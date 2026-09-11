@@ -6,14 +6,17 @@ the end-to-end "does it actually compile" check is a manual smoke test (see
 the task report), not a unit test.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from marrow._dylibs import DYLIB_DIR_ENV, configure
 from marrow.compile import (
     _build_arg_parser,
     _CODEC_LIB_CANDIDATES,
+    _OPTIONAL_LIB_CANDIDATES,
     _copy_deduped,
     _find_codec_lib,
     build_command,
@@ -22,6 +25,7 @@ from marrow.compile import (
     codec_lib_dir,
     dylib_closure,
     main,
+    optional_lib_paths,
     resolve_marrow_path,
     stage_codec_libs,
 )
@@ -378,3 +382,64 @@ def test_bundle_includes_codec_libraries(tmp_path):
         assert any(n in names for n in _CODEC_LIB_CANDIDATES[codec]), (
             f"{codec} missing from bundle: {names}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The libraries shipped inside the wheel, and how marrow finds them
+# ---------------------------------------------------------------------------
+#
+# `dlopen`-ed libraries are invisible to `delocate`/`auditwheel`, which walk
+# load commands -- so the wheel carries them only because `build.py` asks for
+# them by name, and marrow finds them only because `_dylibs` says where. Both
+# halves are silent when broken: the wheel still imports, and a codec or an
+# `s3://` URI fails later with an unrelated-looking message.
+
+
+def test_optional_libs_are_separate_from_the_codec_table():
+    """`libopendal_c` must not join `_CODEC_LIB_CANDIDATES`.
+
+    Every key there is asserted to resolve in the live dev environment by
+    `test_pixi_dev_env_has_every_codec_compression_mojo_dlopens`, and OpenDAL
+    never will -- it has no conda package and is built on demand. Adding it
+    there turns that test red in the default environment.
+    """
+    assert set(_OPTIONAL_LIB_CANDIDATES) & set(_CODEC_LIB_CANDIDATES) == set()
+    assert "opendal" in _OPTIONAL_LIB_CANDIDATES
+
+
+def test_optional_lib_paths_prefers_the_env_override(tmp_path, monkeypatch):
+    lib = tmp_path / "libopendal_c.dylib"
+    lib.write_bytes(b"")
+    monkeypatch.setenv("MARROW_OPENDAL_LIBRARY", str(lib))
+    assert lib in optional_lib_paths()
+
+
+def test_optional_lib_paths_is_empty_and_quiet_when_absent(
+    tmp_path, monkeypatch, capsys
+):
+    """Absent is normal: remote storage is opt-in, so unlike a missing codec
+    this warns about nothing."""
+    monkeypatch.delenv("MARROW_OPENDAL_LIBRARY", raising=False)
+    monkeypatch.delenv("OPENDAL_C_LIBRARY", raising=False)
+    monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
+    (tmp_path / "lib").mkdir()
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert optional_lib_paths() == []
+    assert capsys.readouterr().err == ""
+
+
+def test_configure_points_the_loader_at_the_installed_package(monkeypatch):
+    """The whole reason `_dylibs` exists: a wheel is loaded by the
+    interpreter, so marrow's `argv[0]`-derived candidate names `python` and
+    never `site-packages/marrow/`."""
+    monkeypatch.delenv(DYLIB_DIR_ENV, raising=False)
+    configure()
+    import marrow
+
+    assert Path(os.environ[DYLIB_DIR_ENV]) == Path(marrow.__file__).parent
+
+
+def test_configure_does_not_override_a_users_choice(monkeypatch):
+    monkeypatch.setenv(DYLIB_DIR_ENV, "/somewhere/else")
+    configure()
+    assert os.environ[DYLIB_DIR_ENV] == "/somewhere/else"

@@ -20,6 +20,16 @@ name: Wheels
 #     2026-05 it could not even pull its image
 #     (`No such image: quay.io/pypa/manylinux_2_34_x86_64:2025.06.08-1`), which
 #     the cibuildwheel bump below may or may not settle.
+#   - The macOS `before-all` now builds `libopendal_c` so the wheel can embed
+#     it, and that step has never run here.  Two things about it are guesses:
+#     whether cibuildwheel expands `{project}` inside `[tool.cibuildwheel.macos]
+#     environment`, and whether the runner's rust is new enough (opendal-c wants
+#     >=1.91).  The *mechanism* it feeds is verified -- `pixi run -e wheel wheel`
+#     with `MARROW_OPENDAL_LIBRARY` set produces a wheel whose `fs://` reads work
+#     with no OpenDAL anywhere in the environment -- so what is unproven is this
+#     plumbing, not the result.  The Linux leg deliberately does not build it:
+#     the manylinux image has no rust, and a wheel without OpenDAL still reads
+#     every local file.
 #
 # `pixi run -e wheel wheel` builds and tests a macOS wheel locally and is the
 # working path today; docs/backlog.md tracks the rest.  Restore the

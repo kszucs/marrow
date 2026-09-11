@@ -273,6 +273,47 @@ _CODEC_LIB_CANDIDATES: dict[str, list[str]] = {
 }
 
 
+# `libopendal_c` is deliberately *not* a key above. That table is asserted to
+# resolve completely in the live dev environment
+# (`test_pixi_dev_env_has_every_codec_compression_mojo_dlopens`), and OpenDAL
+# never will: it is `publish = false` upstream, has no conda package, and is
+# built on demand by `pixi run -e opendal build_opendal`. A library that is
+# *expected* to be absent needs its own table, or its absence turns a green test
+# in the default environment red.
+_OPTIONAL_LIB_CANDIDATES: dict[str, list[str]] = {
+    "opendal": ["libopendal_c.dylib", "libopendal_c.so"],
+}
+
+
+def optional_lib_paths() -> list[Path]:
+    """The optional `dlopen`-ed libraries present on this machine.
+
+    Resolution mirrors `Dylib.candidates` on the Mojo side: the exact-path
+    environment override first (`$MARROW_OPENDAL_LIBRARY`, then
+    `$OPENDAL_C_LIBRARY`), then the same directory the codecs come from, in
+    case a conda package ever provides one. Absent is normal and silent --
+    unlike a codec, nothing warns, because remote storage is opt-in and a
+    wheel without it still reads every local file.
+    """
+    out: list[Path] = []
+    for env in ("MARROW_OPENDAL_LIBRARY", "OPENDAL_C_LIBRARY"):
+        override = os.environ.get(env)
+        if override and Path(override).exists():
+            out.append(Path(override))
+            break
+    lib_dir = codec_lib_dir()
+    if not out and lib_dir is not None:
+        found = _find_codec_lib(lib_dir, _OPTIONAL_LIB_CANDIDATES["opendal"])
+        if found is not None:
+            out.append(found)
+    staged: dict[str, Path] = {}
+    for lib in out:
+        staged.setdefault(lib.name, lib)
+        for dep in dylib_closure(lib):
+            staged.setdefault(dep.name, dep)
+    return list(staged.values())
+
+
 def codec_lib_dir() -> Path | None:
     """The directory holding marrow's `dlopen`-ed codec libraries, resolved
     from the active environment rather than a hardcoded pixi path.

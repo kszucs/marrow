@@ -12,6 +12,7 @@ and builds `python/` inside it -- the same reason `mojo build -I <root>` can fin
 marrow's Mojo sources at all.
 """
 
+import importlib.util
 import shutil
 import sys
 import sysconfig
@@ -55,6 +56,15 @@ class CustomBuildHook(BuildHookInterface):
             build_data["force_include"][str(module)] = f"marrow/{module.name}"
         build_data["force_include"][str(repo.libmarrow)] = f"marrow/libmarrow{suffix}"
 
+        # The `dlopen`-ed libraries, beside the extension. `delocate`/`auditwheel`
+        # cannot find these for us: they walk load commands, and a `dlopen`-ed
+        # library has none -- the same blind spot `compile.py` documents for a
+        # `--bundle` directory. Without this a pip-installed marrow cannot read a
+        # zstd-compressed Parquet file, let alone an `s3://` one.
+        # `marrow/_dylibs.py` is the other half: it points the Mojo loader here.
+        for lib in self._dlopen_libs():
+            build_data["force_include"][str(lib)] = f"marrow/{lib.name}"
+
         # `marrow compile` needs marrow's own Mojo source to pass as `-I` to
         # `mojo build` for an installed (pip) user — resolve_marrow_path()'s
         # third resolution step looks for it at `marrow/_mojo/marrow/...`
@@ -70,6 +80,38 @@ class CustomBuildHook(BuildHookInterface):
             if source.name.startswith("bench_") or source.name.startswith("profile_"):
                 continue
             build_data["force_include"][str(source)] = f"marrow/_mojo/{rel}"
+
+    @staticmethod
+    def _dlopen_libs():
+        """Every optional C library marrow may `dlopen`, with its own
+        dependency closure, resolved from the build environment.
+
+        `compile.py` is loaded from its path rather than imported as
+        `marrow.compile`, which would run the package `__init__` and with it
+        `from . import libmarrow`. The extension exists by now, but importing
+        it here would make laying out the wheel depend on the extension being
+        loadable by the *building* interpreter -- which under cross-compilation
+        it is not. `compile.py` imports nothing but the standard library, so
+        loading it alone is well defined.
+
+        A missing library is a warning inside those helpers, never a raise: a
+        wheel built without OpenDAL is a wheel that reads local files, which is
+        the supported configuration today.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "_marrow_compile", ROOT / "python" / "marrow" / "compile.py"
+        )
+        compile_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(compile_mod)
+
+        staged = {}
+        libs = (
+            compile_mod.stage_codec_libs(compile_mod.codec_lib_dir())
+            + compile_mod.optional_lib_paths()
+        )
+        for lib in libs:
+            staged.setdefault(lib.name, lib)
+        return list(staged.values())
 
     @staticmethod
     def _build(repo):

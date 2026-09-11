@@ -10,7 +10,13 @@ This module is re-exports. The implementations live next door: `types`,
 `arrays`, `tabular`, `expr`, `lazy`, `compute`, `parquet`, `ipc`.
 """
 
-from . import libmarrow
+from ._dylibs import configure as _configure_dylibs
+
+# Must precede the extension import: it is what lets a wheel find the codec
+# and object-store libraries shipped beside it. See `_dylibs`.
+_configure_dylibs()
+
+from . import libmarrow  # noqa: E402 - must follow _configure_dylibs()
 from .types import (
     DataType,
     Field,
