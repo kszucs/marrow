@@ -12,6 +12,8 @@ out on its own:
 | `checksum` | `Crc32` — the ISO-3309 / zlib / gzip checksum |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64` |
 | `compression` | `CompressionLibs` — `dlopen`ed zstd / snappy / lz4 / zlib / brotli |
+| `dylib` | `Dylib` — finding and opening an optional C library |
+| `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
 | `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
 
 The names are re-exported here, so `from ..utils import LittleEndian` is the
@@ -36,4 +38,6 @@ from .byteorder import LittleEndian
 from .checksum import Crc32
 from .compression import CompressionLibs
 from .datetime import CivilDate, Epoch, floor_div
+from .dylib import Dylib
+from .uri import StorageOptions, Uri
 from .hashing import AHash64, Hasher, RapidHash64, RapidSecret, XxHash64

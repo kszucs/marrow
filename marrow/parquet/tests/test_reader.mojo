@@ -10,7 +10,7 @@ from std.math import isnan, isinf
 from std.python import Python, PythonObject
 from std.os import remove
 from ...parquet import read_table, ParquetFile
-from ...parquet.source import MappedFile
+from ...io import BufferSource
 from ...tabular import Table
 
 
@@ -935,7 +935,7 @@ def test_read_float16() raises:
 
 def test_read_from_byte_source() raises:
     """`ParquetFile` reads through the `ByteSource` seam: constructing it from a
-    `MappedFile` (a `ByteSource`) directly decodes identically to the
+    `BufferSource` (a `ByteSource`) directly decodes identically to the
     path-convenience constructor."""
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
@@ -951,7 +951,7 @@ def test_read_from_byte_source() raises:
     pq.write_table(tbl, path, compression="snappy")
 
     # Build the file from an explicit ByteSource instead of a path.
-    var pf = ParquetFile(MappedFile(path))
+    var pf = ParquetFile(BufferSource(path))
     assert_equal(pf.num_rows(), 5)
     assert_equal(pf.num_row_groups(), 1)
 

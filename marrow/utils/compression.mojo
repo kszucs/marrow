@@ -19,6 +19,8 @@ supported"). These bindings are what that needs.
 """
 
 from std.ffi import OwnedDLHandle, _DLHandle, _Global, _try_find_dylib
+
+from .dylib import Dylib, c_bytes
 from std.pathlib import Path
 from std.memory import unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
@@ -58,103 +60,6 @@ comptime _BROTLI_DEC_PATHS: List[Path] = [
 ]
 
 
-def _exe_dir() -> String:
-    """Best-effort directory containing the running executable, derived from
-    ``argv()[0]``.
-
-    A bare soname (`dlopen("libsnappy.dylib")`) is resolved by the dynamic
-    loader's default search paths, never `@loader_path` — so a `marrow
-    compile --bundle` directory that ships the codec dylibs next to the
-    binary still fails to `dlopen` them unless something tells the loader to
-    look there. `argv()[0]` carries that "there": when the process is
-    launched as `./qp` or `/abs/path/qp` (as a bundle is documented to be
-    run), it has a directory component, and a candidate built from it plus a
-    slash resolves as a path, not a bare name, bypassing the search order
-    entirely.
-
-    Returns the empty string when `argv()[0]` has no `/` (an unqualified
-    `PATH` lookup, e.g. a bare `qp` after `install`) — callers then fall back
-    to the original bare-soname candidates below, exactly as before this
-    existed.
-
-    **`argv()[0]` is caller-supplied, not the true executable path.** It is
-    whatever the launching process put in `argv[0]`, so it can be spoofed and
-    it is not the same thing as `/proc/self/exe` or `_NSGetExecutablePath`. In
-    particular a `./qp` launch yields `.`, so the codec dylib candidates
-    become `./libsnappy.dylib` — i.e. resolved out of the **current working
-    directory**, which is not necessarily the directory the binary lives in.
-    That is a load-from-cwd surface for anyone who can write to the cwd a
-    marrow binary is run from. Recorded rather than fixed: the real fix is to
-    ask the OS for the executable path, and this module is on the restricted
-    `unsafe_ptr` list (see `CLAUDE.md`), so it is not the place to grow a new
-    platform-conditional syscall wrapper.
-    """
-    var args = argv()
-    if len(args) == 0:
-        return String()
-    var exe = String(args[0])
-    var parts = exe.split("/")
-    if len(parts) <= 1:
-        return String()
-    var out = String()
-    for i in range(len(parts) - 1):
-        if i != 0:
-            out += "/"
-        out += parts[i]
-    return out
-
-
-def _with_exe_dir(dir: String, paths: List[Path]) -> List[Path]:
-    """`paths`, prefixed with an executable-relative candidate (under `dir`,
-    the result of `_exe_dir()`) for each entry when `dir` is non-empty.
-
-    Tried first, so a bundle's own copy of a codec library wins over
-    whatever the bare soname would otherwise resolve to on the host.
-    """
-    var out = List[Path]()
-    if dir.byte_length() != 0:
-        for p in paths:
-            out.append(Path(dir + "/" + String(p)))
-    for p in paths:
-        out.append(p)
-    return out^
-
-
-@fieldwise_init
-struct _Library(Movable):
-    """One compression library: the `dlopen` handle, or the error that opening
-    it produced.
-
-    Failure is *recorded*, not raised. The whole set is opened together inside
-    a process global whose initializer cannot raise, so a box that is missing
-    `libbrotlienc` must still get working zstd — the error is kept and re-raised
-    from `get()`, at the point a page actually needs that codec, with the same
-    text `_try_find_dylib` would have raised."""
-
-    var _handle: Optional[OwnedDLHandle]
-    var _error: String
-
-    @staticmethod
-    def open[name: StaticString](paths: List[Path]) -> _Library:
-        var out = _Library(None, String())
-        try:
-            out._handle = _try_find_dylib[name](paths)
-        except e:
-            out._error = String(e)
-        return out^
-
-    def get(self) raises -> _DLHandle:
-        """A non-owning borrow of the handle, or the `dlopen` failure this
-        library was opened with.
-
-        Borrowing is sound precisely because the owner is the process-wide
-        `_CodecHandles`: it outlives every caller, so the returned handle can
-        never dangle."""
-        if not self._handle:
-            raise Error(self._error)
-        return self._handle.value().borrow()
-
-
 struct _CodecHandles(Movable):
     """Every compression library the codecs can use, opened once per process.
 
@@ -164,33 +69,32 @@ struct _CodecHandles(Movable):
     resolves the symbol with `dlsym`, itself thread-safe, so a concurrent
     decompress is a concurrent *read* of this struct and nothing more."""
 
-    var zstd: _Library
-    var snappy: _Library
-    var lz4: _Library
-    var zlib: _Library
-    var brotli_enc: _Library
-    var brotli_dec: _Library
+    var zstd: Dylib
+    var snappy: Dylib
+    var lz4: Dylib
+    var zlib: Dylib
+    var brotli_enc: Dylib
+    var brotli_dec: Dylib
 
     def __init__(out self):
         # Resolved once, shared by every candidate list below.
-        var exe_dir = _exe_dir()
-        self.zstd = _Library.open["zstd"](
-            _with_exe_dir(exe_dir, materialize[_ZSTD_PATHS]())
+        self.zstd = Dylib.open["zstd"](
+            Dylib.candidates[](materialize[_ZSTD_PATHS]())
         )
-        self.snappy = _Library.open["snappy"](
-            _with_exe_dir(exe_dir, materialize[_SNAPPY_PATHS]())
+        self.snappy = Dylib.open["snappy"](
+            Dylib.candidates[](materialize[_SNAPPY_PATHS]())
         )
-        self.lz4 = _Library.open["lz4"](
-            _with_exe_dir(exe_dir, materialize[_LZ4_PATHS]())
+        self.lz4 = Dylib.open["lz4"](
+            Dylib.candidates[](materialize[_LZ4_PATHS]())
         )
-        self.zlib = _Library.open["z"](
-            _with_exe_dir(exe_dir, materialize[_ZLIB_PATHS]())
+        self.zlib = Dylib.open["z"](
+            Dylib.candidates[](materialize[_ZLIB_PATHS]())
         )
-        self.brotli_enc = _Library.open["brotlienc"](
-            _with_exe_dir(exe_dir, materialize[_BROTLI_ENC_PATHS]())
+        self.brotli_enc = Dylib.open["brotlienc"](
+            Dylib.candidates[](materialize[_BROTLI_ENC_PATHS]())
         )
-        self.brotli_dec = _Library.open["brotlidec"](
-            _with_exe_dir(exe_dir, materialize[_BROTLI_DEC_PATHS]())
+        self.brotli_dec = Dylib.open["brotlidec"](
+            Dylib.candidates[](materialize[_BROTLI_DEC_PATHS]())
         )
 
 
@@ -378,7 +282,7 @@ struct CompressionLibs(Movable):
         """Copy `n` bytes out of a freshly-`alloc`'d compression scratch buffer,
         free the buffer, and return an owned List — the shared tail of every
         `*_compress` method."""
-        var out = List[UInt8](Span(unsafe_ptr=dst, length=n))
+        var out = c_bytes(dst, n)
         dst.unsafe_free()
         return out^
 

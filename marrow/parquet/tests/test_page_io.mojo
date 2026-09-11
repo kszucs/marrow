@@ -8,7 +8,7 @@ not a single byte was saved. The only way to tell the two apart is to watch the
 I/O.
 
 `ParquetFile` is generic over `ByteSource`, so the seam is already there —
-`_Recorder` wraps a `MappedFile` and records every `(offset, length)` the reader
+`_Recorder` wraps a `BufferSource` and records every `(offset, length)` the reader
 asks for. A skipped page is then a *provable* claim: its byte range, taken from
 the file's own `OffsetIndex`, is disjoint from everything that was read.
 
@@ -34,7 +34,7 @@ from ...parquet.reader import (
     RowSelection,
     read_page_index,
 )
-from ...parquet.source import ByteSource, MappedFile
+from ...io import ByteSource, Fetched, BufferSource
 
 
 comptime Reads = ArcPointer[List[Tuple[Int, Int]]]
@@ -42,13 +42,13 @@ comptime Reads = ArcPointer[List[Tuple[Int, Int]]]
 
 
 struct _Recorder(ByteSource):
-    """A `MappedFile` that remembers what was read through it."""
+    """A `BufferSource` that remembers what was read through it."""
 
-    var _inner: MappedFile
+    var _inner: BufferSource
     var _reads: Reads
 
     def __init__(out self, path: String, var reads: Reads) raises:
-        self._inner = MappedFile(path)
+        self._inner = BufferSource(path)
         self._reads = reads^
 
     def size(self) -> Int:
@@ -56,11 +56,19 @@ struct _Recorder(ByteSource):
 
     def read_at(
         ref self, offset: Int, length: Int
-    ) -> Span[UInt8, origin_of(self)]:
+    ) raises -> Span[UInt8, origin_of(self)]:
         self._reads[].append((offset, length))
         return rebind[Span[UInt8, origin_of(self)]](
             self._inner.read_at(offset, length)
         )
+
+    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+        # Every range of a batch is recorded individually, so the byte-level
+        # assertions below read the same whether the reader asked one range at a
+        # time or asked for all of them at once.
+        for ref r in ranges:
+            self._reads[].append((r[0], r[1]))
+        return self._inner.read_ranges(ranges)
 
 
 def _write_paged(path: String, rows: Int, page_rows: Int) raises:
@@ -128,7 +136,7 @@ def test_opening_a_file_reads_only_its_tail() raises:
     """
     var path = String("/tmp/marrow_pageio_footer.parquet")
     _write_paged(path, 100000, 10000)
-    var total = MappedFile(path).size()
+    var total = BufferSource(path).size()
     assert_true(total > 400000, "the fixture must dwarf its own footer")
 
     var reads = Reads(List[Tuple[Int, Int]]())
@@ -355,7 +363,7 @@ def test_a_footer_larger_than_the_speculative_read() raises:
     var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
     assert_equal(f.num_row_groups(), 4000)
 
-    var total = MappedFile(path).size()
+    var total = BufferSource(path).size()
     assert_true(
         len(reads[]) == 2,
         "a footer over the speculative read costs exactly two reads, got "

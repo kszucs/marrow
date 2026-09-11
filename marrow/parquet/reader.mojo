@@ -43,7 +43,13 @@ from ..utils import CompressionLibs
 from .codecs import Encoding, Rle, Plain, Dictionary, Compression
 from ..utils import Epoch, LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
-from .source import ByteSource, MappedFile
+from ..io import (
+    FOOTER_READ_SIZE,
+    BufferSource,
+    ByteSource,
+    DynSource,
+    StorageOptions,
+)
 from .schema import SchemaMapping, DecodedLeaf, LeafColumn, NODE_LEAF
 from .statistics import Statistics
 from .format import (
@@ -2162,7 +2168,7 @@ def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
     and it made every saving below it — column projection, row-group
     pruning, page skipping — cost more than it saved.
 
-    One speculative read of the last `_FOOTER_READ_SIZE` bytes covers the
+    One speculative read of the last `FOOTER_READ_SIZE` bytes covers the
     footer of essentially every real file, so opening one normally costs a
     single round trip. A footer larger than that is read again at its exact
     size, which is the only case that pays twice; `read_footer` indexes from
@@ -2172,7 +2178,7 @@ def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
     if size < 12:
         raise Error("parquet: file too small")
 
-    var tail = _FOOTER_READ_SIZE if _FOOTER_READ_SIZE < size else size
+    var tail = FOOTER_READ_SIZE if FOOTER_READ_SIZE < size else size
     var head = source.read_at(size - tail, tail)
     var meta_len = FileMetaData.footer_length(head)
     if meta_len + 8 <= tail:
@@ -2186,19 +2192,9 @@ def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
     return FileMetaData.read_footer(source.read_at(size - want, want))
 
 
-comptime _FOOTER_READ_SIZE = 64 * 1024
-"""How much of a file's tail to read speculatively when opening it.
-
-Sized so one read gets the footer for essentially every real file — a footer
-runs to kilobytes, not megabytes, and the cost of overshooting on a local file
-is nil where the cost of a second round trip on a remote one is not. The same
-default parquet-rs uses.
-"""
-
-
-struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
-    Movable
-):
+struct ParquetFile[
+    S: ByteSource = BufferSource, leaves: LeafSet = LeafSet.all()
+](Movable):
     """A Parquet file opened for reading — mirrors PyArrow's `ParquetFile`.
 
     Owns a `ByteSource` (the file's bytes), the footer metadata, and the
@@ -2207,7 +2203,7 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
     `ParquetFile` drops. Decoded values are copied into owned Arrow buffers, so
     a returned `Table` outlives the file.
 
-    The source defaults to a local `MappedFile` — `ParquetFile(path)` opens a
+    The source defaults to a local `BufferSource` — `ParquetFile(path)` opens a
     memory map — but any `ByteSource` (streaming, remote object store, …) can be
     passed instead; the whole decode path reads only through `S.read_at`.
 
@@ -2223,10 +2219,10 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
     """Reusable per-worker codec handles — see the pool comment in `read`."""
 
     def __init__(
-        out self: ParquetFile[MappedFile, Self.leaves], path: String
+        out self: ParquetFile[BufferSource, Self.leaves], path: String
     ) raises:
-        # Convenience: open the local file as a memory map (S == MappedFile).
-        self._source = MappedFile(path)
+        # Convenience: open the local file as a memory map (S == BufferSource).
+        self._source = BufferSource(path)
         self._meta = _read_footer(self._source)
         self._mapping = SchemaMapping.from_parquet(self._meta)
         self._codecs = ArcPointer(List[CompressionLibs]())
@@ -2240,7 +2236,7 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
 
     def _read_at(
         ref self, offset: Int, length: Int
-    ) -> Span[UInt8, origin_of(self)]:
+    ) raises -> Span[UInt8, origin_of(self)]:
         """One region of the file. Every read goes through here, so the source
         is only ever asked for the bytes actually needed — a column chunk, a
         page index, a bloom filter — never the whole file.
@@ -2253,7 +2249,7 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
 
     def _metadata_at(
         ref self, offset: Int, length: Int
-    ) -> Span[UInt8, origin_of(self)]:
+    ) raises -> Span[UInt8, origin_of(self)]:
         """A metadata region (page index, bloom filter) whose recorded `length`
         may be absent — writers may omit it. Then the region has to be bounded
         by the end of the file, and only the Thrift reader knows where it really
@@ -2396,6 +2392,82 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
         # `Optional[Error]` would be written by every failing thread at once.
         var worker_errs = List[Optional[Error]](length=nt, fill=None)
 
+        # --- plan, then fetch, then decode -------------------------------
+        #
+        # All three used to happen inside the worker, which was wrong twice
+        # over. `ByteSource.read_at` hands back a span borrowed from storage
+        # the *source* owns, so a source that must fetch has to retain it --
+        # `OpenDalSource` did that in an arena behind an `ArcPointer`, and N
+        # workers appending to one unsynchronised `List` is a realloc race with
+        # a use-after-free hanging off it. The arena also never shrank, so the
+        # bytes stayed resident for the life of the *source* -- across every
+        # later `read()` -- rather than for this call. (The peak within one
+        # call is unchanged: `fetched` below holds every selected range at
+        # once too. What changed is when it is released, and by whom.)
+        #
+        # Both go away by asking the source once, here, on the calling thread:
+        # `read_ranges` answers with a `Fetched` **the caller owns and scopes**,
+        # the workers borrow a value nobody is mutating, and the absence of a
+        # race is a property of the types rather than a rule to remember. It is
+        # what `Fetched` was built for.
+        var slot_sel = List[Optional[RowSelection]](capacity=total)
+        var slot_locs = List[OffsetIndex](capacity=total)
+        var slot_seg_at = List[List[Int]](capacity=total)
+        var slot_lo = List[Int](capacity=total)
+        var slot_n = List[Int](capacity=total)
+        var all_ranges = List[Tuple[Int, Int]]()
+
+        for t in range(total):
+            var slot = t // num_leaves
+            var rg_idx = rg_list[slot]
+            # original column-chunk index for this compact slot
+            var orig = plan.decode_order[t % num_leaves]
+            ref rg = self._meta.row_groups[rg_idx]
+            # the row selection for this group (shared by all its leaf
+            # columns), None when nothing is pushed down or the group is
+            # fully selected.
+            var sel: Optional[RowSelection] = None
+            var locs = OffsetIndex()
+            if row_selections:
+                sel = row_selections.value()[slot].copy()
+                # Only worth decoding when there is something to skip: with no
+                # selection every page is read, and the index would answer
+                # questions nobody asks. Offsets only -- the `ColumnIndex`'s
+                # per-page bounds are decode-time dead weight here, and they
+                # are the bulky half. Not for a leveled leaf: `ColumnReader`
+                # discards the index there (page skipping is a flat-path
+                # optimisation), so decoding one is pure waste.
+                if self._mapping.leaves[orig].max_rep == 0:
+                    locs = self._chunk_offsets(rg.columns[orig], rg.num_rows)
+
+            var start, length = rg.columns[orig].meta_data.byte_range()
+            # **Only as far into the chunk as the selection reaches.** The
+            # offset index says where the page holding the last selected row
+            # ends; nothing after it will be decoded, so nothing after it is
+            # worth asking the source for. A `limit`-shaped selection reads the
+            # front of the chunk and stops; a scattered one reads each run and
+            # skips the gaps.
+            var ranges = List[Tuple[Int, Int]]()
+            if sel and locs.num_pages() > 0:
+                ranges = sel.value().scan_ranges(
+                    locs, rg.columns[orig], rg.num_rows
+                )
+            else:
+                ranges.append((0, length))
+
+            var seg_at = List[Int](capacity=len(ranges))
+            slot_lo.append(len(all_ranges))
+            slot_n.append(len(ranges))
+            for ref r in ranges:
+                seg_at.append(r[0])
+                all_ranges.append((start + r[0], r[1]))
+            slot_sel.append(sel^)
+            slot_locs.append(locs^)
+            slot_seg_at.append(seg_at^)
+
+        # One ask, before any fan-out.
+        var fetched = self._source.read_ranges(all_ranges)
+
         def worker(w: Int) {mut worker_errs, mut grid, imm}:
             # `sync_parallelize`'s value form takes a non-raising worker. The
             # body still unwinds at its first error; the other workers cannot be
@@ -2406,62 +2478,27 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
                 while t < total:
                     var slot = t // num_leaves
                     var rg_idx = rg_list[slot]
-                    # original column-chunk index for this compact slot
                     var orig = plan.decode_order[t % num_leaves]
                     ref rg = self._meta.row_groups[rg_idx]
-                    # the row selection for this group (shared by all its leaf
-                    # columns), None when nothing is pushed down or the group is
-                    # fully selected.
-                    var sel: Optional[RowSelection] = None
-                    var locs = OffsetIndex()
-                    if row_selections:
-                        sel = row_selections.value()[slot].copy()
-                        # Only worth decoding when there is something to skip:
-                        # with no selection every page is read, and the index
-                        # would answer questions nobody asks. Offsets only --
-                        # the `ColumnIndex`'s per-page bounds are decode-time
-                        # dead weight here, and they are the bulky half.
-                        # Not for a leveled leaf: `ColumnReader` discards the
-                        # index there (page skipping is a flat-path
-                        # optimisation), so decoding one is pure waste.
-                        if self._mapping.leaves[orig].max_rep == 0:
-                            locs = self._chunk_offsets(
-                                rg.columns[orig], rg.num_rows
-                            )
-                    # ColumnReader.decode picks the flat vs leveled path from the
-                    # leaf's max repetition, so one call serves every column shape.
-                    # Each worker fetches only its own chunk's bytes.
-                    var start, length = rg.columns[orig].meta_data.byte_range()
-                    # **And only as far into the chunk as the selection reaches.**
-                    # The offset index says where the page holding the last
-                    # selected row ends; nothing after it will be decoded, so
-                    # nothing after it is worth asking the source for. A
-                    # `limit`-shaped selection reads the front of the chunk
-                    # and stops; a scattered one reads each run and skips the
-                    # gaps.
-                    var ranges = List[Tuple[Int, Int]]()
-                    if sel and locs.num_pages() > 0:
-                        ranges = sel.value().scan_ranges(
-                            locs, rg.columns[orig], rg.num_rows
-                        )
-                    else:
-                        ranges.append((0, length))
-
-                    var seg_at = List[Int](capacity=len(ranges))
-                    var segs = List[Span[UInt8, origin_of(self)]](
-                        capacity=len(ranges)
+                    # Borrowing the batch, not the source: `Fetched.span` is a
+                    # read, so every worker can slice its own chunk out of the
+                    # one value nobody is mutating.
+                    var segs = List[Span[UInt8, origin_of(fetched)]](
+                        capacity=slot_n[t]
                     )
-                    for ref r in ranges:
-                        seg_at.append(r[0])
-                        segs.append(self._read_at(start + r[0], r[1]))
-                    var reader = ColumnReader[leaves=Self.leaves](
+                    for i in range(slot_lo[t], slot_lo[t] + slot_n[t]):
+                        segs.append(fetched.span(i))
+                    # ColumnReader.decode picks the flat vs leveled path from
+                    # the leaf's max repetition, so one call serves every column
+                    # shape. Nothing here touches the source.
+                    var reader = ColumnReader[origin_of(fetched), Self.leaves](
                         segs^,
                         rg.columns[orig].meta_data.copy(),
                         self._mapping.leaves[orig].copy(),
                         rg.num_rows,
-                        sel^,
-                        locs^,
-                        seg_at^,
+                        slot_sel[t].copy(),
+                        slot_locs[t].copy(),
+                        slot_seg_at[t].copy(),
                     )
                     grid[t] = reader.decode(codecs_w)
                     t += nt
@@ -2670,18 +2707,30 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
 def read_table[
     leaves: LeafSet = LeafSet.all()
 ](
-    path: String,
+    uri: String,
     columns: Optional[List[String]] = None,
     row_groups: Optional[List[Int]] = None,
     row_selections: Optional[List[RowSelection]] = None,
+    options: StorageOptions = StorageOptions(),
 ) raises -> Table:
     """Read a Parquet file into a Marrow `Table` — a convenience wrapper over
-    `ParquetFile(path).read(...)` (mirrors `pyarrow.parquet.read_table`).
+    `ParquetFile(uri).read(...)` (mirrors `pyarrow.parquet.read_table`).
+
+    `uri` is a path or a URL: `data.parquet`, `file:///tmp/data.parquet`,
+    `s3://bucket/key.parquet`, `gs://…`, `az://…`, `https://…`. A bare path
+    takes the local memory map and never opens `libopendal_c`; anything else
+    goes through OpenDAL, and `options` carries service configuration the URI
+    does not (see `StorageOptions` for the precedence rules).
+
+    Erased through `DynSource` rather than branching on scheme, because
+    branching would link one whole copy of the reader per source type. The
+    ladder costs a discriminant compare per read; a second monomorphization of
+    `ParquetFile` costs kilobytes.
 
     `leaves` narrows which leaf kinds the decoder is compiled for; the default
     compiles all of them. An AOT program that knows its schema can cut the
     decode ladder it links — see `LeafSet`."""
-    var pf = ParquetFile[MappedFile, leaves](path)
+    var pf = ParquetFile[DynSource, leaves](DynSource.open(uri, options))
     return pf.read(columns, row_groups, row_selections)
 
 
@@ -2869,12 +2918,17 @@ struct RowSelection(Copyable, Movable):
         return m^
 
 
-def read_metadata(path: String) raises -> FileMetaData:
+def read_metadata(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> FileMetaData:
     """Read only the file footer: schema, row groups, and per-column-chunk
     metadata (offsets, sizes, codec, null_count, and the raw min/max statistic
     bytes). No column data is decoded. Mirrors `pyarrow.parquet.read_metadata` —
-    a convenience wrapper over `ParquetFile(path).metadata()`."""
-    return ParquetFile(path).metadata()
+    a convenience wrapper over `ParquetFile(uri).metadata()`.
+
+    Reads the file's tail, not the file, so pointing this at an object store
+    costs one ranged request rather than a download."""
+    return ParquetFile(DynSource.open(uri, options)).metadata()
 
 
 struct PageIndex(Copyable, Movable):
@@ -2890,11 +2944,13 @@ struct PageIndex(Copyable, Movable):
         self.column_index = None
 
 
-def read_page_index(path: String) raises -> List[List[PageIndex]]:
+def read_page_index(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> List[List[PageIndex]]:
     """Read the page index (OffsetIndex + ColumnIndex) for every (row group,
     leaf column), indexed `result[row_group][leaf]` — a convenience wrapper over
-    `ParquetFile(path).page_index()`."""
-    return ParquetFile(path).page_index()
+    `ParquetFile(uri).page_index()`."""
+    return ParquetFile(DynSource.open(uri, options)).page_index()
 
 
 struct PageBounds(Copyable, Movable):

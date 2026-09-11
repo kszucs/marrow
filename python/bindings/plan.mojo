@@ -52,6 +52,7 @@ from expressions import (
 )
 from marrow.expr.logical import WindowExpr
 from marrow.kernels.join import JoinKind
+from marrow.io import DynSource
 from marrow.parquet import ParquetFile
 from marrow.schema import Schema
 from marrow.expr.sql import Catalog, sql as _sql
@@ -133,7 +134,7 @@ def _scan_schema(schema: PythonObject, path: String) raises -> Schema:
     boundary rather than inside `ParquetScan`."""
     var builtins = Python.import_module("builtins")
     if schema.__is__(builtins.None):
-        return ParquetFile(path).schema()
+        return ParquetFile(DynSource.open(path)).schema()
     return schema.downcast_value_ptr[Schema]()[].copy()
 
 

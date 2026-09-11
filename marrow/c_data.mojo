@@ -4,6 +4,7 @@ from std.memory.alloc import unsafe_alloc
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr
 from std.sys import size_of
+from .utils.dylib import CStr, alloc_c_string
 from .buffers import (
     Allocation,
     Buffer,
@@ -82,26 +83,9 @@ def _null_ptr[T: AnyType]() -> Pointer[T, MutUntrackedOrigin]:
     return Pointer[T, MutUntrackedOrigin](unsafe_from_address=Int(0))
 
 
-def _alloc_c_string(s: String) -> Pointer[c_char, MutUntrackedOrigin]:
-    """Copy a Mojo String into a heap-allocated null-terminated C string.
-
-    The caller owns the returned buffer and must free it when done.
-
-    Note: copies len(s) bytes then writes an explicit null terminator.
-    String.unsafe_ptr() is not guaranteed to be null-terminated (SSO inline
-    storage leaves bytes past len(s) uninitialized).
-    TODO: replace with unsafe_cstr_ptr() once available in this Mojo build.
-    """
-    var n = s.byte_length()
-    var buf = unsafe_alloc[c_char](n + 1)
-    unsafe_memcpy(dest=buf.unsafe_bitcast[UInt8](), src=s.unsafe_ptr(), count=n)
-    buf.unsafe_bitcast[UInt8]()[unsafe_offset=n] = 0
-    return Pointer[c_char, MutUntrackedOrigin](unsafe_from_address=Int(buf))
-
-
 def _encode_c_metadata(
     metadata: Dict[String, String],
-) raises -> Pointer[c_char, MutUntrackedOrigin]:
+) raises -> CStr:
     """Encode a Dict into the Arrow C Data Interface metadata blob.
 
     Format (native byte order, per the spec):
@@ -160,7 +144,7 @@ def _encode_c_metadata(
 
 
 def _decode_c_metadata(
-    metadata: Pointer[c_char, MutUntrackedOrigin],
+    metadata: CStr,
 ) raises -> Dict[String, String]:
     """Decode an Arrow C Data Interface metadata blob into a Dict."""
     var result = Dict[String, String]()
@@ -287,9 +271,9 @@ struct CArrowSchema(Copyable, Movable):
            frees the struct shell when Python GC collects the capsule.
     """
 
-    var format: Pointer[c_char, MutUntrackedOrigin]
-    var name: Pointer[c_char, MutUntrackedOrigin]
-    var metadata: Pointer[c_char, MutUntrackedOrigin]
+    var format: CStr
+    var name: CStr
+    var metadata: CStr
     var flags: Int64
     var n_children: Int64
     var children: Pointer[
@@ -543,7 +527,7 @@ struct CArrowSchema(Copyable, Movable):
             )
 
         return CArrowSchema(
-            format=_alloc_c_string(fmt),
+            format=alloc_c_string(fmt),
             name=_null_ptr[c_char](),
             metadata=_null_ptr[c_char](),
             flags=flags,
@@ -570,7 +554,7 @@ struct CArrowSchema(Copyable, Movable):
         `map(keys_sorted=True)` column lost its flag on the way out.
         """
         var c_schema = CArrowSchema.from_dtype(field.dtype)
-        c_schema.name = _alloc_c_string(field.name)
+        c_schema.name = alloc_c_string(field.name)
         if field.nullable:
             c_schema.flags |= Int64(ARROW_FLAG_NULLABLE)
         else:
@@ -602,7 +586,7 @@ struct CArrowSchema(Copyable, Movable):
                 children[unsafe_offset=i] = child_ptr
 
         return CArrowSchema(
-            format=_alloc_c_string("+s"),
+            format=alloc_c_string("+s"),
             name=_null_ptr[c_char](),
             metadata=_encode_c_metadata(schema.metadata),
             flags=0,

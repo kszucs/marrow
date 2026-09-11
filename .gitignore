@@ -225,3 +225,7 @@ golden/generated/
 # Working documents and history notes, kept out of version control
 notes/
 .superpowers/
+
+# Apache OpenDAL, cloned by `pixi run -e opendal clone_opendal` to build
+# libopendal_c (it is `publish = false` upstream, so there is no package).
+vendor/

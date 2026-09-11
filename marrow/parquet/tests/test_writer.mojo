@@ -8,6 +8,8 @@ from ...parquet import (
     write_table,
     read_page_index,
 )
+from ...buffers import Buffer
+from ...io import FileSink, MemorySink
 from ...parquet.writer import FileWriter
 from ...parquet.codecs import Compression, Encoding
 from ...utils import Crc32
@@ -61,8 +63,8 @@ def _v2_roundtrip(codec: Compression) raises:
         )
     )
     var path = String("/tmp/marrow_v2.parquet")
-    var w = FileWriter(codec, version=2)
-    w.write(t, path)
+    var w = FileWriter(FileSink(path), codec, version=2)
+    w.write(t)
 
     # the file declares format version 2
     var pf = pq.ParquetFile(path)
@@ -95,8 +97,8 @@ def test_multiple_row_groups() raises:
     var pa = Python.import_module("pyarrow")
     var t = _one_col(pa.array(_ints(2500), type=pa.int64()))
     var path = String("/tmp/marrow_rg.parquet")
-    var w = FileWriter(Compression.SNAPPY)
-    w.write(t, path, row_group_size=1000)
+    var w = FileWriter(FileSink(path), Compression.SNAPPY)
+    w.write(t, row_group_size=1000)
 
     # pyarrow sees 3 row groups
     var pq = Python.import_module("pyarrow.parquet")
@@ -484,8 +486,8 @@ def test_write_list_v2() raises:
     var want = _list_table([[1, 2], [], None, [3]], pa.list_(pa.int64()))
     var t = _to_marrow(want)
     var path = String("/tmp/marrow_nested_write_v2.parquet")
-    var w = FileWriter(Compression.UNCOMPRESSED, version=2)
-    w.write(t, path)
+    var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED, version=2)
+    w.write(t)
     var back = pq.read_table(path)
     assert_true(
         Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
@@ -1171,12 +1173,62 @@ def test_page_checksum() raises:
     for ver in [1, 2]:
         var path = String("/tmp/marrow_crc.parquet")
         var w = FileWriter(
-            Compression.SNAPPY, version=ver, write_page_checksum=True
+            FileSink(path),
+            Compression.SNAPPY,
+            version=ver,
+            write_page_checksum=True,
         )
-        w.write(t, path)
+        w.write(t)
         # PyArrow verifies the checksum -> marrow's CRC matches the spec
         var back = pq.read_table(path, page_checksum_verification=True)
         assert_equal(Int(py=back.num_rows), 200)
         # marrow reads its own checksummed file (runs the verify branch)
         assert_equal(read_table(path).num_rows(), 200)
         remove(path)
+
+
+def test_parquet_sink_memory_bytes_match_file() raises:
+    """The same table written to a `MemorySink` and to a `FileSink` produces
+    identical bytes.
+
+    This is what makes the sink seam real rather than nominal: the writer emits
+    one byte stream and the backend only decides where it lands. It also pins
+    the thing a streaming rewrite would break first — every `data_page_offset`,
+    `PageLocation.offset`, bloom-filter offset and page-index offset is an
+    absolute file position, so a backend that disagreed about where it was
+    would show up here as a byte mismatch rather than as a file PyArrow cannot
+    open.
+    """
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _to_marrow(
+        pa.table(
+            {
+                "i": pa.array([1, 2, 3, 4, 5, 6, 7, 8], type=pa.int64()),
+                "s": pa.array(["a", "bb", "ccc", "d", "ee", "f", "gg", "h"]),
+            }
+        )
+    )
+
+    var path = String("/tmp/marrow_parquet_sink_equivalence.parquet")
+    var fw = FileWriter(
+        FileSink(path), Compression.SNAPPY, write_bloom_filter=True
+    )
+    fw.write(t, row_group_size=3)
+
+    var mw = FileWriter(
+        MemorySink(), Compression.SNAPPY, write_bloom_filter=True
+    )
+    mw.write(t, row_group_size=3)
+
+    ref from_memory = mw.out.sink().bytes()
+    var mapped = Buffer.mmap_file(path)
+    var n = mapped.mapped_size()
+    assert_equal(len(from_memory), n)
+    var from_file = mapped.view[DType.uint8](0, n).as_span()
+    for i in range(n):
+        assert_equal(from_memory[i], from_file[i])
+
+    # And those bytes are a Parquet file, not two copies of one mistake.
+    assert_equal(Int(py=pq.read_table(path).num_rows), 8)
+    remove(path)

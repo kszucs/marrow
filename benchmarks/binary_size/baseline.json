@@ -1,14 +1,14 @@
 {
-  "_comment": "__text baseline for the binary-size CI gate (see devkit/footprint.py and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-09-07. Regenerate after an intentional size change with: pixi run -e dev binary_size_check --update Re-recorded 2026-09-07 for the index/page-pruning work, and the previous floor was a month stale on top of that -- most of the apparent growth was not this change. Measured against 5a7e368c, the last commit before it: query_dynvalue +315,520 (+3.3%, the erased lane paying for DynValue's mask slot and RuntimeValue's dtype ladder), query_streaming +14,196 (+0.93%), query_scan +81,804 (+3.1%) and query_cli +76,672 (+2.6%) for the page index, query_join +984, query_streaming_agg +2,368 and query_streaming_agg_fused +388. Everything beyond those numbers predates the change and had accumulated since the 2026-08-05 record.",
+  "_comment": "__text baseline for the binary-size CI gate (see devkit size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-09-11, on mojo 1.1.0.dev2026090705. Regenerate after an intentional size change with: pixi run -e dev python -m devkit size check --update. Re-recorded 2026-09-11 for the storage seam: ParquetScanOperator now holds ParquetFile[DynSource] rather than pinning the local backend, so a query plan can scan s3:// and not only a path. That is the whole of the change -- query_cli +50,048 (+1.64%), being the erasure ladder plus the OpenDAL backend linking into any binary that scans Parquet. Every other gate moved by less than 800 bytes, which is noise: query_streaming, query_join and query_expr2_streaming are byte-identical. The alternative, if the 50 KB ever matters, is a -D MARROW_OPENDAL switch selecting a one-arm variant; see marrow/io/dispatch.mojo.",
   "threshold_pct": 0.5,
   "gates": {
     "query_streaming": 1540980,
     "query_join": 1689352,
-    "query_streaming_agg_fused": 1513928,
-    "query_streaming_agg": 13195864,
-    "query_dynvalue": 9946648,
+    "query_streaming_agg_fused": 1513992,
+    "query_streaming_agg": 13195416,
+    "query_dynvalue": 9947416,
     "query_expr2_streaming": 1526828,
-    "query_expr2_agg_fused": 1497360,
-    "query_cli": 3058584
+    "query_expr2_agg_fused": 1497424,
+    "query_cli": 3108632
   }
 }

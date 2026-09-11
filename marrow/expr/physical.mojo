@@ -52,7 +52,7 @@ from ..kernels.groups import Groups
 from ..kernels.groupby import HashGrouping
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile, RowSelection
-from ..parquet.source import ByteSource, MappedFile
+from ..io import ByteSource, DynSource
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
 from .bindings import Bindings
@@ -1416,7 +1416,11 @@ struct ParquetScanOperator(Operator):
 
     var _path: String
     var _schema: Schema
-    var _file: Optional[ParquetFile[MappedFile, LeafSet.all()]]
+    var _file: Optional[ParquetFile[DynSource, LeafSet.all()]]
+    """Erased rather than pinned to the local backend, so a plan can scan
+    `s3://…` as readily as a path -- the scheme is a *runtime* property of the
+    URI and a comptime `S` cannot answer it. `DynSource`'s ladder is a
+    discriminant compare per read, against a page decode."""
     var _pushed: List[DynValue]
     var _bindings: Bindings
     var _plan: List[Int]
@@ -1468,8 +1472,8 @@ struct ParquetScanOperator(Operator):
             if not self._file:
                 # Opened on first use, not at plan time: a `Relation` is a
                 # description and must not touch the filesystem to exist.
-                self._file = ParquetFile[MappedFile, LeafSet.all()](
-                    self._path.copy()
+                self._file = ParquetFile[DynSource, LeafSet.all()](
+                    DynSource.open(self._path)
                 )
                 if len(self._pushed) == 0:
                     # Nothing to prove, so nothing to decode. Statistics are

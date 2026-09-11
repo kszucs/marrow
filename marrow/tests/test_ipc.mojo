@@ -28,6 +28,11 @@ from ..builders import (
     FixedSizeListBuilder,
     StructBuilder,
 )
+from std.memory import ArcPointer
+from std.os import remove
+
+from ..buffers import Buffer
+from ..io import ByteSource, Fetched, BufferSource
 from ..schema import Schema
 from ..tabular import RecordBatch, record_batch
 from ..ipc import (
@@ -922,3 +927,124 @@ def test_pyarrow_reads_a_marrow_written_map() raises:
     assert_equal(Int(py=got[0].__len__()), 1)
     assert_equal(Int(py=got[1].__len__()), 0)
     assert_equal(Int(py=got[2].__len__()), 2)
+
+
+def _file_bytes(path: String) raises -> List[UInt8]:
+    var buf = Buffer.mmap_file(path)
+    var n = buf.mapped_size()
+    return List[UInt8](buf.view[DType.uint8](0, n).as_span())
+
+
+def test_ipc_file_reads_from_a_memory_source() raises:
+    """The file reader over bytes that were never a file.
+
+    This is what the `ByteSource` seam buys IPC: the same reader serves a
+    memory map, a heap buffer, and -- once the backend lands -- an object
+    store, because it only ever asks for byte ranges.
+    """
+    var path = String("/tmp/marrow_ipc_memory_source.arrow")
+    var i1: DynArray = array([1, 2, 3, 4], int64)
+    var s1: DynArray = array(["a", "b", "c", "d"])
+    var b1 = record_batch([i1^, s1^], names=["i", "s"])
+    var i2: DynArray = array([5, 6], int64)
+    var s2: DynArray = array(["e", "f"])
+    var b2 = record_batch([i2^, s2^], names=["i", "s"])
+    write_ipc_file(path, [b1.copy(), b2.copy()])
+
+    var r = RecordBatchFileReader(BufferSource(Span(_file_bytes(path))))
+    assert_equal(r.num_record_batches(), 2)
+    var got = r.read_all()
+    assert_equal(len(got), 2)
+    assert_true(got[0] == b1)
+    assert_true(got[1] == b2)
+    remove(path)
+
+
+def test_ipc_stream_reads_from_a_memory_source() raises:
+    """Same for the stream reader, whose framing is sequential rather than
+    indexed."""
+    var path = String("/tmp/marrow_ipc_memory_source_stream.arrow")
+    var i3: DynArray = array([7, 8, 9], int64)
+    var s3: DynArray = array(["g", "h", "i"])
+    var b = record_batch([i3^, s3^], names=["i", "s"])
+    write_ipc_stream(path, [b.copy()])
+
+    var r = RecordBatchStreamReader(BufferSource(Span(_file_bytes(path))))
+    var got = r.read_all()
+    assert_equal(len(got), 1)
+    assert_true(got[0] == b)
+    remove(path)
+
+
+struct _CountingSource(ByteSource):
+    """A `BufferSource` that remembers how many bytes were read through it.
+
+    The count goes through an `ArcPointer` because `ByteSource.read_at` takes
+    `ref self`, not `mut self` — the same reason
+    `marrow/parquet/tests/test_page_io.mojo` does it that way.
+    """
+
+    var _inner: BufferSource
+    var _read: ArcPointer[Int]
+
+    def __init__(out self, data: Span[UInt8, _], var counter: ArcPointer[Int]):
+        self._inner = BufferSource(data)
+        self._read = counter^
+
+    def size(self) -> Int:
+        return self._inner.size()
+
+    def read_at(
+        ref self, offset: Int, length: Int
+    ) raises -> Span[UInt8, origin_of(self)]:
+        self._read[] += length
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._inner.read_at(offset, length)
+        )
+
+    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+        for ref r in ranges:
+            self._read[] += r[1]
+        return self._inner.read_ranges(ranges)
+
+
+def test_ipc_file_reader_reads_only_its_tail() raises:
+    """Opening a file must not fetch the whole thing.
+
+    The footer sits at the end, so the reader asks for a bounded tail and finds
+    it there. Before the `ByteSource` seam this was a whole-file `mmap`, which
+    costs nothing locally and would be a full download from an object store —
+    the same reason `ParquetFile` opens by its tail. Counting the bytes read is
+    the only way to tell "found the footer" from "read the file to find it".
+    """
+    var path = String("/tmp/marrow_ipc_tail.arrow")
+    var bld = Int64Builder()
+    for i in range(50000):
+        bld.append(Int64(i))
+    var col: DynArray = bld.finish()
+    var b = record_batch([col^], names=["i"])
+    write_ipc_file(path, [b.copy()])
+
+    var whole = _file_bytes(path)
+    assert_true(
+        len(whole) > 256 * 1024,
+        "the fixture must be much bigger than one tail read",
+    )
+
+    var counter = ArcPointer[Int](0)
+    var r = RecordBatchFileReader(_CountingSource(Span(whole), counter))
+    assert_equal(r.num_record_batches(), 1)
+
+    # Opening the file reads the leading magic, one bounded tail, and nothing
+    # else -- not the 400 KB of column data sitting between them.
+    assert_true(
+        counter[] < len(whole) // 4,
+        String("opening read ", counter[], " of ", len(whole), " bytes"),
+    )
+
+    # And the batch is still readable, so the cheap open did not skip anything
+    # it needed.
+    var got = r.read_batch(0)
+    assert_equal(got.num_rows(), 50000)
+    remove(path)
+    _ = whole^

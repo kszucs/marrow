@@ -282,6 +282,41 @@ wheel_import = { cmd = "python -c 'import marrow; print(marrow.__file__)'", depe
 wheel_test = { cmd = "pytest python/marrow/tests/test_*.py -v --noconftest -m 'not gpu'", depends-on = ["wheel_install"] }
 wheel = { depends-on = ["wheel_import", "wheel_test"] }
 
+# Object store — builds Apache OpenDAL's C binding and runs the storage tests
+# against it. Separate from `dev` on purpose: `rust` pulls ~400 crates, and
+# nothing in the default environment needs it. `libopendal_c` is `publish =
+# false` upstream with no conda build, so this is the only way to get one.
+[feature.opendal.dependencies]
+rust = ">=1.91"   # opendal-c's rust-version
+git = "*"
+cmake = "*"       # aws-lc-rs, pulled in by the default rustls transport
+
+[feature.opendal.tasks]
+# The clone tag and the cargo feature list live in the script, not here: the
+# wheel build needs the same two and a second copy that drifts is a silently
+# corrupt ABI mirror rather than a build failure. See the comment there.
+clone_opendal = "scripts/build_opendal_c.sh clone"
+build_opendal = "scripts/build_opendal_c.sh"
+# MARROW_REQUIRE_OPENDAL turns "library absent" from a silent skip into a
+# failure -- without it a suite that tests nothing looks exactly like one that
+# passes.
+test_opendal = { cmd = "MARROW_REQUIRE_OPENDAL=1 pytest -v marrow/io/tests marrow/utils/tests/test_utils_uri.mojo", depends-on = [
+  "build_opendal",
+] }
+# Lives here rather than under `examples` because it is the one example that
+# needs `libopendal_c` -- it queries a Parquet file over HTTPS. It also needs
+# the network, so it is not wired into any test task.
+huggingface = { cmd = "python examples/huggingface/main.py", depends-on = [
+  "build_python",
+  "build_opendal",
+], env = { PYTHONPATH = "python" } }
+
+[feature.opendal.target.osx.activation.env]
+MARROW_OPENDAL_LIBRARY = "$PIXI_PROJECT_ROOT/vendor/opendal/bindings/c/target/release/libopendal_c.dylib"
+
+[feature.opendal.target.linux.activation.env]
+MARROW_OPENDAL_LIBRARY = "$PIXI_PROJECT_ROOT/vendor/opendal/bindings/c/target/release/libopendal_c.so"
+
 [environments]
 default = { features = ["dev", "format"], solve-group = "default" }
 dev = { features = ["dev", "format"], solve-group = "default" }
@@ -291,6 +326,7 @@ format = { features = ["format"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
 integration = { features = ["dev", "integration"], solve-group = "integration" }
+opendal = { features = ["dev", "opendal"], solve-group = "opendal" }
 docker = { features = ["docker"], no-default-feature = true }
 wheel = { features = ["wheel"], solve-group = "default" }
 

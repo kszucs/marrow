@@ -364,6 +364,23 @@ def test_read_parquet_accepts_a_path_string(parquet_file):
     ]
 
 
+def test_read_parquet_accepts_a_uri(parquet_file):
+    """A URI, not only a path -- and on both halves of the call.
+
+    The scan operator has always resolved its source from the URI scheme, but
+    schema inference opened the string as a local file directly, so a
+    ``file://`` or ``s3://`` plan failed before it was ever executed. Both go
+    through the same dispatch now. ``file://`` is the case that needs no
+    ``libopendal_c``, so it is the one that can be pinned in the default
+    environment.
+    """
+    uri = parquet_file.as_uri()
+    assert uri.startswith("file://")
+    t = ma.read_parquet(uri)
+    assert t.column_names == ["region", "price"]
+    assert rows(t.order_by("price"))[0] == {"region": "east", "price": 10}
+
+
 # ---------------------------------------------------------------------------
 # optimize() and batches()
 # ---------------------------------------------------------------------------

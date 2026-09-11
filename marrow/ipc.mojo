@@ -21,10 +21,20 @@ list, fixed_size_list, struct, dictionary.
 """
 
 from std.math import ceildiv
-from std.pathlib import Path
 
 from .arrays import DynArray, ArrayData, DictionaryArray, NullArray, Int32Array
 from .buffers import Buffer, Bitmap
+from .io import (
+    FOOTER_READ_SIZE,
+    BufferSource,
+    BufferedSink,
+    ByteSink,
+    ByteSource,
+    DynSink,
+    DynSource,
+    FileSink,
+    StorageOptions,
+)
 from .schema import Schema
 from .tabular import RecordBatch
 from .builders import Int32Builder
@@ -1625,81 +1635,88 @@ struct _IpcDecoder(Movable):
 # ---------------------------------------------------------------------------
 
 
-struct _MessageReader(Movable):
-    """Reads framed IPC messages (continuation + length + metadata + body)."""
+def _read_message[
+    S: ByteSource
+](
+    ref src: S,
+    mut pos: Int,
+    mut meta: List[UInt8],
+    mut body: List[UInt8],
+) raises -> Bool:
+    """Parse one framed IPC message (continuation + length + metadata + body)
+    at `pos`, advancing it past the message. Returns False at end-of-stream.
 
-    var _buf: Buffer[mut=False]
-    """The file's bytes, owned. A `Buffer` rather than a `List` so a
-    memory-mapped file can be read without first copying it in — `len(_buf)` is
-    padded to 64, hence the separate `_size`."""
-    var _size: Int
-    var _pos: Int
+    A free generic function rather than a method on a `_MessageReader[S]`
+    struct: the readers already hold the source and the cursor, and a struct
+    whose only job was to pair them added a nested generic instantiation for
+    nothing.
 
-    def __init__(
-        out self, var buf: Buffer[mut=False], size: Int, start_pos: Int = 0
-    ):
-        self._buf = buf^
-        self._size = size
-        self._pos = start_pos
+    Three ranged reads per message — the frame prefix, the metadata, the body.
+    On a memory map those are three `Buffer.view` calls; on a remote source
+    they are three round trips, and a caller that knows a message's extent from
+    a footer `_Block` could ask for it in one. That optimisation is not here.
 
-    def _span(self) -> Span[UInt8, origin_of(self)]:
-        return rebind[Span[UInt8, origin_of(self)]](
-            self._buf.view[DType.uint8](0, self._size).as_span()
+    The metadata and the body go through `read_ranges`, not `read_at`, and that
+    is not a style choice: `read_at` hands back a span borrowed from storage
+    the source keeps alive for *its* whole lifetime, so a fetching source
+    retains every byte it ever served. A message body is the bulk of the file,
+    so reading a 5 GB stream that way would end holding 5 GB. `read_ranges`
+    returns a batch this function owns and drops. The 8-byte frame prefix goes
+    the same way: it is tiny, but one arena entry *per message* still grows
+    with the stream, and "bounded per call" is not the same as bounded.
+    """
+    var n = src.size()
+    if pos + 4 > n:
+        return False
+
+    # The frame prefix is 4 bytes, or 8 when the continuation marker is
+    # present. Ask for as much of it as the source has left.
+    var pre_fetched = src.read_ranges([(pos, min(8, n - pos))])
+    var pre = pre_fetched.span(0)
+    var marker = LittleEndian.checked[DType.int32](pre, 0)
+    var metadata_len: Int
+    var meta_start: Int
+    if UInt32(marker) == UInt32(0xFFFFFFFF):
+        if pos + 8 > n:
+            return False
+        metadata_len = Int(LittleEndian.checked[DType.int32](pre, 4))
+        meta_start = pos + 8
+    else:
+        metadata_len = Int(marker)
+        meta_start = pos + 4
+
+    if metadata_len == 0:
+        pos = meta_start
+        return False
+    if metadata_len < 0 or meta_start + metadata_len > n:
+        raise Error(
+            "IPC: message metadata at ",
+            meta_start,
+            " runs past the end of a ",
+            n,
+            "-byte source",
         )
+    var meta_fetched = src.read_ranges([(meta_start, metadata_len)])
+    meta.extend(meta_fetched.span(0))
 
-    def pos(self) -> Int:
-        return self._pos
+    var raw_end = meta_start + metadata_len
+    var meta_end = raw_end + (8 - raw_end % 8) % 8
 
-    def seek(mut self, pos: Int):
-        self._pos = pos
+    var dec = _IpcDecoder(meta.copy())
+    var body_len = Int(dec.body_length())
+    if body_len < 0 or meta_end + body_len > n:
+        raise Error(
+            "IPC: message body at ",
+            meta_end,
+            " runs past the end of a ",
+            n,
+            "-byte source",
+        )
+    var body_fetched = src.read_ranges([(meta_end, body_len)])
+    body.extend(body_fetched.span(0))
 
-    def __len__(self) -> Int:
-        return self._size
-
-    def read_next(
-        mut self,
-        mut meta: List[UInt8],
-        mut body: List[UInt8],
-    ) raises -> Bool:
-        """Parse one message at the current position. Returns False at end-of-stream.
-        """
-        var n = self._size
-        var data = self._span()
-        if self._pos + 4 > n:
-            return False
-
-        var marker = LittleEndian.checked[DType.int32](data, self._pos)
-        var metadata_len: Int
-        var meta_start: Int
-        if UInt32(marker) == UInt32(0xFFFFFFFF):
-            if self._pos + 8 > n:
-                return False
-            metadata_len = Int(
-                LittleEndian.checked[DType.int32](data, self._pos + 4)
-            )
-            meta_start = self._pos + 8
-        else:
-            metadata_len = Int(marker)
-            meta_start = self._pos + 4
-
-        if metadata_len == 0:
-            self._pos = meta_start
-            return False
-
-        for i in range(metadata_len):
-            meta.append(data[meta_start + i])
-
-        var raw_end = meta_start + metadata_len
-        var meta_end = raw_end + (8 - raw_end % 8) % 8
-
-        var dec = _IpcDecoder(meta.copy())
-        var body_len = Int(dec.body_length())
-
-        for i in range(body_len):
-            body.append(data[meta_end + i])
-
-        self._pos = meta_end + body_len
-        return True
+    pos = meta_end + body_len
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -2066,15 +2083,20 @@ struct _BatchDecoder(Movable):
 # ---------------------------------------------------------------------------
 
 
-struct RecordBatchFileWriter(Movable):
+struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
     """Incremental writer for the Arrow IPC file format.
 
-    Write batches with `write_batch`, then call `close()` to flush the
-    footer and write the file to disk.
+    Write batches with `write_batch`, then call `close()` to append the footer
+    and commit. Nothing is published until `close()` succeeds.
+
+    Batches are handed to the sink as they are written, so peak residency is
+    one message rather than the whole file. That is safe here and is not in the
+    Parquet writer: the only absolute offsets this format records are the
+    `_Block` positions below, which come from `tell()`, while an encoded
+    message is self-contained.
     """
 
-    var _out: List[UInt8]
-    var _path: String
+    var _out: BufferedSink[Self.S]
     var _schema: Schema
     var _dict_blocks: List[_Block]
     var _blocks: List[_Block]
@@ -2082,9 +2104,16 @@ struct RecordBatchFileWriter(Movable):
     var _dicts_written: List[Bool]
     var _closed: Bool
 
-    def __init__(out self, path: String, schema: Schema) raises:
-        self._out = List[UInt8]()
-        self._path = path
+    def __init__(
+        out self: RecordBatchFileWriter[FileSink],
+        path: String,
+        schema: Schema,
+    ) raises:
+        """Write to a local file — the convenience that pins `S == FileSink`."""
+        self = RecordBatchFileWriter[FileSink](FileSink(path), schema)
+
+    def __init__(out self, var sink: Self.S, schema: Schema) raises:
+        self._out = BufferedSink(sink^)
         self._schema = Schema(copy=schema)
         self._dict_blocks = List[_Block]()
         self._blocks = List[_Block]()
@@ -2093,11 +2122,11 @@ struct RecordBatchFileWriter(Movable):
         self._closed = False
 
         for b in _magic():
-            self._out.append(b)
+            self._out.buffer().append(b)
         var schema_msg = _IpcEncoder.frame_message(
             _IpcEncoder.encode_schema_message(self._schema), List[UInt8]()
         )
-        self._out.extend(Span(schema_msg))
+        self._out.write(Span(schema_msg))
 
     def write_batch(mut self, batch: RecordBatch) raises:
         if self._closed:
@@ -2114,53 +2143,65 @@ struct RecordBatchFileWriter(Movable):
                 self._dicts_written.append(False)
             if self._dicts_written[did]:
                 continue
-            var dict_blk_start = Int64(len(self._out))
+            var dict_blk_start = Int64(self._out.tell())
             var eb = _BatchEncoder.encode_dict_message(
                 Int64(did), pairs[j].values
             )
-            self._out.extend(Span(eb.msg))
+            self._out.write(Span(eb.msg))
             self._dict_blocks.append(
                 _Block(dict_blk_start, eb.metadata_length, eb.body_length)
             )
             self._dicts_written[did] = True
-        var blk_start = Int64(len(self._out))
+        var blk_start = Int64(self._out.tell())
         var eb = self._enc.encode(batch)
-        self._out.extend(Span(eb.msg))
+        self._out.write(Span(eb.msg))
         self._blocks.append(
             _Block(blk_start, eb.metadata_length, eb.body_length)
         )
+        # One message resident at a time. `tell()` stays absolute across this,
+        # which is what keeps the `_Block` offsets above meaningful.
+        self._out.flush()
 
     def close(mut self) raises:
         if self._closed:
             return
-        _pad_to(self._out, 8)
+        self._out.pad_to(8)
         var footer_bytes = _IpcEncoder.encode_footer(
             self._schema, self._dict_blocks, self._blocks
         )
-        self._out.extend(Span(footer_bytes))
-        LittleEndian.append[DType.int32](self._out, Int32(len(footer_bytes)))
+        self._out.write(Span(footer_bytes))
+        LittleEndian.append[DType.int32](
+            self._out.buffer(), Int32(len(footer_bytes))
+        )
         var magic = _magic()
         for i in range(6):
-            self._out.append(magic[i])
-        Path(self._path).write_bytes(self._out^)
+            self._out.buffer().append(magic[i])
+        self._out.close()
         self._closed = True
 
 
-struct RecordBatchStreamWriter(Movable):
+struct RecordBatchStreamWriter[S: ByteSink = FileSink](Movable):
     """Incremental writer for the Arrow IPC stream format.
 
-    Write batches with `write_batch`, then call `close()` to write the
-    EOS marker and flush the stream to disk.
+    Write batches with `write_batch`, then call `close()` to write the EOS
+    marker and commit. A stream records no offsets at all, so each message goes
+    to the sink as soon as it is encoded.
     """
 
-    var _out: List[UInt8]
-    var _path: String
+    var _out: BufferedSink[Self.S]
     var _enc: _BatchEncoder
     var _closed: Bool
 
-    def __init__(out self, path: String, schema: Schema) raises:
-        self._out = List[UInt8]()
-        self._path = path
+    def __init__(
+        out self: RecordBatchStreamWriter[FileSink],
+        path: String,
+        schema: Schema,
+    ) raises:
+        """Write to a local file — the convenience that pins `S == FileSink`."""
+        self = RecordBatchStreamWriter[FileSink](FileSink(path), schema)
+
+    def __init__(out self, var sink: Self.S, schema: Schema) raises:
+        self._out = BufferedSink(sink^)
         self._enc = _BatchEncoder()
         self._closed = False
 
@@ -2168,7 +2209,7 @@ struct RecordBatchStreamWriter(Movable):
             _IpcEncoder.encode_schema_message(schema),
             List[UInt8](),
         )
-        self._out.extend(Span(schema_msg))
+        self._out.write(Span(schema_msg))
 
     def write_batch(mut self, batch: RecordBatch) raises:
         if self._closed:
@@ -2182,15 +2223,18 @@ struct RecordBatchStreamWriter(Movable):
             var eb = _BatchEncoder.encode_dict_message(
                 Int64(pairs[j].dict_id), pairs[j].values
             )
-            self._out.extend(Span(eb.msg))
-        self._out.extend(Span(self._enc.encode(batch).msg))
+            self._out.write(Span(eb.msg))
+        self._out.write(Span(self._enc.encode(batch).msg))
+        self._out.flush()
 
     def close(mut self) raises:
         if self._closed:
             return
-        LittleEndian.append[DType.uint32](self._out, UInt32(0xFFFFFFFF))
-        LittleEndian.append[DType.int32](self._out, Int32(0))
-        Path(self._path).write_bytes(self._out^)
+        LittleEndian.append[DType.uint32](
+            self._out.buffer(), UInt32(0xFFFFFFFF)
+        )
+        LittleEndian.append[DType.int32](self._out.buffer(), Int32(0))
+        self._out.close()
         self._closed = True
 
 
@@ -2199,38 +2243,60 @@ struct RecordBatchStreamWriter(Movable):
 # ---------------------------------------------------------------------------
 
 
-struct RecordBatchFileReader(Movable):
-    """Reader for the Arrow IPC file format with random-access batch reads."""
+struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
+    """Reader for the Arrow IPC file format with random-access batch reads.
+
+    Opens a file by reading its **tail**, not its whole extent: the footer sits
+    at the end, so one speculative `FOOTER_READ_SIZE` read finds it, and the
+    read is repeated only when the footer overruns that window.
+    """
 
     var schema: Schema
     var _ipc_infos: List[_FieldIpcInfo]
     var _blocks: List[_Block]
-    var _msg_reader: _MessageReader
+    var _src: Self.S
     var _dict_values: List[DynArray]
 
-    def __init__(out self, path: String) raises:
-        # Memory-mapped, not read in: an IPC file used to be copied whole into a
-        # `List[UInt8]` before a single byte was parsed.
-        var buf = Buffer.mmap_file(path)
-        var n = buf.mapped_size()
-        var file_bytes = buf.view[DType.uint8](0, n).as_span()
+    def __init__(
+        out self: RecordBatchFileReader[BufferSource], path: String
+    ) raises:
+        """Open a local file as a memory map — the convenience that pins
+        `S == BufferSource`."""
+        self = RecordBatchFileReader[BufferSource](BufferSource(path))
+
+    def __init__(out self, var source: Self.S) raises:
+        var n = source.size()
         if n < 14:
             raise Error("IPC file too short")
         var magic = _magic()
+
+        var head = source.read_at(0, 8)
         for i in range(8):
-            if file_bytes[i] != magic[i]:
+            if head[i] != magic[i]:
                 raise Error("IPC file: bad magic bytes")
+
+        # One tail read serves the trailing magic, the footer length and, all
+        # but always, the footer itself.
+        var want = min(FOOTER_READ_SIZE, n)
+        var tail = source.read_at(n - want, want)
         for i in range(6):
-            if file_bytes[n - 6 + i] != magic[i]:
+            if tail[want - 6 + i] != magic[i]:
                 raise Error("IPC file: bad trailing magic")
 
         var footer_size = Int(
-            LittleEndian.checked[DType.int32](file_bytes, n - 10)
+            LittleEndian.checked[DType.int32](tail, want - 10)
         )
-        var footer_start = n - 10 - footer_size
-        var footer_bytes = List[UInt8](capacity=footer_size)
-        for i in range(footer_size):
-            footer_bytes.append(file_bytes[footer_start + i])
+        if footer_size < 0 or footer_size + 10 > n:
+            raise Error("IPC file: bad footer length ", footer_size)
+
+        var footer_bytes: List[UInt8]
+        if footer_size + 10 <= want:
+            var at = want - 10 - footer_size
+            footer_bytes = List[UInt8](tail[at : at + footer_size])
+        else:
+            # The speculative window was too small; ask for exactly the footer.
+            var start = n - 10 - footer_size
+            footer_bytes = List[UInt8](source.read_at(start, footer_size))
 
         var dec = _IpcDecoder(footer_bytes^)
         var dict_blocks = List[_Block]()
@@ -2239,17 +2305,17 @@ struct RecordBatchFileReader(Movable):
         self.schema = dec.read_footer(dict_blocks, blocks, ipc_infos)
         self._ipc_infos = ipc_infos^
         self._blocks = blocks^
-        self._msg_reader = _MessageReader(buf, n)
+        self._src = source^
         self._dict_values = List[DynArray]()
 
         # Load dictionary values from their footer-registered blocks.
         # dict_values is indexed by dict_id; pass partial list to decode_dict_batch
         # so that nested dicts (already loaded at lower ids) can be resolved.
         for di in range(len(dict_blocks)):
-            self._msg_reader.seek(Int(dict_blocks[di].offset))
+            var pos = Int(dict_blocks[di].offset)
             var meta = List[UInt8]()
             var body = List[UInt8]()
-            if not self._msg_reader.read_next(meta, body):
+            if not _read_message(self._src, pos, meta, body):
                 break
             var dict_id = _IpcDecoder(meta.copy()).peek_dict_id()
             var lkup = _FieldIpcInfo.find_in_schema(
@@ -2270,13 +2336,16 @@ struct RecordBatchFileReader(Movable):
     def num_record_batches(self) -> Int:
         return len(self._blocks)
 
-    def read_batch(mut self, i: Int) raises -> RecordBatch:
+    def read_batch(ref self, i: Int) raises -> RecordBatch:
+        """One batch, by index. `ref self` rather than `mut self`: this format is
+        random-access -- the footer's `_Block` table holds every offset -- so the
+        cursor is a local, and several readers of one file do not contend."""
         if i < 0 or i >= len(self._blocks):
             raise Error("RecordBatchFileReader: batch index out of range")
-        self._msg_reader.seek(Int(self._blocks[i].offset))
+        var pos = Int(self._blocks[i].offset)
         var meta = List[UInt8]()
         var body = List[UInt8]()
-        var _ok = self._msg_reader.read_next(meta, body)
+        var _ok = _read_message(self._src, pos, meta, body)
         var dec = _IpcDecoder(meta^)
         return dec.decode_record_batch(
             self.schema, self._ipc_infos, body^, self._dict_values
@@ -2290,26 +2359,38 @@ struct RecordBatchFileReader(Movable):
         return batches^
 
 
-struct RecordBatchStreamReader(Movable):
-    """Reader for the Arrow IPC stream format."""
+struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
+    """Reader for the Arrow IPC stream format.
+
+    Framing stays strictly sequential, because a stream carries no index. That
+    is honest but not ideal over an object store, which wants a prefetch window
+    rather than a round trip per message; the seam admits such a source, and
+    this reader does not add one.
+    """
 
     var schema: Schema
     var _ipc_infos: List[_FieldIpcInfo]
-    var _msg_reader: _MessageReader
+    var _src: Self.S
+    var _pos: Int
 
-    def __init__(out self, path: String) raises:
-        # Memory-mapped rather than read in, same as the file reader.
-        var buf = Buffer.mmap_file(path)
-        var msg_reader = _MessageReader(buf, buf.mapped_size())
+    def __init__(
+        out self: RecordBatchStreamReader[BufferSource], path: String
+    ) raises:
+        """Open a local file as a memory map — the convenience that pins
+        `S == BufferSource`."""
+        self = RecordBatchStreamReader[BufferSource](BufferSource(path))
+
+    def __init__(out self, var source: Self.S) raises:
+        self._src = source^
+        self._pos = 0
         var meta = List[UInt8]()
         var body = List[UInt8]()
-        if not msg_reader.read_next(meta, body):
+        if not _read_message(self._src, self._pos, meta, body):
             raise Error("RecordBatchStreamReader: missing schema message")
         var ipc_infos = List[_FieldIpcInfo]()
         var dec = _IpcDecoder(meta^)
         self.schema = dec.decode_schema(ipc_infos)
         self._ipc_infos = ipc_infos^
-        self._msg_reader = msg_reader^
 
     def read_all(mut self) raises -> List[RecordBatch]:
         var dict_values = List[DynArray]()
@@ -2317,7 +2398,7 @@ struct RecordBatchStreamReader(Movable):
         while True:
             var meta = List[UInt8]()
             var body = List[UInt8]()
-            if not self._msg_reader.read_next(meta, body):
+            if not _read_message(self._src, self._pos, meta, body):
                 break
             var header_type: UInt8
             var peek = _IpcDecoder(meta.copy())
@@ -2362,64 +2443,86 @@ struct RecordBatchStreamReader(Movable):
 
 
 def write_ipc_file(
-    path: String, schema: Schema, batches: List[RecordBatch]
+    uri: String,
+    schema: Schema,
+    batches: List[RecordBatch],
+    options: StorageOptions = StorageOptions(),
 ) raises:
     """Write RecordBatches to an Arrow IPC file with an explicit schema."""
-    var w = RecordBatchFileWriter(path, schema)
+    var w = RecordBatchFileWriter(DynSink.open(uri, options), schema)
     for batch in batches:
         w.write_batch(batch)
     w.close()
 
 
-def write_ipc_file(path: String, batches: List[RecordBatch]) raises:
+def write_ipc_file(
+    uri: String,
+    batches: List[RecordBatch],
+    options: StorageOptions = StorageOptions(),
+) raises:
     """Write RecordBatches to an Arrow IPC file."""
     if len(batches) == 0:
         raise Error(
             "write_ipc_file: no batches; use write_ipc_file(path, schema,"
             " batches) for schema-only files"
         )
-    write_ipc_file(path, batches[0].schema, batches)
+    write_ipc_file(uri, batches[0].schema, batches, options)
 
 
 def write_ipc_stream(
-    path: String, schema: Schema, batches: List[RecordBatch]
+    uri: String,
+    schema: Schema,
+    batches: List[RecordBatch],
+    options: StorageOptions = StorageOptions(),
 ) raises:
     """Write RecordBatches to an Arrow IPC stream with an explicit schema."""
-    var w = RecordBatchStreamWriter(path, schema)
+    var w = RecordBatchStreamWriter(DynSink.open(uri, options), schema)
     for batch in batches:
         w.write_batch(batch)
     w.close()
 
 
-def write_ipc_stream(path: String, batches: List[RecordBatch]) raises:
+def write_ipc_stream(
+    uri: String,
+    batches: List[RecordBatch],
+    options: StorageOptions = StorageOptions(),
+) raises:
     """Write RecordBatches to an Arrow IPC stream."""
     if len(batches) == 0:
         raise Error(
             "write_ipc_stream: no batches; use write_ipc_stream(path, schema,"
             " batches) for schema-only streams"
         )
-    write_ipc_stream(path, batches[0].schema, batches)
+    write_ipc_stream(uri, batches[0].schema, batches, options)
 
 
-def read_ipc_file(path: String) raises -> List[RecordBatch]:
+def read_ipc_file(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> List[RecordBatch]:
     """Read an Arrow IPC file and return all RecordBatches."""
-    var r = RecordBatchFileReader(path)
+    var r = RecordBatchFileReader(DynSource.open(uri, options))
     return r.read_all()
 
 
-def read_ipc_stream(path: String) raises -> List[RecordBatch]:
+def read_ipc_stream(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> List[RecordBatch]:
     """Read an Arrow IPC stream and return all RecordBatches."""
-    var r = RecordBatchStreamReader(path)
+    var r = RecordBatchStreamReader(DynSource.open(uri, options))
     return r.read_all()
 
 
-def read_ipc_file_schema(path: String) raises -> RecordBatch:
+def read_ipc_file_schema(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> RecordBatch:
     """Read the schema from an Arrow IPC file; return a 0-row RecordBatch."""
-    var r = RecordBatchFileReader(path)
+    var r = RecordBatchFileReader(DynSource.open(uri, options))
     return RecordBatch.empty(r.schema)
 
 
-def read_ipc_stream_schema(path: String) raises -> RecordBatch:
+def read_ipc_stream_schema(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> RecordBatch:
     """Read the schema from an Arrow IPC stream; return a 0-row RecordBatch."""
-    var r = RecordBatchStreamReader(path)
+    var r = RecordBatchStreamReader(DynSource.open(uri, options))
     return RecordBatch.empty(r.schema)

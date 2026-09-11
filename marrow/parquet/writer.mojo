@@ -12,10 +12,15 @@ values). Value encoding is dispatched by Arrow type to typed methods, so the
 writer mirrors the reader's structure.
 """
 
-from std.pathlib import Path
-
 
 from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
+from ..io import (
+    BufferedSink,
+    ByteSink,
+    FileSink,
+    DynSink,
+    StorageOptions,
+)
 from ..dtypes import PrimitiveType, NumericType
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
@@ -768,8 +773,24 @@ struct ColumnWriter(Movable):
 # ---------------------------------------------------------------------------
 
 
-struct FileWriter(Movable):
-    var out: List[UInt8]
+struct FileWriter[S: ByteSink = FileSink](Movable):
+    """Writes a `Table` as a Parquet file to any `ByteSink`.
+
+    **The output is staged whole and committed at `close`, not streamed.**
+    `ColumnWriter` records `data_page_offset`, `dictionary_page_offset` and
+    every `PageLocation.offset` as `len(out)` — absolute file offsets — so
+    flushing between row groups would leave the staging buffer restarting at
+    zero while the footer went on claiming file positions, and every page offset
+    in the file would be wrong. Streaming needs `ColumnWriter` to be told the
+    base offset first; that is a separate change, and until it lands `out` is
+    never flushed early, which keeps `tell()` and `len(buffer())` in agreement
+    by construction.
+
+    So what the sink buys today is *destination independence*, not a lower peak
+    residency: the same writer emits to a local file or an object store.
+    """
+
+    var out: BufferedSink[Self.S]
     var codecs: CompressionLibs
     var compression: Compression
     var version: Int  # data-page version: 1 (default) or 2
@@ -782,6 +803,7 @@ struct FileWriter(Movable):
 
     def __init__(
         out self,
+        var sink: Self.S,
         compression: Compression,
         version: Int = 1,
         use_dictionary: Bool = True,
@@ -790,8 +812,8 @@ struct FileWriter(Movable):
         write_bloom_filter: Bool = False,
         write_page_checksum: Bool = False,
     ):
-        self.out = List[UInt8]()
-        FileMetaData.write_magic(self.out)  # file header magic
+        self.out = BufferedSink(sink^)
+        FileMetaData.write_magic(self.out.buffer())  # file header magic
         self.codecs = CompressionLibs()
         self.compression = compression
         self.version = version
@@ -859,7 +881,7 @@ struct FileWriter(Movable):
                     defs[gi],
                     reps[gi],
                     [self.leaves[gi].name],
-                    self.out,
+                    self.out.buffer(),
                     self.codecs,
                 )
                 total += cc.meta_data.total_uncompressed_size
@@ -874,9 +896,10 @@ struct FileWriter(Movable):
     def write(
         mut self,
         table: Table,
-        path: String,
         row_group_size: Int = DEFAULT_ROW_GROUP_SIZE,
     ) raises:
+        """Encode `table` and commit it to the sink. The destination was fixed
+        when the writer was constructed."""
         var batch = table.combine_chunks()
         var n = batch.num_rows()
 
@@ -912,8 +935,10 @@ struct FileWriter(Movable):
         self._write_bloom_filters(fmeta)
         self._write_page_index(fmeta)
 
-        fmeta.write_footer(self.out)
-        Path(path).write_bytes(Span(self.out))
+        fmeta.write_footer(self.out.buffer())
+        # Nothing has reached the sink until now: this is the single
+        # write, and the commit.
+        self.out.close()
 
     def _write_bloom_filters(mut self, mut fmeta: FileMetaData) raises:
         """Emit each chunk's bloom filter (BloomFilterHeader + bitset) and record
@@ -924,11 +949,11 @@ struct FileWriter(Movable):
                 var nbytes = len(fmeta.row_groups[rg].columns[ci].bloom_bytes)
                 if nbytes == 0:
                     continue
-                var offset = len(self.out)
+                var offset = self.out.tell()
                 var hdr = BloomFilterHeader()
                 hdr.num_bytes = nbytes
-                var hlen = hdr.append_to(self.out)
-                self.out.extend(
+                var hlen = hdr.append_to(self.out.buffer())
+                self.out.buffer().extend(
                     Span(fmeta.row_groups[rg].columns[ci].bloom_bytes)
                 )
                 fmeta.row_groups[rg].columns[
@@ -948,8 +973,8 @@ struct FileWriter(Movable):
                     var cix = (
                         fmeta.row_groups[rg].columns[ci].column_index_out.copy()
                     )
-                    var coff = len(self.out)
-                    var clen = cix.append_to(self.out)
+                    var coff = self.out.tell()
+                    var clen = cix.append_to(self.out.buffer())
                     fmeta.row_groups[rg].columns[ci].column_index_offset = coff
                     fmeta.row_groups[rg].columns[ci].column_index_length = clen
 
@@ -957,15 +982,15 @@ struct FileWriter(Movable):
                     fmeta.row_groups[rg].columns[ci].offset_index_out.copy()
                 )
                 if len(oix.page_locations) > 0:
-                    var ooff = len(self.out)
-                    var olen = oix.append_to(self.out)
+                    var ooff = self.out.tell()
+                    var olen = oix.append_to(self.out.buffer())
                     fmeta.row_groups[rg].columns[ci].offset_index_offset = ooff
                     fmeta.row_groups[rg].columns[ci].offset_index_length = olen
 
 
 def write_table(
     table: Table,
-    path: String,
+    uri: String,
     compression: Compression = Compression.SNAPPY,
     version: Int = 1,
     use_dictionary: Bool = True,
@@ -973,8 +998,15 @@ def write_table(
     var column_encodings: Dict[String, Encoding] = {},
     write_bloom_filter: Bool = False,
     write_page_checksum: Bool = False,
+    options: StorageOptions = StorageOptions(),
 ) raises:
-    """Write a Marrow `Table` to a Parquet file. `version` selects the data-page
+    """Write a Marrow `Table` to a Parquet file at `uri`.
+
+    `uri` is a path or a URL — `out.parquet`, `s3://bucket/key.parquet`, and so
+    on; see `read_table` for the schemes and `StorageOptions` for how service
+    configuration is resolved. Nothing is published until the write completes,
+    locally by writing a temp file and renaming it, remotely because an
+    unfinished upload does not exist. `version` selects the data-page
     format: 1 (default) or 2 (levels stored uncompressed ahead of the values).
     `use_dictionary` (default True, like PyArrow) dictionary-encodes numeric and
     string columns; set False to force PLAIN.
@@ -994,6 +1026,7 @@ def write_table(
     every page header, which the reader verifies to detect corruption.
     """
     var writer = FileWriter(
+        DynSink.open(uri, options),
         compression,
         version,
         use_dictionary,
@@ -1002,4 +1035,4 @@ def write_table(
         write_bloom_filter,
         write_page_checksum,
     )
-    writer.write(table, path)
+    writer.write(table)

@@ -98,7 +98,7 @@ from ..parquet.reader import (
     ParquetFile,
     RowSelection,
 )
-from ..parquet.source import ByteSource
+from ..io import ByteSource
 from ..scalars import BoolScalar, DynScalar, NullScalar
 from .bindings import Bindings
 from .logical import DynValue

@@ -37,7 +37,7 @@ all of them.
 | 13 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
 | 14 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
 | 15 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
-| 16 | **A `ByteSource` a plan can choose** — mmap a local file, stream a local file, stream a remote one | `MappedFile` is the only one and `ParquetScanOperator` hardcodes it, so a plan cannot read anything else. The kind is a *runtime* choice, so the comptime `S` is the wrong mechanism — see §1.9 for the erased shape and the origin spike that gates it. Page-level pruning already saves the I/O; this is what makes that saving reachable | **M** | — |
+| 16 | **Parallel range fetch for a remote `ByteSource`** | Done: the seam, the URI dispatch, and `ParquetScanOperator` on `DynSource`, so a plan can scan `s3://`. What is left is that `OpenDalSource.read_ranges` issues its fetches serially — one round-trip time each, where they could go out together. See §1.9 | **S** | — |
 
 ---
 
@@ -208,35 +208,44 @@ skipped page is stepped over from the index rather than by parsing its header.
 `ByteSource` -- the only way to tell "returned the right rows" from "did less
 work". What is left:
 
-- **`MappedFile` is the only real `ByteSource`, and nothing can supply another.**
-  `ParquetScanOperator` hardcodes `ParquetFile[MappedFile, LeafSet.all()]` and
-  builds it from `ParquetScan`'s `path`, so a query plan cannot stream a local
-  file or read a remote one -- and the byte-level proof above stops at
-  `ParquetFile.read`, since a recorder cannot be injected through `execute()`.
+- **A remote `read_ranges` fetches its ranges serially.** The storage seam is
+  done -- `marrow/io/` owns `ByteSource`/`ByteSink`, both formats read and
+  write through them, `DynSource`/`DynSink` pick a backend from the URI scheme,
+  and `ParquetScanOperator` holds a `ParquetFile[DynSource]` so a *plan* can
+  scan `s3://` (measured: `query_cli` +50,048, +1.64%; every other gate under
+  800 bytes). `ParquetFile.read` also plans first and issues one `read_ranges`
+  before the fan-out, so the decode workers borrow a value nobody mutates,
+  which is the property `Fetched` exists to give.
 
-  **The source kind is a runtime choice** (mmap a local file, stream a local
-  file, stream a remote one -- decided from the URI, maybe from the file's
-  size), so a comptime `S` is the wrong mechanism: it fixes the choice at
-  compile time *and* links one copy of the reader per kind. The shape that fits
-  is an erased `DynByteSource` -- trampoline-based rather than a `Variant`, so
-  a caller can supply its own source, with the `_drop` trampoline every erased
-  box here needs. Erasure is cheap in this one place: `read_at` fires once for
-  the footer, once per (row group x leaf) for the offset index, and once per
-  fetch range, each followed by decoding a page.
+  What is left is inside `OpenDalSource.read_ranges`: it issues its fetches one
+  after another, where parquet-rs hands the whole set to
+  `object_store::ObjectStore::get_ranges` and they go out together. On a local file that is
+  free; on S3 it is the difference between one round-trip time and N. The shape
+  to copy is the pattern at `reader.mojo`'s existing fan-out -- a pre-sized
+  `List[Optional[Buffer]]`, disjoint slots, `sync_parallelize`, a per-worker
+  `Optional[Error]`.
 
-  Contained: `S: ByteSource` appears 4 times and `ParquetFile[...]` at ~7 sites;
-  `ColumnReader` and `PageReader` never mention it, they take spans. **Spike
-  first:** whether a trait method returning `Span[UInt8, origin_of(self)]`
-  survives trampoline erasure -- the origin has to end up tied to the box's
-  pointee, not the box, and that is the one thing that could sink the design.
-  parquet-rs's `object_store` and Apache OpenDAL are the shape to copy, and
-  instrumentation is then a wrapper source rather than a parameter.
+- **`pytest marrow/tests/test_ipc.mojo` on its own deadlocks the compiler.**
+  `%cpu=0.0`, RSS flat at ~900 MB, CPU time frozen at ~13.7 s while elapsed
+  grows, no diagnostic -- the signature CLAUDE.md records for the `__eq__`
+  instantiation cycle. It reproduces on `cb296c82` with no local changes, so it
+  is not new, and it is invisible day to day because every routine invocation
+  selects that file *alongside* `marrow/parquet/tests`, and that larger unit
+  compiles in ~110 s. One selection is one compilation unit, so the smaller
+  selection is a different unit and only it deadlocks. Not yet narrowed to a
+  case: the first 18 cases compile in 33 s, and both halves of the remaining 19
+  hang. Anyone touching `ipc.mojo` must run it in the combined selection or
+  they will read the timeout as their own breakage -- as happened here.
 
-- **The Parquet reader has no batch-read entry point.** `ByteSource.read_at`
-  fetches one range, so a selection spanning several pages issues one call per
-  contiguous run. Adjacent ranges are merged first (`_selected_ranges`), which
-  is what parquet-rs delegates to `ObjectStore::get_ranges` instead -- for a
-  remote source those calls could go out in parallel, and here they are serial.
+- **A Parquet file is still staged whole before it is written.** `ColumnWriter`
+  records `data_page_offset`, `dictionary_page_offset` and every
+  `PageLocation.offset` as `len(out)`, an absolute file offset, so
+  `FileWriter`'s `BufferedSink` cannot flush between row groups: the staging
+  buffer would restart at zero while the footer went on claiming file
+  positions. Teaching `ColumnWriter` its base offset is what unlocks streaming,
+  and would drop peak residency from the file to one row group. The IPC writers
+  already stream, because their only absolute offsets are the `_Block`
+  positions the writer itself computes.
 
 - **The page index is fetched more than once.** `expr.page_selections` decodes
   the whole file's page index to choose pages, and then `read` fetches and
@@ -483,7 +492,7 @@ page.**
 (`marrow/expr/builders.mojo:213`) — one file, and the caller supplies the schema
 because "a `Relation` is a description and must not touch the filesystem to
 exist". `ByteSource` is a deliberate seam whose docstring anticipates "a
-streaming reader or a remote (OpenDAL) object store later", but `MappedFile` is
+streaming reader or a remote (OpenDAL) object store later", but `BufferSource` is
 the only implementation (`marrow/parquet/source.mojo`).
 
 **What it would take.** Three separable pieces. (a) Derive a `Schema` from the

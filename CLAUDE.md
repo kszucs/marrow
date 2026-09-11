@@ -310,14 +310,16 @@ bumps.
 `var arr: DynArray = my_primitive_array` and
 `var prim: PrimitiveArray[Int64Type] = some_array` both work transparently.
 
-**The erased containers do not conform to the traits they erase**, and there is
-no exception. `DynArray`, `DynScalar`, `DynBuilder`, `DynType` and `DynValue`
+**The erased containers do not conform to the traits they erase**, with one
+exception. `DynArray`, `DynScalar`, `DynBuilder`, `DynType` and `DynValue`
 expose the same surface as `Array`, `ArrowScalar`, `Builder`, `DataType` and
 `Value`, but as their own API — they are not substitutable for a typed value in
 generic code, and nothing in the tree asks them to be: every `[T: Array]`-style
 bound lives inside a box's own `_dispatch`. Dropping the conformances changed no
 behaviour and no binary size. **A box may *hold* trait-bound values; it should
-not *be* one.**
+not *be* one.** The exception is `DynSource`/`DynSink` in `marrow/io/`, which
+do conform, because `ParquetFile[S: ByteSource]` and friends are real generic
+consumers that predate them — see `io/dispatch.mojo`.
 
 ### Arrays, builders, scalars
 
@@ -387,9 +389,11 @@ Rules:
 - Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for
   computation. No naked pointer arithmetic in kernel or array code.
 - **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`,
-  `c_data.mojo`, `utils/byteorder.mojo` and the Parquet codec layer**
-  (`parquet/reader.mojo`, `parquet/codecs.mojo`, which `dlopen` the C codecs and
-  hand them raw pointers). Everything else goes through the view abstractions.
+  `c_data.mojo`, `utils/byteorder.mojo` and the layers that hand raw pointers
+  to a `dlopen`ed C library** — `utils/dylib.mojo` (the shared marshalling
+  primitives), `utils/compression.mojo` with `parquet/reader.mojo` and
+  `parquet/codecs.mojo` for the page codecs, and `io/opendal.mojo` for the
+  object store. Everything else goes through the view abstractions.
   `LittleEndian.fixed` is *the* byte-order primitive, and confining the
   unaligned wide load to it is what keeps raw pointers out of every decoder that
   reads a scalar — it had been copying `W` bytes one at a time and calling
@@ -628,8 +632,14 @@ are implemented and invoked — four release paths plus three PyCapsule
 destructors, with the spec's null-release handshake as the double-free guard.
 
 **A `ByteSource` is not always a memory map**, so every read is potentially a
-round trip: `ParquetFile` opens a file by reading its last 64 KiB and parsing
-the footer out of that tail, never `read_at(0, size())`.
+round trip: `ParquetFile` and `RecordBatchFileReader` both open a file by
+reading its last 64 KiB and parsing the footer out of that tail, never
+`read_at(0, size())`. The seam is `marrow/io/` — `ByteSource`/`ByteSink`, a
+local backend, an OpenDAL one, and `DynSource`/`DynSink` picking between them
+by URI scheme — and both formats read and write through it, so a backend is
+written once and every format gains it. A new `dlopen`ed library must also be
+added to the wheel staging in `python/marrow/compile.py`; nothing links it, so
+`delocate`/`auditwheel` cannot find it and the wheel would silently omit it.
 `marrow/parquet/tests/test_page_io.mojo` pins that with a recording
 `ByteSource` — the only way to tell "returned the right rows" from "did less
 work".
@@ -653,7 +663,9 @@ marrow/
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── execution.mojo        # ExecContext — threads, device, `stripe`, GPU_ENABLED
-├── utils/                # byteorder, checksum, hashing, compression, datetime
+├── io/                   # core (ByteSource/ByteSink), local, opendal, dispatch
+├── utils/                # byteorder, checksum, hashing, compression, datetime,
+│                         #   dylib, uri
 │   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/
 │   ├── core.mojo         # the Kernel base trait
@@ -695,7 +707,7 @@ marrow/
 │   │   └── tests/
 │   └── tests/
 ├── parquet/              # reader, writer, schema, format, codecs, bloom,
-│   └── tests/            # statistics, source
+│   └── tests/            # statistics
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # Python package + bindings (python/marrow/libmarrow.so)
 └── marrow/tests/         # Python test_*.py and bench_*.py

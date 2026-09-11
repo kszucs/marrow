@@ -6,7 +6,7 @@ from std.python import Python
 from std.pathlib import Path
 from std.os import remove
 from ...parquet.reader import ParquetFile, read_page_index
-from ...parquet.source import MappedFile
+from ...io import BufferSource
 from ...parquet.format import (
     Encoding,
     FileMetaData,
@@ -251,7 +251,7 @@ def test_page_location_size_covers_the_header_too() raises:
     assert_true(len(oi.page_locations) > 1, "the fixture needs several pages")
 
     var start = pf.metadata().row_groups[0].columns[0].meta_data.byte_range()[0]
-    var chunk = MappedFile(path)
+    var chunk = BufferSource(path)
     for k in range(len(oi.page_locations)):
         ref loc = oi.page_locations[k]
         var read = PageHeader.read_at(

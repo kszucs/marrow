@@ -1,0 +1,85 @@
+name: OpenDAL
+
+# Not a job in test.yml: the default matrix must stay fast and must stay green
+# on a machine with no Rust toolchain. `libopendal_c` is `publish = false`
+# upstream with no conda build, so the only way to get one is to build it, and
+# that is ~400 crates.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    # Only when something that could break the binding changes. The vendored
+    # mirror in io/opendal.mojo is transcribed from a pinned upstream header,
+    # so it breaks from *this* side, not from upstream drift landing on its
+    # own -- and the pin itself lives in scripts/build_opendal_c.sh, so a tag
+    # bump there is exactly the change that must trigger this.
+    paths:
+      - "marrow/io/**"
+      - "scripts/build_opendal_c.sh"
+      - "marrow/utils/dylib.mojo"
+      - "marrow/utils/uri.mojo"
+      - "marrow/parquet/reader.mojo"
+      - "marrow/parquet/writer.mojo"
+      - "marrow/ipc.mojo"
+      - "pixi.toml"
+      - "pixi.lock"
+      - ".github/workflows/opendal.yml"
+  workflow_dispatch:
+
+jobs:
+  opendal:
+    name: opendal (linux, x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MODULAR_HOME: "/home/runner/.modular"
+      FORCE_COLOR: "1"
+      # Turns "libopendal_c is absent" from a silent skip into a failure. Every
+      # case under marrow/io/tests returns early without the library,
+      # which is right for a developer who has not built it and would otherwise
+      # rot into permanent green here.
+      MARROW_REQUIRE_OPENDAL: "1"
+
+    steps:
+      - name: Checkout marrow
+        uses: actions/checkout@v4
+
+      - name: Set up pixi
+        uses: prefix-dev/setup-pixi@v0.9.4
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: opendal
+
+      # The clone is idempotent (test -d guard) and must precede the cache
+      # restore so the key is known. Pinned to a tag, so the key is stable
+      # until someone bumps it deliberately.
+      - name: Clone OpenDAL
+        run: pixi run -e opendal clone_opendal
+
+      - name: Record OpenDAL SHA for the cache key
+        id: sha
+        run: echo "opendal=$(git -C vendor/opendal rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      # A cold build is minutes (opendal core + reqwest + rustls + aws-lc-rs);
+      # a warm one is seconds.
+      - name: Cache the cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/opendal/bindings/c/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: opendal-c-${{ runner.os }}-${{ steps.sha.outputs.opendal }}
+
+      # If this fails for reasons unrelated to marrow it is almost always
+      # `aws-lc-rs`, which wants cmake and sometimes nasm. The escape hatch is
+      # to swap the TLS backend:
+      #   --no-default-features --features opendal/http-transport-reqwest-native-tls,…
+      - name: Build libopendal_c
+        run: pixi run -e opendal build_opendal
+
+      - name: Run the storage tests
+        run: pixi run -e opendal test_opendal
