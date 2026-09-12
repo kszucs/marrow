@@ -260,9 +260,9 @@ def dylib_closure(binary: Path) -> list[Path]:
 # which is what makes a copy staged here actually get found at runtime —
 # copying alone is necessary but not sufficient.
 #
-# Keep this candidate table in sync with `compression.mojo`'s
-# `_ZSTD_PATHS`/`_SNAPPY_PATHS`/`_LZ4_PATHS`/`_ZLIB_PATHS`/
-# `_BROTLI_ENC_PATHS`/`_BROTLI_DEC_PATHS` — same names, same order.
+# Mirrors the `LibSpec` declarations in `marrow/utils/compression.mojo`.
+# `devkit/tests/test_libspecs.py` fails if the two drift, so this is a
+# pointer rather than a promise.
 _CODEC_LIB_CANDIDATES: dict[str, list[str]] = {
     "zstd": ["libzstd.dylib", "libzstd.1.dylib", "libzstd.so", "libzstd.so.1"],
     "snappy": ["libsnappy.dylib", "libsnappy.so", "libsnappy.so.1"],

@@ -2358,7 +2358,7 @@ struct ParquetFile[
             grid.append(None)
 
         # Per-worker codec scratch, reused across calls. The `dlopen` handles
-        # are process-wide now (`_CodecHandles`), so what a `CompressionLibs`
+        # are process-wide now (`_CodecLibs`), so what a `CompressionLibs`
         # still owns is the size out-param snappy writes through — not
         # shareable, hence one per worker. Workers touch disjoint slots and the
         # list is grown before dispatch, which is what keeps that rule.

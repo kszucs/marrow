@@ -16,8 +16,8 @@ from marrow._dylibs import DYLIB_DIR_ENV, configure
 from marrow.compile import (
     _build_arg_parser,
     _CODEC_LIB_CANDIDATES,
-    _OPTIONAL_LIB_CANDIDATES,
     _copy_deduped,
+    _OPTIONAL_LIB_CANDIDATES,
     _find_codec_lib,
     build_command,
     bundle,

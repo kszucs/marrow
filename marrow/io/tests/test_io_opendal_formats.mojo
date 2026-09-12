@@ -29,6 +29,13 @@ from ...c_data import CArrowArrayStream
 from ..opendal import OpenDalStore, OpenDalWriter, OpenDalSource
 
 
+def _fs() raises -> OpenDalStore:
+    """A fresh `fs` store. `OpenDalStore` owns its operator and so is move-only;
+    separate operators over the same directory are equivalent, and building one
+    is a local call."""
+    return OpenDalStore("fs", {"root": "/tmp"})
+
+
 def _store() raises -> Optional[OpenDalStore]:
     """An `fs` store rooted at /tmp, or None when this build cannot make one."""
     try:
@@ -95,14 +102,13 @@ def test_opendal_parquet_read_matches_mmap() raises:
     var maybe = _store()
     if not maybe:
         return
-    var store = maybe.value().copy()
 
     var name = String("marrow_opendal_pq.parquet")
     var path = String("/tmp/", name)
     write_table(_sample(), path, compression=Compression.SNAPPY)
 
     var via_mmap = read_table(path)
-    var pf = ParquetFile(OpenDalSource(store.copy(), name))
+    var pf = ParquetFile(OpenDalSource(_fs(), name))
     var via_store = pf.read()
 
     assert_equal(via_store.num_rows(), via_mmap.num_rows())
@@ -128,7 +134,6 @@ def test_opendal_parquet_reads_only_the_ranges_it_needs() raises:
     var maybe = _store()
     if not maybe:
         return
-    var store = maybe.value().copy()
 
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
@@ -149,18 +154,14 @@ def test_opendal_parquet_reads_only_the_ranges_it_needs() raises:
     var total = BufferSource(path).size()
 
     var projected = ArcPointer(0)
-    var pf = ParquetFile(
-        _Counting(OpenDalSource(store.copy(), name), projected)
-    )
+    var pf = ParquetFile(_Counting(OpenDalSource(_fs(), name), projected))
     var cols: List[String] = ["keep"]
     var got = pf.read(columns=cols^)
     assert_equal(got.num_rows(), 20000)
     assert_equal(got.num_columns(), 1)
 
     var everything = ArcPointer(0)
-    var pf_all = ParquetFile(
-        _Counting(OpenDalSource(store.copy(), name), everything)
-    )
+    var pf_all = ParquetFile(_Counting(OpenDalSource(_fs(), name), everything))
     var all_cols = pf_all.read()
     assert_equal(all_cols.num_columns(), 2)
     remove(path)
@@ -193,7 +194,6 @@ def test_opendal_parquet_write_then_read_back() raises:
     var maybe = _store()
     if not maybe:
         return
-    var store = maybe.value().copy()
 
     var name = String("marrow_opendal_pq_out.parquet")
     var path = String("/tmp/", name)
@@ -201,7 +201,7 @@ def test_opendal_parquet_write_then_read_back() raises:
         remove(path)
 
     var t = _sample()
-    var w = FileWriter(store.copy().writer(name), Compression.SNAPPY)
+    var w = FileWriter(_fs().writer(name), Compression.SNAPPY)
     w.write(t, row_group_size=3)
     assert_true(exists(path), "the sink did not commit")
 
@@ -225,7 +225,7 @@ def test_opendal_parquet_write_then_read_back() raises:
     var back = read_table(path)
     assert_equal(back.num_rows(), 8)
     assert_true(back.combine_chunks() == t.combine_chunks())
-    var pf = ParquetFile(OpenDalSource(store.copy(), name))
+    var pf = ParquetFile(OpenDalSource(_fs(), name))
     assert_true(pf.read().combine_chunks() == t.combine_chunks())
 
     remove(path)
@@ -237,7 +237,6 @@ def test_opendal_ipc_round_trip() raises:
     var maybe = _store()
     if not maybe:
         return
-    var store = maybe.value().copy()
 
     var name = String("marrow_opendal_ipc.arrow")
     var path = String("/tmp/", name)
@@ -246,12 +245,12 @@ def test_opendal_ipc_round_trip() raises:
 
     var t = _sample()
     var batch = t.combine_chunks()
-    var w = RecordBatchFileWriter(store.copy().writer(name), batch.schema)
+    var w = RecordBatchFileWriter(_fs().writer(name), batch.schema)
     w.write_batch(batch)
     w.close()
     assert_true(exists(path), "the sink did not commit")
 
-    var r = RecordBatchFileReader(OpenDalSource(store.copy(), name))
+    var r = RecordBatchFileReader(OpenDalSource(_fs(), name))
     assert_equal(r.num_record_batches(), 1)
     assert_true(r.read_batch(0) == batch)
     remove(path)
@@ -331,7 +330,6 @@ def test_opendal_parquet_parallel_decode_is_sound() raises:
     var maybe = _store()
     if not maybe:
         return
-    var store = maybe.value().copy()
 
     var name = String("marrow_opendal_parallel.parquet")
     var path = String("/tmp/", name)
@@ -356,7 +354,7 @@ def test_opendal_parquet_parallel_decode_is_sound() raises:
     w.write(wide, row_group_size=5000)
 
     # 3 row groups x 4 leaves = 12 slots, 15,000 rows -> genuinely parallel.
-    var pf = ParquetFile(OpenDalSource(store.copy(), name))
+    var pf = ParquetFile(OpenDalSource(_fs(), name))
     var got = pf.read()
     assert_equal(got.num_rows(), n)
     assert_equal(got.num_columns(), 4)

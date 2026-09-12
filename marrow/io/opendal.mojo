@@ -49,14 +49,18 @@ A NULL or malformed `path` **panics inside Rust**, and a panic across
 therefore has no null state and rejects an embedded NUL.
 """
 
-from std.ffi import _DLHandle, _Global, c_char
+from std.ffi import _DLHandle
 from std.memory import ArcPointer, unsafe_memcpy
-from std.os import getenv
-from std.pathlib import Path
 from std.sys import size_of
 
 from ..buffers import Buffer
-from ..utils.dylib import CStr, CString, Dylib, c_bytes, c_string
+from ..utils.dylib import (
+    CString,
+    LibSet,
+    LibSpec,
+    c_bytes,
+    c_string,
+)
 from .core import ByteSink, ByteSource, Fetched, require_range
 
 
@@ -179,88 +183,23 @@ struct CResultWriterWrite(RegisterPassable):
 # `opendal_read_options_new` + `set_range` makes that unrepresentable.
 
 
-def _assert_abi_layout():
-    """Layout guards for the mirror structs above.
-
-    `ErrorPtr` is an `Optional[Pointer]` inside a `RegisterPassable` struct,
-    which assumes `Optional` is niche-optimised to pointer size. If that ever
-    stops holding, every struct here silently becomes the wrong size and the
-    ABI returns garbage rather than failing -- so it is asserted rather than
-    assumed. Called from `_OpenDal.__init__`, because a `comptime assert` has to
-    live in a function body.
-
-    **These check size, not field order.** Reordering `opendal_bytes`'s three
-    members upstream keeps it 24 bytes and breaks every read; widening
-    `opendal_code` to 64 bits keeps `opendal_error` at 32. Size is what
-    `size_of` can see, so the pinned tag in `pixi.toml` is the real defence and
-    this is the backstop.
-    """
-    comptime assert size_of[ErrorPtr]() == size_of[Opaque](), (
-        "Optional[Pointer] lost its pointer niche; every mirror struct is now"
-        " the wrong size"
-    )
-    comptime assert size_of[CBytes]() == 24, "opendal_bytes layout drifted"
-    comptime assert size_of[CError]() == 32, "opendal_error layout drifted"
-    comptime assert (
-        size_of[CResultRead]() == 32
-    ), "opendal_result_read layout drifted"
-    comptime assert (
-        size_of[CResultHandle]() == 16
-    ), "an opendal `{handle, error}` result layout drifted"
-    comptime assert (
-        size_of[CResultWriterWrite]() == 16
-    ), "opendal_result_writer_write layout drifted"
-
-
 # ---------------------------------------------------------------------------
 # Locating and opening the library — once per process, failure recorded
 # ---------------------------------------------------------------------------
 
-comptime _OPENDAL_PATHS: List[Path] = [
-    "libopendal_c.dylib",
-    "libopendal_c.so",
-]
-
-
-def _open_opendal() -> Dylib:
-    """Open `libopendal_c` once per process, recording any failure.
-
-    `Dylib` is shared with the Parquet codec loader: both open a genuinely
-    optional library from inside a `_Global` initializer that cannot raise, and
-    both need the error to surface later at the point of use. The layout guards
-    run here because a `comptime assert` needs a function body and this is the
-    one place that runs before any C call.
-    """
-    _assert_abi_layout()
-    return Dylib.open["opendal_c"](
-        Dylib.candidates["MARROW_OPENDAL_LIBRARY", "OPENDAL_C_LIBRARY"](
-            materialize[_OPENDAL_PATHS]()
+comptime OpenDal = LibSet[
+    "MARROW_OPENDAL",
+    [
+        LibSpec(
+            "opendal_c",
+            ["libopendal_c.dylib", "libopendal_c.so"],
+            # marrow's own name first: `OPENDAL_C_LIBRARY` is a global one, and
+            # a user may already have it pointed at a build with different
+            # cargo features.
+            ["MARROW_OPENDAL_LIBRARY", "OPENDAL_C_LIBRARY"],
         )
-    )
-
-
-comptime _OPENDAL = _Global["MARROW_OPENDAL", _open_opendal]
-"""Process-lifetime handle. Never `dlclose`d, and here that is correctness
-rather than speed: `opendal_operator_new` forces a `LazyLock<tokio::Runtime>`
-that spawns worker threads inside this image, and unloading an image with live
-threads is a crash."""
-
-
-def _lib() raises -> _DLHandle:
-    """The loaded library, or the recorded open failure.
-
-    Symbols are resolved per call rather than cached in a table:
-    `get_function` returns a callable carrying an immutable borrow of the
-    handle, which cannot be a struct field, and a `dlsym` is not measurable
-    against the round trip it precedes. This is the shape
-    `marrow/utils/compression.mojo` already uses.
-    """
-    return _OPENDAL.get_or_create_ptr()[].get()
-
-
-# ---------------------------------------------------------------------------
-# Marshalling and error translation
-# ---------------------------------------------------------------------------
+    ],
+]
 
 
 # ---------------------------------------------------------------------------
@@ -268,24 +207,7 @@ def _lib() raises -> _DLHandle:
 # ---------------------------------------------------------------------------
 
 
-struct _Handle(Movable):
-    """Sole owner of one `opendal_operator *`, freed exactly once."""
-
-    var _op: Opaque
-
-    def __init__(out self, op: Opaque):
-        self._op = op
-
-    def __deinit__(deinit self):
-        try:
-            _lib().call["opendal_operator_free"](self._op)
-        except:
-            # The library was found once to build this handle, so it is still
-            # loaded; there is nowhere for a failure here to go regardless.
-            pass
-
-
-struct OpenDalStore(Copyable, Movable):
+struct OpenDalStore(Movable):
     """A storage service reached through OpenDAL. O(1) to copy.
 
     `ArcPointer`-backed because a dataset is many objects behind one service
@@ -307,7 +229,52 @@ struct OpenDalStore(Copyable, Movable):
     ```
     """
 
-    var _inner: ArcPointer[_Handle]
+    var _op: Opaque
+    """The `opendal_operator *`, owned here and freed in `__deinit__`.
+
+    Sole ownership is why this is `Movable` and not `Copyable`: an operator is
+    freed exactly once. Callers that need to share one -- `OpenDalSource` and
+    `OpenDalWriter` -- hold it behind an `ArcPointer`.
+    """
+
+    @staticmethod
+    def _assert_abi_layout():
+        """Layout guards for the mirror structs above.
+
+        `ErrorPtr` is an `Optional[Pointer]` inside a `RegisterPassable` struct,
+        which assumes `Optional` is niche-optimised to pointer size. If that ever
+        stops holding, every struct here silently becomes the wrong size and the
+        ABI returns garbage rather than failing -- so it is asserted rather than
+        assumed. Called from `_OpenDal.__init__`, because a `comptime assert` has to
+        live in a function body.
+
+        **These check size, not field order.** Reordering `opendal_bytes`'s three
+        members upstream keeps it 24 bytes and breaks every read; widening
+        `opendal_code` to 64 bits keeps `opendal_error` at 32. Size is what
+        `size_of` can see, so the pinned tag in `pixi.toml` is the real defence and
+        this is the backstop.
+        """
+        comptime assert size_of[ErrorPtr]() == size_of[Opaque](), (
+            "Optional[Pointer] lost its pointer niche; every mirror struct is"
+            " now the wrong size"
+        )
+        comptime assert size_of[CBytes]() == 24, "opendal_bytes layout drifted"
+        comptime assert size_of[CError]() == 32, "opendal_error layout drifted"
+        comptime assert (
+            size_of[CResultRead]() == 32
+        ), "opendal_result_read layout drifted"
+        comptime assert (
+            size_of[CResultHandle]() == 16
+        ), "an opendal `{handle, error}` result layout drifted"
+        comptime assert (
+            size_of[CResultWriterWrite]() == 16
+        ), "opendal_result_writer_write layout drifted"
+
+    def __deinit__(deinit self):
+        try:
+            OpenDal.handle().call["opendal_operator_free"](self._op)
+        except:
+            pass  # nowhere for a destructor to report, and it loaded once
 
     def __init__(
         out self, scheme: StringSlice, options: Dict[String, String] = {}
@@ -319,7 +286,10 @@ struct OpenDalStore(Copyable, Movable):
         features, so a stock build has only `memory`. `options` carries
         service-specific keys such as `root` or `bucket`.
         """
-        var lib = _lib()
+        # A `comptime assert` needs a function body to live in, and this is
+        # the one entry point every use of the binding passes through.
+        Self._assert_abi_layout()
+        var lib = OpenDal.handle()
         # Every `CString` is built *before* `options_new`, because `CString`
         # raises on an embedded NUL and a raise between the new and the free
         # leaks the Rust-side options map. Same ordering rule as
@@ -345,7 +315,7 @@ struct OpenDalStore(Copyable, Movable):
         lib.call["opendal_operator_options_free"](opts)
         # Before the raise: the options are ours on both paths.
         CError.raise_if(lib, res.error)
-        self._inner = ArcPointer(_Handle(res.handle))
+        self._op = res.handle
 
     def _call_path[
         name: StaticString, R: RegisterPassable
@@ -360,7 +330,7 @@ struct OpenDalStore(Copyable, Movable):
         cannot be forgotten at one of five call sites.
         """
         var cpath = CString(path)
-        var res = lib.call[name, R](self._inner[]._op, cpath.ptr())
+        var res = lib.call[name, R](self._op, cpath.ptr())
         _ = cpath^
         return res^
 
@@ -372,7 +342,7 @@ struct OpenDalStore(Copyable, Movable):
         request and a TOCTOU on a store where the object can vanish between
         them.
         """
-        var lib = _lib()
+        var lib = OpenDal.handle()
         var res = self._call_path["opendal_operator_stat", CResultHandle](
             lib, path
         )
@@ -383,7 +353,7 @@ struct OpenDalStore(Copyable, Movable):
 
     def read(self, path: StringSlice) raises -> List[UInt8]:
         """The whole object."""
-        var lib = _lib()
+        var lib = OpenDal.handle()
         var res = self._call_path["opendal_operator_read", CResultRead](
             lib, path
         )
@@ -406,7 +376,7 @@ struct OpenDalStore(Copyable, Movable):
             opts, UInt64(offset), UInt64(length)
         )
         var res = lib.call["opendal_operator_read_with", CResultRead](
-            self._inner[]._op, cpath.ptr(), opts
+            self._op, cpath.ptr(), opts
         )
         _ = cpath^
         # Before the raise: the options are ours on both paths.
@@ -422,7 +392,7 @@ struct OpenDalStore(Copyable, Movable):
         One request, not a whole-object fetch and slice -- this is the whole
         reason a Parquet reader can live on an object store.
         """
-        var lib = _lib()
+        var lib = OpenDal.handle()
         return self._take(lib, self._read_range_raw(lib, path, offset, length))
 
     def read_range_into(
@@ -449,7 +419,7 @@ struct OpenDalStore(Copyable, Movable):
 
         A short return means the object ended early; it is not an error.
         """
-        var lib = _lib()
+        var lib = OpenDal.handle()
         var res = self._read_range_raw(lib, path, offset, length)
         var n = 0
         var over = False
@@ -487,7 +457,7 @@ struct OpenDalStore(Copyable, Movable):
         The bytes are borrowed for the call -- OpenDAL copies them -- so this
         must not free them, and the caller must keep them alive across it.
         """
-        var lib = _lib()
+        var lib = OpenDal.handle()
         var cpath = CString(path)
         var n = len(data)
         # An empty write must carry a NULL pointer; the C ABI rejects a
@@ -500,14 +470,14 @@ struct OpenDalStore(Copyable, Movable):
                 UInt(n),
             )
         var err = lib.call["opendal_operator_write", ErrorPtr](
-            self._inner[]._op, cpath.ptr(), Pointer(to=cb)
+            self._op, cpath.ptr(), Pointer(to=cb)
         )
         _ = cpath^
         CError.raise_if(lib, err)
 
     def delete(self, path: StringSlice) raises:
         """Delete `path`. Deleting one that is not there succeeds."""
-        var lib = _lib()
+        var lib = OpenDal.handle()
         CError.raise_if(
             lib, self._call_path["opendal_operator_delete", ErrorPtr](lib, path)
         )
@@ -515,7 +485,7 @@ struct OpenDalStore(Copyable, Movable):
     def writer(self, path: StringSlice) raises -> OpenDalWriter:
         """Open `path` for streaming writes. Nothing is committed until
         `OpenDalWriter.close()` succeeds."""
-        var lib = _lib()
+        var lib = OpenDal.handle()
         var res = self._call_path["opendal_operator_writer", CResultHandle](
             lib, path
         )
@@ -559,7 +529,7 @@ struct OpenDalWriter(ByteSink):
         # Always, closed or not: `opendal_writer_close` commits the object but
         # does **not** release the handle.
         try:
-            _lib().call["opendal_writer_free"](self._writer)
+            OpenDal.handle().call["opendal_writer_free"](self._writer)
         except:
             pass
 
@@ -571,7 +541,7 @@ struct OpenDalWriter(ByteSink):
             raise Error("opendal: writer is closed")
         if len(data) == 0:
             return
-        var lib = _lib()
+        var lib = OpenDal.handle()
         var cb = CBytes(
             rebind[Pointer[UInt8, MutUntrackedOrigin]](data.unsafe_ptr()),
             UInt(len(data)),
@@ -587,7 +557,7 @@ struct OpenDalWriter(ByteSink):
         if self._closed:
             return
         self._closed = True
-        var lib = _lib()
+        var lib = OpenDal.handle()
         CError.raise_if(
             lib, lib.call["opendal_writer_close", ErrorPtr](self._writer)
         )
@@ -626,19 +596,19 @@ struct OpenDalSource(ByteSource):
     scales with the data reintroduces that, silently.
     """
 
-    var _store: OpenDalStore
+    var _store: ArcPointer[OpenDalStore]
     var _path: String
     var _size: Int
     var _arena: ArcPointer[List[Buffer[mut=False]]]
 
     def __init__(out self, var store: OpenDalStore, path: String) raises:
         self._size = store.content_length(path)
-        self._store = store^
+        self._store = ArcPointer(store^)
         self._path = path
         self._arena = ArcPointer(List[Buffer[mut=False]]())
 
     def __init__(out self, *, copy: Self):
-        self._store = copy._store.copy()
+        self._store = copy._store
         self._path = copy._path
         self._size = copy._size
         self._arena = copy._arena
@@ -658,7 +628,7 @@ struct OpenDalSource(ByteSource):
         require_range(offset, length, self._size, "OpenDalSource.read")
         var buf = Buffer.alloc_uninit[DType.uint8](max(length, 1))
         if length > 0:
-            var got = self._store.read_range_into(
+            var got = self._store[].read_range_into(
                 self._path,
                 offset,
                 length,

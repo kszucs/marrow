@@ -394,6 +394,30 @@ Rules:
   primitives), `utils/compression.mojo` with `parquet/reader.mojo` and
   `parquet/codecs.mojo` for the page codecs, and `io/opendal.mojo` for the
   object store. Everything else goes through the view abstractions.
+
+  **A C library is declared, not wired by hand.** One declaration per module:
+  `LibSet[key, [LibSpec(...), ...]]` in `utils/dylib.mojo` names the
+  libraries — sonames and env overrides — and owns them behind a single
+  process-global, opened on first use with the failure recorded rather than
+  raised. Callers write `Codecs.handle["zstd"]()`, and the name is checked
+  against the set at compile time. `compression.mojo` declares six members,
+  `io/opendal.mojo` one.
+
+  **One global per module, not per library**, and the open path is
+  instantiated once for the whole set rather than once per spec — that is why
+  `Dylib.open_spec` takes its spec by *value*. Doing it per library cost
+  `query_cli` ~16 KB of `__text`, and the AOT lane is size-gated. The
+  `_Global` key is spelled by the caller because `_Global` keys against a
+  registry shared with the stdlib and MAX.
+
+  **Symbols are resolved per call, deliberately.** Caching them in typed
+  `def(...) thin abi("C") -> R` fields works — `_DLHandle.get_function` returns
+  a raw storable pointer, unlike the `OwnedDLHandle` overload — and was
+  implemented, measured and reverted: no measurable time (a `dlsym` is
+  nanoseconds against a page decompress) and **+24.7 KB on `query_cli`**,
+  because a reader-only binary then links the compress symbols too. See
+  `backlog.md` before trying it again.
+
   `LittleEndian.fixed` is *the* byte-order primitive, and confining the
   unaligned wide load to it is what keeps raw pointers out of every decoder that
   reads a scalar — it had been copying `W` bytes one at a time and calling

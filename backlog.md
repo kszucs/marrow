@@ -199,6 +199,91 @@ not.
   a `test_scalars` execution crash and a `test_ipc` run that outlives its cap.
   Until those close, the +55%-size-regression class of miss is still possible.
 
+### 1.8b The dylib layer: what was measured, kept and dropped
+
+**Caching `dlsym` results in typed symbol tables.** Possible —
+`_DLHandle.get_function[result_type]` returns a raw C-ABI function pointer
+that *can* be a struct field, contrary to what `io/opendal.mojo` claimed for a
+while (that claim was about the `OwnedDLHandle` overload, which returns a
+borrowing callable). Implemented across all 37 call sites, then reverted: on
+`bench_parquet` the snappy rows moved −3.6%, −0.2% and −0.4% while an
+untouched uncompressed control moved +10%, so every number was noise; and the
+size gate caught **+24,7xx bytes on `query_cli` (+0.79%)**, because a binary
+that only reads Parquet links the compress symbols too where DCE previously
+dropped the unused `call[...]` instantiations. What it *would* buy is
+type-checked signatures — today a wrong return type in
+`call["ZSTD_decompress", Int]` is silent. Revisit only with a plan for the
+size, e.g. splitting each codec's table into decompress and compress halves.
+
+One trap it surfaced, worth knowing before a second attempt: a typed symbol
+field names an untracked pointer, which severs the compiler's reason to keep a
+*local* struct argument materialised across the call — an `opendal_bytes`
+passed that way faulted inside `Bytes::copy_from_slice`, silently writing zero
+bytes before it crashed. (A second trap, a spec name doubling as a `_Global`
+key, no longer applies: `Library` is gone and owning the global is the
+caller's job, so the key is a string that caller picks.)
+
+**A `LibSet` over one global — done, and it paid for itself.** Each library
+used to cost a `Dylib.for_spec[spec]` and a `Dylib.open[name]` instantiation,
+and each *module* hand-rolled a `_Global` and an accessor around whatever it
+had opened. `LibSet[key, specs]` holds `List[Dylib]` behind one global and
+resolves a comptime index, so a module writes one declaration and calls
+`Codecs.handle["zstd"]()` with the name checked at compile time.
+
+The mechanism that matters is `_open` looping over `materialize[Self.specs]()`
+at *run* time: the open path is instantiated once for all the members rather
+than once per spec, which is what `Dylib.open_spec` taking the spec by value
+buys — `_try_find_dylib`'s `name` parameter is error text and nothing else, so
+it does not have to be comptime. Measured: `query_cli` **+15,040 (+0.484%) ->
++11,456 (+0.369%)**, 3,584 bytes back and a real margin under the 0.5%
+threshold instead of 0.016%.
+
+The `_Global` key is spelled by the caller rather than derived from a spec
+name. `_Global` keys against a registry shared with the stdlib and MAX, so
+uniqueness is a property of the whole process, not of these specs — an earlier
+version keyed on `spec.name` and two specs sharing one silently aliased each
+other's storage.
+
+### Link-time linking for the codecs — where this should end up
+
+**The `dlopen` machinery is a workaround for a dependency we now declare.**
+Linking the page codecs at build time is the better shape and should be the
+target; it is deferred rather than rejected.
+
+What it would delete outright: the candidate-path search and its documented
+load-from-cwd surface (`_exe_dir` reads `argv()[0]`, which is caller-supplied),
+`python/marrow/_dylibs.py` and `MARROW_DYLIB_DIR`, the wheel staging in
+`python/build.py`, `compile.py`'s duplicated soname tables and the drift test
+that polices them, and most of `utils/dylib.mojo`. `delocate`/`auditwheel`
+would find the libraries in the load commands by themselves, which is the whole
+reason that staging exists. Calls become `external_call["ZSTD_decompress", Int]`
+or the typed `@extern("ZSTD_decompress") def ... abi("C")` form, so the
+signature is checked where today `call["ZSTD_decompress", Int]` is not.
+
+Mojo supports it: `-Xlinker -l<name>` reaches `ld`, and marrow already passes
+`-Xlinker -lm` on Linux (`devkit/mojo.py`). Per-binary, so it is a
+`BuildOptions` change.
+
+**What blocked it, and what changed.** The objection was that there is no
+portable optional link — a `DT_NEEDED` / `LC_LOAD_DYLIB` entry resolves before
+`import marrow` returns, so a missing codec stops the process starting instead
+of raising. macOS has `-weak-l`; ELF has no per-symbol equivalent and Mojo
+exposes no `weak` attribute. That argument was strong when the codecs were
+present only by luck. It is weaker now: they are `[package.run-dependencies]`,
+so a conda install has them by construction, and graceful degradation is a
+safety net rather than the mechanism. The remaining questions are the wheel
+(which vendors its own copies today and would instead need them as real
+linked deps) and anyone building from source without the dev libraries.
+
+**`libopendal_c` cannot follow** and must stay `dlopen`ed: `publish = false`
+upstream, no conda package, and genuinely optional. So this is a codecs-only
+change and the two mechanisms would coexist — which is the honest cost, and
+the reason it has not been done yet rather than a reason never to.
+
+Order of work if picked up: link the codecs behind a `BuildOptions` flag,
+measure the size gate and the wheel, then delete the staging only once both
+platforms are green.
+
 ### 1.9 The Parquet reader, after page-level pruning landed
 
 A `RowSelection` now narrows what is *fetched*, not just what is decoded: the

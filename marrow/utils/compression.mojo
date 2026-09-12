@@ -4,8 +4,8 @@ The codecs are not reimplemented; the standard C libraries (`libzstd`,
 `libsnappy`, `liblz4`, `libz`, `libbrotli`) are `dlopen`-ed at runtime and their
 block APIs called directly — the same approach arrow-rs and duckdb take, just
 without a link-time dependency. `CompressionLibs` is the primitive block calls
-plus the per-call scratch they need; the `dlopen` handles themselves live in one
-process-wide `_CodecHandles`.
+plus the per-call scratch they need; the handles themselves live in the
+`Codecs` set below, one process-global for all six.
 
 **Nothing here is Parquet-specific**, which is why it lives in `marrow.utils`
 rather than in `marrow.parquet` where it started (as a second module named
@@ -18,102 +18,45 @@ The other consumer is Arrow IPC, which currently *refuses* compressed bodies
 supported"). These bindings are what that needs.
 """
 
-from std.ffi import OwnedDLHandle, _DLHandle, _Global, _try_find_dylib
-
-from .dylib import Dylib, c_bytes
-from std.pathlib import Path
+from .dylib import LibSet, LibSpec, c_bytes
 from std.memory import unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
-from std.sys import argv
 
-comptime _ZSTD_PATHS: List[Path] = [
-    "libzstd.dylib",
-    "libzstd.1.dylib",
-    "libzstd.so",
-    "libzstd.so.1",
+comptime Codecs = LibSet[
+    "MARROW_CODECS",
+    [
+        LibSpec(
+            "zstd",
+            ["libzstd.dylib", "libzstd.1.dylib", "libzstd.so", "libzstd.so.1"],
+            [],
+        ),
+        LibSpec(
+            "snappy", ["libsnappy.dylib", "libsnappy.so", "libsnappy.so.1"], []
+        ),
+        LibSpec("lz4", ["liblz4.dylib", "liblz4.so", "liblz4.so.1"], []),
+        LibSpec(
+            "z", ["libz.dylib", "libz.1.dylib", "libz.so", "libz.so.1"], []
+        ),
+        LibSpec(
+            "brotlienc",
+            ["libbrotlienc.dylib", "libbrotlienc.so", "libbrotlienc.so.1"],
+            [],
+        ),
+        LibSpec(
+            "brotlidec",
+            ["libbrotlidec.dylib", "libbrotlidec.so", "libbrotlidec.so.1"],
+            [],
+        ),
+    ],
 ]
-comptime _SNAPPY_PATHS: List[Path] = [
-    "libsnappy.dylib",
-    "libsnappy.so",
-    "libsnappy.so.1",
-]
-comptime _LZ4_PATHS: List[Path] = [
-    "liblz4.dylib",
-    "liblz4.so",
-    "liblz4.so.1",
-]
-comptime _ZLIB_PATHS: List[Path] = [
-    "libz.dylib",
-    "libz.1.dylib",
-    "libz.so",
-    "libz.so.1",
-]
-comptime _BROTLI_ENC_PATHS: List[Path] = [
-    "libbrotlienc.dylib",
-    "libbrotlienc.so",
-    "libbrotlienc.so.1",
-]
-comptime _BROTLI_DEC_PATHS: List[Path] = [
-    "libbrotlidec.dylib",
-    "libbrotlidec.so",
-    "libbrotlidec.so.1",
-]
+"""Every codec library: what it is called, where to look for it, and one
+process-global holding all six.
 
-
-struct _CodecHandles(Movable):
-    """Every compression library the codecs can use, opened once per process.
-
-    Written exactly once — inside the `_Global` initializer below — and only
-    read afterwards, which is what makes it safe to share across the workers a
-    Parquet read dispatches. `OwnedDLHandle.call` takes `self` immutably and
-    resolves the symbol with `dlsym`, itself thread-safe, so a concurrent
-    decompress is a concurrent *read* of this struct and nothing more."""
-
-    var zstd: Dylib
-    var snappy: Dylib
-    var lz4: Dylib
-    var zlib: Dylib
-    var brotli_enc: Dylib
-    var brotli_dec: Dylib
-
-    def __init__(out self):
-        # Resolved once, shared by every candidate list below.
-        self.zstd = Dylib.open["zstd"](
-            Dylib.candidates[](materialize[_ZSTD_PATHS]())
-        )
-        self.snappy = Dylib.open["snappy"](
-            Dylib.candidates[](materialize[_SNAPPY_PATHS]())
-        )
-        self.lz4 = Dylib.open["lz4"](
-            Dylib.candidates[](materialize[_LZ4_PATHS]())
-        )
-        self.zlib = Dylib.open["z"](
-            Dylib.candidates[](materialize[_ZLIB_PATHS]())
-        )
-        self.brotli_enc = Dylib.open["brotlienc"](
-            Dylib.candidates[](materialize[_BROTLI_ENC_PATHS]())
-        )
-        self.brotli_dec = Dylib.open["brotlidec"](
-            Dylib.candidates[](materialize[_BROTLI_DEC_PATHS]())
-        )
-
-
-def _open_codec_handles() -> _CodecHandles:
-    return _CodecHandles()
-
-
-comptime _CODEC_HANDLES = _Global["MARROW_CODEC_HANDLES", _open_codec_handles]
-"""The process-wide handle set: allocated by the runtime on first
-`get_or_create_ptr()`, and never `dlclose`d before process teardown.
-
-This used to be per read/write, and it dominated any workload that opens the
-same file repeatedly. Nothing else in a marrow-only process holds these
-libraries, so the matching `dlclose` dropped the last reference and dyld really
-unmapped the image; the next read re-mapped, re-bound and re-initialised it, at
-roughly 0.9 ms a cycle. A 1,000-row Snappy `read_table` spent 897 us of its
-921 us there. Process-lifetime handles are what every library that `dlopen`s its
-optional dependencies does, and there is nothing to reclaim: six images that
-outlive every reader and writer by construction."""
+One global for the set, not one each -- six cost `query_cli` ~16 KB of
+`__text` and the AOT lane is size-gated. A program that reads only
+uncompressed Parquet opens nothing, because nothing touches this until a codec
+method runs.
+"""
 
 
 struct CompressionLibs(Movable):
@@ -122,39 +65,32 @@ struct CompressionLibs(Movable):
     `out_size` bytes at `dst` (decompress) or returns the codec's output
     (compress).
 
-    The `dlopen` handles are **not** here — they are the process-wide
-    `_CodecHandles` above, shared by every instance. What an instance owns is
-    the reused size out-param snappy needs, which is not safe to share, so a
-    Parquet read still holds one of these per worker."""
+    The `dlopen` handles are **not** here — they are the `Codecs` set above,
+    shared by every instance. What an instance owns is the reused size
+    out-param snappy needs, which is not safe to share, so a Parquet read
+    still holds one of these per worker."""
 
-    var _handles: Optional[Pointer[_CodecHandles, MutUntrackedOrigin]]
     var _sz: List[UInt]  # reusable size out-param for snappy
 
     def __init__(out self):
-        self._handles = None
         self._sz = [UInt(0)]
-
-    def _libs(mut self) raises -> Pointer[_CodecHandles, MutUntrackedOrigin]:
-        """The process-wide handles, resolved on first codec use and cached.
-
-        Resolved here rather than in `__init__` because every Parquet read
-        constructs a `CompressionLibs` whether or not its pages are compressed:
-        a program that only ever reads uncompressed data must still `dlopen`
-        nothing."""
-        if not self._handles:
-            self._handles = _CODEC_HANDLES.get_or_create_ptr()
-        return self._handles.value()
 
     @staticmethod
     def preload() raises:
-        """Open the handle set now, on the calling thread.
+        """Open every codec now, on the calling thread.
 
         `_Global` vends its pointer without locking and says nothing about
         racing *creation*, so the first touch must not be several workers at
         once. `ParquetFile.read` calls this before dispatching whenever the
         chunks it is about to decode are compressed; after it returns, every
-        worker's `_libs()` is a pure read."""
-        _ = _CODEC_HANDLES.get_or_create_ptr()
+        worker's `Codecs.handle[...]()` is a pure read.
+
+        All six open together, because the caller knows only that *something*
+        ahead is compressed, not which codec. A missing one is not an error
+        here -- each `Dylib` records its own failure and re-raises it at the
+        call that needs it.
+        """
+        Codecs.preload()
 
     # --- decompress: write exactly `out_size` bytes to `dst` ---
 
@@ -164,13 +100,8 @@ struct CompressionLibs(Movable):
         dst: Pointer[UInt8, _],
         out_size: Int,
     ) raises:
-        var libs = self._libs()
-        var n = (
-            libs[]
-            .zstd.get()
-            .call["ZSTD_decompress", Int](
-                dst, out_size, src.unsafe_ptr(), len(src)
-            )
+        var n = Codecs.handle["zstd"]().call["ZSTD_decompress", Int](
+            dst, out_size, src.unsafe_ptr(), len(src)
         )
         if n != out_size:
             raise Error("zstd: decompressed size mismatch")
@@ -181,14 +112,9 @@ struct CompressionLibs(Movable):
         dst: Pointer[UInt8, _],
         out_size: Int,
     ) raises:
-        var libs = self._libs()
         self._sz[0] = UInt(out_size)
-        var status = (
-            libs[]
-            .snappy.get()
-            .call["snappy_uncompress", Int32](
-                src.unsafe_ptr(), len(src), dst, self._sz.unsafe_ptr()
-            )
+        var status = Codecs.handle["snappy"]().call["snappy_uncompress", Int32](
+            src.unsafe_ptr(), len(src), dst, self._sz.unsafe_ptr()
         )
         if status != 0 or Int(self._sz[0]) != out_size:
             raise Error("snappy: decompress failed")
@@ -199,13 +125,8 @@ struct CompressionLibs(Movable):
         dst: Pointer[UInt8, _],
         out_size: Int,
     ) raises:
-        var libs = self._libs()
-        var n = (
-            libs[]
-            .lz4.get()
-            .call["LZ4_decompress_safe", Int32](
-                src.unsafe_ptr(), dst, Int32(len(src)), Int32(out_size)
-            )
+        var n = Codecs.handle["lz4"]().call["LZ4_decompress_safe", Int32](
+            src.unsafe_ptr(), dst, Int32(len(src)), Int32(out_size)
         )
         if Int(n) != out_size:
             raise Error("lz4: decompressed size mismatch")
@@ -216,8 +137,7 @@ struct CompressionLibs(Movable):
         dst: Pointer[UInt8, _],
         out_size: Int,
     ) raises:
-        var libs = self._libs()
-        var z = libs[].zlib.get()
+        var z = Codecs.handle["z"]()
         # z_stream is 112 bytes on LP64; drive it directly. Fields we set:
         # next_in @0, avail_in @8, next_out @24, avail_out @32; total_out @40.
         var strm = unsafe_alloc[UInt64](16)
@@ -257,19 +177,14 @@ struct CompressionLibs(Movable):
         dst: Pointer[UInt8, _],
         out_size: Int,
     ) raises:
-        var libs = self._libs()
         var sz = unsafe_alloc[UInt](1)
         sz[unsafe_offset=0] = UInt(out_size)
         # BrotliDecoderResult BrotliDecoderDecompress(size_t encoded_size,
         #   const uint8_t* encoded, size_t* decoded_size, uint8_t* decoded);
         # returns BROTLI_DECODER_RESULT_SUCCESS == 1.
-        var rc = (
-            libs[]
-            .brotli_dec.get()
-            .call["BrotliDecoderDecompress", Int32](
-                len(src), src.unsafe_ptr(), sz, dst
-            )
-        )
+        var rc = Codecs.handle["brotlidec"]().call[
+            "BrotliDecoderDecompress", Int32
+        ](len(src), src.unsafe_ptr(), sz, dst)
         var produced = Int(sz[unsafe_offset=0])
         sz.unsafe_free()
         if Int(rc) != 1 or produced != out_size:
@@ -287,8 +202,7 @@ struct CompressionLibs(Movable):
         return out^
 
     def zstd_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var libs = self._libs()
-        var z = libs[].zstd.get()
+        var z = Codecs.handle["zstd"]()
         var bound = z.call["ZSTD_compressBound", Int](len(src))
         var dst = unsafe_alloc[UInt8](bound)
         var n = z.call["ZSTD_compress", Int](
@@ -297,8 +211,7 @@ struct CompressionLibs(Movable):
         return Self._take(dst, n)
 
     def snappy_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var libs = self._libs()
-        var s = libs[].snappy.get()
+        var s = Codecs.handle["snappy"]()
         var bound = s.call["snappy_max_compressed_length", Int](len(src))
         var dst = unsafe_alloc[UInt8](bound)
         var sz = unsafe_alloc[UInt](1)
@@ -311,8 +224,7 @@ struct CompressionLibs(Movable):
         return Self._take(dst, produced)
 
     def lz4_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var libs = self._libs()
-        var l = libs[].lz4.get()
+        var l = Codecs.handle["lz4"]()
         var bound = Int(l.call["LZ4_compressBound", Int32](Int32(len(src))))
         var dst = unsafe_alloc[UInt8](bound)
         var n = l.call["LZ4_compress_default", Int32](
@@ -324,8 +236,7 @@ struct CompressionLibs(Movable):
         return Self._take(dst, Int(n))
 
     def gzip_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var libs = self._libs()
-        var z = libs[].zlib.get()
+        var z = Codecs.handle["z"]()
         # gzip worst-case: deflate expansion (~len/1000 + 12) plus the 18-byte
         # gzip header/trailer; pad generously.
         var bound = len(src) + len(src) // 1000 + 128
@@ -376,8 +287,7 @@ struct CompressionLibs(Movable):
         return Self._take(dst, produced)
 
     def brotli_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var libs = self._libs()
-        var e = libs[].brotli_enc.get()
+        var e = Codecs.handle["brotlienc"]()
         var bound = Int(
             e.call["BrotliEncoderMaxCompressedSize", UInt](UInt(len(src)))
         )
