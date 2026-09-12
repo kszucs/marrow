@@ -264,6 +264,14 @@ struct SchemaNode(Copyable, Movable):
         self, col: DynArray, mut leaf_arrays: List[DynArray]
     ) raises:
         """Inverse of `assemble`: collect this node's leaf arrays in column order.
+
+        **Every child is narrowed to its parent's own range before the
+        descent.** Arrow slices a nested array by moving the container's offset
+        and leaving the children whole, so `sa.children[i]` and `la.values()`
+        still span the entire column. `ColumnWriter.write` walks the leaf array
+        positionally from element 0, so handing it the unnarrowed child makes
+        every row group after the first write the *first* row group's leaf
+        values — with the right levels on top of them.
         """
         if self.kind == NODE_LEAF:
             leaf_arrays.append(col.copy())
@@ -275,24 +283,23 @@ struct SchemaNode(Copyable, Movable):
             # the definition levels (`def == max_def` only where the struct is
             # present *and* the child is non-null).
             for i in range(len(self.children)):
+                var child = sa.children[i].slice(sa.offset, sa.length)
                 if self.geom.optional and sa.bitmap:
                     self.children[i].collect_leaf_arrays(
-                        Self._apply_null_mask(sa.children[i], sa), leaf_arrays
+                        Self._apply_null_mask(child, sa), leaf_arrays
                     )
                 else:
-                    self.children[i].collect_leaf_arrays(
-                        sa.children[i], leaf_arrays
-                    )
+                    self.children[i].collect_leaf_arrays(child, leaf_arrays)
         elif self.kind == NODE_LIST:
             # Descend into the list's flat child values — the innermost element
             # arrays hold the leaf values to write; the offsets/levels come from
             # the Dremel shred.
             self.children[0].collect_leaf_arrays(
-                col.as_list().values(), leaf_arrays
+                col.as_list().child_slice(), leaf_arrays
             )
         elif self.kind == NODE_MAP:
             self.children[0].collect_leaf_arrays(
-                col.as_map().values(), leaf_arrays
+                col.as_map().child_slice(), leaf_arrays
             )
         else:
             raise Error("parquet: unsupported schema node kind")
@@ -324,17 +331,24 @@ struct SchemaNode(Copyable, Movable):
     @staticmethod
     def _apply_null_mask(arr: DynArray, sa: StructArray) raises -> DynArray:
         """A copy of `arr` whose validity is `arr` AND `sa` — used to push a
-        nullable struct's null bit into a child before shredding/encoding."""
-        var n = arr.length()
-        var bm = Bitmap[mut=True].alloc_zeroed(n)
+        nullable struct's null bit into a child before shredding/encoding.
+
+        `arr` is the child already narrowed to `sa`'s range, so the two agree
+        index for index. The bitmap is built in `arr`'s *own* offset space:
+        a narrowed child keeps its parent's offset, and validity is read at
+        `offset + i`.
+        """
+        var d = arr.to_data()
+        var n = d.length
+        var bits = d.offset + n
+        var bm = Bitmap[mut=True].alloc_zeroed(bits)
         var nulls = 0
         for i in range(n):
             if arr.is_valid(i) and sa.is_valid(i):
-                bm.set(i)
+                bm.set(d.offset + i)
             else:
                 nulls += 1
-        var d = arr.to_data()
-        d.bitmap = bm^.to_immutable(length=n)
+        d.bitmap = bm^.to_immutable(length=bits)
         d.nulls = nulls
         return DynArray.from_data(d^)
 
@@ -382,9 +396,12 @@ struct SchemaNode(Copyable, Movable):
                 )
             else:
                 # Present (or REQUIRED) struct: shred each field at this element.
+                # `sa.children[c]` is the whole child — a struct slice moves
+                # only `sa.offset` — so the field element for `i` sits at
+                # `sa.offset + i`.
                 for c in range(len(self.children)):
                     self.children[c]._shred_elem(
-                        sa.children[c], i, rep, meta, defs, reps
+                        sa.children[c], sa.offset + i, rep, meta, defs, reps
                     )
         else:  # NODE_LIST / NODE_MAP
             var valid: Bool

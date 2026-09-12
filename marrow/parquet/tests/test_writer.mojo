@@ -1232,3 +1232,63 @@ def test_parquet_sink_memory_bytes_match_file() raises:
     # And those bytes are a Parquet file, not two copies of one mistake.
     assert_equal(Int(py=pq.read_table(path).num_rows), 8)
     remove(path)
+
+
+def test_nested_row_group_leaf_slicing() raises:
+    """Every row group after the first must write *its own* leaf values.
+
+    Splitting a table into row groups slices each column, and Arrow slices a
+    nested array by moving the container's offset and leaving its children
+    whole -- so `list.values()` and `struct.children[i]` still span the entire
+    column. `ColumnWriter.write` walks the leaf array positionally from element
+    0, so until `SchemaNode.collect_leaf_arrays` narrowed the child, every row
+    group after the first wrote row group 0's leaf values underneath its own,
+    correct, levels. PyArrow rejected the resulting `list<int64>` outright
+    ("Unexpected end of stream") and silently misread the structs.
+
+    Three row groups, so the third is checked and not just the second; and
+    every leaf value is distinct, so a shifted read cannot land on the right
+    answer by accident.
+    """
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+
+    var n = 300
+    var lists = Python.list()
+    var plain = Python.list()
+    var opt = Python.list()
+    var nxt = 0
+    for i in range(n):
+        if i % 7 == 0:
+            lists.append(Python.none())  # null list
+        elif i % 7 == 1:
+            lists.append(Python.list())  # present, but empty
+        else:
+            var sub = Python.list()
+            for _ in range(1 + (i % 3)):
+                sub.append(nxt)
+                nxt += 1
+            lists.append(sub)
+        plain.append(Python.dict(a=1000 + i))
+        if i % 5 == 0:
+            opt.append(Python.none())  # null struct
+        else:
+            opt.append(Python.dict(a=2000 + i))
+
+    var want = pa.table(
+        {
+            "l": pa.array(lists, type=pa.list_(pa.int64())),
+            "s": pa.array(plain, type=pa.struct({"a": pa.int64()})),
+            "o": pa.array(opt, type=pa.struct({"a": pa.int64()})),
+        }
+    )
+    var path = String("/tmp/marrow_nested_row_groups.parquet")
+    var w = FileWriter(
+        FileSink(path), Compression.UNCOMPRESSED, use_dictionary=False
+    )
+    w.write(_to_marrow(want), row_group_size=100)
+
+    assert_equal(ParquetFile(path).num_row_groups(), 3)
+    assert_true(Bool(pq.read_table(path).equals(want)))
+    assert_equal(read_table(path).num_rows(), n)
+    remove(path)

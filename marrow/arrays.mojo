@@ -1213,6 +1213,21 @@ struct ListLikeArray[T: ListLikeType](Array):
         """The child array containing the list elements."""
         return self.child[]
 
+    def child_slice(self) -> DynArray:
+        """Just the child elements this array's own range covers --
+        `[offsets[offset], offsets[offset + length])`.
+
+        `values()` hands back the *whole* child: slicing a list moves its own
+        offset and leaves the child untouched, so anything that walks leaf
+        elements positionally rather than through `child_range` has to narrow
+        it first.
+        """
+        var start = Int(self.offsets.unsafe_get[Self.T.offset](self.offset))
+        var end = Int(
+            self.offsets.unsafe_get[Self.T.offset](self.offset + self.length)
+        )
+        return self.child[].slice(start, end - start)
+
     def __len__(self) -> Int:
         return self.length
 
