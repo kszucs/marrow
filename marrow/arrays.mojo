@@ -133,6 +133,26 @@ trait Array(
     All concrete array types (PrimitiveArray, BinaryArray, ListArray,
     FixedSizeListArray, StructArray) implement this trait.  DynArray is
     the type-erased handle that wraps any Array-conforming type.
+
+    Equality (`Equatable`) is **structural**, not logical: two arrays are
+    equal when they have the same dtype, the same length, the same null
+    pattern, and the same window -- including `offset` -- over equal
+    underlying data, all the way down through any children. It is
+    deliberately not a contents/value comparison: `a.slice(1, 2)` and a
+    freshly built array holding the same two values are not equal, because
+    they do not share a layout. `PrimitiveArray`, `BoolArray`,
+    `BinaryLikeArray`, `FixedSizeBinaryArray`, `ListLikeArray`,
+    `FixedSizeListArray`, `StructArray` and `ArrayData` all follow this rule,
+    and `DynArray.__eq__` routes through it via `to_data()`. Element-wise,
+    value-level comparison -- where `a.slice(1, 2) == b` can be True by
+    contents alone -- is `EqKernel`'s job, not this trait's.
+
+    `DictionaryArray` is the one deliberate exception: its typed `__eq__`
+    decodes both sides and compares values, so that two encodings of the same
+    column against differently ordered dictionaries compare equal. That
+    exception does not reach `DynArray`, whose `__eq__` always goes through
+    `to_data()` regardless of the concrete type underneath -- see
+    `DynArray.__eq__` and `DictionaryArray.__eq__` for what that costs.
     """
 
     comptime ScalarType: ArrowScalar
@@ -606,6 +626,13 @@ struct BoolArray(Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
+        # Structural, matching `ArrayData.__eq__`: equal arrays share the same
+        # layout, not merely the same logical contents. `self[i]` below goes
+        # through `is_valid`/`values()`, both offset-applied, which is what
+        # made this loop offset-invariant -- `a.slice(1, 2) == a.slice(2, 2)`
+        # could answer True whenever the two windows held the same bits.
+        if self.offset != other.offset:
+            return False
         for i in range(self.length):
             if self.is_valid(i) and self[i] != other[i]:
                 return False
@@ -841,10 +868,13 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         )
 
     def __eq__(self, other: Self) -> Bool:
-        """Return True if both arrays have the same length, null pattern, and values.
+        """Return True if both arrays have the same dtype, length, null
+        pattern, offset, and values.
 
-        Fast path (no nulls, offset=0 on both): full buffer SIMD comparison.
-        Slow path (nulls or non-zero offset): element-by-element at valid positions.
+        Element-by-element at valid positions, not `Buffer.__eq__` on the
+        backing buffer: a buffer may be over-allocated (e.g. filtered output),
+        so a whole-buffer comparison would read uninitialized bytes past the
+        logical end.
         """
         if self.length != other.length:
             return False
@@ -860,8 +890,13 @@ struct PrimitiveArray[T: PrimitiveType](Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
-        # Compare only the valid length elements (buffer may be over-allocated
-        # in filtered output, so full Buffer.__eq__ would read uninitialized bytes).
+        # Structural, matching `ArrayData.__eq__`: equal arrays share the same
+        # layout, not merely the same logical contents. `unsafe_get` below is
+        # offset-applied, which is what made this loop offset-invariant --
+        # `a.slice(1, 2) == a.slice(2, 2)` could answer True whenever the two
+        # windows held the same values.
+        if self.offset != other.offset:
+            return False
         for i in range(self.length):
             if self.is_valid(i):
                 if self.unsafe_get(i) != other.unsafe_get(i):
@@ -1072,6 +1107,13 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
+        # Structural, matching `ArrayData.__eq__`: equal arrays share the same
+        # layout, not merely the same logical contents. `unsafe_get` below is
+        # offset-applied, which is what made this loop offset-invariant --
+        # `a.slice(1, 2) == a.slice(2, 2)` could answer True whenever the two
+        # windows held the same strings.
+        if self.offset != other.offset:
+            return False
         for i in range(self.length):
             if self.is_valid(i):
                 if self.unsafe_get(UInt(i)) != other.unsafe_get(UInt(i)):
@@ -1329,9 +1371,23 @@ struct ListLikeArray[T: ListLikeType](Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
-        # Fields, not elements: the child array is compared once as a whole.
-        # Materialising a `DynArray` per element is what made this method and
-        # `DynArray.__eq__` mutually recursive and deadlocked the compiler.
+        # Fields, not elements -- materialising a `DynArray` per element is
+        # what made this method and `DynArray.__eq__` mutually recursive and
+        # deadlocked the compiler.
+        #
+        # The comparison is structural, matching `ArrayData.__eq__`: equal
+        # arrays have the same layout, not merely the same logical contents.
+        # So `offset` and the offsets buffer are fields like any other, and
+        # skipping them is what let `[[1, 2], [3, 4]]` and `[[1, 2, 3], [4]]`
+        # compare equal -- same dtype, same length, same null count, same
+        # child, different partition of it.
+        if self.offset != other.offset:
+            return False
+        for k in range(self.length + 1):
+            if self.offsets.unsafe_get[Self.T.offset](
+                self.offset + k
+            ) != other.offsets.unsafe_get[Self.T.offset](other.offset + k):
+                return False
         return self.values() == other.values()
 
     @staticmethod
@@ -1606,9 +1662,16 @@ struct FixedSizeListArray(Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
-        # Fields, not elements: the child array is compared once as a whole.
-        # Materialising a `DynArray` per element is what made this method and
-        # `DynArray.__eq__` mutually recursive and deadlocked the compiler.
+        # Fields, not elements -- materialising a `DynArray` per element is
+        # what made this method and `DynArray.__eq__` mutually recursive and
+        # deadlocked the compiler.
+        #
+        # Structural, matching `ArrayData.__eq__`. There is no offsets buffer
+        # here, so `offset` alone distinguishes two windows of one child:
+        # without it `fsl.slice(0, 1)` and `fsl.slice(1, 1)` compared equal,
+        # since slicing moves the offset and leaves the child untouched.
+        if self.offset != other.offset:
+            return False
         return self.values() == other.values()
 
     @staticmethod
@@ -1789,6 +1852,14 @@ struct FixedSizeBinaryArray(Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
+        # Structural, matching `ArrayData.__eq__`: equal arrays share the same
+        # layout, not merely the same logical contents. The byte offsets below
+        # are each array's own -- `self.offset` / `other.offset` -- which is
+        # what made this loop offset-invariant -- `a.slice(1, 2) ==
+        # a.slice(2, 2)` could answer True whenever the two windows held the
+        # same bytes.
+        if self.offset != other.offset:
+            return False
         for i in range(self.length):
             if self.is_valid(i):
                 var ls = (self.offset + i) * self.byte_width
@@ -2027,6 +2098,12 @@ struct StructArray(Array):
             if not (sv.value() == ov.value()):
                 return False
         if len(self.children) != len(other.children):
+            return False
+        # Fields, not elements, and structural -- matching `ArrayData.__eq__`.
+        # Slicing a struct moves `offset` and leaves the children whole, so
+        # without comparing `offset` two disjoint windows of one array --
+        # `sa.slice(0, 2)` and `sa.slice(2, 2)` -- compared equal.
+        if self.offset != other.offset:
             return False
         for i in range(len(self.children)):
             if self.children[i] != other.children[i]:

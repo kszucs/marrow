@@ -1,4 +1,5 @@
 from std.testing import assert_equal, assert_true, assert_false
+from std.sys import stderr
 from ..arrays import *
 from ..builders import (
     array,
@@ -2663,24 +2664,28 @@ def test_slice_of_all_null_array_is_all_null() raises:
 
 
 # ---------------------------------------------------------------------------
-# B26 — equality is a question about values and null *positions*, not about
-# how the validity happens to be stored.
+# B26 (historical) — equality used to be a question about values and null
+# *positions*, not about how the validity happens to be stored, or at what
+# offset. `__eq__` used to compare the bitmaps themselves: presence against
+# presence, then whole bitmap against whole bitmap. So an all-valid array
+# carrying a bitmap was unequal to one carrying none, and two slices whose
+# logical validity matched were unequal whenever their offsets differed. Six
+# array types shared the shape.
 #
-# `__eq__` compared the bitmaps themselves: presence against presence, then
-# whole bitmap against whole bitmap. So an all-valid array carrying a bitmap was
-# unequal to one carrying none, and two slices whose logical validity matched
-# were unequal whenever their offsets differed. Six array types shared the shape.
-#
-# This matters more than it looks: CLAUDE.md tells you to write
-# `assert_true(result == expected)` rather than an element loop, and every kernel
-# that intersects validity emits an array with a bitmap while `array([...])`
-# emits one without — so the recommended assertion was unreliable for exactly
-# the values a kernel test wants to check.
+# Equality is now **structural** (see the `Array` trait docstring): `offset`
+# is a field like any other, so two arrays that decode to the same values
+# from different offsets are not equal, even with identical null positions.
+# The bitmap-redundancy half of this still holds — a missing bitmap and a
+# redundant all-valid one are still the same value — but only once offset
+# (and everything else structural) already agrees, so the tests below now
+# hold offset fixed to isolate the bitmap from it.
 # ---------------------------------------------------------------------------
 
 
 def test_eq_ignores_a_redundant_all_valid_bitmap() raises:
-    """`[1, 2, 3]` with an all-valid bitmap equals `[1, 2, 3]` with none."""
+    """`[1, 2, 3]` with an all-valid bitmap equals `[1, 2, 3]` with none, once
+    both sit at the same offset — equality is structural, so offset has to
+    agree before the bitmap comparison is the only thing left to isolate."""
     # A builder given no nulls produces no bitmap at all, so the bitmap has to
     # come from a parent: slice past every null and the child keeps the parent's
     # bitmap while its own null count is 0.
@@ -2693,24 +2698,36 @@ def test_eq_ignores_a_redundant_all_valid_bitmap() raises:
     var with_bitmap = b.finish().slice(2, 3)
     assert_true(with_bitmap.bitmap.__bool__())
 
-    var plain = array([1, 2, 3], int32)
+    # Same offset (2), same values, but a parent that never saw a null: no
+    # bitmap at all.
+    var b2 = Int32Builder(5)
+    b2.append(Scalar[int32.native](9))
+    b2.append(Scalar[int32.native](9))
+    b2.append(Scalar[int32.native](1))
+    b2.append(Scalar[int32.native](2))
+    b2.append(Scalar[int32.native](3))
+    var plain = b2.finish().slice(2, 3)
     assert_false(plain.bitmap.__bool__())
+    assert_equal(with_bitmap.offset, plain.offset)
+
     assert_equal(with_bitmap.null_count(), 0)
     assert_equal(plain.null_count(), 0)
     assert_true(with_bitmap == plain)
     assert_true(plain == with_bitmap)
 
 
-def test_eq_compares_null_positions_not_bitmap_offsets() raises:
-    """Two slices with the same logical validity are equal, whatever offset
-    they were taken at."""
+def test_eq_distinguishes_different_offsets_despite_same_null_positions() raises:
+    """Two slices with the same logical validity are no longer equal merely
+    for that: equality is structural, and `offset` is a field like any
+    other, so different offsets make them unequal even when null count and
+    positions coincide."""
     var b1 = Int32Builder(5)
     b1.append_null()
     b1.append_null()
     b1.append(Scalar[int32.native](7))
     b1.append_null()
     b1.append(Scalar[int32.native](9))
-    var left = b1.finish().slice(2, 3)  # [7, null, 9]
+    var left = b1.finish().slice(2, 3)  # [7, null, 9] at offset 2
 
     var b2 = Int32Builder(3)
     b2.append(Scalar[int32.native](7))
@@ -2719,7 +2736,7 @@ def test_eq_compares_null_positions_not_bitmap_offsets() raises:
     var right = b2.finish()  # [7, null, 9] at offset 0
 
     assert_equal(left.null_count(), right.null_count())
-    assert_true(left == right)
+    assert_false(left == right)
 
 
 def test_eq_still_separates_different_null_positions() raises:
@@ -2744,21 +2761,28 @@ def test_eq_still_separates_different_null_positions() raises:
 
 def test_validity_equal_all_valid_bitmap_vs_none() raises:
     """B26: a missing bitmap means all-valid, which is a value, not a
-    representation. The slice excludes the only null but still carries the
-    parent's bitmap at an offset; the plain array has no bitmap at all."""
+    representation — but equality is structural now, so offset must agree
+    too before that comparison isolates the bitmap. The slice excludes the
+    only null but still carries the parent's bitmap at an offset; `plain` is
+    taken from a null-free parent at that same offset, so it carries no
+    bitmap at all."""
     var sliced = array([None, 2, 3], int32).slice(1, 2)
-    var plain = array([2, 3], int32)
+    var plain = array([9, 2, 3], int32).slice(1, 2)
+    assert_equal(sliced.offset, plain.offset)
     assert_equal(sliced.null_count(), 0)
     assert_true(sliced == plain)
     assert_true(plain == sliced)
 
 
-def test_validity_equal_slices_at_different_offsets() raises:
-    """Same logical validity reached from different offsets must compare equal —
-    the views are offset-applied, so the bit patterns line up."""
+def test_eq_distinguishes_slices_at_different_offsets() raises:
+    """Same logical validity and values, reached from different offsets, are
+    no longer equal: equality is structural (see the `Array` trait
+    docstring), and `offset` is a field like any other — two windows that
+    decode to the same thing do not share a layout unless they share an
+    offset too."""
     var a = array([1, None, 3, 4], int32).slice(1, 2)
     var b = array([9, 9, None, 3], int32).slice(2, 2)
-    assert_true(a == b)
+    assert_false(a == b)
 
 
 def test_validity_equal_same_count_different_positions_word_path() raises:
@@ -2871,3 +2895,113 @@ def test_slice_default_length_null_count() raises:
     var c = b.slice(1)  # [3, 4] — bit 4 of the parent is null and not ours
     assert_equal(len(c), 2)
     assert_equal(c.null_count(), 0)
+
+
+def test_list_array_eq_compares_the_partition() raises:
+    """`[[1, 2], [3, 4]]` and `[[1, 2, 3], [4]]` agree on dtype, length, null
+    count and child -- only the offsets separate them. Comparing the child as
+    one whole field and skipping the offsets reported them equal, at offset 0,
+    with no slicing involved."""
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca_any = la.values()
+    ref ca = ca_any.as_int64()
+    ca.append(1)
+    ca.append(2)
+    la.append_valid()
+    ca.append(3)
+    ca.append(4)
+    la.append_valid()
+    var a = la.finish()
+
+    var ib = Int64Builder()
+    var lb = ListBuilder(ib^)
+    var cb_any = lb.values()
+    ref cb = cb_any.as_int64()
+    cb.append(1)
+    cb.append(2)
+    cb.append(3)
+    lb.append_valid()
+    cb.append(4)
+    lb.append_valid()
+    var b = lb.finish()
+
+    assert_false(a == b)
+
+
+def test_list_array_eq_distinguishes_slices() raises:
+    """Slicing moves the list's own offset and leaves the child whole, so
+    comparing the raw child made two disjoint windows of one array equal."""
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca_any = la.values()
+    ref ca = ca_any.as_int64()
+    for i in range(8):
+        ca.append(Int64(i))
+        if i % 2 == 1:
+            la.append_valid()
+    var a = la.finish()
+    ref lst = a
+
+    assert_false(lst.slice(0, 2) == lst.slice(2, 2))
+    assert_true(lst.slice(1, 2) == lst.slice(1, 2))
+
+
+def test_list_array_eq_is_structural_not_logical() raises:
+    """Equality compares layout, not logical contents -- the same rule
+    `ArrayData.__eq__` already follows, which compares `offset` and the whole
+    buffers. `a.slice(1, 1)` and a standalone `[[2, 3]]` hold the same lists
+    but sit at different offsets over different buffers, so they are not equal
+    arrays. Pinned because the cheaper reading -- normalise each field to its
+    own window -- is the tempting one, and it is not what the rest of the
+    codebase means by equal.
+    """
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca_any = la.values()
+    ref ca = ca_any.as_int64()
+    for i in range(6):
+        ca.append(Int64(i))
+        if i % 2 == 1:
+            la.append_valid()
+    var a = la.finish()
+
+    var ib = Int64Builder()
+    var lb = ListBuilder(ib^)
+    var cb_any = lb.values()
+    ref cb = cb_any.as_int64()
+    cb.append(2)
+    cb.append(3)
+    lb.append_valid()
+    var b = lb.finish()
+
+    assert_false(a.slice(1, 1) == b)
+    assert_true(a.slice(1, 1) == a.slice(1, 1))
+
+
+def test_struct_array_eq_distinguishes_slices() raises:
+    """Slicing a struct moves its offset and leaves the children whole, so
+    comparing `children[i]` raw made two disjoint windows compare equal."""
+    var sb = StructBuilder([field("v", int64)], capacity=4)
+    for i in range(4):
+        sb.field_builder(0).as_int64().append(Int64(10 * i))
+        sb.append_valid()
+    var sa = sb.finish()
+
+    assert_false(sa.slice(0, 2) == sa.slice(2, 2))
+    assert_true(sa.slice(1, 2) == sa.slice(1, 2))
+
+
+def test_fixed_size_list_eq_distinguishes_slices() raises:
+    """Same defect on the fixed-size layout, where the window is
+    `[offset * size, (offset + length) * size)` rather than an offsets pair."""
+    var ints_b = Int64Builder(6)
+    for i in range(6):
+        ints_b.append(Int64(i))
+    var builder = FixedSizeListBuilder(ints_b^, list_size=2)
+    for _ in range(3):
+        builder.append_valid()
+    var fsl = builder.finish()
+
+    assert_false(fsl.slice(0, 1) == fsl.slice(1, 1))
+    assert_true(fsl.slice(2, 1) == fsl.slice(2, 1))

@@ -365,9 +365,16 @@ def test_limit_takes_a_prefix() raises:
 
 
 def test_limit_skips_the_offset() raises:
+    """`limit` is zero-copy, so it hands back a *window* on its input rather
+    than a fresh array -- and array equality is structural, so the expected
+    side has to be the same window. Comparing against a standalone
+    `array([30, 40])` asserted the values and the layout at once, and only
+    passed while equality ignored `offset`."""
     var plan = table(_batch()).limit(length=2, offset=2)
     var out = plan.execute()
-    assert_true(out.columns[1].as_int64() == array([30, 40], int64))
+    assert_true(
+        out.columns[1].as_int64() == array([10, 20, 30, 40], int64).slice(2, 2)
+    )
 
 
 def test_limit_preserves_its_input_schema() raises:
