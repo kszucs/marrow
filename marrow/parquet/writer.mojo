@@ -24,6 +24,8 @@ from ..io import (
 from ..dtypes import PrimitiveType, NumericType
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
+from .chunker import ContentDefinedChunking, ContentDefinedChunker, Chunk
+from .gearhash import gearhash_table
 
 
 from .codecs import (
@@ -406,10 +408,12 @@ struct ColumnWriter(Movable):
         num_rows: Int,
         num_present: Int,
     ) raises -> Int:
-        """Rows per data page: the row count whose estimated encoded value bytes
-        fill `DEFAULT_DATA_PAGE_SIZE`, clamped to `[1, MAX_ROWS_PER_PAGE]`. The
-        estimate is values-only (dictionary indices are `bit_width` bits each,
-        byte arrays their measured length, everything else its physical width).
+        """Rows per data page from the estimated encoded value bytes alone --
+        the row count whose bytes fill `DEFAULT_DATA_PAGE_SIZE`, not yet
+        capped by `MAX_ROWS_PER_PAGE`. `write` applies that cap once, at the
+        call site, alongside the CDC row cap. The estimate is values-only
+        (dictionary indices are `bit_width` bits each, byte arrays their
+        measured length, everything else its physical width).
         """
         var est: Int
         if encoding == Encoding.RLE_DICTIONARY:
@@ -430,9 +434,7 @@ struct ColumnWriter(Movable):
             est = num_present * self._phys_width()
         if est <= 0 or num_rows == 0:
             return MAX_ROWS_PER_PAGE
-        return max(
-            1, min(MAX_ROWS_PER_PAGE, num_rows * DEFAULT_DATA_PAGE_SIZE // est)
-        )
+        return max(1, num_rows * DEFAULT_DATA_PAGE_SIZE // est)
 
     def _write_dict_page(
         self,
@@ -536,33 +538,32 @@ struct ColumnWriter(Movable):
         path: List[String],
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
+        page_plan: List[Int],
     ) raises -> ColumnChunk:
-        """Write one leaf column chunk, split into data pages. A flat column
-        passes empty `def_levels`/`rep_levels` and its 0/1 definition levels are
-        derived here; a leveled (list/map) column passes the rep/def levels
-        pre-shredded by `SchemaNode.shred_levels`. Values are dictionary/PLAIN/
+        """Write one leaf column chunk, split into data pages. `def_levels` /
+        `rep_levels` are always pre-populated by the caller: either
+        Dremel-shredded by `SchemaNode.shred_levels` (a leveled list/map/
+        nullable-struct column) or synthesized from the leaf array's own
+        validity by `_flat_def_levels` (a flat column) --
+        `FileWriter._write_row_group` is the single call site for the latter,
+        shared with the content-defined chunker. Values are dictionary/PLAIN/
         DELTA/BSS-encoded; a shared dictionary page (if any) precedes the data
-        pages. Produces the per-page OffsetIndex + ColumnIndex on the chunk."""
+        pages. Produces the per-page OffsetIndex + ColumnIndex on the chunk.
+
+        `page_plan`, when non-empty, is the content-defined chunker's per-chunk
+        level-count boundaries and replaces the byte-estimate `_rows_per_page`
+        sizing. `MAX_ROWS_PER_PAGE` still bounds every physical page inside a
+        chunk -- a default-sized CDC chunk of int64 alone holds 32K-131K
+        values, well past the 20 000-row cap, so it fires on essentially every
+        chunk and one chunk commonly becomes several pages."""
         var max_def = self.leaf.max_def
         var max_rep = self.leaf.max_rep
         var slot_def = self.leaf.slot_def
 
-        # ---- per-slot definition/repetition levels ----
-        # Flat: one 0/1 def per row from the array's validity (a non-nullable
-        # column has max_def == 0, so every slot is present). Leveled: the
-        # pre-shredded levels, with one slot per element or empty/null list.
-        var defs = List[Int32]()
-        var reps = List[Int32]()
-        if max_rep == 0 and len(def_levels) == 0:
-            for i in range(values.length()):
-                defs.append(
-                    Int32(max_def) if values.is_valid(i) else Int32(max_def - 1)
-                )
-        else:
-            for d in def_levels:
-                defs.append(d)
-            for r in rep_levels:
-                reps.append(r)
+        # ---- per-slot definition/repetition levels: borrow the caller's
+        # lists, which outlive this call ----
+        ref defs = def_levels
+        ref reps = rep_levels
 
         var num_values = len(defs)
         var num_present = 0
@@ -604,9 +605,32 @@ struct ColumnWriter(Movable):
                 total_uncompressed += d[1]
                 total_compressed += d[2]
 
-        var rows_per_page = self._rows_per_page(
-            values, encoding, dict_width, num_rows, num_present
-        )
+        # Content-defined chunking: `page_plan[k]` is the level count of CDC
+        # chunk `k`; absent (CDC off), it is normalised here to one chunk
+        # spanning every level, so the boundary-advance below needs no
+        # separate has-a-plan branch. `row_cap` still bounds every physical
+        # page inside a chunk -- a chunk bigger than `MAX_ROWS_PER_PAGE` (the
+        # common case) splits into several pages, and only once the slot
+        # cursor reaches the chunk's own boundary does the plan advance to
+        # the next chunk.
+        #
+        # `row_cap` and `chunk_end` are irreducibly different units: `row_cap`
+        # counts **records** (an encoded-byte budget), `chunk_end` counts
+        # **levels** (a content-hash boundary) -- that is why they stay two
+        # separate numbers rather than folding into one list.
+        var has_plan = len(page_plan) > 0
+        var plan = page_plan.copy()
+        var row_cap = MAX_ROWS_PER_PAGE
+        if not has_plan:
+            plan.append(num_values)
+            row_cap = min(
+                row_cap,
+                self._rows_per_page(
+                    values, encoding, dict_width, num_rows, num_present
+                ),
+            )
+        var plan_idx = 0
+        var chunk_end = plan[0]
 
         # ---- emit data pages ----
         var page_locs = List[PageLocation]()
@@ -622,7 +646,7 @@ struct ColumnWriter(Movable):
             var e0 = e
             var p0 = p
             var page_rows = 0
-            while i < num_values and page_rows < rows_per_page:
+            while i < num_values and page_rows < row_cap and i < chunk_end:
                 # consume one whole record (rep == 0 starts a new record)
                 if Int(defs[i]) >= slot_def:
                     e += 1
@@ -638,6 +662,9 @@ struct ColumnWriter(Movable):
                         p += 1
                     i += 1
                 page_rows += 1
+            if i >= chunk_end and plan_idx + 1 < len(plan):
+                plan_idx += 1
+                chunk_end += plan[plan_idx]
             var page_num_values = i - i0
             var page_present = p - p0
             var page_null = page_num_values - page_present
@@ -773,6 +800,23 @@ struct ColumnWriter(Movable):
 # ---------------------------------------------------------------------------
 
 
+def _flat_def_levels(values: DynArray, max_def: Int) -> List[Int32]:
+    """Definition levels for a flat leaf, one per row: `max_def` where the
+    row is valid, `max_def - 1` otherwise. A flat leaf (no repeated group or
+    nullable struct above it) is never Dremel-shredded, so this is the only
+    place its def levels exist. `FileWriter._write_row_group` calls this once
+    per leaf and shares the result between the content-defined chunker and
+    `ColumnWriter.write` -- previously each synthesized the same array under
+    a differently spelled condition, and the two could drift out of
+    agreement."""
+    var defs = List[Int32](capacity=values.length())
+    for i in range(values.length()):
+        defs.append(
+            Int32(max_def) if values.is_valid(i) else Int32(max_def - 1)
+        )
+    return defs^
+
+
 struct FileWriter[S: ByteSink = FileSink](Movable):
     """Writes a `Table` as a Parquet file to any `ByteSink`.
 
@@ -800,6 +844,12 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
     var write_bloom_filter: Bool  # build bloom filters for eligible columns
     var write_page_checksum: Bool  # attach a CRC-32 to every page
     var leaves: List[LeafColumn]
+    var content_defined_chunking: Optional[ContentDefinedChunking]
+    """How to derive data page boundaries from a rolling hash instead of a row
+    count / byte estimate, or `None` for the existing default sizing."""
+    var gearhash: List[UInt64]
+    """The 16 KiB gear hash table, materialized once per file and lent to
+    every chunker call -- never copied per chunker or per value."""
 
     def __init__(
         out self,
@@ -811,6 +861,7 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
         var column_encodings: Dict[String, Encoding] = {},
         write_bloom_filter: Bool = False,
         write_page_checksum: Bool = False,
+        var content_defined_chunking: Optional[ContentDefinedChunking] = None,
     ):
         self.out = BufferedSink(sink^)
         FileMetaData.write_magic(self.out.buffer())  # file header magic
@@ -823,6 +874,8 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
         self.write_bloom_filter = write_bloom_filter
         self.write_page_checksum = write_page_checksum
         self.leaves = List[LeafColumn]()
+        self.content_defined_chunking = content_defined_chunking^
+        self.gearhash = List[UInt64]()
 
     def _encoding_for(self, leaf: LeafColumn) raises -> Encoding:
         """The value encoding for a leaf, most specific first: a per-column
@@ -844,6 +897,27 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
     def _write_row_group(
         mut self, batch: RecordBatch, nodes: List[SchemaNode]
     ) raises -> RowGroup:
+        # Content-defined chunking: one chunker per leaf, **built fresh for this
+        # row group**. The rolling-hash state carries across the pages and the
+        # `chunks()` calls within a row group and is deliberately dropped at its
+        # end, which is where Arrow C++ puts the boundary too: its
+        # `content_defined_chunker_` is a member of `ColumnWriterImpl`
+        # (`column_writer.cc`), and `RowGroupSerializer` builds a new column
+        # writer for every row group. Hoisting this into `write()` to make the
+        # state column-global reads like the stronger guarantee and is simply a
+        # different chunking -- it moves every boundary past row group 0 off
+        # Arrow C++'s, which `test_chunker_parity.mojo` catches.
+        var chunkers = List[ContentDefinedChunker]()
+        if self.content_defined_chunking:
+            var opts = self.content_defined_chunking.value().copy()
+            chunkers = List[ContentDefinedChunker](capacity=len(self.leaves))
+            for ref leaf in self.leaves:
+                chunkers.append(
+                    ContentDefinedChunker(
+                        opts, leaf.max_def, leaf.max_rep, leaf.slot_def
+                    )
+                )
+
         var columns = List[ColumnChunk]()
         var total = 0
         for ci in range(len(nodes)):
@@ -852,9 +926,10 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
             var leaf_values = List[DynArray]()
             nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_values)
 
-            # Per-leaf rep/def levels: empty for a flat column (each leaf derives
-            # its own 0/1 def levels), Dremel-shredded when the column contains a
-            # repeated (list/map) group.
+            # Per-leaf rep/def levels: empty for a flat column (each leaf's
+            # levels are synthesized below from its own validity), Dremel-
+            # shredded when the column contains a repeated (list/map) group
+            # or a nullable struct.
             var defs = List[List[Int32]]()
             var reps = List[List[Int32]]()
             for _ in range(len(self.leaves)):
@@ -867,6 +942,29 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
 
             for k in range(len(col_leaves)):
                 var gi = col_leaves[k]
+
+                # A flat leaf (required or nullable) is never Dremel-shredded,
+                # so its def levels only exist here -- synthesized once and
+                # shared below by the content-defined chunker and
+                # `ColumnWriter.write`, which used to each synthesize the same
+                # array under a differently spelled condition.
+                if len(defs[gi]) == 0:
+                    defs[gi] = _flat_def_levels(
+                        leaf_values[k], self.leaves[gi].max_def
+                    )
+
+                # Content-defined chunking: the per-page level-count plan for
+                # this leaf, from this row group's chunker. Empty (the
+                # default) unless CDC is enabled, in which case
+                # `ColumnWriter.write` falls back to its byte-estimate sizing.
+                var page_plan = List[Int]()
+                if self.content_defined_chunking:
+                    ref chunker = chunkers[gi]
+                    for c in chunker.chunks(
+                        self.gearhash, leaf_values[k], defs[gi], reps[gi]
+                    ):
+                        page_plan.append(c.num_levels)
+
                 var ccw = ColumnWriter(
                     self.leaves[gi].copy(),
                     self.compression,
@@ -883,6 +981,7 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
                     [self.leaves[gi].name],
                     self.out.buffer(),
                     self.codecs,
+                    page_plan,
                 )
                 total += cc.meta_data.total_uncompressed_size
                 columns.append(cc^)
@@ -905,6 +1004,12 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
 
         var ps = SchemaMapping.from_arrow(table.schema)
         self.leaves = ps.leaves.copy()
+
+        # Content-defined chunking: the 16 KiB gearhash table is materialized
+        # once per file and lent (never copied) to every `chunks()` call. The
+        # chunkers themselves are per row group -- see `_write_row_group`.
+        if self.content_defined_chunking:
+            self.gearhash = gearhash_table()
 
         var fmeta = FileMetaData()
         fmeta.version = self.version
@@ -998,6 +1103,7 @@ def write_table(
     var column_encodings: Dict[String, Encoding] = {},
     write_bloom_filter: Bool = False,
     write_page_checksum: Bool = False,
+    var content_defined_chunking: Optional[ContentDefinedChunking] = None,
     options: StorageOptions = StorageOptions(),
 ) raises:
     """Write a Marrow `Table` to a Parquet file at `uri`.
@@ -1024,6 +1130,20 @@ def write_table(
 
     `write_page_checksum` (default False, like PyArrow) attaches a CRC-32 to
     every page header, which the reader verifies to detect corruption.
+
+    `content_defined_chunking` (default None, off) derives data page boundaries
+    from a rolling hash over each column's values instead of a row count/byte
+    estimate, so an edit early in a column stops shifting every page after it --
+    useful when the file is stored in a content-addressable store. Only the
+    writer is aware of it; readers are unaffected.
+
+    A content-defined chunk is still capped at `MAX_ROWS_PER_PAGE` (20 000)
+    rows, matching Arrow C++'s default -- but unlike Arrow C++, marrow applies
+    no *encoded-byte* cap inside a chunk: Arrow C++'s comes from an
+    encoder-internal running total, which a writer that picks page boundaries
+    before encoding has no counterpart for. With a large `max_chunk_size` and
+    wide values, marrow will therefore write larger pages than Arrow C++ would
+    for the same data.
     """
     var writer = FileWriter(
         DynSink.open(uri, options),
@@ -1034,5 +1154,6 @@ def write_table(
         column_encodings^,
         write_bloom_filter,
         write_page_checksum,
+        content_defined_chunking^,
     )
     writer.write(table)

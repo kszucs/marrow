@@ -77,3 +77,103 @@ def test_unsupported_compression(tmp_path):
     mt = mpq.read_table(src)
     with pytest.raises(Exception):
         mpq.write_table(mt, tmp_path / "o.parquet", compression="brotli")
+
+
+def _int64_table(n):
+    return pa.table({"a": pa.array(range(n), pa.int64())})
+
+
+def _string_table(n):
+    return pa.table({"s": pa.array([f"row-{i}-" + "x" * (i % 40) for i in range(n)])})
+
+
+def test_content_defined_chunking_changes_page_layout(tmp_path):
+    src = tmp_path / "src.parquet"
+    want = _int64_table(200_000)
+    pq.write_table(want, src)
+    mt = mpq.read_table(src)
+
+    plain = tmp_path / "plain.parquet"
+    cdc = tmp_path / "cdc.parquet"
+    mpq.write_table(mt, plain, compression="none")
+    mpq.write_table(mt, cdc, compression="none", use_content_defined_chunking=True)
+
+    assert plain.read_bytes() != cdc.read_bytes()
+    _assert_equiv(pq.read_table(plain), want)
+    _assert_equiv(pq.read_table(cdc), want)
+
+
+def test_content_defined_chunking_string_column(tmp_path):
+    """A non-int64 leaf -- the specific failure a fixed-width-only value
+    dispatch would hide."""
+    src = tmp_path / "src.parquet"
+    want = _string_table(20_000)
+    pq.write_table(want, src)
+    mt = mpq.read_table(src)
+
+    plain = tmp_path / "plain.parquet"
+    cdc = tmp_path / "cdc.parquet"
+    mpq.write_table(mt, plain, compression="none")
+    mpq.write_table(
+        mt,
+        cdc,
+        compression="none",
+        use_content_defined_chunking={
+            "min_chunk_size": 1024,
+            "max_chunk_size": 4096,
+        },
+    )
+
+    assert plain.read_bytes() != cdc.read_bytes()
+    _assert_equiv(pq.read_table(plain), want)
+    _assert_equiv(pq.read_table(cdc), want)
+
+
+def test_content_defined_chunking_rejects_bad_sizes(tmp_path):
+    src = tmp_path / "src.parquet"
+    pq.write_table(_sample(), src)
+    mt = mpq.read_table(src)
+    with pytest.raises(Exception):
+        mpq.write_table(
+            mt,
+            tmp_path / "bad.parquet",
+            use_content_defined_chunking={
+                "min_chunk_size": 1024,
+                "max_chunk_size": 1024,
+            },
+        )
+
+
+def test_content_defined_chunking_dict_requires_min_and_max(tmp_path):
+    """PyArrow's shape: a dict must supply both `min_chunk_size` and
+    `max_chunk_size` -- there is no fallback to the `True` defaults for a
+    dict missing one, and an unrecognized key is rejected too."""
+    src = tmp_path / "src.parquet"
+    pq.write_table(_sample(), src)
+    mt = mpq.read_table(src)
+    with pytest.raises(ValueError, match="Missing options"):
+        mpq.write_table(
+            mt,
+            tmp_path / "missing.parquet",
+            use_content_defined_chunking={"min_chunk_size": 1024},
+        )
+    with pytest.raises(ValueError, match="Unknown options"):
+        mpq.write_table(
+            mt,
+            tmp_path / "unknown.parquet",
+            use_content_defined_chunking={
+                "min_chunk_size": 1024,
+                "max_chunk_size": 4096,
+                "bogus": 1,
+            },
+        )
+
+
+def test_content_defined_chunking_rejects_bad_type(tmp_path):
+    src = tmp_path / "src.parquet"
+    pq.write_table(_sample(), src)
+    mt = mpq.read_table(src)
+    with pytest.raises(TypeError):
+        mpq.write_table(
+            mt, tmp_path / "bad.parquet", use_content_defined_chunking="yes"
+        )

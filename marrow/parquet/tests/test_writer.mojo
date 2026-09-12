@@ -10,7 +10,8 @@ from ...parquet import (
 )
 from ...buffers import Buffer
 from ...io import FileSink, MemorySink
-from ...parquet.writer import FileWriter
+from ...parquet.writer import FileWriter, MAX_ROWS_PER_PAGE
+from ...parquet.chunker import ContentDefinedChunking
 from ...parquet.codecs import Compression, Encoding
 from ...utils import Crc32
 from ...tabular import Table
@@ -1231,6 +1232,185 @@ def test_parquet_sink_memory_bytes_match_file() raises:
 
     # And those bytes are a Parquet file, not two copies of one mistake.
     assert_equal(Int(py=pq.read_table(path).num_rows), 8)
+
+
+# ---------------------------------------------------------------------------
+# Content-defined chunking (CDC) — data page boundaries from a rolling hash
+# over each column's `(def_level, rep_level, value)` stream instead of a row
+# count / byte estimate. Only the writer is aware of it; a reader cannot tell
+# a CDC file from a default one, so every check here is on the page layout.
+# ---------------------------------------------------------------------------
+
+
+def _page_row_counts(path: String, rg: Int, col: Int) raises -> List[Int]:
+    """Per-page row counts for one (row group, leaf column) -- the shape
+    `ColumnWriter.write`'s page-splitting loop produced."""
+    var pbs = ParquetFile(path).page_bounds()
+    var out = List[Int](capacity=len(pbs[rg][col]))
+    for p in range(len(pbs[rg][col])):
+        out.append(pbs[rg][col][p].copy().num_rows)
+    return out^
+
+
+def test_cdc_changes_page_layout_and_reads_back_identically() raises:
+    """CDC-derived page boundaries differ from the byte-estimate default for
+    the same data, and the file still reads back every row correctly."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var n = 25_000
+    var want = pa.table({"x": pa.array(_ints(n), type=pa.int64())})
+    var t = _to_marrow(want)
+
+    var path_off = String("/tmp/marrow_cdc_off.parquet")
+    var w_off = FileWriter(
+        FileSink(path_off), Compression.UNCOMPRESSED, use_dictionary=False
+    )
+    w_off.write(t)
+
+    var path_on = String("/tmp/marrow_cdc_on.parquet")
+    var w_on = FileWriter(
+        FileSink(path_on),
+        Compression.UNCOMPRESSED,
+        use_dictionary=False,
+        content_defined_chunking=ContentDefinedChunking(512, 4096, 0),
+    )
+    w_on.write(t)
+
+    var rows_off = _page_row_counts(path_off, 0, 0)
+    var rows_on = _page_row_counts(path_on, 0, 0)
+    assert_true(
+        rows_off != rows_on, "CDC produced the same page layout as CDC off"
+    )
+    # a tiny CDC size envelope cuts far more often than the default estimate
+    assert_true(len(rows_on) > len(rows_off))
+
+    assert_true(Bool(pq.read_table(path_on).column(0).equals(want.column(0))))
+    assert_equal(read_table(path_on).num_rows(), n)
+
+    remove(path_off)
+    remove(path_on)
+
+
+def test_cdc_page_split_respects_max_rows_per_page() raises:
+    """A default-sized CDC chunk of int64 (256 KiB-1 MiB) holds 32K-131K
+    values, far past MAX_ROWS_PER_PAGE -- so the writer's page loop must keep
+    splitting inside a chunk, not stop at CDC's own (much wider) boundaries."""
+    var pa = Python.import_module("pyarrow")
+    var n = 200_000
+    var t = _one_col(pa.array(_ints(n), type=pa.int64()))
+    var path = String("/tmp/marrow_cdc_maxrows.parquet")
+    var w = FileWriter(
+        FileSink(path),
+        Compression.UNCOMPRESSED,
+        use_dictionary=False,
+        content_defined_chunking=ContentDefinedChunking(),
+    )
+    w.write(t)
+
+    var rows = _page_row_counts(path, 0, 0)
+    assert_true(len(rows) > 1)
+    var total = 0
+    for r in rows:
+        assert_true(
+            r <= MAX_ROWS_PER_PAGE,
+            "a CDC page exceeded MAX_ROWS_PER_PAGE: " + String(r),
+        )
+        total += r
+    assert_equal(total, n)
+    remove(path)
+
+
+def test_cdc_empty_table_emits_one_page() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array(Python.list(), type=pa.int64()))
+    var path = String("/tmp/marrow_cdc_empty.parquet")
+    var w = FileWriter(
+        FileSink(path),
+        Compression.UNCOMPRESSED,
+        content_defined_chunking=ContentDefinedChunking(),
+    )
+    w.write(t)
+
+    var rows = _page_row_counts(path, 0, 0)
+    assert_equal(len(rows), 1)
+    assert_equal(rows[0], 0)
+    assert_equal(read_table(path).num_rows(), 0)
+    remove(path)
+
+
+def test_cdc_no_zero_length_first_page() raises:
+    """A hard cut that fires on the very first value must not turn into a
+    zero-length data page. `_calculate` (`chunker.mojo`) used to append a
+    `Chunk` unconditionally on every cut, including one landing at level 0 --
+    see `test_chunker_flat_required_no_zero_length_first_chunk` for the
+    chunker-level pin. Every string element below is longer than
+    `max_chunk_size`, so the very first value alone trips the hard cut."""
+    var pa = Python.import_module("pyarrow")
+    var n = 80
+    var strs = Python.list()
+    for i in range(n):
+        strs.append(
+            Python.str("this-value-is-much-longer-than-the-cdc-max-chunk-size-")
+            + Python.str(i)
+        )
+    var t = _one_col(pa.array(strs, type=pa.string()))
+    var path = String("/tmp/marrow_cdc_zero_first_page.parquet")
+    var w = FileWriter(
+        FileSink(path),
+        Compression.UNCOMPRESSED,
+        use_dictionary=False,
+        content_defined_chunking=ContentDefinedChunking(0, 8, -1),
+    )
+    w.write(t)
+
+    var rows = _page_row_counts(path, 0, 0)
+    assert_true(
+        len(rows) > 1, "expected several pages, got " + String(len(rows))
+    )
+    var total = 0
+    for r in rows:
+        assert_true(r > 0, "a CDC page had zero rows")
+        total += r
+    assert_equal(total, n)
+    assert_equal(read_table(path).num_rows(), n)
+    remove(path)
+
+
+def test_cdc_string_and_nullable_roundtrip() raises:
+    """CDC must chunk more than int64: a string column (the binary-like
+    dispatch) and a nullable column (definition levels feed the rolling hash,
+    synthesized in `_write_row_group` for a flat leaf that is never
+    Dremel-shredded) both round-trip with CDC on."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var n = 4_000
+    var strs = Python.list()
+    var ints = Python.list()
+    for i in range(n):
+        strs.append(Python.str("row-") + Python.str(String(i)))
+        if i % 5 == 0:
+            ints.append(Python.none())
+        else:
+            ints.append(i)
+    var want = pa.table(
+        {
+            "s": pa.array(strs, type=pa.string()),
+            "i": pa.array(ints, type=pa.int64()),
+        }
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_cdc_mixed.parquet")
+    var w = FileWriter(
+        FileSink(path),
+        Compression.UNCOMPRESSED,
+        use_dictionary=False,
+        content_defined_chunking=ContentDefinedChunking(512, 4096, 0),
+    )
+    w.write(t)
+
+    assert_true(Bool(pq.read_table(path).equals(want)))
+    var back = read_table(path)
+    assert_equal(back.num_rows(), n)
     remove(path)
 
 

@@ -12,6 +12,7 @@ from marrow.parquet import (
     read_table as _read_table,
     write_table as _write_table,
 )
+from marrow.parquet.chunker import ContentDefinedChunking
 from marrow.parquet.codecs import Compression
 from marrow.tabular import Table
 
@@ -46,10 +47,23 @@ def parquet_write_table(
     path: PythonObject,
     compression: PythonObject,
     version: PythonObject,
+    cdc: PythonObject,
+    cdc_min: PythonObject,
+    cdc_max: PythonObject,
+    cdc_norm: PythonObject,
 ) raises -> PythonObject:
     var t = Table(py=table)
+    var chunking: Optional[ContentDefinedChunking] = None
+    if Bool(py=cdc):
+        chunking = ContentDefinedChunking(
+            Int(py=cdc_min), Int(py=cdc_max), Int(py=cdc_norm)
+        )
     _write_table(
-        t, String(py=path), _codec(String(py=compression)), Int(py=version)
+        t,
+        String(py=path),
+        _codec(String(py=compression)),
+        Int(py=version),
+        content_defined_chunking=chunking^,
     )
     return Python.evaluate("None")
 
