@@ -7,7 +7,7 @@ traps. This file is only what is missing, what is wrong, and what it would take.
 
 Untracked (`notes/` is gitignored). Two things are recorded per item: why a
 user cares, and what standing in the way is real rather than assumed. Claims
-were re-verified against the tree on 2026-09-08; where a claim did not survive
+were re-verified against the tree on 2026-09-12; where a claim did not survive
 that check it says so inline.
 
 ## What is missing, in priority order
@@ -23,27 +23,28 @@ all of them.
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
 | 1 | **Division by zero answers the dividend** — `10.0 / 0.0` is `10.0`, where IEEE 754 and DuckDB both say `inf` | Not a judgement call: `/` by zero has a value and integer `//`/`%` by zero do not, which is why the reference nulls one and not the other. The fix is deleting the substitute-1 hack, not adding a validity mask | **S** | — |
-| 2 | **CI is red on Linux.** PR #124 (`ci`) has Lint, Docs, Binary size and Integration passing — the first green jobs since 2026-05-11 — and **Tests and Benchmarks still fail**. Round 6 of `ci-diag` named both: `marrow/tests/test_scalars.mojo` reports `mojo: error: execution crashed` for every case, and `marrow/tests/test_ipc.mojo` is killed at 1,800 s | The scalars crash is a **new known-wrong answer**, not a harness defect: `DynScalar` is the one variant CLAUDE.md flags for the `List`-growth bug, and Linux is where it fires. The IPC "hang" is not one — all 37 cases pass individually at 57-89 s each, so it is 40 minutes of repeated compilation against a 30-minute cap, i.e. suite sharding. Note PR #124 forked at `cb296c82` and predates the devkit consolidation, so it needs rebasing before its workflows mean anything | **M** | — |
+| 2 | **CI is green except on x86-64 Linux.** `71a5bca2` landed on 2026-09-10 and fixed five workflows for five unrelated causes; Lint, Docs, Binary size and Integration pass, and so does the macOS half of Tests. Two jobs still fail, both `linux/x86_64` only: the `marrow/tests` selection, because **`test_scalars.mojo` segfaults** there, and `bench_aggregates.mojo`, whose four cases exit non-zero after `mojo: warning: could not locate shared library for '-lm' on the linker search path` | The scalars segfault is a **known-wrong answer**, not a harness defect: `DynScalar` is the one variant CLAUDE.md flags for the `List`-growth bug. One selection is one driver binary, so it takes the whole directory down with it. The `-lm` failure is a separate, newer, toolchain-shaped thing and has not been diagnosed at all. | **M** | — |
 | 3 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
-| 4 | **Error taxonomy** — 337 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 337 sites. Already a retrofit, and growing: 269 on 2026-09-04, 337 on 2026-09-08 | **M** | — |
+| 4 | **Error taxonomy** — 366 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 366 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12 | **M** | — |
 | 5 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 3 |
-| 6 | **Parallel group-by — landed 2026-09-01 and silently reverted the same day** | `f17045a9` took `groupby.mojo` 224 -> 517 lines with radix-partitioned placement. `bcbbd32e`, whose subject is *"delete StringArgs, one trait per string signature"*, put it back to 224 and deleted `test_groupby.mojo` (520 lines) and `bench_groupby.mojo` (157). 980 lines gone; nothing noticed, because the tests that would have caught it went in the same commit. `GROUP_RADIX`, `GROUP_THREAD_LOCAL` and `_choose_strategy` are zero grep hits today. Recover with `git show f17045a9:marrow/kernels/groupby.mojo` | **S** | — |
-| 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 8 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
-| 9 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 8, 10 |
-| 10 | **Statistics propagation and a cost model** | Feeds 9. Not urgent on its own — it is the last piece, after 8 | **L** | — |
-| 11 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
-| 12 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 13 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 14 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
-| 15 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
-| 16 | **Parallel range fetch for a remote `ByteSource`** | Done: the seam, the URI dispatch, and `ParquetScanOperator` on `DynSource`, so a plan can scan `s3://`. What is left is that `OpenDalSource.read_ranges` issues its fetches serially — one round-trip time each, where they could go out together. See §1.9 | **S** | — |
+| 6 | **`OpenDalSource.read_ranges` fetches serially** | One round-trip time per range where they could go out together. On a local file that is free; on S3 it is the difference between one RTT and N. The seam, the URI dispatch and `ParquetScanOperator` on `DynSource` are all in place, so this is the last piece of scanning `s3://` well. See §1.9 | **S** | — |
+| 7 | **Parallel group-by — landed 2026-09-01 and silently reverted the same day** | `f17045a9` took `groupby.mojo` 224 -> 517 lines with radix-partitioned placement. `bcbbd32e`, whose subject is *"delete StringArgs, one trait per string signature"*, put it back to 224 and deleted `test_groupby.mojo` (520 lines) and `bench_groupby.mojo` (157). 980 lines gone; nothing noticed, because the tests that would have caught it went in the same commit. `GROUP_RADIX`, `GROUP_THREAD_LOCAL` and `_choose_strategy` are zero grep hits today. Recover with `git show f17045a9:marrow/kernels/groupby.mojo` | **S** | — |
+| 8 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
+| 9 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
+| 10 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 9, 11 |
+| 11 | **Statistics propagation and a cost model** | Feeds 10. Not urgent on its own — it is the last piece, after 9 | **L** | — |
+| 12 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
+| 13 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 14 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 15 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
+| 16 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
 
 ## 1. Open work
 
-Ordered by value. Nothing below is started.
+Ordered by value. Some of it is partly done -- §1.9 in particular tracks a
+subsystem that moved twice this week -- and each entry says which part.
 
 ### 1.1 Correctness — known-wrong answers
 
@@ -63,9 +64,7 @@ assumed:
 | `10.0 // 0.0`, `10 // 0` | NULL | — |
 | `10.0 % 0.0`, `10 % 0` | NULL | — |
 
-**So `/` and `//`/`%` want different answers, and an earlier version of this
-entry had it wrong** — it said "SQL says NULL" for `/` and pointed the fix at
-the validity-mask treatment `//` and `%` get. `/` by zero has a value in the
+**`/` and `//`/`%` want different answers.** `/` by zero has a value in the
 reals' completion and integer division by zero does not, which is why IEEE 754
 and DuckDB both give `inf` here and NULL there. Postgres raises, and is the
 outlier.
@@ -113,18 +112,6 @@ anything that prunes by "what does this read" prunes every column, and
 the demand is empty. The desugaring is unchanged, so the trap still waits for
 the next thing that reads `columns()` and believes the answer.
 
-**Fixed 2026-09-04, kept here for the shape.** Three of the four `xfail`s were
-one root cause — Mojo's `//` floors and its `%` takes the divisor's sign, and
-both substituted 1 for a zero divisor — and the fourth was a *hash* bug
-mistaken for a grouping one: `HashKernel` widened a float lane with
-`cast[uint64]()`, a numeric conversion, so every value in (-1, 1) truncated to
-0 and the hash-only table merged them. Two lessons worth keeping: a
-convention bug hides wherever the two conventions agree (`math_mod_int64`
-asked `((n % 3) + 3) % 3`, the agreeing form, for exactly that reason), and a
-kernel that decides validity from a *value* cannot do it in the lane — the
-mask belongs outside, in `BinaryKernel.extra_validity` and in the fused node's
-`Bound`.
-
 ### 1.3 Latent compiler hazards
 
 **~15 more `t"…{dtype}"` sites under `marrow/kernels/`.** A t-string
@@ -159,10 +146,7 @@ Counted 2026-09-03, by prefix:
 | 2 | subqueries |
 | 1 | `DISTINCT ON` |
 
-**Fifteen came off between 2026-08-31 and 2026-09-03** — seven window cases
-(windows), `math_log_bases`, and the string and temporal surface, which
-landed `substr`, `replace`, `lpad`, `position`, `split_part`, `last_day` and
-`epoch`. `bool_and`/`bool_or` is still the odd one out among the aggregates:
+`bool_and`/`bool_or` is the odd one out among the aggregates:
 `AnyKernel`/`AllKernel` are `BoolReduceKernel`s rather than `FoldKernel`s and
 have no grouped variant, so they need an aggregate node in both lanes *plus* a
 kernel change.
@@ -183,8 +167,8 @@ now desugars**: `GREATEST`/`LEAST` become `coalesce(extremum, a, b)` and
 means either the verbs or rewriting the cases in SQL. The third,
 `nested_list_contains`, still needs `.contains` as a method on `ListValue`,
 where only the free `array_contains` exists. Re-checking a case by name is not
-enough to un-skip it; §1.12 records four that were claimed unblocked and were
-not.
+enough to un-skip it: a case has been claimed unblocked, and found still
+blocked, four separate times.
 
 ### 1.8 Test and infrastructure gaps
 
@@ -193,13 +177,12 @@ not.
   package and has no replacement. The invariant is currently unenforced.
 - **`HashGrouper` has no dedicated test** — `kernels/tests/test_groupby.mojo`
   was deleted without replacement.
-- **CI runs again, and Linux fails it.** The workflow defects are gone — every
-  job resolves its task and the binary-size gate is wired in — so what is left
-  is two real failures on `ubuntu-latest`, both named in the row 2 entry above:
-  a `test_scalars` execution crash and a `test_ipc` run that outlives its cap.
-  Until those close, the +55%-size-regression class of miss is still possible.
+- **CI runs, and x86-64 Linux fails it.** The workflow defects are gone as of
+  `71a5bca2` and the binary-size gate compares both ends on one machine, so
+  the +55%-size-regression class of miss is closed on macOS. What is left is
+  two `linux/x86_64` failures, named in the row 2 entry above.
 
-### 1.8b The dylib layer: what was measured, kept and dropped
+### 1.8b The dylib layer: what was measured and dropped
 
 **Caching `dlsym` results in typed symbol tables.** Possible —
 `_DLHandle.get_function[result_type]` returns a raw C-ABI function pointer
@@ -219,30 +202,11 @@ One trap it surfaced, worth knowing before a second attempt: a typed symbol
 field names an untracked pointer, which severs the compiler's reason to keep a
 *local* struct argument materialised across the call — an `opendal_bytes`
 passed that way faulted inside `Bytes::copy_from_slice`, silently writing zero
-bytes before it crashed. (A second trap, a spec name doubling as a `_Global`
-key, no longer applies: `Library` is gone and owning the global is the
-caller's job, so the key is a string that caller picks.)
-
-**A `LibSet` over one global — done, and it paid for itself.** Each library
-used to cost a `Dylib.for_spec[spec]` and a `Dylib.open[name]` instantiation,
-and each *module* hand-rolled a `_Global` and an accessor around whatever it
-had opened. `LibSet[key, specs]` holds `List[Dylib]` behind one global and
-resolves a comptime index, so a module writes one declaration and calls
-`Codecs.handle["zstd"]()` with the name checked at compile time.
-
-The mechanism that matters is `_open` looping over `materialize[Self.specs]()`
-at *run* time: the open path is instantiated once for all the members rather
-than once per spec, which is what `Dylib.open_spec` taking the spec by value
-buys — `_try_find_dylib`'s `name` parameter is error text and nothing else, so
-it does not have to be comptime. Measured: `query_cli` **+15,040 (+0.484%) ->
-+11,456 (+0.369%)**, 3,584 bytes back and a real margin under the 0.5%
-threshold instead of 0.016%.
-
-The `_Global` key is spelled by the caller rather than derived from a spec
-name. `_Global` keys against a registry shared with the stdlib and MAX, so
-uniqueness is a property of the whole process, not of these specs — an earlier
-version keyed on `spec.name` and two specs sharing one silently aliased each
-other's storage.
+bytes before it crashed. A second: `_Global` keys against a registry shared
+with the stdlib and MAX, so key uniqueness is a property of the whole process,
+not of these specs. The key is the caller's to pick for that reason — deriving
+it from a spec name let two specs sharing one silently alias each other's
+storage.
 
 ### Link-time linking for the codecs — where this should end up
 
@@ -419,8 +383,8 @@ bindings currently have.
 
 ### 1.11 Undocumented subsystems
 
-Nine substantial pieces of the codebase have no design document and never did:
-the whole Parquet subsystem (nine modules, ~380 KB), the Arrow IPC layer, the C
+Ten substantial pieces of the codebase have no design document and never did:
+the whole Parquet subsystem (ten modules, ~490 KB), the Arrow IPC layer, the C
 Data Interface, the GPU execution model, `utils/argparse.mojo` (769 lines),
 `kernels/groups.mojo`/`cast_decimal.mojo`, `Dispersion`, the
 `comptime/temporal.mojo` nodes, and the `_drop` destructor trampoline on every
@@ -429,48 +393,18 @@ feature".
 
 ---
 
-### 1.12 Found while landing the window, CLI and string/temporal work
+### 1.12 Two findings not covered by any row above
 
-Five findings that were not on this list and are not covered by any row above.
-Ordered by what they cost.
-
-**The binary-size gate cannot see a sort.** `sort_indices` decoded dictionary
-keys through the type-erased `cast`, whose single non-generic body chains
-`elif` over every type family — so **every AOT binary that sorted anything
-linked 694 cast symbols**, about 3 MB, for a path most plans never take. Fixed
-in `04d84cb8`: decode directly with `take` and convert the index through an
-integer-only ladder. A sorting binary went 4,510,744 -> 1,441,112 of `__text`,
-a 68% cut, and sorting now costs 12,440 bytes over a plan that does not sort.
-
-This is the third instance of the same shape — `kernels::cast` reachable from
-a plan that needs none — after the hashing fix and `ParquetScan`. What let it
-survive is that **no gate program sorts**, and that is still true: the source
-`benchmarks/binary_size/query_sort.mojo` now exists, but `baseline.json` has no
-`query_sort` entry, so the gate never builds or compares it. The baseline grew
-from six programs to eight (`query_expr2_agg_fused`, `query_expr2_streaming`)
-and there are fourteen sources — `query_arith`, `query_exprs`, `query_param`,
-`query_runtime`, `query_scan`, `query_scan_typed` and `query_sort` are all
-ungated. Adding the baseline entry, not the program, is the task.
-
-**Windows read a pruned population.** `Window.to_operator` forwarded its
-pushed-down predicate, so a `Filter` above a window pushed its row-group
-predicate to the scan and every rank and running total was computed over fewer
-rows than the query selects — wrong numbers, no error. Fixed in `04d84cb8`.
-Nothing could have caught it: all 21 window tests and 7 golden cases use
-in-memory tables, and the bug needs a Parquet scan under a window under a
-filter. It is designed out now rather than fixed: `PushFilterIntoScan` descends
-through `Filter` and nothing else, so a `Window` stops a predicate by not being
-a `Filter`.
-
-**A bounded sort forwarded the same predicate.** `Sort.to_operator` forwarded
-unconditionally while `PushFilterBelowSort` refused when `sort.limit` was set,
-so the two mechanisms disagreed about a `TopN` sort. Unreachable only because
-`TopN` leaves the `Limit` above, which clears. Fixed in `a85bd62d`.
-
-**`COUNT` over an empty window frame answered NULL.** The identity of the empty
-set is the aggregate's to decide and the aggregate operator already decided it
-correctly; a short-circuit was discarding that. Fixed in `04d84cb8` by deleting
-the special case.
+**The binary-size gate is blind to more than half its own programs.** Three
+times a plan has linked `kernels::cast` without needing it — through hashing,
+through `ParquetScan`, and through `sort_indices`, the last costing 694 cast
+symbols and about 3 MB in every AOT binary that sorted anything. Each was found
+by hand, because **no gate program sorts**: `benchmarks/binary_size/query_sort.mojo`
+exists but `baseline.json` has no `query_sort` entry, so the gate never builds
+or compares it. Fifteen sources, eight gated — `query_arith`, `query_exprs`,
+`query_param`, `query_runtime`, `query_scan`, `query_scan_typed` and
+`query_sort` are all ungated. Adding the baseline entries, not the programs, is
+the task, and until it is done the next instance is equally invisible.
 
 **NaN ordering keys are never peers — still open.** `mark_changes` decides
 peer identity with `equal()`, which is IEEE, while the sort maps all NaNs to
@@ -516,49 +450,6 @@ Each section states what exists, what is absent, and what it would take.
 
 A user rejects the library outright without these.
 
-#### 1.1 A query API from Python
-
-**What exists.** The frontend, and this paragraph used to say "Nothing" —
-written while it was deleted, left standing after it was rebuilt, and
-contradicted two paragraphs later by its own "Done, 2026-08-30". The
-description below of a `python/` with no expression module has been wrong
-since `ee16f5a4`; it is kept only because the history after it is worth
-reading.
-
-The frontend existed and was deleted on 2026-08-29 in commit `b2de85a0`
-(message: "e"):
-
-```
-D  python/bindings/expressions.mojo
-D  python/bindings/plan.mojo
-D  python/marrow/lazy.py
-D  python/marrow/_expr_column.py
-D  python/marrow/tests/test_lazy.py
-D  python/marrow/tests/test_expressions.py
-D  python/marrow/tests/{bench_,test_,profile_}clickbench.py
-```
-
-`README.md:178-247` still documents `ma.read_parquet`, `ma.memtable`, `col`,
-`lit`, `collect()`, `to_pyarrow()`, and claims 40/43 ClickBench queries pass.
-None of it resolves today; the ClickBench harness went in the same commit and
-`benchmarks/` no longer contains it.
-
-**Done, 2026-08-30 — and it was not only re-wiring.** The estimate above said
-"the runtime lane was built for exactly this shape", and that was half right.
-The relation nodes and fluent verbs were indeed ready. The *expression* lane
-was not: it could express comparisons, three-valued boolean logic, `coalesce`
-and `case_when` and nothing else — no arithmetic, no strings, no temporal
-extraction, no casts, no null predicates. A frontend on that could not have
-written `col("a") + 1`. Restoring the API therefore meant adding ~45 verbs to
-`RuntimeValue`, each a new tag over an existing kernel, plus the two binding
-modules and the two Python modules.
-
-It also surfaced one wrong answer: `_compare` promoted mixed dtypes by casting
-the right operand to the left's type and falling back to the reverse, which
-narrows rather than widens, so `int32_col > lit(2**40)` raised instead of
-comparing. `promote_dyn` now states the same rule the comptime lane's
-`promote[L, R]` does.
-
 #### 1.2 CSV and JSON readers
 
 **What exists.** Nothing. The only occurrence of "csv" anywhere under `marrow/`
@@ -574,18 +465,20 @@ page.**
 #### 1.3 Datasets: multi-file, partitioned, remote
 
 **What exists.** `scan(path: String, schema: Schema)`
-(`marrow/expr/builders.mojo:213`) — one file, and the caller supplies the schema
+(`marrow/expr/builders.mojo:360`) — one file, and the caller supplies the schema
 because "a `Relation` is a description and must not touch the filesystem to
-exist". `ByteSource` is a deliberate seam whose docstring anticipates "a
-streaming reader or a remote (OpenDAL) object store later", but `BufferSource` is
-the only implementation (`marrow/parquet/source.mojo`).
+exist".
 
-**What it would take.** Three separable pieces. (a) Derive a `Schema` from the
-Parquet footer so `scan(path)` needs no schema — small; everything needed is in
-`marrow/parquet/schema.mojo`. (b) A `MultiFileScan` relation node owning a list
-of sources and yielding row groups across them, plus hive-path parsing to
-synthesise partition columns. (c) An object-store `ByteSource`, which is the
-seam's stated purpose but needs an HTTP client marrow does not have.
+Storage itself is no longer the gap: `marrow/io/` owns the seam, and
+`DynSource`/`DynSink` pick a backend from the URI scheme.
+
+**What it would take — two pieces left, both local.** (a) Derive a `Schema`
+from the Parquet footer so `scan(path)` needs no schema — small; everything
+needed is in `marrow/parquet/schema.mojo`, and it is row 5 of the table.
+(b) A `MultiFileScan` relation node owning a list of sources and yielding row
+groups across them, plus hive-path parsing to synthesise partition columns.
+Both are now strictly harder than the remote piece was, which inverts this
+section's original ordering.
 
 #### 1.4 The optimizer: no cost model, no CSE
 
@@ -636,35 +529,13 @@ selection. `Join._output_schema` is positional (left fields then right) and
 order and are not expressible as plan rewrites at all. They need
 `kernels/join.mojo` to accept an output ordering.
 
-**Two engine bugs surfaced by building it**, both fixed: an ungrouped aggregate
-above a `Limit` returned zero rows (`Pipeline.drain` skipped every stage above
-a finished one), and `RecordBatch.__eq__` was not reflexive (`Buffer.__eq__`
-compared the 64-byte-aligned allocation past the logical end). Neither was
-visible to a harness that compares an optimized plan against an unoptimized one
-— both sides agree and pass.
-
-A credible engine ships without a cost model.
-
-It is also the mirror image of marrow's `count_star()` defect below — the same
+A credible engine ships without a cost model, so none of this is urgent — but
+the `count_star()` hazard in §1.1 is the mirror image of it: the same
 expression that blocks projection pushdown is the one an optimizer most wants
-to special-case. (marrow's projection pushdown now clamps rather than
-special-cases: it never prunes a source to zero columns. Fast count-star
-remains uncopied.)
-
-**What it would take — done, and the estimate was wrong in an instructive
-way.** This said projection pushdown was "a second field on the `Pushdown`
-struct", and that anything beyond it needed "a real plan representation — a
-structural change, not an increment." The structural change is what shipped:
-`DynRelation` is variant-backed, nodes carry `traverse`, and rules rewrite
-plans. Projection pushdown turned out **not** to fit that struct at all — it
-needs a downward pass with an accumulator, where the retired `Pushdown` carried
-per-node facts.
-
-The `count_star()` hazard was real and is handled rather than fixed:
-`ColumnPruning` never narrows a source to zero columns, keeping the first
-column when the demand is empty, because a `RecordBatch` carries its row count
-in its columns. The underlying desugaring (`lit(1, int64).count()` with empty
-`columns()`) is unchanged.
+to special-case. `ColumnPruning` clamps rather than special-cases, never
+narrowing a source to zero columns, because a `RecordBatch` carries its row
+count in its columns. Fast count-star remains uncopied and the desugaring is
+unchanged.
 
 #### 1.6 String and temporal function coverage
 
@@ -673,22 +544,10 @@ byte length, starts/ends/contains, six comparisons, `LIKE`/`ILIKE`, and a
 `ConcatKernel` wired to no expression node) and 11 temporal extractors plus
 `date_trunc`.
 
-**Most of what this section listed landed on 2026-09-07** in `c9d93911`, and it
-landed *reachably*: `UNARY_VERBS`/`BINARY_VERBS`/`TERNARY_VERBS`
-(`marrow/expr/runtime/values.mojo:1885`) is now the single vocabulary, and
-`expr_verbs()` hands it to Python, where `_install_verbs()` generates a method
-per entry. **A verb added to `values.mojo` is reachable from Python without
-touching the bindings or `python/marrow/expr.py`** — which is why "the string
-and temporal verbs cannot be reached from Python" came off the table entirely
-rather than being reworded: the class of gap is closed, not just its instances.
-
-So `substr`, `replace`, `split_part`, `lpad`/`rpad`, `position`, `repeat`,
-`left`/`right`, `trim_chars`, `char_length`, `ascii`, `last_day`, `epoch`,
-`week`, `iso_year`, `day_name` and `month_name` all exist and are callable from
-both lanes and from Python. `lit[T: TemporalType]`
-(`marrow/expr/builders.mojo:168`) also landed, so `WHERE ts > TIMESTAMP
-'2024-01-01'` — described here as the most damaging absence on the page — is
-expressible.
+Adding one is cheap and reaches every caller: `UNARY_VERBS`/`BINARY_VERBS`/
+`TERNARY_VERBS` (`marrow/expr/runtime/values.mojo:1885`) is the single
+vocabulary, and a verb added there is callable from Python without touching the
+bindings or `python/marrow/expr.py`.
 
 **Still absent — strings:** `concat` and `concat_ws` (the kernel exists; the
 node does not) and the whole regex family.
@@ -814,13 +673,10 @@ a categorical improvement for a small amount of code.
 
 **Storage is complete; expressions cannot reach it.**
 
-- **Nested:** eight golden cases — list element access, `list_contains`, list
-  slice, `unnest`, list sum, struct field access, map lookup, map cardinality.
-  `list_contains` was closed on 2026-08-31 (§1.5): `ArrayContainsKernel` now
-  has `ArrayContains` in the comptime lane, an `array_contains` tag in the
-  runtime one, and a verb reaching both, so the nested verbs are
-  `array_length` and `array_contains`. Everything else needs a kernel that
-  does not exist. ibis's minimum here is `ArrayIndex`, `ArraySlice`,
+- **Nested:** eight golden cases — list element access, list slice, `unnest`,
+  list sum, struct field access, map lookup, map cardinality. The nested verbs
+  that exist are `array_length` and `array_contains`; everything else needs a
+  kernel that does not exist. ibis's minimum here is `ArrayIndex`, `ArraySlice`,
   `ArrayContains`, `ArrayLength`, `Unnest`, `MapGet`/`MapContains`/`MapKeys`/
   `MapValues`/`MapLength`, and `StructField` — and struct is genuinely thin
   there too (`structs.py` defines exactly two nodes), so `StructField` alone
@@ -867,9 +723,8 @@ differentiator hiding inside a table-stakes item.
 
 - **No `EXPLAIN ANALYZE`, no per-operator metrics, no profiling hook, no
   progress, no cancellation.** An operator cannot be interrupted mid-`drain`.
-  Plain `explain()` came off this list on 2026-09-07 and is now
-  `LazyTable.explain` (`python/marrow/lazy.py:499`). - **No
-  error taxonomy.** 337 `raise Error(...)` sites across `marrow/` produce
+ - **No
+  error taxonomy.** 366 `raise Error(...)` sites across `marrow/` produce
   plain strings with no type. The messages themselves are good — they name the
   verb and the column (`"drop: column 'x' not found in schema"`) — but a
   Python frontend cannot map them to distinct exception classes. That is cheap
@@ -903,10 +758,18 @@ stripped, `__text`):
 
 | Gate | Bytes | |
 |---|---:|---|
-| `query_streaming_agg_fused` (comptime) | 1,481,012 | |
-| `query_streaming_agg` (runtime-named) | 9,940,868 | **6.71x** |
-| `query_dynvalue` (erased values) | 6,227,524 | |
-| `query_streaming` (fused filter + project floor) | 1,483,336 | |
+| `query_streaming_agg_fused` (comptime) | 1,513,992 | |
+| `query_streaming_agg` (runtime-named) | 13,195,416 | **8.72x** |
+| `query_dynvalue` (erased values) | 9,947,416 | |
+| `query_streaming` (fused filter + project floor) | 1,540,980 | |
+| `query_cli` (the AOT lane as a program) | 3,108,632 | |
+
+Re-read from `baseline.json` on 2026-09-12. The previous numbers here (6.71x,
+`query_dynvalue` at 6,227,524) were from 2026-08 and the gap has **widened**,
+not narrowed: the fused lane grew 2.2% while the runtime-named one grew 33%.
+That is the erasure boundary doing its job, but it also means the runtime
+lane's floor is drifting and nothing watches it — worth a note the day a
+`query_dynvalue` regression matters.
 
 The runtime lane's cost is not incidental: it links the whole name-resolution
 ladder and, through it, `marrow.kernels.cast` — 693 cast symbols in
@@ -936,20 +799,15 @@ at parity — a point the project already holds as an architectural invariant
 enforce, since `test_parity.mojo` was deleted with the old package and has no
 replacement.
 
-**What it would take to be a product — the wrapper landed on 2026-09-03.**
-This said `execute_cli()`, the generated `--help`/`--describe` surface and the
-Parquet/Arrow output writers were all missing with the deleted package. They
-are `marrow/expr/cli.mojo` now: `QueryCli` turns a plan into a program with
-late-bound parameters, `--describe`, and writers that stay comptime-gated
-(`run[parquet=True]()`, `run[ipc=True]()`) so a binary links only the formats
-it names. What is left of this item is **promoting the schema handle from spike
-to public API** — the smaller half, and the only story here that is genuinely
-unavailable elsewhere.
+**What it would take to be a product.** One thing: **promote the schema handle
+from spike to public API.** The wrapper it used to wait on is `marrow/expr/cli.mojo`
+already. This is the only story on the page that is genuinely unavailable
+elsewhere.
 
-**Honest counterweights.** 1.48 MB of `__text` is small for a query engine and
+**Honest counterweights.** 1.51 MB of `__text` is small for a query engine and
 not small in absolute terms; the binary still links `libmax`/AsyncRT with GPU
 codegen off. The fused lane requires the schema at compile time, which most
-workloads do not have. And the 6.71x is measured on one query shape on
+workloads do not have. And the 8.72x is measured on one query shape on
 osx-arm64 — a broader sweep across query shapes is *unverified*.
 
 #### 3.2 One kernel, two targets
@@ -975,18 +833,12 @@ This is not a user-visible feature on its own.
 
 ## 3. Unexplored — `warp.match_any()` for GPU hash join and group-by
 
-### Correction to the original note
+### There is no GPU hash join or group-by today
 
-The first pass at this idea (written right after the b3 changelog scan)
-claimed marrow's hash-join/group-by kernels "already run GPU probe/build
-paths." That's wrong — checked more carefully:
+Worth stating, because the plumbing reads as though there might be:
 
-- `marrow/kernels/hashtable.mojo` (`SwissHashTable`, the SIMD-group Swiss
-  table every join/groupby is built on) imports `std.gpu.host.DeviceContext`
-  but never calls anything from it — `grep -c DeviceContable hashtable.mojo`
-  shows exactly one match, the import line itself. Dead import.
 - `marrow/kernels/join.mojo`'s `ctx` parameter is always
-  `ExecutionContext.parallel(self._num_threads)` — CPU multi-threading, not
+  `ExecContext.parallel(self._num_threads)` — CPU multi-threading, not
   GPU. Its own docstring says the GPU context slot is a "future GPU
   acceleration hook" — i.e. not implemented.
 - `marrow/kernels/aggregate.mojo`'s only GPU involvement is delegating
@@ -1046,7 +898,7 @@ Not "add match_any to hashtable.mojo" — it's:
 3. Only then decide whether it's worth integrating into
    `kernels/join.mojo` / `kernels/hashtable.mojo` for real, following
    whatever GPU dispatch convention `views.reduce`/`views.apply` already
-   established (`ExecutionContext.gpu(ctx)`, `has_accelerator_support[...]`
+   established (`ExecContext.gpu(ctx)`, `has_accelerator_support[...]`
    gating, etc. — see `marrow/views.mojo`).
 
 ### Status
