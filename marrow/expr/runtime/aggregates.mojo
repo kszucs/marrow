@@ -90,7 +90,7 @@ from ...execution import ExecContext
 from ...kernels.concat import concat
 from std.memory import ArcPointer
 
-from ...kernels.groups import Groups
+from ...kernels.groupby import Groups
 from ..physical import (
     BufferedAggregateOperator,
     Datum,

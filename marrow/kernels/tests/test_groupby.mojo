@@ -37,7 +37,7 @@ from ...kernels.aggregate import (
     SumFold,
 )
 from ...kernels.groupby import HashGrouping
-from ...kernels.groups import Groups
+from ...kernels.groupby import Groups
 
 
 comptime _BIG: Int = 100_000

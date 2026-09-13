@@ -26,7 +26,7 @@ from std.memory import ArcPointer
 from std.testing import assert_equal, assert_false
 from ...dtypes import DynType, int64
 from ...execution import ExecContext
-from ...kernels.groups import Groups
+from ...kernels.groupby import Groups
 from ...schema import Schema
 from ...builders import array
 from ...tabular import record_batch

@@ -702,8 +702,7 @@ marrow/
 │   ├── distinct.mojo     # (approx_)count_distinct, grouped variants
 │   ├── filter.mojo       # filter / take / drop_null
 │   ├── sort.mojo         # sort / sort_indices
-│   ├── groupby.mojo      # hash group-by
-│   ├── groups.mojo       # Groups — which slot each row contributes to
+│   ├── groupby.mojo      # hash group-by, and `Groups` (row -> slot)
 │   ├── join.mojo         # hash join
 │   ├── hashtable.mojo    # SwissHashTable
 │   ├── hashing.mojo      # rapidhash

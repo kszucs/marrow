@@ -26,7 +26,7 @@ from ..builders import Int64Builder
 from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
 from ..execution import ExecContext
-from .groups import Groups
+from .groupby import Groups
 from .hashing import RapidHashKernel
 from ..utils import RapidHash64
 from .hashtable import SwissHashTable
