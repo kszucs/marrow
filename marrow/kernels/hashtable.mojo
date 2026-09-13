@@ -159,9 +159,15 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
         self._max_count = cap * 7 // 8
         self._ctrl = Buffer.alloc_filled(cap + _GROUP_WIDTH, fill=_CTRL_EMPTY)
         self._slots = Buffer.alloc_uninit[DType.int32](cap)
-        self._bucket_hashes = Buffer.alloc_uninit[DType.uint64](
-            max(capacity, 16)
-        )
+        # Sized to `cap`, the same invariant `reserve` maintains, and not to
+        # `capacity`. A table built with an explicit capacity accepts up to
+        # `_max_count = cap * 7/8` buckets before `reserve` grows it, so a
+        # `capacity`-sized array here is overrun by `_set_hash` for any key
+        # count in `(capacity, _max_count]` — a heap write past the end, with
+        # no resize triggered because `_capacity` is already large enough.
+        # Only `_looks_high_cardinality` builds with an explicit capacity, and
+        # it escapes by an exact fit; that is a coincidence, not a design.
+        self._bucket_hashes = Buffer.alloc_uninit[DType.uint64](cap)
         self._num_buckets = 0
         self._offsets = Buffer.alloc_uninit(0)
         self._rows = Buffer.alloc_uninit(0)
@@ -669,3 +675,27 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
     def num_keys(self) -> Int:
         """Number of unique keys (buckets) inserted so far."""
         return self._num_buckets
+
+    def bucket_hashes(self) raises -> UInt64Array:
+        """Every bucket's hash, in bucket-id order — element ``b`` is the hash
+        that owns bucket ``b``.
+
+        Buckets are created one per *distinct hash*, so the result has no
+        duplicates and re-inserting it into another table reproduces the same
+        set of keys with the same relative order. That is what lets the
+        group-by rebuild a populated serial table as 64 partitioned ones
+        without losing the group ids it has already handed out
+        (``HashGrouping._migrate_to_radix``)."""
+        var n = self._num_buckets
+        var buf = Buffer.alloc_uninit[DType.uint64](max(n, 1))
+        # `_bucket_hashes` is already dense in bucket order, so the result is a
+        # prefix of it — one memcpy, not a builder and a per-element append
+        # whose validity bitmap would be discarded anyway.
+        buf.extend(self._bucket_hashes.view[DType.uint64](0, n), 0, n)
+        return UInt64Array(
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf^.to_immutable(),
+        )

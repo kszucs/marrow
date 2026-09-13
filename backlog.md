@@ -28,7 +28,7 @@ all of them.
 | 4 | **Error taxonomy** — 366 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 366 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12 | **M** | — |
 | 5 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 3 |
 | 6 | **`OpenDalSource.read_ranges` fetches serially** | One round-trip time per range where they could go out together. On a local file that is free; on S3 it is the difference between one RTT and N. The seam, the URI dispatch and `ParquetScanOperator` on `DynSource` are all in place, so this is the last piece of scanning `s3://` well. See §1.9 | **S** | — |
-| 7 | **Parallel group-by — landed 2026-09-01 and silently reverted the same day** | `f17045a9` took `groupby.mojo` 224 -> 517 lines with radix-partitioned placement. `bcbbd32e`, whose subject is *"delete StringArgs, one trait per string signature"*, put it back to 224 and deleted `test_groupby.mojo` (520 lines) and `bench_groupby.mojo` (157). 980 lines gone; nothing noticed, because the tests that would have caught it went in the same commit. `GROUP_RADIX`, `GROUP_THREAD_LOCAL` and `_choose_strategy` are zero grep hits today. Recover with `git show f17045a9:marrow/kernels/groupby.mojo` | **S** | — |
+| 7 | **Parallel group-by** — radix-partitioned placement, landed on `recover-parallel-groupby` | Rows split by the top 6 bits of the key hash into 64 persistent Swiss tables, so equal keys land in one table and no aggregate state is ever split — which is why exact `count_distinct`, whose partial states have no correct merge, still works. Gated on row count and a sampled cardinality estimate, and decided per batch, so a small first morsel no longer pins a query to the serial path. `_MIN_DISTINCT_RATIO` is **uncalibrated**: its 0.9 was set from a measurement of a version since made twice as fast, and nothing has re-measured the crossover | **S** | — |
 | 8 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
 | 9 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
 | 10 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 9, 11 |
@@ -175,8 +175,12 @@ blocked, four separate times.
 - **No cross-lane parity test.** "One engine, two drivers" was enforced by a
   `test_parity.mojo` across four axes; it went with the previous expression
   package and has no replacement. The invariant is currently unenforced.
-- **`HashGrouper` has no dedicated test** — `kernels/tests/test_groupby.mojo`
-  was deleted without replacement.
+- **Group-by is covered at the kernel, not through the engine.**
+  `kernels/tests/test_groupby.mojo` (24 cases) pins both placement paths
+  directly on `HashGrouping`, but nothing drives the radix path through
+  `GroupByOperator`: every group-by case in `expr/tests`, `golden/` and
+  `python/marrow/tests` is far under the 60,000-row gate, so the engine's
+  wiring to the parallel path is untested end to end.
 - **CI runs, and x86-64 Linux fails it.** The workflow defects are gone as of
   `71a5bca2` and the binary-size gate compares both ends on one machine, so
   the +55%-size-regression class of miss is closed on macOS. What is left is
@@ -591,18 +595,20 @@ them.
 **What exists.** Data parallelism *inside* kernels only —
 `sync_parallelize`/`ctx.stripe` appear in `partition.mojo` (6), `views.mojo` (3),
 `sort.mojo` (2), `join.mojo` (2), `filter.mojo` (1), and nowhere else.
-**Group-by aggregation is serial**: `marrow/kernels/groupby.mojo` is 224 lines
-holding one `HashGrouper` and one `HashGrouping`, and `_choose_strategy`,
-`GROUP_RADIX` and `GROUP_THREAD_LOCAL` — once described as
-shipped — return **zero grep hits in the tree**. They were removed in the
-aggregate rearchitecture; the backlog is stale. There is no pipeline
-parallelism: `Pipeline._flow` pushes one morsel through the stages on the
-calling thread.
+**Group-by placement is parallel**, as of the radix-partitioned `HashGrouping`
+— one `SwissHashTable` per partition of the key hash's top 6 bits, so no
+aggregate state is ever split and no merge step exists. Aggregate *accumulation*
+is still serial, and deliberately: a thread-local partial would need a `merge`
+on every `AggKernel`, which `mean` and the Welford triple make non-uniform and
+exact `count_distinct` makes impossible. There is no pipeline parallelism:
+`Pipeline._flow` pushes one morsel through the stages on the calling thread.
 
-**What it would take.** Restoring thread-local partial aggregation is the
-highest-value single item and it was previously built. True pipeline parallelism
-is larger: the push `Operator` contract is a good foundation, but nothing owns a
-task queue today.
+**What it would take.** True pipeline parallelism is the remaining item: the
+push `Operator` contract is a good foundation, but nothing owns a task queue
+today. Two group-by knobs are also uncalibrated — `_MIN_DISTINCT_RATIO` (0.9)
+and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) have no measurement in the tree, and
+`bench_groupby.mojo` has no row-count tier between 1M and 10M to find the
+crossover with.
 
 #### 2.2 Larger-than-memory execution
 

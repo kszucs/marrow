@@ -57,7 +57,7 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `sort.mojo` — sort and sort_indices
   - `concat.mojo` — concatenation
   - `core.mojo` — the `Kernel` root trait and `Groups`
-  - *not re-exported* — `groupby.mojo` (`HashGrouper`/`HashGrouping`),
+  - *not re-exported* — `groupby.mojo` (`HashGrouping`),
     `join.mojo` / `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the
     hash machinery group-by, join and `is_in` share)
 

@@ -121,9 +121,10 @@ def count_distinct(
             _ = table.insert_hashes(part_hashes, grow_adaptively=True)
             return table.num_keys()
 
-        var counts = RadixPartitioner(
-            num_bits=6, ctx=ctx.copy()
-        ).map_partitions[Int](hashes^, count_partition)
+        var split = RadixPartitioner(num_bits=6, ctx=ctx.copy()).map_partitions[
+            Int
+        ](hashes^, count_partition)
+        ref counts = split[1]
         n = 0
         for i in range(len(counts)):
             n += counts[i]

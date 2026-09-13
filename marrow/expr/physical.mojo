@@ -645,7 +645,6 @@ struct GroupByOperator(Operator):
     var _schema: Schema
     var _grouping: HashGrouping
     var _keyless: Bool
-    var _ctx: ExecContext
     var _num_groups: Int
     var _emitted: Bool
 
@@ -660,8 +659,12 @@ struct GroupByOperator(Operator):
         self._keys = keys^
         self._folds = folds^
         self._schema = schema^
-        self._grouping = HashGrouping()
-        self._ctx = ctx^
+        # The grouping gets the caller's context: it is what selects radix
+        # placement over the single-table path, and what stripes the key
+        # hashing. The operator keeps no copy of its own — it has no striped
+        # work, and a write-only field plus a comment explaining why it is
+        # write-only is more to maintain than no field.
+        self._grouping = HashGrouping(ctx^)
         # One implicit group when there are no keys — including over an input
         # that yields nothing, where `sum` must still answer one null rather
         # than no rows.

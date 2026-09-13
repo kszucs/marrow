@@ -261,8 +261,11 @@ struct RadixPartitioner(Movable):
         # slot list linear and unable to be dropped.
         R: Copyable & Deinitable,
         Op: def(Int, Int32Array, UInt64Array) raises -> R,
-    ](self, var hashes: UInt64Array, op: Op) raises -> List[R]:
-        """Run ``op`` on every partition in parallel and collect the results.
+    ](self, var hashes: UInt64Array, op: Op) raises -> Tuple[
+        List[Partition], List[R]
+    ]:
+        """Run ``op`` on every partition in parallel; return the split and the
+        results.
 
         Partitions ``hashes`` (one radix pass), then dispatches one worker per
         partition via ``sync_parallelize`` — each worker calls
@@ -274,10 +277,17 @@ struct RadixPartitioner(Movable):
         results are *moved* out in partition order (never copied — ``R`` may own
         a `SwissHashTable`).
 
+        **The partitions come back too**, because every caller needs them after
+        the join and this used to drop them: both the hash join's build and the
+        radix group-by returned ``rows`` as part of their ``R`` purely to get
+        the mapping back out, which put an input into a structure named for
+        results. They are ref-counted offset slices over the two buffers
+        ``partition`` already allocated, so handing them back costs a refcount
+        bump apiece.
+
         This is the shared skeleton behind every partition-parallel kernel: the
-        hash join builds a table per partition (``R`` = table + keys + rows),
-        probes per partition (``R`` = index pairs), and the radix group-by
-        aggregates per partition (``R`` = first-rows + aggregate column).
+        hash join builds a table per partition, probes per partition, and the
+        radix group-by places keys per partition.
         """
         var partitions = self.partition(hashes^)
         var p = len(partitions)
@@ -309,4 +319,4 @@ struct RadixPartitioner(Movable):
         var out = List[R](capacity=p)
         for i in range(p):
             out.append(slots[i].take())
-        return out^
+        return (partitions^, out^)

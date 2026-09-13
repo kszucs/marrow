@@ -604,21 +604,24 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
 
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
-        ) raises {mut tables, imm} -> Tuple[StructArray, Int32Array]:
-            var k = TakeKernel.apply(left_keys, rows)
+        ) raises {mut tables, imm} -> StructArray:
             tables[i].build_hashes(part_hashes)
-            return (k^, rows.copy())
+            return TakeKernel.apply(left_keys, rows)
 
         var hashes = HashKernel[Self.Hash].apply(left_keys, self._ctx.copy())
-        var parts = partitioner.map_partitions[Tuple[StructArray, Int32Array]](
+        # The row mapping comes back with the split rather than through the
+        # op's result — it is an input, not something the worker produced.
+        var split = partitioner.map_partitions[StructArray](
             hashes^, build_partition
         )
+        ref routed = split[0]
+        ref built = split[1]
 
         var keys_out = List[StructArray](capacity=p)
         var rows_out = List[Int32Array](capacity=p)
-        for i in range(len(parts)):
-            keys_out.append(parts[i][0].copy())
-            rows_out.append(parts[i][1].copy())
+        for i in range(len(built)):
+            keys_out.append(built[i].copy())
+            rows_out.append(routed[i].row_indices.copy())
 
         self._tables = tables^
         self._left_partition_keys = keys_out^
@@ -669,10 +672,11 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         var probe_hashes = HashKernel[Self.Hash].apply(
             right_keys, self._ctx.copy()
         )
-        var pairs_per_partition = RadixPartitioner(
+        var probe_split = RadixPartitioner(
             num_bits=self._radix_bits,
             ctx=self._ctx.copy(),
         ).map_partitions[IndexPairs](probe_hashes^, probe_partition)
+        ref pairs_per_partition = probe_split[1]
 
         # 4. Concat per-partition pairs into a single IndexPairs.
         var p = len(pairs_per_partition)

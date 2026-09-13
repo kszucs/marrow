@@ -477,13 +477,42 @@ struct HashKernel[H: Hasher](Kernel):
         var num_fields = len(keys.children)
         if num_fields == 0:
             raise Self.error("empty struct array")
+        var cols = List[DynArray](capacity=num_fields)
+        for k in range(num_fields):
+            cols.append(keys.children[k].slice(keys.offset, n))
+        return Self.apply(cols, n, ctx)
 
-        var result = Self.dispatch(keys.children[0].slice(keys.offset, n), ctx)
+    @staticmethod
+    def apply(
+        columns: List[DynArray],
+        num_rows: Int,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> UInt64Array:
+        """Hash a list of key columns row-wise, combining them column by column.
+
+        The struct overload above is this one plus the slicing — a `StructArray`
+        contributes nothing here beyond its children and its offset, which is
+        why the group-by hashes its key columns directly rather than wrapping
+        them in a struct with invented field names.
+
+        `columns` must already be sliced to the rows being hashed, and that is
+        **checked**. The struct overload got the truncation for free from
+        `StructArray.length`; hashing a bare list has nothing playing that
+        role, and a column longer than `num_rows` would hand the group-by more
+        hashes than it sized its id buffer for — a scatter past the end of the
+        buffer rather than a wrong answer.
+        """
+        var n = num_rows
+        var num_fields = len(columns)
+        if num_fields == 0:
+            raise Self.error("empty struct array")
+        for k in range(num_fields):
+            Self.expect_same_length(len(columns[k]), n)
+
+        var result = Self.dispatch(columns[0], ctx)
 
         for k in range(1, num_fields):
-            var field_hashes = Self.dispatch(
-                keys.children[k].slice(keys.offset, n), ctx
-            )
+            var field_hashes = Self.dispatch(columns[k], ctx)
 
             var buf: Buffer[mut=True]
             comptime if GPU_ENABLED:

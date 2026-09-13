@@ -3,12 +3,12 @@
   "threshold_pct": 0.5,
   "gates": {
     "query_streaming": 1540980,
-    "query_join": 1689352,
-    "query_streaming_agg_fused": 1513992,
-    "query_streaming_agg": 13195416,
-    "query_dynvalue": 9947416,
+    "query_join": 1683636,
+    "query_streaming_agg_fused": 1557636,
+    "query_streaming_agg": 13235288,
+    "query_dynvalue": 9950360,
     "query_expr2_streaming": 1526828,
-    "query_expr2_agg_fused": 1497424,
-    "query_cli": 3108632
+    "query_expr2_agg_fused": 1540724,
+    "query_cli": 3120216
   }
 }
