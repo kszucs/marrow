@@ -334,10 +334,10 @@ link against. It may be possible on Linux; that is untested here.
 
 The point of the AOT lane is that the binary contains little beyond the query.
 `col("amount", int64)` is a `NumericColumn[Int64Type]`, so the predicate's
-structure lives in its type and fuses into one SIMD loop; no interpreter is reachable, and
-the kernels the query does not name are never linked. Anything that scans
-Parquet does also link the storage layer, including about 50 KB for the OpenDAL
-backend.
+structure lives in its type and fuses into one SIMD loop; no interpreter is
+reachable, and the kernels the query does not name are never linked. Anything
+that scans Parquet does also link the storage layer, including about 50 KB for
+the OpenDAL backend.
 
 The command-line surface preserves that. Parameter coercion is monomorphic —
 `cli.param("min-amount", int64)` instantiates one coercion function for

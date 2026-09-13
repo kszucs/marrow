@@ -677,7 +677,9 @@ a categorical improvement for a small amount of code.
 
 #### 2.6 Nested-type and decimal operations
 
-**Storage is complete; expressions cannot reach it.**
+**Storage is complete, and every type enters an expression** — each has a
+column, literal and parameter leaf — **but almost nothing computes on the
+nested ones or on decimal.**
 
 - **Nested:** eight golden cases — list element access, list slice, `unnest`,
   list sum, struct field access, map lookup, map cardinality. The nested verbs
@@ -687,11 +689,12 @@ a categorical improvement for a small amount of code.
   `MapValues`/`MapLength`, and `StructField` — and struct is genuinely thin
   there too (`structs.py` defines exactly two nodes), so `StructField` alone
   closes most of the struct gap.
-- **Decimal:** `NumericColumn[T]` binds `T: NumericType` and `DecimalType` is a separate
-  trait (`marrow/dtypes.mojo:160`), so **no decimal column can enter an
-  expression at all**, despite `Decimal128Array`, all four decimal widths and
-  every decimal cast kernel existing. Decimal arithmetic was never written. For a library aimed at analytics, "cannot compute on a
-  money column" is close to disqualifying.
+- **Decimal:** a decimal column, literal and parameter enter the comptime lane
+  as `DecimalValue` (`col("price", decimal128(10, 2))`), but **nothing computes
+  on one**: there is no decimal arithmetic, comparison, cast or aggregate node,
+  though all four decimal widths and every decimal cast kernel exist. Each
+  node has to align scales before it adds or compares. For a library aimed at
+  analytics, "cannot compute on a money column" is close to disqualifying.
 
 #### 2.7 No row format
 
@@ -804,6 +807,11 @@ at parity — a point the project already holds as an architectural invariant
 ("one engine, two drivers") but currently does not
 enforce, since `test_parity.mojo` was deleted with the old package and has no
 replacement.
+
+**`QueryCli.param` declares numeric parameters only.** The plan-level `param`
+covers every dtype, but the CLI has to parse argv text into the value, and it
+has a parser for numbers alone; string, bool, temporal and decimal each need
+one before an AOT binary can take them on its command line.
 
 **What it would take to be a product.** One thing: **promote the schema handle
 from spike to public API.** The wrapper it used to wait on is `marrow/expr/cli.mojo`

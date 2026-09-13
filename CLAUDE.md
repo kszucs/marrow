@@ -354,7 +354,8 @@ builder. Same alias scheme (`StringBuilder`, `ListBuilder`, `Int32Builder`, …)
 
 **Scalars** (`marrow/scalars.mojo`): the trait is **`ArrowScalar`** (not `Scalar`
 — that name is the builtin), erased by `DynScalar`. `NullScalar`, `BoolScalar`,
-`PrimitiveScalar[T]`, `StringScalar`, `FixedSizeBinaryScalar`, `ListScalar`,
+`PrimitiveScalar[T]`, `BinaryLikeScalar[T]` (`StringScalar`, `LargeStringScalar`,
+`BinaryScalar`, `LargeBinaryScalar`), `FixedSizeBinaryScalar`, `ListScalar`,
 `StructScalar`, `DictionaryScalar`, plus the usual aliases.
 
 ### Buffers, bitmaps, views
@@ -502,7 +503,13 @@ share no node types**:
   builds an `Operator` owning all mutable state (grouper table, accumulator
   slots, child operators), erased by `DynOperator`. **The engine pushes**:
   `push(batch)` answers with what it produced, `drain()` with what is left, and
-  `collect()` runs a plan down to one `StructArray`. One operator per plan node
+  `collect()` runs a plan down to one `StructArray`. **A `Datum` broadcasts a
+  scalar through the `ArrowScalar.to_array` of the type it was built from** —
+  pass the typed scalar (`PrimitiveScalar[T]`, `ListScalar`, …), not
+  `.to_dyn()`: only an erased `DynScalar` reaches `DynScalar.to_array`, which
+  dispatches over every scalar kind, and a comptime leaf that erased first cost
+  every AOT gate ~4% of `__text`. One
+  operator per plan node
   — `FilterOperator`, `ProjectOperator`, `GroupByOperator`,
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
   `LimitOperator`, `ParquetScanOperator`, `BatchSourceOperator` — plus
@@ -512,7 +519,14 @@ share no node types**:
   `aggregates.mojo`, `rules.mojo`) — every node's operands are bound on a family
   trait (`L: NumericValue`), its output dtype is a comptime type, and a subtree
   fuses into one SIMD loop. Nothing is erased. `NumericColumn[T]`, `NumericLiteral[T]`,
-  `NumericParam[T]`, `Aggregate[Agg, A]`.
+  `NumericParam[T]`, `Aggregate[Agg, A]`. **Every Arrow dtype has a family and
+  all three leaves** — `col(name, dtype)`, `lit(...)`, `param(name, dtype)` —
+  in `leaves.mojo`: numeric, temporal, decimal, interval, bool, string, binary,
+  list, fixed-size list, fixed-size binary, struct, dictionary and null. Only
+  the first six fuse (bool and string with their own lanes); the rest have
+  no lane, as `ListValue` has none, so a node over one binds the column and
+  runs a kernel. A family without a node is still readable, projectable and
+  null-testable.
 - **The runtime lane** (`runtime/values.mojo`, `runtime/aggregates.mojo`) —
   `RuntimeValue` is one struct holding a tag, its children behind `ArcPointer`,
   and an optional payload; `RuntimeAggregate` is an aggregate named at run time
@@ -1045,6 +1059,30 @@ Two project-specific traps, neither of which produces a diagnostic:
   reduce at a call/return site; a single projection off a direct trait-bound
   parameter does. Expose companions as direct members (`Value.ArrayType`).
 
+- **Conditional conformance exists but cannot merge the per-family leaves.**
+  `struct Column[T](NumericValue where conforms_to(T, NumericType), ...)`
+  parses, and a method gated `where conforms_to(Self.T, X)` matches it.
+  Measured 2026-09-14 on `1.1.0.dev2026090705` against a model of the family
+  traits (`/tmp` programs, not kept), four walls:
+  - **A narrowed associated type is not refined by the condition.**
+    `comptime Type = Self.T` fails `comptime Type: NumericType` ("type
+    'DataType' does not conform"); a `where` on a `comptime` member is a
+    redefinition, and an `if`-typed member reduces to the upper bound.
+  - **`downcast[Self.T, A & B]` satisfies every family and is unsound**:
+    `conforms_to(Column[Date32Type].Type, Defaultable)` answers `True`, and
+    marrow branches on exactly that.
+  - **A conditional associated type does not reduce for a witness.**
+    `comptime Bound = PrimitiveArray[..] if .. else BinaryLikeArray[..]`
+    declares, but a gated `bind() -> PrimitiveArray[..]` is not accepted for
+    `bind() -> Self.Bound` ("no 'bind' candidates have type"), and values do
+    not convert to it inside the struct.
+  - **Identical-signature defaults from two conditional traits are
+    ambiguous** ("lacking evidence to select candidate"), though defaults whose
+    return types differ resolve; the conditions are not known to be disjoint,
+    and a `comptime if` on one does not disprove the other.
+  A merge needs families without a narrowed `Type` and without an associated
+  `Bound` — a redesign of `core.mojo`, not a leaf change.
+
 - **Declare associated types per concrete struct, never as a trait default that
   references a sibling.** The default errors with *"recursive reference"*, and
   when projected through a dependent comptime alias it *crashes* instead —
@@ -1218,12 +1256,6 @@ release with both artifacts attached.
    (YEAR_MONTH / DAY_TIME) is skipped there, but that is a pyarrow limit — it
    has no type for either unit and the harness bridges through pyarrow; marrow
    consumes all three from the other implementations.
-3. **Scalar fidelity**: `binary`, `large_binary` and `large_string` share
-   `StringScalar`, whose `type()` hard-returns `string`, so a `binary` element
-   reports `string`. That is the one remaining fidelity bug. `large_list`, `map`
-   and `fixed_size_list` share `ListScalar` without the problem, because it
-   carries its own `DynType` instead of rebuilding `list_(child.dtype())`.
-   Sharing a struct is not the defect; reconstructing the type from the child was.
 
 ## How to Identify Leaky Abstractions
 

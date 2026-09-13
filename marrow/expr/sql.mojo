@@ -1703,9 +1703,7 @@ struct Planner(Copyable, Movable):
         """`x IN (...)` as an `OR` chain, with NULLs lifted out of it.
 
         `x = NULL` is NULL for every row, so a NULL in the list cannot join
-        the chain as an equality — and marrow has no way to broadcast an
-        untyped null scalar anyway (`DynScalar.repeat: unsupported dtype
-        null`). Its whole effect is to turn the chain's *false* into NULL,
+        the chain as an equality. Its whole effect is to turn the chain's *false* into NULL,
         which is SQL's rule and what makes `NOT IN (1, NULL)` match nothing:
 
             IN  with a NULL present -> TRUE where the chain matches, else NULL

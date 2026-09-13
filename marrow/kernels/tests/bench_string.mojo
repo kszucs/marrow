@@ -257,7 +257,7 @@ def bench_upper_100k(mut b: Benchmark) raises:
 # The shape ClickBench q21 actually executes.
 #
 # The runtime expression lane (`marrow/expr/runtime/values.mojo`) evaluates a literal by
-# `DynScalar.repeat(num_rows)`, so `URL LIKE '%google%'` reaches the kernel as
+# `DynScalar.to_array(num_rows)`, so `URL LIKE '%google%'` reaches the kernel as
 # array x array with n identical right-hand rows -- the `_bench_like_array`
 # shape, not the `_bench_like_scalar` one.  Dense and sparse variants of it
 # pin down whether the cost tracks the number of matches (compare-bound) or

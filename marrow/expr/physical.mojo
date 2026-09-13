@@ -40,7 +40,7 @@ appends one stage.
 from std.memory import ArcPointer
 
 from ..arrays import DynArray, Int32Array, StructArray
-from ..scalars import DynScalar
+from ..scalars import ArrowScalar, DynScalar, NullScalar
 from std.utils import Variant
 from ..builders import Int32Builder, nulls
 from ..dtypes import Field, field, struct_
@@ -83,14 +83,34 @@ struct Datum(Copyable, Movable):
     """
 
     var _v: Variant[DynScalar, DynArray]
+    var _to_array: def(DynScalar, Int) thin raises -> DynArray
+    """How the scalar case broadcasts, fixed where its type was still known.
+
+    A typed scalar points at its own `to_array`, so a binary links the
+    broadcast of exactly the scalars it builds; only an already-erased scalar
+    reaches `DynScalar.to_array`, which covers every dtype. Never called for
+    an array."""
 
     @implicit
     def __init__(out self, var value: DynArray):
         self._v = Variant[DynScalar, DynArray](value^)
+        self._to_array = Self._broadcast[NullScalar]
 
     @implicit
     def __init__(out self, var value: DynScalar):
         self._v = Variant[DynScalar, DynArray](value^)
+        self._to_array = DynScalar.to_array
+
+    @implicit
+    def __init__[S: ArrowScalar](out self, var value: S):
+        self._v = Variant[DynScalar, DynArray](DynScalar(value^))
+        self._to_array = Self._broadcast[S]
+
+    @staticmethod
+    def _broadcast[
+        S: ArrowScalar
+    ](scalar: DynScalar, rows: Int) raises -> DynArray:
+        return scalar.as_type[S]().to_array(rows)
 
     def is_scalar(self) -> Bool:
         """Whether this is still one value.
@@ -133,7 +153,7 @@ struct Datum(Copyable, Movable):
         turns the whole class into a raise naming both numbers.
         """
         if self._v.isa[DynScalar]():
-            return self._v[DynScalar].repeat(n)
+            return self._to_array(self._v[DynScalar], n)
         ref arr = self._v[DynArray]
         if len(arr) != n:
             raise Error(

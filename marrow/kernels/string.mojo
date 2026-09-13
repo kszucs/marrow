@@ -865,7 +865,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         needs a compiled pattern — so an array x array LIKE rebuilt the whole
         pattern (a token list, a literal buffer and a `String`) for every
         element. That is the shape the runtime expression lane produces: it
-        evaluates a literal by `DynScalar.repeat(num_rows)`, so a constant
+        evaluates a literal by `DynScalar.to_array(num_rows)`, so a constant
         pattern arrives as n identical rows and every one of those n compiles
         was redundant.
 

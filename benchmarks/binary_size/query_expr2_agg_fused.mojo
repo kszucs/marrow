@@ -15,7 +15,8 @@ ported onto the same package on 2026-08-29 and groups by `col("name", string)`,
 so the key's dtype is the only difference left between the two.
 
 **Keep the key numeric.** This docstring used to say a fused string key
-"cannot be spelled" because the comptime `NumericColumn[T]` is bound on `NumericType`.
+"cannot be spelled" because the comptime `Column[T]` (now `NumericColumn[T]`) is
+bound on `NumericType`.
 That is false — `StringColumn[T]` is a separate leaf and `col(name, string)`
 returns one. What is true is that this gate's recorded baseline was measured
 against the `int64` key, so changing it would silently invalidate the only

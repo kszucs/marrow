@@ -23,15 +23,45 @@ from .`comptime`.numeric import CaseWhen, Maximum, Minimum
 from .`comptime`.core import BoolValue, ComptimeValue, ListValue, NumericValue
 from .`comptime`.nested import ArrayContains, ListLength
 from .`comptime`.leaves import (
+    BinaryColumn,
+    BinaryLiteral,
+    BinaryParam,
     BoolColumn,
-    NumericColumn,
+    BoolLiteral,
+    BoolParam,
+    DecimalColumn,
+    DecimalLiteral,
+    DecimalParam,
+    DictionaryColumn,
+    DictionaryLiteral,
+    DictionaryParam,
+    FixedSizeBinaryColumn,
+    FixedSizeBinaryLiteral,
+    FixedSizeBinaryParam,
+    FixedSizeListColumn,
+    FixedSizeListLiteral,
+    FixedSizeListParam,
+    IntervalColumn,
+    IntervalLiteral,
+    IntervalParam,
     ListColumn,
-    NumericParam,
-    TemporalColumn,
-    TemporalLiteral,
+    ListLiteral,
+    ListParam,
+    NullColumn,
+    NullLiteral,
+    NullParam,
+    NumericColumn,
     NumericLiteral,
+    NumericParam,
     StringColumn,
     StringLiteral,
+    StringParam,
+    StructColumn,
+    StructLiteral,
+    StructParam,
+    TemporalColumn,
+    TemporalLiteral,
+    TemporalParam,
 )
 from .logical import (
     DynRelation,
@@ -48,12 +78,22 @@ from .runtime.values import maximum as _rt_maximum
 from .runtime.values import minimum as _rt_minimum
 from ..arrays import DynArray
 from ..dtypes import (
+    BinaryType,
     BoolType,
-    Int64Type,
-    ListLikeType,
+    DecimalType,
+    DictionaryType,
+    DynType,
+    FixedSizeBinaryType,
+    FixedSizeListType,
     FloatingType,
+    Int64Type,
+    IntervalType,
+    LargeBinaryType,
+    ListLikeType,
+    NullType,
     NumericType,
     StringLikeType,
+    StructType,
     TemporalType,
     int64,
 )
@@ -66,7 +106,17 @@ from ..kernels.window import (
     Rank,
     RowNumber,
 )
-from ..scalars import DynScalar
+from ..scalars import (
+    BinaryLikeScalar,
+    BoolScalar,
+    DictionaryScalar,
+    DynScalar,
+    FixedSizeBinaryScalar,
+    ListScalar,
+    NullScalar,
+    PrimitiveScalar,
+    StructScalar,
+)
 from ..schema import Schema
 from ..tabular import RecordBatch
 
@@ -99,11 +149,24 @@ def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:
     """A date/time/timestamp/duration column, fused like its numeric sibling.
 
     A separate overload for the same reason `TemporalColumn` is a separate
-    struct: Mojo has no conditional conformance, so one leaf cannot be numeric
-    for `int64` and temporal for `date32`. The caller still writes
+    struct: one leaf cannot be numeric for `int64` and temporal for `date32`,
+    since conditional conformance cannot satisfy the families' narrowed
+    `Type`. The caller still writes
     `col("d", date32)` and never sees the difference.
     """
     return TemporalColumn[T](name^)
+
+
+def col[T: DecimalType](var name: String, dtype: T) -> DecimalColumn[T]:
+    """A decimal column. Not arithmetic: `DecimalValue` is its own family
+    because adding two decimals has to align their scales first."""
+    return DecimalColumn[T](name^)
+
+
+def col[T: IntervalType](var name: String, dtype: T) -> IntervalColumn[T]:
+    """An interval column — `month_interval`, `day_time_interval` or
+    `month_day_nano_interval`."""
+    return IntervalColumn[T](name^)
 
 
 def col(var name: String, dtype: BoolType) -> BoolColumn:
@@ -126,6 +189,48 @@ def col(var name: String, dtype: BoolType) -> BoolColumn:
 def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
     """A list column. `list`, `large_list` and `map` are the same leaf."""
     return ListColumn[T](name^)
+
+
+def col(var name: String, dtype: FixedSizeListType) -> FixedSizeListColumn:
+    """A fixed-size list column."""
+    return FixedSizeListColumn(name^)
+
+
+def col(var name: String, dtype: BinaryType) -> BinaryColumn[BinaryType]:
+    """A `binary` column.
+
+    One overload per binary dtype rather than one over `BinaryLikeType`, which
+    `string` and `large_string` conform to as well: a `string` column would
+    then match both this and the string overload.
+    """
+    return BinaryColumn[BinaryType](name^)
+
+
+def col(
+    var name: String, dtype: LargeBinaryType
+) -> BinaryColumn[LargeBinaryType]:
+    """A `large_binary` column."""
+    return BinaryColumn[LargeBinaryType](name^)
+
+
+def col(var name: String, dtype: FixedSizeBinaryType) -> FixedSizeBinaryColumn:
+    """A fixed-size binary column."""
+    return FixedSizeBinaryColumn(name^)
+
+
+def col(var name: String, dtype: StructType) -> StructColumn:
+    """A struct column."""
+    return StructColumn(name^)
+
+
+def col(var name: String, dtype: DictionaryType) -> DictionaryColumn:
+    """A dictionary-encoded column."""
+    return DictionaryColumn(name^)
+
+
+def col(var name: String, dtype: NullType) -> NullColumn:
+    """A column of Arrow's `null` type."""
+    return NullColumn(name^)
 
 
 def col(var name: String) -> RuntimeValue:
@@ -181,6 +286,109 @@ def lit[T: TemporalType](value: Int, dtype: T) -> TemporalLiteral[T]:
 def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:
     """A typed constant string, `Shape.scalar` like its numeric sibling."""
     return StringLiteral[T](value^)
+
+
+def lit(value: Bool, dtype: BoolType) -> BoolLiteral:
+    """A typed boolean constant, `Shape.scalar` like its siblings."""
+    return BoolLiteral(value)
+
+
+def lit[T: DecimalType](value: Int, dtype: T) -> DecimalLiteral[T]:
+    """A decimal constant from its **unscaled** integer:
+    `lit(150, decimal128(10, 2))` is `1.50`.
+
+    `Int` for the reason every `lit` takes it — `dtype` resolves `T`, and it is
+    read second. A value wider than 64 bits takes the scalar overload below.
+    """
+    return DecimalLiteral[T](Scalar[T.native](value), dtype)
+
+
+def lit[T: DecimalType](value: PrimitiveScalar[T]) raises -> DecimalLiteral[T]:
+    """A decimal constant from a typed scalar, which carries its own precision
+    and scale and holds the full `decimal128`/`decimal256` range. A null
+    scalar raises: a literal has no validity to carry it."""
+    _check_valid(value.is_valid())
+    return DecimalLiteral[T](value.value(), value.type().as_type[T]())
+
+
+def lit[T: IntervalType](value: Int, dtype: T) -> IntervalLiteral[T]:
+    """An interval constant in its storage encoding: months for
+    `month_interval`, the packed days-and-milliseconds for
+    `day_time_interval`. A `month_day_nano_interval` is 128 bits and takes the
+    scalar overload below."""
+    return IntervalLiteral[T](Scalar[T.native](value))
+
+
+def lit[
+    T: IntervalType
+](value: PrimitiveScalar[T]) raises -> IntervalLiteral[T]:
+    """An interval constant from a typed scalar, whatever its width. A null
+    scalar raises, as the decimal overload's does."""
+    _check_valid(value.is_valid())
+    return IntervalLiteral[T](value.value())
+
+
+def lit(var value: List[UInt8], dtype: BinaryType) -> BinaryLiteral[BinaryType]:
+    """A `binary` constant from its bytes."""
+    return BinaryLiteral[BinaryType](value^)
+
+
+def lit(
+    var value: List[UInt8], dtype: LargeBinaryType
+) -> BinaryLiteral[LargeBinaryType]:
+    """A `large_binary` constant from its bytes."""
+    return BinaryLiteral[LargeBinaryType](value^)
+
+
+def lit(var value: FixedSizeBinaryScalar) -> FixedSizeBinaryLiteral:
+    """A fixed-size binary constant. The scalar carries its byte width."""
+    return FixedSizeBinaryLiteral(value^)
+
+
+def lit[
+    T: ListLikeType
+](var value: ListScalar, dtype: T) raises -> ListLiteral[T]:
+    """A `list`, `large_list` or `map` constant. `dtype` fixes `T`, and is
+    checked against the scalar's own dtype here, once, rather than at every
+    bind."""
+    _check_literal(value.type(), DynType(dtype.copy()))
+    return ListLiteral[T](value^)
+
+
+def lit(
+    var value: ListScalar, dtype: FixedSizeListType
+) raises -> FixedSizeListLiteral:
+    """A fixed-size list constant, checked against `dtype` as `list` is."""
+    _check_literal(value.type(), DynType(dtype.copy()))
+    return FixedSizeListLiteral(value^)
+
+
+def lit(var value: StructScalar) -> StructLiteral:
+    """A struct constant. The scalar carries its fields' dtypes."""
+    return StructLiteral(value^)
+
+
+def lit(var value: DictionaryScalar) -> DictionaryLiteral:
+    """A dictionary-encoded constant, broadcast over a one-entry
+    dictionary."""
+    return DictionaryLiteral(value^)
+
+
+def lit(var value: NullScalar) -> NullLiteral:
+    """A constant of Arrow's `null` type."""
+    return NullLiteral(value^)
+
+
+def _check_valid(valid: Bool) raises:
+    if not valid:
+        raise Error("lit: a null scalar has no value for a fixed-width literal")
+
+
+def _check_literal(actual: DynType, expected: DynType) raises:
+    """A `lit` scalar or a `param` default must be of the dtype it is declared
+    with; checked where the node is built, so the leaf can trust it."""
+    if actual != expected:
+        raise Error("the scalar is ", actual, ", not ", expected)
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +552,165 @@ def param[
     because it declares parameters inline at each use site.
     """
     return NumericParam[T](name^, help^, default^)
+
+
+def param[
+    T: TemporalType
+](
+    var name: String,
+    dtype: T,
+    var help: String = String(),
+    var default: Optional[Scalar[T.native]] = None,
+) -> TemporalParam[T]:
+    """A late-bound date/time/timestamp/duration, in its unit's ticks. A
+    binding must carry the same unit and timezone."""
+    return TemporalParam[T](name^, dtype, help^, default^)
+
+
+def param[
+    T: DecimalType
+](
+    var name: String,
+    dtype: T,
+    var help: String = String(),
+    var default: Optional[Scalar[T.native]] = None,
+) -> DecimalParam[T]:
+    """A late-bound decimal, defaulting to an unscaled integer. A binding must
+    carry the same precision and scale."""
+    return DecimalParam[T](name^, dtype, help^, default^)
+
+
+def param[
+    T: IntervalType
+](
+    var name: String,
+    dtype: T,
+    var help: String = String(),
+    var default: Optional[Scalar[T.native]] = None,
+) -> IntervalParam[T]:
+    """A late-bound interval, in its storage encoding."""
+    return IntervalParam[T](name^, help^, default^)
+
+
+def param(
+    var name: String,
+    dtype: BoolType,
+    var help: String = String(),
+    var default: Optional[Bool] = None,
+) -> BoolParam:
+    """A late-bound boolean."""
+    var scalar = Optional[BoolScalar](None)
+    if default:
+        scalar = BoolScalar(default.value())
+    return BoolParam(name^, help^, scalar^)
+
+
+def param[
+    T: StringLikeType
+](
+    var name: String,
+    dtype: T,
+    var help: String = String(),
+    var default: Optional[String] = None,
+) -> StringParam[T]:
+    """A late-bound string."""
+    var scalar = Optional[BinaryLikeScalar[T]](None)
+    if default:
+        scalar = BinaryLikeScalar[T](default.value())
+    return StringParam[T](name^, help^, scalar^)
+
+
+def param(
+    var name: String,
+    dtype: BinaryType,
+    var help: String = String(),
+    var default: Optional[List[UInt8]] = None,
+) -> BinaryParam[BinaryType]:
+    """A late-bound `binary` value, bound as a `BinaryScalar`."""
+    return BinaryParam[BinaryType](name^, help^, default^)
+
+
+def param(
+    var name: String,
+    dtype: LargeBinaryType,
+    var help: String = String(),
+    var default: Optional[List[UInt8]] = None,
+) -> BinaryParam[LargeBinaryType]:
+    """A late-bound `large_binary` value."""
+    return BinaryParam[LargeBinaryType](name^, help^, default^)
+
+
+def param(
+    var name: String,
+    dtype: FixedSizeBinaryType,
+    var help: String = String(),
+    var default: Optional[FixedSizeBinaryScalar] = None,
+) raises -> FixedSizeBinaryParam:
+    """A late-bound fixed-size binary value."""
+    if default:
+        _check_literal(default.value().type(), DynType(dtype))
+    return FixedSizeBinaryParam(name^, DynType(dtype), help^, default^)
+
+
+def param[
+    T: ListLikeType
+](
+    var name: String,
+    dtype: T,
+    var help: String = String(),
+    var default: Optional[ListScalar] = None,
+) raises -> ListParam[T]:
+    """A late-bound `list`, `large_list` or `map`."""
+    if default:
+        _check_literal(default.value().type(), DynType(dtype.copy()))
+    return ListParam[T](name^, DynType(dtype.copy()), help^, default^)
+
+
+def param(
+    var name: String,
+    dtype: FixedSizeListType,
+    var help: String = String(),
+    var default: Optional[ListScalar] = None,
+) raises -> FixedSizeListParam:
+    """A late-bound fixed-size list."""
+    if default:
+        _check_literal(default.value().type(), DynType(dtype.copy()))
+    return FixedSizeListParam(name^, DynType(dtype.copy()), help^, default^)
+
+
+def param(
+    var name: String,
+    dtype: StructType,
+    var help: String = String(),
+    var default: Optional[StructScalar] = None,
+) raises -> StructParam:
+    """A late-bound struct."""
+    if default:
+        _check_literal(default.value().type(), DynType(dtype.copy()))
+    return StructParam(name^, DynType(dtype.copy()), help^, default^)
+
+
+def param(
+    var name: String,
+    dtype: DictionaryType,
+    var help: String = String(),
+    var default: Optional[DictionaryScalar] = None,
+) raises -> DictionaryParam:
+    """A late-bound dictionary-encoded value."""
+    if default:
+        _check_literal(default.value().type(), DynType(dtype.copy()))
+    return DictionaryParam(name^, DynType(dtype.copy()), help^, default^)
+
+
+def param(
+    var name: String,
+    dtype: NullType,
+    var help: String = String(),
+    var default: Optional[NullScalar] = None,
+) -> NullParam:
+    """A late-bound value of Arrow's `null` type — bound to a `NullScalar`,
+    the one value it has."""
+    return NullParam(name^, DynType(dtype), help^, default^)
 
 
 def table(var batch: RecordBatch) raises -> DynRelation:

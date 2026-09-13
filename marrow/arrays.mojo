@@ -112,7 +112,7 @@ from .scalars import (
     BoolScalar,
     FixedSizeBinaryScalar,
     PrimitiveScalar,
-    StringScalar,
+    BinaryLikeScalar,
     ListScalar,
     StructScalar,
     DictionaryScalar,
@@ -380,10 +380,16 @@ struct ArrayData(Copyable, Equatable, Movable):
         `validity()` hands out a view into this array's own buffer at its own
         offset; a consumer that bakes the validity into a differently-offset
         result needs its own copy, and this is that copy.
+
+        An array with no bitmap and every row null — the `null` dtype, which
+        the spec gives no validity buffer — answers an all-clear bitmap, not
+        `None`: the missing bitmap there means "all null", not "all valid".
         """
         var v = self.validity()
         if v:
             return v.value().to_owned()
+        elif self.length > 0 and self.nulls == self.length:
+            return Bitmap.alloc_zeroed(self.length).to_immutable()
         else:
             return None
 
@@ -943,7 +949,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
     by the type parameter T; T.offset determines the physical offset DType.
     """
 
-    comptime ScalarType = StringScalar
+    comptime ScalarType = BinaryLikeScalar[Self.T]
 
     var length: Int
     var nulls: Int
@@ -1078,8 +1084,8 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
             Int(start_offset), Int(length)
         ).to_string_slice()
 
-    def __getitem__(self, index: Int) raises -> StringScalar:
-        """Return a StringScalar for the element at the given index.
+    def __getitem__(self, index: Int) raises -> BinaryLikeScalar[Self.T]:
+        """Return the scalar for the element at the given index.
 
         Raises:
             If the index is out of bounds.
@@ -1087,8 +1093,8 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         if not self.is_valid(index):
-            return StringScalar.null()
-        return StringScalar(String(self.unsafe_get(UInt(index))))
+            return BinaryLikeScalar[Self.T].null()
+        return BinaryLikeScalar[Self.T](String(self.unsafe_get(UInt(index))))
 
     def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and string values.

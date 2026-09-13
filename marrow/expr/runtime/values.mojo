@@ -387,12 +387,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
         than in the index, which would then carry a ladder for a caller it may
         not have.
 
-        **Both leaves dispatch, and the literal one is why a `date32` predicate
-        prunes here at all.** `DynScalar.repeat` covers numerics only — a
-        measured decision, since widening it costs 34,052 bytes on
-        `query_streaming`, an AOT gate that repeats nothing. Broadcasting here
-        instead keeps the temporal and decimal arms in the lane that already
-        accepted an interpreter.
+        A column dispatches on the dtype the index records; a literal
+        broadcasts itself with `DynScalar.to_array`, which is what lets a
+        `date32` or decimal predicate prune in this lane.
 
         A column with no statistics, a value that is not primitive, and a
         statistic this build cannot decode all answer all-null — and a null
@@ -415,22 +412,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
                         return NullArray(length=index.chunks).to_dyn()
             if self._tag == "literal" and self._payload.isa[DynScalar]():
                 ref value = self._payload[DynScalar]
-                var vt = value.type()
-                if vt.is_primitive():
-
-                    def broadcast[
-                        T: PrimitiveType
-                    ](w: T) raises {imm} -> DynArray:
-                        return (
-                            value.as_primitive[T]()
-                            .repeat(index.chunks)
-                            .to_dyn()
-                        )
-
-                    try:
-                        return vt.dispatch_primitive(broadcast)
-                    except:
-                        return NullArray(length=index.chunks).to_dyn()
+                if value.type().is_primitive():
+                    return value.to_array(index.chunks)
         return NullArray(length=index.chunks).to_dyn()
 
     def _defined(self, index: Index) raises -> BoolArray:
@@ -570,7 +553,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             if self._tag == "column":
                 return Datum(batch.field(self._payload[String]).copy())
             if self._tag == "literal":
-                return Datum(self._payload[DynScalar].repeat(len(batch)))
+                return Datum(self._payload[DynScalar].to_array(len(batch)))
             raise Error("evaluate: unknown runtime leaf '", self._tag, "'")
 
         var kids = List[DynArray](capacity=len(self._kids))
@@ -686,7 +669,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         indexed from 0 while keeping the column's `offset`, so a *sliced*
         divisor got its nulls at the wrong rows. `nullif` already answers the
         question this needs — nulled where equal, `a`'s own nulls kept — and
-        `DynScalar.repeat` is the same broadcast a literal operand takes.
+        `DynScalar.to_array` is the same broadcast a literal operand takes.
 
         `DivisionBinary` reaches the same result the other way, from the lane,
         because a fused node has no array to hand to a kernel.

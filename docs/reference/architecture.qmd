@@ -16,7 +16,7 @@ Every layer has a typed form and one erased box:
 | Trait | Erased box | Concrete types |
 |---|---|---|
 | `Array` | `DynArray` | `PrimitiveArray[T]`, `StringArray`, `ListArray`, `StructArray`, … |
-| `ArrowScalar` | `DynScalar` | `PrimitiveScalar[T]`, `StringScalar`, … |
+| `ArrowScalar` | `DynScalar` | `PrimitiveScalar[T]`, `BinaryLikeScalar[T]`, … |
 | `Builder` | `DynBuilder` | `PrimitiveBuilder[T]`, `ListBuilder`, … |
 | `DataType` | `DynType` | `Int64Type`, `StringType`, `ListType`, … |
 | `Value` | `DynValue` | the expression nodes of **both** lanes |

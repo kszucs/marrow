@@ -12,12 +12,15 @@ from std.testing import (
 )
 
 from ...arrays import BoolArray
-from ...builders import array
+from ...builders import array, nulls
+from ...dtypes import int64, null
 
 from ...kernels.boolean import (
     AndKernel,
-    OrKernel,
+    IsNullKernel,
     NotKernel,
+    NotNullKernel,
+    OrKernel,
     XorKernel,
 )
 
@@ -132,3 +135,19 @@ def test_length_mismatch_raises() raises:
     var b = array([True])
     with assert_raises():
         _ = AndKernel.apply(a, b)
+
+
+# --- null predicates -------------------------------------------------------
+
+
+def test_is_null_over_the_null_dtype_is_true_everywhere() raises:
+    """A `null` array carries no bitmap, which the kernel read as all valid."""
+    var n = nulls(3, null.to_dyn())
+    assert_true(IsNullKernel.apply(n) == array([True, True, True]))
+    assert_true(NotNullKernel.apply(n) == array([False, False, False]))
+
+
+def test_is_null_without_a_bitmap_is_false_everywhere() raises:
+    var v = array([1, 2], int64).to_dyn()
+    assert_true(IsNullKernel.apply(v) == array([False, False]))
+    assert_true(NotNullKernel.apply(v) == array([True, True]))

@@ -27,21 +27,33 @@ is the first such family; string, bool, temporal and list follow the same shape.
 
 from ...buffers import Bitmap
 from ...dtypes import (
+    BinaryLikeType,
     BoolType,
-    PrimitiveType,
-    TemporalType,
     DataType,
-    ListLikeType,
+    DecimalType,
+    DictionaryType,
     DynType,
+    FixedSizeBinaryType,
+    FixedSizeListType,
+    IntervalType,
+    ListLikeType,
+    NullType,
     NumericType,
+    PrimitiveType,
     StringLikeType,
+    StructType,
+    TemporalType,
 )
 from ...schema import Schema
 from ...arrays import (
     Array,
     BinaryLikeArray,
     BoolArray,
+    DictionaryArray,
+    FixedSizeBinaryArray,
+    FixedSizeListArray,
     ListLikeArray,
+    NullArray,
     PrimitiveArray,
     StructArray,
 )
@@ -420,7 +432,7 @@ trait PrimitiveValue(ComptimeValue):
                     self.dtype(Schema.from_dtype(batch.dtype)).as_type[
                         Self.Type
                     ](),
-                ).to_dyn()
+                )
             )
         else:
             var length = len(batch)
@@ -948,9 +960,10 @@ trait NumericValue(PrimitiveValue):
     """This value supports arithmetic.
 
     No members — it exists only so a node can say it needs `+` rather than
-    merely a readable lane. Mojo has no conditional conformance, so a single
-    leaf cannot be numeric for `int64` and temporal for `date32`; the leaves
-    therefore differ while everything above them is shared.
+    merely a readable lane. A single leaf cannot be numeric for `int64` and
+    temporal for `date32` — conditional conformance cannot satisfy a narrowed
+    `Type` (see CLAUDE.md) — so the leaves differ while everything above them
+    is shared.
     """
 
     def defined(self, index: Index) raises -> BoolArray:
@@ -1451,6 +1464,37 @@ trait TemporalValue(PrimitiveValue):
         return DateTrunc[Self](self.copy(), CalendarUnit.parse(unit))
 
 
+trait DecimalValue(PrimitiveValue):
+    """Marker: a fixed-point decimal.
+
+    Its own family rather than `NumericValue`, because decimal arithmetic is
+    not the lane's `+`: the operands carry a scale, and `1.50 + 2.5` has to
+    align them before it adds. Adding the unscaled integers, as `NumericBinary`
+    would, gives `150 + 25 = 175` where the answer is `400` at scale 2.
+    Reading, projecting, null tests and `count_distinct` work, because those
+    bind on `PrimitiveValue` or below.
+
+    `Type` is not `Defaultable` — precision and scale live on the dtype
+    *instance* — so every leaf carries or looks up its dtype, as the temporal
+    leaves do.
+    """
+
+    comptime Type: DecimalType
+
+
+trait IntervalValue(PrimitiveValue):
+    """Marker: a calendar interval — months, days and sub-day time.
+
+    Not `NumericValue`: an interval's storage packs two or three independent
+    fields into one integer (`day_time` is days and milliseconds, and
+    `month_day_nano` is 128 bits of three), so the lane's arithmetic would
+    carry between fields rather than add them. Not `TemporalValue` either,
+    since it has no epoch to extract fields from.
+    """
+
+    comptime Type: IntervalType
+
+
 # ---------------------------------------------------------------------------
 # ListValue — the family with no lane
 # ---------------------------------------------------------------------------
@@ -1491,6 +1535,122 @@ trait ListValue(ComptimeValue):
     def validity(
         self, bound: ListLikeArray[Self.Type]
     ) raises -> Optional[Bitmap[mut=False]]:
+        ...
+
+
+# ---------------------------------------------------------------------------
+# The other families with no lane
+# ---------------------------------------------------------------------------
+# Binary, fixed-size binary, fixed-size list, struct, dictionary and null
+# columns have the shape `ListValue` has: `bind` resolves an array, and there is
+# no per-element value a fused loop could hold — a struct row is several
+# values, a dictionary row an index into another array, a binary row bytes
+# that are not text. One family each rather than one for all, because the
+# operations that will read them are specific to each: a struct field, a
+# fixed-size-list element, a dictionary decode. Null tests, `is_in`, and
+# projection work today, since those bind on `ComptimeValue`.
+#
+# `Type` is fixed outright where the family has one dtype struct, as
+# `BoolValue` does.
+
+
+trait BinaryValue(ComptimeValue):
+    """A comptime node producing a `binary` or `large_binary` column.
+
+    Not `StringValue`: its lane borrows a `StringSlice`, which promises UTF-8
+    that a binary column does not keep.
+    """
+
+    comptime Type: BinaryLikeType
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> BinaryLikeArray[Self.Type]:
+        ...
+
+    def validity(
+        self, bound: BinaryLikeArray[Self.Type]
+    ) raises -> Optional[Bitmap[mut=False]]:
+        ...
+
+
+trait FixedSizeBinaryValue(ComptimeValue):
+    """A comptime node producing a `fixed_size_binary` column."""
+
+    comptime Type = FixedSizeBinaryType
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> FixedSizeBinaryArray:
+        ...
+
+    def validity(
+        self, bound: FixedSizeBinaryArray
+    ) raises -> Optional[Bitmap[mut=False]]:
+        ...
+
+
+trait FixedSizeListValue(ComptimeValue):
+    """A comptime node producing a `fixed_size_list` column.
+
+    Not `ListValue`, whose `Type` is a `ListLikeType` with an offsets buffer;
+    a fixed-size list has none.
+    """
+
+    comptime Type = FixedSizeListType
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> FixedSizeListArray:
+        ...
+
+    def validity(
+        self, bound: FixedSizeListArray
+    ) raises -> Optional[Bitmap[mut=False]]:
+        ...
+
+
+trait StructValue(ComptimeValue):
+    """A comptime node producing a struct column."""
+
+    comptime Type = StructType
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> StructArray:
+        ...
+
+    def validity(
+        self, bound: StructArray
+    ) raises -> Optional[Bitmap[mut=False]]:
+        ...
+
+
+trait DictionaryValue(ComptimeValue):
+    """A comptime node producing a dictionary-encoded column."""
+
+    comptime Type = DictionaryType
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> DictionaryArray:
+        ...
+
+    def validity(
+        self, bound: DictionaryArray
+    ) raises -> Optional[Bitmap[mut=False]]:
+        ...
+
+
+trait NullValue(ComptimeValue):
+    """A comptime node producing a column of Arrow's `null` type."""
+
+    comptime Type = NullType
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> NullArray:
+        ...
+
+    def validity(self, bound: NullArray) raises -> Optional[Bitmap[mut=False]]:
         ...
 
 

@@ -327,11 +327,14 @@ trait NullPredicateKernel(UnaryPredicateKernel):
             apply[Self.bits](validity.value(), out.view(), ctx)
             buf = out.to_immutable()
         else:
+            # No bitmap means every row shares one validity — valid, or null
+            # for the `null` dtype, which carries no bitmap and was reported
+            # as never null.
             var zeroed = Bitmap.alloc_zeroed(n)
-            comptime if Self.negate:
-                buf = zeroed.to_immutable()  # all-valid -> is_null all False
+            if (arr.null_count() == n) == Self.negate:
+                buf = (~zeroed.view()).to_immutable()
             else:
-                buf = (~zeroed.view()).to_immutable()  # not_null all True
+                buf = zeroed.to_immutable()
         return BoolArray(length=n, nulls=0, offset=0, bitmap=None, buffer=buf)
 
 

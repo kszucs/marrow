@@ -5,7 +5,8 @@ length-1 arrays.
 
 Typed scalars:
   PrimitiveScalar[T]  — holds Scalar[T.native] (built-in) + Bool validity
-  StringScalar        — holds String value + Bool validity
+  BinaryLikeScalar[T] — holds a String value + Bool validity; StringScalar,
+                        LargeStringScalar, BinaryScalar, LargeBinaryScalar
   ListScalar          — holds DynArray (child values) + DataType + Bool validity
   StructScalar        — holds List[DynScalar] (one per field) + DataType + Bool validity
   DictionaryScalar    — holds integer index + decoded DynScalar value + DataType + Bool validity
@@ -31,17 +32,36 @@ from std.builtin.rebind import downcast
 from std.memory import OwnedPointer
 
 from .arrays import (
+    ArrayData,
+    BinaryLikeArray,
     BoolArray,
-    PrimitiveArray,
-    StringArray,
+    DictionaryArray,
     DynArray,
+    FixedSizeBinaryArray,
+    NullArray,
+    PrimitiveArray,
+    StructArray,
 )
-from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
+from .buffers import Bitmap, Buffer
+from .builders import (
+    BinaryLikeBuilder,
+    BoolBuilder,
+    DynBuilder,
+    FixedSizeBinaryBuilder,
+    PrimitiveBuilder,
+    array,
+    nulls,
+)
 from std.os import abort
 from .dtypes import (
+    BinaryLikeType,
+    BinaryType,
+    LargeBinaryType,
+    LargeStringType,
+    StringType,
     DynType,
+    IntegerType,
     PrimitiveType,
-    StringLikeType,
     Date32Type,
     Date64Type,
     DayTimeIntervalType,
@@ -92,6 +112,13 @@ trait ArrowScalar(Copyable, Deinitable, Equatable, Movable, Writable):
     def is_null(self) -> Bool:
         return not self.is_valid()
 
+    def to_array(self, length: Int) raises -> DynArray:
+        """This scalar repeated into a column of `length` rows, erased.
+
+        The erased counterpart of each scalar's typed `repeat`, and what lets
+        `Datum` and `DynScalar` broadcast any scalar without a dtype ladder."""
+        ...
+
     def to_dyn(deinit self) -> DynScalar:
         return DynScalar(self^)
 
@@ -105,6 +132,13 @@ struct NullScalar(ArrowScalar):
     @staticmethod
     def null() -> Self:
         return Self()
+
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
+
+    def repeat(self, times: Int) -> NullArray:
+        """Broadcast into `times` nulls."""
+        return NullArray(length=times)
 
     def type(self) -> DynType:
         return null
@@ -137,6 +171,9 @@ struct BoolScalar(ArrowScalar):
     @staticmethod
     def null() -> Self:
         return Self(is_valid=False)
+
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
 
     def repeat(self, times: Int) raises -> BoolArray:
         """Broadcast this scalar into an array of length `times`."""
@@ -258,6 +295,9 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
         """Get the underlying native value. Undefined if null."""
         return Self.NativeScalar.from_bytes(self._value)
 
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
+
     def repeat(self, times: Int) raises -> PrimitiveArray[Self.T]:
         """Broadcast this scalar into an array of length `times`."""
         var builder = PrimitiveBuilder[Self.T](self._dtype.copy(), times)
@@ -316,12 +356,20 @@ comptime Decimal256Scalar = PrimitiveScalar[Decimal256Type]
 
 
 # ---------------------------------------------------------------------------
-# StringScalar
+# BinaryLikeScalar[T]
 # ---------------------------------------------------------------------------
 
 
-struct StringScalar(ArrowScalar):
-    """A single string value: holds a String + validity flag."""
+struct BinaryLikeScalar[T: BinaryLikeType](ArrowScalar):
+    """A single `string`, `large_string`, `binary` or `large_binary` value —
+    the scalar of `BinaryLikeArray[T]`.
+
+    Parameterised on its dtype as `PrimitiveScalar[T]` is, and for the same
+    reason: none of the four has a runtime parameter, so the dtype is the type
+    and nothing is stored for it. One unparameterised struct for all four lost
+    `T` at `BinaryLikeArray[T].__getitem__`, and `type()` answered `string` for
+    every one of them.
+    """
 
     var _value: String
     var _is_valid: Bool
@@ -340,7 +388,7 @@ struct StringScalar(ArrowScalar):
         return Self(is_valid=False)
 
     def type(self) -> DynType:
-        return string
+        return Self.T().to_dyn()
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -349,13 +397,13 @@ struct StringScalar(ArrowScalar):
         """Get the underlying value. Undefined if null."""
         return self._value.copy()
 
-    def repeat(self, times: Int) raises -> StringArray:
-        """Broadcast this scalar into an array of length `times`.
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
 
-        The numeric and bool scalars have had this; string did not, so
-        `DynScalar.repeat` could not support it and the erased `like` path — which
-        materialises its constant pattern per morsel — failed at run time."""
-        var builder = StringBuilder(capacity=times)
+    def repeat(self, times: Int) raises -> BinaryLikeArray[Self.T]:
+        """Broadcast this scalar into an array of length `times`."""
+        var bytes = self._value.byte_length() * times if self._is_valid else 0
+        var builder = BinaryLikeBuilder[Self.T](times, bytes)
         if self._is_valid:
             for _ in range(times):
                 builder.append(self._value)
@@ -381,6 +429,12 @@ struct StringScalar(ArrowScalar):
             writer.write('"')
         else:
             writer.write("null")
+
+
+comptime StringScalar = BinaryLikeScalar[StringType]
+comptime LargeStringScalar = BinaryLikeScalar[LargeStringType]
+comptime BinaryScalar = BinaryLikeScalar[BinaryType]
+comptime LargeBinaryScalar = BinaryLikeScalar[LargeBinaryType]
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +466,20 @@ struct FixedSizeBinaryScalar(ArrowScalar):
 
     def type(self) -> DynType:
         return FixedSizeBinaryType(self._byte_width).to_dyn()
+
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
+
+    def repeat(self, times: Int) raises -> FixedSizeBinaryArray:
+        """Broadcast this scalar into an array of length `times`."""
+        var builder = FixedSizeBinaryBuilder(self._byte_width, times)
+        if self._is_valid:
+            for _ in range(times):
+                builder.append(Span(self._value))
+        else:
+            for _ in range(times):
+                builder.append_null()
+        return builder.finish()
 
     def value(ref self) -> ref[self._value] List[UInt8]:
         """The `byte_width` value bytes (empty for a null scalar)."""
@@ -477,6 +545,56 @@ struct ListScalar(ArrowScalar):
         """Get the child elements array."""
         return self._value[].copy()
 
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length)
+
+    def repeat(self, times: Int) raises -> DynArray:
+        """Broadcast this list into a column of `times` rows, each this list.
+
+        Built as a layout rather than through a builder, because the four
+        dtypes this backs have four builders and one layout: the child is this
+        list's elements tiled `times` over, plus — for the variable-length
+        three — an offsets buffer stepping by the list's length.
+
+        A null row of a `fixed_size_list` still owns `size` child slots, so the
+        elements are tiled for it too, and a value of any other length raises
+        rather than building a child the dtype does not describe. A null row
+        of a variable-length list owns none.
+        """
+        ref values = self._value[]
+        var fixed = self._dtype.is_fixed_size_list()
+        if fixed and len(values) != self._dtype.as_fixed_size_list().size:
+            raise Error(
+                "ListScalar.repeat: ",
+                self._dtype,
+                " needs ",
+                self._dtype.as_fixed_size_list().size,
+                " elements per row, the scalar holds ",
+                len(values),
+            )
+        var tiled = fixed or self._is_valid
+        var step = len(values) if tiled else 0
+        var child = DynBuilder(values.dtype(), step * times)
+        for _ in range(times if tiled else 0):
+            child.extend(values)
+        var buffers = List[Buffer[mut=False]]()
+        if not fixed:
+            if self._dtype.is_large_list():
+                buffers.append(_stepped_offsets[DType.int64](times, step))
+            else:
+                buffers.append(_stepped_offsets[DType.int32](times, step))
+        return DynArray.from_data(
+            ArrayData(
+                dtype=self._dtype.copy(),
+                length=times,
+                nulls=0 if self._is_valid else times,
+                offset=0,
+                bitmap=_validity(self._is_valid, times),
+                buffers=buffers^,
+                children=[child.finish().to_data()],
+            )
+        )
+
     def __eq__(self, other: Self) -> Bool:
         return (
             self._is_valid == other._is_valid
@@ -528,6 +646,29 @@ struct StructScalar(ArrowScalar):
 
     def num_fields(self) -> Int:
         return len(self._value)
+
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
+
+    def repeat(self, times: Int) raises -> StructArray:
+        """Broadcast this struct into a column of `times` rows: each field
+        broadcast on its own, or nulls of the field's dtype under a null
+        struct, whose scalar carries no field values."""
+        ref fields = self._dtype.as_struct().fields
+        var children = List[DynArray](capacity=len(fields))
+        for i in range(len(fields)):
+            if self._is_valid:
+                children.append(self._value[i].to_array(times))
+            else:
+                children.append(nulls(times, fields[i].dtype))
+        return StructArray(
+            dtype=self._dtype.copy(),
+            length=times,
+            nulls=0 if self._is_valid else times,
+            offset=0,
+            bitmap=_validity(self._is_valid, times),
+            children=children^,
+        )
 
     def field(self, index: Int) -> DynScalar:
         """Return the i-th field as an DynScalar."""
@@ -598,6 +739,36 @@ struct DictionaryScalar(ArrowScalar):
         """The integer index into the dictionary. -1 when null."""
         return self._index
 
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
+
+    def repeat(self, times: Int) raises -> DictionaryArray:
+        """Broadcast this value into a column of `times` rows over a
+        one-entry dictionary: every index is 0, or null under a null scalar.
+
+        The source dictionary is not carried by a scalar, so the column is
+        re-encoded rather than sharing it; `DictionaryArray.__eq__` decodes,
+        so the two compare equal.
+        """
+        ref dt = self._dtype.as_dictionary()
+        var valid = self.is_valid()
+        var values = self._decoded[].to_array(1) if valid else array(
+            dt.value_type()
+        )
+
+        def indices[T: IntegerType](d: T) raises {imm} -> DynArray:
+            var zero = Optional(Scalar[T.native](0)) if valid else None
+            return PrimitiveScalar[T](zero, d).repeat(times).to_dyn()
+
+        return DictionaryArray(
+            dtype=self._dtype.copy(),
+            length=times,
+            nulls=0 if valid else times,
+            offset=0,
+            indices=dt.index_type().dispatch_integer(indices),
+            values=values^,
+        )
+
     def value(self) -> DynScalar:
         """The decoded dictionary value. Matches PyArrow's DictionaryScalar.as_py().
         """
@@ -617,6 +788,25 @@ struct DictionaryScalar(ArrowScalar):
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
+
+
+def _stepped_offsets[
+    D: DType
+](times: Int, step: Int) raises -> Buffer[mut=False]:
+    """The offsets of `times` lists of `step` elements each."""
+    var offsets = Buffer.alloc_uninit[D](times + 1)
+    for i in range(times + 1):
+        offsets.unsafe_set[D](i, Scalar[D](i * step))
+    return offsets.to_immutable()
+
+
+def _validity(valid: Bool, times: Int) -> Optional[Bitmap[mut=False]]:
+    """The bitmap a broadcast of one scalar needs: none when it is valid, all
+    clear when it is null."""
+    if valid:
+        return None
+    else:
+        return Bitmap.alloc_zeroed(times).to_immutable()
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +857,9 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         Decimal128Scalar,
         Decimal256Scalar,
         StringScalar,
+        LargeStringScalar,
+        BinaryScalar,
+        LargeBinaryScalar,
         FixedSizeBinaryScalar,
         ListScalar,
         StructScalar,
@@ -738,44 +931,26 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
         return self._dispatch(f)
 
-    def repeat(self, times: Int) raises -> DynArray:
-        """Broadcast this scalar into an array of length `times`.
+    def to_array(self, length: Int) raises -> DynArray:
+        """This scalar repeated into a column of `length` rows, whatever it
+        holds — the erased `ArrowScalar.to_array`. Reached by a `Datum` built
+        from an *erased* scalar; one built from a typed scalar links only that
+        type's."""
 
-        A twelve-arm dtype ladder before, which is why it silently lacked string
-        — the erased `like` path materialises its pattern through here and hit
-        "unsupported dtype string".
+        def f[T: ArrowScalar](t: T) raises {imm} -> DynArray:
+            return t.to_array(length)
 
-        Dispatches over **numeric**, not `PrimitiveType`, and that is a measured
-        choice rather than a timid one: `repeat` builds a whole array per
-        instantiation, so widening it to every primitive type (adding temporal,
-        interval and the four decimals) cost **34,052 bytes** on
-        `query_streaming` — 83% of that commit's growth — to support scalars
-        nothing repeats today. The families that are covered are enumerated by
-        `dispatch_*`, so none of *them* can be silently dropped; a temporal or
-        decimal scalar raises, which is the same answer the ladder gave and is
-        loud rather than wrong."""
-        var dt = self.type()
-        if dt == bool_:
-            return self.as_bool().repeat(times).to_dyn()
-        elif dt.is_string_like():
-
-            def stringlike[T: StringLikeType](d: T) raises {imm} -> DynArray:
-                return self.as_string().repeat(times).to_dyn()
-
-            return dt.dispatch_stringlike(stringlike)
-        elif dt.is_numeric():
-
-            def numeric[T: NumericType](d: T) raises {imm} -> DynArray:
-                return self.as_primitive[T]().repeat(times).to_dyn()
-
-            return dt.dispatch_numeric(numeric)
-        else:
-            raise Error(t"DynScalar.repeat: unsupported dtype {dt}")
+        return self._dispatch(f)
 
     def is_null(self) -> Bool:
         return not self.is_valid()
 
     # --- typed downcasts ---
+
+    def isa[T: ArrowScalar](self) -> Bool:
+        """Whether the held scalar is a `T` — one discriminant compare, where
+        `type()` walks the whole variant to build a `DynType`."""
+        return self._v.isa[T]()
 
     def as_type[T: ArrowScalar](ref self) -> ref[self._v[T]] T:
         """This scalar as the concrete `T` it holds — a borrow, no copy."""
@@ -828,8 +1003,26 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     def as_float64(ref self) -> ref[self._v[Float64Scalar]] Float64Scalar:
         return self.as_type[Float64Scalar]()
 
+    def as_binary_like[
+        T: BinaryLikeType
+    ](ref self) -> ref[self._v[BinaryLikeScalar[T]]] BinaryLikeScalar[T]:
+        return self.as_type[BinaryLikeScalar[T]]()
+
     def as_string(ref self) -> ref[self._v[StringScalar]] StringScalar:
         return self.as_type[StringScalar]()
+
+    def as_large_string(
+        ref self,
+    ) -> ref[self._v[LargeStringScalar]] LargeStringScalar:
+        return self.as_type[LargeStringScalar]()
+
+    def as_binary(ref self) -> ref[self._v[BinaryScalar]] BinaryScalar:
+        return self.as_type[BinaryScalar]()
+
+    def as_large_binary(
+        ref self,
+    ) -> ref[self._v[LargeBinaryScalar]] LargeBinaryScalar:
+        return self.as_type[LargeBinaryScalar]()
 
     def as_fixed_size_binary(
         ref self,
@@ -940,8 +1133,14 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
                 return PythonObject(self.as_primitive[T]().value())
 
             return dt.dispatch_primitive(numeric)
-        elif dt.is_string_like():
-            return PythonObject(self.as_string().to_string())
+        elif dt.is_binary_like():
+
+            def binarylike[
+                T: BinaryLikeType
+            ](d: T) raises {imm} -> PythonObject:
+                return PythonObject(self.as_binary_like[T]().to_string())
+
+            return dt.dispatch_binarylike(binarylike)
         elif dt.is_list():
             return self.as_list().value().to_python_object()
         elif dt.is_fixed_size_list():

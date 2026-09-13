@@ -229,11 +229,11 @@ a sum, an element, an unnested column — because the expectation block cannot
 render a list, struct or map.
 
 **Decimals** (3) — `decimal_sum_keeps_scale`, `decimal_multiply_widens_scale`,
-`decimal_division_rounds`. `NumericColumn[T]` binds `T: NumericType` and decimal is
-not one, so no decimal column can enter an expression at all, though
-`Decimal128Array` and the dtypes exist. All three render the result as
-**text** so that the scale is asserted and not merely the value: `7.00` and
-`7.0` are the same number and different answers.
+`decimal_division_rounds`. A decimal column, literal and parameter exist
+(`col("price", decimal128(10, 2))`), but `DecimalValue` has no arithmetic,
+cast or aggregate node, because each has to align scales first. All three
+render the result as **text** so that the scale is asserted and not merely the
+value: `7.00` and `7.0` are the same number and different answers.
 
 **Predicates and subqueries** (5) — `filter_in_literal_list`,
 `filter_not_in_list_with_null`, `filter_is_distinct_from`, `subquery_scalar`,

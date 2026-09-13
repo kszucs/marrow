@@ -412,8 +412,8 @@ def fill_null(
 ) raises -> DynArray:
     """Replace the nulls of `a` with a scalar (PyArrow ``pc.fill_null`` with a
     scalar replacement). The scalar is broadcast to `a`'s length via
-    ``DynScalar.repeat`` and forwarded to the array overload."""
-    return FillNullKernel.apply(a, fill.repeat(a.length()), ctx)
+    ``DynScalar.to_array`` and forwarded to the array overload."""
+    return FillNullKernel.apply(a, fill.to_array(a.length()), ctx)
 
 
 def fill_null[
@@ -428,7 +428,7 @@ def fill_null[
 
     var s = PrimitiveScalar[T](Optional[Scalar[T.native]](fill), a.dtype.copy())
     return (
-        FillNullKernel.apply(a.copy(), s^.to_dyn().repeat(len(a)), ctx)
+        FillNullKernel.apply(a.copy(), s^.to_dyn().to_array(len(a)), ctx)
         .as_primitive[T]()
         .copy()
     )

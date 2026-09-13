@@ -42,9 +42,9 @@ What survived, and is measured here: argv parsing and `--help`, now through
 `marrow/utils/argparse.mojo` — the leaf module `parse_params`/`render_usage`
 were extracted into — plus the parameter node itself.
 
-**The path is no longer a `param`.** `param()` is `NumericParam[T: NumericType]`;
-there is no `StringParam` and `ParquetScan` takes a plain `String`, so the path
-is late-bound through the parser instead of through the plan. `Bindings` is a
+**The path is not a `param`.** `ParquetScan` takes a plain `String`, not a
+value, so the path is late-bound through the parser instead of through the
+plan even though `param("path", string)` exists. `Bindings` is a
 `Dict[String, DynScalar]` passed to `execute`, so the plan itself stays
 immutable — the old process-global parameter registry is gone with the rest.
 """

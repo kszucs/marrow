@@ -10,9 +10,9 @@ def plan() raises -> DynRelation:
     so that the *scale* is asserted and not just the value: `7.00` and `7.0`
     are the same number and different answers.
 
-    marrow has `Decimal128Array` and the decimal dtypes, but `NumericColumn[T]` binds
-    `T: NumericType`, which decimal is not, so no decimal column can enter an
-    expression.
+    marrow can read a decimal column into an expression, but `DecimalValue` has
+    no cast or `sum` node: both have to carry the scale, which the numeric
+    nodes do not.
 
     -- skip mojo
     -- skip python

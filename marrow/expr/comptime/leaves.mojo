@@ -8,33 +8,60 @@ lane loop above does none.
 from ...arrays import (
     BinaryLikeArray,
     BoolArray,
+    DictionaryArray,
+    FixedSizeBinaryArray,
+    FixedSizeListArray,
     ListLikeArray,
+    NullArray,
     PrimitiveArray,
     StructArray,
 )
+from ...builders import BinaryLikeBuilder
 from ...buffers import Bitmap
-from ...builders import PrimitiveBuilder
 from ...dtypes import (
+    BinaryLikeType,
     BoolType,
+    DecimalType,
     DynType,
-    NumericType,
+    IntervalType,
     ListLikeType,
+    NumericType,
+    PrimitiveType,
     StringLikeType,
     TemporalType,
+    bool_,
 )
-from ...scalars import PrimitiveScalar, StringScalar
+from ...scalars import (
+    ArrowScalar,
+    BinaryLikeScalar,
+    BoolScalar,
+    DictionaryScalar,
+    DynScalar,
+    FixedSizeBinaryScalar,
+    ListScalar,
+    NullScalar,
+    PrimitiveScalar,
+    StructScalar,
+)
 from ...schema import Schema
-from ...tabular import RecordBatch
 from ..logical import Shape
 from ..bindings import Bindings
 from ..index import Index
 from ..physical import Datum
 from .core import (
+    BinaryValue,
     BoolValue,
     ColumnBound,
+    DecimalValue,
+    DictionaryValue,
+    FixedSizeBinaryValue,
+    FixedSizeListValue,
+    IntervalValue,
     ListValue,
+    NullValue,
     NumericValue,
     StringValue,
+    StructValue,
     TemporalValue,
     Unnamed,
 )
@@ -118,10 +145,11 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
 
     **Byte-for-byte the same lane as `NumericColumn[T]`** — temporal dtypes are
     fixed-width signed integers underneath, so `bind` and `lane[W]` are
-    identical. It is a separate struct only because Mojo has no conditional
-    conformance: one leaf cannot be a `NumericValue` when `T` is `int64` and a
-    `TemporalValue` when `T` is `date32`, and the difference matters because
-    `date + date` must not compile.
+    identical. It is a separate struct because one leaf cannot be a
+    `NumericValue` when `T` is `int64` and a `TemporalValue` when `T` is
+    `date32` — conditional conformance exists, but it cannot satisfy the
+    families' narrowed `Type` or their `Bound` (see CLAUDE.md) — and the
+    difference matters because `date + date` must not compile.
 
     That is the whole duplication, and the point of the split is that it stops
     at the leaf: everything above binds on `PrimitiveValue`, where the previous
@@ -220,7 +248,7 @@ struct NumericLiteral[T: NumericType](NumericValue):
         # Stays a scalar. `Shape == 0` tells the caller so, and `Datum.to_array`
         # is the one place it stops being lazy — a predicate over a constant
         # never allocates a column.
-        return PrimitiveScalar[Self.T](self._value).to_dyn()
+        return PrimitiveScalar[Self.T](self._value)
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -294,9 +322,7 @@ struct TemporalLiteral[T: TemporalType](TemporalValue, Unnamed):
     # -- Evaluable ----------------------------------------------------------
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        return PrimitiveScalar[Self.T](
-            Optional(self._value), self._dtype
-        ).to_dyn()
+        return PrimitiveScalar[Self.T](Optional(self._value), self._dtype)
 
     # -- PrimitiveValue -----------------------------------------------------
 
@@ -455,7 +481,7 @@ struct StringLiteral[T: StringLikeType](StringValue, Unnamed):
     # -- Evaluable ----------------------------------------------------------
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        return Datum(StringScalar(self._value.copy()).to_dyn())
+        return BinaryLikeScalar[Self.T](self._value)
 
     # -- StringValue --------------------------------------------------------
 
@@ -474,6 +500,241 @@ struct StringLiteral[T: StringLikeType](StringValue, Unnamed):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write('"', self._value, '"')
+
+
+struct BoolLiteral(BoolValue):
+    """A boolean constant, splatted into every lane."""
+
+    comptime NativeType = DType.bool
+    comptime shape = Shape.scalar
+    comptime Bound = NoneType
+
+    var _value: Bool
+
+    def __init__(out self, value: Bool):
+        self._value = value
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        # Stays a scalar; `BoolValue.evaluate` would pack a whole bitmap.
+        return BoolScalar(self._value)
+
+    # -- BoolValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return NoneType()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return SIMD[DType.bool, W](self._value)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct DecimalColumn[T: DecimalType](ColumnBound, DecimalValue):
+    """A decimal column, resolved by name once per batch.
+
+    The lane of `TemporalColumn[T]`, for the same reason: a decimal is a
+    fixed-width integer underneath, and its precision and scale are on the
+    dtype instance, so `dtype` reads the schema rather than `Self.T()`.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.columnar
+    comptime Bound = PrimitiveArray[Self.T]
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return schema.field(name=self._name).dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_primitive[Self.T]().copy()
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct DecimalLiteral[T: DecimalType](DecimalValue):
+    """A decimal constant: its unscaled integer and the dtype that scales it.
+
+    Carries its dtype for the reason `TemporalLiteral` does — precision and
+    scale are values, so `Self.T` cannot build one.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = NoneType
+
+    var _value: Scalar[Self.Type.native]
+    var _dtype: Self.T
+
+    def __init__(out self, value: Scalar[Self.Type.native], dtype: Self.T):
+        self._value = value
+        self._dtype = dtype.copy()
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(self._dtype)
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return PrimitiveScalar[Self.T](Optional(self._value), self._dtype)
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return NoneType()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return SIMD[Self.Type.native, W](self._value)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct IntervalColumn[T: IntervalType](ColumnBound, IntervalValue):
+    """An interval column, resolved by name once per batch.
+
+    An interval dtype has no parameters, so unlike the decimal and temporal
+    leaves this one answers `dtype` from `Self.T()`.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.columnar
+    comptime Bound = PrimitiveArray[Self.T]
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_primitive[Self.T]().copy()
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct IntervalLiteral[T: IntervalType](IntervalValue):
+    """An interval constant, in its storage encoding."""
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = NoneType
+
+    var _value: Scalar[Self.Type.native]
+
+    def __init__(out self, value: Scalar[Self.Type.native]):
+        self._value = value
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return PrimitiveScalar[Self.T](self._value)
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return NoneType()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return SIMD[Self.Type.native, W](self._value)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
 
 
 struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
@@ -583,6 +844,96 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
 # `ParamCell` raises "parameter is not bound" *without* naming it, because a
 # cell cannot know the name it is read through. Here the node **is** the
 # parameter, so it can.
+#
+# Every family has one, and all of them read their value through `_bound`,
+# which is where a binding is checked against the declared dtype. The typed
+# downcast after it cannot check: `as_primitive[T]` on a scalar of another
+# dtype is not a raise but a process abort in a release build.
+
+
+def _bound[
+    S: ArrowScalar
+](bindings: Bindings, name: String, dtype: DynType) raises -> Optional[S]:
+    """This execution's value for the parameter `name`, or `None` when nothing
+    binds it — refused unless it is a non-null `S` of `dtype`.
+
+    Checked on the typed member, not through `DynScalar.type()`, which would
+    link a walk over every scalar arm into a binary that names one. A null is
+    refused, except for the `null` dtype whose only value it is: a fixed-width
+    parameter's `Bound` is one value with no validity to carry it.
+    """
+    var got = bindings.get(name)
+    if got:
+        if not got.value().isa[S]():
+            raise Error(
+                "parameter '",
+                name,
+                "' is ",
+                dtype,
+                " but was bound to a scalar of another kind",
+            )
+        ref typed = got.value().as_type[S]()
+        var actual = typed.type()
+        if actual != dtype:
+            raise Error(
+                "parameter '",
+                name,
+                "' is ",
+                dtype,
+                " but was bound to ",
+                actual,
+            )
+        if typed.is_null() and not dtype.is_null():
+            raise Error("parameter '", name, "' was bound to null")
+        return typed.copy()
+    else:
+        return None
+
+
+def _unbound(name: String, help: String) -> Error:
+    """The diagnostic for a parameter with no binding and no default."""
+    return Error(
+        "parameter '", name, "' is not bound", (": " + help) if help else ""
+    )
+
+
+def _param[
+    S: ArrowScalar
+](
+    bindings: Bindings,
+    name: String,
+    help: String,
+    dtype: DynType,
+    default: Optional[S],
+) raises -> S:
+    """A parameter's value for this execution, or its default — which `param`
+    checked against `dtype` when it built the node."""
+    var got = _bound[S](bindings, name, dtype)
+    if got:
+        return got.value().copy()
+    elif default:
+        return default.value().copy()
+    else:
+        raise _unbound(name, help)
+
+
+def _primitive_param[
+    T: PrimitiveType
+](
+    bindings: Bindings,
+    name: String,
+    help: String,
+    dtype: T,
+    default: Optional[Scalar[T.native]],
+) raises -> Scalar[T.native]:
+    """A fixed-width parameter's value for this execution, or its default."""
+    var got = _bound[PrimitiveScalar[T]](bindings, name, DynType(dtype))
+    if got:
+        return got.value().value()
+    elif default:
+        return default.value()
+    else:
+        raise _unbound(name, help)
 
 
 struct NumericParam[T: NumericType](NumericValue):
@@ -638,16 +989,8 @@ struct NumericParam[T: NumericType](NumericValue):
         `statistics`, once per scan when this parameter sits in a predicate the
         source is pruning with.
         """
-        var got = bindings.get(self._name)
-        if got:
-            return got.value().as_primitive[Self.T]().value()
-        if self._default:
-            return self._default.value()
-        raise Error(
-            "parameter '",
-            self._name,
-            "' is not bound",
-            (": " + self._help) if self._help else "",
+        return _primitive_param[Self.T](
+            bindings, self._name, self._help, Self.T(), self._default
         )
 
     def statistics[
@@ -667,7 +1010,7 @@ struct NumericParam[T: NumericType](NumericValue):
         ).repeat(index.chunks)
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        """Read this execution's value — the one leaf that reads `bindings`.
+        """Read this execution's value.
 
         **Here, rather than as a rewrite at `to_operator`.** Substituting at
         lowering would need every composite node to rebuild itself with
@@ -685,6 +1028,1192 @@ struct NumericParam[T: NumericType](NumericValue):
         W: Int
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return SIMD[Self.Type.native, W](bound)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct TemporalParam[T: TemporalType](TemporalValue):
+    """A late-bound date/time/timestamp/duration — `TemporalLiteral[T]` whose
+    value arrives later.
+
+    Carries its dtype, as the literal does: a unit and a timezone are values,
+    and a binding is checked against them, so a `timestamp[ms]` parameter
+    refuses a `timestamp[s]` scalar rather than reading its ticks at the wrong
+    unit.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = Scalar[Self.T.native]
+
+    var _name: String
+    var _dtype: Self.T
+    var _help: String
+    var _default: Optional[Scalar[Self.T.native]]
+
+    def __init__(
+        out self,
+        var name: String,
+        dtype: Self.T,
+        var help: String = String(),
+        var default: Optional[Scalar[Self.T.native]] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype.copy()
+        self._help = help^
+        self._default = default^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(self._dtype)
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return _primitive_param[Self.T](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return SIMD[Self.Type.native, W](bound)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct DecimalParam[T: DecimalType](DecimalValue):
+    """A late-bound decimal — `DecimalLiteral[T]` whose value arrives later.
+
+    A binding must match the declared precision and scale, since the unscaled
+    integer means nothing without them.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = Scalar[Self.T.native]
+
+    var _name: String
+    var _dtype: Self.T
+    var _help: String
+    var _default: Optional[Scalar[Self.T.native]]
+
+    def __init__(
+        out self,
+        var name: String,
+        dtype: Self.T,
+        var help: String = String(),
+        var default: Optional[Scalar[Self.T.native]] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype.copy()
+        self._help = help^
+        self._default = default^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(self._dtype)
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return _primitive_param[Self.T](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return SIMD[Self.Type.native, W](bound)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct IntervalParam[T: IntervalType](IntervalValue):
+    """A late-bound interval — `IntervalLiteral[T]` whose value arrives
+    later."""
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = Scalar[Self.T.native]
+
+    var _name: String
+    var _help: String
+    var _default: Optional[Scalar[Self.T.native]]
+
+    def __init__(
+        out self,
+        var name: String,
+        var help: String = String(),
+        var default: Optional[Scalar[Self.T.native]] = None,
+    ):
+        self._name = name^
+        self._help = help^
+        self._default = default^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return _primitive_param[Self.T](
+            bindings, self._name, self._help, Self.T(), self._default
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return SIMD[Self.Type.native, W](bound)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct BoolParam(BoolValue):
+    """A late-bound boolean — `BoolLiteral` whose value arrives later."""
+
+    comptime NativeType = DType.bool
+    comptime shape = Shape.scalar
+    comptime Bound = Bool
+
+    var _name: String
+    var _help: String
+    var _default: Optional[BoolScalar]
+
+    def __init__(
+        out self,
+        var name: String,
+        var help: String = String(),
+        var default: Optional[BoolScalar] = None,
+    ):
+        self._name = name^
+        self._help = help^
+        self._default = default^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        # Stays a scalar; `BoolValue.evaluate` would pack a whole bitmap.
+        return _param[BoolScalar](
+            bindings, self._name, self._help, bool_, self._default
+        )
+
+    # -- BoolValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return _param[BoolScalar](
+            bindings, self._name, self._help, bool_, self._default
+        ).value()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return SIMD[DType.bool, W](bound)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct StringParam[T: StringLikeType](StringValue):
+    """A late-bound string — `StringLiteral[T]` whose value arrives later."""
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = String
+    """The value itself, so `lane` borrows it — see `StringLiteral.Bound`."""
+
+    var _name: String
+    var _help: String
+    var _default: Optional[BinaryLikeScalar[Self.T]]
+
+    def __init__(
+        out self,
+        var name: String,
+        var help: String = String(),
+        var default: Optional[BinaryLikeScalar[Self.T]] = None,
+    ):
+        self._name = name^
+        self._help = help^
+        self._default = default^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return _param[BinaryLikeScalar[Self.T]](
+            bindings, self._name, self._help, DynType(Self.T()), self._default
+        )
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return _param[BinaryLikeScalar[Self.T]](
+            bindings, self._name, self._help, DynType(Self.T()), self._default
+        ).value()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        return StringSlice(bound)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct FixedSizeBinaryColumn(ColumnBound, FixedSizeBinaryValue):
+    """A fixed-size binary column, resolved by name once per batch."""
+
+    comptime shape = Shape.columnar
+    comptime Bound = FixedSizeBinaryArray
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return schema.field(name=self._name).dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- FixedSizeBinaryValue -----------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_fixed_size_binary().copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct FixedSizeBinaryLiteral(ColumnBound, FixedSizeBinaryValue):
+    """A fixed-size binary constant, held as a scalar and broadcast when bound.
+    """
+
+    comptime shape = Shape.scalar
+    comptime Bound = FixedSizeBinaryArray
+
+    var _value: FixedSizeBinaryScalar
+
+    def __init__(out self, var value: FixedSizeBinaryScalar):
+        self._value = value^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._value.type()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._value.copy()
+
+    # -- FixedSizeBinaryValue -----------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._value.repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct FixedSizeBinaryParam(ColumnBound, FixedSizeBinaryValue):
+    """A late-bound fixed-size binary — `FixedSizeBinaryLiteral` whose value arrives later.
+    """
+
+    comptime shape = Shape.scalar
+    comptime Bound = FixedSizeBinaryArray
+
+    var _name: String
+    var _dtype: DynType
+    var _help: String
+    var _default: Optional[FixedSizeBinaryScalar]
+
+    def __init__(
+        out self,
+        var name: String,
+        var dtype: DynType,
+        var help: String = String(),
+        var default: Optional[FixedSizeBinaryScalar] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype^
+        self._help = help^
+        self._default = default^
+
+    def _scalar(self, bindings: Bindings) raises -> FixedSizeBinaryScalar:
+        return _param[FixedSizeBinaryScalar](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._scalar(bindings)
+
+    # -- FixedSizeBinaryValue -----------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._scalar(bindings).repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct FixedSizeListColumn(ColumnBound, FixedSizeListValue):
+    """A fixed-size list column, resolved by name once per batch."""
+
+    comptime shape = Shape.columnar
+    comptime Bound = FixedSizeListArray
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return schema.field(name=self._name).dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- FixedSizeListValue -------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_fixed_size_list().copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct FixedSizeListLiteral(ColumnBound, FixedSizeListValue):
+    """A fixed-size list constant, held as a scalar and broadcast when bound."""
+
+    comptime shape = Shape.scalar
+    comptime Bound = FixedSizeListArray
+
+    var _value: ListScalar
+
+    def __init__(out self, var value: ListScalar):
+        self._value = value^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._value.type()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._value.copy()
+
+    # -- FixedSizeListValue -------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._value.repeat(len(batch)).as_fixed_size_list().copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct FixedSizeListParam(ColumnBound, FixedSizeListValue):
+    """A late-bound fixed-size list — `FixedSizeListLiteral` whose value arrives later.
+    """
+
+    comptime shape = Shape.scalar
+    comptime Bound = FixedSizeListArray
+
+    var _name: String
+    var _dtype: DynType
+    var _help: String
+    var _default: Optional[ListScalar]
+
+    def __init__(
+        out self,
+        var name: String,
+        var dtype: DynType,
+        var help: String = String(),
+        var default: Optional[ListScalar] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype^
+        self._help = help^
+        self._default = default^
+
+    def _scalar(self, bindings: Bindings) raises -> ListScalar:
+        return _param[ListScalar](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._scalar(bindings)
+
+    # -- FixedSizeListValue -------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return (
+            self._scalar(bindings)
+            .repeat(len(batch))
+            .as_fixed_size_list()
+            .copy()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct StructColumn(ColumnBound, StructValue):
+    """A struct column, resolved by name once per batch."""
+
+    comptime shape = Shape.columnar
+    comptime Bound = StructArray
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return schema.field(name=self._name).dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- StructValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_struct().copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct StructLiteral(ColumnBound, StructValue):
+    """A struct constant, held as a scalar and broadcast when bound."""
+
+    comptime shape = Shape.scalar
+    comptime Bound = StructArray
+
+    var _value: StructScalar
+
+    def __init__(out self, var value: StructScalar):
+        self._value = value^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._value.type()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._value.copy()
+
+    # -- StructValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._value.repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct StructParam(ColumnBound, StructValue):
+    """A late-bound struct — `StructLiteral` whose value arrives later."""
+
+    comptime shape = Shape.scalar
+    comptime Bound = StructArray
+
+    var _name: String
+    var _dtype: DynType
+    var _help: String
+    var _default: Optional[StructScalar]
+
+    def __init__(
+        out self,
+        var name: String,
+        var dtype: DynType,
+        var help: String = String(),
+        var default: Optional[StructScalar] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype^
+        self._help = help^
+        self._default = default^
+
+    def _scalar(self, bindings: Bindings) raises -> StructScalar:
+        return _param[StructScalar](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._scalar(bindings)
+
+    # -- StructValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._scalar(bindings).repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct DictionaryColumn(ColumnBound, DictionaryValue):
+    """A dictionary-encoded column, resolved by name once per batch."""
+
+    comptime shape = Shape.columnar
+    comptime Bound = DictionaryArray
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return schema.field(name=self._name).dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- DictionaryValue ----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_dictionary().copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct DictionaryLiteral(ColumnBound, DictionaryValue):
+    """A dictionary-encoded constant, held as a scalar and broadcast when bound.
+    """
+
+    comptime shape = Shape.scalar
+    comptime Bound = DictionaryArray
+
+    var _value: DictionaryScalar
+
+    def __init__(out self, var value: DictionaryScalar):
+        self._value = value^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._value.type()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._value.copy()
+
+    # -- DictionaryValue ----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._value.repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct DictionaryParam(ColumnBound, DictionaryValue):
+    """A late-bound dictionary-encoded — `DictionaryLiteral` whose value arrives later.
+    """
+
+    comptime shape = Shape.scalar
+    comptime Bound = DictionaryArray
+
+    var _name: String
+    var _dtype: DynType
+    var _help: String
+    var _default: Optional[DictionaryScalar]
+
+    def __init__(
+        out self,
+        var name: String,
+        var dtype: DynType,
+        var help: String = String(),
+        var default: Optional[DictionaryScalar] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype^
+        self._help = help^
+        self._default = default^
+
+    def _scalar(self, bindings: Bindings) raises -> DictionaryScalar:
+        return _param[DictionaryScalar](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._scalar(bindings)
+
+    # -- DictionaryValue ----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._scalar(bindings).repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct NullColumn(ColumnBound, NullValue):
+    """A null-typed column, resolved by name once per batch."""
+
+    comptime shape = Shape.columnar
+    comptime Bound = NullArray
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return schema.field(name=self._name).dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- NullValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_null().copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct NullLiteral(ColumnBound, NullValue):
+    """A null-typed constant, held as a scalar and broadcast when bound."""
+
+    comptime shape = Shape.scalar
+    comptime Bound = NullArray
+
+    var _value: NullScalar
+
+    def __init__(out self, var value: NullScalar):
+        self._value = value^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._value.type()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._value.copy()
+
+    # -- NullValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._value.repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct NullParam(ColumnBound, NullValue):
+    """A late-bound null-typed — `NullLiteral` whose value arrives later."""
+
+    comptime shape = Shape.scalar
+    comptime Bound = NullArray
+
+    var _name: String
+    var _dtype: DynType
+    var _help: String
+    var _default: Optional[NullScalar]
+
+    def __init__(
+        out self,
+        var name: String,
+        var dtype: DynType,
+        var help: String = String(),
+        var default: Optional[NullScalar] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype^
+        self._help = help^
+        self._default = default^
+
+    def _scalar(self, bindings: Bindings) raises -> NullScalar:
+        return _param[NullScalar](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._scalar(bindings)
+
+    # -- NullValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self._scalar(bindings).repeat(len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+struct ListLiteral[T: ListLikeType](ColumnBound, ListValue):
+    """A list constant, held as a scalar and broadcast when bound.
+
+    `lit` checks the scalar's dtype against `T` when it builds one, which is
+    what makes the unchecked `as_type` in `bind` sound.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = ListLikeArray[Self.T]
+
+    var _value: ListScalar
+
+    def __init__(out self, var value: ListScalar):
+        self._value = value^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._value.type()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._value.copy()
+
+    # -- ListValue ----------------------------------------------------------
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> ListLikeArray[Self.Type]:
+        return (
+            self._value.repeat(len(batch))
+            .as_type[ListLikeArray[Self.T]]()
+            .copy()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct ListParam[T: ListLikeType](ColumnBound, ListValue):
+    """A late-bound list — `ListLiteral[T]` whose value arrives later."""
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = ListLikeArray[Self.T]
+
+    var _name: String
+    var _dtype: DynType
+    var _help: String
+    var _default: Optional[ListScalar]
+
+    def __init__(
+        out self,
+        var name: String,
+        var dtype: DynType,
+        var help: String = String(),
+        var default: Optional[ListScalar] = None,
+    ):
+        self._name = name^
+        self._dtype = dtype^
+        self._help = help^
+        self._default = default^
+
+    def _scalar(self, bindings: Bindings) raises -> ListScalar:
+        return _param[ListScalar](
+            bindings, self._name, self._help, self._dtype, self._default
+        )
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._dtype.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self._scalar(bindings)
+
+    # -- ListValue ----------------------------------------------------------
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> ListLikeArray[Self.Type]:
+        return (
+            self._scalar(bindings)
+            .repeat(len(batch))
+            .as_type[ListLikeArray[Self.T]]()
+            .copy()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")
+
+
+def _repeat_bytes[
+    T: BinaryLikeType
+](value: Span[UInt8, _], times: Int) raises -> BinaryLikeArray[T]:
+    """`times` copies of `value`, which need not be UTF-8.
+
+    A binary leaf holds `List[UInt8]` rather than a `BinaryScalar`, whose
+    `String` would promise UTF-8 the bytes do not keep, so it broadcasts them
+    itself."""
+    var builder = BinaryLikeBuilder[T](times, len(value) * times)
+    for _ in range(times):
+        builder.append(StringSlice(unsafe_from_utf8=value))
+    return builder.finish()
+
+
+struct BinaryColumn[T: BinaryLikeType](BinaryValue, ColumnBound):
+    """A `binary` or `large_binary` column, resolved by name once per batch."""
+
+    comptime Type = Self.T
+    comptime shape = Shape.columnar
+    comptime Bound = BinaryLikeArray[Self.T]
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
+
+    # -- BinaryValue --------------------------------------------------------
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> BinaryLikeArray[Self.Type]:
+        return batch.field(self._name).as_type[BinaryLikeArray[Self.T]]().copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct BinaryLiteral[T: BinaryLikeType](BinaryValue, ColumnBound, Unnamed):
+    """A binary constant.
+
+    **Evaluates to a column, not a scalar**, though its `shape` is
+    `Shape.scalar`: the bytes need not be UTF-8, so they are not handed to a
+    `BinaryScalar`, and `Datum.to_array` accepts a column of the batch's
+    length either way.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = BinaryLikeArray[Self.T]
+
+    var _value: List[UInt8]
+
+    def __init__(out self, var value: List[UInt8]):
+        self._value = value^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self.bind(batch, bindings).to_dyn()
+
+    # -- BinaryValue --------------------------------------------------------
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> BinaryLikeArray[Self.Type]:
+        return _repeat_bytes[Self.T](Span(self._value), len(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(<", len(self._value), " bytes>)")
+
+
+struct BinaryParam[T: BinaryLikeType](BinaryValue, ColumnBound):
+    """A late-bound binary value — `BinaryLiteral[T]` whose value arrives
+    later, bound as a `BinaryScalar` (or `LargeBinaryScalar`). Evaluates to a column
+    for the reason the literal does."""
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = BinaryLikeArray[Self.T]
+
+    var _name: String
+    var _help: String
+    var _default: Optional[List[UInt8]]
+
+    def __init__(
+        out self,
+        var name: String,
+        var help: String = String(),
+        var default: Optional[List[UInt8]] = None,
+    ):
+        self._name = name^
+        self._help = help^
+        self._default = default^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return self.bind(batch, bindings).to_dyn()
+
+    # -- BinaryValue --------------------------------------------------------
+
+    def bind(
+        self, batch: StructArray, bindings: Bindings
+    ) raises -> BinaryLikeArray[Self.Type]:
+        var got = _bound[BinaryLikeScalar[Self.T]](
+            bindings, self._name, DynType(Self.T())
+        )
+        if got:
+            return _repeat_bytes[Self.T](
+                got.value().to_string().as_bytes(), len(batch)
+            )
+        elif self._default:
+            return _repeat_bytes[Self.T](
+                Span(self._default.value()), len(batch)
+            )
+        else:
+            raise _unbound(self._name, self._help)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("param(", self._name, ")")
