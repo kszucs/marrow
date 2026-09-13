@@ -36,7 +36,7 @@ from ....kernels.groupby import Groups
 from ...logical import DynValue
 from ...physical import Morsel
 from ..aggregates import Count, Max, Mean, Min, Product, Sum
-from ..leaves import Column, Literal
+from ..leaves import NumericColumn, NumericLiteral
 from ..numeric import Mul
 from ..strings import Upper
 

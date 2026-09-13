@@ -26,7 +26,7 @@ from ...logical import DynValue
 from ...logical import DynRelation, Filter, InMemoryTable, Project
 from ..boolean import And
 from ..core import BoolValue, StringValue
-from ..leaves import Column, Literal, StringColumn, StringLiteral
+from ..leaves import NumericColumn, NumericLiteral, StringColumn, StringLiteral
 from ..numeric import Gt
 from ..strings import (
     EndsWith,

@@ -118,7 +118,7 @@ def test_query_cli_declares_help_for_every_argument() raises:
     for ref expected in wanted:
         assert_true(expected in text, "missing from --help: " + expected)
 
-    # The declarations are ordinary nodes: the plan sees `Param[T]`, not a
+    # The declarations are ordinary nodes: the plan sees `NumericParam[T]`, not a
     # CLI object.
     assert_equal(lo.name(), String("min-amount"))
     assert_equal(rate.name(), String("rate"))

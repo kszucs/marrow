@@ -1,6 +1,6 @@
 """The comptime lane: expressions whose structure is their type.
 
-`And[Gt[Column[Int64Type], Literal[Int64Type]], …]` is a type, not data. A whole
+`And[Gt[NumericColumn[Int64Type], NumericLiteral[Int64Type]], …]` is a type, not data. A whole
 subtree therefore compiles to one inlined SIMD loop with no dispatch anywhere
 inside it — worth a measured **3.4x** on binary size against the same plan built
 from runtime expressions (1.46 MB vs 4.91 MB), because the fused form
@@ -230,7 +230,7 @@ trait ComptimeValue(Evaluable, Value):
         value has no placement. Aggregates override this with a `FusedAggregateOperator`.
 
         `bindings` is handed to the operator, which passes it back down through
-        `evaluate` -> `bind`. A `Param` reads it there, which is also the only
+        `evaluate` -> `bind`. A `NumericParam` reads it there, which is also the only
         place it can reach a parameter nested inside a fused subtree: this call
         copies the node without descending into it.
         """
@@ -1635,10 +1635,10 @@ trait Unnamed(ComptimeValue):
     The conformance is the documentation. Before this trait a reader could only
     learn that `NumericBinary` and `StringCompare` agree by comparing their
     bodies; now the two say so in their conformance list, and a node that
-    genuinely has a name (`Column`, `Literal`) is visibly absent from it.
+    genuinely has a name (`NumericColumn`, `NumericLiteral`) is visibly absent from it.
 
-    A same-signature override of a trait default is ordinary -- `Column` and
-    `Literal` simply do not conform here rather than overriding. What is
+    A same-signature override of a trait default is ordinary -- `NumericColumn` and
+    `NumericLiteral` simply do not conform here rather than overriding. What is
     forbidden, and what this deliberately does not do, is a default whose
     *return type* a conformer must change: those become competing overloads and
     every call site reports `ambiguous call to 'name'`.
@@ -1660,7 +1660,7 @@ trait ColumnBound(ComptimeValue):
     Two quite different nodes land here, and it is worth being explicit that
     they are the same case:
 
-    - **A leaf** -- `Column`, `TemporalColumn`, `BoolColumn`, `StringColumn`,
+    - **A leaf** -- `NumericColumn`, `TemporalColumn`, `BoolColumn`, `StringColumn`,
       `ListColumn`. `bind` resolved the column out of the batch, and the column
       carries its own bitmap. No second lookup, no re-read.
     - **A node that computed its result in `bind`** -- `ListLength` and

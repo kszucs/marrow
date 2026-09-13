@@ -16,7 +16,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import col
 from ....dtypes import Float64Type, Int64Type, int64
-from ..leaves import Column
+from ..leaves import NumericColumn
 
 
 struct MiniSchema(Copyable, Movable):
@@ -57,14 +57,14 @@ struct Handle[s: MiniSchema](Copyable, Movable):
 
     def __getattr_param__[
         name: String
-    ](self) -> Column[
+    ](self) -> NumericColumn[
         Int64Type if Self.s.codes[Self.s.index_of(name)] == 0 else Float64Type
     ]:
         """Contracts 2-4, all in this signature.
 
         2. `__getattr_param__` fires for an attribute the struct does not have.
         3. The **return type depends on the parameter** — a conditional comptime
-           type that reduces at a return site *and* satisfies `Column`'s
+           type that reduces at a return site *and* satisfies `NumericColumn`'s
            `NumericType` bound. Both branches must always be well-formed;
            totality is what makes it reduce.
         4. `comptime assert` on `Self.s` turns an unknown column into a build
@@ -74,7 +74,7 @@ struct Handle[s: MiniSchema](Copyable, Movable):
         comptime T = Int64Type if Self.s.codes[
             Self.s.index_of(name)
         ] == 0 else Float64Type
-        return Column[T](name)
+        return NumericColumn[T](name)
 
 
 def test_handle_resolves_an_attribute_to_a_column() raises:
@@ -95,7 +95,7 @@ def test_handle_infers_each_column_dtype_from_the_schema() raises:
 
 
 def test_handle_column_is_a_normal_fused_leaf() raises:
-    """The inferred type is a real `Column[T]`, not something merely shaped like
+    """The inferred type is a real `NumericColumn[T]`, not something merely shaped like
     one — it reports the shape the fusion driver keys off."""
     var t = Handle[SCHEMA]()
     assert_true(type_of(t.a).shape == type_of(col("a", int64)).shape)

@@ -30,7 +30,7 @@ def _batch() raises -> RecordBatch:
 
 
 def test_col_with_dtype_takes_the_comptime_lane() raises:
-    """A dtype in hand fuses: the result is a `Column[T]`, not erased."""
+    """A dtype in hand fuses: the result is a `NumericColumn[T]`, not erased."""
     var c = col("a", int64)
     assert_equal(c.name(), "a")
     assert_true(c.shape == Shape.columnar)

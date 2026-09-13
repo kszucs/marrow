@@ -20,7 +20,7 @@ from ...dtypes import DynType, Int64Type, int64
 from ...scalars import DynScalar
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue, Shape, Value
-from ..`comptime`.leaves import Column, Literal
+from ..`comptime`.leaves import NumericColumn, NumericLiteral
 from ..runtime.values import RuntimeValue, column
 
 

@@ -15,7 +15,7 @@ package on 2026-08-29, so the two now differ only in that one projects
 `col("name", string)` where this projects `col("b", int64)`.
 
 **Keep it numeric.** The docstring here used to claim a fused string column
-"cannot be spelled" because the comptime `Column[T]` is bound on `NumericType`.
+"cannot be spelled" because the comptime `NumericColumn[T]` is bound on `NumericType`.
 That is false: `StringColumn[T]` is a separate leaf and `col(name, string)`
 returns one. What is true is that this gate's recorded baseline was measured
 against the all-numeric program, so changing it to a string column would

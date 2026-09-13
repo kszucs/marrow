@@ -56,7 +56,7 @@ Four calls carry the whole surface:
 - **`cli.param(name, dtype, default=..., help=...)`** — a late-bound scalar.
   It returns the plan node *and* declares the option, which is the point:
   one line produces `--min-amount`, its `--help` entry, the string-to-`int64`
-  coercion and the `Param[Int64Type]` the predicate is built from, so the
+  coercion and the `NumericParam[Int64Type]` the predicate is built from, so the
   parser and the plan cannot drift apart. Required unless it has a `default`.
 - **`cli.argument(name, help=...)`** — a positional, read back with
   `cli.get(name)`. Paths are the usual case.
@@ -209,10 +209,10 @@ compile error — `marrow/schema.mojo`'s `field(name=...)` raises
 surface.** `marrow/expr/comptime/tests/test_schema_handle.mojo` pins the four
 compiler contracts it needs — a struct with heap-allocated fields *is* a valid
 comptime parameter, `__getattr_param__` fires for a missing attribute, its
-return type may depend on the attribute name and still satisfy `Column`'s
+return type may depend on the attribute name and still satisfy `NumericColumn`'s
 `NumericType` bound, and `comptime assert` turns an unknown name into a build
 failure carrying its own message. With a schema as a comptime parameter,
-`t.amount` resolves to `Column[Float64Type]` and `t.amont` fails the build with
+`t.amount` resolves to `NumericColumn[Float64Type]` and `t.amont` fails the build with
 `constraint failed: unknown column: amont`.
 
 What does not exist yet is the production side of it: the handle and the
@@ -333,8 +333,8 @@ link against. It may be possible on Linux; that is untested here.
 ## Why this is small
 
 The point of the AOT lane is that the binary contains little beyond the query.
-`col("amount", int64)` is a `Column[Int64Type]`, so the predicate's structure
-lives in its type and fuses into one SIMD loop; no interpreter is reachable, and
+`col("amount", int64)` is a `NumericColumn[Int64Type]`, so the predicate's
+structure lives in its type and fuses into one SIMD loop; no interpreter is reachable, and
 the kernels the query does not name are never linked. Anything that scans
 Parquet does also link the storage layer, including about 50 KB for the OpenDAL
 backend.

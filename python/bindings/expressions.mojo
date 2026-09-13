@@ -4,8 +4,8 @@ Exposes `marrow.expr.runtime.values.RuntimeValue` as the Python type ``Expr``
 and `marrow.expr.runtime.aggregates.RuntimeAggregate` as ``Agg``.
 
 **Only the runtime lane is bindable.** A comptime node's operands are bound on
-a family trait and its output dtype is a comptime type, so `Column[Int64Type]`
-and `Column[Float64Type]` are different Mojo types and there is no single one a
+a family trait and its output dtype is a comptime type, so `NumericColumn[Int64Type]`
+and `NumericColumn[Float64Type]` are different Mojo types and there is no single one a
 Python object could hold. That is not a gap in the bindings — it is the lane's
 defining property, and the reason `marrow/expr/runtime/` exists.
 

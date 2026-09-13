@@ -1082,7 +1082,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
         `dispatch_numeric`/`dispatch_primitive`, so a family check could only
         fire after a different caller had already resolved wrong. It used to be
         written out anyway, and in the comptime lane it could not fire at all —
-        `Column[T].dtype` ignores the schema and answers `DynType(Self.T())`,
+        `NumericColumn[T].dtype` ignores the schema and answers `DynType(Self.T())`,
         so the dtype being validated was manufactured from `V` two frames
         earlier. The AOT binary still linked both arms and their format
         strings.

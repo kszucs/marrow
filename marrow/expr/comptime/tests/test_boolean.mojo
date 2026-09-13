@@ -17,7 +17,7 @@ from ....tabular import RecordBatch, record_batch
 from ..core import ComptimeValue
 from ..boolean import And, IsIn, Not, Or, Xor
 
-from ..leaves import BoolColumn, Column, Literal
+from ..leaves import BoolColumn, NumericColumn, NumericLiteral
 from ..numeric import Gt, Lt
 
 

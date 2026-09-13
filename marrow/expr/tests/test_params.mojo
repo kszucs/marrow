@@ -1,7 +1,7 @@
 """Late-bound parameters.
 
 A parameter is a literal whose value arrives later, so these cases check the
-two things that distinguish it from `Literal`: that binding reaches every use
+two things that distinguish it from `NumericLiteral`: that binding reaches every use
 site — including one nested inside a fused subtree — and that the value
 belongs to an execution rather than to the plan.
 """
@@ -15,7 +15,7 @@ from ...tabular import record_batch
 from ..builders import col, param, table
 from ..bindings import Bindings
 from ..logical import DynRelation, DynValue, InMemoryTable
-from ..`comptime`.leaves import Column
+from ..`comptime`.leaves import NumericColumn
 from ..`comptime`.boolean import Not
 from ..`comptime`.numeric import Gt
 

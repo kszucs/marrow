@@ -3,7 +3,7 @@
 Two lanes that share no node types, meeting at `DynValue`:
 
 - the **comptime** lane, where a subtree's structure lives in its *type* and
-  fuses into one SIMD loop — `col("a", int64)` gives a `Column[Int64Type]`;
+  fuses into one SIMD loop — `col("a", int64)` gives a `NumericColumn[Int64Type]`;
 - the **runtime** lane, where structure lives in fields and each node
   materialises a column — `col("a")` gives a `RuntimeValue`.
 
@@ -94,10 +94,10 @@ from .`comptime`.core import (
 from .`comptime`.nested import ArrayContains, ListLength
 from .`comptime`.leaves import (
     BoolColumn,
-    Column,
+    NumericColumn,
     ListColumn,
-    Literal,
-    Param,
+    NumericLiteral,
+    NumericParam,
     StringColumn,
     StringLiteral,
     TemporalColumn,

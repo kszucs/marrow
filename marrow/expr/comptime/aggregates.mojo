@@ -12,7 +12,7 @@ first, because none has comptime types.
 
 **The three executors live here too.** `ScatteredAggregateOperator`,
 `RegisterAggregateOperator` and `BufferedAggregateOperator` are what the nodes
-below become, and they sit beside them for the same reason `Column` sits beside
+below become, and they sit beside them for the same reason `NumericColumn` sits beside
 its own `bind`/`lane`: this lane is organised by **family**, not by
 logical-versus-physical. That split is real one level up (`logical.mojo` /
 `physical.mojo`); inside a lane the distinction that matters is lane-agnostic

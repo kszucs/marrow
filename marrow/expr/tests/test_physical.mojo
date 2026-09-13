@@ -32,7 +32,7 @@ from ..physical import (
     Morsel,
     Pipeline,
 )
-from ..`comptime`.leaves import Column, Literal
+from ..`comptime`.leaves import NumericColumn, NumericLiteral
 from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
 from ..builders import col, lit, table

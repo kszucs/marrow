@@ -511,8 +511,8 @@ share no node types**:
   `boolean.mojo`, `strings.mojo`, `temporal.mojo`, `nested.mojo`, `casts.mojo`,
   `aggregates.mojo`, `rules.mojo`) — every node's operands are bound on a family
   trait (`L: NumericValue`), its output dtype is a comptime type, and a subtree
-  fuses into one SIMD loop. Nothing is erased. `Column[T]`, `Literal[T]`,
-  `Param[T]`, `Aggregate[Agg, A]`.
+  fuses into one SIMD loop. Nothing is erased. `NumericColumn[T]`, `NumericLiteral[T]`,
+  `NumericParam[T]`, `Aggregate[Agg, A]`.
 - **The runtime lane** (`runtime/values.mojo`, `runtime/aggregates.mojo`) —
   `RuntimeValue` is one struct holding a tag, its children behind `ArcPointer`,
   and an optional payload; `RuntimeAggregate` is an aggregate named at run time
@@ -521,13 +521,13 @@ share no node types**:
 - **`builders.mojo`** — `col`, `lit`, `if_else`, `is_in`, `minimum`, `maximum`,
   `array_length`, `array_contains`, `param`, `count_star`, `table()`, `scan()`:
   the one surface spanning both lanes. `col("a", int64)` gives a comptime
-  `Column[Int64Type]`, `col("a")` a `RuntimeValue`. **A verb with a counterpart
+  `NumericColumn[Int64Type]`, `col("a")` a `RuntimeValue`. **A verb with a counterpart
   in both lanes carries one overload per lane**, and both must stay in this
   file: a split overload set shadows rather than overloads, so which one a call
   site got would depend on its imports. Not every verb is two-lane — `param` and
   `count_star` are comptime-only by nature, and `if_else` is comptime-only by
   omission, its runtime twin sitting unexposed at `runtime/values.mojo`.
-- **`bindings.mojo`** — `Bindings`, the values for one execution. `Param[T]` is a
+- **`bindings.mojo`** — `Bindings`, the values for one execution. `NumericParam[T]` is a
   comptime-lane leaf and lives in `comptime/leaves.mojo`; sharing a file forced
   the alias to drag in `logical.Shape`, which imports it back. A parameter's
   value is carried *through* an execution rather than substituted into a copy of

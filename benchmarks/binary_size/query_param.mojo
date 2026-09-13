@@ -6,7 +6,7 @@ projection, same Parquet leaf. The differences are the late-bound values:
     scan(args.get("src"), sch)                      # path, from argv
     Gt(col("a", int64), param("min-a", int64))      # predicate, from argv
 
-so the binary links the `Param[Int64Type]` node, the `Bindings` map the value
+so the binary links the `NumericParam[Int64Type]` node, the `Bindings` map the value
 travels in, and `marrow.utils.argparse` — the parser, the `--help` renderer and
 the string-to-scalar conversion at the boundary. The delta against
 `query_scan` is what "this value arrives at run time" costs an AOT query.
@@ -42,7 +42,7 @@ What survived, and is measured here: argv parsing and `--help`, now through
 `marrow/utils/argparse.mojo` — the leaf module `parse_params`/`render_usage`
 were extracted into — plus the parameter node itself.
 
-**The path is no longer a `param`.** `param()` is `Param[T: NumericType]`;
+**The path is no longer a `param`.** `param()` is `NumericParam[T: NumericType]`;
 there is no `StringParam` and `ParquetScan` takes a plain `String`, so the path
 is late-bound through the parser instead of through the plan. `Bindings` is a
 `Dict[String, DynScalar]` passed to `execute`, so the plan itself stays

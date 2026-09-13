@@ -84,7 +84,7 @@ from ..physical import Datum
 
 from .rules import widest_shape
 from .core import BoolValue, ColumnBound, NumericValue, StringValue, Unnamed
-from .leaves import Literal, StringLiteral
+from .leaves import NumericLiteral, StringLiteral
 
 
 struct StringCompare[K: StringPredicateKernel, L: StringValue, R: StringValue](
@@ -378,7 +378,7 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
 # instantiates nothing new, and `comptime if` keeps their `bind` off every
 # path. `String()` and `0` are never read.
 comptime UnusedText = StringLiteral[StringType]
-comptime UnusedNumber = Literal[Int64Type]
+comptime UnusedNumber = NumericLiteral[Int64Type]
 
 
 struct StringFunction[

@@ -13,7 +13,7 @@ leaf kinds it could encounter as a comptime parameter:
 parameter every arm is reachable and every `LeafBuilder` is linked: a two-type
 schema still pays for bool, binary, all eleven numeric widths, the temporal
 types and all four decimals. Pinning the set is the same move the fused lane
-already makes for expressions — `col("a", int64)` is a `Column[Int64Type]`, so
+already makes for expressions — `col("a", int64)` is a `NumericColumn[Int64Type]`, so
 the dtype is a comptime parameter and the kernels fold away branches they
 cannot reach; `leaf_of[T]()` applies it to the decode ladder. The delta against
 `query_scan` was what the unused half of that ladder costs, with everything

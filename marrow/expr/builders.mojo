@@ -24,12 +24,12 @@ from .`comptime`.core import BoolValue, ComptimeValue, ListValue, NumericValue
 from .`comptime`.nested import ArrayContains, ListLength
 from .`comptime`.leaves import (
     BoolColumn,
-    Column,
+    NumericColumn,
     ListColumn,
-    Param,
+    NumericParam,
     TemporalColumn,
     TemporalLiteral,
-    Literal,
+    NumericLiteral,
     StringColumn,
     StringLiteral,
 )
@@ -74,14 +74,14 @@ from ..tabular import RecordBatch
 # ---------------------------------------------------------------------------
 # col — a column reference
 # ---------------------------------------------------------------------------
-def col[T: NumericType](var name: String, dtype: T) -> Column[T]:
+def col[T: NumericType](var name: String, dtype: T) -> NumericColumn[T]:
     """A typed column read, fused into whatever it is combined with.
 
     `dtype` is a *value* parameter whose type carries the information — the
     caller writes `col("a", int64)`, and `T` is deduced. It is never read at
-    run time; `Column[T].Type` answers from `T`.
+    run time; `NumericColumn[T].Type` answers from `T`.
     """
-    return Column[T](name^)
+    return NumericColumn[T](name^)
 
 
 def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
@@ -110,7 +110,7 @@ def col(var name: String, dtype: BoolType) -> BoolColumn:
     """A boolean column, fused like its numeric and string siblings.
 
     Its own overload because booleans are **bit-packed**: `BoolColumn`'s lane
-    loads through a `BitmapView` rather than a typed buffer, and `Column[T]` is
+    loads through a `BitmapView` rather than a typed buffer, and `NumericColumn[T]` is
     bound on `NumericType` and cannot take `BoolType` — the same reason
     `PrimitiveArray[bool_]` exists nowhere in the tree.
 
@@ -141,7 +141,7 @@ def col(var name: String) -> RuntimeValue:
 # ---------------------------------------------------------------------------
 # lit — a constant
 # ---------------------------------------------------------------------------
-def lit[T: NumericType](value: Int, dtype: T) -> Literal[T]:
+def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
     """A typed constant. Stays `Shape.scalar`, so it never materialises unless
     something asks it to.
 
@@ -152,12 +152,12 @@ def lit[T: NumericType](value: Int, dtype: T) -> Literal[T]:
     second. the previous expression package reached the same two overloads by
     the same route.
     """
-    return Literal[T](Scalar[T.native](value))
+    return NumericLiteral[T](Scalar[T.native](value))
 
 
-def lit[T: FloatingType](value: Float64, dtype: T) -> Literal[T]:
+def lit[T: FloatingType](value: Float64, dtype: T) -> NumericLiteral[T]:
     """The floating counterpart, for the literals `Int` cannot spell."""
-    return Literal[T](Scalar[T.native](value))
+    return NumericLiteral[T](Scalar[T.native](value))
 
 
 def lit(var value: DynScalar) -> RuntimeValue:
@@ -328,7 +328,7 @@ def param[
     dtype: T,
     var help: String = String(),
     var default: Optional[Scalar[T.native]] = None,
-) -> Param[T]:
+) -> NumericParam[T]:
     """Declare a late-bound scalar.
 
     **Declare once and reuse it.** Copies share the cell, so binding once is
@@ -343,7 +343,7 @@ def param[
     package needs all three
     because it declares parameters inline at each use site.
     """
-    return Param[T](name^, help^, default^)
+    return NumericParam[T](name^, help^, default^)
 
 
 def table(var batch: RecordBatch) raises -> DynRelation:
@@ -367,7 +367,9 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     return DynRelation(ParquetScan(path^, schema^))
 
 
-def count_star() -> Aggregate[Fold[CountFold, Int64Type], Literal[Int64Type]]:
+def count_star() -> (
+    Aggregate[Fold[CountFold, Int64Type], NumericLiteral[Int64Type]]
+):
     """`COUNT(*)` — how many rows each group has.
 
     Not the same aggregate as `col("x", int64).count()`, which counts the

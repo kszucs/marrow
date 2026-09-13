@@ -18,7 +18,7 @@ from ....tabular import RecordBatch, record_batch
 from ....scalars import DynScalar
 from ...logical import DynValue, Shape
 from ...physical import Evaluable, Morsel
-from ..leaves import Column, Literal
+from ..leaves import NumericColumn, NumericLiteral
 from ..numeric import Add, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub
 
 

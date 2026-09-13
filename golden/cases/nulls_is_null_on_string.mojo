@@ -8,7 +8,7 @@ def plan() raises -> DynRelation:
     `IS NULL` over a *string* column. `nulls_is_null` asks it of an int64 one,
     and the two are different instantiations: `NullPredicate` reads its
     operand's validity, and a `StringColumn`'s bound is a `BinaryLikeArray`
-    where a `Column[T]`'s is a `PrimitiveArray[T]`.
+    where a `NumericColumn[T]`'s is a `PrimitiveArray[T]`.
 
     -- expected
     k:string	v:int64	w:int64

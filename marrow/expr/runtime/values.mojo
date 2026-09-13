@@ -547,7 +547,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         compute, not in how they are turned into something that runs.
 
         `bindings` is carried for symmetry and reaches nothing: this lane has
-        no `Param` node, and a `RuntimeValue`'s children are `RuntimeValue`s.
+        no `NumericParam` node, and a `RuntimeValue`'s children are `RuntimeValue`s.
         """
         return EvalOperator[Self](self.copy(), bindings.copy())
 

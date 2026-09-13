@@ -10,7 +10,7 @@ def plan() raises -> DynRelation:
     so that the *scale* is asserted and not just the value: `7.00` and `7.0`
     are the same number and different answers.
 
-    marrow has `Decimal128Array` and the decimal dtypes, but `Column[T]` binds
+    marrow has `Decimal128Array` and the decimal dtypes, but `NumericColumn[T]` binds
     `T: NumericType`, which decimal is not, so no decimal column can enter an
     expression.
 

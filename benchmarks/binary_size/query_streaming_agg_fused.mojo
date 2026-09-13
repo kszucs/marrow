@@ -3,7 +3,7 @@
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name` — the same query as
 `query_streaming_agg.mojo`, but every value is comptime: the key is a
 `StringColumn[StringType]`, and `col("a", int64).sum()` resolves to
-`Aggregate[Fold[SumFold, Int64Type], Column[Int64Type]]`. Kernel *and* input
+`Aggregate[Fold[SumFold, Int64Type], NumericColumn[Int64Type]]`. Kernel *and* input
 dtype are known at compile time, so the plan holds a direct
 `AggState[SumFold, Int64Type]` / `AggState[MinFold, Int64Type]`.
 

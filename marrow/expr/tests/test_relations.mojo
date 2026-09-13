@@ -25,7 +25,7 @@ from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue
 from ..physical import Datum
-from ..`comptime`.leaves import Column, Literal
+from ..`comptime`.leaves import NumericColumn, NumericLiteral
 from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
 from ..builders import col, lit, scan, table
@@ -781,12 +781,12 @@ def test_filter_above_limit_with_offset_reads_the_limited_rows() raises:
         )
     )
     # Sorted: 1 2 3 4 5 7 9. Skip 2, keep 4 -> 3 4 5 7. Then keep > 4 -> 5 7.
-    var limited = t.sort_by([DynValue(Column[Int64Type]("v"))], [True]).limit(
-        4, offset=2
-    )
+    var limited = t.sort_by(
+        [DynValue(NumericColumn[Int64Type]("v"))], [True]
+    ).limit(4, offset=2)
 
     var fused = limited.filter(
-        Gt(Column[Int64Type]("v"), Literal[Int64Type](Int64(4)))
+        Gt(NumericColumn[Int64Type]("v"), NumericLiteral[Int64Type](Int64(4)))
     )
     var got = fused.execute()
     assert_equal(got.num_rows(), 2)

@@ -9,7 +9,7 @@ themselves; it is true now.
 """
 
 
-from .leaves import Column, Literal
+from .leaves import NumericColumn, NumericLiteral
 from .numeric import (
     Add,
     Gt,

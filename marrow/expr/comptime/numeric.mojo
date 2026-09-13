@@ -1,8 +1,8 @@
 """Fused numeric operators: nodes built from other numeric nodes.
 
 Each is generic over its operands' *types*, so the whole subtree is one type
-and the driver inlines it into one loop. `Add[Column[Int64Type],
-Literal[Int64Type]]` names its kernel, its operand types and its output type at
+and the driver inlines it into one loop. `Add[NumericColumn[Int64Type],
+NumericLiteral[Int64Type]]` names its kernel, its operand types and its output type at
 compile time; nothing is looked up when it runs.
 
 The kernel is a parameter rather than a field for the same reason `_eval` is a
@@ -709,7 +709,7 @@ struct TemporalCompare[
       narrow-bounded aliases supplying `A`, keeps every bound and compiles, but
       `A` appears nowhere in `__init__` and so cannot be inferred: `Gt(col(...),
       lit(...))` fails with *value passed to 'l' cannot be converted from
-      'Column[...]' to 'GtKernel'*. Only the explicit `Gt[L, R](...)` spelling
+      'NumericColumn[...]' to 'GtKernel'*. Only the explicit `Gt[L, R](...)` spelling
       survives, and every call site uses the inferred one.
 
     So what separates the two nodes is the operand *bounds*, not the bodies:

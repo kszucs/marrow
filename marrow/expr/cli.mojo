@@ -25,8 +25,8 @@ def main() raises:
         cli.run(plan^)
 ```
 
-`cli.param(...)` is the whole trick. It returns an ordinary `Param[T]` — the
-same node `param()` builds, usable anywhere a `Literal[T]` is — *and* records
+`cli.param(...)` is the whole trick. It returns an ordinary `NumericParam[T]` — the
+same node `param()` builds, usable anywhere a `NumericLiteral[T]` is — *and* records
 the declaration, so one line produces the plan node, the `--min-amount` option,
 its `--help` entry and the string-to-scalar coercion that binds it. The old
 layer made the author write the declaration twice, once for the parser and once
@@ -81,7 +81,7 @@ from ..ipc import RecordBatchFileWriter
 from ..parquet.writer import write_table
 from .bindings import Bindings
 from .logical import DynRelation
-from .`comptime`.leaves import Param
+from .`comptime`.leaves import NumericParam
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +335,7 @@ struct QueryCli(Movable):
         var default: Optional[Scalar[T.native]] = None,
         var help: String = String(),
         var metavar: String = String(),
-    ) raises -> Param[T]:
+    ) raises -> NumericParam[T]:
         """Declare `--name VALUE` **and** return the plan node it binds.
 
         Required unless it has a `default`. The default lives on the returned
@@ -354,7 +354,7 @@ struct QueryCli(Movable):
             required=not default,
         )
         self._params.append(_ParamDecl(name.copy(), _coerce_param[T]))
-        return Param[T](name^, help^, default^)
+        return NumericParam[T](name^, help^, default^)
 
     def argument(
         mut self, var name: String, *, var help: String = String()
@@ -475,7 +475,7 @@ struct QueryCli(Movable):
         plan itself rather than through `run()`.
 
         Only options argv actually mentioned appear. An omitted one is not an
-        empty binding — it is absent, so `Param.bind` falls back to the node's
+        empty binding — it is absent, so `NumericParam.bind` falls back to the node's
         own default or raises naming itself.
         """
         self._require_parsed()

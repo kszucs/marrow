@@ -687,7 +687,7 @@ a categorical improvement for a small amount of code.
   `MapValues`/`MapLength`, and `StructField` — and struct is genuinely thin
   there too (`structs.py` defines exactly two nodes), so `StructField` alone
   closes most of the struct gap.
-- **Decimal:** `Column[T]` binds `T: NumericType` and `DecimalType` is a separate
+- **Decimal:** `NumericColumn[T]` binds `T: NumericType` and `DecimalType` is a separate
   trait (`marrow/dtypes.mojo:160`), so **no decimal column can enter an
   expression at all**, despite `Decimal128Array`, all four decimal widths and
   every decimal cast kernel existing. Decimal arithmetic was never written. For a library aimed at analytics, "cannot compute on a
@@ -755,7 +755,7 @@ Where marrow could be better than anything that exists.
 **What it is.** In the comptime lane a node's operands are bound on a family
 trait, its output dtype is a comptime type, and a whole subtree fuses into one
 SIMD loop with nothing erased. `col("a", int64).sum()` resolves to
-`Aggregate[Fold[SumFold, Int64Type], Column[Int64Type]]`, so the plan holds a
+`Aggregate[Fold[SumFold, Int64Type], NumericColumn[Int64Type]]`, so the plan holds a
 direct `AggState[SumFold, Int64Type]` and no per-dtype resolution ladder is
 reachable in the binary at all.
 
@@ -785,8 +785,8 @@ ladder and, through it, `marrow.kernels.cast` — 693 cast symbols in
 `marrow/expr/comptime/tests/test_schema_handle.mojo` pins four compiler
 contracts and proves that a schema can be a comptime parameter and that
 `__getattr_param__` can return a *conditional* type carrying its trait bound.
-So `t.amount` resolves to `Column[Float64Type]`, `t.qty` to
-`Column[Int64Type]`, and `t.amont` is a compile error reading `constraint
+So `t.amount` resolves to `NumericColumn[Float64Type]`, `t.qty` to
+`NumericColumn[Int64Type]`, and `t.amont` is a compile error reading `constraint
 failed: unknown column: amont`. None of them can do it at build time, because
 none of them has a compile step to do it in.
 

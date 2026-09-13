@@ -40,7 +40,7 @@ from .core import (
 )
 
 
-struct Column[T: NumericType](ColumnBound, NumericValue):
+struct NumericColumn[T: NumericType](ColumnBound, NumericValue):
     """A numeric column, resolved by name once per batch."""
 
     comptime Type = Self.T
@@ -116,7 +116,7 @@ struct Column[T: NumericType](ColumnBound, NumericValue):
 struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
     """A date/time/timestamp/duration column, resolved by name once per batch.
 
-    **Byte-for-byte the same lane as `Column[T]`** — temporal dtypes are
+    **Byte-for-byte the same lane as `NumericColumn[T]`** — temporal dtypes are
     fixed-width signed integers underneath, so `bind` and `lane[W]` are
     identical. It is a separate struct only because Mojo has no conditional
     conformance: one leaf cannot be a `NumericValue` when `T` is `int64` and a
@@ -159,7 +159,7 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
     def dtype(self, schema: Schema) raises -> DynType:
         """Read from the schema, not built from `Self.T()`.
 
-        The one place this leaf genuinely differs from `Column[T]`: a numeric
+        The one place this leaf genuinely differs from `NumericColumn[T]`: a numeric
         dtype is `Defaultable` and can answer from its type, a temporal one
         cannot.
 
@@ -189,7 +189,7 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
         writer.write("col(", self._name, ")")
 
 
-struct Literal[T: NumericType](NumericValue):
+struct NumericLiteral[T: NumericType](NumericValue):
     """A numeric constant, splatted into every lane."""
 
     comptime Type = Self.T
@@ -319,9 +319,9 @@ struct TemporalLiteral[T: TemporalType](TemporalValue, Unnamed):
 struct BoolColumn(BoolValue, ColumnBound):
     """A boolean column, resolved by name once per batch.
 
-    Separate from `Column[T]` because booleans are **bit-packed**: the `Bound`
+    Separate from `NumericColumn[T]` because booleans are **bit-packed**: the `Bound`
     is a `BoolArray` and the lane loads through `values()`, the offset-applied
-    `BitmapView`, rather than through a typed buffer. `Column[T]` is bound on
+    `BitmapView`, rather than through a typed buffer. `NumericColumn[T]` is bound on
     `NumericType` and cannot take `BoolType` — the same reason `PrimitiveArray[bool_]`
     is not a thing anywhere in the tree.
 
@@ -355,7 +355,7 @@ struct BoolColumn(BoolValue, ColumnBound):
     # -- Evaluable ----------------------------------------------------------
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        # As with `Column[T]`: hand back the column rather than re-packing an
+        # As with `NumericColumn[T]`: hand back the column rather than re-packing an
         # identical bitmap through the fused driver.
         return batch.field(self._name).copy()
 
@@ -534,7 +534,7 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
 # ---------------------------------------------------------------------------
 # A parameter is **a literal whose value arrives later**: it has a dtype and a
 # shape when the plan is built, and a value only once something binds it. That is
-# why `Param` mirrors `Literal` — same families, same `Shape.scalar`, same
+# why `NumericParam` mirrors `NumericLiteral` — same families, same `Shape.scalar`, same
 # per-family split — rather than being a category of its own.
 #
 # **A parameter is a description; its value belongs to an execution.** The node
@@ -585,8 +585,8 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
 # parameter, so it can.
 
 
-struct Param[T: NumericType](NumericValue):
-    """A late-bound numeric scalar — `Literal[T]` whose value arrives later.
+struct NumericParam[T: NumericType](NumericValue):
+    """A late-bound numeric scalar — `NumericLiteral[T]` whose value arrives later.
 
     Immutable. It knows its name, dtype, help and default; the *value* arrives
     through `Bindings`, which the operator carries and hands back down to
@@ -656,7 +656,7 @@ struct Param[T: NumericType](NumericValue):
         self, index: Index, bindings: Bindings, upper: Bool
     ) raises -> PrimitiveArray[Stat]:
         """One value for the whole execution, so both extremes are it — the
-        answer `Literal` gives, read from `bindings` rather than off the node.
+        answer `NumericLiteral` gives, read from `bindings` rather than off the node.
 
         This is what makes the AOT lane prune at all: its plans are written
         `col("amount", int64) >= param("min-amount")`, and a parameter that

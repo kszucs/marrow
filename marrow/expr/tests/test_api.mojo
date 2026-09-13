@@ -37,7 +37,7 @@ from ..builders import array_length, col, if_else, lit, table
 from ..runtime.values import case_when, coalesce, column, literal
 from ...scalars import DynScalar, Int64Scalar
 from ..logical import DynRelation, DynValue, InMemoryTable
-from ..`comptime`.leaves import Column, Literal
+from ..`comptime`.leaves import NumericColumn, NumericLiteral
 from ..`comptime`.numeric import Add, Gt, Lt, TemporalGt, TemporalLt
 
 

@@ -10,7 +10,7 @@ Compiled it is a standalone `SELECT` over a Parquet file with `--help`,
     ./orders orders.parquet --format csv | head
 
 Every expression here is comptime — `col("amount", int64)` is a
-`Column[Int64Type]`, the predicate fuses into one SIMD loop — so the gate's job
+`NumericColumn[Int64Type]`, the predicate fuses into one SIMD loop — so the gate's job
 is to show that wrapping a plan in a command-line surface does **not** drag the
 runtime interpreter in behind it. `marrow::expr::runtime` must link 0 symbols:
 

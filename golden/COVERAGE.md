@@ -229,7 +229,7 @@ a sum, an element, an unnested column — because the expectation block cannot
 render a list, struct or map.
 
 **Decimals** (3) — `decimal_sum_keeps_scale`, `decimal_multiply_widens_scale`,
-`decimal_division_rounds`. `Column[T]` binds `T: NumericType` and decimal is
+`decimal_division_rounds`. `NumericColumn[T]` binds `T: NumericType` and decimal is
 not one, so no decimal column can enter an expression at all, though
 `Decimal128Array` and the dtypes exist. All three render the result as
 **text** so that the scale is asserted and not merely the value: `7.00` and

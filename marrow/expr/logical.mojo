@@ -324,7 +324,7 @@ trait Value(Copyable, Deinitable, Writable):
 
         `grouped` picks a fold's placement and is ignored by everything else.
         `bindings` supplies this execution's parameter values — the operator
-        carries them and hands them back down to `bind`, where a `Param` reads
+        carries them and hands them back down to `bind`, where a `NumericParam` reads
         them. That is why a plan holds no parameter state and two executions
         of it cannot interfere.
         """
@@ -1140,7 +1140,7 @@ struct DynRelation(Copyable, Movable, Writable):
 
         Sugar over `project`: the values are runtime column reads, so this
         needs no dtype from the caller. That is the runtime lane earning its
-        keep — a fused `Column[T]` would force `select` to be generic over
+        keep — a fused `NumericColumn[T]` would force `select` to be generic over
         every column's type.
         """
         var values = List[DynValue](capacity=len(names))
@@ -1183,7 +1183,7 @@ struct DynRelation(Copyable, Movable, Writable):
 
         Sugar over `project`, like `select` — the surviving columns are runtime
         column reads, so no caller has to supply their dtypes. That is the same
-        reason `select` is not generic: a fused `Column[T]` would make this
+        reason `select` is not generic: a fused `NumericColumn[T]` would make this
         method parametric over every column in the input.
         """
         if len(names) != len(values):

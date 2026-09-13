@@ -1,10 +1,10 @@
 """Parameter values for one execution.
 
 Split out of `params.mojo`, which held two unrelated things: this alias, which
-depends on nothing in the package, and `Param[T]`, a comptime-lane leaf node.
+depends on nothing in the package, and `NumericParam[T]`, a comptime-lane leaf node.
 Sharing a file forced the alias to drag in `logical.Shape`, which imports it
 back -- one of the package's dependency cycles existed only because of the
-pairing. `Param` now lives beside the other comptime leaves; this is a genuine
+pairing. `NumericParam` now lives beside the other comptime leaves; this is a genuine
 leaf module.
 """
 
@@ -27,5 +27,5 @@ Passed to `to_operator`, not stored on the plan, which is what keeps a plan
 immutable and lets two executions use different values without interfering.
 
 Missing names are not an error here — a parameter with a default is satisfied
-without one, and `Param` raises naming itself when it has neither.
+without one, and `NumericParam` raises naming itself when it has neither.
 """
