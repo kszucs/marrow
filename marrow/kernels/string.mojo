@@ -137,7 +137,7 @@ trait StringMapKernel(Kernel):
     """
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         ...
 
     @staticmethod
@@ -172,7 +172,7 @@ struct UpperKernel(StringMapKernel):
     comptime name = "upper"
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         return s.upper()
 
 
@@ -180,7 +180,7 @@ struct LowerKernel(StringMapKernel):
     comptime name = "lower"
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         return s.lower()
 
 
@@ -188,7 +188,7 @@ struct StripKernel(StringMapKernel):
     comptime name = "strip"
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         return String(s.strip())
 
 
@@ -196,7 +196,7 @@ struct LStripKernel(StringMapKernel):
     comptime name = "lstrip"
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         return String(s.lstrip())
 
 
@@ -204,7 +204,7 @@ struct RStripKernel(StringMapKernel):
     comptime name = "rstrip"
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         return String(s.rstrip())
 
 
@@ -212,7 +212,7 @@ struct ReverseKernel(StringMapKernel):
     comptime name = "reverse"
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         # Reverse by grapheme cluster so multi-byte characters stay intact.
         var out = String()
         for g in s.__reversed__():
@@ -224,7 +224,7 @@ struct CapitalizeKernel(StringMapKernel):
     comptime name = "capitalize"
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o]) -> String:
+    def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
         # First grapheme upper-cased, the rest lower-cased (pyarrow semantics).
         var out = String()
         var first = True
@@ -320,7 +320,7 @@ trait StringPredicateKernel(Kernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         ...
 
@@ -398,7 +398,7 @@ struct StartsWithKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s.startswith(pat)
 
@@ -408,7 +408,7 @@ struct EndsWithKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s.endswith(pat)
 
@@ -418,7 +418,7 @@ struct ContainsKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return pat in s
 
@@ -428,7 +428,7 @@ struct StringEqKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s == pat
 
@@ -438,7 +438,7 @@ struct StringNeKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s != pat
 
@@ -456,7 +456,7 @@ struct StringLtKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s < pat
 
@@ -466,7 +466,7 @@ struct StringLeKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s <= pat
 
@@ -476,7 +476,7 @@ struct StringGtKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s > pat
 
@@ -486,7 +486,7 @@ struct StringGeKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return not (s < pat)  # StringSlice has no __ge__(StringSlice) overload
 
@@ -936,7 +936,7 @@ struct LikeKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return LikePattern[False](pat).matches(s)
 
@@ -975,7 +975,7 @@ struct ILikeKernel(StringPredicateKernel):
 
     @staticmethod
     def predicate[
-        o1: Origin, o2: Origin
+        o1: Origin[mut=False], o2: Origin[mut=False]
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return LikePattern[True](pat).matches(s)
 
@@ -1189,7 +1189,9 @@ trait StringIntKernel:
     """
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
+    def transform[
+        o: Origin[mut=False]
+    ](s: StringSlice[o], count: Int) -> String:
         ...
 
 
@@ -1303,7 +1305,7 @@ struct SubstrKernel(StringArgKernel):
 
     @staticmethod
     def transform[
-        o: Origin
+        o: Origin[mut=False]
     ](s: StringSlice[o], start: Int, count: Int) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
@@ -1366,7 +1368,9 @@ struct LeftKernel(StringArgKernel, StringIntKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
+    def transform[
+        o: Origin[mut=False]
+    ](s: StringSlice[o], count: Int) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
         var take = count if count >= 0 else chars + count
@@ -1404,7 +1408,9 @@ struct RightKernel(StringArgKernel, StringIntKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
+    def transform[
+        o: Origin[mut=False]
+    ](s: StringSlice[o], count: Int) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
         var skip = chars - count if count >= 0 else -count
@@ -1448,7 +1454,9 @@ struct RepeatKernel(StringArgKernel, StringIntKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
+    def transform[
+        o: Origin[mut=False]
+    ](s: StringSlice[o], count: Int) -> String:
         var out = String()
         for _ in range(count):
             out += s
@@ -1492,7 +1500,7 @@ struct Pad[left: Bool](StringArgKernel):
 
     @staticmethod
     def transform[
-        o: Origin
+        o: Origin[mut=False]
     ](s: StringSlice[o], width: Int, fill: StringSlice) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
@@ -1571,7 +1579,7 @@ struct ReplaceKernel(StringArgKernel):
 
     @staticmethod
     def transform[
-        o: Origin
+        o: Origin[mut=False]
     ](s: StringSlice[o], needle: StringSlice, repl: StringSlice) -> String:
         var m = len(needle.as_bytes())
         if m == 0:
@@ -1640,7 +1648,7 @@ struct SplitPartKernel(StringArgKernel):
 
     @staticmethod
     def transform[
-        o: Origin
+        o: Origin[mut=False]
     ](s: StringSlice[o], sep: StringSlice, index: Int) -> String:
         if index < 1:
             return String()
@@ -1708,7 +1716,9 @@ struct TrimCharsKernel(StringArgKernel):
     comptime uses_count = False
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], text: StringSlice) -> String:
+    def transform[
+        o: Origin[mut=False]
+    ](s: StringSlice[o], text: StringSlice) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
         var lo = 0
@@ -1771,7 +1781,7 @@ trait StringToIntKernel:
     same reasoning on the `string -> string` side."""
 
     @staticmethod
-    def measure[o: Origin](s: StringSlice[o]) -> Int64:
+    def measure[o: Origin[mut=False]](s: StringSlice[o]) -> Int64:
         ...
 
 
@@ -1872,7 +1882,7 @@ struct CharLengthKernel(StringMeasureKernel, StringToIntKernel):
     comptime uses_text = False
 
     @staticmethod
-    def measure[o: Origin](s: StringSlice[o]) -> Int64:
+    def measure[o: Origin[mut=False]](s: StringSlice[o]) -> Int64:
         return Int64(Utf8.count(s))
 
     @staticmethod
@@ -1902,7 +1912,7 @@ struct AsciiKernel(StringMeasureKernel, StringToIntKernel):
     comptime uses_text = False
 
     @staticmethod
-    def measure[o: Origin](s: StringSlice[o]) -> Int64:
+    def measure[o: Origin[mut=False]](s: StringSlice[o]) -> Int64:
         var bytes = s.as_bytes()
         var n = len(bytes)
         if n == 0:
@@ -1955,7 +1965,9 @@ struct PositionKernel(StringMeasureKernel):
     comptime uses_text = True
 
     @staticmethod
-    def measure[o: Origin](s: StringSlice[o], needle: StringSlice) -> Int64:
+    def measure[
+        o: Origin[mut=False]
+    ](s: StringSlice[o], needle: StringSlice) -> Int64:
         var at = Utf8.find(s, needle, 0)
         if at < 0:
             return Int64(0)

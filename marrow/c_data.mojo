@@ -1,4 +1,4 @@
-from std.ffi import c_char, CStringSlice
+from std.ffi import c_char, CStringSpan
 from std.memory import ArcPointer, unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 from std.python import Python, PythonObject
@@ -641,7 +641,7 @@ struct CArrowSchema(Copyable, Movable):
 
     def to_dtype(self) raises -> DynType:
         var fmt = StringSlice(
-            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=self.format.as_imm())
+            unsafe_from_utf8=CStringSpan(unsafe_from_ptr=self.format.as_imm())
         )
         # Dictionary type: non-null `dictionary` field signals dictionary encoding.
         # The format string is the index type's format (e.g. "i" for int32).
@@ -805,7 +805,7 @@ struct CArrowSchema(Copyable, Movable):
 
     def to_field(self) raises -> Field:
         var name = StringSlice(
-            unsafe_from_utf8=CStringSlice(unsafe_from_ptr=self.name.as_imm())
+            unsafe_from_utf8=CStringSpan(unsafe_from_ptr=self.name.as_imm())
         )
         var dtype = self.to_dtype()
         var nullable = self.flags & ARROW_FLAG_NULLABLE

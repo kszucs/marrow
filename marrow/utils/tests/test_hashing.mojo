@@ -457,7 +457,7 @@ def test_rapidhash64_span_agrees_with_lane_path() raises:
 def _std_ahash(data: Span[UInt8, _]) -> UInt64:
     """`std.hashlib`'s aHash of `data`, as the oracle for `AHash64.hash`."""
     var h = AHasher[SIMD[DType.uint64, 4](0)]()
-    h._update_with_bytes(data)
+    h.update(data)
     return h^.finish()
 
 

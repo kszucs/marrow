@@ -1000,7 +1000,7 @@ def test_dictionary_to_pyarrow() raises:
     var c_schema = CArrowSchema.from_dtype(arr.dtype())
     var fmt = String(
         StringSlice(
-            unsafe_from_utf8=CStringSlice(
+            unsafe_from_utf8=CStringSpan(
                 unsafe_from_ptr=Pointer(to=c_schema.format[])
             )
         )
@@ -1043,7 +1043,7 @@ def test_map_dtype_schema_roundtrip() raises:
     var c_schema = CArrowSchema.from_dtype(dt)
     var fmt = String(
         StringSlice(
-            unsafe_from_utf8=CStringSlice(
+            unsafe_from_utf8=CStringSpan(
                 unsafe_from_ptr=Pointer(to=c_schema.format[])
             )
         )

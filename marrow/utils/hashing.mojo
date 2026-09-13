@@ -713,7 +713,7 @@ struct AHash64(Hasher):
         """Delegates to `std.hashlib`, so this is exactly the standard
         library's aHash."""
         var hasher = AHasher[SIMD[DType.uint64, 4](0)]()
-        hasher._update_with_bytes(data)
+        hasher.update(data)
         var h = hasher^.finish()
         return h if seed == 0 else h ^ seed
 

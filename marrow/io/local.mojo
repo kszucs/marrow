@@ -30,10 +30,10 @@ def _rename(var src: String, var dst: String) raises:
     """`rename(2)`. Not in `std.os`, which has `remove`/`unlink` but no rename;
     this is the same `external_call` + `errno` shape `os.remove` uses.
 
-    Both paths are taken by value because `as_c_string_slice` mutates the
+    Both paths are taken by value because `as_c_string_span` mutates the
     `String` (it appends the terminator) and so needs an lvalue."""
     var err = external_call["rename", c_int](
-        src.as_c_string_slice(), dst.as_c_string_slice()
+        src.as_c_string_span(), dst.as_c_string_span()
     )
     if err != 0:
         raise Error("rename '", src, "' -> '", dst, "': ", String(get_errno()))

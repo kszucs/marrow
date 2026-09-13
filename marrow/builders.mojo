@@ -784,7 +784,9 @@ struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
     def append(mut self, value: String) raises:
         self.append(StringSlice(value))
 
-    def append[origin: Origin](mut self, s: StringSlice[origin]) raises:
+    def append[
+        origin: Origin[mut=False]
+    ](mut self, s: StringSlice[origin]) raises:
         self.reserve(1)
         self.reserve_bytes(s.byte_length())
         self.unsafe_append(s)
@@ -888,7 +890,9 @@ struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
             self._values.resize[DType.uint8](new_cap)
 
     @always_inline
-    def unsafe_append[origin: Origin](mut self, s: StringSlice[origin]):
+    def unsafe_append[
+        origin: Origin[mut=False]
+    ](mut self, s: StringSlice[origin]):
         """Append string bytes without capacity checks. Caller must ensure capacity.
         """
         var length = s.byte_length()
