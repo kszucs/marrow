@@ -573,7 +573,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="the-data" class="level2">
 <h2 class="anchored" data-anchor-id="the-data">The data</h2>
 <p>We start with two <code>RecordBatch</code>es. The first holds employees; the second maps department ids to names.</p>
-<div id="19a4caaf" class="cell" data-execution_count="2">
+<div id="231210dd" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>employees <span class="op">=</span> ma.record_batch({</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>:    ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>, <span class="st">"Eve"</span>, <span class="st">"Frank"</span>]),</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dept_id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">1</span>]),</span>
@@ -598,7 +598,7 @@ RecordBatch(num_rows=3, schema=Schema(fields=[dept_id: int64, dept: string]))</c
 <h2 class="anchored" data-anchor-id="step-1-filter-rows">Step 1 — filter rows</h2>
 <p>Filtering <em>rows</em> has two spellings, and it is worth seeing both.</p>
 <p>The <strong>query layer</strong> is the one you will reach for. <code>col(...)</code> names a column, comparison operators build a predicate, and the engine applies it to every column for you:</p>
-<div id="6c1bf7c2" class="cell" data-execution_count="3">
+<div id="4101d5cd" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> col, lit</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>top_earners <span class="op">=</span> (</span>
@@ -612,7 +612,7 @@ RecordBatch(num_rows=3, schema=Schema(fields=[dept_id: int64, dept: string]))</c
 </div>
 </div>
 <p>The <strong>eager kernels</strong> work a column at a time, so the same thing by hand is a mask plus a <code>filter</code> per column. Reach for this when you already hold a mask:</p>
-<div id="c37ccbfa" class="cell" data-execution_count="4">
+<div id="cdab1f74" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>threshold <span class="op">=</span> ma.array([<span class="dv">80_000</span>] <span class="op">*</span> employees.num_rows)</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>well_paid <span class="op">=</span> mc.greater(employees.column(<span class="st">"salary"</span>), threshold)</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"mask:"</span>, well_paid)</span>
@@ -629,7 +629,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <section id="step-2-sort" class="level2">
 <h2 class="anchored" data-anchor-id="step-2-sort">Step 2 — sort</h2>
 <p><code>sort_by</code> orders a batch by one or more keys. Pass a list of <code>(column, "ascending" | "descending")</code> tuples; the second argument controls null placement (<code>None</code> uses the default). Multi-column keys are honoured — ties on the first key break on the next:</p>
-<div id="4f4dd5bc" class="cell" data-execution_count="5">
+<div id="47b558fe" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>by_salary <span class="op">=</span> top_earners.sort_by([(<span class="st">"dept_id"</span>, <span class="st">"ascending"</span>), (<span class="st">"salary"</span>, <span class="st">"descending"</span>)])</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_salary.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -647,7 +647,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <li><code>num_threads</code> — <code>0</code> auto-selects cores, <code>1</code> forces the serial path.</li>
 </ul>
 <p>Enrich each employee with their department name:</p>
-<div id="33378aa6" class="cell" data-execution_count="6">
+<div id="04b6d7db" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>enriched <span class="op">=</span> employees.join(departments, [<span class="st">"dept_id"</span>], join_type<span class="op">=</span><span class="st">"inner"</span>)</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(enriched.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -659,7 +659,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <section id="step-4-put-it-together" class="level2">
 <h2 class="anchored" data-anchor-id="step-4-put-it-together">Step 4 — put it together</h2>
 <p>The whole pipeline reads as a short sequence of transformations: join, filter, sort, project.</p>
-<div id="f766a1e1" class="cell" data-execution_count="7">
+<div id="8131e977" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 1. join employees to their departments</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>joined <span class="op">=</span> employees.join(departments, [<span class="st">"dept_id"</span>], join_type<span class="op">=</span><span class="st">"inner"</span>)</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -681,7 +681,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <section id="step-5-aggregate" class="level2">
 <h2 class="anchored" data-anchor-id="step-5-aggregate">Step 5 — aggregate</h2>
 <p>Aggregation is not an eager kernel call — it happens inside a <strong>query plan</strong>. Wrap the batch with <code>ma.memtable()</code> to get a lazy table, describe what you want, and call <code>.collect()</code> to run it. Nulls are skipped:</p>
-<div id="ff421afc" class="cell" data-execution_count="8">
+<div id="880b8b2d" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>q <span class="op">=</span> ma.memtable(joined)</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>totals <span class="op">=</span> q.aggregate(</span>
@@ -695,7 +695,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 </div>
 </div>
 <p>The same call with a <code>by=</code> key groups instead of reducing to one row — one code path for both:</p>
-<div id="08bf0f7e" class="cell" data-execution_count="9">
+<div id="7ed3ff99" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>by_dept <span class="op">=</span> (</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    q.aggregate(</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>        by<span class="op">=</span>[<span class="st">"dept"</span>],</span>
@@ -710,7 +710,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 </div>
 </div>
 <p>Nothing has run until <code>.collect()</code>, so a plan is a reusable template — and <code>explain()</code> shows what will happen:</p>
-<div id="b520fb9b" class="cell" data-execution_count="10">
+<div id="236980d8" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_dept.explain())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>Sort(Aggregate(InMemoryTable(6 rows), by=dept, count(salary), mean(salary)), dept asc)</code></pre>
