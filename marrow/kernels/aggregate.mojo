@@ -59,7 +59,6 @@ from ..dtypes import (
     TemporalType,
     UInt8Type,
     float64,
-    int32,
     int64,
 )
 from ..scalars import PrimitiveScalar, DynScalar
@@ -75,8 +74,6 @@ from .distinct import (
 from .hashing import RapidHashKernel
 from .hashtable import SwissHashTable
 from ..utils import RapidHash64
-from ..arrays import StructArray
-from ..dtypes import Field, struct_
 
 
 # ---------------------------------------------------------------------------
@@ -1485,9 +1482,9 @@ struct DistinctCount[exact: Bool, A: Array](AggKernel):
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         ref value = input
-        # The exact arm builds a `(group, value)` pair as a `StructArray`, so
-        # it needs the value column erased — once per morsel, to construct the
-        # struct, not per row. The approximate arm hashes `input` directly.
+        # The exact arm hashes a `(group, value)` pair, so it needs the value
+        # column erased — once per morsel, to build the column list, not per
+        # row. The approximate arm hashes `input` directly.
         var erased = input.copy().to_dyn()
         var single = groups.is_single()
         self.reserve(1 if single else groups.num_groups)
@@ -1499,29 +1496,18 @@ struct DistinctCount[exact: Bool, A: Array](AggKernel):
             # slot: a row is new when its *pair* is new. At one slot the group
             # is constant, so the value alone identifies the pair and hashing
             # it is enough.
-            # `List[DynArray]` because that is `StructArray`'s child layout,
-            # not because this kernel is erased: a struct holds columns of
-            # differing types, so its children cannot be one typed list. The
-            # narrowing back out never happens — the struct goes straight to
-            # the hasher.
-            var children = List[DynArray]()
+            # `List[DynArray]` because a pair holds columns of differing
+            # types, so it cannot be one typed list — not because this kernel
+            # is erased. The columns go straight to the hasher, which combines
+            # them per row; it used to need them wrapped in a `StructArray`
+            # carrying invented field names, which is what the group-by's own
+            # key hashing stopped doing.
+            var columns = List[DynArray]()
             if not single:
-                children.append(groups.ids.copy().to_dyn())
-            children.append(erased.copy())
-            var fields = List[Field]()
-            if not single:
-                fields.append(Field("g", int32))
-            fields.append(Field("v", erased.dtype().copy()))
-            var pairs = StructArray(
-                dtype=struct_(fields^),
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                children=children^,
-            )
+                columns.append(groups.ids.copy().to_dyn())
+            columns.append(erased.copy())
             var bids = self._table.insert_hashes(
-                RapidHashKernel.apply(pairs, ExecContext.serial()),
+                RapidHashKernel.apply(columns, n, ExecContext.serial()),
                 grow_adaptively=True,
             )
             while len(self._seen) < self._table.num_keys():
