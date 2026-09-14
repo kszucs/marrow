@@ -14,16 +14,17 @@ repo-actions: false
 ::::: {.mr-hero-copy}
 
 ```{=html}
-<span class="mr-pill"><span class="mr-pill-tag">Alpha</span>Apache Arrow in Mojo</span>
-<h1 class="mr-headline">One query engine.<br><span class="mr-ramp">Three ways to drive it.</span></h1>
+<span class="mr-pill"><span class="mr-pill-tag">Experimental</span>Open source, Apache 2.0</span>
+<h1 class="mr-headline">Apache Arrow,<br><span class="mr-ramp">written in Mojo.</span></h1>
 <p class="mr-lead">
-  Columnar arrays, null-aware SIMD kernels, native Parquet, and a relational
-  engine you drive from Python, eagerly or lazily, or compile ahead of time into
-  a standalone binary with no Python in it.
+  Columnar arrays, null-aware compute kernels, Parquet and Arrow IPC, and a
+  small query engine. Use it from Python much as you would PyArrow, or build a
+  Mojo query into its own executable. It covers a useful part of Arrow, not all
+  of it.
 </p>
 <div class="mr-cta">
   <a class="mr-btn mr-btn-primary" href="tutorials/quickstart.html">
-    Get started
+    Read the quickstart
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
   </a>
   <a class="mr-btn mr-btn-secondary" href="https://github.com/kszucs/marrow">
@@ -31,9 +32,9 @@ repo-actions: false
   </a>
 </div>
 <ul class="mr-facts">
-  <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Zero-copy PyArrow interop</li>
-  <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Native Parquet</li>
-  <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Checked against DuckDB</li>
+  <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Shares buffers with PyArrow</li>
+  <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Reads and writes Parquet</li>
+  <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Answers checked against DuckDB</li>
 </ul>
 ```
 
@@ -54,13 +55,14 @@ from marrow import col, lit
    .aggregate(by=["region"], total=("sum", "price"))
    .order_by(("total", "descending"))
    .head(10)
+   .optimize()
    .collect())
 ```
 
 ::::
 
 ```{=html}
-<p class="mr-window-caption">Nothing runs until <code>collect()</code>, so the optimizer sees the whole query.</p>
+<p class="mr-window-caption">Nothing runs until <code>collect()</code>. <code>optimize()</code> rewrites the plan first; it is opt-in.</p>
 ```
 
 :::::
@@ -72,24 +74,24 @@ from marrow import col, lit
 ```{=html}
 <div class="mr-numbers">
   <div class="mr-number">
-    <span class="mr-number-value">2.9 MB</span>
-    <span class="mr-number-label">A whole Parquet query, compiled: no Python, no interpreter.</span>
+    <span class="mr-number-value">215 of 278</span>
+    <span class="mr-number-label">SQL queries in the test corpus answered exactly as DuckDB answers them. The other 63 are recorded too, and wait on features marrow does not have yet.</span>
   </div>
   <div class="mr-number">
-    <span class="mr-number-value">278</span>
-    <span class="mr-number-label">Golden query cases, their answers generated from DuckDB.</span>
+    <span class="mr-number-value">3</span>
+    <span class="mr-number-label">Arrow implementations (C++, Rust, Go) it exchanges IPC files and C Data with in Arrow's integration suite, for the layouts it implements.</span>
   </div>
   <div class="mr-number">
-    <span class="mr-number-value">0</span>
-    <span class="mr-number-label">Copies when data crosses into the Arrow ecosystem.</span>
+    <span class="mr-number-value">3.1 MB</span>
+    <span class="mr-number-label">Machine code in a compiled Parquet query on macOS arm64, held there by a CI size gate. The executable also loads the Mojo runtime libraries.</span>
   </div>
 </div>
 
 <div class="mr-section-head">
-  <span class="mr-eyebrow">The same query, three ways</span>
-  <h2 class="mr-section-title">Pick the frontend, not the engine</h2>
-  <p>Every tab runs the same plan through the same operators. What changes is
-  <em>when</em> the query is decided, and what that costs you.</p>
+  <span class="mr-eyebrow">Three ways in</span>
+  <h2 class="mr-section-title">Call a kernel, build a plan, or compile it</h2>
+  <p>The same arrays and kernels sit under all three. What changes is how much
+  is decided before anything runs.</p>
 </div>
 ```
 
@@ -97,7 +99,7 @@ from marrow import col, lit
 
 ## Eager Python
 
-The PyArrow API you already know. Kernels run the moment you call them.
+Names follow PyArrow's. Each call runs its kernel straight away.
 
 ```python
 import marrow as ma
@@ -113,8 +115,8 @@ ma.compute.filter(batch.column("price"), hot)
 
 ## Lazy Python
 
-Describe the whole query first; nothing executes until `collect()`, so the
-optimizer sees all of it at once.
+Describe the query first and run it with `collect()`. Add `optimize()` to let
+the plan rewriter push filters down and prune columns before it runs.
 
 ```python
 import marrow as ma
@@ -123,69 +125,79 @@ from marrow import col, lit
 ma.read_parquet("orders.parquet") \
   .filter(col("price") > lit(15)) \
   .aggregate(by=["region"], total=("sum", "price")) \
-  .order_by(("total", "descending")) \
-  .head(10) \
+  .optimize() \
   .collect()
 ```
 
 ## Compiled Mojo
 
-The dtypes are fixed at compile time, so the whole expression fuses into one
-SIMD loop and the linker deletes every kernel the query cannot reach.
+Column types are fixed when the query is compiled, so an expression can fuse
+into a single loop, and kernels the query never uses are not linked in. The
+filter threshold and the input path stay command-line arguments.
 
 ```mojo
-from marrow.dtypes import field, int64
+from marrow.dtypes import field, int64, string
 from marrow.expr import QueryCli, col, scan
 from marrow.schema import schema
 
 def main() raises:
-    var cli = QueryCli("orders")
-    var min_price = cli.param("min-price", int64, default=Int64(15))
-    cli.argument("src")
+    var cli = QueryCli(String("orders"))
+    var min_amount = cli.param(String("min-amount"), int64, default=Int64(0))
+    cli.argument(String("src"))
+
     if cli.parse():
-        var sch = schema([field("region", int64), field("price", int64)])
+        var sch = schema(
+            [field("id", int64), field("amount", int64), field("name", string)]
+        )
         cli.run(
-            scan(cli.get("src"), sch^).filter(col("price", int64) > min_price)
+            scan(cli.get(String("src")), sch^).filter(
+                col("amount", int64) >= min_amount
+            )
         )
 ```
 
 ```bash
 $ marrow compile query.mojo -o orders
-$ ./orders orders.parquet --min-price 15    # 2.9 MB, no Python anywhere
+$ ./orders orders.parquet --min-amount 250
 ```
+
+Building takes a minute or two, so this suits a query you run many times, not
+one you are still shaping. `--bundle` copies the executable together with the
+runtime libraries it loads, for running it on another machine.
 
 :::
 
 ```{=html}
 <div class="mr-section-head">
   <span class="mr-eyebrow">Where it fits</span>
-  <h2 class="mr-section-title">How marrow relates to what you already use</h2>
-  <p>marrow is alpha and far less complete than any of these. It is worth your
-  attention where the third column is.</p>
+  <h2 class="mr-section-title">Next to the tools you already use</h2>
+  <p>Each of these is more complete and better tested than marrow. The right
+  column is what marrow offers anyway.</p>
 </div>
 ```
 
-| | What it is | Why you'd reach for marrow instead |
+| | What it is | What marrow offers |
 |---|---|---|
-| **PyArrow** | the reference Arrow implementation | Same data model, same method names, zero-copy both ways. marrow runs the compute in Mojo instead of through the interpreter |
-| **Polars / DuckDB** | mature engines, far more complete | They ship a runtime *alongside* your query. marrow can freeze the query itself into a binary you can drop on a machine with nothing installed |
-| **arrow-rs / DataFusion** | the closest architectural analogue | marrow is checked against them for conformance, and adds a compile-time-fused expression lane Rust monomorphization can't quite reach |
-| **Mojo / MAX** | the language and its AI runtime | marrow makes Arrow first-class in Mojo, and lets one kernel source serve both CPU SIMD and GPU |
+| **PyArrow** | Python bindings to Arrow C++, the reference implementation | Similar method names, and arrays pass between the two without copying their buffers |
+| **Polars / DuckDB** | Mature query engines with far broader features | A fixed query compiled into its own executable. No benchmark results are published yet, so no speed claims |
+| **arrow-rs / DataFusion** | Arrow and a query engine in Rust, the closest relatives in design | Its IPC and C Data output is tested against arrow-rs, C++ and Go in Arrow's integration suite |
+| **Mojo** | The language marrow is written in | Arrow arrays, Parquet and a query engine for Mojo programs; a few element-wise kernels can also run on a GPU behind a build flag |
 
 ::: {.callout-note}
 ## How correctness is checked
-278 golden query cases whose expected answers are generated **from DuckDB,
-never from marrow**, plus the official Arrow archery suite run against the
-**C++, Rust and Go** implementations in both directions. See
-[Status & limitations](reference/status.qmd) for what is missing and what is
-known to be wrong.
+A corpus of 278 SQL queries whose expected answers come from DuckDB, never from
+marrow: 215 run and match, and 63 wait on features marrow does not have yet.
+Arrow's own integration suite round-trips IPC files and
+C Data with the C++, Rust and Go implementations, skipping the layouts marrow
+does not implement (unions, views, run-end encoding, extension types). See
+[Status & limitations](reference/status.qmd) for the full list.
 :::
 
 ```{=html}
 <div class="mr-section-head">
   <span class="mr-eyebrow">See it run</span>
-  <h2 class="mr-section-title">Sixty seconds with marrow</h2>
-  <p>Every cell below is executed when the site is built, so the output is real.</p>
+  <h2 class="mr-section-title">A short tour</h2>
+  <p>These cells run when the site is built, so the output below is real.</p>
 </div>
 ```
 
@@ -197,8 +209,7 @@ import marrow as ma
 from marrow import col, lit
 ```
 
-Build arrays straight from Python data. The type is inferred in one pass, and
-`None` marks a null:
+Build arrays from Python data. The type is inferred, and `None` marks a null:
 
 ```{python}
 ages   = ma.array([25, 35, 45, None, 55])
@@ -209,7 +220,7 @@ print(ages)
 print(names)
 ```
 
-Compute is vectorized and null-aware; a null in either operand propagates:
+Kernels are vectorized and null-aware; a null in either operand gives a null:
 
 ```{python}
 print("next year:", ma.compute.add(ages, ma.array([1] * 5)))
@@ -228,8 +239,8 @@ people = ma.record_batch({"age": ages, "name": names, "salary": salary})
    .to_pylist())
 ```
 
-Every array speaks the Arrow C Data Interface, so it crosses into the rest of
-the ecosystem as a pointer exchange:
+Arrays implement the Arrow PyCapsule interface, so PyArrow takes them without
+copying the buffers, and marrow takes PyArrow's the same way:
 
 ```{python}
 import pyarrow as pa
@@ -248,22 +259,22 @@ print(pa_ages.type, "|", len(back))
   <a class="mr-card" href="tutorials/quickstart.html">
     <span class="mr-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7 9.5 3 2.5-3 2.5M13 15h4"/></svg></span>
     <h3>Quickstart <span class="mr-arrow">→</span></h3>
-    <p>Build the extension and tour arrays, compute and tables in ten minutes.</p>
+    <p>Build the extension, then try arrays, kernels and tables.</p>
   </a>
   <a class="mr-card" href="guide/queries-lazy.html">
     <span class="mr-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 13 9 5 9-5"/></svg></span>
     <h3>Lazy queries <span class="mr-arrow">→</span></h3>
-    <p>Build a plan in Python, optimize it, and run it once.</p>
+    <p>Build a plan in Python, optionally optimize it, then run it.</p>
   </a>
   <a class="mr-card" href="guide/compile.html">
     <span class="mr-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span>
     <h3>Compile a query <span class="mr-arrow">→</span></h3>
-    <p>Turn a Mojo query into a standalone binary with no Python in it.</p>
+    <p>Build a Mojo query into an executable, and what that does and does not include.</p>
   </a>
-  <a class="mr-card" href="reference/architecture.html">
+  <a class="mr-card" href="reference/status.html">
     <span class="mr-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><path d="M6.5 10v4a3 3 0 0 0 3 3H14"/></svg></span>
-    <h3>Architecture <span class="mr-arrow">→</span></h3>
-    <p>Two expression lanes, one plan IR, and why the binary is small.</p>
+    <h3>Status <span class="mr-arrow">→</span></h3>
+    <p>What is implemented, what is missing, and what is known to be wrong.</p>
   </a>
 </div>
 ```

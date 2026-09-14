@@ -2,10 +2,10 @@
 title: "Sorting"
 ---
 
-Marrow sorts arrays and tables with an adaptive strategy: a pattern-defeating
-quicksort for small inputs, an LSD radix sort for large ones, and a parallel
-radix sort at scale. Nulls are ordered explicitly — you choose whether they
-sort to the front or the back.
+Marrow picks a sort by input type and size: for primitive arrays, a
+pattern-defeating quicksort for small inputs and an LSD radix sort for large
+ones; a comparison sort for strings; a counting sort for booleans. Nulls are
+ordered explicitly — you choose whether they sort to the front or the back.
 
 ```{python}
 #| echo: false
@@ -32,7 +32,8 @@ print("sort_indices:", mc.sort_indices(a))
 ### Direction and null placement
 
 `sort` and `sort_indices` take a `sort_keys` sequence of `(column, order)`
-pairs — ignored for a plain array, since there is only one column — and a
+pairs — for a plain array the column name is ignored, the first key's
+direction is used, and more than one key raises `NotImplementedError` — and a
 `null_placement` keyword argument:
 
 ```{python}
@@ -111,13 +112,14 @@ var ordered = sort(struct_array, key_indices=[0, 1], ascending=[True, False])
 
 ### Algorithm selection
 
-The kernel adapts to the input size automatically:
+For primitive arrays, the strategy switches at fixed sizes:
 
 | Input size | Strategy |
 |------------|----------|
 | `N < 32,768` | PDQsort (pattern-defeating quicksort) |
 | `N ≥ 32,768` | LSD radix sort |
-| `N ≥ 524,288` | Parallel radix sort |
+| `N ≥ 524,288` | Parallel radix sort, given a multi-threaded context |
 
-You never choose the algorithm — the kernel picks the fastest one for the data
-in front of it.
+The thresholds are fixed rather than tuned per machine, and they are not the
+fastest choice at every size. `mc.sort` and `mc.sort_indices` run
+single-threaded unless you pass a multi-threaded `ctx`.

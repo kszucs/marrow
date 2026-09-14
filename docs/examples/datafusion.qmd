@@ -24,7 +24,8 @@ DataFusion is an optional dependency in the `examples` pixi feature. Install it 
 pixi run -e examples datafusion_udf
 ```
 
-Or add it to an existing environment:
+Or install DataFusion into an existing environment (`pip install datafusion`)
+and import:
 
 ```python
 import marrow as ma
@@ -36,9 +37,9 @@ from datafusion import SessionContext, udf
 ## Register a Mojo kernel as a UDF
 
 Any Marrow compute function can be wrapped as a DataFusion UDF. The two
-conversions — `ma.array(pa_arr)` in and `pa.array(ma_arr)` out — are zero-copy
-pointer exchanges over the Arrow C Data Interface, not serialization, so the
-wrapper costs nothing beyond the kernel itself.
+conversions — `ma.array(pa_arr)` in and `pa.array(ma_arr)` out — hand the
+buffers over through the Arrow C Data Interface instead of copying the values.
+Each call still pays the usual Python call overhead.
 
 ```{python}
 def mojo_add(a: pa.Array, b: pa.Array) -> pa.Array:
@@ -93,7 +94,7 @@ pa.Table.from_batches(
 Each call to `mojo_add` inside a DataFusion query goes through these steps:
 
 1. DataFusion evaluates the query plan and produces a `pyarrow.Array` chunk for each argument column.
-2. `mc.add(a, b)` imports each argument into Marrow via `__arrow_c_array__` — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.
+2. `ma.array(a)` and `ma.array(b)` import each argument into Marrow via `__arrow_c_array__` — a pointer exchange, no copy — and `mc.add` runs the vectorized Mojo kernel over the Arrow buffers.
 3. `pa.array(result)` exports the result back to PyArrow via `__arrow_c_array__` — again, no copy.
 
 The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.

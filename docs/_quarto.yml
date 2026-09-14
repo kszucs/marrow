@@ -10,7 +10,7 @@ project:
 
 website:
   title: "Marrow"
-  description: "Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary."
+  description: "An experimental Apache Arrow implementation in Mojo, usable from Python or compiled into native executables."
   image: assets/social.png
   favicon: assets/favicon.png
   open-graph: true
@@ -56,7 +56,7 @@ website:
     contents:
       - section: "Start here"
         contents:
-          - text: "10-minute quickstart"
+          - text: "Quickstart"
             href: tutorials/quickstart.qmd
           - text: "Build a data pipeline"
             href: tutorials/data-pipeline.qmd

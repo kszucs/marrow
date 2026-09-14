@@ -5,8 +5,9 @@ execute:
   enabled: false
 ---
 
-Some of marrow's kernels run on the GPU — Metal on Apple Silicon, CUDA on
-NVIDIA — through Mojo's `DeviceContext`. The GPU and CPU paths are **the same
+A few of marrow's kernels can run on the GPU through Mojo's `DeviceContext`.
+They have been exercised on Metal (Apple Silicon); CUDA goes through the same
+Mojo API but has no CI run here. The GPU and CPU paths are **the same
 kernel source**: every `apply` overload writes one lane function and hands it to
 a dispatcher that picks the target. This is experimental infrastructure to build
 on, not a turnkey speed-up — read [When it is worth it](#when-it-is-and-isnt-worth-it)
@@ -65,8 +66,8 @@ from marrow.execution import ExecContext
 from max.gpu.host import DeviceContext
 
 var cpu       = ExecContext.serial()                 # single-threaded CPU
-var threaded  = ExecContext.parallel(num_threads=0)  # 0 = all cores
-var automatic = ExecContext.auto()                   # the default
+var threaded  = ExecContext.parallel(num_threads=0)  # 0 = serial or parallel by size
+var automatic = ExecContext.auto()                   # same as parallel(0)
 var on_device = ExecContext.gpu(DeviceContext())     # run on the GPU
 ```
 
@@ -109,9 +110,10 @@ buffer, so a device result carries the same nulls a host result would.
 intensity — roughly one operation per element — so for most workloads CPU SIMD
 is competitive or faster.
 
-Measured on Apple Silicon (Metal, unified memory): uploading per call is **2-3×
-slower than the CPU** even for compute-heavy kernels, and the crossover was
-around 10K vectors at dimension ≥ 384.
+Measured on Apple Silicon (Metal, unified memory) with a kernel that is no
+longer in the tree: uploading per call was **2-3× slower than the CPU** even for
+compute-heavy work, and the crossover was around 10K vectors at dimension ≥ 384.
+Treat these as orders of magnitude, not current figures.
 
 The rule that follows: **upload once, run several kernels device-resident, and
 download at the end.** Treat GPU dispatch as infrastructure for data that is

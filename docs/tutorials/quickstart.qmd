@@ -1,5 +1,5 @@
 ---
-title: "10-minute quickstart"
+title: "Quickstart"
 subtitle: "From zero to arrays, compute and tables"
 ---
 
@@ -33,15 +33,15 @@ from marrow import compute as mc
 ```
 
 ::: {.callout-tip}
-The API deliberately mirrors [PyArrow](https://arrow.apache.org/docs/python/).
-If you know `pa.array`, `pa.record_batch` and `pa.table`, you already know most
-of Marrow.
+The API follows [PyArrow](https://arrow.apache.org/docs/python/)'s names where
+it can: `pa.array`, `pa.record_batch` and `pa.table` have direct counterparts,
+though marrow implements far less of the API.
 :::
 
 ## Create an array
 
-`ma.array()` turns a Python list into a columnar array. The type is inferred in
-a single pass, and `None` marks a null position:
+`ma.array()` turns a Python list into a columnar array. The type is inferred,
+and `None` marks a null position:
 
 ```{python}
 a = ma.array([1, 2, 3, None, 5])
@@ -51,8 +51,7 @@ print("null count:", a.null_count)
 print("type:      ", a.type)
 ```
 
-Pass `type=` to skip inference and coerce the data to a specific type — this is
-also the fastest path:
+Pass `type=` to skip inference and coerce the data to a specific type:
 
 ```{python}
 f = ma.array([1, 2, 3], type=ma.float32())
@@ -82,7 +81,8 @@ print("multiply:", mc.multiply(y, y))
 ```
 
 ::: {.callout-note}
-Aggregates are **not** on the eager surface. `sum`, `mean`, `min`, `max`,
+Most aggregates are **not** on the eager surface (boolean `mc.any` and `mc.all`
+are). `sum`, `mean`, `min`, `max`,
 `count_distinct` and the rest reduce a column inside a query plan, built with
 `ma.memtable(...)` / `ma.read_parquet(...)`, so that a group-by and a
 whole-table aggregate are the same code path.

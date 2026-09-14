@@ -1,16 +1,17 @@
 ---
-title: "Compiling a query to a standalone binary"
+title: "Compiling a query to a native executable"
 subtitle: "marrow compile — the AOT lane, exposed to users"
 execute:
   enabled: false
 ---
 
 Everything else in this guide runs through the Python bindings: build a plan,
-call `.execute()`, get a `RecordBatch` back, in the same process that built
-the plan. `marrow compile` is a different thing entirely — it turns a Mojo
-source file into a standalone binary that runs the query later, from the
-command line, with no marrow, no Mojo toolchain and no Python interpreter
-installed on the machine that runs it.
+call `.collect()`, get a `RecordBatch` back, in the same process that built
+the plan. `marrow compile` is a different thing: it turns a Mojo source file
+into a native executable that runs the query later, from the command line,
+without Python. The executable loads the Mojo runtime libraries; `--bundle`
+(below) copies them next to it, so the machine that runs it needs no marrow or
+Mojo install.
 
 ::: {.callout-note}
 The code on this page is Mojo, compiled ahead of time — not the Python
@@ -26,8 +27,8 @@ is the whole trade:
 
 - A fixed report that runs against a different file and a different
   threshold every day — `marrow compile` fits well. Ship one binary, run it
-  with different `--flag` values, no marrow install required on the target
-  machine.
+  with different `--flag` values; with `--bundle`, the target machine needs no
+  marrow install.
 - A query whose *shape* varies — a different filter, a different set of
   group-by keys, an ad hoc notebook session — wants the
   [Python lazy frontend](expressions.qmd) instead. Reshaping a plan there is
@@ -173,13 +174,10 @@ This replaces the old `-D MARROW_CLI_WRITERS=true` build flag. Putting the
 choice in the source means the query file states which formats its binary
 supports, and no build invocation can disagree with it.
 
-Measured on the `query_cli` program, `__text`, same machine and same
-invocation:
-
-| Build | `__text` | vs. text-only |
-|---|---:|---|
-| `cli.run(plan)` — table and CSV | 2,965,016 | — |
-| `cli.run[parquet=True, ipc=True](plan)` | 3,621,592 | **+656,576** |
+When this was measured on the `query_cli` program, linking both writers
+(`cli.run[parquet=True, ipc=True](plan)`) added about 657 KB of `__text` to the
+text-only build. The text-only build is the one the CI size gate tracks; its
+current figure is in `benchmarks/binary_size/baseline.json`.
 
 `nm -C` on the two: `marrow::parquet::writer` is **0** symbols in the first and
 7 in the second, and `marrow::expr::runtime` is 0 in both.
@@ -245,7 +243,7 @@ $ pixi run -e dev mojo build -O3 -g0 -I . benchmarks/binary_size/query_cli.mojo 
 The extra pins `mojo>=1.1,<2`, and marrow needs a **nightly** Mojo build;
 PyPI's stable `mojo` package tops out at 1.0.0, so `pip install
 marrow[compile]` cannot satisfy it from PyPI alone. Install the nightly
-explicitly first — `pip install --pre mojo --extra-index-url
+explicitly first — `pip install --pre mojo-compiler --extra-index-url
 https://whl.modular.com/nightly/simple/` — or work inside marrow's own pixi
 environment, which already has the pinned nightly. `check_mojo_version`
 reports the same thing at run time if the stable wheel is what got installed.
@@ -334,10 +332,12 @@ link against. It may be possible on Linux; that is untested here.
 
 ## Why this is small
 
-The point of the AOT lane is that the binary contains the query and nothing
-else. `col("amount", int64)` is a `Column[Int64Type]`, so the predicate's
-structure lives in its type and fuses into one SIMD loop; no interpreter is
-reachable, and the kernels the query does not name are never linked.
+The point of the AOT lane is that the binary contains little beyond the query.
+`col("amount", int64)` is a `Column[Int64Type]`, so the predicate's structure
+lives in its type and fuses into one SIMD loop; no interpreter is reachable, and
+the kernels the query does not name are never linked. Anything that scans
+Parquet does also link the storage layer, including about 50 KB for the OpenDAL
+backend.
 
 The command-line surface preserves that. Parameter coercion is monomorphic —
 `cli.param("min-amount", int64)` instantiates one coercion function for

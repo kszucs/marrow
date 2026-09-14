@@ -17,10 +17,11 @@ import marrow as ma
 from marrow import compute as mc
 ```
 
-The compute functions live in `marrow.compute`, whose names mirror
-`pyarrow.compute` — `mc.add`, `mc.subtract`, `mc.cast`, `mc.filter` behave like
-their PyArrow counterparts (`import marrow.compute as mc; mc.add(a, b)`), for
-drop-in `pyarrow.compute` compatibility.
+The compute functions live in `marrow.compute`, and their names and signatures
+follow `pyarrow.compute` for the functions it implements — `mc.add`,
+`mc.subtract`, `mc.cast`, `mc.filter`. It is not a drop-in replacement: some
+options (`skip_nulls=False`, `nan_is_null=True`, multi-key `sort_keys`) raise
+`NotImplementedError`, and `memory_pool` is ignored.
 
 ## Arithmetic
 
@@ -86,7 +87,8 @@ print(mc.add(a, b))   # null at 0, 1, and 3
 
 ## Aggregates
 
-Aggregates are **not** eager kernel calls. `sum`, `mean`, `min`, `max`,
+Most aggregates are **not** eager kernel calls (boolean `any` and `all`, below,
+are the exception). `sum`, `mean`, `min`, `max`,
 `product`, `count`, `count_distinct` and the rest reduce a column inside a
 **query plan**, so that a whole-table reduction and a `GROUP BY` are the same
 code path. Wrap a batch with `ma.memtable()`, describe the reduction, and

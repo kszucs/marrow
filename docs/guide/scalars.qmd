@@ -55,7 +55,8 @@ absent. Absence is not the same as the value `0`.
 
 ## Scalars of every type
 
-Any array type produces a matching scalar, including strings and structs:
+Each array type produces a matching scalar, including strings and structs. One
+known gap: binary and large string scalars report their type as `string`.
 
 ```{python}
 s = ma.array(["hi", None, "there"])
@@ -72,7 +73,7 @@ print(people[0], "->", people[0].as_py())
 | `.as_py()` | Python object | Native value, or `None` if null |
 | `.is_valid()` | `bool` | `True` if the value is present |
 | `.is_null()` | `bool` | `True` if the value is absent |
-| `.type()` | `DataType` | The Arrow type of the value |
+| `.type` | `DataType` | The Arrow type of the value |
 
 Scalars are also truthy through `__bool__`, so a boolean scalar can be used
 directly in a condition:

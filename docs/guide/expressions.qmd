@@ -92,8 +92,9 @@ print(optimized)                 # the rewritten plan, as text
 var out = optimized.execute()
 ```
 
-`AllRules` is fifteen rules — elimination, merging, conjunction splitting, four
-pushdowns and a Top-N rewrite — plus `ColumnPruning`, a preparatory downward
+`AllRules` is sixteen rules — elimination, merging, conjunction splitting, six
+pushdowns (five for filters, one for limits) and a Top-N rewrite — plus
+`ColumnPruning`, a preparatory downward
 pass. They run in a chosen order, so each sees the previous one's output.
 Because a plan renders as text, `optimize[NoRules]()` and `optimize[AllRules]()`
 can be printed and diffed.

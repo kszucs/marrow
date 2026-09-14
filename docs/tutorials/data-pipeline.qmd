@@ -103,8 +103,8 @@ enriched = employees.join(departments, ["dept_id"], join_type="inner")
 print(enriched.to_pylist())
 ```
 
-Columns that collide between the two sides are suffixed with `_right`, matching
-PyArrow's behaviour.
+Columns that collide between the two sides are suffixed with `_right`, the
+right-hand key included.
 
 ## Step 4 — put it together
 
@@ -127,8 +127,8 @@ print(report.to_pylist())
 ```
 
 Only the join is eager here — it is a `RecordBatch` method. Everything after it
-is one plan, so the engine sees the filter, the sort and the projection
-together instead of materializing an intermediate batch per step.
+is one plan, which runs when `collect()` is called. Add `.optimize()` before
+`collect()` to let the plan rewriter act on it first.
 
 ## Step 5 — aggregate
 

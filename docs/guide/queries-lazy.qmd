@@ -148,7 +148,7 @@ managers = ma.memtable(ma.record_batch({
 t.join(managers, on="region").select("region", "manager", "price").collect().to_pylist()
 ```
 
-`how=` takes `inner`, `left`, `right`, `outer`, `semi` and `anti`. Use
+`how=` takes `inner`, `left`, `right`, `full`, `semi` and `anti`. Use
 `left_on=` / `right_on=` when the key names differ.
 
 ## Reading Parquet
@@ -187,13 +187,10 @@ print(result.to_pyarrow())        # zero-copy, over the C Data Interface
 
 ## Limits worth knowing
 
-- **Parquet and Arrow IPC are the only sources** — no CSV, no JSON, and
-  `read_parquet` takes one file: no globs, directories, hive partitions or
-  object storage.
-- **No window functions from Python.** They exist, in the Mojo lane only.
-- **Statistics pruning is unreachable from Python** — the boxed predicate has
-  lost the type the pruning overload needs, so a filtered scan reads every row
-  group.
+- **`read_parquet` reads one file** (local, or an object-store URI through
+  OpenDAL): no globs, directories or hive partitions, and no CSV or JSON.
+- **Row groups are skipped only after `.optimize()`.** Without it, a filtered
+  scan reads every row group.
 - **No `distinct`/`union`/`except`/`intersect` nodes**, and no regex.
 - **Float division by zero answers the dividend**, not `inf` — see
   [Compute](compute.qmd).

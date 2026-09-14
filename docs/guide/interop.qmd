@@ -16,7 +16,7 @@ import pyarrow as pa
 # Marrow
 ma_arr = ma.array([1, 2, 3, None, 5])
 print("marrow:", ma_arr)
-print("type:  ", ma_arr.type())
+print("type:  ", ma_arr.type)
 
 # PyArrow
 pa_arr = pa.array([1, 2, 3, None, 5])

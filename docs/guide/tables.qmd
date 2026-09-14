@@ -142,7 +142,8 @@ for kind in ["inner", "left", "right", "full", "semi", "anti"]:
 ```
 
 Columns whose names collide across the two inputs are suffixed with `_right`,
-matching PyArrow.
+the right-hand key column included. PyArrow's defaults differ: it merges the key
+columns and adds no suffix.
 
 ## Grouping & aggregation
 
@@ -208,13 +209,12 @@ print(table.to_pydict())
 print("batches:", len(table.to_batches()))
 ```
 
-A table can carry many batches at once. Because each batch is a separate chunk,
-appending data never re-copies the columns already present — the reason Arrow
-tables scale to streaming and out-of-core workloads.
+A table can carry many batches at once, each kept as its own chunk, so building
+a table from batches does not copy them. Most `Table` verbs combine the chunks
+before they run, and all execution is in memory.
 
 ::: {.callout-note}
-`sort_by` and `join` live on `RecordBatch`, not `Table`. To run them over a
-multi-chunk `Table`, work with its batches (`table.to_batches()`) — a
-single-chunk table exposes its one batch directly. Aggregation is not on either
-type; it is a query-layer verb, as above.
+`Table.sort_by` and `Table.join` combine the table's chunks into one batch
+before they run. Aggregation is on neither type; it is a query-layer verb, as
+above.
 :::

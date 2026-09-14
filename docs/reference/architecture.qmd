@@ -44,8 +44,9 @@ building form, frozen by `finish()`). An allocation is CPU, FOREIGN, MAPPED,
 HOST or DEVICE — data movement is a *kind change*, not a shadow copy.
 
 `BufferView` / `BitmapView` are borrowed, offset-applied spans, and they are
-what kernels actually compute over. Naked pointer arithmetic is confined to five
-files; everything else goes through the views.
+what kernels actually compute over. Raw pointers are confined to the buffer,
+view, C Data, byte-order and codec/IO layers; everything else goes through the
+views.
 
 ::: {.callout-note}
 Buffers are 64-byte aligned and their **size** is rounded up to a multiple of
@@ -109,16 +110,17 @@ Concretely, from the CI-gated `benchmarks/binary_size/` suite:
 
 | binary | `__text` |
 |---|---:|
-| every value comptime — the plan holds a direct kernel | **1,478,768** |
-| the aggregate resolved from a function *name* at run time, as the Python frontend does | 12,024,976 |
+| every value comptime — the plan holds a direct kernel | **1,557,636** |
+| the aggregate resolved from a function *name* at run time, as the Python frontend does | 13,235,288 |
 
-Same query, same answer, **8× the code** — because the second one cannot prove
-which kernels it will not call.
+Same query, same answer, **about 8.5× the code** — because the second one cannot
+prove which kernels it will not call. (Figures from the gate's baseline of
+2026-09-11.)
 
 The rule set is itself a comptime parameter — `plan.optimize[AllRules]()` — so a
 binary links exactly the rules it names, and `execute()` alone links none. Output
-writers are comptime parameters for the same reason: `cli.run[parquet=True]`
-costs 656,576 bytes that `cli.run` does not pay.
+writers are comptime parameters for the same reason: the Parquet and IPC writers
+together added about 657 KB that `cli.run` does not pay, when last measured.
 
 `benchmarks/binary_size/` is the live gate, at a 0.5% threshold. Trust it over
 any ratio quoted in prose, including this one.
