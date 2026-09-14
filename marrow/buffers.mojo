@@ -641,13 +641,31 @@ struct Buffer[*, mut: Bool = False](
         may end exactly at its logical last byte. Nothing may read or write
         past `size` on a FOREIGN buffer on the strength of this rounding.
 
+        **A pointer that is not 64-byte aligned is copied**, into an owned CPU
+        buffer that does not reference `owner` — the same thing arrow-rs's
+        `ArrayData::align_buffers` does on import. Every `Buffer` is 64-byte
+        aligned, and producers that are not are common: a pyarrow array over a
+        numpy allocation is only guaranteed 16-byte alignment, and on Linux,
+        where glibc serves a large allocation from `mmap` behind a 16-byte
+        header, it is usually not 64-byte aligned at all. A null pointer —
+        what the spec allows for a zero-length buffer — is kept as it is.
+
         Precondition: `owner` must have been created with `Allocation.foreign(...)`.
         """
-        return Buffer[mut=False](
-            size=math.align_up(Int(size), 64),
-            ptr=rebind[Pointer[UInt8, ImmUntrackedOrigin]](ptr),
-            owner=owner,
-        )
+        if Int(ptr) % 64 != 0:
+            var aligned = Buffer.alloc_uninit(Int(size))
+            unsafe_memcpy(
+                dest=aligned._ptr,
+                src=rebind[Pointer[UInt8, MutUntrackedOrigin]](ptr),
+                count=Int(size),
+            )
+            return aligned^.to_immutable()
+        else:
+            return Buffer[mut=False](
+                size=math.align_up(Int(size), 64),
+                ptr=rebind[Pointer[UInt8, ImmUntrackedOrigin]](ptr),
+                owner=owner,
+            )
 
     @staticmethod
     def from_host(host: HostBuffer[DType.uint8]) -> Buffer[mut=False]:

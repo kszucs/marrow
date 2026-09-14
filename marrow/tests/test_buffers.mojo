@@ -143,6 +143,40 @@ def test_buffer_foreign_kind() raises:
     assert_equal(n_released, 1)
 
 
+def test_buffer_foreign_copies_only_a_misaligned_pointer() raises:
+    """A foreign pointer off the 64-byte grid is copied; an aligned one is not.
+
+    The C Data Interface only recommends alignment, and a pyarrow array over a
+    large numpy allocation is usually not 64-byte aligned on Linux, so importing
+    one must not trip `Buffer`'s alignment invariant. Writing through the producer's
+    pointer after the import tells the two paths apart: the copy keeps the old
+    bytes, the zero-copy view sees the new ones.
+    """
+    var raw = unsafe_alloc[UInt8](128, alignment=64)
+    for i in range(128):
+        raw[unsafe_offset=i] = UInt8(i)
+
+    def release(ptr: Pointer[UInt8, MutUntrackedOrigin]) -> None:
+        ptr.unsafe_free()
+
+    var keeper = ArcPointer(
+        Allocation.foreign(
+            rebind[Pointer[UInt8, MutUntrackedOrigin]](raw), release
+        )
+    )
+    var copied = Buffer.from_foreign(
+        raw.unsafe_offset(1).unsafe_bitcast[NoneType](), 16, keeper
+    )
+    var viewed = Buffer.from_foreign(raw.unsafe_bitcast[NoneType](), 16, keeper)
+    for i in range(17):
+        raw[unsafe_offset=i] = UInt8(200)
+
+    assert_equal(len(copied), 64)
+    for i in range(16):
+        assert_equal(copied.unsafe_get(i), UInt8(i + 1))
+        assert_equal(viewed.unsafe_get(i), UInt8(200))
+
+
 def test_buffer_no_device() raises:
     var buf = Buffer.alloc_zeroed(10)
     assert_false(buf^.to_immutable().is_device())
