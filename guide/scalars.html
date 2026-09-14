@@ -69,7 +69,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <meta name="quarto:offset" content="../">
 <link href="../guide/tables.html" rel="next">
 <link href="../guide/types.html" rel="prev">
-<link href="../assets/logo.png" rel="icon" type="image/png">
+<link href="../assets/favicon.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="../site_libs/quarto-html/popper.min.js"></script>
@@ -117,11 +117,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link rel="stylesheet" href="../theme/marrow.css">
 <meta property="og:title" content="Scalars – Marrow">
 <meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta property="og:site_name" content="Marrow">
 <meta name="twitter:title" content="Scalars – Marrow">
 <meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -293,11 +293,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
     <a href="../index.html" class="navbar-brand navbar-brand-logo">
-    <img src="../assets/logo.png" alt="marrow" class="navbar-logo light-content">
-    <img src="../assets/logo.png" alt="marrow" class="navbar-logo dark-content">
-    </a>
-    <a class="navbar-brand" href="../index.html">
-    <span class="navbar-title">Marrow</span>
+    <img src="../assets/logo-horizontal-light.svg" alt="marrow" class="navbar-logo light-content">
+    <img src="../assets/logo-horizontal-dark.svg" alt="marrow" class="navbar-logo dark-content">
     </a>
   </div>
             <div id="quarto-search" class="" title="Search"></div>
@@ -569,7 +566,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="getting-a-scalar" class="level2">
 <h2 class="anchored" data-anchor-id="getting-a-scalar">Getting a scalar</h2>
 <p>Indexing an array with <code>[]</code> returns a scalar:</p>
-<div id="3555b6d8" class="cell" data-execution_count="2">
+<div id="c0e601f3" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="va">None</span>, <span class="dv">30</span>])</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>first <span class="op">=</span> a[<span class="dv">0</span>]</span>
@@ -583,7 +580,7 @@ int64</code></pre>
 </div>
 </div>
 <p>Slicing an array and taking an element gives a scalar the same way — the underlying buffer is shared, so neither step copies:</p>
-<div id="e41edd18" class="cell" data-execution_count="3">
+<div id="dfa59867" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>tail <span class="op">=</span> a.<span class="bu">slice</span>(<span class="dv">2</span>)</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(tail[<span class="dv">0</span>], <span class="st">"|"</span>, tail[<span class="dv">0</span>].as_py(), <span class="st">"|"</span>, tail[<span class="dv">0</span>].<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -594,7 +591,7 @@ int64</code></pre>
 <section id="null-scalars" class="level2">
 <h2 class="anchored" data-anchor-id="null-scalars">Null scalars</h2>
 <p>A null position yields a scalar that reports <code>is_null()</code> and converts to Python <code>None</code>:</p>
-<div id="94c7a225" class="cell" data-execution_count="4">
+<div id="02ef5ca7" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>missing <span class="op">=</span> a[<span class="dv">1</span>]</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_null: "</span>, missing.is_null())</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid:"</span>, missing.is_valid())</span>
@@ -622,7 +619,7 @@ Note
 <section id="scalars-of-every-type" class="level2">
 <h2 class="anchored" data-anchor-id="scalars-of-every-type">Scalars of every type</h2>
 <p>Any array type produces a matching scalar, including strings and structs:</p>
-<div id="22705e9b" class="cell" data-execution_count="5">
+<div id="4c6dc153" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"hi"</span>, <span class="va">None</span>, <span class="st">"there"</span>])</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s[<span class="dv">0</span>], <span class="st">"-&gt;"</span>, s[<span class="dv">0</span>].as_py())</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -668,7 +665,7 @@ Note
 </tbody>
 </table>
 <p>Scalars are also truthy through <code>__bool__</code>, so a boolean scalar can be used directly in a condition:</p>
-<div id="d01017a7" class="cell" data-execution_count="6">
+<div id="82ad2a1b" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>flag <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>])[<span class="dv">0</span>]</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"truthy:"</span>, <span class="bu">bool</span>(flag))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">

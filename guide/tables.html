@@ -69,7 +69,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <meta name="quarto:offset" content="../">
 <link href="../guide/compute.html" rel="next">
 <link href="../guide/scalars.html" rel="prev">
-<link href="../assets/logo.png" rel="icon" type="image/png">
+<link href="../assets/favicon.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="../site_libs/quarto-html/popper.min.js"></script>
@@ -117,11 +117,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link rel="stylesheet" href="../theme/marrow.css">
 <meta property="og:title" content="Tables &amp; joins – Marrow">
 <meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta property="og:site_name" content="Marrow">
 <meta name="twitter:title" content="Tables &amp; joins – Marrow">
 <meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -293,11 +293,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
     <a href="../index.html" class="navbar-brand navbar-brand-logo">
-    <img src="../assets/logo.png" alt="marrow" class="navbar-logo light-content">
-    <img src="../assets/logo.png" alt="marrow" class="navbar-logo dark-content">
-    </a>
-    <a class="navbar-brand" href="../index.html">
-    <span class="navbar-title">Marrow</span>
+    <img src="../assets/logo-horizontal-light.svg" alt="marrow" class="navbar-logo light-content">
+    <img src="../assets/logo-horizontal-dark.svg" alt="marrow" class="navbar-logo dark-content">
     </a>
   </div>
             <div id="quarto-search" class="" title="Search"></div>
@@ -572,7 +569,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="creating-a-recordbatch" class="level2">
 <h2 class="anchored" data-anchor-id="creating-a-recordbatch">Creating a RecordBatch</h2>
 <p>The most direct constructor takes a dict mapping column names to arrays:</p>
-<div id="b79c9837" class="cell" data-execution_count="2">
+<div id="0b95db64" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"id"</span>:    ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>]),</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>:  ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
@@ -584,7 +581,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <p>You can also pass a list of arrays with explicit <code>names=</code>:</p>
-<div id="c3d85bad" class="cell" data-execution_count="3">
+<div id="adf705ac" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> ma.record_batch(</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    [ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>]), ma.array([<span class="st">"x"</span>, <span class="st">"y"</span>, <span class="st">"z"</span>])],</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    names<span class="op">=</span>[<span class="st">"id"</span>, <span class="st">"label"</span>],</span>
@@ -597,7 +594,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="inspecting-a-batch" class="level2">
 <h2 class="anchored" data-anchor-id="inspecting-a-batch">Inspecting a batch</h2>
-<div id="e14bd2b9" class="cell" data-execution_count="4">
+<div id="2726976e" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"shape:       "</span>, batch.shape)        <span class="co"># (rows, columns)</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"num_rows:    "</span>, batch.num_rows)</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"num_columns: "</span>, batch.num_columns)</span>
@@ -612,7 +609,7 @@ schema:       Schema(fields=[id: int64, name: string, score: float64])</code></p
 </div>
 </div>
 <p>Reach a single column by name or position — both return an array:</p>
-<div id="ed036012" class="cell" data-execution_count="5">
+<div id="03b714ed" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(batch.column(<span class="st">"name"</span>))</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(batch.column(<span class="dv">0</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -621,7 +618,7 @@ PrimitiveArray[int64]([1, 2, 3, 4])</code></pre>
 </div>
 </div>
 <p>Convert the whole batch to native Python, either column-oriented (<code>to_pydict</code>) or row-oriented (<code>to_pylist</code>):</p>
-<div id="bd68eea1" class="cell" data-execution_count="6">
+<div id="cab5ac1c" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(batch.to_pydict())</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(batch.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -633,7 +630,7 @@ PrimitiveArray[int64]([1, 2, 3, 4])</code></pre>
 <section id="selecting-slicing-reshaping" class="level2">
 <h2 class="anchored" data-anchor-id="selecting-slicing-reshaping">Selecting, slicing, reshaping</h2>
 <p><code>select</code> keeps a subset of columns (by name or index); <code>slice</code> takes a zero-copy window of rows:</p>
-<div id="873b7d41" class="cell" data-execution_count="7">
+<div id="6c48303b" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(batch.select([<span class="st">"name"</span>, <span class="st">"score"</span>]).to_pydict())</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(batch.<span class="bu">slice</span>(<span class="dv">1</span>, <span class="dv">2</span>).to_pylist())         <span class="co"># offset 1, length 2</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -642,7 +639,7 @@ PrimitiveArray[int64]([1, 2, 3, 4])</code></pre>
 </div>
 </div>
 <p>Column mutations return a <strong>new</strong> batch — arrays are immutable. Each takes a <code>Field</code> describing the new column, built with <code>ma.field(name, type, nullable, metadata)</code>:</p>
-<div id="c39086fc" class="cell" data-execution_count="8">
+<div id="d4439669" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>rank <span class="op">=</span> ma.field(<span class="st">"rank"</span>, ma.int64(), <span class="va">True</span>, <span class="va">None</span>)</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>with_rank     <span class="op">=</span> batch.append_column(rank, ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>]))</span>
@@ -668,7 +665,7 @@ removed:   ['id', 'name']</code></pre>
 <section id="sorting" class="level2">
 <h2 class="anchored" data-anchor-id="sorting">Sorting</h2>
 <p><code>sort_by</code> orders a batch by a column. The second argument is null placement (<code>None</code> for the default, or <code>"at_start"</code> / <code>"at_end"</code>):</p>
-<div id="44fcc3c5" class="cell" data-execution_count="9">
+<div id="07b276a4" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(batch.sort_by([(<span class="st">"score"</span>, <span class="st">"descending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[{'id': 1, 'name': 'Alice', 'score': 9.5}, {'id': 4, 'name': 'Dave', 'score': 9.1}, {'id': 2, 'name': 'Bob', 'score': 8.2}, {'id': 3, 'name': 'Carol', 'score': 7.8}]</code></pre>
@@ -679,7 +676,7 @@ removed:   ['id', 'name']</code></pre>
 <section id="joins" class="level2">
 <h2 class="anchored" data-anchor-id="joins">Joins</h2>
 <p><code>join</code> runs a hash join between two batches on named key columns:</p>
-<div id="f3861130" class="cell" data-execution_count="10">
+<div id="f23cc8e2" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dept_id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">1</span>, <span class="dv">3</span>]),</span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>:    ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
@@ -731,7 +728,7 @@ removed:   ['id', 'name']</code></pre>
 </tbody>
 </table>
 <p>The supported join types:</p>
-<div id="6f3d64fd" class="cell" data-execution_count="11">
+<div id="301fef03" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> kind <span class="kw">in</span> [<span class="st">"inner"</span>, <span class="st">"left"</span>, <span class="st">"right"</span>, <span class="st">"full"</span>, <span class="st">"semi"</span>, <span class="st">"anti"</span>]:</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    out <span class="op">=</span> people.join(depts, [<span class="st">"dept_id"</span>], join_type<span class="op">=</span>kind)</span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>kind<span class="sc">:&gt;6}</span><span class="ss">: </span><span class="sc">{</span>out<span class="sc">.</span>num_rows<span class="sc">}</span><span class="ss"> rows, columns=</span><span class="sc">{</span>out<span class="sc">.</span>column_names<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -749,7 +746,7 @@ removed:   ['id', 'name']</code></pre>
 <section id="grouping-aggregation" class="level2">
 <h2 class="anchored" data-anchor-id="grouping-aggregation">Grouping &amp; aggregation</h2>
 <p>Aggregation lives in the <strong>query layer</strong>, not on <code>RecordBatch</code>. Wrap a batch with <code>ma.memtable()</code> to get a lazy table, describe the reduction, and <code>.collect()</code> runs it and hands back a <code>RecordBatch</code>:</p>
-<div id="4f42f939" class="cell" data-execution_count="12">
+<div id="2aa24e2f" class="cell" data-execution_count="12">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>sales <span class="op">=</span> ma.record_batch({</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"EU"</span>, <span class="st">"US"</span>, <span class="st">"EU"</span>, <span class="st">"US"</span>, <span class="st">"EU"</span>]),</span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"amount"</span>: ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>]),</span>
@@ -766,7 +763,7 @@ removed:   ['id', 'name']</code></pre>
 </div>
 </div>
 <p>A <code>by=</code> key turns the same call into a <code>GROUP BY</code> — one row per group. Keyword arguments name the output columns:</p>
-<div id="52b91f8d" class="cell" data-execution_count="13">
+<div id="4deab266" class="cell" data-execution_count="13">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>by_region <span class="op">=</span> q.aggregate(</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    by<span class="op">=</span>[<span class="st">"region"</span>],</span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"amount"</span>),</span>
@@ -783,7 +780,7 @@ removed:   ['id', 'name']</code></pre>
 <section id="tables" class="level2">
 <h2 class="anchored" data-anchor-id="tables">Tables</h2>
 <p>A <code>Table</code> holds chunked columns and is built the same way as a batch, from a dict or from arrays with <code>names=</code>:</p>
-<div id="5c10d8e4" class="cell" data-execution_count="14">
+<div id="37b648f5" class="cell" data-execution_count="14">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>table <span class="op">=</span> ma.table({</span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"id"</span>:   ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]),</span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"city"</span>: ma.array([<span class="st">"NYC"</span>, <span class="st">"LA"</span>, <span class="st">"SF"</span>, <span class="st">"CHI"</span>, <span class="st">"SEA"</span>]),</span>
@@ -796,7 +793,7 @@ shape: (5, 2)</code></pre>
 </div>
 </div>
 <p>Tables share the inspection API with batches — <code>schema</code>, <code>column_names</code>, <code>column</code>, <code>to_pydict</code>, <code>to_pylist</code> — and expose their underlying batches:</p>
-<div id="fabf622d" class="cell" data-execution_count="15">
+<div id="14ac18b8" class="cell" data-execution_count="15">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(table.column(<span class="st">"city"</span>))</span>
 <span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(table.to_pydict())</span>
 <span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"batches:"</span>, <span class="bu">len</span>(table.to_batches()))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
