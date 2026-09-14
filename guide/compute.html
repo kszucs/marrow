@@ -76,12 +76,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -111,16 +111,35 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
 <meta property="og:title" content="Compute – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta property="og:description" content="An experimental Apache Arrow implementation in Mojo, usable from Python or compiled into native executables.">
 <meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta property="og:site_name" content="Marrow">
 <meta name="twitter:title" content="Compute – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta name="twitter:description" content="An experimental Apache Arrow implementation in Mojo, usable from Python or compiled into native executables.">
 <meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -366,7 +385,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -551,7 +570,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#casting" id="toc-casting" class="nav-link" data-scroll-target="#casting">Casting</a></li>
   <li><a href="#null-behaviour-summary" id="toc-null-behaviour-summary" class="nav-link" data-scroll-target="#null-behaviour-summary">Null behaviour summary</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/compute.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -578,11 +597,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <p>Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons, selection and casting. All kernels are null-aware; the exact null handling depends on the operation.</p>
 <p>String, temporal, boolean and conditional kernels are implemented in Mojo but not yet bound to Python — they are reachable from a query plan instead.</p>
-<p>The compute functions live in <code>marrow.compute</code>, whose names mirror <code>pyarrow.compute</code> — <code>mc.add</code>, <code>mc.subtract</code>, <code>mc.cast</code>, <code>mc.filter</code> behave like their PyArrow counterparts (<code>import marrow.compute as mc; mc.add(a, b)</code>), for drop-in <code>pyarrow.compute</code> compatibility.</p>
+<p>The compute functions live in <code>marrow.compute</code>, and their names and signatures follow <code>pyarrow.compute</code> for the functions it implements — <code>mc.add</code>, <code>mc.subtract</code>, <code>mc.cast</code>, <code>mc.filter</code>. It is not a drop-in replacement: some options (<code>skip_nulls=False</code>, <code>nan_is_null=True</code>, multi-key <code>sort_keys</code>) raise <code>NotImplementedError</code>, and <code>memory_pool</code> is ignored.</p>
 <section id="arithmetic" class="level2">
 <h2 class="anchored" data-anchor-id="arithmetic">Arithmetic</h2>
 <p>Element-wise binary operations: <code>add</code>, <code>subtract</code>, <code>multiply</code>, <code>divide</code>.</p>
-<div id="263bd976" class="cell" data-execution_count="2">
+<div id="dbe30709" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -598,7 +617,7 @@ divide:   PrimitiveArray[int64]([10, 10, 10, 10, 10])</code></pre>
 </div>
 </div>
 <p>Floats work the same way:</p>
-<div id="2a84295f" class="cell" data-execution_count="3">
+<div id="07589906" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>x <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.0</span>, <span class="fl">3.0</span>])</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>y <span class="op">=</span> ma.array([<span class="fl">0.5</span>, <span class="fl">1.5</span>, <span class="fl">2.5</span>])</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"add:   "</span>, mc.add(x, y))</span>
@@ -651,7 +670,7 @@ divide: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])</code></pre>
 <section id="null-propagation" class="level3">
 <h3 class="anchored" data-anchor-id="null-propagation">Null propagation</h3>
 <p>If <strong>either</strong> operand at a position is null, the result at that position is null. This mirrors SQL’s three-valued logic.</p>
-<div id="ce01c644" class="cell" data-execution_count="4">
+<div id="92676fd2" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>])</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>])</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -663,7 +682,7 @@ divide: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])</code></pre>
 null count: 2</code></pre>
 </div>
 </div>
-<div id="b9daa93e" class="cell" data-execution_count="5">
+<div id="ef8eae96" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Both inputs can contribute nulls</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="va">None</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>])</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="va">None</span>, <span class="dv">30</span>, <span class="va">None</span>])</span>
@@ -677,8 +696,8 @@ null count: 2</code></pre>
 </section>
 <section id="aggregates" class="level2">
 <h2 class="anchored" data-anchor-id="aggregates">Aggregates</h2>
-<p>Aggregates are <strong>not</strong> eager kernel calls. <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>, <code>product</code>, <code>count</code>, <code>count_distinct</code> and the rest reduce a column inside a <strong>query plan</strong>, so that a whole-table reduction and a <code>GROUP BY</code> are the same code path. Wrap a batch with <code>ma.memtable()</code>, describe the reduction, and <code>.collect()</code> runs it:</p>
-<div id="53dfbe1a" class="cell" data-execution_count="6">
+<p>Most aggregates are <strong>not</strong> eager kernel calls (boolean <code>any</code> and <code>all</code>, below, are the exception). <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>, <code>product</code>, <code>count</code>, <code>count_distinct</code> and the rest reduce a column inside a <strong>query plan</strong>, so that a whole-table reduction and a <code>GROUP BY</code> are the same code path. Wrap a batch with <code>ma.memtable()</code>, describe the reduction, and <code>.collect()</code> runs it:</p>
+<div id="a6c461b1" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({<span class="st">"v"</span>: ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])})</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>q <span class="op">=</span> ma.memtable(batch)</span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -694,7 +713,7 @@ null count: 2</code></pre>
 </div>
 </div>
 <p>Nulls are skipped, so <code>sum</code> above is <code>1 + 3 + 5</code>. Adding a <code>by=</code> key groups rather than reducing to one row — the only change is the argument:</p>
-<div id="e0414112" class="cell" data-execution_count="7">
+<div id="ee0e04c5" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>sales <span class="op">=</span> ma.record_batch({</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>, <span class="st">"west"</span>]),</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"amount"</span>: ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>]),</span>
@@ -710,7 +729,7 @@ null count: 2</code></pre>
 <section id="accumulator-types-widen" class="level3">
 <h3 class="anchored" data-anchor-id="accumulator-types-widen">Accumulator types widen</h3>
 <p><code>sum</code> and <code>product</code> do <strong>not</strong> preserve the input type — integers accumulate in <code>int64</code> and floats in <code>float64</code>, so a long column cannot silently overflow its own width. <code>mean</code> is always <code>float64</code>:</p>
-<div id="1f705261" class="cell" data-execution_count="8">
+<div id="030f80a9" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>ints <span class="op">=</span> ma.record_batch({<span class="st">"v"</span>: ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())})</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>res  <span class="op">=</span> ma.memtable(ints).aggregate(total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"v"</span>), avg<span class="op">=</span>(<span class="st">"mean"</span>, <span class="st">"v"</span>)).collect()</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum of int32 -&gt;"</span>, res.column(<span class="st">"total"</span>).<span class="bu">type</span>)</span>
@@ -724,7 +743,7 @@ mean         -&gt; float64</code></pre>
 <section id="counting" class="level3">
 <h3 class="anchored" data-anchor-id="counting">Counting</h3>
 <p><code>count</code> counts non-null values; <code>ma.count_star()</code> counts <strong>rows</strong>, which differs on a nullable column. <code>count_distinct</code> is exact, while <code>approx_count_distinct</code> uses a fixed-size HyperLogLog sketch — far cheaper in memory on a high-cardinality column:</p>
-<div id="4675fabc" class="cell" data-execution_count="9">
+<div id="c3184ec3" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>ids <span class="op">=</span> ma.record_batch({<span class="st">"id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">4</span>])})</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.memtable(ids).aggregate(</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    rows<span class="op">=</span>ma.count_star(),</span>
@@ -740,7 +759,7 @@ mean         -&gt; float64</code></pre>
 <section id="boolean-aggregates" class="level3">
 <h3 class="anchored" data-anchor-id="boolean-aggregates">Boolean aggregates</h3>
 <p><code>any</code> and <code>all</code> operate on boolean arrays. Nulls are skipped.</p>
-<div id="4285ddda" class="cell" data-execution_count="10">
+<div id="451572bc" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>flags <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">None</span>, <span class="va">True</span>])</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"any:"</span>, mc.<span class="bu">any</span>(flags))   <span class="co"># True  — at least one True</span></span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all:"</span>, mc.<span class="bu">all</span>(flags))   <span class="co"># False — False is present</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -749,7 +768,7 @@ mean         -&gt; float64</code></pre>
 all: False</code></pre>
 </div>
 </div>
-<div id="cb964c8a" class="cell" data-execution_count="11">
+<div id="fdd8dd0e" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>all_true <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all with nulls:"</span>, mc.<span class="bu">all</span>(all_true))   <span class="co"># True — only True values</span></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -769,7 +788,7 @@ any empty/null: False</code></pre>
 <section id="filter" class="level3">
 <h3 class="anchored" data-anchor-id="filter">filter</h3>
 <p><code>filter(array, mask)</code> keeps elements where the boolean mask is <code>True</code>. The mask must be a <code>BoolArray</code> of the same length.</p>
-<div id="01bfc831" class="cell" data-execution_count="12">
+<div id="6dccf664" class="cell" data-execution_count="12">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>])</span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -779,7 +798,7 @@ any empty/null: False</code></pre>
 </div>
 </div>
 <p>Nulls in the source array are preserved through the filter:</p>
-<div id="201fb453" class="cell" data-execution_count="13">
+<div id="feebcfdd" class="cell" data-execution_count="13">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="va">None</span>])</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">True</span>])</span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -789,7 +808,7 @@ any empty/null: False</code></pre>
 </div>
 </div>
 <p>Nulls in the mask are treated as <code>False</code> (the element is excluded):</p>
-<div id="d02c65e6" class="cell" data-execution_count="14">
+<div id="65fcd2a2" class="cell" data-execution_count="14">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>])</span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">None</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -802,7 +821,7 @@ any empty/null: False</code></pre>
 <section id="drop_null" class="level3">
 <h3 class="anchored" data-anchor-id="drop_null">drop_null</h3>
 <p><code>drop_null(array)</code> removes all null positions. Equivalent to filtering by the array’s own validity bitmap.</p>
-<div id="f09f9a7c" class="cell" data-execution_count="15">
+<div id="230a9f73" class="cell" data-execution_count="15">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.drop_null(arr))   <span class="co"># [1, 3, 5]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -810,7 +829,7 @@ any empty/null: False</code></pre>
 </div>
 </div>
 <p>Works on numeric array types:</p>
-<div id="eba0a779" class="cell" data-execution_count="16">
+<div id="c1c1f2ec" class="cell" data-execution_count="16">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="va">None</span>, <span class="fl">3.0</span>, <span class="va">None</span>, <span class="fl">5.0</span>])</span>
 <span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.drop_null(f))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -822,7 +841,7 @@ any empty/null: False</code></pre>
 <section id="comparisons" class="level2">
 <h2 class="anchored" data-anchor-id="comparisons">Comparisons</h2>
 <p>Element-wise comparison kernels return a boolean array. Nulls propagate: if either input at a position is null, the output is null.</p>
-<div id="32c78c88" class="cell" data-execution_count="17">
+<div id="a39f597b" class="cell" data-execution_count="17">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">4</span>,    <span class="dv">5</span>])</span>
 <span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -842,7 +861,7 @@ greater_equal: BoolArray([True, False, True, NULL, True])</code></pre>
 </div>
 </div>
 <p>The null at index 3 propagates to all output arrays:</p>
-<div id="7c0a9595" class="cell" data-execution_count="18">
+<div id="42283cf7" class="cell" data-execution_count="18">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb33"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> mc.equal(a, b)</span>
 <span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, result.null_count)      <span class="co"># 1</span></span>
 <span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(3):"</span>, result[<span class="dv">3</span>].is_valid())     <span class="co"># False</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -855,7 +874,7 @@ is_valid(3): False</code></pre>
 <section id="casting" class="level2">
 <h2 class="anchored" data-anchor-id="casting">Casting</h2>
 <p><code>cast</code> converts an array to another type. By default a lossy conversion raises; pass <code>safe=False</code> for the raw truncating/wrapping conversion.</p>
-<div id="ac5a7951" class="cell" data-execution_count="19">
+<div id="827ca164" class="cell" data-execution_count="19">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb35"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>ints <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
 <span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"to float64:"</span>, mc.cast(ints, ma.float64()))</span>
 <span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -1371,16 +1390,31 @@ truncated:  PrimitiveArray[int32]([1, -1, 2])</code></pre>
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/compute.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

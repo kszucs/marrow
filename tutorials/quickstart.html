@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>10-minute quickstart – Marrow</title>
+<title>Quickstart – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -75,12 +75,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -110,15 +110,34 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="10-minute quickstart – Marrow">
+<meta property="og:title" content="Quickstart – Marrow">
 <meta property="og:description" content="From zero to arrays, compute and tables">
 <meta property="og:image" content="https://marrow.kszucs.dev/tutorials/assets/social.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="10-minute quickstart – Marrow">
+<meta name="twitter:title" content="Quickstart – Marrow">
 <meta name="twitter:description" content="From zero to arrays, compute and tables">
 <meta name="twitter:image" content="https://marrow.kszucs.dev/tutorials/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -341,7 +360,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Start here</a></li><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">10-minute quickstart</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Start here</a></li><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Quickstart</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -365,7 +384,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link active">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -537,15 +556,15 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#assemble-a-table" id="toc-assemble-a-table" class="nav-link" data-scroll-target="#assemble-a-table">Assemble a table</a></li>
   <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">Where to go next</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/tutorials/quickstart.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Start here</a></li><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">10-minute quickstart</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Start here</a></li><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Quickstart</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">10-minute quickstart</h1>
+<h1 class="title">Quickstart</h1>
 <p class="subtitle lead">From zero to arrays, compute and tables</p>
 </div>
 
@@ -571,7 +590,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> marrow</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run build_python     <span class="co"># compiles the native extension (python/marrow/libmarrow.so)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Then bring it in under the customary <code>ma</code> alias:</p>
-<div id="7e530272" class="cell" data-execution_count="2">
+<div id="683067d8" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
@@ -585,14 +604,14 @@ Tip
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>The API deliberately mirrors <a href="https://arrow.apache.org/docs/python/">PyArrow</a>. If you know <code>pa.array</code>, <code>pa.record_batch</code> and <code>pa.table</code>, you already know most of Marrow.</p>
+<p>The API follows <a href="https://arrow.apache.org/docs/python/">PyArrow</a>’s names where it can: <code>pa.array</code>, <code>pa.record_batch</code> and <code>pa.table</code> have direct counterparts, though marrow implements far less of the API.</p>
 </div>
 </div>
 </section>
 <section id="create-an-array" class="level2">
 <h2 class="anchored" data-anchor-id="create-an-array">Create an array</h2>
-<p><code>ma.array()</code> turns a Python list into a columnar array. The type is inferred in a single pass, and <code>None</code> marks a null position:</p>
-<div id="dd822ef6" class="cell" data-execution_count="3">
+<p><code>ma.array()</code> turns a Python list into a columnar array. The type is inferred, and <code>None</code> marks a null position:</p>
+<div id="a59da4a0" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(a)</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, <span class="bu">len</span>(a))</span>
@@ -605,8 +624,8 @@ null count: 1
 type:       int64</code></pre>
 </div>
 </div>
-<p>Pass <code>type=</code> to skip inference and coerce the data to a specific type — this is also the fastest path:</p>
-<div id="abf97ca4" class="cell" data-execution_count="4">
+<p>Pass <code>type=</code> to skip inference and coerce the data to a specific type:</p>
+<div id="0643ae53" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>], <span class="bu">type</span><span class="op">=</span>ma.float32())</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(f)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -614,7 +633,7 @@ type:       int64</code></pre>
 </div>
 </div>
 <p>Strings, nested lists and structs all work the same way:</p>
-<div id="55fcd008" class="cell" data-execution_count="5">
+<div id="b20cf7b7" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.array([<span class="st">"hello"</span>, <span class="va">None</span>, <span class="st">"world"</span>]))</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="va">None</span>]))</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.array([{<span class="st">"x"</span>: <span class="dv">1</span>, <span class="st">"y"</span>: <span class="fl">1.5</span>}, {<span class="st">"x"</span>: <span class="dv">2</span>, <span class="st">"y"</span>: <span class="fl">2.5</span>}]))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -628,7 +647,7 @@ StructArray({'x': PrimitiveArray[int64]([1, 2]), 'y': PrimitiveArray[float64]([1
 <section id="compute-on-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="compute-on-arrays">Compute on arrays</h2>
 <p>Compute kernels live in <code>marrow.compute</code> (imported here as <code>mc</code>), vectorized and null-aware, with names that mirror <code>pyarrow.compute</code>. A null in either operand propagates to the result:</p>
-<div id="bb2c4de4" class="cell" data-execution_count="6">
+<div id="4c8b3eab" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>x <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>y <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -649,11 +668,11 @@ Note
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>Aggregates are <strong>not</strong> on the eager surface. <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>, <code>count_distinct</code> and the rest reduce a column inside a query plan, built with <code>ma.memtable(...)</code> / <code>ma.read_parquet(...)</code>, so that a group-by and a whole-table aggregate are the same code path.</p>
+<p>Most aggregates are <strong>not</strong> on the eager surface (boolean <code>mc.any</code> and <code>mc.all</code> are). <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>, <code>count_distinct</code> and the rest reduce a column inside a query plan, built with <code>ma.memtable(...)</code> / <code>ma.read_parquet(...)</code>, so that a group-by and a whole-table aggregate are the same code path.</p>
 </div>
 </div>
 <p>Comparisons return a boolean array, which you can feed straight into <code>filter</code>:</p>
-<div id="315aee91" class="cell" data-execution_count="7">
+<div id="32b064fb" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>big  <span class="op">=</span> mc.greater(y, ma.array([<span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>]))</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"mask:  "</span>, big)</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"kept:  "</span>, mc.<span class="bu">filter</span>(y, big))</span>
@@ -665,7 +684,7 @@ no nulls: PrimitiveArray[int64]([1, 2, 3, 5])</code></pre>
 </div>
 </div>
 <p>Sorting handles nulls explicitly and returns either the sorted values or the sort indices:</p>
-<div id="54d98a63" class="cell" data-execution_count="8">
+<div id="c1f61d8b" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="dv">3</span>, <span class="dv">1</span>, <span class="va">None</span>, <span class="dv">2</span>, <span class="dv">5</span>])</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sorted:  "</span>, mc.sort(s))</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"desc:    "</span>, mc.sort(s, [(<span class="st">""</span>, <span class="st">"descending"</span>)], null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span>
@@ -680,7 +699,7 @@ argsort:  PrimitiveArray[int32]([1, 3, 0, 4, 2])</code></pre>
 <section id="assemble-a-table" class="level2">
 <h2 class="anchored" data-anchor-id="assemble-a-table">Assemble a table</h2>
 <p>A <code>RecordBatch</code> is a schema plus a set of equal-length columns — the workhorse tabular structure:</p>
-<div id="b7a4a771" class="cell" data-execution_count="9">
+<div id="08a39d87" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>:   ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"age"</span>:    ma.array([<span class="dv">34</span>, <span class="dv">28</span>, <span class="dv">45</span>, <span class="dv">52</span>]),</span>
@@ -694,7 +713,7 @@ shape: (4, 3)</code></pre>
 </div>
 </div>
 <p>Inspect it as native Python with <code>to_pydict()</code> (column-oriented) or <code>to_pylist()</code> (row-oriented):</p>
-<div id="a4df0bf8" class="cell" data-execution_count="10">
+<div id="eae1283e" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.to_pydict())</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -703,7 +722,7 @@ shape: (4, 3)</code></pre>
 </div>
 </div>
 <p>Select columns, slice rows, and sort by one or more keys:</p>
-<div id="e04bdc23" class="cell" data-execution_count="11">
+<div id="09904ff7" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.select([<span class="st">"name"</span>, <span class="st">"salary"</span>]).to_pydict())</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.<span class="bu">slice</span>(<span class="dv">1</span>, <span class="dv">2</span>).to_pylist())</span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"descending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1158,16 +1177,31 @@ shape: (4, 3)</code></pre>
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/tutorials/quickstart.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

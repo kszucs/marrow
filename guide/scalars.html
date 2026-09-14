@@ -76,12 +76,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -111,16 +111,35 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
 <meta property="og:title" content="Scalars – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta property="og:description" content="An experimental Apache Arrow implementation in Mojo, usable from Python or compiled into native executables.">
 <meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta property="og:site_name" content="Marrow">
 <meta name="twitter:title" content="Scalars – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta name="twitter:description" content="An experimental Apache Arrow implementation in Mojo, usable from Python or compiled into native executables.">
 <meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -366,7 +385,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -537,7 +556,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#scalars-of-every-type" id="toc-scalars-of-every-type" class="nav-link" data-scroll-target="#scalars-of-every-type">Scalars of every type</a></li>
   <li><a href="#the-scalar-api" id="toc-the-scalar-api" class="nav-link" data-scroll-target="#the-scalar-api">The scalar API</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/scalars.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -566,7 +585,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="getting-a-scalar" class="level2">
 <h2 class="anchored" data-anchor-id="getting-a-scalar">Getting a scalar</h2>
 <p>Indexing an array with <code>[]</code> returns a scalar:</p>
-<div id="c0e601f3" class="cell" data-execution_count="2">
+<div id="0a4ade0d" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="va">None</span>, <span class="dv">30</span>])</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>first <span class="op">=</span> a[<span class="dv">0</span>]</span>
@@ -580,7 +599,7 @@ int64</code></pre>
 </div>
 </div>
 <p>Slicing an array and taking an element gives a scalar the same way — the underlying buffer is shared, so neither step copies:</p>
-<div id="dfa59867" class="cell" data-execution_count="3">
+<div id="ea031935" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>tail <span class="op">=</span> a.<span class="bu">slice</span>(<span class="dv">2</span>)</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(tail[<span class="dv">0</span>], <span class="st">"|"</span>, tail[<span class="dv">0</span>].as_py(), <span class="st">"|"</span>, tail[<span class="dv">0</span>].<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -591,7 +610,7 @@ int64</code></pre>
 <section id="null-scalars" class="level2">
 <h2 class="anchored" data-anchor-id="null-scalars">Null scalars</h2>
 <p>A null position yields a scalar that reports <code>is_null()</code> and converts to Python <code>None</code>:</p>
-<div id="02ef5ca7" class="cell" data-execution_count="4">
+<div id="75b33499" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>missing <span class="op">=</span> a[<span class="dv">1</span>]</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_null: "</span>, missing.is_null())</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid:"</span>, missing.is_valid())</span>
@@ -618,8 +637,8 @@ Note
 </section>
 <section id="scalars-of-every-type" class="level2">
 <h2 class="anchored" data-anchor-id="scalars-of-every-type">Scalars of every type</h2>
-<p>Any array type produces a matching scalar, including strings and structs:</p>
-<div id="4c6dc153" class="cell" data-execution_count="5">
+<p>Each array type produces a matching scalar, including strings and structs. One known gap: binary and large string scalars report their type as <code>string</code>.</p>
+<div id="048972dd" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"hi"</span>, <span class="va">None</span>, <span class="st">"there"</span>])</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s[<span class="dv">0</span>], <span class="st">"-&gt;"</span>, s[<span class="dv">0</span>].as_py())</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -658,14 +677,14 @@ Note
 <td><code>True</code> if the value is absent</td>
 </tr>
 <tr class="even">
-<td><code>.type()</code></td>
+<td><code>.type</code></td>
 <td><code>DataType</code></td>
 <td>The Arrow type of the value</td>
 </tr>
 </tbody>
 </table>
 <p>Scalars are also truthy through <code>__bool__</code>, so a boolean scalar can be used directly in a condition:</p>
-<div id="82ad2a1b" class="cell" data-execution_count="6">
+<div id="fcb3f958" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>flag <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>])[<span class="dv">0</span>]</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"truthy:"</span>, <span class="bu">bool</span>(flag))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -1111,16 +1130,31 @@ Note
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/scalars.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Marrow — Apache Arrow in Mojo – Marrow</title>
+<title>marrow — Apache Arrow in Mojo – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -73,12 +73,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="site_libs/quarto-html/popper.min.js"></script>
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -108,25 +108,42 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="theme/marrow.css">
-<meta property="og:title" content="Marrow — Apache Arrow in Mojo">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta property="og:title" content="marrow — Apache Arrow in Mojo">
 <meta property="og:image" content="https://marrow.kszucs.dev/assets/social.png">
 <meta property="og:site_name" content="Marrow">
 <meta property="og:image:height" content="630">
 <meta property="og:image:width" content="1200">
-<meta name="twitter:title" content="Marrow — Apache Arrow in Mojo">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta name="twitter:title" content="marrow — Apache Arrow in Mojo">
 <meta name="twitter:image" content="https://marrow.kszucs.dev/assets/social.png">
 <meta name="twitter:image-height" content="630">
 <meta name="twitter:image-width" content="1200">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
-<body class="nav-fixed fullcontent quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+<body class="nav-fixed mr-landing quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
     const toggleBodyColorMode = (bsSheetEl) => {
       const mode = bsSheetEl.getAttribute("data-mode");
       const bodyEl = window.document.querySelector("body");
@@ -340,120 +357,141 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     </nav>
 </header>
 <!-- content -->
-<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-full page-navbar">
 <!-- sidebar -->
 <!-- margin-sidebar -->
     
 <!-- main -->
-<main class="content page-columns page-full" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
+<main class="content page-columns page-full column-body" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
 
 
 
 
 
-<section class="mr-hero column-screen">
-  <img class="mr-hero-logo dark-content" src="assets/logo-dark.svg" alt="marrow — Apache Arrow in Mojo">
-  <img class="mr-hero-logo light-content" src="assets/logo-light.svg" alt="marrow — Apache Arrow in Mojo">
-  <h1>One query engine.<br><span class="mr-gradient">Three ways to drive it.</span></h1>
-  <p class="lead">
-    Apache Arrow in Mojo — columnar arrays, null-aware SIMD kernels, native
-    Parquet, and a relational engine you can drive from Python eagerly, lazily,
-    or compile ahead of time into a standalone binary that carries no Python at
-    all.
-  </p>
-  <div class="mr-badges">
-    <span class="mr-badge">Written in <strong>Mojo</strong></span>
-    <span class="mr-badge">Zero-copy <strong>PyArrow</strong> interop</span>
-    <span class="mr-badge">Native <strong>Parquet</strong></span>
-    <span class="mr-badge">Checked against <strong>DuckDB</strong></span>
+<div class="mr-hero column-screen">
+<div class="mr-hero-inner">
+<div class="mr-hero-copy">
+<span class="mr-pill"><span class="mr-pill-tag">Experimental</span>Open source, Apache 2.0</span>
+<h1 class="mr-headline">Apache Arrow,<br><span class="mr-ramp">written in Mojo.</span></h1>
+<p class="mr-lead">
+  Columnar arrays, null-aware compute kernels, Parquet and Arrow IPC, and a
+  small query engine. Use it from Python much as you would PyArrow, or build a
+  Mojo query into its own executable. It covers a useful part of Arrow, not all
+  of it.
+</p>
+<div class="mr-cta">
+  <a class="mr-btn mr-btn-primary" href="tutorials/quickstart.html">
+    Read the quickstart
+    <svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+  </a>
+  <a class="mr-btn mr-btn-secondary" href="https://github.com/kszucs/marrow">
+    <i class="bi bi-github" aria-hidden="true"></i> GitHub
+  </a>
+</div>
+<ul class="mr-facts">
+  <li><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>Shares buffers with PyArrow</li>
+  <li><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>Reads and writes Parquet</li>
+  <li><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>Answers checked against DuckDB</li>
+</ul>
+</div>
+<div class="mr-hero-code">
+<div class="mr-window">
+<div class="mr-window-bar"><span class="mr-dot"></span><span class="mr-dot"></span><span class="mr-dot"></span><span class="mr-window-title">orders.py</span></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> col, lit</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>(ma.read_parquet(<span class="st">"orders.parquet"</span>)</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>   .<span class="bu">filter</span>(col(<span class="st">"price"</span>) <span class="op">&gt;</span> lit(<span class="dv">15</span>))</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>   .aggregate(by<span class="op">=</span>[<span class="st">"region"</span>], total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"price"</span>))</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>   .order_by((<span class="st">"total"</span>, <span class="st">"descending"</span>))</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>   .head(<span class="dv">10</span>)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>   .optimize()</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>   .collect())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p class="mr-window-caption">Nothing runs until <code>collect()</code>. <code>optimize()</code> rewrites the plan first; it is opt-in.</p>
+</div>
+</div>
+</div>
+<div class="mr-container column-screen">
+<div class="mr-numbers">
+  <div class="mr-number">
+    <span class="mr-number-value">215 of 278</span>
+    <span class="mr-number-label">SQL queries in the test corpus answered exactly as DuckDB answers them. The other 63 are recorded too, and wait on features marrow does not have yet.</span>
   </div>
-  <div class="mr-cta">
-    <a class="mr-btn mr-btn-primary" href="tutorials/quickstart.html">Get started →</a>
-    <a class="mr-btn mr-btn-ghost" href="guide/queries-lazy.html">Browse the guide</a>
-    <a class="mr-btn mr-btn-ghost" href="https://github.com/kszucs/marrow">View on GitHub</a>
+  <div class="mr-number">
+    <span class="mr-number-value">3</span>
+    <span class="mr-number-label">Arrow implementations (C++, Rust, Go) it exchanges IPC files and C Data with in Arrow's integration suite, for the layouts it implements.</span>
   </div>
-  <div class="mr-install">
-    <span class="mr-prompt">$</span> pixi run build_python
-    <span class="mr-dot">·</span>
-    <span class="mr-prompt">&gt;&gt;&gt;</span> import marrow as ma
-  </div>
-</section>
-
-<div class="mr-stats column-page">
-  <div class="mr-stat">
-    <span class="mr-num mr-gradient">2.9 MB</span>
-    <span class="mr-lbl">a whole Parquet query, compiled — no Python, no interpreter</span>
-  </div>
-  <div class="mr-stat">
-    <span class="mr-num mr-gradient">278</span>
-    <span class="mr-lbl">golden query cases, answers generated from DuckDB</span>
-  </div>
-  <div class="mr-stat">
-    <span class="mr-num mr-gradient">0</span>
-    <span class="mr-lbl">copies exchanging data with the Arrow ecosystem</span>
+  <div class="mr-number">
+    <span class="mr-number-value">3.0 MB</span>
+    <span class="mr-number-label">Machine code in a compiled Parquet query on macOS arm64, held there by a CI size gate. The executable also loads the Mojo runtime libraries.</span>
   </div>
 </div>
-<p class="mr-eyebrow">
-The same query, three ways
-</p>
-<h2 class="mr-section-title">
-Pick the frontend, not the engine
-</h2>
-<p>Every tab below runs the same plan through the same operators. What changes is <em>when</em> the query is decided — and what that costs you.</p>
+
+<div class="mr-section-head">
+  <span class="mr-eyebrow">Three ways in</span>
+  <h2 class="mr-section-title">Call a kernel, build a plan, or compile it</h2>
+  <p>The same arrays and kernels sit under all three. What changes is how much
+  is decided before anything runs.</p>
+</div>
 <div class="tabset-margin-container"></div><div class="panel-tabset">
 <ul class="nav nav-tabs" role="tablist"><li class="nav-item" role="presentation"><a class="nav-link active" id="tabset-1-1-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-1" role="tab" aria-controls="tabset-1-1" aria-selected="true" href="">Eager Python</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-2-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-2" role="tab" aria-controls="tabset-1-2" aria-selected="false" href="">Lazy Python</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-3-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-3" role="tab" aria-controls="tabset-1-3" aria-selected="false" href="">Compiled Mojo</a></li></ul>
 <div class="tab-content">
 <div id="tabset-1-1" class="tab-pane active" role="tabpanel" aria-labelledby="tabset-1-1-tab">
-<p>The PyArrow API you already know. Kernels run the moment you call them.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({</span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>]),</span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"price"</span>:  ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>]),</span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>})</span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>hot <span class="op">=</span> ma.compute.greater(batch.column(<span class="st">"price"</span>), ma.array([<span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>]))</span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>ma.compute.<span class="bu">filter</span>(batch.column(<span class="st">"price"</span>), hot)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Names follow PyArrow’s. Each call runs its kernel straight away.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>]),</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"price"</span>:  ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>]),</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>hot <span class="op">=</span> ma.compute.greater(batch.column(<span class="st">"price"</span>), ma.array([<span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>]))</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>ma.compute.<span class="bu">filter</span>(batch.column(<span class="st">"price"</span>), hot)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <div id="tabset-1-2" class="tab-pane" role="tabpanel" aria-labelledby="tabset-1-2-tab">
-<p>Describe the whole query first; nothing executes until <code>collect()</code>, so the optimizer sees all of it at once.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> col, lit</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>ma.read_parquet(<span class="st">"orders.parquet"</span>) <span class="op">\</span></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  .<span class="bu">filter</span>(col(<span class="st">"price"</span>) <span class="op">&gt;</span> lit(<span class="dv">15</span>)) <span class="op">\</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  .aggregate(by<span class="op">=</span>[<span class="st">"region"</span>], total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"price"</span>)) <span class="op">\</span></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  .order_by((<span class="st">"total"</span>, <span class="st">"descending"</span>)) <span class="op">\</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  .head(<span class="dv">10</span>) <span class="op">\</span></span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  .collect()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Describe the query first and run it with <code>collect()</code>. Add <code>optimize()</code> to let the plan rewriter push filters down and prune columns before it runs.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> col, lit</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>ma.read_parquet(<span class="st">"orders.parquet"</span>) <span class="op">\</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  .<span class="bu">filter</span>(col(<span class="st">"price"</span>) <span class="op">&gt;</span> lit(<span class="dv">15</span>)) <span class="op">\</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  .aggregate(by<span class="op">=</span>[<span class="st">"region"</span>], total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"price"</span>)) <span class="op">\</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  .optimize() <span class="op">\</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  .collect()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <div id="tabset-1-3" class="tab-pane" role="tabpanel" aria-labelledby="tabset-1-3-tab">
-<p>The dtypes are fixed at compile time, so the whole expression fuses into one SIMD loop and the linker deletes every kernel the query cannot reach.</p>
-<pre class="mojo"><code>from marrow.dtypes import field, int64
-from marrow.expr import QueryCli, col, scan
-from marrow.schema import schema
-
-def main() raises:
-    var cli = QueryCli("orders")
-    var min_price = cli.param("min-price", int64, default=Int64(15))
-    cli.argument("src")
-    if cli.parse():
-        var sch = schema([field("region", int64), field("price", int64)])
-        cli.run(
-            scan(cli.get("src"), sch^).filter(col("price", int64) &gt; min_price)
-        )</code></pre>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> marrow compile query.mojo <span class="at">-o</span> orders</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders orders.parquet <span class="at">--min-price</span> 15    <span class="co"># 2.9 MB, no Python anywhere</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Column types are fixed when the query is compiled, so an expression can fuse into a single loop, and kernels the query never uses are not linked in. The filter threshold and the input path stay command-line arguments.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> field, int64, string</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.expr <span class="im">import</span> <span class="dt">QueryCli</span>, col, scan</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.schema <span class="im">import</span> schema</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">main</span>() <span class="kw">raises</span><span class="op">:</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> cli <span class="op">=</span> <span class="fu">QueryCli</span>(<span class="dt">String</span>(<span class="st">"orders"</span>))</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> min_amount <span class="op">=</span> cli.<span class="fu">param</span>(<span class="dt">String</span>(<span class="st">"min-amount"</span>), int64, default<span class="op">=</span><span class="dt">Int64</span>(<span class="dv">0</span>))</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    cli.<span class="fu">argument</span>(<span class="dt">String</span>(<span class="st">"src"</span>))</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> cli.<span class="fu">parse</span>()<span class="op">:</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">var</span> sch <span class="op">=</span> <span class="fu">schema</span>(</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>            [<span class="fu">field</span>(<span class="st">"id"</span>, int64), <span class="fu">field</span>(<span class="st">"amount"</span>, int64), <span class="fu">field</span>(<span class="st">"name"</span>, string)]</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>        cli.<span class="fu">run</span>(</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>            <span class="fu">scan</span>(cli.<span class="fu">get</span>(<span class="dt">String</span>(<span class="st">"src"</span>)), sch<span class="op">^</span>).<span class="fu">filter</span>(</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>                <span class="fu">col</span>(<span class="st">"amount"</span>, int64) <span class="op">&gt;=</span> min_amount</span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>            )</span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>        )</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> marrow compile query.mojo <span class="at">-o</span> orders</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders orders.parquet <span class="at">--min-amount</span> 250</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Building takes a minute or two, so this suits a query you run many times, not one you are still shaping. <code>--bundle</code> copies the executable together with the runtime libraries it loads, for running it on another machine.</p>
 </div>
 </div>
 </div>
-<p class="mr-eyebrow">
-Where it fits
-</p>
-<h2 class="mr-section-title">
-How marrow relates to what you already use
-</h2>
-<p>marrow is <strong>alpha</strong> and far less complete than any of these. It is worth your attention where the third column is.</p>
+<div class="mr-section-head">
+  <span class="mr-eyebrow">Where it fits</span>
+  <h2 class="mr-section-title">Next to the tools you already use</h2>
+  <p>Each of these is more complete and better tested than marrow. The right
+  column is what marrow offers anyway.</p>
+</div>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -464,29 +502,29 @@ How marrow relates to what you already use
 <tr class="header">
 <th></th>
 <th>What it is</th>
-<th>Why you’d reach for marrow instead</th>
+<th>What marrow offers</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td><strong>PyArrow</strong></td>
-<td>the reference Arrow implementation</td>
-<td>Same data model, same method names, zero-copy both ways. marrow runs the compute in Mojo instead of through the interpreter</td>
+<td>Python bindings to Arrow C++, the reference implementation</td>
+<td>Similar method names, and arrays pass between the two without copying their buffers</td>
 </tr>
 <tr class="even">
 <td><strong>Polars / DuckDB</strong></td>
-<td>mature engines, far more complete</td>
-<td>They ship a runtime <em>alongside</em> your query. marrow can freeze the query itself into a binary you can drop on a machine with nothing installed</td>
+<td>Mature query engines with far broader features</td>
+<td>A fixed query compiled into its own executable. No benchmark results are published yet, so no speed claims</td>
 </tr>
 <tr class="odd">
 <td><strong>arrow-rs / DataFusion</strong></td>
-<td>the closest architectural analogue</td>
-<td>marrow is checked against them for conformance, and adds a compile-time-fused expression lane Rust monomorphization can’t quite reach</td>
+<td>Arrow and a query engine in Rust, the closest relatives in design</td>
+<td>Its IPC and C Data output is tested against arrow-rs, C++ and Go in Arrow’s integration suite</td>
 </tr>
 <tr class="even">
-<td><strong>Mojo / MAX</strong></td>
-<td>the language and its AI runtime</td>
-<td>marrow makes Arrow first-class in Mojo, and lets one kernel source serve both CPU SIMD and GPU</td>
+<td><strong>Mojo</strong></td>
+<td>The language marrow is written in</td>
+<td>Arrow arrays, Parquet and a query engine for Mojo programs; a few element-wise kernels can also run on a GPU behind a build flag</td>
 </tr>
 </tbody>
 </table>
@@ -496,88 +534,90 @@ How marrow relates to what you already use
 <i class="callout-icon"></i>
 </div>
 <div class="callout-title-container flex-fill">
-Note
+<span class="screen-reader-only">Note</span>How correctness is checked
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p><strong>How correctness is checked.</strong> 278 golden query cases whose expected answers are generated <strong>from DuckDB, never from marrow</strong>, plus the official Arrow archery suite run against the <strong>C++, Rust and Go</strong> implementations in both directions. See <a href="./reference/status.html">Status &amp; limitations</a> for what is missing and what is known to be wrong.</p>
+<p>A corpus of 278 SQL queries whose expected answers come from DuckDB, never from marrow: 215 run and match, and 63 wait on features marrow does not have yet. Arrow’s own integration suite round-trips IPC files and C Data with the C++, Rust and Go implementations, skipping the layouts marrow does not implement (unions, views, run-end encoding, extension types). See <a href="./reference/status.html">Status &amp; limitations</a> for the full list.</p>
 </div>
 </div>
-<p class="mr-eyebrow">
-See it run
-</p>
-<h2 class="mr-section-title">
-Sixty seconds with marrow
-</h2>
-<p>Build arrays straight from Python data — the type is inferred in one pass, and <code>None</code> marks a null:</p>
-<div id="8ea42a24" class="cell" data-execution_count="2">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ages   <span class="op">=</span> ma.array([<span class="dv">25</span>, <span class="dv">35</span>, <span class="dv">45</span>, <span class="va">None</span>, <span class="dv">55</span>])</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>names  <span class="op">=</span> ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>, <span class="st">"Eve"</span>])</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>salary <span class="op">=</span> ma.array([<span class="dv">70_000</span>, <span class="dv">90_000</span>, <span class="dv">110_000</span>, <span class="dv">50_000</span>, <span class="dv">130_000</span>])</span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ages)</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(names)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="mr-section-head">
+  <span class="mr-eyebrow">See it run</span>
+  <h2 class="mr-section-title">A short tour</h2>
+  <p>These cells run when the site is built, so the output below is real.</p>
+</div>
+<p>Build arrays from Python data. The type is inferred, and <code>None</code> marks a null:</p>
+<div id="fa7b8653" class="cell" data-execution_count="2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>ages   <span class="op">=</span> ma.array([<span class="dv">25</span>, <span class="dv">35</span>, <span class="dv">45</span>, <span class="va">None</span>, <span class="dv">55</span>])</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>names  <span class="op">=</span> ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>, <span class="st">"Eve"</span>])</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>salary <span class="op">=</span> ma.array([<span class="dv">70_000</span>, <span class="dv">90_000</span>, <span class="dv">110_000</span>, <span class="dv">50_000</span>, <span class="dv">130_000</span>])</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ages)</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(names)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([25, 35, 45, NULL, 55])
 StringArray([Alice, Bob, Carol, Dave, Eve])</code></pre>
 </div>
 </div>
-<p>Compute is vectorized and null-aware — a null in either operand propagates:</p>
-<div id="e014186d" class="cell" data-execution_count="3">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"next year:"</span>, ma.compute.add(ages, ma.array([<span class="dv">1</span>] <span class="op">*</span> <span class="dv">5</span>)))</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"over 40:  "</span>, ma.compute.greater(ages, ma.array([<span class="dv">40</span>] <span class="op">*</span> <span class="dv">5</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Kernels are vectorized and null-aware; a null in either operand gives a null:</p>
+<div id="e4064d52" class="cell" data-execution_count="3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"next year:"</span>, ma.compute.add(ages, ma.array([<span class="dv">1</span>] <span class="op">*</span> <span class="dv">5</span>)))</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"over 40:  "</span>, ma.compute.greater(ages, ma.array([<span class="dv">40</span>] <span class="op">*</span> <span class="dv">5</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>next year: PrimitiveArray[int64]([26, 36, 46, NULL, 56])
 over 40:   BoolArray([False, False, True, NULL, True])</code></pre>
 </div>
 </div>
 <p>Assemble columns into a <code>RecordBatch</code>, then query it lazily:</p>
-<div id="c7432ff3" class="cell" data-execution_count="4">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({<span class="st">"age"</span>: ages, <span class="st">"name"</span>: names, <span class="st">"salary"</span>: salary})</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>(ma.memtable(people)</span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>   .<span class="bu">filter</span>(col(<span class="st">"salary"</span>) <span class="op">&gt;</span> lit(<span class="dv">60_000</span>))</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>   .aggregate(headcount<span class="op">=</span>(<span class="st">"count"</span>, <span class="st">"salary"</span>), payroll<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"salary"</span>))</span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>   .collect()</span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>   .to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="e9b7c3cd" class="cell" data-execution_count="4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({<span class="st">"age"</span>: ages, <span class="st">"name"</span>: names, <span class="st">"salary"</span>: salary})</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>(ma.memtable(people)</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>   .<span class="bu">filter</span>(col(<span class="st">"salary"</span>) <span class="op">&gt;</span> lit(<span class="dv">60_000</span>))</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>   .aggregate(headcount<span class="op">=</span>(<span class="st">"count"</span>, <span class="st">"salary"</span>), payroll<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"salary"</span>))</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>   .collect()</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>   .to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-display" data-execution_count="4">
 <pre><code>[{'headcount': 4, 'payroll': 400000}]</code></pre>
 </div>
 </div>
-<p>Every array speaks the Arrow C Data Interface, so it crosses into the rest of the ecosystem as a pointer exchange:</p>
-<div id="6014e697" class="cell" data-execution_count="5">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>pa_ages <span class="op">=</span> pa.array(ages)          <span class="co"># marrow → PyArrow, no copy</span></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>back    <span class="op">=</span> ma.array(pa_ages)       <span class="co"># PyArrow → marrow, no copy</span></span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pa_ages.<span class="bu">type</span>, <span class="st">"|"</span>, <span class="bu">len</span>(back))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Arrays implement the Arrow PyCapsule interface, so PyArrow takes them without copying the buffers, and marrow takes PyArrow’s the same way:</p>
+<div id="45c120f5" class="cell" data-execution_count="5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>pa_ages <span class="op">=</span> pa.array(ages)          <span class="co"># marrow → PyArrow, no copy</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>back    <span class="op">=</span> ma.array(pa_ages)       <span class="co"># PyArrow → marrow, no copy</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pa_ages.<span class="bu">type</span>, <span class="st">"|"</span>, <span class="bu">len</span>(back))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>int64 | 5</code></pre>
 </div>
 </div>
-<p class="mr-eyebrow">Keep going</p>
-<h2 class="mr-section-title">Where to next</h2>
+<div class="mr-section-head">
+  <span class="mr-eyebrow">Keep going</span>
+  <h2 class="mr-section-title">Where to next</h2>
+</div>
 
-<div class="mr-grid column-page">
+<div class="mr-cards">
   <a class="mr-card" href="tutorials/quickstart.html">
-    <span class="mr-ico">🚀</span>
-    <h3>10-minute quickstart</h3>
-    <p>Install marrow and tour arrays, compute and tables end to end.</p>
+    <span class="mr-card-icon"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"></rect><path d="m7 9.5 3 2.5-3 2.5M13 15h4"></path></svg></span>
+    <h3>Quickstart <span class="mr-arrow">→</span></h3>
+    <p>Build the extension, then try arrays, kernels and tables.</p>
   </a>
   <a class="mr-card" href="guide/queries-lazy.html">
-    <span class="mr-ico">🧮</span>
-    <h3>Lazy queries</h3>
-    <p>Build a plan in Python, optimize it, and run it once.</p>
+    <span class="mr-card-icon"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5Z"></path><path d="m3 13 9 5 9-5"></path></svg></span>
+    <h3>Lazy queries <span class="mr-arrow">→</span></h3>
+    <p>Build a plan in Python, optionally optimize it, then run it.</p>
   </a>
   <a class="mr-card" href="guide/compile.html">
-    <span class="mr-ico">📦</span>
-    <h3>Compile a query</h3>
-    <p>Turn a Mojo query into a standalone binary with no Python in it.</p>
+    <span class="mr-card-icon"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"></path><path d="m3 8 9 5 9-5M12 13v8"></path></svg></span>
+    <h3>Compile a query <span class="mr-arrow">→</span></h3>
+    <p>Build a Mojo query into an executable, and what that does and does not include.</p>
   </a>
-  <a class="mr-card" href="reference/architecture.html">
-    <span class="mr-ico">🧠</span>
-    <h3>Architecture</h3>
-    <p>Two expression lanes, one plan IR, and why the binary is small.</p>
+  <a class="mr-card" href="reference/status.html">
+    <span class="mr-card-icon"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><path d="M6.5 10v4a3 3 0 0 0 3 3H14"></path></svg></span>
+    <h3>Status <span class="mr-arrow">→</span></h3>
+    <p>What is implemented, what is missing, and what is known to be wrong.</p>
   </a>
+</div>
 </div>
 
 
@@ -998,16 +1038,31 @@ over 40:   BoolArray([False, False, True, NULL, True])</code></pre>
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
     </div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="./tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="./guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="./reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

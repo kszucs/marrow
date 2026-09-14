@@ -76,12 +76,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -111,7 +111,26 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
@@ -366,7 +385,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -538,7 +557,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#when-it-is-and-isnt-worth-it" id="toc-when-it-is-and-isnt-worth-it" class="nav-link" data-scroll-target="#when-it-is-and-isnt-worth-it">When it is (and isn’t) worth it</a></li>
   <li><a href="#caveats" id="toc-caveats" class="nav-link" data-scroll-target="#caveats">Caveats</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/gpu.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -564,7 +583,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>Some of marrow’s kernels run on the GPU — Metal on Apple Silicon, CUDA on NVIDIA — through Mojo’s <code>DeviceContext</code>. The GPU and CPU paths are <strong>the same kernel source</strong>: every <code>apply</code> overload writes one lane function and hands it to a dispatcher that picks the target. This is experimental infrastructure to build on, not a turnkey speed-up — read <a href="#when-it-is-and-isnt-worth-it">When it is worth it</a> before reaching for it.</p>
+<p>A few of marrow’s kernels can run on the GPU through Mojo’s <code>DeviceContext</code>. They have been exercised on Metal (Apple Silicon); CUDA goes through the same Mojo API but has no CI run here. The GPU and CPU paths are <strong>the same kernel source</strong>: every <code>apply</code> overload writes one lane function and hands it to a dispatcher that picks the target. This is experimental infrastructure to build on, not a turnkey speed-up — read <a href="#when-it-is-and-isnt-worth-it">When it is worth it</a> before reaching for it.</p>
 <div class="callout callout-style-default callout-important callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -652,27 +671,27 @@ Note
 <li><strong><code>ExecContext</code></strong> is what <em>kernels</em> take. It bundles a CPU worker count and an optional device.</li>
 <li><strong><code>DeviceContext</code></strong> is Mojo’s handle on the device itself, and it is what <em>transfers</em> take.</li>
 </ul>
-<pre class="mojo gpu"><code>from marrow.execution import ExecContext
-from max.gpu.host import DeviceContext
-
-var cpu       = ExecContext.serial()                 # single-threaded CPU
-var threaded  = ExecContext.parallel(num_threads=0)  # 0 = all cores
-var automatic = ExecContext.auto()                   # the default
-var on_device = ExecContext.gpu(DeviceContext())     # run on the GPU</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode mojo gpu code-with-copy"><code class="sourceCode mojo"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.execution <span class="im">import</span> <span class="dt">ExecContext</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> <span class="bu">max</span>.gpu.host <span class="im">import</span> <span class="dt">DeviceContext</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> cpu       <span class="op">=</span> <span class="dt">ExecContext</span>.<span class="fu">serial</span>()                 <span class="co"># single-threaded CPU</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> threaded  <span class="op">=</span> <span class="dt">ExecContext</span>.<span class="fu">parallel</span>(num_threads<span class="op">=</span><span class="dv">0</span>)  <span class="co"># 0 = serial or parallel by size</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> automatic <span class="op">=</span> <span class="dt">ExecContext</span>.<span class="fu">auto</span>()                   <span class="co"># same as parallel(0)</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> on_device <span class="op">=</span> <span class="dt">ExecContext</span>.<span class="fu">gpu</span>(<span class="fu">DeviceContext</span>())     <span class="co"># run on the GPU</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="a-kernel-on-the-device-end-to-end" class="level2">
 <h2 class="anchored" data-anchor-id="a-kernel-on-the-device-end-to-end">A kernel on the device, end to end</h2>
 <p>Data movement is explicit and is a <em>kind change</em>, not a shadow copy — a buffer is either host-resident or device-resident. Upload the inputs, run the kernel, download the result:</p>
-<pre class="mojo gpu"><code>from max.gpu.host import DeviceContext
-from marrow.builders import array
-from marrow.dtypes import int32, Int32Type
-from marrow.kernels.numeric import AddKernel
-
-var ctx = DeviceContext()
-var a = array([1, 2, 3, 4], int32).to_device(ctx)
-var b = array([10, 20, 30, 40], int32).to_device(ctx)
-
-var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode mojo gpu code-with-copy"><code class="sourceCode mojo"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> <span class="bu">max</span>.gpu.host <span class="im">import</span> <span class="dt">DeviceContext</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int32, <span class="dt">Int32Type</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.numeric <span class="im">import</span> <span class="dt">AddKernel</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> ctx <span class="op">=</span> <span class="fu">DeviceContext</span>()</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> a <span class="op">=</span> <span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>], int32).<span class="fu">to_device</span>(ctx)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> b <span class="op">=</span> <span class="fu">array</span>([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>], int32).<span class="fu">to_device</span>(ctx)</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> result <span class="op">=</span> <span class="dt">AddKernel</span>.<span class="fu">apply</span>[<span class="dt">Int32Type</span>](a, b, ctx).<span class="fu">to_cpu</span>(ctx)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 50%">
@@ -705,7 +724,7 @@ var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)</code></pre>
 <section id="when-it-is-and-isnt-worth-it" class="level2">
 <h2 class="anchored" data-anchor-id="when-it-is-and-isnt-worth-it">When it is (and isn’t) worth it</h2>
 <p><strong>Transfer cost dominates.</strong> The kernels wired to the GPU are all low arithmetic intensity — roughly one operation per element — so for most workloads CPU SIMD is competitive or faster.</p>
-<p>Measured on Apple Silicon (Metal, unified memory): uploading per call is <strong>2-3× slower than the CPU</strong> even for compute-heavy kernels, and the crossover was around 10K vectors at dimension ≥ 384.</p>
+<p>Measured on Apple Silicon (Metal, unified memory) with a kernel that is no longer in the tree: uploading per call was <strong>2-3× slower than the CPU</strong> even for compute-heavy work, and the crossover was around 10K vectors at dimension ≥ 384. Treat these as orders of magnitude, not current figures.</p>
 <p>The rule that follows: <strong>upload once, run several kernels device-resident, and download at the end.</strong> Treat GPU dispatch as infrastructure for data that is already on the device, never as a per-call accelerator.</p>
 </section>
 <section id="caveats" class="level2">
@@ -1168,16 +1187,31 @@ var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)</code></pre>
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/gpu.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

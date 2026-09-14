@@ -23,6 +23,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -41,12 +76,12 @@ ul.task-list li input[type="checkbox"] {
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -76,7 +111,26 @@ ul.task-list li input[type="checkbox"] {
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
@@ -331,7 +385,7 @@ ul.task-list li input[type="checkbox"] {
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -505,7 +559,7 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#the-push-engine" id="toc-the-push-engine" class="nav-link" data-scroll-target="#the-push-engine">The push engine</a></li>
   <li><a href="#choosing-a-lane" id="toc-choosing-a-lane" class="nav-link" data-scroll-target="#choosing-a-lane">Choosing a lane</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/expressions.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -577,12 +631,12 @@ ul.task-list li input[type="checkbox"] {
 <section id="the-verbs" class="level2">
 <h2 class="anchored" data-anchor-id="the-verbs">The verbs</h2>
 <p>A plan is a sentence, read left to right:</p>
-<pre class="mojo fragment"><code>var out = (
-    table(orders)
-    .filter(col("amount", int64) &gt; lit(5, int64))
-    .limit(2)
-    .execute()
-)</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode mojo fragment code-with-copy"><code class="sourceCode mojo"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> <span class="kw">out</span> <span class="op">=</span> (</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">table</span>(orders)</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    .<span class="fu">filter</span>(<span class="fu">col</span>(<span class="st">"amount"</span>, int64) <span class="op">&gt;</span> <span class="fu">lit</span>(<span class="dv">5</span>, int64))</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    .<span class="fu">limit</span>(<span class="dv">2</span>)</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    .<span class="fu">execute</span>()</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>.filter()</code>, <code>.select()</code>, <code>.project()</code>, <code>.with_columns()</code>, <code>.drop()</code>, <code>.rename()</code>, <code>.aggregate()</code>, <code>.sort_by()</code>, <code>.limit()</code> and <code>.join()</code> chain off any relation. <code>table(batch)</code> and <code>scan(path, schema)</code> are the two sources, and <code>.execute()</code> drains the plan into a single <code>RecordBatch</code>.</p>
 </section>
 <section id="aggregates-are-methods-on-the-column" class="level2">
@@ -592,41 +646,40 @@ ul.task-list li input[type="checkbox"] {
 <div class="code-with-filename-file">
 <pre><strong>docs/snippets/query_pipeline.mojo</strong></pre>
 </div>
-<pre class="mojo" data-filename="docs/snippets/query_pipeline.mojo"><code>"""A whole query as one sentence — filter, group, having, order, limit.
-
-Compiled by `pixi run -e dev docs_check`; included by docs/guide/expressions.qmd.
-"""
-
-from marrow.builders import array
-from marrow.dtypes import int64
-from marrow.expr import col, lit, table
-from marrow.tabular import record_batch
-
-
-def main() raises:
-    var orders = record_batch(
-        [
-            array([1, 2, 1, 2], int64).copy(),
-            array([10, 20, None, 40], int64).copy(),
-        ],
-        names=["customer", "amount"],
-    )
-
-    var out = (
-        table(orders^)
-        .filter(col("amount", int64) &gt; lit(5, int64))
-        .aggregate(
-            [col("amount", int64).sum().alias("total")],
-            [col("customer", int64)],
-        )
-        .filter(col("total", int64) &gt; lit(5, int64))
-        .sort_by([col("total", int64)], [False])
-        .limit(1)
-        .execute()
-    )
-
-    print(out)
-</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2" data-filename="docs/snippets/query_pipeline.mojo"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="do">"""A whole query as one sentence — filter, group, having, order, limit.</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="do">Compiled by `pixi run -e dev docs_check`; included by docs/guide/expressions.qmd.</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="do">"""</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.expr <span class="im">import</span> col, lit, table</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.tabular <span class="im">import</span> record_batch</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">main</span>() <span class="kw">raises</span><span class="op">:</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> orders <span class="op">=</span> <span class="fu">record_batch</span>(</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>        [</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>            <span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">1</span>, <span class="dv">2</span>], int64).<span class="fu">copy</span>(),</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>            <span class="fu">array</span>([<span class="dv">10</span>, <span class="dv">20</span>, <span class="cn">None</span>, <span class="dv">40</span>], int64).<span class="fu">copy</span>(),</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>        ],</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>        names<span class="op">=</span>[<span class="st">"customer"</span>, <span class="st">"amount"</span>],</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> <span class="kw">out</span> <span class="op">=</span> (</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>        <span class="fu">table</span>(orders<span class="op">^</span>)</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">filter</span>(<span class="fu">col</span>(<span class="st">"amount"</span>, int64) <span class="op">&gt;</span> <span class="fu">lit</span>(<span class="dv">5</span>, int64))</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">aggregate</span>(</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>            [<span class="fu">col</span>(<span class="st">"amount"</span>, int64).<span class="fu">sum</span>().<span class="kw">alias</span>(<span class="st">"total"</span>)],</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>            [<span class="fu">col</span>(<span class="st">"customer"</span>, int64)],</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">filter</span>(<span class="fu">col</span>(<span class="st">"total"</span>, int64) <span class="op">&gt;</span> <span class="fu">lit</span>(<span class="dv">5</span>, int64))</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">sort_by</span>([<span class="fu">col</span>(<span class="st">"total"</span>, int64)], [<span class="cn">False</span>])</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">limit</span>(<span class="dv">1</span>)</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">execute</span>()</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="kw">out</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
@@ -663,57 +716,56 @@ Note
 <div class="code-with-filename-file">
 <pre><strong>docs/snippets/window_functions.mojo</strong></pre>
 </div>
-<pre class="mojo" data-filename="docs/snippets/window_functions.mojo"><code>"""Window functions — ranking and a partitioned running total.
-
-Compiled by `pixi run docs_check`; included by docs/guide/expressions.qmd.
-"""
-
-from marrow.builders import array
-from marrow.dtypes import int64, string
-from marrow.expr import col, row_number, table
-from marrow.tabular import record_batch
-
-
-def main() raises:
-    var sales = record_batch(
-        [
-            array(["east", "west", "east", "west"]).to_dyn(),
-            array([10, 20, 30, 40], int64).to_dyn(),
-        ],
-        names=["region", "amount"],
-    )
-
-    var out = (
-        table(sales^)
-        .with_columns(
-            ["rn", "running"],
-            [
-                row_number().over(order_by=[col("amount", int64)]),
-                col("amount", int64)
-                .sum()
-                .over(
-                    partition_by=[col("region", string)],
-                    order_by=[col("amount", int64)],
-                ),
-            ],
-        )
-        .execute()
-    )
-
-    print(out)
-</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3" data-filename="docs/snippets/window_functions.mojo"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="do">"""Window functions — ranking and a partitioned running total.</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="do">Compiled by `pixi run docs_check`; included by docs/guide/expressions.qmd.</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="do">"""</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64, string</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.expr <span class="im">import</span> col, row_number, table</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.tabular <span class="im">import</span> record_batch</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">main</span>() <span class="kw">raises</span><span class="op">:</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> sales <span class="op">=</span> <span class="fu">record_batch</span>(</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>        [</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>            <span class="fu">array</span>([<span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>, <span class="st">"west"</span>]).<span class="fu">to_dyn</span>(),</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>            <span class="fu">array</span>([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>], int64).<span class="fu">to_dyn</span>(),</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        ],</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>        names<span class="op">=</span>[<span class="st">"region"</span>, <span class="st">"amount"</span>],</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> <span class="kw">out</span> <span class="op">=</span> (</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        <span class="fu">table</span>(sales<span class="op">^</span>)</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">with_columns</span>(</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>            [<span class="st">"rn"</span>, <span class="st">"running"</span>],</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>            [</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>                <span class="fu">row_number</span>().<span class="fu">over</span>(order_by<span class="op">=</span>[<span class="fu">col</span>(<span class="st">"amount"</span>, int64)]),</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>                <span class="fu">col</span>(<span class="st">"amount"</span>, int64)</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>                .<span class="fu">sum</span>()</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>                .<span class="fu">over</span>(</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>                    partition_by<span class="op">=</span>[<span class="fu">col</span>(<span class="st">"region"</span>, string)],</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>                    order_by<span class="op">=</span>[<span class="fu">col</span>(<span class="st">"amount"</span>, int64)],</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>                ),</span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>            ],</span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>        .<span class="fu">execute</span>()</span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="kw">out</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><code>row_number</code>, <code>rank</code> and <code>dense_rank</code> are re-exported from <code>marrow.expr</code>; <code>percent_rank</code>, <code>cume_dist</code> and <code>ntile</code> come from <code>marrow.expr.builders</code>. <code>lag</code>, <code>lead</code>, <code>first_value</code>, <code>nth_value</code> and <code>last_value</code> are methods on a value. A window preserves <strong>input order</strong>, not sorted order.</p>
 </section>
 <section id="the-optimizer" class="level2">
 <h2 class="anchored" data-anchor-id="the-optimizer">The optimizer</h2>
 <p><code>execute()</code> alone optimizes nothing. The rewriter is a comptime parameter, so a binary links exactly the rules it names:</p>
-<pre class="mojo fragment"><code>from marrow.expr import AllRules
-
-var optimized = plan.optimize[AllRules]()
-print(optimized)                 # the rewritten plan, as text
-var out = optimized.execute()</code></pre>
-<p><code>AllRules</code> is fifteen rules — elimination, merging, conjunction splitting, four pushdowns and a Top-N rewrite — plus <code>ColumnPruning</code>, a preparatory downward pass. They run in a chosen order, so each sees the previous one’s output. Because a plan renders as text, <code>optimize[NoRules]()</code> and <code>optimize[AllRules]()</code> can be printed and diffed.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode mojo fragment code-with-copy"><code class="sourceCode mojo"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.expr <span class="im">import</span> <span class="dt">AllRules</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> optimized <span class="op">=</span> plan.<span class="fu">optimize</span>[<span class="dt">AllRules</span>]()</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(optimized)                 <span class="co"># the rewritten plan, as text</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> <span class="kw">out</span> <span class="op">=</span> optimized.<span class="fu">execute</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>AllRules</code> is sixteen rules — elimination, merging, conjunction splitting, six pushdowns (five for filters, one for limits) and a Top-N rewrite — plus <code>ColumnPruning</code>, a preparatory downward pass. They run in a chosen order, so each sees the previous one’s output. Because a plan renders as text, <code>optimize[NoRules]()</code> and <code>optimize[AllRules]()</code> can be printed and diffed.</p>
 </section>
 <section id="late-bound-parameters" class="level2">
 <h2 class="anchored" data-anchor-id="late-bound-parameters">Late-bound parameters</h2>
@@ -722,30 +774,29 @@ var out = optimized.execute()</code></pre>
 <div class="code-with-filename-file">
 <pre><strong>docs/snippets/late_bound_params.mojo</strong></pre>
 </div>
-<pre class="mojo" data-filename="docs/snippets/late_bound_params.mojo"><code>"""A late-bound parameter, supplied per execution through `Bindings`.
-
-Compiled by `pixi run docs_check`; included by docs/guide/expressions.qmd.
-"""
-
-from marrow.builders import array
-from marrow.dtypes import int64
-from marrow.expr import col, param, table
-from marrow.scalars import Int64Scalar
-from marrow.tabular import record_batch
-
-
-def main() raises:
-    var batch = record_batch(
-        [array([1, 5, 9], int64).to_dyn()], names=["a"]
-    )
-
-    var min_a = param("min-a", int64)
-    var plan = table(batch^).filter(col("a", int64) &gt; min_a.copy())
-
-    # One plan, two executions -- the value travels through, not into, the plan.
-    print(plan.execute(bindings={"min-a": Int64Scalar(4).to_dyn()}))
-    print(plan.execute(bindings={"min-a": Int64Scalar(8).to_dyn()}))
-</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5" data-filename="docs/snippets/late_bound_params.mojo"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="do">"""A late-bound parameter, supplied per execution through `Bindings`.</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="do">Compiled by `pixi run docs_check`; included by docs/guide/expressions.qmd.</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="do">"""</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.expr <span class="im">import</span> col, param, table</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.scalars <span class="im">import</span> <span class="dt">Int64Scalar</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.tabular <span class="im">import</span> record_batch</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">main</span>() <span class="kw">raises</span><span class="op">:</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> batch <span class="op">=</span> <span class="fu">record_batch</span>(</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>        [<span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">5</span>, <span class="dv">9</span>], int64).<span class="fu">to_dyn</span>()], names<span class="op">=</span>[<span class="st">"a"</span>]</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> min_a <span class="op">=</span> <span class="fu">param</span>(<span class="st">"min-a"</span>, int64)</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> plan <span class="op">=</span> <span class="fu">table</span>(batch<span class="op">^</span>).<span class="fu">filter</span>(<span class="fu">col</span>(<span class="st">"a"</span>, int64) <span class="op">&gt;</span> min_a.<span class="fu">copy</span>())</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>    <span class="co"># One plan, two executions -- the value travels through, not into, the plan.</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(plan.<span class="fu">execute</span>(bindings<span class="op">=</span>{<span class="st">"min-a"</span><span class="op">:</span> <span class="fu">Int64Scalar</span>(<span class="dv">4</span>).<span class="fu">to_dyn</span>()}))</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(plan.<span class="fu">execute</span>(bindings<span class="op">=</span>{<span class="st">"min-a"</span><span class="op">:</span> <span class="fu">Int64Scalar</span>(<span class="dv">8</span>).<span class="fu">to_dyn</span>()}))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The value travels <em>through</em> the execution as a <code>Bindings</code> map rather than being substituted into a copy of the plan, so two executions of one plan cannot interfere — and the fused inner loop is unchanged, so a parameter costs nothing per row. Give it a <code>default=</code> to make it optional.</p>
 <p>This is what <a href="../guide/compile.html">compiling a query</a> is built on.</p>
@@ -1198,16 +1249,31 @@ def main() raises:
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/expressions.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

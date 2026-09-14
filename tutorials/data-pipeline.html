@@ -76,12 +76,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -111,7 +111,26 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
@@ -366,7 +385,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -540,7 +559,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#step-5-aggregate" id="toc-step-5-aggregate" class="nav-link" data-scroll-target="#step-5-aggregate">Step 5 — aggregate</a></li>
   <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">Where to go next</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/tutorials/data-pipeline.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -570,7 +589,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="the-data" class="level2">
 <h2 class="anchored" data-anchor-id="the-data">The data</h2>
 <p>We start with two <code>RecordBatch</code>es. The first holds employees; the second maps department ids to names.</p>
-<div id="f770c9d2" class="cell" data-execution_count="2">
+<div id="93bd3dc2" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>employees <span class="op">=</span> ma.record_batch({</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>:    ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>, <span class="st">"Eve"</span>, <span class="st">"Frank"</span>]),</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dept_id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">1</span>]),</span>
@@ -595,7 +614,7 @@ RecordBatch(num_rows=3, schema=Schema(fields=[dept_id: int64, dept: string]))</c
 <h2 class="anchored" data-anchor-id="step-1-filter-rows">Step 1 — filter rows</h2>
 <p>Filtering <em>rows</em> has two spellings, and it is worth seeing both.</p>
 <p>The <strong>query layer</strong> is the one you will reach for. <code>col(...)</code> names a column, comparison operators build a predicate, and the engine applies it to every column for you:</p>
-<div id="ed178953" class="cell" data-execution_count="3">
+<div id="318ed8de" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> col, lit</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>top_earners <span class="op">=</span> (</span>
@@ -609,7 +628,7 @@ RecordBatch(num_rows=3, schema=Schema(fields=[dept_id: int64, dept: string]))</c
 </div>
 </div>
 <p>The <strong>eager kernels</strong> work a column at a time, so the same thing by hand is a mask plus a <code>filter</code> per column. Reach for this when you already hold a mask:</p>
-<div id="1b7200a4" class="cell" data-execution_count="4">
+<div id="975b6c61" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>threshold <span class="op">=</span> ma.array([<span class="dv">80_000</span>] <span class="op">*</span> employees.num_rows)</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>well_paid <span class="op">=</span> mc.greater(employees.column(<span class="st">"salary"</span>), threshold)</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"mask:"</span>, well_paid)</span>
@@ -626,7 +645,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <section id="step-2-sort" class="level2">
 <h2 class="anchored" data-anchor-id="step-2-sort">Step 2 — sort</h2>
 <p><code>sort_by</code> orders a batch by one or more keys. Pass a list of <code>(column, "ascending" | "descending")</code> tuples; the second argument controls null placement (<code>None</code> uses the default). Multi-column keys are honoured — ties on the first key break on the next:</p>
-<div id="1a7c463f" class="cell" data-execution_count="5">
+<div id="ed4c4efc" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>by_salary <span class="op">=</span> top_earners.sort_by([(<span class="st">"dept_id"</span>, <span class="st">"ascending"</span>), (<span class="st">"salary"</span>, <span class="st">"descending"</span>)])</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_salary.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -644,19 +663,19 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <li><code>num_threads</code> — <code>0</code> auto-selects cores, <code>1</code> forces the serial path.</li>
 </ul>
 <p>Enrich each employee with their department name:</p>
-<div id="21aebde0" class="cell" data-execution_count="6">
+<div id="531266fc" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>enriched <span class="op">=</span> employees.join(departments, [<span class="st">"dept_id"</span>], join_type<span class="op">=</span><span class="st">"inner"</span>)</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(enriched.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[{'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Bob', 'dept_id': 2, 'salary': 72000, 'age': 28, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Eve', 'dept_id': 2, 'salary': 61000, 'age': 24, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52, 'dept_id_right': 3, 'dept': 'Marketing'}]</code></pre>
 </div>
 </div>
-<p>Columns that collide between the two sides are suffixed with <code>_right</code>, matching PyArrow’s behaviour.</p>
+<p>Columns that collide between the two sides are suffixed with <code>_right</code>, the right-hand key included.</p>
 </section>
 <section id="step-4-put-it-together" class="level2">
 <h2 class="anchored" data-anchor-id="step-4-put-it-together">Step 4 — put it together</h2>
 <p>The whole pipeline reads as a short sequence of transformations: join, filter, sort, project.</p>
-<div id="2c7b754d" class="cell" data-execution_count="7">
+<div id="b008e537" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 1. join employees to their departments</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>joined <span class="op">=</span> employees.join(departments, [<span class="st">"dept_id"</span>], join_type<span class="op">=</span><span class="st">"inner"</span>)</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -673,12 +692,12 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <pre><code>[{'name': 'Carol', 'dept': 'Engineering', 'salary': 120000}, {'name': 'Frank', 'dept': 'Engineering', 'salary': 105000}, {'name': 'Alice', 'dept': 'Engineering', 'salary': 95000}, {'name': 'Dave', 'dept': 'Marketing', 'salary': 88000}]</code></pre>
 </div>
 </div>
-<p>Only the join is eager here — it is a <code>RecordBatch</code> method. Everything after it is one plan, so the engine sees the filter, the sort and the projection together instead of materializing an intermediate batch per step.</p>
+<p>Only the join is eager here — it is a <code>RecordBatch</code> method. Everything after it is one plan, which runs when <code>collect()</code> is called. Add <code>.optimize()</code> before <code>collect()</code> to let the plan rewriter act on it first.</p>
 </section>
 <section id="step-5-aggregate" class="level2">
 <h2 class="anchored" data-anchor-id="step-5-aggregate">Step 5 — aggregate</h2>
 <p>Aggregation is not an eager kernel call — it happens inside a <strong>query plan</strong>. Wrap the batch with <code>ma.memtable()</code> to get a lazy table, describe what you want, and call <code>.collect()</code> to run it. Nulls are skipped:</p>
-<div id="baf85a3e" class="cell" data-execution_count="8">
+<div id="ff1d251d" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>q <span class="op">=</span> ma.memtable(joined)</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>totals <span class="op">=</span> q.aggregate(</span>
@@ -692,7 +711,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 </div>
 </div>
 <p>The same call with a <code>by=</code> key groups instead of reducing to one row — one code path for both:</p>
-<div id="376d3edd" class="cell" data-execution_count="9">
+<div id="28f61352" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>by_dept <span class="op">=</span> (</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    q.aggregate(</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>        by<span class="op">=</span>[<span class="st">"dept"</span>],</span>
@@ -707,7 +726,7 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 </div>
 </div>
 <p>Nothing has run until <code>.collect()</code>, so a plan is a reusable template — and <code>explain()</code> shows what will happen:</p>
-<div id="4e925d57" class="cell" data-execution_count="10">
+<div id="9d9376de" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_dept.explain())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>Sort(Aggregate(InMemoryTable(6 rows), by=dept, count(salary), mean(salary)), dept asc)</code></pre>
@@ -1147,8 +1166,8 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../tutorials/quickstart.html" class="pagination-link" aria-label="10-minute quickstart">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">10-minute quickstart</span>
+      <a href="../tutorials/quickstart.html" class="pagination-link" aria-label="Quickstart">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Quickstart</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
@@ -1161,16 +1180,31 @@ names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/tutorials/data-pipeline.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

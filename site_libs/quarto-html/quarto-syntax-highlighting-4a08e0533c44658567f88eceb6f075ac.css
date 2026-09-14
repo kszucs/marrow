@@ -1,0 +1,248 @@
+/* quarto syntax highlight colors */
+:root {
+  --quarto-hl-al-color: #c62828;
+  --quarto-hl-an-color: #858c99;
+  --quarto-hl-at-color: #a15c07;
+  --quarto-hl-bn-color: #1f55c8;
+  --quarto-hl-bu-color: #1f55c8;
+  --quarto-hl-ch-color: #1d7a3a;
+  --quarto-hl-co-color: #858c99;
+  --quarto-hl-cv-color: #858c99;
+  --quarto-hl-cn-color: #1f55c8;
+  --quarto-hl-cf-color: #c2410c;
+  --quarto-hl-dt-color: #a15c07;
+  --quarto-hl-dv-color: #1f55c8;
+  --quarto-hl-do-color: #6b7280;
+  --quarto-hl-er-color: #c62828;
+  --quarto-hl-ex-color: #c2410c;
+  --quarto-hl-fl-color: #1f55c8;
+  --quarto-hl-fu-color: #1f55c8;
+  --quarto-hl-im-color: #c2410c;
+  --quarto-hl-in-color: #858c99;
+  --quarto-hl-kw-color: #c2410c;
+  --quarto-hl-op-color: #515866;
+  --quarto-hl-ot-color: #1c1e26;
+  --quarto-hl-pp-color: #c2410c;
+  --quarto-hl-re-color: #858c99;
+  --quarto-hl-sc-color: #a15c07;
+  --quarto-hl-ss-color: #1d7a3a;
+  --quarto-hl-st-color: #1d7a3a;
+  --quarto-hl-va-color: #1c1e26;
+  --quarto-hl-vs-color: #1d7a3a;
+  --quarto-hl-wa-color: #c62828;
+}
+
+/* other quarto variables */
+:root {
+  --quarto-font-monospace: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* syntax highlight based on Pandoc's rules */
+pre > code.sourceCode > span {
+  font-style: inherit;
+  color: #1c1e26;
+}
+
+code.sourceCode > span {
+  font-style: inherit;
+  color: #1c1e26;
+}
+
+div.sourceCode,
+div.sourceCode pre.sourceCode {
+  font-style: inherit;
+  color: #1c1e26;
+}
+
+/* Normal */
+code span {
+  font-style: inherit;
+  color: #1c1e26;
+}
+
+/* Alert */
+code span.al {
+  font-weight: bold;
+  font-style: inherit;
+  color: #c62828;
+}
+
+/* Annotation */
+code span.an {
+  font-style: inherit;
+  color: #858c99;
+}
+
+/* Attribute */
+code span.at {
+  font-style: inherit;
+  color: #a15c07;
+}
+
+/* BaseN */
+code span.bn {
+  font-style: inherit;
+  color: #1f55c8;
+}
+
+/* BuiltIn */
+code span.bu {
+  font-style: inherit;
+  color: #1f55c8;
+}
+
+/* ControlFlow */
+code span.cf {
+  font-style: inherit;
+  color: #c2410c;
+}
+
+/* Char */
+code span.ch {
+  font-style: inherit;
+  color: #1d7a3a;
+}
+
+/* Constant */
+code span.cn {
+  font-style: inherit;
+  color: #1f55c8;
+}
+
+/* Comment */
+code span.co {
+  font-style: inherit;
+  color: #858c99;
+}
+
+/* CommentVar */
+code span.cv {
+  font-style: inherit;
+  color: #858c99;
+}
+
+/* Documentation */
+code span.do {
+  font-style: inherit;
+  color: #6b7280;
+}
+
+/* DataType */
+code span.dt {
+  font-style: inherit;
+  color: #a15c07;
+}
+
+/* DecVal */
+code span.dv {
+  font-style: inherit;
+  color: #1f55c8;
+}
+
+/* Error */
+code span.er {
+  font-style: inherit;
+  color: #c62828;
+}
+
+/* Extension */
+code span.ex {
+  font-style: inherit;
+  color: #c2410c;
+}
+
+/* Float */
+code span.fl {
+  font-style: inherit;
+  color: #1f55c8;
+}
+
+/* Function */
+code span.fu {
+  font-style: inherit;
+  color: #1f55c8;
+}
+
+/* Import */
+code span.im {
+  font-style: inherit;
+  color: #c2410c;
+}
+
+/* Information */
+code span.in {
+  font-style: inherit;
+  color: #858c99;
+}
+
+/* Keyword */
+code span.kw {
+  font-style: inherit;
+  color: #c2410c;
+}
+
+/* Operator */
+code span.op {
+  font-style: inherit;
+  color: #515866;
+}
+
+/* Other */
+code span.ot {
+  font-style: inherit;
+  color: #1c1e26;
+}
+
+/* Preprocessor */
+code span.pp {
+  font-style: inherit;
+  color: #c2410c;
+}
+
+/* RegionMarker */
+code span.re {
+  font-style: inherit;
+  color: #858c99;
+}
+
+/* SpecialChar */
+code span.sc {
+  font-style: inherit;
+  color: #a15c07;
+}
+
+/* SpecialString */
+code span.ss {
+  font-style: inherit;
+  color: #1d7a3a;
+}
+
+/* String */
+code span.st {
+  font-style: inherit;
+  color: #1d7a3a;
+}
+
+/* Variable */
+code span.va {
+  font-style: inherit;
+  color: #1c1e26;
+}
+
+/* VerbatimString */
+code span.vs {
+  font-style: inherit;
+  color: #1d7a3a;
+}
+
+/* Warning */
+code span.wa {
+  font-style: inherit;
+  color: #c62828;
+}
+
+.prevent-inlining {
+  content: "</";
+}
+
+/*# sourceMappingURL=8b7b600f99a04451b65995483d1a354c.css.map */

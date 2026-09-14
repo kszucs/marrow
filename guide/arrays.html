@@ -76,12 +76,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -111,16 +111,35 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
 <meta property="og:title" content="Arrays – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta property="og:description" content="An experimental Apache Arrow implementation in Mojo, usable from Python or compiled into native executables.">
 <meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta property="og:site_name" content="Marrow">
 <meta name="twitter:title" content="Arrays – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta name="twitter:description" content="An experimental Apache Arrow implementation in Mojo, usable from Python or compiled into native executables.">
 <meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -366,7 +385,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -551,7 +570,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#type-erased-builders" id="toc-type-erased-builders" class="nav-link" data-scroll-target="#type-erased-builders">Type-erased builders</a></li>
   </ul></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/arrays.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -587,13 +606,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 <div id="tabset-1-2" class="tab-pane" role="tabpanel" aria-labelledby="tabset-1-2-tab">
 <p><code>array()</code> takes the dtype as an <strong>argument</strong>, not a parameter, and lives in <code>marrow.builders</code>:</p>
-<pre class="mojo"><code>from marrow.builders import array, arange, nulls
-from marrow.dtypes import int32, int64, Int32Type
-
-var a = array([1, 2, 3, None, 5], int64)   # nulls at index 3
-var b = array([True, False, True])          # BoolArray — no dtype needed
-var c = array(["hello", None, "world"])     # StringArray
-var d = arange[Int32Type](0, 10)</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array, arange, nulls</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int32, int64, <span class="dt">Int32Type</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> a <span class="op">=</span> <span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="cn">None</span>, <span class="dv">5</span>], int64)   <span class="co"># nulls at index 3</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> b <span class="op">=</span> <span class="fu">array</span>([<span class="cn">True</span>, <span class="cn">False</span>, <span class="cn">True</span>])          <span class="co"># BoolArray — no dtype needed</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> c <span class="op">=</span> <span class="fu">array</span>([<span class="st">"hello"</span>, <span class="cn">None</span>, <span class="st">"world"</span>])     <span class="co"># StringArray</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> d <span class="op">=</span> <span class="fu">arange</span>[<span class="dt">Int32Type</span>](<span class="dv">0</span>, <span class="dv">10</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </div>
 </div>
@@ -601,7 +620,7 @@ var d = arange[Int32Type](0, 10)</code></pre>
 <section id="primitive-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="primitive-arrays">Primitive arrays</h2>
 <p>Primitive arrays hold fixed-size scalar values: booleans, integers, and floats.</p>
-<div id="56c990b1" class="cell" data-execution_count="2">
+<div id="65288031" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Integer arrays</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>i64 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>])</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>i32 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
@@ -616,7 +635,7 @@ PrimitiveArray[int32]([1, 2, 3, 4, 5])
 PrimitiveArray[uint8]([0, 127, 255])</code></pre>
 </div>
 </div>
-<div id="2fc93493" class="cell" data-execution_count="3">
+<div id="34867130" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Floating point</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>f32 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>], <span class="bu">type</span><span class="op">=</span>ma.float32())</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>f64 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>])   <span class="co"># float64 inferred</span></span>
@@ -627,7 +646,7 @@ PrimitiveArray[uint8]([0, 127, 255])</code></pre>
 PrimitiveArray[float64]([1.0, 2.5, 3.14])</code></pre>
 </div>
 </div>
-<div id="00bfb7a7" class="cell" data-execution_count="4">
+<div id="36987578" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Boolean</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>])</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(b)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -638,7 +657,7 @@ PrimitiveArray[float64]([1.0, 2.5, 3.14])</code></pre>
 <section id="null-values" class="level3">
 <h3 class="anchored" data-anchor-id="null-values">Null values</h3>
 <p>Pass <code>None</code> to mark a position as null. The validity bitmap tracks which positions are valid.</p>
-<div id="47159a2e" class="cell" data-execution_count="5">
+<div id="ba7a6685" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(arr)</span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, arr.null_count)</span>
@@ -669,7 +688,7 @@ Note
 </section>
 <section id="inspecting-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="inspecting-arrays">Inspecting arrays</h3>
-<div id="0f73b9bb" class="cell" data-execution_count="6">
+<div id="ced3d5c6" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, <span class="bu">len</span>(arr))</span>
@@ -686,7 +705,7 @@ type:       int32</code></pre>
 <section id="string-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="string-arrays">String arrays</h2>
 <p>String arrays store variable-length UTF-8 strings.</p>
-<div id="89cc5975" class="cell" data-execution_count="7">
+<div id="b25afc07" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"hello"</span>, <span class="va">None</span>, <span class="st">"world"</span>, <span class="st">"mañana"</span>])</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s)</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, s.null_count)</span>
@@ -701,7 +720,7 @@ is_valid(1): False</code></pre>
 <section id="list-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="list-arrays">List arrays</h2>
 <p>List arrays store variable-length sequences. Each element is itself a list.</p>
-<div id="d0cf2cee" class="cell" data-execution_count="8">
+<div id="512b78fb" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>nested <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], [<span class="dv">6</span>]])</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(nested)</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, nested.<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -712,7 +731,7 @@ type: list&lt;int64&gt;</code></pre>
 </div>
 <section id="nulls-in-list-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="nulls-in-list-arrays">Nulls in list arrays</h3>
-<div id="3d29e9cc" class="cell" data-execution_count="9">
+<div id="ef392c66" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>with_null <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], <span class="va">None</span>, [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]])</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(with_null)</span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, with_null.null_count)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -726,7 +745,7 @@ null count: 1</code></pre>
 <section id="struct-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="struct-arrays">Struct arrays</h2>
 <p>Struct arrays store rows of named fields — like a table with one row per element.</p>
-<div id="f688c2ab" class="cell" data-execution_count="10">
+<div id="840ffce2" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.array([</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Alice"</span>, <span class="st">"age"</span>: <span class="dv">30</span>},</span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Bob"</span>,   <span class="st">"age"</span>: <span class="dv">25</span>},</span>
@@ -743,7 +762,7 @@ type: struct&lt;name: string, age: int64&gt;</code></pre>
 <section id="slicing" class="level2">
 <h2 class="anchored" data-anchor-id="slicing">Slicing</h2>
 <p><code>slice(offset, length)</code> returns a zero-copy view of a sub-range. No data is copied.</p>
-<div id="ae4a2e67" class="cell" data-execution_count="11">
+<div id="2f394232" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>, <span class="dv">60</span>])</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"original: "</span>, arr)</span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"slice(2, 3):"</span>, arr.<span class="bu">slice</span>(<span class="dv">2</span>, <span class="dv">3</span>))   <span class="co"># [30, NULL, 50]</span></span>
@@ -755,7 +774,7 @@ slice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])</code></pre>
 </div>
 </div>
 <p>Slicing works on all array types:</p>
-<div id="22afc7ba" class="cell" data-execution_count="12">
+<div id="17d2af78" class="cell" data-execution_count="12">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>, <span class="st">"d"</span>, <span class="st">"e"</span>])</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s.<span class="bu">slice</span>(<span class="dv">1</span>, <span class="dv">3</span>))   <span class="co"># ["b", "c", "d"]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -767,7 +786,7 @@ slice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])</code></pre>
 <h2 class="anchored" data-anchor-id="fixedsizelist-arrays">FixedSizeList arrays</h2>
 <p>FixedSizeList arrays store sequences of a <em>fixed</em> length per element — the natural layout for embedding vectors or coordinates, where every row has the same width.</p>
 <p>Type inference always produces a variable-length <code>list</code>, even when every row happens to be the same length:</p>
-<div id="9edd7811" class="cell" data-execution_count="13">
+<div id="53f4f9de" class="cell" data-execution_count="13">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co"># inference sees lists — the result is list&lt;float64&gt;, not a fixed-size list</span></span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>coords <span class="op">=</span> ma.array([[<span class="fl">1.0</span>, <span class="fl">2.0</span>], [<span class="fl">3.0</span>, <span class="fl">4.0</span>], [<span class="fl">5.0</span>, <span class="fl">6.0</span>]])</span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(coords.<span class="bu">type</span>)   <span class="co"># list&lt;float64&gt;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -776,7 +795,7 @@ slice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])</code></pre>
 </div>
 </div>
 <p>To get a genuine <code>fixed_size_list</code>, pass the type explicitly with <code>fixed_size_list_(value_type, size)</code>. The fixed width is part of the type, which lets kernels skip per-row offset lookups:</p>
-<div id="9f33ddf4" class="cell" data-execution_count="14">
+<div id="9527e146" class="cell" data-execution_count="14">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>coords <span class="op">=</span> ma.array(</span>
 <span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    [[<span class="fl">1.0</span>, <span class="fl">2.0</span>], [<span class="fl">3.0</span>, <span class="fl">4.0</span>], [<span class="fl">5.0</span>, <span class="fl">6.0</span>]],</span>
 <span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">type</span><span class="op">=</span>ma.fixed_size_list_(ma.float64(), <span class="dv">2</span>),</span>
@@ -792,57 +811,57 @@ type: fixed_size_list&lt;item: float64&gt;</code></pre>
 <section id="building-arrays-in-mojo" class="level2">
 <h2 class="anchored" data-anchor-id="building-arrays-in-mojo">Building arrays in Mojo</h2>
 <p><code>ma.array()</code> is a convenience over the native <strong>builder</strong> API — the mutable staging area you accumulate values in before freezing them with <code>finish()</code>. Reach for it in Mojo when values arrive one at a time.</p>
-<pre class="mojo"><code>from marrow.builders import Int64Builder
-from marrow.arrays import Int64Array
-
-var b = Int64Builder(capacity=4)
-b.append(10)
-b.append(20)
-b.append_null()
-b.append(40)
-
-var arr: Int64Array = b.finish()
-print(arr)               # PrimitiveArray[int64]([10, 20, NULL, 40])</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> <span class="dt">Int64Builder</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.arrays <span class="im">import</span> <span class="dt">Int64Array</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> b <span class="op">=</span> <span class="fu">Int64Builder</span>(capacity<span class="op">=</span><span class="dv">4</span>)</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>b.<span class="fu">append</span>(<span class="dv">10</span>)</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>b.<span class="fu">append</span>(<span class="dv">20</span>)</span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>b.<span class="fu">append_null</span>()</span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>b.<span class="fu">append</span>(<span class="dv">40</span>)</span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> arr<span class="op">:</span> <span class="dt">Int64Array</span> <span class="op">=</span> b.<span class="fu">finish</span>()</span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(arr)               <span class="co"># PrimitiveArray[int64]([10, 20, NULL, 40])</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>capacity</code> pre-allocates the backing buffer; it is optional but avoids reallocation when the size is known.</p>
 <p><code>StringBuilder</code> tracks offsets for you:</p>
-<pre class="mojo"><code>from marrow.builders import StringBuilder
-from marrow.arrays import StringArray
-
-var sb = StringBuilder()
-sb.append("hello")
-sb.append_null()
-sb.append("world")
-var strs: StringArray = sb.finish()   # StringArray([hello, NULL, world])</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb30"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> <span class="dt">StringBuilder</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.arrays <span class="im">import</span> <span class="dt">StringArray</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> sb <span class="op">=</span> <span class="fu">StringBuilder</span>()</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>sb.<span class="fu">append</span>(<span class="st">"hello"</span>)</span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>sb.<span class="fu">append_null</span>()</span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>sb.<span class="fu">append</span>(<span class="st">"world"</span>)</span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> strs<span class="op">:</span> <span class="dt">StringArray</span> <span class="op">=</span> sb.<span class="fu">finish</span>()   <span class="co"># StringArray([hello, NULL, world])</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section id="nested-builders" class="level3">
 <h3 class="anchored" data-anchor-id="nested-builders">Nested builders</h3>
 <p>A <code>ListBuilder</code> wraps a child builder. Append child values, then <strong>commit</strong> each list element with <code>append_valid()</code> — or <code>append_null()</code> for a null list:</p>
-<pre class="mojo"><code>from marrow.builders import ListBuilder, Int64Builder
-
-var lists = ListBuilder(Int64Builder())
-var child_any = lists.values()      # a DynBuilder over the child
-ref child = child_any.as_int64()    # borrow it at its real type
-
-child.append(1)
-child.append(2)
-lists.append_valid()                # [1, 2]
-
-child.append(3)
-lists.append_valid()                # [3]
-
-lists.append_null()                 # a null list
-var arr = lists.finish()</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb31"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> <span class="dt">ListBuilder</span>, <span class="dt">Int64Builder</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> lists <span class="op">=</span> <span class="fu">ListBuilder</span>(<span class="fu">Int64Builder</span>())</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> child_any <span class="op">=</span> lists.<span class="fu">values</span>()      <span class="co"># a DynBuilder over the child</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a><span class="kw">ref</span> child <span class="op">=</span> child_any.<span class="fu">as_int64</span>()    <span class="co"># borrow it at its real type</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>child.<span class="fu">append</span>(<span class="dv">1</span>)</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>child.<span class="fu">append</span>(<span class="dv">2</span>)</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>lists.<span class="fu">append_valid</span>()                <span class="co"># [1, 2]</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>child.<span class="fu">append</span>(<span class="dv">3</span>)</span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>lists.<span class="fu">append_valid</span>()                <span class="co"># [3]</span></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a>lists.<span class="fu">append_null</span>()                 <span class="co"># a null list</span></span>
+<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> arr <span class="op">=</span> lists.<span class="fu">finish</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>values()</code> hands back a <strong><code>DynBuilder</code></strong>, which has no <code>append</code> of its own — narrow it with <code>.as_int64()</code> / <code>.as_string()</code> / … first. <code>StructBuilder</code> and <code>FixedSizeListBuilder</code> follow the same build-children-then-commit shape.</p>
 </section>
 <section id="type-erased-builders" class="level3">
 <h3 class="anchored" data-anchor-id="type-erased-builders">Type-erased builders</h3>
 <p><code>DynBuilder</code> is the runtime-typed builder. Construct one from a <code>DataType</code> when the type is only known at run time; typed builders convert to it implicitly:</p>
-<pre class="mojo"><code>from marrow.builders import DynBuilder, Int64Builder
-from marrow.dtypes import int64
-
-var dyn = DynBuilder(int64)      # int64 is already an instance — not int64()
-
-var typed = Int64Builder()
-var erased: DynBuilder = typed^  # move it in -- no explicit wrapper needed</code></pre>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb32"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> <span class="dt">DynBuilder</span>, <span class="dt">Int64Builder</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> dyn <span class="op">=</span> <span class="fu">DynBuilder</span>(int64)      <span class="co"># int64 is already an instance — not int64()</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> typed <span class="op">=</span> <span class="fu">Int64Builder</span>()</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> erased<span class="op">:</span> <span class="dt">DynBuilder</span> <span class="op">=</span> typed<span class="op">^</span>  <span class="co"># move it in -- no explicit wrapper needed</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The conversion is implicit, so no <code>DynBuilder(...)</code> wrapper is needed, but the typed builder is <strong>moved</strong> (<code>typed^</code>) rather than copied: builders are not <code>ImplicitlyCopyable</code>, which keeps ownership visible at the call site.</p>
 <p><code>finish()</code> on a <code>DynBuilder</code> returns a <code>DynArray</code>, the type-erased array container.</p>
 
@@ -1285,16 +1304,31 @@ var erased: DynBuilder = typed^  # move it in -- no explicit wrapper needed</cod
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/arrays.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

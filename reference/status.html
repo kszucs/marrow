@@ -40,12 +40,12 @@ ul.task-list li input[type="checkbox"] {
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -75,7 +75,26 @@ ul.task-list li input[type="checkbox"] {
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
@@ -330,7 +349,7 @@ ul.task-list li input[type="checkbox"] {
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -503,7 +522,7 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#python-specific-limits" id="toc-python-specific-limits" class="nav-link" data-scroll-target="#python-specific-limits">Python-specific limits</a></li>
   <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">Errors</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/status.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -529,13 +548,13 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<p>marrow is <strong>alpha</strong>. Both Apache Arrow and Mojo are moving targets, and this page is the honest inventory — kept next to the machine-checked sources it is derived from, so it can be re-verified rather than believed.</p>
+<p>marrow is <strong>experimental</strong>. Both Apache Arrow and Mojo are moving targets. This page lists what works and what does not, with a pointer to the source each line comes from, so it can be checked rather than taken on trust.</p>
 <section id="how-correctness-is-measured" class="level2">
 <h2 class="anchored" data-anchor-id="how-correctness-is-measured">How correctness is measured</h2>
 <p>Two independent checks, neither of which grades marrow against itself:</p>
 <ul>
 <li><strong>The golden corpus</strong> — <code>golden/</code>, <strong>278 query cases</strong>. Each records a SQL query, the answer <strong>generated from DuckDB</strong>, and the marrow spelling. The expectations are <em>never</em> regenerated from marrow. The corpus currently carries <strong>zero <code>xfail</code>s</strong>: every case that compiles, passes.</li>
-<li><strong>Arrow archery integration</strong> — the official cross-implementation suite, run against the <strong>C++, Rust and Go</strong> implementations in both directions (<code>pixi run -e integration integration</code>).</li>
+<li><strong>Arrow archery integration</strong> — the official cross-implementation suite, run against the <strong>C++, Rust and Go</strong> implementations in both directions (<code>pixi run -e integration integration</code>), skipping the layouts marrow does not implement: unions, views, run-end encoding and extension types.</li>
 </ul>
 </section>
 <section id="known-wrong-answers" class="level2">
@@ -577,7 +596,7 @@ ul.task-list li input[type="checkbox"] {
 </tr>
 <tr class="even">
 <td style="text-align: right;">10</td>
-<td>temporal — date_diff, age, strftime/strptime, make_date, iso_week</td>
+<td>temporal — date_diff, age, strftime/strptime, make_date, epoch seconds, month intervals, time zones, timestamp literals</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;">8</td>
@@ -585,7 +604,7 @@ ul.task-list li input[type="checkbox"] {
 </tr>
 <tr class="even">
 <td style="text-align: right;">7</td>
-<td>math — atan2 and the rest of the trigonometric family</td>
+<td>math — greatest/least, rounding to digits, bitwise operators, gcd/lcm, signbit, trigonometry</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;">5</td>
@@ -643,7 +662,7 @@ ul.task-list li input[type="checkbox"] {
 </tr>
 <tr class="even">
 <td><strong>Sources</strong></td>
-<td>Parquet and Arrow IPC only. <strong>No CSV, no JSON.</strong> <code>scan</code>/<code>read_parquet</code> takes <strong>one file</strong> — no globs, directories, hive partitions or object storage</td>
+<td>A lazy scan reads <strong>one Parquet file</strong>, local or at an object-store URI through OpenDAL (whose C library is installed separately), or an in-memory batch. Arrow IPC is read and written eagerly. <strong>No CSV, no JSON</strong>, and no globs, directories or hive partitions</td>
 </tr>
 <tr class="odd">
 <td><strong>Parquet</strong></td>
@@ -651,7 +670,7 @@ ul.task-list li input[type="checkbox"] {
 </tr>
 <tr class="even">
 <td><strong>Optimizer</strong></td>
-<td>15 rules plus column pruning. <strong>No cost model</strong>, so no join reordering and no build-side selection</td>
+<td>16 rules plus column pruning. <strong>No cost model</strong>, so no join reordering and no build-side selection</td>
 </tr>
 <tr class="odd">
 <td><strong>Execution</strong></td>
@@ -676,12 +695,10 @@ ul.task-list li input[type="checkbox"] {
 <h2 class="anchored" data-anchor-id="python-specific-limits">Python-specific limits</h2>
 <p>The Python bindings are narrower than the Mojo core, and some of the gaps are CPython-binding limits rather than missing features:</p>
 <ul>
-<li><strong>Aggregates are not on the eager surface.</strong> <code>marrow.compute</code> has no <code>sum</code> / <code>min</code> / <code>max</code> / <code>mean</code>; reductions live in the query layer.</li>
-<li><strong>String and temporal verbs are unbound.</strong> All 17 (<code>substr</code>, <code>lpad</code>, <code>replace</code>, <code>split_part</code>, <code>position</code>, <code>epoch</code>, <code>last_day</code>, <code>week</code>, …) exist and evaluate in <strong>both</strong> Mojo lanes; none is reachable from Python.</li>
-<li><strong>No window functions from Python.</strong> They exist in the Mojo lane only.</li>
-<li><strong>Statistics pruning is unreachable from Python</strong> — a <code>PythonObject</code> has already erased the type the pruning overload needs, so a filtered scan reads every row group.</li>
-<li><strong><code>==</code> on a dtype or an array is identity comparison.</strong> <code>tp_richcompare</code> is not reachable through the binding API, so <code>ma.int32() == ma.int32()</code> is <code>False</code>. Compare <code>str()</code> instead.</li>
-<li><strong>Methods where PyArrow has properties</strong> — <code>Array.type()</code>, <code>RecordBatch.num_rows()</code>. The <code>tp_getset</code> slot is unexposed.</li>
+<li><strong>Most aggregates are not on the eager surface.</strong> <code>marrow.compute</code> has <code>any</code> and <code>all</code>, but no <code>sum</code> / <code>min</code> / <code>max</code> / <code>mean</code>; those reductions live in the query layer.</li>
+<li><strong>Row groups are skipped only in an optimized plan.</strong> <code>.optimize()</code> pushes filters into the Parquet scan; <code>collect()</code> on a plan that was not optimized reads every row group.</li>
+<li><strong><code>==</code> on an <code>Array</code> is identity, not element-wise.</strong> Use <code>mc.equal</code> to compare values. Dtypes, fields and schemas do compare by value.</li>
+<li><strong>Some <code>pyarrow.compute</code> options are missing.</strong> <code>skip_nulls=False</code>, multi-key <code>sort_keys</code>, <code>nan_is_null=True</code> and <code>boundscheck=False</code> raise <code>NotImplementedError</code>, and <code>memory_pool</code> is ignored.</li>
 </ul>
 </section>
 <section id="errors" class="level2">
@@ -1125,16 +1142,31 @@ ul.task-list li input[type="checkbox"] {
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/status.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  

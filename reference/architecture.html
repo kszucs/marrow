@@ -41,12 +41,12 @@ ul.task-list li input[type="checkbox"] {
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-4a08e0533c44658567f88eceb6f075ac.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -76,7 +76,26 @@ ul.task-list li input[type="checkbox"] {
 }</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
@@ -331,7 +350,7 @@ ul.task-list li input[type="checkbox"] {
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">10-minute quickstart</span></a>
+ <span class="menu-text">Quickstart</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -504,7 +523,7 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#why-the-compiled-binary-is-small" id="toc-why-the-compiled-binary-is-small" class="nav-link" data-scroll-target="#why-the-compiled-binary-is-small">Why the compiled binary is small</a></li>
   <li><a href="#what-this-costs" id="toc-what-this-costs" class="nav-link" data-scroll-target="#what-this-costs">What this costs</a></li>
   </ul>
-</nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/architecture.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -556,7 +575,7 @@ ul.task-list li input[type="checkbox"] {
 <tr class="even">
 <td><code>ArrowScalar</code></td>
 <td><code>DynScalar</code></td>
-<td><code>PrimitiveScalar[T]</code>, <code>StringScalar</code>, …</td>
+<td><code>PrimitiveScalar[T]</code>, <code>BinaryLikeScalar[T]</code>, …</td>
 </tr>
 <tr class="odd">
 <td><code>Builder</code></td>
@@ -582,7 +601,7 @@ ul.task-list li input[type="checkbox"] {
 <section id="buffers-and-views" class="level2">
 <h2 class="anchored" data-anchor-id="buffers-and-views">Buffers and views</h2>
 <p><code>Buffer</code> is ref-counted and immutable by default (<code>Buffer[mut=True]</code> is the building form, frozen by <code>finish()</code>). An allocation is CPU, FOREIGN, MAPPED, HOST or DEVICE — data movement is a <em>kind change</em>, not a shadow copy.</p>
-<p><code>BufferView</code> / <code>BitmapView</code> are borrowed, offset-applied spans, and they are what kernels actually compute over. Naked pointer arithmetic is confined to five files; everything else goes through the views.</p>
+<p><code>BufferView</code> / <code>BitmapView</code> are borrowed, offset-applied spans, and they are what kernels actually compute over. Raw pointers are confined to the buffer, view, C Data, byte-order and codec/IO layers; everything else goes through the views.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -637,16 +656,16 @@ Note
 <tbody>
 <tr class="odd">
 <td>every value comptime — the plan holds a direct kernel</td>
-<td style="text-align: right;"><strong>1,478,768</strong></td>
+<td style="text-align: right;"><strong>1,519,476</strong></td>
 </tr>
 <tr class="even">
 <td>the aggregate resolved from a function <em>name</em> at run time, as the Python frontend does</td>
-<td style="text-align: right;">12,024,976</td>
+<td style="text-align: right;">13,032,812</td>
 </tr>
 </tbody>
 </table>
-<p>Same query, same answer, <strong>8× the code</strong> — because the second one cannot prove which kernels it will not call.</p>
-<p>The rule set is itself a comptime parameter — <code>plan.optimize[AllRules]()</code> — so a binary links exactly the rules it names, and <code>execute()</code> alone links none. Output writers are comptime parameters for the same reason: <code>cli.run[parquet=True]</code> costs 656,576 bytes that <code>cli.run</code> does not pay.</p>
+<p>Same query, same answer, <strong>about 8.6× the code</strong> — because the second one cannot prove which kernels it will not call. (Figures from the gate’s baseline as of the Mojo 1.2.0.dev2026091305 upgrade.)</p>
+<p>The rule set is itself a comptime parameter — <code>plan.optimize[AllRules]()</code> — so a binary links exactly the rules it names, and <code>execute()</code> alone links none. Output writers are comptime parameters for the same reason: the Parquet and IPC writers together added about 657 KB that <code>cli.run</code> does not pay, when last measured.</p>
 <p><code>benchmarks/binary_size/</code> is the live gate, at a 0.5% threshold. Trust it over any ratio quoted in prose, including this one.</p>
 </section>
 <section id="what-this-costs" class="level2">
@@ -1095,16 +1114,31 @@ Note
 <footer class="footer">
   <div class="nav-footer">
     <div class="nav-footer-left">
-<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+<p>marrow — Apache Arrow in Mojo</p>
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    </div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/architecture.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../tutorials/quickstart.html">
+<p>Quickstart</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html">
+<p>Guide</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="../reference/status.html">
+<p>Status</p>
+</a>
+  </li>  
     <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/kszucs/marrow">
-      <i class="bi bi-github" role="img">
+      <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
     </a>
   </li>  
