@@ -21,6 +21,7 @@ each introduced by a ULEB128 header. `header & 1` selects the run kind:
                       LSB-first, `bit_width` bits each.
 """
 
+from std.bit import byte_swap
 from std.sys import size_of
 from std.memory import unsafe_memcpy
 
@@ -503,7 +504,11 @@ struct Plain:
                 arr[i] = 0xFF
         for i in range(width):
             arr[FULL - width + i] = span[off + i]
-        return SIMD[native, 1].from_bytes[big_endian=True](arr)
+        # Not `SIMD.from_bytes`: it dereferences the byte array at the native
+        # type's alignment, which for an `int128`/`int256` decimal is an aligned
+        # SSE load that faults on x86-64. `fixed` reads little-endian, so a
+        # swap turns the big-endian bytes into the value on either host.
+        return byte_swap(LittleEndian.fixed[native](arr, 0))
 
     @staticmethod
     def encode_primitive[

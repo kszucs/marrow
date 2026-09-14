@@ -28,11 +28,19 @@ struct LittleEndian:
         kernel's string path against `std.hashlib`, which loads wide. Every
         Parquet and IPC decode paid it too. The bitcast is why `unsafe_ptr` is
         used here: this module is the byte-order abstraction, and confining the
-        raw load to it is what keeps it out of the decoders."""
+        raw load to it is what keeps it out of the decoders.
+
+        **The load is unaligned.** A byte span promises no alignment, and a
+        typed dereference assumes `align_of[Scalar[T]]` -- 16 for `int128` and
+        32 for `int256` -- which x86-64 lowers to an aligned SSE move that
+        faults on an odd address. That is exactly what `SIMD.from_bytes` does,
+        and it crashed `PrimitiveScalar.value()` on Linux x86-64 while ARM, which
+        does not trap on alignment, passed."""
         var v = (
             data.unsafe_ptr()
             .unsafe_offset(pos)
-            .unsafe_bitcast[Scalar[T]]()[unsafe_offset=0]
+            .unsafe_bitcast[Scalar[T]]()
+            .unsafe_load[alignment=1](0)
         )
         comptime if is_big_endian():
             return byte_swap(v)
