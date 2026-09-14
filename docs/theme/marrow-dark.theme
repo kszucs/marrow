@@ -1,0 +1,230 @@
+{
+  "background-color": "#10131a",
+  "editor-colors": {
+    "BackgroundColor": "#10131a",
+    "BracketMatching": "#65676a",
+    "CodeFolding": "#253749",
+    "CurrentLine": "#2b3036",
+    "CurrentLineNumber": "#e1e4e8",
+    "IconBorder": "#24292e",
+    "IndentationLine": "#d7dbe0",
+    "LineNumbers": "#444d56",
+    "MarkBookmark": "#8be9fd",
+    "MarkBreakpointActive": "#ff5555",
+    "MarkBreakpointDisabled": "#bd93f9",
+    "MarkBreakpointReached": "#f1fa8c",
+    "MarkError": "#b31d28",
+    "MarkExecution": "#44475a",
+    "MarkWarning": "#ffab70",
+    "ModifiedLines": "#f97583",
+    "ReplaceHighlight": "#40c661",
+    "SavedLines": "#28a745",
+    "SearchHighlight": "#404030",
+    "Separator": "#1b1f23",
+    "SpellChecking": "#ff5555",
+    "TabMarker": "#444d56",
+    "TemplateBackground": "#23241e",
+    "TemplateFocusedPlaceholder": "#22231d",
+    "TemplatePlaceholder": "#22231d",
+    "TemplateReadOnlyPlaceholder": "#262721",
+    "TextSelection": "#253749",
+    "WordWrapMarker": "#2f3031"
+  },
+  "metadata": {
+    "copyright": [
+      "derived from the GitHub theme shipped with Quarto"
+    ],
+    "license": "MIT",
+    "name": "Marrow Dark",
+    "revision": 1
+  },
+  "text-color": "#e8eaef",
+  "text-styles": {
+    "Alert": {
+      "bold": true,
+      "italic": false,
+      "selected-text-color": "#f06a5b",
+      "text-color": "#f06a5b"
+    },
+    "Annotation": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#6f7686",
+      "text-color": "#6f7686"
+    },
+    "Attribute": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#f2c46d",
+      "text-color": "#f2c46d"
+    },
+    "BaseN": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#8cb8ff",
+      "text-color": "#8cb8ff"
+    },
+    "BuiltIn": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#8cb8ff",
+      "text-color": "#8cb8ff"
+    },
+    "Char": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#9dd49a",
+      "text-color": "#9dd49a"
+    },
+    "Comment": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#6f7686",
+      "text-color": "#6f7686"
+    },
+    "CommentVar": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#6f7686",
+      "text-color": "#6f7686"
+    },
+    "Constant": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#8cb8ff",
+      "text-color": "#8cb8ff"
+    },
+    "ControlFlow": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#ff8f4a",
+      "text-color": "#ff8f4a"
+    },
+    "DataType": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#f2c46d",
+      "text-color": "#f2c46d"
+    },
+    "DecVal": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#8cb8ff",
+      "text-color": "#8cb8ff"
+    },
+    "Documentation": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#7d8697",
+      "text-color": "#7d8697"
+    },
+    "Error": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#f06a5b",
+      "text-color": "#f06a5b"
+    },
+    "Extension": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#ff8f4a",
+      "text-color": "#ff8f4a"
+    },
+    "Float": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#8cb8ff",
+      "text-color": "#8cb8ff"
+    },
+    "Function": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#8cb8ff",
+      "text-color": "#8cb8ff"
+    },
+    "Import": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#ff8f4a",
+      "text-color": "#ff8f4a"
+    },
+    "Information": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#6f7686",
+      "text-color": "#6f7686"
+    },
+    "Keyword": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#ff8f4a",
+      "text-color": "#ff8f4a"
+    },
+    "Normal": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#e8eaef",
+      "text-color": "#e8eaef"
+    },
+    "Operator": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#a3aab8",
+      "text-color": "#a3aab8"
+    },
+    "Other": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#e8eaef",
+      "text-color": "#e8eaef"
+    },
+    "Preprocessor": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#ff8f4a",
+      "text-color": "#ff8f4a"
+    },
+    "RegionMarker": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#6f7686",
+      "text-color": "#6f7686"
+    },
+    "SpecialChar": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#f2c46d",
+      "text-color": "#f2c46d"
+    },
+    "SpecialString": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#9dd49a",
+      "text-color": "#9dd49a"
+    },
+    "String": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#9dd49a",
+      "text-color": "#9dd49a"
+    },
+    "Variable": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#e8eaef",
+      "text-color": "#e8eaef"
+    },
+    "VerbatimString": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#9dd49a",
+      "text-color": "#9dd49a"
+    },
+    "Warning": {
+      "bold": false,
+      "italic": false,
+      "selected-text-color": "#f06a5b",
+      "text-color": "#f06a5b"
+    }
+  }
+}

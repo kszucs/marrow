@@ -17,6 +17,9 @@ website:
   twitter-card: true
   site-url: https://marrow.kszucs.dev
   repo-url: https://github.com/kszucs/marrow
+  repo-subdir: docs
+  repo-branch: main
+  repo-actions: [edit, issue]
   page-navigation: true
   back-to-top-navigation: true
 
@@ -100,10 +103,17 @@ website:
 
   page-footer:
     border: true
-    left: "Marrow — Apache Arrow in Mojo. Built with [Quarto](https://quarto.org)."
+    left: "marrow — Apache Arrow in Mojo"
     right:
+      - text: "Quickstart"
+        href: tutorials/quickstart.qmd
+      - text: "Guide"
+        href: guide/arrays.qmd
+      - text: "Status"
+        href: reference/status.qmd
       - icon: github
         href: https://github.com/kszucs/marrow
+        aria-label: GitHub
 
 format:
   html:
@@ -113,6 +123,11 @@ format:
     css: theme/marrow.css
     include-in-header:
       - theme/head.html
+    syntax-definitions:
+      - theme/mojo.xml
+    syntax-highlighting:
+      light: theme/marrow-light.theme
+      dark: theme/marrow-dark.theme
     toc: true
     toc-depth: 3
     toc-title: "On this page"

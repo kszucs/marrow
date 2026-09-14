@@ -1,55 +1,83 @@
 /*-- scss:defaults --*/
 
-// ===========================================================================
-// Marrow — light theme. Same molten brand ramp, warm paper surfaces.
-// ===========================================================================
+// Marrow, light theme. Tokens only, as in marrow-dark.scss.
 
+// Brand -----------------------------------------------------------------------
 $mr-red:    #d62c17;
 $mr-orange: #ea5a00;
 $mr-amber:  #f5a300;
+$mr-accent: #c2410c;   // the orange, deepened to read as text on white
 
-$mr-bg:     #ffffff;
-$mr-bg-2:   #faf9f7;
-$mr-bg-3:   #f4f2ee;
-$mr-border: #e6e2dc;
-$mr-text:   #1c1e26;
-$mr-muted:  #6b7280;
+// Neutrals --------------------------------------------------------------------
+$mr-bg:            #ffffff;
+$mr-surface:       #f7f8fa;
+$mr-raised:        #eff1f4;
+$mr-border:        #e4e7ec;
+$mr-border-strong: #cfd4dc;
+$mr-text:          #1c1e26;   // the logo's ink
+$mr-muted:         #515866;
+$mr-subtle:        #858c99;
 
+// Type ------------------------------------------------------------------------
 $font-family-sans-serif: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-$headings-font-family:   "Space Grotesk", "Inter", sans-serif;
+$headings-font-family:   "Urbanist", "Inter", sans-serif;
 $font-family-monospace:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-$headings-font-weight:   600;
+$headings-font-weight:   700;
+$line-height-base:       1.7;
 
-$body-bg:      $mr-bg;
-$body-color:   $mr-text;
-$primary:      $mr-orange;
-$link-color:   #c74800;
-$link-hover-color: $mr-red;
-$border-color: $mr-border;
-
-$navbar-bg:    rgba(255, 255, 255, 0.8);
-$navbar-fg:    $mr-text;
-$navbar-hl:    $mr-orange;
-
-$code-color:      #b5410a;
-$code-bg:         rgba(234, 90, 0, 0.07);
-$code-block-bg:   #0e1017;
-
+// Bootstrap -------------------------------------------------------------------
+$body-bg:          $mr-bg;
+$body-color:       $mr-text;
+$primary:          $mr-orange;
+$link-color:       $mr-accent;
+$link-hover-color: #9a3412;
+$border-color:     $mr-border;
+$input-bg:         $mr-bg;
+$input-border-color: $mr-border;
+$popover-bg:       $mr-bg;
 $table-border-color: $mr-border;
-$toc-color: $mr-muted;
+$nav-tabs-link-active-border-color: $mr-border;
+
+// Quarto ----------------------------------------------------------------------
+$navbar-bg:     $mr-bg;
+$navbar-fg:     $mr-muted;
+$navbar-hl:     $mr-text;
+$navbar-brand:  $mr-text;
+$sidebar-fg:    $mr-muted;
+$sidebar-hl:    $mr-text;
+$footer-bg:     $mr-bg;
+$footer-fg:     $mr-subtle;
+$toc-color:     $mr-muted;
+$toc-active-border:   $mr-accent;
+$toc-inactive-border: $mr-border;
+$code-color:    $mr-text;
+$code-bg:       $mr-raised;
+$code-block-bg: $mr-surface;
+
+$callout-color-note:      #2563eb;
+$callout-color-tip:       #15803d;
+$callout-color-warning:   #b45309;
+$callout-color-important: #c62828;
+$callout-color-caution:   $mr-orange;
 
 /*-- scss:rules --*/
 
 :root {
-  --mr-red:    #{$mr-red};
-  --mr-orange: #{$mr-orange};
-  --mr-amber:  #{$mr-amber};
-  --mr-bg:     #{$mr-bg};
-  --mr-bg-2:   #{$mr-bg-2};
-  --mr-bg-3:   #{$mr-bg-3};
-  --mr-border: #{$mr-border};
-  --mr-text:   #{$mr-text};
-  --mr-muted:  #{$mr-muted};
-  --mr-grad:   linear-gradient(100deg, #{$mr-red} 0%, #{$mr-orange} 48%, #{$mr-amber} 100%);
-  --mr-glow:   0 0 40px rgba(234, 90, 0, 0.18);
+  --mr-accent: #{$mr-accent};
+  --mr-accent-soft: rgba(234, 90, 0, 0.08);
+  --mr-bg:      #{$mr-bg};
+  --mr-surface: #{$mr-surface};
+  --mr-raised:  #{$mr-raised};
+  --mr-border:  #{$mr-border};
+  --mr-border-strong: #{$mr-border-strong};
+  --mr-text:    #{$mr-text};
+  --mr-muted:   #{$mr-muted};
+  --mr-subtle:  #{$mr-subtle};
+  --mr-ramp:    linear-gradient(90deg, #{$mr-red}, #{$mr-orange} 55%, #{$mr-amber});
+  --mr-btn-bg:  #{$mr-accent};
+  --mr-btn-fg:  #ffffff;
+  --mr-btn-hover: #9a3412;
+  --mr-grid-line: rgba(28, 30, 38, 0.045);
+  --mr-glow:    rgba(234, 90, 0, 0.10);
+  --mr-shadow:  0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.08);
 }

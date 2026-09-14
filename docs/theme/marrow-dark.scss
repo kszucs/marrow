@@ -1,65 +1,84 @@
 /*-- scss:defaults --*/
 
-// ===========================================================================
-// Marrow — dark theme (default). Palette drawn from the logo: molten
-// red → orange → amber chevrons glowing on near-black.
-// ===========================================================================
+// Marrow, dark theme (the default). This file holds tokens only: Bootstrap and
+// Quarto variables, and the --mr-* custom properties that marrow.css reads.
 
-// Brand ramp ---------------------------------------------------------------
+// Brand: the logo's chevrons (docs/assets/logo.py) ----------------------------
 $mr-red:    #e5341f;
 $mr-orange: #ff6a00;
 $mr-amber:  #ffc400;
+$mr-accent: #ff8f4a;   // the orange, lifted to read as text on the page colour
 
-// Surfaces -----------------------------------------------------------------
-$mr-bg:        #0b0d12;   // page
-$mr-bg-2:      #11141c;   // raised surface
-$mr-bg-3:      #171b26;   // cards / code
-$mr-border:    #262b38;
-$mr-text:      #e9ecf3;
-$mr-muted:     #99a1b3;
+// Neutrals --------------------------------------------------------------------
+$mr-bg:            #0b0d12;
+$mr-surface:       #10131a;   // code, cards, inputs
+$mr-raised:        #161a23;   // hover, table heads, inline code
+$mr-border:        #222733;
+$mr-border-strong: #313746;
+$mr-text:          #e8eaef;
+$mr-muted:         #a3aab8;
+$mr-subtle:        #6f7686;
 
-// Typography ---------------------------------------------------------------
+// Type ------------------------------------------------------------------------
 $font-family-sans-serif: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-$headings-font-family:   "Space Grotesk", "Inter", sans-serif;
+$headings-font-family:   "Urbanist", "Inter", sans-serif;
 $font-family-monospace:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-$headings-font-weight:   600;
+$headings-font-weight:   700;
+$line-height-base:       1.7;
 
-// Bootstrap core ------------------------------------------------------------
-$body-bg:      $mr-bg;
-$body-color:   $mr-text;
-$primary:      $mr-orange;
-$link-color:   #ff9042;
-$link-hover-color: $mr-amber;
-$border-color: $mr-border;
-
-// Navbar --------------------------------------------------------------------
-$navbar-bg:    rgba(11, 13, 18, 0.72);
-$navbar-fg:    $mr-text;
-$navbar-hl:    $mr-amber;
-
-// Code ----------------------------------------------------------------------
-$code-color:      #ffb066;
-$code-bg:         rgba(255, 106, 0, 0.08);
-$code-block-bg:   #0e1017;
-
-// Tables --------------------------------------------------------------------
+// Bootstrap -------------------------------------------------------------------
+$body-bg:          $mr-bg;
+$body-color:       $mr-text;
+$primary:          $mr-orange;
+$link-color:       $mr-accent;
+$link-hover-color: #ffb07a;
+$border-color:     $mr-border;
+$input-bg:         $mr-surface;
+$input-border-color: $mr-border;
+$popover-bg:       $mr-surface;
 $table-border-color: $mr-border;
+$nav-tabs-link-active-border-color: $mr-border;
 
-// TOC / sidebar
-$toc-color: $mr-muted;
+// Quarto ----------------------------------------------------------------------
+$navbar-bg:     $mr-bg;
+$navbar-fg:     $mr-muted;
+$navbar-hl:     $mr-text;
+$navbar-brand:  $mr-text;
+$sidebar-fg:    $mr-muted;
+$sidebar-hl:    $mr-text;
+$footer-bg:     $mr-bg;
+$footer-fg:     $mr-subtle;
+$toc-color:     $mr-muted;
+$toc-active-border:   $mr-accent;
+$toc-inactive-border: $mr-border;
+$code-color:    $mr-text;
+$code-bg:       $mr-raised;
+$code-block-bg: $mr-surface;
+
+$callout-color-note:      #5b9cf5;
+$callout-color-tip:       #3fb97a;
+$callout-color-warning:   #e8a53a;
+$callout-color-important: #f06a5b;
+$callout-color-caution:   $mr-orange;
 
 /*-- scss:rules --*/
 
 :root {
-  --mr-red:    #{$mr-red};
-  --mr-orange: #{$mr-orange};
-  --mr-amber:  #{$mr-amber};
-  --mr-bg:     #{$mr-bg};
-  --mr-bg-2:   #{$mr-bg-2};
-  --mr-bg-3:   #{$mr-bg-3};
-  --mr-border: #{$mr-border};
-  --mr-text:   #{$mr-text};
-  --mr-muted:  #{$mr-muted};
-  --mr-grad:   linear-gradient(100deg, #{$mr-red} 0%, #{$mr-orange} 48%, #{$mr-amber} 100%);
-  --mr-glow:   0 0 40px rgba(255, 106, 0, 0.35);
+  --mr-accent: #{$mr-accent};
+  --mr-accent-soft: rgba(255, 143, 74, 0.12);
+  --mr-bg:      #{$mr-bg};
+  --mr-surface: #{$mr-surface};
+  --mr-raised:  #{$mr-raised};
+  --mr-border:  #{$mr-border};
+  --mr-border-strong: #{$mr-border-strong};
+  --mr-text:    #{$mr-text};
+  --mr-muted:   #{$mr-muted};
+  --mr-subtle:  #{$mr-subtle};
+  --mr-ramp:    linear-gradient(90deg, #{$mr-red}, #{$mr-orange} 55%, #{$mr-amber});
+  --mr-btn-bg:  #{$mr-orange};
+  --mr-btn-fg:  #140a02;
+  --mr-btn-hover: #ff8124;
+  --mr-grid-line: rgba(255, 255, 255, 0.035);
+  --mr-glow:    rgba(255, 106, 0, 0.16);
+  --mr-shadow:  0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
 }

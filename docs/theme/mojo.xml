@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE language>
+<!--
+  Mojo, for the docs' code listings. Pandoc ships no Mojo grammar, so without
+  this every ```mojo block rendered as plain text. It covers what the guides
+  use -- keywords, argument conventions, builtin types, decorators, strings,
+  docstrings, comments and numbers -- not the whole language.
+-->
+<language name="Mojo" version="1" kateversion="5.0" section="Sources" extensions="*.mojo" mimetype="text/x-mojo" license="MIT">
+  <highlighting>
+    <list name="keywords">
+      <item>alias</item>
+      <item>as</item>
+      <item>comptime</item>
+      <item>def</item>
+      <item>del</item>
+      <item>extension</item>
+      <item>fn</item>
+      <item>global</item>
+      <item>lambda</item>
+      <item>nonlocal</item>
+      <item>raises</item>
+      <item>struct</item>
+      <item>trait</item>
+      <item>var</item>
+      <item>where</item>
+    </list>
+    <list name="conventions">
+      <item>borrowed</item>
+      <item>deinit</item>
+      <item>inout</item>
+      <item>mut</item>
+      <item>out</item>
+      <item>owned</item>
+      <item>read</item>
+      <item>ref</item>
+    </list>
+    <list name="flow">
+      <item>and</item>
+      <item>assert</item>
+      <item>break</item>
+      <item>case</item>
+      <item>continue</item>
+      <item>elif</item>
+      <item>else</item>
+      <item>except</item>
+      <item>finally</item>
+      <item>for</item>
+      <item>if</item>
+      <item>in</item>
+      <item>is</item>
+      <item>match</item>
+      <item>not</item>
+      <item>or</item>
+      <item>pass</item>
+      <item>raise</item>
+      <item>return</item>
+      <item>try</item>
+      <item>while</item>
+      <item>with</item>
+      <item>yield</item>
+    </list>
+    <list name="imports">
+      <item>from</item>
+      <item>import</item>
+    </list>
+    <list name="constants">
+      <item>False</item>
+      <item>None</item>
+      <item>Self</item>
+      <item>True</item>
+    </list>
+    <list name="types">
+      <item>ArcPointer</item>
+      <item>Bool</item>
+      <item>DType</item>
+      <item>Dict</item>
+      <item>Float16</item>
+      <item>Float32</item>
+      <item>Float64</item>
+      <item>Int</item>
+      <item>Int8</item>
+      <item>Int16</item>
+      <item>Int32</item>
+      <item>Int64</item>
+      <item>List</item>
+      <item>Optional</item>
+      <item>Origin</item>
+      <item>OwnedPointer</item>
+      <item>SIMD</item>
+      <item>Scalar</item>
+      <item>Set</item>
+      <item>Some</item>
+      <item>Span</item>
+      <item>String</item>
+      <item>StringSlice</item>
+      <item>Tuple</item>
+      <item>UInt</item>
+      <item>UInt8</item>
+      <item>UInt16</item>
+      <item>UInt32</item>
+      <item>UInt64</item>
+      <item>UnsafePointer</item>
+      <item>Variant</item>
+    </list>
+    <list name="builtins">
+      <item>abort</item>
+      <item>abs</item>
+      <item>conforms_to</item>
+      <item>isa</item>
+      <item>len</item>
+      <item>max</item>
+      <item>min</item>
+      <item>print</item>
+      <item>range</item>
+      <item>rebind</item>
+      <item>size_of</item>
+    </list>
+
+    <contexts>
+      <context name="Normal" attribute="Normal Text" lineEndContext="#stay">
+        <DetectSpaces />
+        <keyword attribute="Import" String="imports" context="#stay" />
+        <keyword attribute="Keyword" String="keywords" context="#stay" />
+        <keyword attribute="Keyword" String="conventions" context="#stay" />
+        <keyword attribute="Control Flow" String="flow" context="#stay" />
+        <keyword attribute="Constant" String="constants" context="#stay" />
+        <keyword attribute="Data Type" String="types" context="#stay" />
+        <keyword attribute="Builtin Function" String="builtins" context="#stay" />
+        <RegExpr attribute="Decorator" String="@[_a-zA-Z][_a-zA-Z0-9]*" context="#stay" />
+        <RegExpr attribute="Function" String="[_a-zA-Z][_a-zA-Z0-9]*(?=\s*[\[(])" context="#stay" />
+        <RegExpr attribute="Data Type" String="\b[A-Z][a-zA-Z0-9]*\b" context="#stay" />
+        <DetectIdentifier />
+        <StringDetect attribute="Documentation" String="&quot;&quot;&quot;" context="Docstring Q" />
+        <StringDetect attribute="Documentation" String="'''" context="Docstring A" />
+        <DetectChar attribute="String" char="&quot;" context="String Q" />
+        <DetectChar attribute="String" char="'" context="String A" />
+        <DetectChar attribute="Comment" char="#" context="Comment" />
+        <RegExpr attribute="Number" String="\b0[xX][0-9a-fA-F_]+\b" context="#stay" />
+        <RegExpr attribute="Number" String="\b0[bB][01_]+\b" context="#stay" />
+        <RegExpr attribute="Float" String="\b[0-9][0-9_]*\.[0-9_]*([eE][+-]?[0-9]+)?\b" context="#stay" />
+        <RegExpr attribute="Number" String="\b[0-9][0-9_]*\b" context="#stay" />
+        <AnyChar attribute="Operator" String="+-*/%=&lt;&gt;!&amp;|^~:" context="#stay" />
+      </context>
+
+      <context name="Comment" attribute="Comment" lineEndContext="#pop" />
+
+      <context name="Docstring Q" attribute="Documentation" lineEndContext="#stay">
+        <StringDetect attribute="Documentation" String="&quot;&quot;&quot;" context="#pop" />
+      </context>
+      <context name="Docstring A" attribute="Documentation" lineEndContext="#stay">
+        <StringDetect attribute="Documentation" String="'''" context="#pop" />
+      </context>
+
+      <context name="String Q" attribute="String" lineEndContext="#pop">
+        <RegExpr attribute="Special Char" String="\\." context="#stay" />
+        <DetectChar attribute="String" char="&quot;" context="#pop" />
+      </context>
+      <context name="String A" attribute="String" lineEndContext="#pop">
+        <RegExpr attribute="Special Char" String="\\." context="#stay" />
+        <DetectChar attribute="String" char="'" context="#pop" />
+      </context>
+    </contexts>
+
+    <itemDatas>
+      <itemData name="Normal Text" defStyleNum="dsNormal" spellChecking="false" />
+      <itemData name="Keyword" defStyleNum="dsKeyword" spellChecking="false" />
+      <itemData name="Control Flow" defStyleNum="dsControlFlow" spellChecking="false" />
+      <itemData name="Import" defStyleNum="dsImport" spellChecking="false" />
+      <itemData name="Constant" defStyleNum="dsConstant" spellChecking="false" />
+      <itemData name="Data Type" defStyleNum="dsDataType" spellChecking="false" />
+      <itemData name="Builtin Function" defStyleNum="dsBuiltIn" spellChecking="false" />
+      <itemData name="Function" defStyleNum="dsFunction" spellChecking="false" />
+      <itemData name="Decorator" defStyleNum="dsAttribute" spellChecking="false" />
+      <itemData name="Number" defStyleNum="dsDecVal" spellChecking="false" />
+      <itemData name="Float" defStyleNum="dsFloat" spellChecking="false" />
+      <itemData name="Operator" defStyleNum="dsOperator" spellChecking="false" />
+      <itemData name="String" defStyleNum="dsString" />
+      <itemData name="Special Char" defStyleNum="dsSpecialChar" spellChecking="false" />
+      <itemData name="Documentation" defStyleNum="dsDocumentation" />
+      <itemData name="Comment" defStyleNum="dsComment" />
+    </itemDatas>
+  </highlighting>
+  <general>
+    <comments>
+      <comment name="singleLine" start="#" position="afterwhitespace" />
+    </comments>
+    <keywords casesensitive="1" />
+  </general>
+</language>

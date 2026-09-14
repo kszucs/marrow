@@ -1,3 +1,22 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Urbanist:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<script>
+// Every docs page shares one sidebar, and Quarto marks the first navbar item
+// linking into it ("Tutorials") active on all of them. Mark the item for the
+// section the page is actually in.
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var section = (path.match(/\/(tutorials|guide|examples|reference)\//) || [])[1];
+  if (section === "examples") section = "guide";
+  document.querySelectorAll("#navbarCollapse .navbar-nav .nav-link").forEach(function (link) {
+    var href = link.getAttribute("href") || "";
+    var target = (href.match(/(tutorials|guide|reference)\//) || [])[1];
+    var home = !target && /(^|\/)index\.html$/.test(href);
+    var active = section ? target === section : home && /(\/|index\.html)$/.test(path);
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+});
+</script>
