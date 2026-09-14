@@ -164,25 +164,6 @@ _arith_params = pytest.mark.parametrize(
     "dtype,a,b", _ARITH_CASES, ids=[c[0] for c in _ARITH_CASES]
 )
 
-# Unary sum/aggregate: int64, float64, and int64 with nulls
-_SUM_CASES = [
-    ("int64", "int64_a"),
-    ("float64", "float64_a"),
-    ("int64_nulls", "int64_nulls"),
-]
-_sum_params = pytest.mark.parametrize(
-    "dtype,key", _SUM_CASES, ids=[c[0] for c in _SUM_CASES]
-)
-
-# Unary numeric: int64 and float64
-_UNARY_NUM_CASES = [
-    ("int64", "int64_a"),
-    ("float64", "float64_a"),
-]
-_unary_num_params = pytest.mark.parametrize(
-    "dtype,key", _UNARY_NUM_CASES, ids=[c[0] for c in _UNARY_NUM_CASES]
-)
-
 # Nullable: int64_nulls and float64_nulls
 _NULL_CASES = [
     ("int64", "int64_nulls"),
@@ -237,7 +218,7 @@ def test_pyarrow_add(benchmark, pa_arrays, n, dtype, a, b):
 def test_marrow_subtract(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
     benchmark(
-        ma.subtract,
+        ma.compute.subtract,
         ma_arrays["int64_a"],
         ma_arrays["int64_b"],
         ma.ExecContext.serial(),
@@ -254,7 +235,7 @@ def test_pyarrow_sub(benchmark, pa_arrays, n):
 def test_marrow_multiply(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
     benchmark(
-        ma.multiply,
+        ma.compute.multiply,
         ma_arrays["int64_a"],
         ma_arrays["int64_b"],
         ma.ExecContext.serial(),
@@ -271,7 +252,7 @@ def test_pyarrow_mul(benchmark, pa_arrays, n):
 def test_marrow_divide(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="float64")
     benchmark(
-        ma.divide,
+        ma.compute.divide,
         ma_arrays["float64_a"],
         ma_arrays["float64_b"],
         ma.ExecContext.serial(),
@@ -285,58 +266,6 @@ def test_pyarrow_div(benchmark, pa_arrays, n):
 
 
 # ── Aggregate ─────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.benchmark(group="aggregate")
-@_sum_params
-def test_marrow_sum(benchmark, ma_arrays, n, dtype, key):
-    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.compute.sum, ma_arrays[key], ma.ExecContext.serial())
-
-
-@pytest.mark.benchmark(group="aggregate")
-@_sum_params
-def test_pyarrow_sum(benchmark, pa_arrays, n, dtype, key):
-    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
-    benchmark(pc.sum, pa_arrays[key])
-
-
-@pytest.mark.benchmark(group="aggregate")
-def test_marrow_product(benchmark, ma_arrays, n):
-    benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.compute.product, ma_arrays["int64_a"], ma.ExecContext.serial())
-
-
-@pytest.mark.benchmark(group="aggregate")
-def test_pyarrow_product(benchmark, pa_arrays, n):
-    benchmark.extra_info.update(lib="pyarrow", n=n, dtype="int64")
-    benchmark(pc.product, pa_arrays["int64_a"])
-
-
-@pytest.mark.benchmark(group="aggregate")
-@_unary_num_params
-def test_marrow_min(benchmark, ma_arrays, n, dtype, key):
-    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.compute.min, ma_arrays[key], ma.ExecContext.serial())
-
-
-@pytest.mark.benchmark(group="aggregate")
-@_unary_num_params
-def test_pyarrow_min(benchmark, pa_arrays, n, dtype, key):
-    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
-    benchmark(pc.min, pa_arrays[key])
-
-
-@pytest.mark.benchmark(group="aggregate")
-def test_marrow_max(benchmark, ma_arrays, n):
-    benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.compute.max, ma_arrays["int64_a"], ma.ExecContext.serial())
-
-
-@pytest.mark.benchmark(group="aggregate")
-def test_pyarrow_max(benchmark, pa_arrays, n):
-    benchmark.extra_info.update(lib="pyarrow", n=n, dtype="int64")
-    benchmark(pc.max, pa_arrays["int64_a"])
 
 
 @pytest.mark.benchmark(group="aggregate")
