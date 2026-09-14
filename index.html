@@ -547,7 +547,7 @@ document.addEventListener("DOMContentLoaded", function () {
   <p>These cells run when the site is built, so the output below is real.</p>
 </div>
 <p>Build arrays from Python data. The type is inferred, and <code>None</code> marks a null:</p>
-<div id="fa7b8653" class="cell" data-execution_count="2">
+<div id="046a9b57" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>ages   <span class="op">=</span> ma.array([<span class="dv">25</span>, <span class="dv">35</span>, <span class="dv">45</span>, <span class="va">None</span>, <span class="dv">55</span>])</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>names  <span class="op">=</span> ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>, <span class="st">"Eve"</span>])</span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>salary <span class="op">=</span> ma.array([<span class="dv">70_000</span>, <span class="dv">90_000</span>, <span class="dv">110_000</span>, <span class="dv">50_000</span>, <span class="dv">130_000</span>])</span>
@@ -560,7 +560,7 @@ StringArray([Alice, Bob, Carol, Dave, Eve])</code></pre>
 </div>
 </div>
 <p>Kernels are vectorized and null-aware; a null in either operand gives a null:</p>
-<div id="e4064d52" class="cell" data-execution_count="3">
+<div id="c56f4a4d" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"next year:"</span>, ma.compute.add(ages, ma.array([<span class="dv">1</span>] <span class="op">*</span> <span class="dv">5</span>)))</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"over 40:  "</span>, ma.compute.greater(ages, ma.array([<span class="dv">40</span>] <span class="op">*</span> <span class="dv">5</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -569,7 +569,7 @@ over 40:   BoolArray([False, False, True, NULL, True])</code></pre>
 </div>
 </div>
 <p>Assemble columns into a <code>RecordBatch</code>, then query it lazily:</p>
-<div id="e9b7c3cd" class="cell" data-execution_count="4">
+<div id="f94d1a8b" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({<span class="st">"age"</span>: ages, <span class="st">"name"</span>: names, <span class="st">"salary"</span>: salary})</span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>(ma.memtable(people)</span>
@@ -582,7 +582,7 @@ over 40:   BoolArray([False, False, True, NULL, True])</code></pre>
 </div>
 </div>
 <p>Arrays implement the Arrow PyCapsule interface, so PyArrow takes them without copying the buffers, and marrow takes PyArrow’s the same way:</p>
-<div id="45c120f5" class="cell" data-execution_count="5">
+<div id="433657f3" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>pa_ages <span class="op">=</span> pa.array(ages)          <span class="co"># marrow → PyArrow, no copy</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>back    <span class="op">=</span> ma.array(pa_ages)       <span class="co"># PyArrow → marrow, no copy</span></span>
