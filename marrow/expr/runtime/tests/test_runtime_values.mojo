@@ -284,6 +284,22 @@ def _ints(v: RuntimeValue) raises -> DynArray:
     return v.evaluate(b.to_struct_array(), Bindings()).to_array(4)
 
 
+def test_runtime_arithmetic_operators() raises:
+    """`col("b") * lit(2)` spells the same query in either lane, so each
+    operator has to reach the kernel its verb names."""
+    var b = build_col("b")
+    assert_true(_ints(b + b) == array([20, 40, 60, 80], int64))
+    assert_true(_ints(b - _lit(10)) == array([0, 10, 20, 30], int64))
+    assert_true(_ints(b * _lit(2)) == array([20, 40, 60, 80], int64))
+    assert_true(_ints(b // _lit(3)) == array([3, 6, 10, 13], int64))
+    assert_true(_ints(b % _lit(3)) == array([1, 2, 0, 1], int64))
+    assert_true(_ints(-b) == array([-10, -20, -30, -40], int64))
+    assert_true(_ints(b / _lit(4)) == array([2.5, 5.0, 7.5, 10.0], float64))
+    assert_true(
+        _ints(b ** _lit(2)) == array([100.0, 400.0, 900.0, 1600.0], float64)
+    )
+
+
 def test_runtime_arithmetic_over_two_columns() raises:
     assert_true(
         _ints(add(column("b"), column("b"))) == array([20, 40, 60, 80], int64)

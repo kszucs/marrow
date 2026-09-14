@@ -1113,6 +1113,36 @@ struct RuntimeValue(Evaluable, Movable, Value):
         """`APPROX_COUNT_DISTINCT(self)` — see `DistinctCount[exact=False]`."""
         return RuntimeAggregate(self.copy(), String(APPROX_COUNT_DISTINCT))
 
+    # --- Arithmetic operators ---
+    #
+    # The spelling the "Arithmetic" section below promises, so that
+    # `col("a") * lit(2)` reads the same in either lane. Each forwards to its
+    # verb, which is the one place the tag is named.
+
+    def __add__(self, other: RuntimeValue) -> RuntimeValue:
+        return add(self.copy(), other.copy())
+
+    def __sub__(self, other: RuntimeValue) -> RuntimeValue:
+        return sub(self.copy(), other.copy())
+
+    def __mul__(self, other: RuntimeValue) -> RuntimeValue:
+        return mul(self.copy(), other.copy())
+
+    def __truediv__(self, other: RuntimeValue) -> RuntimeValue:
+        return truediv(self.copy(), other.copy())
+
+    def __floordiv__(self, other: RuntimeValue) -> RuntimeValue:
+        return floordiv(self.copy(), other.copy())
+
+    def __mod__(self, other: RuntimeValue) -> RuntimeValue:
+        return mod(self.copy(), other.copy())
+
+    def __pow__(self, other: RuntimeValue) -> RuntimeValue:
+        return pow(self.copy(), other.copy())
+
+    def __neg__(self) -> RuntimeValue:
+        return neg(self.copy())
+
     def write_to[W: Writer](self, mut writer: W):
         var named = self.name()
         if named != "":
