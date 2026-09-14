@@ -110,12 +110,12 @@ Concretely, from the CI-gated `benchmarks/binary_size/` suite:
 
 | binary | `__text` |
 |---|---:|
-| every value comptime — the plan holds a direct kernel | **1,557,636** |
-| the aggregate resolved from a function *name* at run time, as the Python frontend does | 13,235,288 |
+| every value comptime — the plan holds a direct kernel | **1,519,476** |
+| the aggregate resolved from a function *name* at run time, as the Python frontend does | 13,032,812 |
 
-Same query, same answer, **about 8.5× the code** — because the second one cannot
-prove which kernels it will not call. (Figures from the gate's baseline of
-2026-09-11.)
+Same query, same answer, **about 8.6× the code** — because the second one cannot
+prove which kernels it will not call. (Figures from the gate's baseline as of the
+Mojo 1.2.0.dev2026091305 upgrade.)
 
 The rule set is itself a comptime parameter — `plan.optimize[AllRules]()` — so a
 binary links exactly the rules it names, and `execute()` alone links none. Output

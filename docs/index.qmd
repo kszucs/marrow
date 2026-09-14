@@ -82,7 +82,7 @@ from marrow import col, lit
     <span class="mr-number-label">Arrow implementations (C++, Rust, Go) it exchanges IPC files and C Data with in Arrow's integration suite, for the layouts it implements.</span>
   </div>
   <div class="mr-number">
-    <span class="mr-number-value">3.1 MB</span>
+    <span class="mr-number-value">3.0 MB</span>
     <span class="mr-number-label">Machine code in a compiled Parquet query on macOS arm64, held there by a CI size gate. The executable also loads the Mojo runtime libraries.</span>
   </div>
 </div>
