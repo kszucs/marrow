@@ -43,6 +43,7 @@ from .arrays import (
     StructArray,
 )
 from .buffers import Bitmap, Buffer
+from .utils.byteorder import LittleEndian
 from .builders import (
     BinaryLikeBuilder,
     BoolBuilder,
@@ -229,7 +230,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     # TODO: remove `_Bytes` and store `Self.NativeScalar` directly once the
     # `Variant` layout bug is fixed upstream. Checklist for whoever does it:
-    #   1. `var _value: Self.NativeScalar`, drop the `as_bytes()`/`from_bytes()`
+    #   1. `var _value: Self.NativeScalar`, drop the `as_bytes()`/`LittleEndian`
     #      round trips in the three constructors, `value()`, `write_to`, and the
     #      hoisted decode in `repeat()`.
     #   2. Assert `align_of[DynScalar]() == 8` -- if a scalar's alignment climbs
@@ -261,7 +262,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
     ) where conforms_to(Self.T, Defaultable):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
-        self._value = value.as_bytes()
+        self._value = value.as_bytes[big_endian=False]()
         self._is_valid = True
 
     def __init__(
@@ -270,18 +271,18 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
         if value:
-            self._value = value.value().as_bytes()
+            self._value = value.value().as_bytes[big_endian=False]()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0).as_bytes()
+            self._value = Self.NativeScalar(0).as_bytes[big_endian=False]()
             self._is_valid = False
 
     def __init__(out self, value: Optional[Self.NativeScalar], dtype: Self.T):
         if value:
-            self._value = value.value().as_bytes()
+            self._value = value.value().as_bytes[big_endian=False]()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0).as_bytes()
+            self._value = Self.NativeScalar(0).as_bytes[big_endian=False]()
             self._is_valid = False
         self._dtype = dtype.copy()
 
@@ -293,7 +294,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     def value(self) -> Self.NativeScalar:
         """Get the underlying native value. Undefined if null."""
-        return Self.NativeScalar.from_bytes(self._value)
+        return LittleEndian.fixed[Self.T.native](self._value, 0)
 
     def to_array(self, length: Int) raises -> DynArray:
         return self.repeat(length).to_dyn()
