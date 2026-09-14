@@ -11,8 +11,8 @@ project:
 website:
   title: "Marrow"
   description: "Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary."
-  image: assets/logo.png
-  favicon: assets/logo.png
+  image: assets/social.png
+  favicon: assets/favicon.png
   open-graph: true
   twitter-card: true
   site-url: https://marrow.kszucs.dev
@@ -21,8 +21,14 @@ website:
   back-to-top-navigation: true
 
   navbar:
-    logo: assets/logo.png
-    logo-alt: "marrow"
+    title: false
+    logo:
+      light:
+        path: assets/logo-horizontal-light.svg
+        alt: "marrow"
+      dark:
+        path: assets/logo-horizontal-dark.svg
+        alt: "marrow"
     pinned: true
     collapse-below: lg
     left:

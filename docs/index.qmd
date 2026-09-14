@@ -1,5 +1,6 @@
 ---
 pagetitle: "Marrow — Apache Arrow in Mojo"
+image: assets/social.png
 toc: false
 anchor-sections: false
 sidebar: false
@@ -10,7 +11,8 @@ format:
 
 ```{=html}
 <section class="mr-hero column-screen">
-  <img class="mr-hero-logo" src="assets/logo.png" alt="marrow — Apache Arrow in Mojo">
+  <img class="mr-hero-logo dark-content" src="assets/logo-dark.svg" alt="marrow — Apache Arrow in Mojo">
+  <img class="mr-hero-logo light-content" src="assets/logo-light.svg" alt="marrow — Apache Arrow in Mojo">
   <h1>One query engine.<br><span class="mr-gradient">Three ways to drive it.</span></h1>
   <p class="lead">
     Apache Arrow in Mojo — columnar arrays, null-aware SIMD kernels, native

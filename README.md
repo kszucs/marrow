@@ -1,4 +1,7 @@
-![marrow](logo.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+  <img alt="marrow — Apache Arrow in Mojo" src="docs/assets/logo-light.svg" width="560">
+</picture>
 
 # marrow
 
