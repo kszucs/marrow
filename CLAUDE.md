@@ -376,7 +376,10 @@ builder. Same alias scheme (`StringBuilder`, `ListBuilder`, `Int32Builder`, …)
   boundary corrupted tcmalloc's freelist and cost ~4 hours to trace; the bounds
   are now enforced by `debug_assert` on every `BufferView` / `BitmapView` write
   path. FOREIGN (imported) buffers carry no padding guarantee at all — the C
-  Data Interface spec makes even alignment "recommended, but not required".
+  Data Interface spec makes even alignment "recommended, but not required",
+  so `Buffer.from_foreign` copies a pointer that is not 64-byte aligned
+  rather than wrapping it. A pyarrow array over a large numpy allocation
+  on Linux is the usual case.
 
 **`Bitmap`** (also `marrow/buffers.mojo` — there is no `bitmap.mojo`): bit-packed
 validity wrapping a `Buffer`, same `mut` pair, same O(1) copies.
