@@ -11,10 +11,11 @@ driver runs from.
 """
 
 from marrow.arrays import DynArray
-from marrow.dtypes import DynType, bool_, float64, int32, int64
 from marrow.expr.builders import table as _in_memory_table
 from marrow.expr.logical import DynRelation
 from marrow.ipc import read_ipc_file
+from marrow.kernels.aggregate import AllKernel
+from marrow.kernels.numeric import equal
 from marrow.tabular import RecordBatch
 
 
@@ -38,42 +39,24 @@ def table(var name: String) raises -> DynRelation:
 
 
 def values_equal(a: DynArray, b: DynArray) raises -> Bool:
-    """Value equality, which is *not* what `DynArray.__eq__` means.
+    """Value equality, which is *not* what `==` on arrays means.
 
-    `DynArray.__eq__` delegates to `ArrayData.__eq__`, which compares the
-    physical layout — offset, padding, whether a validity bitmap is present.
-    Two columns holding identical values compare unequal there when one was
-    written by pyarrow into the expectation file and the other came out of a
-    marrow kernel. The typed arrays' `__eq__` is the logical one ("same
-    length, null pattern, and values", offset-aware), so narrow first.
+    `==` is structural on every array type — offset, buffers, whether a
+    validity bitmap is present — so two columns holding identical values
+    compare unequal when one was written by pyarrow into the expectation file
+    and the other came out of a marrow kernel. `LIMIT ... OFFSET` shows it
+    plainly: the result is a zero-copy window at a non-zero offset.
 
-    The ladder is closed on purpose: it covers the dtypes the corpus uses and
-    raises on anything else, rather than quietly falling back to a comparison
-    that means something different.
+    So compare the way `assert_values_equal` does: the null pattern position
+    by position, then the valid slots through the eq kernel, which raises on a
+    dtype it has no equality for rather than answering something else.
     """
-    var dt = a.dtype()
-    if dt != b.dtype():
+    if a.dtype() != b.dtype() or len(a) != len(b):
         return False
-    if dt.is_string_like():
-        return a.as_string() == b.as_string()
-    elif dt == DynType(int64):
-        return a.as_int64() == b.as_int64()
-    elif dt == DynType(int32):
-        return a.as_int32() == b.as_int32()
-    elif dt == DynType(float64):
-        return a.as_float64() == b.as_float64()
-    elif dt == DynType(bool_):
-        return a.as_bool() == b.as_bool()
-    elif dt.is_date32():
-        return a.as_date32() == b.as_date32()
-    elif dt.is_timestamp():
-        # The predicate, not `dt == DynType(timestamp(microsecond))`: the
-        # equality above has already established that the two dtypes match, so
-        # pinning a unit here would only make a `timestamp[s]` result fall
-        # through to the raise instead of comparing.
-        return a.as_timestamp() == b.as_timestamp()
-    else:
-        raise Error(String("golden: no value comparison for dtype ", dt))
+    for i in range(len(a)):
+        if a.is_null(i) != b.is_null(i):
+            return False
+    return AllKernel.reduce(equal(a, b))
 
 
 def check(var name: String, plan: DynRelation) raises:
