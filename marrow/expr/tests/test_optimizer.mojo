@@ -1015,7 +1015,8 @@ def test_push_filter_into_scan_conjoins_stacked_filters() raises:
 
 
 def test_scan_pruning_rule_set_prunes_with_two_rules() raises:
-    """`ScanPruning` is what `QueryCli.run` applies, so it has to reach a scan
+    """`ScanPruning` is the rule set a compiled query names to prune
+    (`QueryCli(plan.optimize[ScanPruning]()).run()`), so it has to reach a scan
     on its own — through a filter chain and under an unbounded sort, which is
     the whole of what the descent it replaced could reach."""
     var plan = (

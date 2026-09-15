@@ -44,8 +44,14 @@ from ...scalars import (
     StructScalar,
 )
 from ...schema import Schema
-from ..logical import Shape
-from ..bindings import Bindings
+from ..logical import References, Shape
+from ..bindings import (
+    Bindings,
+    ParamSpec,
+    bool_from_text,
+    numeric_from_text,
+    string_from_text,
+)
 from ..index import Index
 from ..physical import Datum
 from .core import (
@@ -81,8 +87,8 @@ struct NumericColumn[T: NumericType](ColumnBound, NumericValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -178,8 +184,8 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -232,8 +238,8 @@ struct NumericLiteral[T: NumericType](NumericValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         # SQL names `SELECT 1` as `1`; so does this.
@@ -310,8 +316,8 @@ struct TemporalLiteral[T: TemporalType](TemporalValue, Unnamed):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -369,8 +375,8 @@ struct BoolColumn(BoolValue, ColumnBound):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -415,8 +421,8 @@ struct StringColumn[T: StringLikeType](ColumnBound, StringValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -472,8 +478,8 @@ struct StringLiteral[T: StringLikeType](StringValue, Unnamed):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
@@ -516,8 +522,8 @@ struct BoolLiteral(BoolValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -563,8 +569,8 @@ struct DecimalColumn[T: DecimalType](ColumnBound, DecimalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -612,8 +618,8 @@ struct DecimalLiteral[T: DecimalType](DecimalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -662,8 +668,8 @@ struct IntervalColumn[T: IntervalType](ColumnBound, IntervalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -705,8 +711,8 @@ struct IntervalLiteral[T: IntervalType](IntervalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -763,8 +769,8 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -831,24 +837,38 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
 # `--help`, and the globals are unsynchronised, so building two plans on two
 # threads is a data race.
 #
-# None of that exists here. Sharing is structural rather than name-keyed, so
-# there is no registry to leak and no global to race on, and one declaration
-# cannot conflict with itself.
+# None of that exists here. There is no registry to leak and no global to race
+# on: a plan's parameters are found by walking the plan. Each parameter leaf
+# declares a `ParamSpec` from `references` — the one walk that also answers
+# `columns()` — and `DynRelation.params()` keeps one per name. A name read twice
+# is one parameter, because `Bindings` is keyed by name; a read that disagrees
+# about its dtype is refused when the value binds, by `_bound` below.
 #
-# There is deliberately **no `params()` traversal**. Asking a plan which
-# parameters it takes is a sixteen-method walk that only a `--help` surface
-# would use, and nothing outside a test ever asked. Add it back when something
-# does; until then a plan's parameters are discovered the way its columns are —
-# by binding it and being told, by name, which one is missing. the previous
-# expression package's
-# `ParamCell` raises "parameter is not bound" *without* naming it, because a
-# cell cannot know the name it is read through. Here the node **is** the
-# parameter, so it can.
+# An unbound parameter raises **naming itself**. The previous expression
+# package's `ParamCell` could not, because a cell does not know the name it is
+# read through; here the node is the parameter.
 #
 # Every family has one, and all of them read their value through `_bound`,
 # which is where a binding is checked against the declared dtype. The typed
 # downcast after it cannot check: `as_primitive[T]` on a scalar of another
 # dtype is not a raise but a process abort in a release build.
+
+
+def _shown[S: Writable](default: Optional[S]) -> Optional[String]:
+    """A parameter's default as `--help` shows it, or `None` when required."""
+    if default:
+        return String(default.value())
+    else:
+        return None
+
+
+def _shown_bool(default: Optional[BoolScalar]) -> Optional[String]:
+    """A `bool` default as a command line spells it — `true` or `false`, the
+    spellings `parse_bool` reads back."""
+    if default:
+        return String("true") if default.value().value() else String("false")
+    else:
+        return None
 
 
 def _bound[
@@ -973,8 +993,16 @@ struct NumericParam[T: NumericType](NumericValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                DynType(Self.T()),
+                self._help.copy(),
+                _shown(self._default),
+                numeric_from_text[Self.T],
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1066,8 +1094,16 @@ struct TemporalParam[T: TemporalType](TemporalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                DynType(self._dtype),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1125,8 +1161,16 @@ struct DecimalParam[T: DecimalType](DecimalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                DynType(self._dtype),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1178,8 +1222,16 @@ struct IntervalParam[T: IntervalType](IntervalValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                DynType(Self.T()),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1230,8 +1282,16 @@ struct BoolParam(BoolValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                DynType(bool_),
+                self._help.copy(),
+                _shown_bool(self._default),
+                bool_from_text,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1286,8 +1346,16 @@ struct StringParam[T: StringLikeType](StringValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                DynType(Self.T()),
+                self._help.copy(),
+                _shown(self._default),
+                string_from_text[Self.T],
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1299,12 +1367,17 @@ struct StringParam[T: StringLikeType](StringValue):
             bindings, self._name, self._help, DynType(Self.T()), self._default
         )
 
-    # -- StringValue --------------------------------------------------------
-
-    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+    def value(self, bindings: Bindings) raises -> String:
+        """This execution's string, or the default; raises naming itself when
+        there is neither. What a scan reads to resolve a parameter path."""
         return _param[BinaryLikeScalar[Self.T]](
             bindings, self._name, self._help, DynType(Self.T()), self._default
         ).value()
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self.value(bindings)
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return None
@@ -1332,8 +1405,8 @@ struct FixedSizeBinaryColumn(ColumnBound, FixedSizeBinaryValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -1369,8 +1442,8 @@ struct FixedSizeBinaryLiteral(ColumnBound, FixedSizeBinaryValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -1423,8 +1496,16 @@ struct FixedSizeBinaryParam(ColumnBound, FixedSizeBinaryValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                self._dtype.copy(),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1459,8 +1540,8 @@ struct FixedSizeListColumn(ColumnBound, FixedSizeListValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -1495,8 +1576,8 @@ struct FixedSizeListLiteral(ColumnBound, FixedSizeListValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -1549,8 +1630,16 @@ struct FixedSizeListParam(ColumnBound, FixedSizeListValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                self._dtype.copy(),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1590,8 +1679,8 @@ struct StructColumn(ColumnBound, StructValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -1626,8 +1715,8 @@ struct StructLiteral(ColumnBound, StructValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -1679,8 +1768,16 @@ struct StructParam(ColumnBound, StructValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                self._dtype.copy(),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1715,8 +1812,8 @@ struct DictionaryColumn(ColumnBound, DictionaryValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -1752,8 +1849,8 @@ struct DictionaryLiteral(ColumnBound, DictionaryValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -1806,8 +1903,16 @@ struct DictionaryParam(ColumnBound, DictionaryValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                self._dtype.copy(),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1842,8 +1947,8 @@ struct NullColumn(ColumnBound, NullValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -1878,8 +1983,8 @@ struct NullLiteral(ColumnBound, NullValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -1931,8 +2036,16 @@ struct NullParam(ColumnBound, NullValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                self._dtype.copy(),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -1972,8 +2085,8 @@ struct ListLiteral[T: ListLikeType](ColumnBound, ListValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String(self._value)
@@ -2032,8 +2145,16 @@ struct ListParam[T: ListLikeType](ColumnBound, ListValue):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                self._dtype.copy(),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()
@@ -2090,8 +2211,8 @@ struct BinaryColumn[T: BinaryLikeType](BinaryValue, ColumnBound):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return [self._name.copy()]
+    def references(self, mut into: References):
+        into.column(self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -2135,8 +2256,8 @@ struct BinaryLiteral[T: BinaryLikeType](BinaryValue, ColumnBound, Unnamed):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
@@ -2182,8 +2303,16 @@ struct BinaryParam[T: BinaryLikeType](BinaryValue, ColumnBound):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        into.param(
+            ParamSpec(
+                self._name.copy(),
+                DynType(Self.T()),
+                self._help.copy(),
+                _shown(self._default),
+                None,
+            )
+        )
 
     def name(self) -> String:
         return self._name.copy()

@@ -1,9 +1,9 @@
-"""Unit tests for `marrow.compile` — the pure functions only.
+"""Tests for `marrow compile` and the programs it builds.
 
 A single `mojo build` takes 1-2 minutes, so these tests never shell out to
-`mojo`: `check_mojo_version`'s subprocess/PATH lookups are monkeypatched, and
-the end-to-end "does it actually compile" check is a manual smoke test (see
-the task report), not a unit test.
+`mojo`: `check_mojo_version`'s subprocess/PATH lookups are monkeypatched. The
+tests that need a real binary use the size gate's, built by
+`pixi run binary_size`, and skip when it is not there.
 """
 
 import os
@@ -443,3 +443,88 @@ def test_configure_does_not_override_a_users_choice(monkeypatch):
     monkeypatch.setenv(DYLIB_DIR_ENV, "/somewhere/else")
     configure()
     assert os.environ[DYLIB_DIR_ENV] == "/somewhere/else"
+
+
+# --- the compiled query program ----------------------------------------------
+#
+# `benchmarks/binary_size/query_cli` is the example the compile guide shows,
+# built by `pixi run binary_size`. These run it the way a user does. Like the
+# bundle tests above they need the gate binary, and they skip when it is
+# missing or older than any source it was built from -- a stale binary would
+# test yesterday's command line.
+
+_REPO = Path(__file__).resolve().parents[3]
+_QUERY_CLI = _REPO / "benchmarks" / "binary_size" / "query_cli"
+
+
+def _query_cli_or_skip() -> Path:
+    if not _QUERY_CLI.exists():
+        pytest.skip("gate binary not built: pixi run binary_size query_cli")
+    built = _QUERY_CLI.stat().st_mtime
+    sources = [_REPO / "benchmarks" / "binary_size" / "query_cli.mojo"]
+    sources += list((_REPO / "marrow").rglob("*.mojo"))
+    if any(src.stat().st_mtime > built for src in sources):
+        pytest.skip("gate binary is older than its sources")
+    return _QUERY_CLI
+
+
+def _orders(tmp_path: Path) -> Path:
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    table = pa.table(
+        {
+            "id": pa.array([1, 2, 3, 4, 5, 6, 7], pa.int64()),
+            "amount": pa.array([100, 250, 90, 1000, 250, None, 42], pa.int64()),
+            "name": ["alice", "bob", "carol", "dave", "erin", "frank", "grace"],
+        }
+    )
+    path = tmp_path / "orders.parquet"
+    pq.write_table(table, path, compression="none")
+    return path
+
+
+def _run(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [str(_query_cli_or_skip()), *args], capture_output=True, text=True
+    )
+
+
+def test_query_cli_help_lists_the_plan_parameters():
+    result = _run("--help")
+    assert result.returncode == 0
+    assert "--src string" in result.stdout
+    assert "--min-amount int64" in result.stdout
+    assert "--describe" in result.stdout
+
+
+def test_query_cli_describe_needs_no_arguments():
+    result = _run("--describe")
+    assert result.returncode == 0
+    assert result.stdout.strip() == (
+        "Filter(ParquetScan(param(src)), greater_equal(col(amount), param(min-amount)))"
+    )
+
+
+def test_query_cli_filters_a_parquet_file_to_csv(tmp_path):
+    src = _orders(tmp_path)
+    result = _run("--src", str(src), "--min-amount", "250", "--format", "csv")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "id,amount,name\n2,250,bob\n4,1000,dave\n5,250,erin\n"
+
+
+def test_query_cli_usage_errors_exit_2_and_go_to_stderr(tmp_path):
+    src = _orders(tmp_path)
+    unknown = _run("--src", str(src), "--min-amont", "5")
+    assert unknown.returncode == 2
+    assert unknown.stdout == ""
+    assert "unrecognized option" in unknown.stderr
+
+    bad = _run("--src", str(src), "--min-amount", "abc")
+    assert bad.returncode == 2
+    assert "--min-amount" in bad.stderr
+
+
+def test_query_cli_a_missing_file_exits_1(tmp_path):
+    result = _run("--src", str(tmp_path / "nope.parquet"), "--min-amount", "1")
+    assert result.returncode == 1
+    assert result.stdout == ""

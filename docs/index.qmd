@@ -132,33 +132,32 @@ ma.read_parquet("orders.parquet") \
 ## Compiled Mojo
 
 Column types are fixed when the query is compiled, so an expression can fuse
-into a single loop, and kernels the query never uses are not linked in. The
-filter threshold and the input path stay command-line arguments.
+into a single loop, and kernels the query never uses are not linked in. Every
+`param` in the plan becomes a command-line flag.
 
 ```mojo
 from marrow.dtypes import field, int64, string
-from marrow.expr import QueryCli, col, scan
+from marrow.expr import DynRelation, QueryCli, col, param, scan
 from marrow.schema import schema
 
-def main() raises:
-    var cli = QueryCli(String("orders"))
-    var min_amount = cli.param(String("min-amount"), int64, default=Int64(0))
-    cli.argument(String("src"))
 
-    if cli.parse():
-        var sch = schema(
+def query() raises -> DynRelation:
+    var orders = scan(
+        param("src", string),
+        schema(
             [field("id", int64), field("amount", int64), field("name", string)]
-        )
-        cli.run(
-            scan(cli.get(String("src")), sch^).filter(
-                col("amount", int64) >= min_amount
-            )
-        )
+        ),
+    )
+    return orders.filter(col("amount", int64) >= param("min-amount", int64))
+
+
+def main() raises:
+    QueryCli(query()).run()
 ```
 
 ```bash
 $ marrow compile query.mojo -o orders
-$ ./orders orders.parquet --min-amount 250
+$ ./orders --src orders.parquet --min-amount 250
 ```
 
 Building takes a minute or two, so this suits a query you run many times, not
@@ -269,7 +268,7 @@ print(pa_ages.type, "|", len(back))
   <a class="mr-card" href="guide/compile.html">
     <span class="mr-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span>
     <h3>Compile a query <span class="mr-arrow">→</span></h3>
-    <p>Build a Mojo query into an executable, and what that does and does not include.</p>
+    <p>Turn a Mojo query into a native program whose parameters are command-line flags.</p>
   </a>
   <a class="mr-card" href="reference/status.html">
     <span class="mr-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><path d="M6.5 10v4a3 3 0 0 0 3 3H14"/></svg></span>

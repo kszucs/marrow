@@ -168,9 +168,6 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return self._input.columns()
-
     def name(self) -> String:
         return self._alias.copy()
 

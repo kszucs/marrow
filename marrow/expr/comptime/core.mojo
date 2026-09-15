@@ -1763,15 +1763,15 @@ trait BoolValue(ComptimeValue):
     # has to diff to know are the same. A trait default states it once, and the
     # conformance list says which nodes mean it.
     #
-    # **What could not be factored, and why.** `columns()` duplicates just as
-    # widely — five nodes spell `[self._name.copy()]`, five spell
-    # `merged(self.l.columns(), self.r.columns())` — and it stays duplicated,
-    # because both bodies read a *field*. Mojo rejects a `var` requirement on a
-    # trait outright ("traits do not support 'var' fields; use 'comptime' to
-    # declare associated types"), so no default can reach `self._name` or
-    # `self.l`; routing through an abstract accessor would only trade one one-line
-    # body per node for another. The two below are factorable precisely because
-    # neither reads `self`: `Unnamed.name` reads nothing, and
+    # **What was factored later, and how.** `columns()` duplicated just as
+    # widely — five nodes spelled `[self._name.copy()]`, five spelled
+    # `merged(self.l.columns(), self.r.columns())` — and it could not become a
+    # default the way the two below did, because every body read a *field* and
+    # a trait cannot declare one ("traits do not support 'var' fields").
+    # Reflection reaches fields: `Value.references` walks the fields of
+    # `reflect[Self]` that are themselves a `Value`, so a composite states
+    # nothing and only a leaf says what it reads. The two below needed no
+    # reflection because neither reads `self`: `Unnamed.name` reads nothing, and
     # `ColumnBound.validity` reads only its `bound` argument.
 
     def cast[

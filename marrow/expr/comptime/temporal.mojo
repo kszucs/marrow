@@ -109,11 +109,6 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
     def __init__(out self, var a: Self.A):
         self.a = a^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -183,9 +178,6 @@ struct DateTrunc[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     def dtype(self, schema: Schema) raises -> DynType:
         return self.a.dtype(schema)
 
@@ -235,11 +227,6 @@ struct TemporalExtract64[K: TemporalExtract64Kernel, A: TemporalValue](
     def __init__(out self, var a: Self.A):
         self.a = a^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -285,9 +272,6 @@ struct LastDay[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Date32Type())
 
@@ -329,11 +313,6 @@ struct TemporalName[K: TemporalNameKernel, A: TemporalValue](
 
     def __init__(out self, var a: Self.A):
         self.a = a^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     # -- StringValue --------------------------------------------------------
 

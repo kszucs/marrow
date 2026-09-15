@@ -78,7 +78,7 @@ from ...kernels.string import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Shape, merged
+from ..logical import Shape
 from ..bindings import Bindings
 from ..physical import Datum
 
@@ -111,11 +111,6 @@ struct StringCompare[K: StringPredicateKernel, L: StringValue, R: StringValue](
     def __init__(out self, var l: Self.L, var r: Self.R):
         self.l = l^
         self.r = r^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -190,9 +185,6 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue, Unnamed):
         self.a = a^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return self.a.dtype(schema)
@@ -282,11 +274,6 @@ struct StringPredicate[
         self.l = l^
         self.r = r^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
-
     # -- BoolValue ----------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -341,11 +328,6 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
 
     def __init__(out self, var a: Self.A):
         self.a = a^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     # -- PrimitiveValue -----------------------------------------------------
 
@@ -446,18 +428,6 @@ struct StringFunction[
         self.count = count^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        var out = self.a.columns()
-        comptime if Self.K.uses_text:
-            out = merged(out^, self.text.columns())
-        comptime if Self.K.uses_alt:
-            out = merged(out^, self.alt.columns())
-        comptime if Self.K.uses_start:
-            out = merged(out^, self.start.columns())
-        comptime if Self.K.uses_count:
-            out = merged(out^, self.count.columns())
-        return out^
 
     def dtype(self, schema: Schema) raises -> DynType:
         return self.a.dtype(schema)
@@ -591,14 +561,6 @@ struct StringMeasure[K: StringMeasureKernel, A: StringValue, T: StringValue](
         self.a = a^
         self.text = text^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        var out = self.a.columns()
-        comptime if Self.K.uses_text:
-            out = merged(out^, self.text.columns())
-        return out^
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -657,9 +619,6 @@ struct StringConcat[L: StringValue, R: StringValue](StringValue, Unnamed):
         self.r = r^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
 
     def dtype(self, schema: Schema) raises -> DynType:
         return self.l.dtype(schema)

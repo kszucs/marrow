@@ -18,25 +18,13 @@ has since been deleted; this half survived because it never needed it. The split
   `get_int` / `get_float` / `get_bool` for the three conversions every CLI
   needs.
 - *Not here*: anything that has to know a `DataType` to interpret a token.
-  the old `_parse_scalar` turned `"1560601845"` into a
-  `PrimitiveScalar[TimestampType]` by dispatching on the declared parameter's
-  dtype — that is expression-layer knowledge, it needs `marrow.dtypes` and
-  `marrow.scalars`, and importing either would cost the leaf property. It
-  belongs on top of this: build a parser from the declarations, run
-  it, then coerce each answered string.
-- *Also not here*: `--describe`'s JSON, and the `-o` / `--format` output
-  writers. The JSON payload's whole content is the **dtype** of each parameter,
-  so a generic `describe()` could not emit it, and the JSON-escaping helper it
-  needs is a string utility rather than argument parsing — putting it here
-  would make this module two things. The writers know about Parquet and IPC.
-  Both stay in `params.mojo`.
-
-`split_cli_args` stays there too, for a different reason: it is generic
-mechanically (pull two flags out of a token list) but its content is the
-*policy* that `-o` names an output path and `--format` overrides the writer.
-`ArgumentParser` subsumes the mechanism —
-`p.option("output", short="o"); p.option("format", default="")` is the whole
-of it — so whoever re-adds `execute_cli` should delete it rather than port it.
+  Turning `"250"` into an `int64` scalar is expression-layer knowledge — it
+  needs `marrow.dtypes` and `marrow.scalars`, and importing either would cost
+  the leaf property. Each parameter carries its own parser instead
+  (`marrow.expr.bindings.ParamSpec.parse`), and `marrow.expr.cli.QueryCli`
+  builds a parser from a plan's parameters, runs it, then applies them.
+- *Also not here*: the `-o` / `--format` output writers, which know about
+  Parquet and IPC; they live in `QueryCli` too.
 
 ## Shape
 

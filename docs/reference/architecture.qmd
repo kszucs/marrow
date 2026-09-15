@@ -110,17 +110,18 @@ Concretely, from the CI-gated `benchmarks/binary_size/` suite:
 
 | binary | `__text` |
 |---|---:|
-| every value comptime — the plan holds a direct kernel | **1,519,476** |
-| the aggregate resolved from a function *name* at run time, as the Python frontend does | 13,032,812 |
+| every value comptime — the plan holds a direct kernel | **1,452,744** |
+| the aggregate resolved from a function *name* at run time, as the Python frontend does | 13,204,780 |
 
-Same query, same answer, **about 8.6× the code** — because the second one cannot
-prove which kernels it will not call. (Figures from the gate's baseline as of the
-Mojo 1.2.0.dev2026091305 upgrade.)
+Same query, same answer, **about 9.1× the code** — because the second one cannot
+prove which kernels it will not call. (Figures from the gate's baseline, recorded
+with Mojo 1.2.0.dev2026091405.)
 
 The rule set is itself a comptime parameter — `plan.optimize[AllRules]()` — so a
 binary links exactly the rules it names, and `execute()` alone links none. Output
-writers are comptime parameters for the same reason: the Parquet and IPC writers
-together added about 657 KB that `cli.run` does not pay, when last measured.
+writers are comptime parameters for the same reason: on the
+[compile guide](../guide/compile.qmd)'s example, `QueryCli(plan).run()` is
+2,994,476 bytes of `__text`, and `run[parquet=True, ipc=True]()` adds 707,568.
 
 `benchmarks/binary_size/` is the live gate, at a 0.5% threshold. Trust it over
 any ratio quoted in prose, including this one.

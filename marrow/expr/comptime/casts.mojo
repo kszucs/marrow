@@ -72,11 +72,6 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue, Unnamed):
     def __init__(out self, var a: Self.A):
         self.a = a^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -121,9 +116,6 @@ struct NumToBool[A: NumericValue](BoolValue, Unnamed):
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(BoolType())
 
@@ -157,11 +149,6 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue, Unnamed):
 
     def __init__(out self, var a: Self.A):
         self.a = a^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     # -- PrimitiveValue -----------------------------------------------------
 
@@ -211,11 +198,6 @@ struct StringToNum[To: NumericType, A: StringValue](
     def __init__(out self, var a: Self.A):
         self.a = a^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -248,11 +230,6 @@ struct NumToString[To: StringLikeType, A: NumericValue](
 
     def __init__(out self, var a: Self.A):
         self.a = a^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     # -- StringValue --------------------------------------------------------
 

@@ -37,7 +37,7 @@ from ...kernels.boolean import (
 from ...kernels.membership import IsInKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import DynValue, Shape, merged
+from ..logical import DynValue, Shape
 from ..bindings import Bindings
 from ..index import Index, keep_every
 from ..physical import Datum
@@ -100,9 +100,6 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         self.r = r^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
 
     def conjuncts(self) -> List[DynValue]:
         """`AND` splits; `OR` and `XOR` do not.
@@ -193,9 +190,6 @@ struct Not[A: ComptimeValue](ComptimeValue, Unnamed):
     def __init__(out self, var a: Self.A):
         self.a = a^
 
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     def dtype(self, schema: Schema) raises -> DynType:
         """Spelled out, where the fusing bool nodes inherit it from
         `BoolValue`. A Kleene operator produces `bool` but does not fuse, so it
@@ -257,9 +251,6 @@ struct NullPredicate[K: UnaryPredicateKernel, A: ComptimeValue](
         self.a = a^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(BoolType())
@@ -326,9 +317,6 @@ struct ValuePredicate[K: ValuePredicateKernel, A: NumericValue](
         self.a = a^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(BoolType())
@@ -399,11 +387,6 @@ struct IsIn[A: ComptimeValue](BoolValue, ColumnBound, Unnamed):
     def __init__(out self, var a: Self.A, var value_set: DynArray):
         self.a = a^
         self._value_set = value_set^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     # -- BoolValue ----------------------------------------------------------
 
