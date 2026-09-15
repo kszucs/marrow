@@ -75,35 +75,37 @@ ma_arr = ma.array(pa.array([1, 2, 3]))     # PyArrow -> marrow, no copy
 ## Compiled queries
 
 A query written against the Mojo expression layer compiles to a native
-executable that needs no Python at run time; only scalars and paths are
-supplied when it runs. It still loads the Mojo runtime libraries, which
-`--bundle` copies alongside it:
+executable that needs no Python at run time. Mark the values that change
+between runs with `param()`, and each one becomes a command-line flag:
 
 ```mojo
 from marrow.dtypes import field, int64, string
-from marrow.expr import QueryCli, col, scan
+from marrow.expr import DynRelation, QueryCli, col, param, scan
 from marrow.schema import schema
 
-def main() raises:
-    var cli = QueryCli("orders", description="Orders above a threshold.")
-    var min_amount = cli.param("min-amount", int64, default=Int64(0))
-    cli.argument("src", help="input Parquet file")
 
-    if cli.parse():
-        var sch = schema([field("id", int64), field("amount", int64)])
-        cli.run(
-            scan(cli.get("src"), sch^).filter(col("amount", int64) >= min_amount)
-        )
+def query() raises -> DynRelation:
+    var orders = scan(
+        param("src", string),
+        schema(
+            [field("id", int64), field("amount", int64), field("name", string)]
+        ),
+    )
+    return orders.filter(col("amount", int64) >= param("min-amount", int64))
+
+
+def main() raises:
+    QueryCli(query()).run()
 ```
 
 ```bash
 marrow compile query.mojo -o orders
-./orders orders.parquet --min-amount 250
-./orders --help          # generated from the param() declarations
+./orders --src orders.parquet --min-amount 250
+./orders --help          # the flags come from the plan's param() calls
 ```
 
-`--help` and `--describe` are rendered from the declarations themselves, so
-there is no argument-parsing code to keep in sync.
+The executable still loads the Mojo runtime libraries, which `--bundle` copies
+alongside it.
 See the [compile guide](https://marrow.kszucs.dev/guide/compile.html).
 
 ## What's in it

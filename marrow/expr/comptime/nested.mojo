@@ -23,7 +23,7 @@ from ...dtypes import DynType, Int32Type
 from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 from ...schema import Schema
 from ..bindings import Bindings
-from ..logical import Shape, merged
+from ..logical import Shape
 from .core import (
     BoolValue,
     ColumnBound,
@@ -55,9 +55,6 @@ struct ListLength[A: ListValue](ColumnBound, NumericValue, Unnamed):
         self.a = a^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Int32Type())
@@ -116,11 +113,6 @@ struct ArrayContains[L: ListValue, E: NumericValue](
     def __init__(out self, var list: Self.L, var elem: Self.E):
         self.list = list^
         self.elem = elem^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.list.columns(), self.elem.columns())
 
     # -- BoolValue ----------------------------------------------------------
 

@@ -68,7 +68,8 @@ from ....scalars import (
 )
 from ....tabular import record_batch
 from ...builders import array_length, col, lit, param, table
-from ...logical import DynRelation
+from ...bindings import ParamSpec
+from ...logical import DynRelation, References, Value
 
 
 def _table() raises -> DynRelation:
@@ -649,3 +650,51 @@ def test_lit_refuses_a_null_decimal_scalar() raises:
     )
     with assert_raises(contains="null"):
         _ = lit(null_decimal^)
+
+
+# ---------------------------------------------------------------------------
+# every family's parameter declares itself
+# ---------------------------------------------------------------------------
+
+
+def _spec[V: Value](value: V) -> ParamSpec:
+    var refs = References()
+    value.references(refs)
+    return refs.params[0].copy()
+
+
+def test_every_param_family_declares_its_spec() raises:
+    """One case builds every family's parameter, so every family's
+    `references` override is compiled, and pins what the command line needs
+    from each: its name, dtype, shown default, and whether a token parses."""
+    var n = _spec(param("n", int64, default=Int64(1), help="a number"))
+    assert_equal(n.name, String("n"))
+    assert_true(n.dtype == DynType(int64))
+    assert_equal(n.help, String("a number"))
+    assert_equal(n.default.value(), String("1"))
+    assert_true(True if n.parse else False)
+
+    var b = _spec(param("b", bool_, default=False))
+    assert_true(b.dtype == DynType(bool_))
+    assert_equal(b.default.value(), String("false"))
+    assert_true(True if b.parse else False)
+
+    var s = _spec(param("s", string, default=String("x")))
+    assert_equal(s.default.value(), String("x"))
+    assert_true(True if s.parse else False)
+    assert_true(True if _spec(param("ls", large_string)).parse else False)
+
+    var ts = _spec(param("ts", timestamp(millisecond)))
+    assert_true(ts.dtype == DynType(timestamp(millisecond)))
+    assert_true(not ts.default)
+    assert_true(not ts.parse)
+
+    assert_true(not _spec(param("d", decimal128(10, 2))).parse)
+    assert_true(not _spec(param("i", year_month_interval())).parse)
+    assert_true(not _spec(param("x", binary)).parse)
+    assert_true(not _spec(param("fb", fixed_size_binary_(4))).parse)
+    assert_true(not _spec(param("l", list_(int64))).parse)
+    assert_true(not _spec(param("fl", fixed_size_list_(int64, 2))).parse)
+    assert_true(not _spec(param("st", struct_([field("a", int64)]))).parse)
+    assert_true(not _spec(param("dict", dictionary(int32, string))).parse)
+    assert_true(not _spec(param("nil", null)).parse)

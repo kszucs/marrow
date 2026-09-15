@@ -67,6 +67,7 @@ from .logical import (
     DynRelation,
     InMemoryTable,
     ParquetScan,
+    ScanPath,
     WindowExpr,
 )
 
@@ -93,6 +94,7 @@ from ..dtypes import (
     NullType,
     NumericType,
     StringLikeType,
+    StringType,
     StructType,
     TemporalType,
     int64,
@@ -537,19 +539,16 @@ def param[
     var help: String = String(),
     var default: Optional[Scalar[T.native]] = None,
 ) -> NumericParam[T]:
-    """Declare a late-bound scalar.
+    """Declare a late-bound scalar: a literal whose value each execution binds.
 
-    **Declare once and reuse it.** Copies share the cell, so binding once is
-    visible everywhere:
+    A parameter is its name. Every read of `"min-a"` in a plan sees the one
+    value bound to that name, and `DynRelation.params()` reports it once, as
+    first declared; a read of another dtype is refused when the value binds.
+    `default` makes it optional, and `help` is its line in `QueryCli`'s
+    `--help`:
 
-        var min_a = param("min-a", int64)
-        t.filter(col("a", int64) > min_a).project(["m"], [min_a])
-
-    Calling `param("min-a", int64)` twice makes two *independent* parameters
-    that happen to share a name — which is why there is no registry, no
-    name-keyed dedup and no dtype-conflict check. the previous expression
-    package needs all three
-    because it declares parameters inline at each use site.
+        var plan = t.filter(col("a", int64) > param("min-a", int64))
+        plan.execute(bindings={"min-a": Int64Scalar(4).to_dyn()})
     """
     return NumericParam[T](name^, help^, default^)
 
@@ -731,7 +730,19 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     any verb applies, so without this a caller names `ParquetScan` and wraps it
     by hand.
     """
-    return DynRelation(ParquetScan(path^, schema^))
+    return DynRelation(ParquetScan(ScanPath(path^), schema^))
+
+
+def scan(
+    var path: StringParam[StringType], var schema: Schema
+) raises -> DynRelation:
+    """A Parquet file named at run time, as a plan.
+
+    `scan(param("src", string), schema)` — the path is a parameter like any
+    other, so a compiled query reads a different file per run, and `QueryCli`
+    offers it as `--src`.
+    """
+    return DynRelation(ParquetScan(ScanPath(path^), schema^))
 
 
 def count_star() -> (

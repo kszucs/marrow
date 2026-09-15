@@ -83,7 +83,7 @@ from ...kernels.aggregate import (
     ValidCount,
 )
 from ...schema import Schema
-from ..logical import DynValue, Shape, Value, merged
+from ..logical import DynValue, Shape, Value
 from .values import RuntimeValue
 from ..bindings import Bindings
 from ...execution import ExecContext
@@ -346,9 +346,6 @@ struct RuntimeAggregate(Value):
             if name == known:
                 return name^
         raise Error("unknown aggregate '", name, "'")
-
-    def columns(self) -> List[String]:
-        return self._input.columns()
 
     def name(self) -> String:
         return self._alias.copy()

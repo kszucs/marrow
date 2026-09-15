@@ -1,21 +1,18 @@
 """``marrow compile`` — compile a ``.mojo`` query file into a standalone binary.
 
-A user writes a ``.mojo`` file that builds a plan against a known schema,
-declares its late-bound values with ``QueryCli.param``/``.argument``, and ends
-in ``cli.run(plan)``. This module builds that file with the same recipe
+A user writes a ``.mojo`` file that builds a plan with ``param()`` placeholders
+and ends in ``QueryCli(plan).run()``; every parameter becomes a command-line
+flag. This module builds that file with the same recipe
 ``devkit.footprint.Gates.build`` uses to measure gate
 binaries: ``mojo build -O3 -g0 -I <marrow> <src> -o <out>``, then ``strip``.
 
 See ``benchmarks/binary_size/query_cli.mojo`` for a complete example, and
 ``docs/guide/compile.qmd`` for the guide.
 
-**The output writers are chosen in the source, not here.** They used to be
-gated by a ``-D MARROW_CLI_WRITERS=true`` define this module passed by default,
-which is why it once carried a ``--no-writers`` flag. ``QueryCli.run`` takes
-them as comptime parameters instead — ``cli.run[parquet=True](plan)`` links the
-Parquet writer, ``cli.run(plan)`` does not — so the query file says which
-formats its binary supports and there is no build flag that can disagree with
-it.
+**The output writers are chosen in the source, not here.** ``QueryCli.run``
+takes them as comptime parameters — ``run[parquet=True]()`` links the Parquet
+writer, ``run()`` does not — so the query file says which formats its binary
+supports and no build flag can disagree with it.
 """
 
 from __future__ import annotations
@@ -573,7 +570,7 @@ def _add_compile_subparser(
         "compile",
         help="compile a marrow query (.mojo) into a standalone binary",
         description="Compile a marrow query (.mojo, ending in "
-        "cli.run(plan)) into a standalone binary.",
+        "QueryCli(plan).run()) into a standalone binary.",
     )
     parser.add_argument("file", type=Path, help="the .mojo source file to compile")
     parser.add_argument(
