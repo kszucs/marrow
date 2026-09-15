@@ -590,7 +590,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <section id="sorting-an-array" class="level2">
 <h2 class="anchored" data-anchor-id="sorting-an-array">Sorting an array</h2>
 <p><code>mc.sort</code> returns a sorted copy; the array’s <code>.argsort()</code> method (or <code>mc.sort_indices</code>) returns the indices that would sort it (an <code>int32</code> array), leaving the input untouched:</p>
-<div id="0e59b5ff" class="cell" data-execution_count="2">
+<div id="3b705774" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">3</span>, <span class="dv">1</span>, <span class="va">None</span>, <span class="dv">2</span>, <span class="dv">5</span>])</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sorted:      "</span>, mc.sort(a))</span>
@@ -605,7 +605,7 @@ sort_indices: PrimitiveArray[int32]([1, 3, 0, 4, 2])</code></pre>
 <section id="direction-and-null-placement" class="level3">
 <h3 class="anchored" data-anchor-id="direction-and-null-placement">Direction and null placement</h3>
 <p><code>sort</code> and <code>sort_indices</code> take a <code>sort_keys</code> sequence of <code>(column, order)</code> pairs — for a plain array the column name is ignored, the first key’s direction is used, and more than one key raises <code>NotImplementedError</code> — and a <code>null_placement</code> keyword argument:</p>
-<div id="83113215" class="cell" data-execution_count="3">
+<div id="45deb141" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"ascending"</span>)],  null_placement<span class="op">=</span><span class="st">"at_start"</span>))</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"ascending"</span>)],  null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"descending"</span>)], null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -642,7 +642,7 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 </tbody>
 </table>
 <p>Sorting works across types — strings order lexicographically:</p>
-<div id="1e721b7e" class="cell" data-execution_count="4">
+<div id="e9f6889d" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>words <span class="op">=</span> ma.array([<span class="st">"pear"</span>, <span class="st">"apple"</span>, <span class="va">None</span>, <span class="st">"cherry"</span>])</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(words, null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -654,7 +654,7 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 <section id="sorting-a-table" class="level2">
 <h2 class="anchored" data-anchor-id="sorting-a-table">Sorting a table</h2>
 <p><code>RecordBatch.sort_by</code> reorders whole rows by a key column. Pass a list of <code>(column, "ascending" | "descending")</code> tuples and a null-placement argument (<code>None</code> for the default):</p>
-<div id="d9fc13de" class="cell" data-execution_count="5">
+<div id="9ed091f0" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>: ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"age"</span>:  ma.array([<span class="dv">34</span>, <span class="dv">28</span>, <span class="dv">45</span>, <span class="dv">28</span>]),</span>
@@ -666,7 +666,7 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 </div>
 </div>
 <p>Multi-column keys work from Python too — ties on the first key break on the next, and each key carries its own direction:</p>
-<div id="1493f0e3" class="cell" data-execution_count="6">
+<div id="c5ef41a7" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"ascending"</span>), (<span class="st">"name"</span>, <span class="st">"descending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[{'name': 'Dave', 'age': 28}, {'name': 'Bob', 'age': 28}, {'name': 'Alice', 'age': 34}, {'name': 'Carol', 'age': 45}]</code></pre>
