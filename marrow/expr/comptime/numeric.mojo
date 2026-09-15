@@ -61,7 +61,7 @@ from ...kernels.conditional import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
-from ..logical import Shape, merged
+from ..logical import Shape
 from ..bindings import Bindings
 from ..index import Index, keep_every
 from ..physical import Datum
@@ -94,11 +94,6 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     def __init__(out self, var l: Self.L, var r: Self.R):
         self.l = l^
         self.r = r^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -197,11 +192,6 @@ struct DivisionBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
         self.l = l^
         self.r = r^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -295,11 +285,6 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](
     def __init__(out self, var a: Self.A):
         self.a = a^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -370,11 +355,6 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         self.l = l^
         self.r = r^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -425,11 +405,6 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
 
     def __init__(out self, var a: Self.A):
         self.a = a^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self.a.columns()
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -502,11 +477,6 @@ struct NumericCompare[
     def __init__(out self, var l: Self.L, var r: Self.R):
         self.l = l^
         self.r = r^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -633,12 +603,6 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
 
     # -- Value --------------------------------------------------------------
 
-    def columns(self) -> List[String]:
-        return merged(
-            merged(self.cond.columns(), self.then.columns()),
-            self.otherwise.columns(),
-        )
-
     def dtype(self, schema: Schema) raises -> DynType:
         return self.then.dtype(schema)
 
@@ -743,11 +707,6 @@ struct TemporalCompare[
         self.l = l^
         self.r = r^
 
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -836,9 +795,6 @@ struct ConditionalBinary[
         self.r = r^
 
     # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.l.columns(), self.r.columns())
 
     def dtype(self, schema: Schema) raises -> DynType:
         return self.l.dtype(schema)

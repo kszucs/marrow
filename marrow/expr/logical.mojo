@@ -35,7 +35,6 @@ added later needs no change there.
 """
 
 from std.builtin.rebind import downcast
-from std.collections import Set
 from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant
@@ -59,10 +58,11 @@ from ..kernels.window import (
 )
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
-from ..dtypes import DynType, Field, field, int64
-from .bindings import Bindings
+from ..dtypes import DynType, Field, StringType, field, int64
+from .bindings import Bindings, ParamSpec, distinct_params
 from .index import Index, keep_every
 from .optimizer import RuleSet, optimize
+from .`comptime`.leaves import StringParam
 from .runtime.values import column
 from .physical import (
     Datum,
@@ -295,10 +295,35 @@ trait Value(Copyable, Deinitable, Writable):
             partition_by^, order_by^, ascending^, nulls_first, rows^
         )
 
+    def references(self, mut into: References):
+        """Every column and parameter this expression reads, operands in
+        declaration order.
+
+        **Derived for a composite.** A node's operands are its fields that are
+        themselves a `Value`, and this walks them by reflection -- so adding a
+        node adds no walk, and a composite cannot forget an operand.
+
+        **A leaf must override it**, because a leaf's answer is not in an
+        operand: a column names itself, a parameter declares itself, a literal
+        reads nothing. The `comptime assert` turns a forgotten override into a
+        build error rather than an empty answer, which `ColumnPruning` would
+        read as "nothing here needs a column".
+        """
+        comptime r = reflect[Self]
+        comptime assert _operand_count[Self]() > 0, (
+            "Value.references: a leaf must override references() to say what"
+            " it reads"
+        )
+        comptime for i in range(r.field_count()):
+            comptime if conforms_to(r.field_at[i].T, Value):
+                r.field_ref[i](self).references(into)
+
     def columns(self) -> List[String]:
         """Which columns this expression reads, deduplicated, first-seen
         order."""
-        ...
+        var refs = References()
+        self.references(refs)
+        return refs.columns.copy()
 
     def name(self) -> String:
         """This expression's name, or empty when it has none."""
@@ -344,9 +369,10 @@ struct DynValue(Copyable, Movable, Writable):
     and no Python frontend can build) and runtime expressions everywhere (which
     is the 4.91 MB configuration).
 
-    Six function slots — `columns`, `name`, `dtype`, `write`, `to_operator`
-    and `_drop` — plus two constant fields, `shape` and `aggregates`, read once
-    at construction because both are comptime constants. `_drop` is the
+    Seven function slots — `references`, `name`, `dtype`, `write`,
+    `to_operator`, `mask` and `_drop` — plus two constant fields, `shape` and
+    `aggregates`, read once at construction because both are comptime
+    constants. `_drop` is the
     destructor trampoline every erased box here needs; erasure through
     `rebind[ArcPointer[NoneType]]` forgets the pointee's destructor otherwise.
     the previous expression package carried seven and had no `dtype`, computing
@@ -368,7 +394,7 @@ struct DynValue(Copyable, Movable, Writable):
     """
 
     var _boxed: ArcPointer[NoneType]
-    var _columns: def(ArcPointer[NoneType]) thin -> List[String]
+    var _references: def(ArcPointer[NoneType], mut References) thin
     var _name: def(ArcPointer[NoneType]) thin -> String
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
     var _write: def(ArcPointer[NoneType]) thin -> String
@@ -410,8 +436,10 @@ struct DynValue(Copyable, Movable, Writable):
         return rebind[ArcPointer[V]](ptr)[].mask(index, bindings)
 
     @staticmethod
-    def _columns_tramp[V: Value](ptr: ArcPointer[NoneType]) -> List[String]:
-        return rebind[ArcPointer[V]](ptr)[].columns()
+    def _references_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], mut into: References):
+        rebind[ArcPointer[V]](ptr)[].references(into)
 
     @staticmethod
     def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -452,7 +480,7 @@ struct DynValue(Copyable, Movable, Writable):
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._drop = Self._drop_tramp[V]
         self._aggregates = V.aggregates
-        self._columns = Self._columns_tramp[V]
+        self._references = Self._references_tramp[V]
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
         self._write = Self._write_tramp[V]
@@ -476,8 +504,13 @@ struct DynValue(Copyable, Movable, Writable):
         """
         return self._mask(self._boxed, index, bindings)
 
+    def references(self, mut into: References):
+        self._references(self._boxed, into)
+
     def columns(self) -> List[String]:
-        return self._columns(self._boxed)
+        var refs = References()
+        self.references(refs)
+        return refs.columns.copy()
 
     def name(self) -> String:
         return self._name(self._boxed)
@@ -520,32 +553,62 @@ struct DynValue(Copyable, Movable, Writable):
 
 
 # ---------------------------------------------------------------------------
-# merged — order-preserving union, the shape `columns()` folds with
+# References — what an expression reads from outside itself
 # ---------------------------------------------------------------------------
-# `columns()` folds a node's children into a list that is deduplicated but
-# **order-preserving**: first-seen order is part of the contract
-# (`test_runtime_columns_are_deduped_in_first_seen_order` asserts it), so a
-# plain `Set` cannot answer it on its own.
-#
-# A `List` carries the order and a `Set` answers membership, which also makes
-# this linear — the loop it replaces rescanned the accumulated list once per
-# candidate, so a wide expression was quadratic in its own column count.
-#
-# `bind` and `validity` fold too and are deliberately *not* here: each is
-# already a single expression — a tuple and an intersect — so there is nothing
-# to extract. They could not be defaulted onto a trait anyway, since a default
-# returning `Self.Bound` needs that type to be `ImplicitlyCopyable`, which
-# marrow's array types deliberately are not.
-def merged(var into: List[String], extra: List[String]) -> List[String]:
-    """`into`, followed by whatever in `extra` it does not already contain."""
-    var seen = Set[String]()
-    for ref n in into:
-        seen.add(n.copy())
-    for ref n in extra:
-        if n not in seen:
-            seen.add(n.copy())
-            into.append(n.copy())
-    return into^
+struct References(Movable):
+    """What an expression reads from outside itself: columns from the batch,
+    parameters from `Bindings`.
+
+    The one collector the structural walk fills, so a new kind of reference is
+    a new field here rather than a second walk over every node.
+    """
+
+    var columns: List[String]
+    """First-seen order, deduplicated -- the `columns()` contract."""
+
+    var params: List[ParamSpec]
+    """Every occurrence, in walk order."""
+
+    def __init__(out self):
+        self.columns = List[String]()
+        self.params = List[ParamSpec]()
+
+    def column(mut self, name: String):
+        """Record a column read, once.
+
+        **A linear scan, not a `Set`, and that is measured.** An expression
+        reads a handful of columns, so the scan is cheap; a `Set[String]` here
+        linked the hash table's growth paths into every fused binary --
+        +6,356 bytes of `__text` (+0.44%) on `query_streaming_agg_fused`, whose
+        single-operand nodes never linked them before.
+        """
+        var seen = False
+        for ref c in self.columns:
+            if c == name:
+                seen = True
+        if not seen:
+            self.columns.append(name.copy())
+
+    def param(mut self, var spec: ParamSpec):
+        """Record a parameter read."""
+        self.params.append(spec^)
+
+    def extend(mut self, other: References):
+        """Record everything `other` recorded, after what is already here."""
+        for ref c in other.columns:
+            self.column(c)
+        for ref p in other.params:
+            self.params.append(p.copy())
+
+
+def _operand_count[T: AnyType]() -> Int:
+    """How many of `T`'s fields are operands -- fields that are a `Value`."""
+    comptime r = reflect[T]
+    var count = 0
+    comptime for i in range(r.field_count()):
+        comptime if conforms_to(r.field_at[i].T, Value):
+            count += 1
+    return count
 
 
 def reject_aggregate(
@@ -862,16 +925,21 @@ struct WindowExpr(Copyable, Movable, Writable):
             frame,
         )
 
+    def references(self, mut into: References):
+        """Every column and parameter this reads — function argument and both
+        key lists."""
+        if self.argument:
+            self.argument.value().references(into)
+        for ref k in self.partition_by:
+            k.references(into)
+        for ref k in self.order_by:
+            k.references(into)
+
     def columns(self) -> List[String]:
         """Every column this reads — function argument and both key lists."""
-        var out = List[String]()
-        if self.argument:
-            out = merged(out^, self.argument.value().columns())
-        for ref k in self.partition_by:
-            out = merged(out^, k.columns())
-        for ref k in self.order_by:
-            out = merged(out^, k.columns())
-        return out^
+        var refs = References()
+        self.references(refs)
+        return refs.columns.copy()
 
     def dtype(self, schema: Schema) raises -> DynType:
         """The type this produces.
@@ -944,6 +1012,12 @@ trait Relation(Copyable, Deinitable, Movable, Writable):
         whole rather than rebuilt wrongly.
         """
         return DynRelation(self.copy())
+
+    def references(self, mut into: References):
+        """Every column and parameter this plan's expressions read: the inputs'
+        first, then this node's own. Read-only by rule — no node is built and
+        nothing is lowered, so walking a plan links no operator."""
+        ...
 
     def schema(self) -> Schema:
         """The columns this relation produces.
@@ -1070,6 +1144,31 @@ struct DynRelation(Copyable, Movable, Writable):
             return node.traverse(f)
 
         return self._dispatch(job)
+
+    def references(self, mut into: References):
+        """`references` on whichever node this is.
+
+        Through `_dispatch`, with each arm collecting into its own `References`
+        and one merge afterwards. An inline `isa` ladder writing straight into
+        `into` was tried and measured 24,152 bytes against this one's 3,132 on
+        `query_cli`: it inlines every node's walk into every arm."""
+
+        def job[T: Relation](node: T) raises {imm} -> References:
+            var refs = References()
+            node.references(refs)
+            return refs^
+
+        try:
+            into.extend(self._dispatch(job))
+        except:
+            abort("DynRelation.references: no arm matched")
+
+    def params(self) -> List[ParamSpec]:
+        """Every parameter this plan reads, once per name, in walk order —
+        what `QueryCli` turns into a command line."""
+        var refs = References()
+        self.references(refs)
+        return distinct_params(refs.params)
 
     def schema(self) -> Schema:
         def job[T: Relation](node: T) raises {imm} -> Schema:
@@ -1442,6 +1541,9 @@ struct EmptyRelation(Relation, Writable):
     def __init__(out self, var batch: RecordBatch):
         self.batch = batch^
 
+    def references(self, mut into: References):
+        pass
+
     def schema(self) -> Schema:
         return self.batch.schema.copy()
 
@@ -1463,6 +1565,9 @@ struct InMemoryTable(Relation, Writable):
 
     def __init__(out self, var batch: RecordBatch):
         self.batch = batch^
+
+    def references(self, mut into: References):
+        pass
 
     def schema(self) -> Schema:
         return self.batch.schema.copy()
@@ -1547,6 +1652,10 @@ struct Filter(Relation, Writable):
             self.constant,
             self.conjuncts.copy(),
         )
+
+    def references(self, mut into: References):
+        self.input[].references(into)
+        self.predicate.references(into)
 
     def schema(self) -> Schema:
         return self.input[].schema()
@@ -1686,6 +1795,11 @@ struct Project(Relation, Writable):
     ](self, f: F) raises -> DynRelation:
         return Project(f(self.input[]), self.names.copy(), self.values.copy())
 
+    def references(self, mut into: References):
+        self.input[].references(into)
+        for ref v in self.values:
+            v.references(into)
+
     def schema(self) -> Schema:
         return self._schema.copy()
 
@@ -1778,6 +1892,13 @@ struct Aggregate(Relation, Writable):
     ](self, f: F) raises -> DynRelation:
         return Aggregate(f(self.input[]), self.keys.copy(), self.aggs.copy())
 
+    def references(self, mut into: References):
+        self.input[].references(into)
+        for ref k in self.keys:
+            k.references(into)
+        for ref a in self.aggs:
+            a.references(into)
+
     def schema(self) -> Schema:
         return self._schema.copy()
 
@@ -1831,6 +1952,9 @@ struct Limit(Relation, Writable):
         F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         return Limit(f(self.input[]), self.offset, self.length)
+
+    def references(self, mut into: References):
+        self.input[].references(into)
 
     def schema(self) -> Schema:
         return self.input[].schema()
@@ -1922,6 +2046,11 @@ struct Sort(Relation, Writable):
             self.nulls_first,
             self.limit,
         )
+
+    def references(self, mut into: References):
+        self.input[].references(into)
+        for ref k in self.keys:
+            k.references(into)
 
     def schema(self) -> Schema:
         return self.input[].schema()
@@ -2042,6 +2171,11 @@ struct Window(Relation, Writable):
         F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         return Window(f(self.input[]), self.names.copy(), self.exprs.copy())
+
+    def references(self, mut into: References):
+        self.input[].references(into)
+        for ref e in self.exprs:
+            e.references(into)
 
     def schema(self) -> Schema:
         return self._schema.copy()
@@ -2248,6 +2382,10 @@ struct Join(Relation, Writable):
             strictness=self.strictness,
         )
 
+    def references(self, mut into: References):
+        self.left[].references(into)
+        self.right[].references(into)
+
     def schema(self) -> Schema:
         return self._schema.copy()
 
@@ -2281,6 +2419,50 @@ struct Join(Relation, Writable):
         )
 
 
+struct ScanPath(Copyable, Movable, Writable):
+    """Where a scan reads from: a literal path, or a `string` parameter resolved
+    per execution.
+
+    A type of its own rather than a second field on the scan, so every place
+    that rebuilds a scan carries the parameter with it.
+
+    **The parameter sits behind an `ArcPointer`, and that is measured.** A
+    scan is a member of `DynRelation`'s variant, whose copy and destroy code is
+    inlined wherever a plan is copied — in every binary, scans or not. Holding
+    an `Optional[StringParam[StringType]]` inline instead cost 19,396 more bytes
+    of `__text` on `query_streaming` and 23,904 on `query_join`, neither of
+    which builds a scan.
+    """
+
+    var _literal: String
+    var _param: Optional[ArcPointer[StringParam[StringType]]]
+
+    def __init__(out self, var path: String):
+        self._literal = path^
+        self._param = None
+
+    def __init__(out self, var param: StringParam[StringType]):
+        self._literal = String()
+        self._param = ArcPointer(param^)
+
+    def resolve(self, bindings: Bindings) raises -> String:
+        """The path this execution reads."""
+        if self._param:
+            return self._param.value()[].value(bindings)
+        else:
+            return self._literal.copy()
+
+    def references(self, mut into: References):
+        if self._param:
+            self._param.value()[].references(into)
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self._param:
+            writer.write(self._param.value()[])
+        else:
+            writer.write(self._literal)
+
+
 struct ParquetScan(Relation, Writable):
     """A Parquet file as a source, read one row group at a time.
 
@@ -2294,7 +2476,7 @@ struct ParquetScan(Relation, Writable):
     yet. The operator opens it on first `drain`.
     """
 
-    var path: String
+    var path: ScanPath
     var _schema: Schema
     var pruners: List[DynValue]
     """Predicates this scan may use to skip row groups, put here by
@@ -2309,13 +2491,18 @@ struct ParquetScan(Relation, Writable):
 
     def __init__(
         out self,
-        var path: String,
+        var path: ScanPath,
         var schema: Schema,
         var pruners: List[DynValue] = [],
     ):
         self.path = path^
         self._schema = schema^
         self.pruners = pruners^
+
+    def references(self, mut into: References):
+        self.path.references(into)
+        for ref p in self.pruners:
+            p.references(into)
 
     def schema(self) -> Schema:
         return self._schema.copy()
@@ -2337,7 +2524,7 @@ struct ParquetScan(Relation, Writable):
     ) raises -> Pipeline:
         return Pipeline(
             ParquetScanOperator(
-                self.path.copy(),
+                self.path.resolve(bindings),
                 self._schema.copy(),
                 self.pruners.copy(),
                 bindings.copy(),

@@ -34,6 +34,7 @@ from ..logical import (
     DynRelation,
     DynValue,
     InMemoryTable,
+    References,
     Relation,
     Shape,
     Value,
@@ -87,8 +88,8 @@ struct _ValueProbe(Copyable, Movable, Value, Writable):
     def __deinit__(deinit self):
         self._deaths[].append(1)
 
-    def columns(self) -> List[String]:
-        return List[String]()
+    def references(self, mut into: References):
+        pass
 
     def name(self) -> String:
         return String("probe")

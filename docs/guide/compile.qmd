@@ -1,117 +1,93 @@
 ---
-title: "Compiling a query to a native executable"
-subtitle: "marrow compile — the AOT lane, exposed to users"
+title: "Compile a query"
+subtitle: "Ship a query as a small native program"
 execute:
   enabled: false
 ---
 
-Everything else in this guide runs through the Python bindings: build a plan,
-call `.collect()`, get a `RecordBatch` back, in the same process that built
-the plan. `marrow compile` is a different thing: it turns a Mojo source file
-into a native executable that runs the query later, from the command line,
-without Python. The executable loads the Mojo runtime libraries; `--bundle`
-(below) copies them next to it, so the machine that runs it needs no marrow or
-Mojo install.
+Write a query once, in Mojo, and mark the values that change between runs with
+`param()`. `marrow compile` turns it into a native executable in which every
+parameter is a command-line flag, so one binary answers the same question for
+any file and any threshold, with no Python and no interpreter behind it.
 
 ::: {.callout-note}
-The code on this page is Mojo, compiled ahead of time — not the Python
-`marrow.expr` API the rest of this guide uses. See
-[Expression execution](expressions.qmd) for the lazy Python frontend.
+The code on this page is Mojo, compiled ahead of time. For queries built at run
+time from Python, see [Lazy queries](queries-lazy.qmd).
 :::
 
-## When to reach for this instead of the lazy frontend
+## Why compile a query
 
-The query *shape* — which relation nodes, in what order, over which columns
-— is frozen at compile time. Only **scalars and paths** are late-bound. That
-is the whole trade:
+- **The query is the program.** Column types are fixed when the query is
+  compiled, so `col("amount", int64) >= param("min-amount", int64)` fuses into a
+  single loop, and the executable links the kernels this query uses and nothing
+  else. The example below is 3.0 MB of machine code.
+- **Far smaller than an interpreter.** The same `GROUP BY` compiled this way is
+  1.45 MB of machine code; resolving its aggregates by name at run time, as a
+  dynamic frontend must, takes 13.2 MB, **9.1× as much**. See
+  [why the compiled binary is small](../reference/architecture.qmd#why-the-compiled-binary-is-small).
+- **Values change, code does not.** Parameters are read when the program starts,
+  so a daily report is one binary run against a different file and threshold
+  each day.
+- **A command line for free.** `--help`, `--describe`, output formats and error
+  messages come from the query itself; there is no argument parsing to write.
+- **Easy to ship.** `--bundle` gathers the executable and the libraries it loads
+  into one directory that runs without pixi or a marrow install.
 
-- A fixed report that runs against a different file and a different
-  threshold every day — `marrow compile` fits well. Ship one binary, run it
-  with different `--flag` values; with `--bundle`, the target machine needs no
-  marrow install.
-- A query whose *shape* varies — a different filter, a different set of
-  group-by keys, an ad hoc notebook session — wants the
-  [Python lazy frontend](expressions.qmd) instead. Reshaping a plan there is
-  a line of Python; reshaping a compiled binary is a rebuild.
+## When to use it
 
-**State the cost up front, because it will not announce itself:** a
-`marrow compile` build takes roughly **1-2 minutes per invocation**, because
-`mojo build` elaborates the whole of `marrow` at `-O3` for every compile —
-there is no incremental build. That is fine for a binary you build once and
-run many times; it is a bad fit for an edit-compile-run loop.
+Compile a query whose shape is settled and that runs many times: a report, an
+export, a filter in a data pipeline. A query you are still shaping belongs in
+[Python](queries-lazy.qmd), where changing it is a line rather than a rebuild —
+**a build takes a minute or two**, because the whole library is compiled at
+`-O3` each time.
 
-## What you write
-
-A query file is an ordinary Mojo program with a `main()`. It declares its
-command-line surface, parses it, builds a plan, and runs it:
+## Write the query
 
 ```{.mojo filename="benchmarks/binary_size/query_cli.mojo"}
 {{< include ../../benchmarks/binary_size/query_cli.mojo >}}
 ```
 
-Four calls carry the whole surface:
+- `query()` builds the plan. It is a function because Mojo has no module-level
+  variables.
+- `param(name, dtype)` is a value supplied at run time, and the input file is
+  one too: `scan(param("src", string), ...)`.
+- `QueryCli(query()).run()` is the whole program: every `param` in the plan
+  becomes a `--name` flag.
 
-- **`QueryCli(prog, description=...)`** — the program's name and its `--help`
-  blurb.
-- **`cli.param(name, dtype, default=..., help=...)`** — a late-bound scalar.
-  It returns the plan node *and* declares the option, which is the point:
-  one line produces `--min-amount`, its `--help` entry, the string-to-`int64`
-  coercion and the `NumericParam[Int64Type]` the predicate is built from, so the
-  parser and the plan cannot drift apart. Required unless it has a `default`.
-- **`cli.argument(name, help=...)`** — a positional, read back with
-  `cli.get(name)`. Paths are the usual case.
-- **`cli.run(plan)`** — execute and write the result.
+## Build it
 
-`cli.option(...)` and `cli.flag(...)` are there too, for a string or boolean
-the plan does not consume as a scalar.
+```bash
+$ marrow compile query_cli.mojo -o orders
+```
 
-### `param()` — the late-bound value
+In a marrow checkout, where the `marrow` script is not installed, run the same
+command as `pixi run python -P python/marrow/compile.py compile query_cli.mojo
+-o orders`. Add `--fast` for a quicker `-O1` build of a slower program, and
+`-v` to see the underlying `mojo build` command.
 
-`cli.param(name, dtype)` returns a node structurally identical to
-`lit(value)`, except the scalar behind it arrives from the command line. It
-composes with everything a literal does — comparisons, arithmetic — and costs
-nothing extra per row: the value is resolved once per batch, not once per
-element.
+## Run it
 
-A plan is immutable and stateless, so the value does not live *in* the node.
-It travels through the execution as a `Bindings` map, which `cli.run()`
-assembles from the parsed arguments. Two executions of the same plan with
-different values cannot interfere.
-
-`param()` is also available directly, without a `QueryCli` — `param("min-a",
-int64, default=0)` — for a plan that binds its own values through
-`plan.execute(bindings=...)`. It is numeric-only today; there is no string or
-temporal parameter, so a late-bound **path** is an ordinary
-`cli.argument()`/`cli.option()` string rather than a node.
-
-## What the compiled binary does
-
-Every `QueryCli` binary gets five arguments without the author declaring
-them: `-h/--help`, `--describe`, `-o/--output`, `--format` and `--max-rows`.
+The flags come from the plan, typed by the parameters' dtypes:
 
 ```bash
 $ ./orders --help
-usage: orders [-h] [--describe] [--output PATH] [--format FMT] [--max-rows N] [--min-amount N] <src>
-
-Orders at or above a minimum amount.
+usage: ./orders [-h] --src string --min-amount int64 [--describe] [--output PATH] [--format FMT] [--max-rows N]
 
 options:
-  -h, --help          show this help message
-      --describe      print the query plan and exit
-  -o, --output PATH   write results here (default: stdout)
-      --format FMT    output format: table | csv | parquet | ipc (default: inferred from --output's extension, else table)
-      --max-rows N    rows to print for `table` output, 0 for all (default: 20)
-      --min-amount N  keep orders whose amount is at least this (default: 0)
-
-arguments:
-  src                 input Parquet file (required)
+  -h, --help              show this help message
+      --src string        (required)
+      --min-amount int64  (required)
+      --describe          print the query plan and exit
+  -o, --output PATH       write results here (default: stdout)
+      --format FMT        output format: table | csv | parquet | ipc (default: inferred from --output's extension, else table)
+      --max-rows N        rows to print for `table` output, 0 for all (default: 20)
 ```
 
-Running it against a seven-row Parquet file whose `amount` column is
+Against a seven-row `orders.parquet` whose `amount` column is
 `[100, 250, 90, 1000, 250, null, 42]`:
 
 ```bash
-$ ./orders orders.parquet --min-amount 250
+$ ./orders --src orders.parquet --min-amount 250
 id  amount  name
 --  ------  ----
 2   250     bob
@@ -120,229 +96,108 @@ id  amount  name
 (3 rows)
 ```
 
-`--describe` prints the plan and exits, which is the only way to ask a
-shipped binary what query is baked into it. It short-circuits the
-required-argument check, so it needs no input file:
+`--describe` prints the plan baked into the binary, and needs no other
+arguments:
 
 ```bash
 $ ./orders --describe
-Filter(ParquetScan(), greater_equal(col(amount), param(min-amount)))
+Filter(ParquetScan(param(src)), greater_equal(col(amount), param(min-amount)))
 ```
 
-### Output formats
-
-The default is an aligned text table, capped at `--max-rows` (20) with a
-footer that says so — `print(batch)` alone prints
-`RecordBatch(num_rows=3, schema=...)` and no data, which is fine as a repr and
-useless as a report. `--format csv` writes RFC 4180 CSV and is **never**
-truncated, because a silently capped pipe is a data-loss bug:
+A mistake on the command line prints the usage and exits with status 2; a
+failure while running exits with status 1. Both go to stderr:
 
 ```bash
-$ ./orders orders.parquet --format csv
+$ ./orders --src orders.parquet --min-amount abc
+usage: ./orders [-h] --src string --min-amount int64 [--describe] [--output PATH] [--format FMT] [--max-rows N]
+./orders: error: --min-amount: expected int64, got 'abc'
+```
+
+## Output
+
+The default is an aligned table, capped at `--max-rows`. `--format csv` writes
+RFC 4180 CSV and is never truncated, so it is safe to pipe:
+
+```bash
+$ ./orders --src orders.parquet --min-amount 250 --format csv
 id,amount,name
-1,100,alice
 2,250,bob
-3,90,carol
 4,1000,dave
 5,250,erin
-7,42,grace
 ```
 
-`-o PATH` writes to a file instead of stdout and picks the format from the
-extension — `.csv` for CSV, `.parquet` for Parquet, `.arrow`/`.ipc` for Arrow
-IPC, anything else CSV. `--format` overrides the guess.
-
-**Parquet and Arrow IPC are opt-in at compile time.** They are the largest
-thing this layer can pull into a binary, and a query that prints or pipes its
-result should not carry them, so `run()` takes them as comptime parameters:
+`-o PATH` writes to a file and picks the format from its extension: `.csv`,
+`.parquet` or `.pq`, `.arrow` or `.ipc`. Parquet and Arrow IPC output are
+opt-in, because their writers add about 700 KB of machine code that a program
+which only prints should not carry:
 
 ```{.mojo .fragment}
-cli.run(plan)                  # text only — table and csv
-cli.run[parquet=True](plan)    # + the Parquet writer
-cli.run[ipc=True](plan)        # + the Arrow IPC writer
+QueryCli(query()).run[parquet=True, ipc=True]()
 ```
 
-A binary built without one says so, and names the fix, rather than failing
-obscurely:
+## Parameters
+
+A parameter is required unless it has a default, and `help=` gives it a line in
+`--help`; `description=` sets the program's own:
+
+```{.mojo .fragment}
+param("min-amount", int64, default=Int64(0), help="keep orders at or above this")
+QueryCli(query(), description="Orders at or above a minimum amount.").run()
+```
+
+| dtype | on the command line |
+|---|---|
+| integers | `250`, `-3` — refused if the type cannot hold the value |
+| floats | `0.25`, `1e-3` |
+| `bool` | `true`, `false`, `1`, `0` |
+| `string`, `large_string` | any text |
+
+Parameters of other types appear in `--help` but cannot be set from the command
+line yet, so they need a default. A name used twice in a plan is one parameter
+and one flag.
+
+## Skip what the filter rules out
+
+Optimize the plan with `ScanPruning` and the scan reads only the row groups and
+pages whose statistics could hold a matching row — thresholds from the command
+line included:
+
+```{.mojo .fragment}
+QueryCli(query().optimize[ScanPruning]()).run()
+```
 
 ```bash
-$ ./orders orders.parquet -o out.parquet
-orders: error: --format parquet: this binary was built without the Parquet writer; build it with `cli.run[parquet=True](plan)`
+$ ./orders --describe
+Filter(ParquetScan(param(src)) pruned by 1, greater_equal(col(amount), param(min-amount)))
 ```
 
-This replaces the old `-D MARROW_CLI_WRITERS=true` build flag. Putting the
-choice in the source means the query file states which formats its binary
-supports, and no build invocation can disagree with it.
+It links the optimizer, which adds about 1.5 MB of machine code to this example,
+so it pays off for large files rather than small ones.
 
-When this was measured on the `query_cli` program, linking both writers
-(`cli.run[parquet=True, ipc=True](plan)`) added about 657 KB of `__text` to the
-text-only build. The text-only build is the one the CI size gate tracks; its
-current figure is in `benchmarks/binary_size/baseline.json`.
+## Ship it
 
-`nm -C` on the two: `marrow::parquet::writer` is **0** symbols in the first and
-7 in the second, and `marrow::expr::runtime` is 0 in both.
-
-### Errors
-
-A usage error prints the usage line and exits **2**; an execution error exits
-**1**. Neither surfaces a Mojo traceback:
+A compiled executable loads the Mojo runtime libraries from the environment it
+was built in. `--bundle DIR` copies the executable, those libraries and marrow's
+Parquet compression codecs into one directory:
 
 ```bash
-$ ./orders --min-amont 5 orders.parquet
-usage: orders [-h] [--describe] [--output PATH] [--format FMT] [--max-rows N] [--min-amount N] <src>
-orders: error: unrecognized option '--min-amont'
-
-$ ./orders --min-amount abc orders.parquet
-orders: error: --min-amount expects an integer, got 'abc'
+$ marrow compile query_cli.mojo -o orders --bundle dist
+$ zip -ry orders.zip dist        # -y keeps the bundle's symlinks
 ```
 
-### Column names are checked against the schema, not the compiler
+`dist/orders` then runs from any directory with no pixi environment and no
+marrow install; copy the directory to a machine with the same OS and CPU
+architecture. The object-store backend is not bundled, so a bundle reads local
+files.
 
-`col("amount", int64)` fixes the column's *dtype* at compile time — that is
-what makes the predicate fuse — but the *name* is resolved against the schema
-when the plan is built, so a typo is a run-time error naming the column, not a
-compile error — `marrow/schema.mojo`'s `field(name=...)` raises
-``Field with name `amont` not found.``, which `run()` reports as
-`orders: error: Field with name \`amont\` not found.`.
+## Limits worth knowing
 
-**It could be a compile error, and that is the obvious next step for this
-surface.** `marrow/expr/comptime/tests/test_schema_handle.mojo` pins the four
-compiler contracts it needs — a struct with heap-allocated fields *is* a valid
-comptime parameter, `__getattr_param__` fires for a missing attribute, its
-return type may depend on the attribute name and still satisfy `NumericColumn`'s
-`NumericType` bound, and `comptime assert` turns an unknown name into a build
-failure carrying its own message. With a schema as a comptime parameter,
-`t.amount` resolves to `NumericColumn[Float64Type]` and `t.amont` fails the build with
-`constraint failed: unknown column: amont`.
-
-What does not exist yet is the production side of it: the handle and the
-comptime schema in that file are defined *in the test*, and nothing derives one
-from a Parquet footer at build time. Until that lands, `col(name, dtype)` is
-the working spelling and a bad name is caught when the plan is built.
-
-## `marrow compile` — building the binary
-
-Installing marrow with the `compile` extra (`pip install marrow[compile]`)
-registers a `marrow` console script backed by `python/marrow/compile.py`.
-`compile` is a subcommand of it, so more subcommands can join it later:
-
-```bash
-$ marrow compile benchmarks/binary_size/query_cli.mojo -o orders
-```
-
-Inside a checkout, the equivalent without the wrapper is the recipe
-`marrow compile` runs for you:
-
-```bash
-$ pixi run -e dev mojo build -O3 -g0 -I . benchmarks/binary_size/query_cli.mojo -o orders
-```
-
-::: {.callout-warning}
-## The `compile` extra does not resolve on PyPI today
-
-The extra pins `mojo>=1.1,<2`, and marrow needs a **nightly** Mojo build;
-PyPI's stable `mojo` package tops out at 1.0.0, so `pip install
-marrow[compile]` cannot satisfy it from PyPI alone. Install the nightly
-explicitly first — `pip install --pre mojo-compiler --extra-index-url
-https://whl.modular.com/nightly/simple/` — or work inside marrow's own pixi
-environment, which already has the pinned nightly. `check_mojo_version`
-reports the same thing at run time if the stable wheel is what got installed.
-:::
-
-`marrow` resolves the `mojo` compiler on `PATH` (raising a named error,
-including the nightly-vs-stable-PyPI distinction, if it is missing or out of
-range) and the `marrow/` Mojo package to pass as `mojo build`'s `-I` — via
-`--marrow-path`, the `MARROW_MOJO_PATH` environment variable, the copy
-bundled into the wheel, or by walking up from the current directory looking
-for a `marrow/` + `pixi.toml` pair, in that order. Then it runs
-`mojo build -O3 -g0 -I <marrow> <src> -o <out>` followed by `strip`, so a
-compiled query's size is directly comparable to the numbers in
-`benchmarks/binary_size/`.
-
-Useful flags:
-
-- **`-o OUTPUT`** (or the positional form, `marrow compile query.mojo out`)
-  — where to write the binary. Defaults to the source file's name without
-  `.mojo`, in the current directory.
-- **`--fast`** — build with `-O1` instead of `-O3`: a faster compile, a
-  slower binary. Still on the order of a minute, since elaborating `marrow`
-  dominates either way.
-- **`--bundle DIR`** — see below.
-- **`--marrow-path`, `-v`, `--no-strip`** — override package resolution,
-  print the underlying `mojo build` command, or skip stripping debug
-  symbols.
-
-## `--bundle` — a relocatable, self-contained directory
-
-A compiled binary still dynamically links a handful of Mojo/MAX runtime
-`.dylib`/`.so` files, resolved through the local pixi environment's rpath —
-copying the bare binary to another machine will not run there.
-`marrow compile query.mojo -o query --bundle DIR` copies the binary plus the
-**transitive** closure of its non-system shared-library dependencies into
-`DIR` and rewrites the rpath to `@loader_path` (macOS) / `$ORIGIN` (Linux),
-so `DIR` runs standalone — no pixi environment, no marrow install:
-
-```bash
-$ marrow compile query.mojo -o query --bundle ./dist
-$ ./dist/query data.parquet --min-amount 5
-```
-
-The closure walks `otool -L` / `ldd` recursively rather than hardcoding a
-dylib list, because the set is not fixed — a `-D MARROW_GPU=true` build pulls
-in an additional GPU runtime library that a CPU-only build does not link.
-
-**The bundle also includes marrow's Parquet compression codecs** — zstd,
-snappy, lz4, zlib and brotli. Those are `dlopen`-ed at runtime rather than
-linked (see `marrow/utils/compression.mojo`), so they are invisible to
-`otool -L`/`ldd` and need their own step: `--bundle` resolves the active
-pixi/conda environment's `lib/` directory (`$CONDA_PREFIX`, or two
-directories up from `mojo` on `PATH` — never a hardcoded pixi path) and
-copies whichever of the five it finds there, plus their own transitive
-dependencies (`libbrotlienc`/`libbrotlidec` each pull in
-`libbrotlicommon`). A codec that is not installed is skipped with a warning
-rather than failing the bundle. This matters because snappy is pyarrow's
-default Parquet compression — without it, the bundle could only read
-uncompressed files. `compression.mojo` tries an executable-relative path
-before the bare soname it otherwise `dlopen`s, which is what makes the staged
-copy actually get found at runtime; copying alone is not enough, since a bare
-`dlopen("libsnappy.dylib")` never searches `@loader_path`.
-
-**Zipping the bundle: use `zip -ry`, not `zip -r`.** A plain `zip -r`
-dereferences symlinks, turning each deduplicated alias back into a full copy
-of the same bytes. `zip -ry DIR.zip DIR` (the `-y` stores symlinks as
-symlinks) preserves the dedup; unzip on a machine of the same OS/arch to get
-the directory back exactly as built.
-
-**What "self-contained" has and has not been verified to mean.** The bundle's
-own binary has its rpath rewritten to `@loader_path`, and that path has been
-verified end to end: a snappy-compressed Parquet file reads correctly from a
-freshly built bundle run with no `DYLD_LIBRARY_PATH` or `CONDA_PREFIX` set,
-from a different working directory, via both a relative (`./query`) and an
-absolute-path invocation. What is **not** rewritten is the codec libraries'
-*own* `@rpath` entries — `bundle()` only rewrites the main binary's rpath. In
-practice that means a codec with its own dependency (`libbrotlienc` depends on
-`libbrotlicommon`) resolves it via the codec library's rpath as recorded on
-the *build* machine, which is not verified to carry over elsewhere. This
-mirrors the existing behaviour for the runtime-dylib closure, so it is not a
-new gap — full cross-machine portability of every codec remains an open
-question, not a claim this page makes.
-
-Static linking is not on the table on macOS — there is no `libSystem.a` to
-link against. It may be possible on Linux; that is untested here.
-
-## Why this is small
-
-The point of the AOT lane is that the binary contains little beyond the query.
-`col("amount", int64)` is a `NumericColumn[Int64Type]`, so the predicate's
-structure lives in its type and fuses into one SIMD loop; no interpreter is
-reachable, and the kernels the query does not name are never linked. Anything
-that scans Parquet does also link the storage layer, including about 50 KB for
-the OpenDAL backend.
-
-The command-line surface preserves that. Parameter coercion is monomorphic —
-`cli.param("min-amount", int64)` instantiates one coercion function for
-`int64` and stores it behind a thin function pointer, rather than dispatching
-on a runtime dtype and dragging in all eleven numeric widths — and the file
-writers are behind the comptime gate described above. The
-`benchmarks/binary_size/query_cli` gate exists to keep it that way, and
-measures `marrow::expr::runtime` at **0 symbols**.
+- The plan's shape is fixed at compile time; only parameter values change per
+  run.
+- Column names are checked when the program runs, not when it compiles.
+- There is no incremental build: every compile takes a minute or two.
+- A bundle is checked on the machine that built it. The brotli codec's own
+  dependency is found the way it was at build time, so brotli-compressed files
+  are the least certain case elsewhere.
+- `marrow compile` has no `-D` passthrough, so a GPU build
+  (`-D MARROW_GPU=true`) needs `mojo build` directly.

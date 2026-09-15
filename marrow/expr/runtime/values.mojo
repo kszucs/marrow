@@ -178,7 +178,7 @@ from ...dtypes import (
 from ...scalars import BoolScalar, DynScalar, PrimitiveScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import DynValue, Shape, Value, merged
+from ..logical import DynValue, References, Shape, Value
 from ..bindings import Bindings
 from ..index import Index, keep_every
 from ..physical import Datum
@@ -426,22 +426,20 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return index.defined(self._payload[String])
         return keep_every(index.chunks)
 
-    def columns(self) -> List[String]:
+    def references(self, mut into: References):
+        """A column leaf names itself; every other tag reads what its children
+        read. Written out because the children sit behind `ArcPointer` in a
+        `List`, which the reflected default on `Value` cannot see into -- and a
+        runtime value holds no parameter, so it only ever reports columns."""
+        if self._tag == "column" and self._payload.isa[String]():
+            into.column(self._payload[String])
         # The leaf case is spelled out rather than falling out of an empty
         # loop: without it the compiler reads the recursion below as
         # unconditional and warns `self recursive call will cause an infinite
         # loop`. Same reason `evaluate` has its own early return.
-        if len(self._kids) == 0:
-            if self._tag == "column" and self._payload.isa[String]():
-                return [self._payload[String].copy()]
-            return List[String]()
-
-        var out = List[String]()
-        if self._tag == "column" and self._payload.isa[String]():
-            out.append(self._payload[String].copy())
-        for ref kid in self._kids:
-            out = merged(out^, kid[].columns())
-        return out^
+        if len(self._kids) > 0:
+            for ref kid in self._kids:
+                kid[].references(into)
 
     def conjuncts(self) -> List[DynValue]:
         """This predicate split on `and`, or `[self]` when it is not one.

@@ -22,7 +22,7 @@ costs nothing: the closed-erasure property that keeps `kernels::sort` out of a
 binary that never sorts applies here too.
 """
 
-from .bindings import Bindings
+from .bindings import Bindings, ParamSpec
 from .cli import QueryCli, render_csv, render_table
 from .builders import (
     array_contains,
@@ -51,7 +51,9 @@ from .logical import (
     Limit,
     ParquetScan,
     Project,
+    References,
     Relation,
+    ScanPath,
     Shape,
     Sort,
     Value,

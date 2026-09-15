@@ -541,11 +541,33 @@ share no node types**:
   site got would depend on its imports. Not every verb is two-lane — `param` and
   `count_star` are comptime-only by nature, and `if_else` is comptime-only by
   omission, its runtime twin sitting unexposed at `runtime/values.mojo`.
-- **`bindings.mojo`** — `Bindings`, the values for one execution. `NumericParam[T]` is a
-  comptime-lane leaf and lives in `comptime/leaves.mojo`; sharing a file forced
-  the alias to drag in `logical.Shape`, which imports it back. A parameter's
-  value is carried *through* an execution rather than substituted into a copy of
-  the plan, so two executions of one plan cannot interfere.
+- **`bindings.mojo`** — `Bindings`, the values for one execution, and
+  `ParamSpec`, what a plan declares: a parameter's name, dtype, help, shown
+  default and a monomorphic command-line parser (`numeric_from_text[T]`,
+  `bool_from_text`, `string_from_text[T]`; `None` for families with no
+  spelling). `distinct_params` keeps the first spec per name — a later read of
+  another dtype is refused when the value binds, naming the parameter. A
+  parameter's value is carried *through* an
+  execution rather than substituted into a copy of the plan, so two executions
+  of one plan cannot interfere.
+- **What an expression reads is one walk.** `Value.references(mut into:
+  References)` collects columns (first-seen, deduplicated) and `ParamSpec`s;
+  `columns()` and `DynRelation.params()` are views of it. **A composite's walk
+  is derived**: a trait default over the fields of `reflect[Self]` that are
+  themselves a `Value`, so a node added later needs no walk code. **A leaf must
+  override it** — a column names itself, a parameter declares itself, a literal
+  reads nothing — and a `comptime assert` on the operand count makes a
+  forgotten override a build error rather than an empty answer `ColumnPruning`
+  would act on. `References.column` deduplicates with a linear scan: a
+  `Set[String]` there linked the hash table's growth paths into every fused
+  binary, +6,356 B (+0.44%) on `query_streaming_agg_fused`. Relations implement
+  `references` by hand, because their values sit in erased containers
+  reflection cannot tell apart, and `ParquetScan` reads its path through
+  `ScanPath` — a literal or a `StringParam` — so a rewrite that rebuilds a scan
+  cannot drop the parameter. **A field on any relation node is paid in every
+  binary**: `DynRelation`'s variant copy and destroy code is inlined wherever a
+  plan is copied, so `ScanPath` keeps its parameter behind an `ArcPointer` —
+  inline, it cost `query_join`, which never scans, 23,904 bytes of `__text`.
 - **`optimizer.mojo`** — the plan rewriter. `plan.optimize[AllRules]()` returns a
   new `DynRelation` you can print and diff: 16 rules (elimination, merging,
   `SplitConjunction`, four filter pushdowns, `PushFilterIntoScan`, `TopN`) run
@@ -598,10 +620,13 @@ share no node types**:
   `ColumnReader.decode` ignores a selection for a leveled leaf, so a repeated
   column would return misaligned columns rather than fewer rows, and `list<int>`
   is a single leaf so counting leaves would wave it through.
-- **`cli.mojo`** — `QueryCli`, which turns a compiled plan
-  into a program with declared parameters, `--help`, `--describe` and output
-  writers, the writers being comptime parameters so a binary links only the
-  formats it names. **It applies no rules.** An earlier draft had `run` force
+- **`cli.mojo`** — `QueryCli`, which turns a compiled plan into a program:
+  `QueryCli(plan).run()`. **Its options are the plan's parameters**, found by
+  `plan.params()`, so nothing is declared twice. `--help`, `--describe`,
+  `-o/--output`, `--format` and `--max-rows` are built in; the Parquet and IPC
+  writers are comptime parameters (`run[parquet=True]()`) so a binary links only
+  the formats it names. Usage errors go to stderr and exit 2, execution errors
+  exit 1. **It applies no rules.** An earlier draft had `run` force
   `ScanPruning` on every plan; that made `query_cli`'s `__text` 1,467,352 bytes
   larger (+33%), because `Optimizer.run` walks the plan through
   `DynRelation._dispatch`, whose ten arms each rebuild their node and so
@@ -734,10 +759,10 @@ marrow/
 │   ├── builders.mojo     # col, lit, if_else, is_in, minimum/maximum,
 │                         #   array_length/array_contains, param, count_star,
 │                         #   table, scan
-│   ├── bindings.mojo     # Bindings — parameter values for one execution
+│   ├── bindings.mojo     # ParamSpec + Bindings — what a plan declares, what a run binds
 │   ├── optimizer.mojo    # the plan rewriter: 16 rules + ColumnPruning
 │   ├── index.mojo        # Index / ZoneMaps — what a source knows unread
-│   ├── cli.mojo          # QueryCli — the AOT lane as a program
+│   ├── cli.mojo          # QueryCli — a plan as a command-line program
 │   ├── comptime/         # AOT lane: core, leaves, numeric, boolean, strings,
 │   │   └── tests/        #   temporal, nested, casts, aggregates, rules
 │   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
@@ -1134,6 +1159,10 @@ Two project-specific traps, neither of which produces a diagnostic:
   it.** Route construction through a separately-instantiated generic bound on
   the trait — `_construct_default[D: Defaultable & DataType]()`
   (`marrow/schema.mojo`), which is what makes `Schema.from_struct[T]()` work.
+  *Calling a method* on a reflected field needs no helper once
+  `comptime if conforms_to(T, Trait)` has narrowed it —
+  `r.field_ref[i](self).references(into)` in `Value.references` resolves
+  directly, including for fields typed by a struct parameter (`var l: Self.L`).
   The same limit is why **`Table[T]` is deferred**; `col("a", int64)` is the
   working API.
 
