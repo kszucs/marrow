@@ -656,16 +656,16 @@ Note
 <tbody>
 <tr class="odd">
 <td>every value comptime — the plan holds a direct kernel</td>
-<td style="text-align: right;"><strong>1,519,476</strong></td>
+<td style="text-align: right;"><strong>1,452,744</strong></td>
 </tr>
 <tr class="even">
 <td>the aggregate resolved from a function <em>name</em> at run time, as the Python frontend does</td>
-<td style="text-align: right;">13,032,812</td>
+<td style="text-align: right;">13,204,780</td>
 </tr>
 </tbody>
 </table>
-<p>Same query, same answer, <strong>about 8.6× the code</strong> — because the second one cannot prove which kernels it will not call. (Figures from the gate’s baseline as of the Mojo 1.2.0.dev2026091305 upgrade.)</p>
-<p>The rule set is itself a comptime parameter — <code>plan.optimize[AllRules]()</code> — so a binary links exactly the rules it names, and <code>execute()</code> alone links none. Output writers are comptime parameters for the same reason: the Parquet and IPC writers together added about 657 KB that <code>cli.run</code> does not pay, when last measured.</p>
+<p>Same query, same answer, <strong>about 9.1× the code</strong> — because the second one cannot prove which kernels it will not call. (Figures from the gate’s baseline, recorded with Mojo 1.2.0.dev2026091405.)</p>
+<p>The rule set is itself a comptime parameter — <code>plan.optimize[AllRules]()</code> — so a binary links exactly the rules it names, and <code>execute()</code> alone links none. Output writers are comptime parameters for the same reason: on the <a href="../guide/compile.html">compile guide</a>’s example, <code>QueryCli(plan).run()</code> is 2,994,476 bytes of <code>__text</code>, and <code>run[parquet=True, ipc=True]()</code> adds 707,568.</p>
 <p><code>benchmarks/binary_size/</code> is the live gate, at a 0.5% threshold. Trust it over any ratio quoted in prose, including this one.</p>
 </section>
 <section id="what-this-costs" class="level2">
