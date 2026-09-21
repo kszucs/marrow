@@ -601,7 +601,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <section id="arithmetic" class="level2">
 <h2 class="anchored" data-anchor-id="arithmetic">Arithmetic</h2>
 <p>Element-wise binary operations: <code>add</code>, <code>subtract</code>, <code>multiply</code>, <code>divide</code>.</p>
-<div id="d32f839e" class="cell" data-execution_count="2">
+<div id="02a85405" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -617,7 +617,7 @@ divide:   PrimitiveArray[int64]([10, 10, 10, 10, 10])</code></pre>
 </div>
 </div>
 <p>Floats work the same way:</p>
-<div id="9204ce83" class="cell" data-execution_count="3">
+<div id="84b39d8c" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>x <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.0</span>, <span class="fl">3.0</span>])</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>y <span class="op">=</span> ma.array([<span class="fl">0.5</span>, <span class="fl">1.5</span>, <span class="fl">2.5</span>])</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"add:   "</span>, mc.add(x, y))</span>
@@ -670,7 +670,7 @@ divide: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])</code></pre>
 <section id="null-propagation" class="level3">
 <h3 class="anchored" data-anchor-id="null-propagation">Null propagation</h3>
 <p>If <strong>either</strong> operand at a position is null, the result at that position is null. This mirrors SQL’s three-valued logic.</p>
-<div id="4dc46c72" class="cell" data-execution_count="4">
+<div id="1c80cc1c" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>])</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>])</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -682,7 +682,7 @@ divide: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])</code></pre>
 null count: 2</code></pre>
 </div>
 </div>
-<div id="01c8e707" class="cell" data-execution_count="5">
+<div id="0d333099" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Both inputs can contribute nulls</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="va">None</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>])</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="va">None</span>, <span class="dv">30</span>, <span class="va">None</span>])</span>
@@ -697,7 +697,7 @@ null count: 2</code></pre>
 <section id="aggregates" class="level2">
 <h2 class="anchored" data-anchor-id="aggregates">Aggregates</h2>
 <p>Most aggregates are <strong>not</strong> eager kernel calls (boolean <code>any</code> and <code>all</code>, below, are the exception). <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>, <code>product</code>, <code>count</code>, <code>count_distinct</code> and the rest reduce a column inside a <strong>query plan</strong>, so that a whole-table reduction and a <code>GROUP BY</code> are the same code path. Wrap a batch with <code>ma.memtable()</code>, describe the reduction, and <code>.collect()</code> runs it:</p>
-<div id="814ea6ca" class="cell" data-execution_count="6">
+<div id="47514a14" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({<span class="st">"v"</span>: ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])})</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>q <span class="op">=</span> ma.memtable(batch)</span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -713,7 +713,7 @@ null count: 2</code></pre>
 </div>
 </div>
 <p>Nulls are skipped, so <code>sum</code> above is <code>1 + 3 + 5</code>. Adding a <code>by=</code> key groups rather than reducing to one row — the only change is the argument:</p>
-<div id="6697bfd4" class="cell" data-execution_count="7">
+<div id="9f90702e" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>sales <span class="op">=</span> ma.record_batch({</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>, <span class="st">"west"</span>]),</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"amount"</span>: ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>]),</span>
@@ -729,7 +729,7 @@ null count: 2</code></pre>
 <section id="accumulator-types-widen" class="level3">
 <h3 class="anchored" data-anchor-id="accumulator-types-widen">Accumulator types widen</h3>
 <p><code>sum</code> and <code>product</code> do <strong>not</strong> preserve the input type — integers accumulate in <code>int64</code> and floats in <code>float64</code>, so a long column cannot silently overflow its own width. <code>mean</code> is always <code>float64</code>:</p>
-<div id="3b23b06f" class="cell" data-execution_count="8">
+<div id="cb872061" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>ints <span class="op">=</span> ma.record_batch({<span class="st">"v"</span>: ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())})</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>res  <span class="op">=</span> ma.memtable(ints).aggregate(total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"v"</span>), avg<span class="op">=</span>(<span class="st">"mean"</span>, <span class="st">"v"</span>)).collect()</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum of int32 -&gt;"</span>, res.column(<span class="st">"total"</span>).<span class="bu">type</span>)</span>
@@ -743,7 +743,7 @@ mean         -&gt; float64</code></pre>
 <section id="counting" class="level3">
 <h3 class="anchored" data-anchor-id="counting">Counting</h3>
 <p><code>count</code> counts non-null values; <code>ma.count_star()</code> counts <strong>rows</strong>, which differs on a nullable column. <code>count_distinct</code> is exact, while <code>approx_count_distinct</code> uses a fixed-size HyperLogLog sketch — far cheaper in memory on a high-cardinality column:</p>
-<div id="686ab394" class="cell" data-execution_count="9">
+<div id="03ea9103" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>ids <span class="op">=</span> ma.record_batch({<span class="st">"id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">4</span>])})</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.memtable(ids).aggregate(</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    rows<span class="op">=</span>ma.count_star(),</span>
@@ -759,7 +759,7 @@ mean         -&gt; float64</code></pre>
 <section id="boolean-aggregates" class="level3">
 <h3 class="anchored" data-anchor-id="boolean-aggregates">Boolean aggregates</h3>
 <p><code>any</code> and <code>all</code> operate on boolean arrays. Nulls are skipped.</p>
-<div id="82acc792" class="cell" data-execution_count="10">
+<div id="dfa1aedd" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>flags <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">None</span>, <span class="va">True</span>])</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"any:"</span>, mc.<span class="bu">any</span>(flags))   <span class="co"># True  — at least one True</span></span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all:"</span>, mc.<span class="bu">all</span>(flags))   <span class="co"># False — False is present</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -768,7 +768,7 @@ mean         -&gt; float64</code></pre>
 all: False</code></pre>
 </div>
 </div>
-<div id="edfdafee" class="cell" data-execution_count="11">
+<div id="a0ff9a49" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>all_true <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all with nulls:"</span>, mc.<span class="bu">all</span>(all_true))   <span class="co"># True — only True values</span></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -788,7 +788,7 @@ any empty/null: False</code></pre>
 <section id="filter" class="level3">
 <h3 class="anchored" data-anchor-id="filter">filter</h3>
 <p><code>filter(array, mask)</code> keeps elements where the boolean mask is <code>True</code>. The mask must be a <code>BoolArray</code> of the same length.</p>
-<div id="39ff3606" class="cell" data-execution_count="12">
+<div id="f8b4190b" class="cell" data-execution_count="12">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>])</span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -798,7 +798,7 @@ any empty/null: False</code></pre>
 </div>
 </div>
 <p>Nulls in the source array are preserved through the filter:</p>
-<div id="17195189" class="cell" data-execution_count="13">
+<div id="8a85d73b" class="cell" data-execution_count="13">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="va">None</span>])</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">True</span>])</span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -808,7 +808,7 @@ any empty/null: False</code></pre>
 </div>
 </div>
 <p>Nulls in the mask are treated as <code>False</code> (the element is excluded):</p>
-<div id="e34acb03" class="cell" data-execution_count="14">
+<div id="395a50fb" class="cell" data-execution_count="14">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>])</span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">None</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -821,7 +821,7 @@ any empty/null: False</code></pre>
 <section id="drop_null" class="level3">
 <h3 class="anchored" data-anchor-id="drop_null">drop_null</h3>
 <p><code>drop_null(array)</code> removes all null positions. Equivalent to filtering by the array’s own validity bitmap.</p>
-<div id="3543e676" class="cell" data-execution_count="15">
+<div id="9ea8dceb" class="cell" data-execution_count="15">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.drop_null(arr))   <span class="co"># [1, 3, 5]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -829,7 +829,7 @@ any empty/null: False</code></pre>
 </div>
 </div>
 <p>Works on numeric array types:</p>
-<div id="a883fa29" class="cell" data-execution_count="16">
+<div id="68424f35" class="cell" data-execution_count="16">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="va">None</span>, <span class="fl">3.0</span>, <span class="va">None</span>, <span class="fl">5.0</span>])</span>
 <span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.drop_null(f))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -841,7 +841,7 @@ any empty/null: False</code></pre>
 <section id="comparisons" class="level2">
 <h2 class="anchored" data-anchor-id="comparisons">Comparisons</h2>
 <p>Element-wise comparison kernels return a boolean array. Nulls propagate: if either input at a position is null, the output is null.</p>
-<div id="e4f21c6c" class="cell" data-execution_count="17">
+<div id="437cb9b0" class="cell" data-execution_count="17">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">4</span>,    <span class="dv">5</span>])</span>
 <span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -861,7 +861,7 @@ greater_equal: BoolArray([True, False, True, NULL, True])</code></pre>
 </div>
 </div>
 <p>The null at index 3 propagates to all output arrays:</p>
-<div id="1a22560a" class="cell" data-execution_count="18">
+<div id="95388181" class="cell" data-execution_count="18">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb33"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> mc.equal(a, b)</span>
 <span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, result.null_count)      <span class="co"># 1</span></span>
 <span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(3):"</span>, result[<span class="dv">3</span>].is_valid())     <span class="co"># False</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -874,7 +874,7 @@ is_valid(3): False</code></pre>
 <section id="casting" class="level2">
 <h2 class="anchored" data-anchor-id="casting">Casting</h2>
 <p><code>cast</code> converts an array to another type. By default a lossy conversion raises; pass <code>safe=False</code> for the raw truncating/wrapping conversion.</p>
-<div id="bf4b0d94" class="cell" data-execution_count="19">
+<div id="79450365" class="cell" data-execution_count="19">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb35"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>ints <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
 <span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"to float64:"</span>, mc.cast(ints, ma.float64()))</span>
 <span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a></span>

@@ -595,7 +595,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <p>The Arrow IPC format serialises <code>RecordBatch</code>es with essentially no transformation of the columnar buffers, so writing and reading it back is fast and lossless across every implemented type — nested, dictionary, temporal and null columns included.</p>
 <section id="writing-and-reading-a-file" class="level3">
 <h3 class="anchored" data-anchor-id="writing-and-reading-a-file">Writing and reading a file</h3>
-<div id="b968fb3f" class="cell" data-execution_count="2">
+<div id="f63255dd" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> tempfile, os</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({</span>
@@ -616,7 +616,7 @@ document.addEventListener("DOMContentLoaded", function () {
 </div>
 </div>
 <p><code>read_ipc_file</code> returns a list of <code>RecordBatch</code>es. Round-tripping preserves nulls and types exactly:</p>
-<div id="386487f7" class="cell" data-execution_count="3">
+<div id="3729b6e2" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null preserved:"</span>, restored[<span class="dv">0</span>].column(<span class="st">"name"</span>))</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"schema matches: "</span>, restored[<span class="dv">0</span>].schema)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -628,7 +628,7 @@ schema matches:  Schema(fields=[id: int64, name: string])</code></pre>
 <section id="reading-just-the-schema" class="level3">
 <h3 class="anchored" data-anchor-id="reading-just-the-schema">Reading just the schema</h3>
 <p>When you only need the column layout, <code>read_ipc_file_schema</code> reads the header and returns a zero-row batch:</p>
-<div id="0b35f7c2" class="cell" data-execution_count="4">
+<div id="01791538" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>header <span class="op">=</span> ma.read_ipc_file_schema(path)</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(header.schema)</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"rows:"</span>, header.num_rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -672,7 +672,7 @@ rows: 0</code></pre>
 </tr>
 </tbody>
 </table>
-<div id="803226b0" class="cell" data-execution_count="5">
+<div id="88ae6755" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>stream_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"people.arrows"</span>)</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>ma.write_ipc_stream(stream_path, batches<span class="op">=</span>[batch])</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.read_ipc_stream(stream_path)[<span class="dv">0</span>].to_pydict())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -685,7 +685,7 @@ rows: 0</code></pre>
 <section id="parquet" class="level2">
 <h2 class="anchored" data-anchor-id="parquet">Parquet</h2>
 <p>Marrow ships a <strong>from-scratch</strong> Parquet reader and writer — it decodes and encodes the Parquet format itself, with no PyArrow at runtime. The Python API lives in <code>marrow.parquet</code> and mirrors <code>pyarrow.parquet</code>:</p>
-<div id="d1369e69" class="cell" data-execution_count="6">
+<div id="cfde8e7a" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow.parquet <span class="im">as</span> pq</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>table <span class="op">=</span> ma.table({</span>
@@ -706,7 +706,7 @@ rows: 0</code></pre>
 <section id="column-projection" class="level3">
 <h3 class="anchored" data-anchor-id="column-projection">Column projection</h3>
 <p>Pass <code>columns=</code> to read only a subset of top-level columns (in the given order) — the reader skips the others entirely:</p>
-<div id="ba37d052" class="cell" data-execution_count="7">
+<div id="0fd89659" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>subset <span class="op">=</span> pq.read_table(pq_path, columns<span class="op">=</span>[<span class="st">"city"</span>, <span class="st">"id"</span>])</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(subset.column_names)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -717,7 +717,7 @@ rows: 0</code></pre>
 <section id="compression-and-page-version" class="level3">
 <h3 class="anchored" data-anchor-id="compression-and-page-version">Compression and page version</h3>
 <p><code>write_table</code> accepts a <code>compression</code> codec and a Parquet data-page version:</p>
-<div id="9d52193e" class="cell" data-execution_count="8">
+<div id="30dc4529" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>pq.write_table(table, pq_path, compression<span class="op">=</span><span class="st">"zstd"</span>, data_page_version<span class="op">=</span><span class="st">"2.0"</span>)</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pq.read_table(pq_path).num_rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
