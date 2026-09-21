@@ -26,7 +26,6 @@ from ....tabular import RecordBatch, record_batch
 from ....utils.testing import Benchmark
 from ...builders import col, lit, table
 from ...logical import DynValue
-from ...runtime.values import RuntimeValue, column
 
 
 comptime ROWS = 100_000
@@ -79,11 +78,7 @@ def bench_agg_runtime_sum_of_product(mut b: Benchmark) raises:
     @always_inline
     def call() raises {imm}:
         var plan = table(batch.copy()).aggregate(
-            [
-                RuntimeValue("multiply", column("qty"), column("price"))
-                .sum()
-                .alias("r")
-            ],
+            [(col("qty") * col("price")).sum().alias("r")],
             [col("g")],
         )
         keep(plan.execute().num_rows())
@@ -123,7 +118,7 @@ def bench_agg_erased_distinct(mut b: Benchmark) raises:
     @always_inline
     def call() raises {imm}:
         var plan = table(batch.copy()).aggregate(
-            [column("qty").count_distinct().alias("d")], [col("g")]
+            [col("qty").count_distinct().alias("d")], [col("g")]
         )
         keep(plan.execute().num_rows())
 
