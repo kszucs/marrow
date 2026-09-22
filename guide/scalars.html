@@ -80,8 +80,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-04c76cb8fd28c45ab7405f776130ba30.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-b345523c710a00bb55f0711ef3308125.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="../site_libs/bootstrap/bootstrap-dark-4acfd5c603099b96e72fbb590d56e9ed.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../site_libs/bootstrap/bootstrap-db0177512fd2ae71fe50b2c2c978e43b.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-a4ceadfbb6204d628e80810457f4b845.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -585,7 +585,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <section id="getting-a-scalar" class="level2">
 <h2 class="anchored" data-anchor-id="getting-a-scalar">Getting a scalar</h2>
 <p>Indexing an array with <code>[]</code> returns a scalar:</p>
-<div id="2801b068" class="cell" data-execution_count="2">
+<div id="8010e7f7" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="va">None</span>, <span class="dv">30</span>])</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>first <span class="op">=</span> a[<span class="dv">0</span>]</span>
@@ -599,7 +599,7 @@ int64</code></pre>
 </div>
 </div>
 <p>Slicing an array and taking an element gives a scalar the same way — the underlying buffer is shared, so neither step copies:</p>
-<div id="0a0b42a3" class="cell" data-execution_count="3">
+<div id="b76b5748" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>tail <span class="op">=</span> a.<span class="bu">slice</span>(<span class="dv">2</span>)</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(tail[<span class="dv">0</span>], <span class="st">"|"</span>, tail[<span class="dv">0</span>].as_py(), <span class="st">"|"</span>, tail[<span class="dv">0</span>].<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -610,7 +610,7 @@ int64</code></pre>
 <section id="null-scalars" class="level2">
 <h2 class="anchored" data-anchor-id="null-scalars">Null scalars</h2>
 <p>A null position yields a scalar that reports <code>is_null()</code> and converts to Python <code>None</code>:</p>
-<div id="30be8128" class="cell" data-execution_count="4">
+<div id="be4afc25" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>missing <span class="op">=</span> a[<span class="dv">1</span>]</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_null: "</span>, missing.is_null())</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid:"</span>, missing.is_valid())</span>
@@ -638,7 +638,7 @@ Note
 <section id="scalars-of-every-type" class="level2">
 <h2 class="anchored" data-anchor-id="scalars-of-every-type">Scalars of every type</h2>
 <p>Each array type produces a matching scalar, including strings and structs. One known gap: binary and large string scalars report their type as <code>string</code>.</p>
-<div id="447eea3b" class="cell" data-execution_count="5">
+<div id="a65910e3" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"hi"</span>, <span class="va">None</span>, <span class="st">"there"</span>])</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s[<span class="dv">0</span>], <span class="st">"-&gt;"</span>, s[<span class="dv">0</span>].as_py())</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -684,7 +684,7 @@ Note
 </tbody>
 </table>
 <p>Scalars are also truthy through <code>__bool__</code>, so a boolean scalar can be used directly in a condition:</p>
-<div id="9eb92020" class="cell" data-execution_count="6">
+<div id="0f1494e9" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>flag <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>])[<span class="dv">0</span>]</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"truthy:"</span>, <span class="bu">bool</span>(flag))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
