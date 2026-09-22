@@ -132,20 +132,29 @@ def mark_changes(key: DynArray, mut flags: List[Bool], ctx: ExecContext) raises:
     ORs into `flags`, so a caller marks a whole key list by calling this once
     per column: a compound key changes wherever *any* of its columns does.
 
-    **Null is not distinct from null here**, which is `IS NOT DISTINCT FROM`
-    and not `=`. That is what `PARTITION BY` and `ORDER BY` both mean — the
-    same rule `GROUP BY` uses, where all nulls land in one group — and it is
-    why this cannot simply read `equal`'s output: `equal` propagates null, so
-    a null-versus-null comparison answers *null* rather than true, and reading
-    that as "not equal" would give every null row its own partition. The
-    three-way split below is the whole correction, and it needs no per-dtype
-    arm because validity is on `DynArray` and the value comparison is
-    `equal`'s job.
+    **Neither null nor NaN is distinct from itself here**, which is
+    `IS NOT DISTINCT FROM` and not `=`. That is what `PARTITION BY` and
+    `ORDER BY` both mean — the same rule `GROUP BY` uses, where all nulls land
+    in one group — and the two halves are corrected in different places
+    because they need different machinery, not because one is more
+    caller-specific than the other. The join wants the NaN half too, and
+    not the null half.
+
+    Null is corrected here, in the three-way split below: `equal` propagates
+    null, so a null-versus-null comparison answers *null* rather than true,
+    and reading that as "not equal" would give every null row its own
+    partition. It stays here because it needs no per-dtype arm at all —
+    validity is on `DynArray`, so there is nothing for a kernel to dispatch.
+
+    NaN is corrected in the comparison, by asking `equal[nan_safe=True]` rather than
+    `equal`, because it *is* per-dtype: only a float has a NaN, and the test is
+    a SIMD op on the lane. See that function for what the split cost and what
+    it still does not reach.
     """
     var n = len(key)
     if n < 2:
         return
-    var eq = equal(key.slice(1, n - 1), key.slice(0, n - 1), ctx)
+    var eq = equal[nan_safe=True](key.slice(1, n - 1), key.slice(0, n - 1), ctx)
     var values = eq.values()
     for j in range(1, n):
         if flags[j]:

@@ -351,19 +351,27 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return keep_every(index.chunks)
 
         if self._tag == "lt":
-            return self._decided(live.copy(), LtKernel.dispatch(lo, rhi))
+            return self._decided(
+                live.copy(), LtKernel[nan_safe=True].dispatch(lo, rhi)
+            )
         if self._tag == "le":
-            return self._decided(live.copy(), LeKernel.dispatch(lo, rhi))
+            return self._decided(
+                live.copy(), LeKernel[nan_safe=True].dispatch(lo, rhi)
+            )
         if self._tag == "gt":
-            return self._decided(live.copy(), GtKernel.dispatch(hi, rlo))
+            return self._decided(
+                live.copy(), GtKernel[nan_safe=True].dispatch(hi, rlo)
+            )
         if self._tag == "ge":
-            return self._decided(live.copy(), GeKernel.dispatch(hi, rlo))
+            return self._decided(
+                live.copy(), GeKernel[nan_safe=True].dispatch(hi, rlo)
+            )
         if self._tag == "eq":
             # Interval overlap, read exactly as the fused node reads it: the
             # value can only appear where neither side lies wholly beyond the
             # other.
-            var below = LeKernel.dispatch(lo, rhi)
-            var above = GeKernel.dispatch(hi, rlo)
+            var below = LeKernel[nan_safe=True].dispatch(lo, rhi)
+            var above = GeKernel[nan_safe=True].dispatch(hi, rlo)
             return AndKernel.apply(
                 live^, AndKernel.apply(below.as_bool(), above.as_bool())
             )
@@ -569,17 +577,41 @@ struct RuntimeValue(Evaluable, Movable, Value):
             var l = kids[0].copy()
             var r = kids[1].copy()
             if self._tag == "eq":
-                return Datum(Self._compare[EqKernel, StringEqKernel](l^, r^))
+                return Datum(
+                    Self._compare[EqKernel[nan_safe=True], StringEqKernel](
+                        l^, r^
+                    )
+                )
             if self._tag == "ne":
-                return Datum(Self._compare[NeKernel, StringNeKernel](l^, r^))
+                return Datum(
+                    Self._compare[NeKernel[nan_safe=True], StringNeKernel](
+                        l^, r^
+                    )
+                )
             if self._tag == "lt":
-                return Datum(Self._compare[LtKernel, StringLtKernel](l^, r^))
+                return Datum(
+                    Self._compare[LtKernel[nan_safe=True], StringLtKernel](
+                        l^, r^
+                    )
+                )
             if self._tag == "le":
-                return Datum(Self._compare[LeKernel, StringLeKernel](l^, r^))
+                return Datum(
+                    Self._compare[LeKernel[nan_safe=True], StringLeKernel](
+                        l^, r^
+                    )
+                )
             if self._tag == "gt":
-                return Datum(Self._compare[GtKernel, StringGtKernel](l^, r^))
+                return Datum(
+                    Self._compare[GtKernel[nan_safe=True], StringGtKernel](
+                        l^, r^
+                    )
+                )
             if self._tag == "ge":
-                return Datum(Self._compare[GeKernel, StringGeKernel](l^, r^))
+                return Datum(
+                    Self._compare[GeKernel[nan_safe=True], StringGeKernel](
+                        l^, r^
+                    )
+                )
             if self._tag == "and":
                 return Datum(AndKernel.dispatch(l^, r^))
             if self._tag == "or":

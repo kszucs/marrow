@@ -43,35 +43,31 @@ all of them.
 Ordered by value. Some of it is partly done -- §1.9 in particular tracks a
 subsystem that moved twice this week -- and each entry says which part.
 
-### 1.1 Correctness — known-wrong answers
+### 1.1 Latent traps — nothing currently answers wrongly
 
-**`count(*)` desugars to `count(lit(1))`.** `builders.mojo` returns
-`lit(1, int64).count().alias("count_star")`, whose `columns()` is empty — so
-anything that prunes by "what does this read" prunes every column, and
-`RecordBatch.num_rows()` returns **0** when there are none (`tabular.mojo`).
+**`count(*)` reads no column, and a `RecordBatch` cannot tell that from "no
+rows".** `builders.mojo` desugars it to `lit(1, int64).count()`, whose
+`columns()` is correctly empty — the defect is that `RecordBatch` has no row
+count and derives one from `columns[0]`, which `to_struct_array` copies into
+`StructArray.length`. So a zero-column batch does not merely *report* zero
+rows, it becomes zero rows one node into the plan. `ColumnPruning` never
+narrows a source to zero columns, keeping the first when the demand is empty,
+which is what keeps every answer right today at the cost of one decoded column
+per count-star query.
 
-**Projection pushdown landed 2026-08-31 and handles it rather than fixing it:**
-`ColumnPruning` never narrows a source to zero columns, keeping the first when
-the demand is empty. The desugaring is unchanged, so the trap still waits for
-the next thing that reads `columns()` and believes the answer.
-
-**The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
-NULL by first asking "is there a zero in this column", and
-`BufferView.__contains__` (`views.mojo:199`) is that question: SIMD, early
-exit, per-chunk reduction — the variant measured fastest on 2026-09-04, where
-the scalar form cost **+45%** on `bench_floordiv_int32_*`.
-`marrow/tests/bench_views.mojo` exists to keep the scalar form from coming
-back and says `RuntimeValue._null_zeros` and `DivisionBinary` both call it.
-
-Neither does, and `grep -rn __contains__ marrow/` finds no production caller
-at all. `DivisionBinary.bind` (`expr/comptime/numeric.mojo:214`) walks the
-divisor a row at a time into a `Bitmap.alloc_zeroed(length)`, which is the
-shape the +45% measured; `RuntimeValue._null_zeros` pays a `nullif` against a
-broadcast zeros array instead. So the benchmark guards a helper nothing uses
-while the regression it was written to catch is in the tree. Re-point the two
-callers at `__contains__` before treating any cost here as measured — and a
-kernel bench cannot see it, since no kernel passes over the divisor:
-`BinaryKernel.apply` intersects the operands' validity and nothing else.
+**There is no contained fix.** Operators compute in `StructArray`, which
+carries an explicit `length` already (`_struct_of` in `physical.mojo` takes
+one), and `RecordBatch` appears at exactly two boundary functions —
+`to_struct_array` in, `from_struct_array` out. So the in-memory half is
+`tabular.mojo`: an explicit `num_rows` on `RecordBatch` (what Arrow specifies
+and pyarrow does), additive enough not to touch its 56 construction sites,
+carried through `from_struct_array`, `select` and `slice`. What that does *not*
+cover is the source the clamp exists for: a `ParquetScan` narrowed to no
+columns has to answer its row count from the footer rather than from a column
+it no longer decodes. Dropping the clamp for the in-memory source alone would
+make `ColumnPruning`'s rule depend on which source is below it, which is a
+worse rule than the uniform clamp — so the two halves land together or not at
+all.
 
 ### 1.3 Latent compiler hazards
 
@@ -138,6 +134,24 @@ blocked, four separate times.
   `GroupByOperator`: every group-by case in `expr/tests`, `golden/` and
   `python/marrow/tests` is far under the 60,000-row gate, so the engine's
   wiring to the parallel path is untested end to end.
+
+**The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
+NULL by first asking "is there a zero in this column", and
+`BufferView.__contains__` (`views.mojo:199`) is that question: SIMD, early
+exit, per-chunk reduction — the variant measured fastest on 2026-09-04, where
+the scalar form cost **+45%** on `bench_floordiv_int32_*`.
+`marrow/tests/bench_views.mojo` exists to keep the scalar form from coming
+back and says `RuntimeValue._null_zeros` and `DivisionBinary` both call it.
+
+Neither does, and `grep -rn __contains__ marrow/` finds no production caller
+at all. `DivisionBinary.bind` (`expr/comptime/numeric.mojo:214`) walks the
+divisor a row at a time into a `Bitmap.alloc_zeroed(length)`, which is the
+shape the +45% measured; `RuntimeValue._null_zeros` pays a `nullif` against a
+broadcast zeros array instead. So the benchmark guards a helper nothing uses
+while the regression it was written to catch is in the tree. Re-point the two
+callers at `__contains__` before treating any cost here as measured — and a
+kernel bench cannot see it, since no kernel passes over the divisor:
+`BinaryKernel.apply` intersects the operands' validity and nothing else.
 
 ### 1.8b The dylib layer: what was measured and dropped
 
@@ -340,7 +354,7 @@ feature".
 
 ---
 
-### 1.12 Two findings not covered by any row above
+### 1.12 A finding not covered by any row above
 
 **The binary-size gate is blind to more than half its own programs.** Three
 times a plan has linked `kernels::cast` without needing it — through hashing,
@@ -352,16 +366,6 @@ or compares it. Fifteen sources, eight gated — `query_arith`, `query_exprs`,
 `query_param`, `query_runtime`, `query_scan`, `query_scan_typed` and
 `query_sort` are all ungated. Adding the baseline entries, not the programs, is
 the task, and until it is done the next instance is equally invisible.
-
-**NaN ordering keys are never peers — still open.** `mark_changes` decides
-peer identity with `equal()`, which is IEEE, while the sort maps all NaNs to
-one key and places them adjacent. The docstring claims `IS NOT DISTINCT FROM`
-and delivers it for NULL but not NaN.
-
-**The root is not in the window path.** `sort` and `equal` disagree about NaN,
-and anything pairing those two kernels inherits it — `distinct` and `group_by`
-are the other candidates. Fixing it inside `mark_changes` would paper over
-that, so the first task is to establish whether the divergence is general.
 
 ### 1.13 Framed window aggregates are O(n^2)
 
@@ -508,15 +512,24 @@ what is missing is the null-skipping variant.
 
 #### 1.7 Known-wrong answers in core operations
 
-The float group-key and integer `//`/`%` entries that stood here are **merged**,
-in `136b3529`, and the golden corpus now carries **zero `xfail`s** — every case
-it compiles, marrow answers the way DuckDB does. `/` by zero was not part of
-that fix and landed separately on 2026-09-22 — floats answer `inf`/`-inf`/
-`nan`, and `pc.divide` raises on an integer zero divisor as pyarrow does.
+One left; the golden corpus carries **zero `xfail`s** otherwise.
 
 - **Integer overflow wraps where SQL raises** (`golden/COVERAGE.md`). The
-  `edges` fixture already carries int64 max/min for the day a checked-arithmetic
-  mode exists.
+  `edges` fixture already carries int64 max/min for the day a
+  checked-arithmetic mode exists.
+
+  **The machinery is already in the tree, in `cast`.**
+  `NumericCast.apply[From, To, safe]` takes `safe` as a *comptime* parameter
+  and, when it is on and `needs_check[In, Out]()` says the pair can overflow,
+  swaps `views.apply` for `views.apply_checked` — a driver whose lane returns
+  `(value, bad)` and raises on the first flagged lane, serial because an
+  exception cannot cross a worker or a GPU launch. Arithmetic would copy that
+  shape: a `core_checked` beside each `core`, a two-input `apply_checked`, and
+  a selector that must be comptime in the fused lane (a runtime `if` there is
+  not eliminable and every AOT gate pays for it) while the runtime lane can
+  read it off `ExecContext`. `cast` already spells it both ways — comptime on
+  `apply`, a runtime argument on `dispatch` — so the asymmetry has a
+  precedent. A golden case still cannot express "raises".
 
 ---
 

@@ -543,10 +543,12 @@ struct NumericCompare[
             )
         elif Self.K.name == EqKernel.name:
             # Equality is interval overlap: possible exactly when neither side
-            # lies wholly beyond the other. Two comparisons, not one, and both
-            # are the ordinary kernels.
-            var below = LeKernel.apply(lo, rhi)
-            var above = GeKernel.apply(hi, rlo)
+            # lies wholly beyond the other. `nan_safe` to match the order this
+            # lane *evaluates* under — pruning a chunk with an IEEE `<=` while
+            # the predicate runs a total one would drop a row group the query
+            # matches.
+            var below = LeKernel[nan_safe=True].apply(lo, rhi)
+            var above = GeKernel[nan_safe=True].apply(hi, rlo)
             return AndKernel.apply(live, AndKernel.apply(below^, above^))
         else:
             return keep_every(index.chunks)
@@ -555,12 +557,12 @@ struct NumericCompare[
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
 
-comptime Eq = NumericCompare[EqKernel, _, _]
-comptime Ne = NumericCompare[NeKernel, _, _]
-comptime Lt = NumericCompare[LtKernel, _, _]
-comptime Le = NumericCompare[LeKernel, _, _]
-comptime Gt = NumericCompare[GtKernel, _, _]
-comptime Ge = NumericCompare[GeKernel, _, _]
+comptime Eq = NumericCompare[EqKernel[nan_safe=True], _, _]
+comptime Ne = NumericCompare[NeKernel[nan_safe=True], _, _]
+comptime Lt = NumericCompare[LtKernel[nan_safe=True], _, _]
+comptime Le = NumericCompare[LeKernel[nan_safe=True], _, _]
+comptime Gt = NumericCompare[GtKernel[nan_safe=True], _, _]
+comptime Ge = NumericCompare[GeKernel[nan_safe=True], _, _]
 
 
 struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
@@ -749,12 +751,12 @@ struct TemporalCompare[
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
 
-comptime TemporalEq = TemporalCompare[EqKernel, _, _]
-comptime TemporalNe = TemporalCompare[NeKernel, _, _]
-comptime TemporalLt = TemporalCompare[LtKernel, _, _]
-comptime TemporalLe = TemporalCompare[LeKernel, _, _]
-comptime TemporalGt = TemporalCompare[GtKernel, _, _]
-comptime TemporalGe = TemporalCompare[GeKernel, _, _]
+comptime TemporalEq = TemporalCompare[EqKernel[nan_safe=False], _, _]
+comptime TemporalNe = TemporalCompare[NeKernel[nan_safe=False], _, _]
+comptime TemporalLt = TemporalCompare[LtKernel[nan_safe=False], _, _]
+comptime TemporalLe = TemporalCompare[LeKernel[nan_safe=False], _, _]
+comptime TemporalGt = TemporalCompare[GtKernel[nan_safe=False], _, _]
+comptime TemporalGe = TemporalCompare[GeKernel[nan_safe=False], _, _]
 
 
 # ---------------------------------------------------------------------------

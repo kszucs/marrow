@@ -31,8 +31,10 @@ at `i` (validity = `Bitmap.intersect(left.bitmap, right.bitmap)`). Data bits for
 null positions hold the comparison of the underlying values — undefined per the
 Arrow spec, but branch-free.
 
-`EqKernel` additionally overloads `apply` for `StructArray`: row equality is
-every child column agreeing, which is how the hash table verifies key rows.
+The six comparison kernels carry a `nan_safe` parameter, because marrow needs
+two answers about NaN — see `EqKernel`. It also overloads `apply` for `StructArray`: row
+equality is every child column agreeing, which is how the hash table verifies
+key rows.
 """
 
 import std.math as math
@@ -653,12 +655,19 @@ trait NumericCompareKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-def equal(
+def equal[
+    nan_safe: Bool = False
+](
     left: DynArray,
     right: DynArray,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> BoolArray:
     """Equality over any comparable dtype, picking the kernel family.
+
+    `nan_safe` selects which equality — see `EqKernel`. The default is the
+    user's `=`; `equal[nan_safe=True]` is key identity, which `mark_changes`
+    and the hash join's key verification ask for. It reaches only the floating
+    arm, because nothing else has a NaN.
 
     Fixed-width and variable-width equality are separate kernels — SIMD over
     fixed-width lanes versus an elementwise walk — and `NumericCompareKernel`
@@ -677,15 +686,15 @@ def equal(
     question — which kernel the *user's* `==` meant — and lives in the
     expression layer for that reason.
     """
-    if left.dtype() != right.dtype():
-        # Checked before either arm, and before the downcast below: `leaf`
-        # resolves `T` from the *left* dtype and then reads `right` at that same
-        # `T`, so a mismatch here would be one more wrong `as_type` — the exact
-        # failure this function's binarylike arm was added to fix.
-        raise Error(
-            "equal: dtype mismatch, ", left.dtype(), " vs ", right.dtype()
-        )
-    elif left.dtype() == bool_dt:
+    # Checked before every arm, and before the downcast below: `leaf` resolves
+    # `T` from the *left* dtype and then reads `right` at that same `T`, so a
+    # mismatch here would be one more wrong `as_type` — the exact failure this
+    # function's binarylike arm was added to fix. `expect_same_dtype` rather
+    # than a hand-rolled raise, so one condition has one message whichever
+    # entry point reached it.
+    EqKernel.expect_same_dtype(left.dtype(), right.dtype())
+
+    if left.dtype() == bool_dt:
         # Booleans are bit-packed, so `BoolArray` is not a `PrimitiveArray` and
         # `dispatch_primitive` raised "dtype is not primitive" on them — a
         # `bool` join key was impossible for the same reason a `binary` one was.
@@ -711,6 +720,18 @@ def equal(
             )
 
         return left.dtype().dispatch_binarylike(leaf)
+    elif nan_safe and left.dtype().is_floating_point():
+        # `dispatch_floating`, not the kernel's own `dispatch`: only a float has
+        # a NaN, so `dispatch_primitive` would link ~25 arms of `_binary_cmp` to
+        # serve three. It buys nothing in `libmarrow.so`, which links the wide
+        # ladder anyway for the runtime lane, and everything in an AOT binary
+        # whose only total comparison is a window peer scan.
+        def total[T: FloatingType](d: T) raises {imm} -> BoolArray:
+            return EqKernel[nan_safe=True].apply(
+                left.as_primitive[T](), right.as_primitive[T](), ctx
+            )
+
+        return left.dtype().dispatch_floating(total)
     else:
         return EqKernel.dispatch(left, right, ctx).as_bool().copy()
 
@@ -750,7 +771,28 @@ def _bytes_equal[
     )
 
 
-struct EqKernel(NumericCompareKernel):
+struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):
+    """Equality. `nan_safe=True` additionally makes a NaN equal itself.
+
+    The parameter exists because marrow needs both answers and they differ on
+    exactly one input. The default is the user's `=`: `EqKernel` is
+    `pyarrow.compute.equal`, so a NaN equals nothing, itself included.
+    `EqKernel[nan_safe=True]` is the *key identity* `HashKernel` already uses,
+    for a caller pairing equality with a hash or a sort — see `equal`.
+
+    Not IEEE `totalOrder`, which is a bitwise compare: that separates `-0.0`
+    from `0.0` and one NaN payload from another, where both parameterizations
+    here agree `-0.0 == 0.0` and this one folds every NaN together.
+    """
+
+    # Constant, and deliberately not read off `nan_safe`: this is the
+    # *operator's* name and both parameterizations are equality. It reaches plan
+    # rendering (`NumericCompare.write_to`) and the pruning rule's
+    # `Self.K.name == EqKernel.name` test, so making it vary printed
+    # `equal_nan_safe(a, 1)` in `explain()` and silently dropped zone-map
+    # pruning for every equality predicate. A comptime member that does *not*
+    # read the struct parameter resolves off the unbound name too, which is why
+    # the siblings can say `GtKernel.name`.
     comptime name = "equal"
 
     @always_inline
@@ -758,7 +800,10 @@ struct EqKernel(NumericCompareKernel):
     def core[
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        return a.eq(b)
+        comptime if Self.nan_safe and T.is_floating_point():
+            return a.eq(b) | (math.isnan(a) & math.isnan(b))
+        else:
+            return a.eq(b)
 
     @staticmethod
     def apply(
@@ -773,17 +818,29 @@ struct EqKernel(NumericCompareKernel):
         goes through `equal` rather than this kernel's own numeric
         `dispatch`."""
         Self.expect_same_dtype(left.dtype, right.dtype)
-        var mask = equal(left.children[0].copy(), right.children[0].copy(), ctx)
+        var mask = equal[Self.nan_safe](
+            left.children[0].copy(), right.children[0].copy(), ctx
+        )
         for k in range(1, len(left.children)):
             mask = AndKernel.apply(
                 mask,
-                equal(left.children[k].copy(), right.children[k].copy(), ctx),
+                equal[Self.nan_safe](
+                    left.children[k].copy(), right.children[k].copy(), ctx
+                ),
                 ctx,
             )
         return mask^
 
 
-struct NeKernel(NumericCompareKernel):
+struct NeKernel[nan_safe: Bool = False](NumericCompareKernel):
+    """`equal`'s complement, under whichever NaN rule `nan_safe` selects.
+
+    `a.ne(b)` is *not* the IEEE answer: it lowers to an ordered compare, so it
+    answered False whenever either operand was a NaN — `nan <> 1.0` came out
+    False where pyarrow says True. Negating `eq` is correct under both rules by
+    construction, and keeps `<>` the exact complement of `=` when `nan_safe`
+    makes the latter total."""
+
     comptime name = "not_equal"
 
     @always_inline
@@ -791,10 +848,14 @@ struct NeKernel(NumericCompareKernel):
     def core[
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        return a.ne(b)
+        return ~EqKernel[Self.nan_safe].core[T, W](a, b)
 
 
-struct LtKernel(NumericCompareKernel):
+struct LtKernel[nan_safe: Bool = False](NumericCompareKernel):
+    """Ordering. `nan_safe=True` adopts SQL's total order, where NaN is greater
+    than every number and than `inf` — DuckDB 1.5.5, DataFusion 54 and Polars
+    1.43 all answer `nan > 1.0` true."""
+
     comptime name = "less"
 
     @always_inline
@@ -802,10 +863,18 @@ struct LtKernel(NumericCompareKernel):
     def core[
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        return a.lt(b)
+        comptime if Self.nan_safe and T.is_floating_point():
+            # `~(a >= b)` rather than `a < b | …`: one `isnan`, not two, and it
+            # makes `<` the exact complement of `>=` under the total order.
+            return ~(a.ge(b) | math.isnan(a))
+        else:
+            return a.lt(b)
 
 
-struct LeKernel(NumericCompareKernel):
+struct LeKernel[nan_safe: Bool = False](NumericCompareKernel):
+    """Ordering — see `LtKernel`. Under the total order a NaN is also `<=` a NaN,
+    which IEEE denies."""
+
     comptime name = "less_equal"
 
     @always_inline
@@ -813,10 +882,13 @@ struct LeKernel(NumericCompareKernel):
     def core[
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        return a.le(b)
+        comptime if Self.nan_safe and T.is_floating_point():
+            return a.le(b) | math.isnan(b)
+        else:
+            return a.le(b)
 
 
-struct GtKernel(NumericCompareKernel):
+struct GtKernel[nan_safe: Bool = False](NumericCompareKernel):
     comptime name = "greater"
 
     @always_inline
@@ -824,10 +896,17 @@ struct GtKernel(NumericCompareKernel):
     def core[
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        return a.gt(b)
+        comptime if Self.nan_safe and T.is_floating_point():
+            # The complement of `<=`, for the same reason as `LtKernel`.
+            return ~(a.le(b) | math.isnan(b))
+        else:
+            return a.gt(b)
 
 
-struct GeKernel(NumericCompareKernel):
+struct GeKernel[nan_safe: Bool = False](NumericCompareKernel):
+    """Ordering — see `LtKernel`. Under the total order a NaN is also `>=` a NaN.
+    """
+
     comptime name = "greater_equal"
 
     @always_inline
@@ -835,4 +914,7 @@ struct GeKernel(NumericCompareKernel):
     def core[
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        return a.ge(b)
+        comptime if Self.nan_safe and T.is_floating_point():
+            return a.ge(b) | math.isnan(a)
+        else:
+            return a.ge(b)

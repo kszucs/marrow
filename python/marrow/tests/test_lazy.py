@@ -274,6 +274,39 @@ def test_join_with_separate_key_names(table, regions):
     assert len(out) == 4
 
 
+def test_a_nan_key_is_the_same_key_everywhere_in_the_expression_layer():
+    """Four consumers of NaN key identity, all agreeing.
+
+    Asserts, in order: the two NaNs form one ``GROUP BY`` group (sizes 2 and
+    1), count as one distinct value (``d == 2`` over three rows), are ``rank``
+    peers, and **join**. All four match DuckDB 1.5.5 and DataFusion 54.0.0
+    (measured 2026-09-22), because ``marrow.expr``'s ``=`` is SQL's total one.
+    ``marrow.compute.equal`` keeps pyarrow's IEEE answer, which is a different
+    question and has its own case in ``test_compare.mojo``.
+    """
+    nan = float("nan")
+    left = ma.memtable(
+        ma.record_batch(
+            {
+                "k": ma.array([nan, nan, 1.0], type=ma.float64()),
+                "v": ma.array([1, 2, 3], type=ma.int64()),
+            }
+        )
+    )
+    right = ma.memtable(ma.record_batch({"k": ma.array([nan, 1.0], type=ma.float64())}))
+
+    grouped = rows(left.aggregate(keys=[col("k")], aggs=[count_star().alias("n")]))
+    assert sorted(row["n"] for row in grouped) == [1, 2]
+    assert rows(left.aggregate(aggs=[col("k").count_distinct().alias("d")])) == [
+        {"d": 2}
+    ]
+    ranked = rows(left.with_columns(["r"], [ma.rank().over(order_by=[col("k")])]))
+    assert [row["r"] for row in ranked] == [2, 2, 1]
+
+    joined = rows(left.join(right, on="k"))
+    assert sorted(row["v"] for row in joined) == [1, 2, 3]
+
+
 def test_join_needs_keys(table, regions):
     with pytest.raises(ValueError, match="pass `on`"):
         table.join(regions)

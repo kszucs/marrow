@@ -31,6 +31,8 @@ Serial cost breakdown at N=10M (from macOS `sample`, 50 iters, 8-bit baseline):
 """
 
 from std.builtin.sort import sort as _sort_impl
+from std.math import isnan
+from std.utils.numerics import nan
 from std.sys import size_of
 
 from ..arrays import (
@@ -97,41 +99,52 @@ def _encode_sort_key[
 ](val: Scalar[T.native], ascending: Bool,) -> UInt64:
     """Encode val as UInt64 that sorts correctly in unsigned ascending order.
 
-    Float transform: positive → XOR sign bit; negative → XOR all bits
-    (NaN becomes uint max, sorting last in ascending order).
+    Float transform: positive → XOR sign bit; negative → XOR all bits.
     Signed int transform: XOR sign bit so -N < 0 < +N in unsigned order.
     Unsigned: zero-extend cast.
     Descending: complement all bits.
+
+    **Every NaN is folded onto one bit pattern first**, exactly as
+    `HashKernel._floating_lanes` does, so `sort` and `hash` answer the same
+    question about NaN identity. The flip is otherwise sign-dependent and splits
+    them, which `mark_changes` cannot recover from: it compares *adjacent* rows,
+    so NaNs that never land together are never handed to a comparison at all.
+    `test_sort_indices_puts_both_nan_signs_last` has the worked example.
     """
     comptime native = T.native
     var key: UInt64
 
+    var v = val
+    comptime if native.is_floating_point():
+        if isnan(v):
+            v = nan[native]()
+
     comptime if native == DType.float16:
-        var bits = val.to_bits().cast[DType.uint16]()
+        var bits = v.to_bits().cast[DType.uint16]()
         var sign = bits >> 15
         var flip = (UInt16(0) - sign) | UInt16(0x8000)
         key = (bits ^ flip).cast[DType.uint64]()
     elif native == DType.float32:
-        var bits = val.to_bits().cast[DType.uint32]()
+        var bits = v.to_bits().cast[DType.uint32]()
         var sign = bits >> 31
         var flip = (UInt32(0) - sign) | UInt32(0x80000000)
         key = (bits ^ flip).cast[DType.uint64]()
     elif native == DType.float64:
-        var bits = val.to_bits().cast[DType.uint64]()
+        var bits = v.to_bits().cast[DType.uint64]()
         var sign = bits >> 63
         var flip = (UInt64(0) - sign) | UInt64(0x8000000000000000)
         key = bits ^ flip
     elif native == DType.int8:
-        key = val.to_bits().cast[DType.uint64]() ^ UInt64(0x80)
+        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x80)
     elif native == DType.int16:
-        key = val.to_bits().cast[DType.uint64]() ^ UInt64(0x8000)
+        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x8000)
     elif native == DType.int32:
-        key = val.to_bits().cast[DType.uint64]() ^ UInt64(0x80000000)
+        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x80000000)
     elif native == DType.int64:
-        key = val.to_bits().cast[DType.uint64]() ^ UInt64(0x8000000000000000)
+        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x8000000000000000)
     else:
         # uint8, uint16, uint32, uint64 — no encoding needed.
-        key = val.cast[DType.uint64]()
+        key = v.cast[DType.uint64]()
 
     if not ascending:
         key = ~key

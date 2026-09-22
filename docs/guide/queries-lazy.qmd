@@ -192,7 +192,7 @@ print(result.to_pyarrow())        # zero-copy, over the C Data Interface
 - **Row groups are skipped only after `.optimize()`.** Without it, a filtered
   scan reads every row group.
 - **No `distinct`/`union`/`except`/`intersect` nodes**, and no regex.
-- **Float division by zero answers the dividend**, not `inf` — see
-  [Compute](compute.qmd).
+- **Comparisons follow SQL, not IEEE**: `nan = nan` is true here and false in
+  `marrow.compute` — see [Compute](compute.qmd).
 
 The full list is on [Status & limitations](../reference/status.qmd).

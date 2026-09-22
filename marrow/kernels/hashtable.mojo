@@ -621,8 +621,11 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
         ref build_indices = indices[0]
         ref probe_indices = indices[1]
 
-        # Filter hash-collision false positives by key equality.
-        var mask = EqKernel.apply(
+        # Filter hash-collision false positives by key equality. `nan_safe`,
+        # because this is SQL's `=`: `JOIN ... ON a.k = b.k` must agree with
+        # `WHERE a.k = b.k`, and the hash already folds every NaN together, so
+        # the IEEE answer rejected pairs it had just matched.
+        var mask = EqKernel[nan_safe=True].apply(
             TakeKernel.apply(build_keys, build_indices),
             TakeKernel.apply(probe_keys, probe_indices),
         )

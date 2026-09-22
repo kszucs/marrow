@@ -1,4 +1,6 @@
+from std.math import isnan
 from std.testing import assert_equal, assert_true, assert_raises
+from std.utils.numerics import nan
 
 from ...arrays import (
     BinaryArray,
@@ -316,6 +318,38 @@ def test_string_to_float() raises:
     var a: DynArray = array(["1.5", "-2.25", "3.0"])
     var r = cast(a, float64)
     assert_true(r.as_float64() == array([1.5, -2.25, 3.0], float64))
+
+
+def test_a_nan_is_not_zero_so_it_casts_to_true() raises:
+    """`cast(nan, bool)` is True, as `pyarrow` 23.0.1 answers it.
+
+    `NumToBoolKernel.core` was `a.ne(0)`, and `SIMD.ne` lowers to an *ordered*
+    compare — False whenever either operand is a NaN — so a NaN cast to False
+    while its own docstring called the test total. Negating `eq` is total.
+    """
+    var a: DynArray = array([nan[float64.native](), 0.0, 2.0], float64)
+    var r = cast(a, bool_)
+    assert_true(r.as_bool() == array([True, False, True]))
+
+
+def test_a_nan_does_not_round_trip_so_a_safe_cast_to_int_raises() raises:
+    """The same ordered-compare trap, one layer down in `core_checked`.
+
+    `needs_check` is True for every float→int pair, so a NaN is exactly what
+    arrives here; `out.cast[In]().ne(a)` answered False and waved it through,
+    producing whatever `fptosi` gave. `pyarrow.compute.cast` raises.
+
+    **`safe=False` does not null the row**, unlike the string parsers — it
+    keeps the hardware's answer, which is 0 for a NaN on arm64. Asserted as
+    "does not raise" rather than as that value, since it is a lowering detail
+    and not a promise.
+    """
+    var a: DynArray = array([nan[float64.native](), 1.0], float64)
+    with assert_raises():
+        _ = cast(a, int64, safe=True)
+    var lax = cast(a, int64, safe=False)
+    assert_equal(lax.null_count(), 0)
+    assert_equal(len(lax), 2)
 
 
 def test_string_to_int_parse_error_safe_raises() raises:

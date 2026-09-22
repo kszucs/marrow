@@ -46,21 +46,27 @@ print("add:   ", mc.add(x, y))
 print("divide:", mc.divide(x, y))
 ```
 
-::: {.callout-warning}
-## Float division by zero answers the dividend
+::: {.callout-note}
+## `marrow.compute` compares like pyarrow; `marrow.expr` compares like SQL
 
-`DivKernel` substitutes a `1` divisor so the SIMD lane cannot trap, so
-`10.0 / 0.0` is `10.0` rather than `inf`:
+The two answer differently on NaN, deliberately. `marrow.compute` mirrors
+`pyarrow.compute`, so its comparisons are IEEE — a NaN equals nothing, itself
+included. `marrow.expr` is a SQL engine, and DuckDB, DataFusion and Polars all
+agree that SQL's comparisons are total:
 
-| expression | DuckDB | marrow |
+| expression | `pc.equal` / `pc.greater` | `col("a") == …` / `> …` |
 |---|---|---|
-| `10.0 / 0.0` | `inf` | `10.0` |
-| `-10.0 / 0.0` | `-inf` | `-10.0` |
-| `0.0 / 0.0` | `nan` | `0.0` |
+| `nan = nan` | `False` | **`True`** |
+| `nan <> nan` | `True` | **`False`** |
+| `nan > 1.0` | `False` | **`True`** |
 
-Integer `//` and `%` by zero are **not** affected — they answer NULL, as SQL
-does. The two genuinely want different answers: division by zero has a value in
-the reals' completion and integer division by zero does not.
+So a NaN is its own `GROUP BY` group, its own join key and its own `rank` peer,
+and it sorts after `inf`. `NULL` is unaffected and stays three-valued in both.
+
+Float division by zero answers a *value* — `10.0 / 0.0` is `inf`, `0.0 / 0.0`
+is `nan` — while integer `//` and `%` by zero answer NULL, as SQL does. The two
+genuinely want different answers: division by zero has a value in the reals'
+completion and integer division by zero does not.
 :::
 
 

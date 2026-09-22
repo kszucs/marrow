@@ -1,3 +1,4 @@
+from std.math import inf, nan
 from std.testing import (
     assert_equal,
     assert_true,
@@ -70,6 +71,121 @@ def test_equal_true_and_false() raises:
     assert_true(result[2].value())  # 3 == 3
     assert_false(result[3].value())  # 4 != 0
     assert_true(result[4].value())  # 5 == 5
+
+
+def test_equal_is_ieee_on_nan_and_nan_safe_is_not() raises:
+    """The two answers marrow has to have, side by side — see `equal[nan_safe=True]`
+    for which consumer needs which, and why `=` stays IEEE.
+
+    `-0.0 == 0.0` is asserted true under *both* so that a later change cannot
+    quietly make `equal[nan_safe=True]` a bit comparison, which would answer false here
+    and still pass every NaN assertion.
+    """
+    var q = nan[DType.float64]()
+    var a = array([q, q, 0.0, 1.0], float64)
+    var b = array([q, 1.0, -0.0, 1.0], float64)
+
+    var ieee = EqKernel.apply[Float64Type](a, b)
+    assert_false(ieee[0].value())
+    assert_false(ieee[1].value())
+    assert_true(ieee[2].value())
+    assert_true(ieee[3].value())
+
+    var total = equal[nan_safe=True](a.copy().to_dyn(), b.copy().to_dyn())
+    assert_true(total[0].value())
+    assert_false(total[1].value())
+    assert_true(total[2].value())
+    assert_true(total[3].value())
+
+
+def test_nan_safe_comparisons_take_sqls_total_order() raises:
+    """`nan_safe=True` is SQL's comparison, measured against three engines.
+
+    DuckDB 1.5.5, DataFusion 54.0.0 and Polars 1.43.2 all answer `nan = nan`
+    true, `nan <> nan` false and `nan > 1.0` true — NaN is greater than every
+    number and than `inf`. This is what `marrow.expr` binds; `pc.*` keeps
+    pyarrow's IEEE answers, which `test_equal_is_ieee_on_nan_and_nan_safe_is_not`
+    pins on the other side.
+
+    `<=` and `>=` are the two that surprise: a NaN is `<=` and `>=` a NaN under
+    the total order, where IEEE denies both.
+    """
+    var q = nan[DType.float64]()
+    var i = inf[DType.float64]()
+    #              nan~nan  nan~1.0  nan~inf  1.0~nan
+    var a = array([q, q, q, 1.0], float64)
+    var b = array([q, 1.0, i, q], float64)
+
+    var eq = EqKernel[nan_safe=True].apply[Float64Type](a, b)
+    assert_true(eq == array([True, False, False, False]))
+
+    var ne = NeKernel[nan_safe=True].apply[Float64Type](a, b)
+    assert_true(ne == array([False, True, True, True]))
+
+    var lt = LtKernel[nan_safe=True].apply[Float64Type](a, b)
+    assert_true(lt == array([False, False, False, True]))
+    var le = LeKernel[nan_safe=True].apply[Float64Type](a, b)
+    assert_true(le == array([True, False, False, True]))
+    var gt = GtKernel[nan_safe=True].apply[Float64Type](a, b)
+    assert_true(gt == array([False, True, True, False]))
+    var ge = GeKernel[nan_safe=True].apply[Float64Type](a, b)
+    assert_true(ge == array([True, True, True, False]))
+
+
+def test_not_equal_is_unordered_on_nan() raises:
+    """`nan <> 1.0` is true, and `a.ne(b)` does not say so.
+
+    Mojo's `SIMD.ne` lowers to an *ordered* compare, so it answered False
+    whenever either operand was a NaN — `pc.not_equal(nan, 1.0)` came out False
+    where `pyarrow.compute.not_equal` says True, which is a parity bug
+    independent of the total-order question. `NeKernel` negates `EqKernel`
+    instead, which is right under both rules by construction.
+    """
+    var q = nan[DType.float64]()
+    var a = array([q, q, 2.0, 3.0], float64)
+    var b = array([q, 1.0, 9.0, 3.0], float64)
+    var ne = NeKernel.apply[Float64Type](a, b)
+    assert_true(ne == array([True, True, True, False]))
+
+
+def test_nan_safe_equality_leaves_nulls_alone() raises:
+    """Null in, null out — the same rule `equal` follows, and deliberately.
+
+    Whether two nulls are the same key is the *caller's* question and the
+    answers differ — `mark_changes` says they are, a filter's `=` says
+    unknown — so `equal[nan_safe=True]` corrects only NaN and leaves the validity for
+    the caller to read. Pinned because the correction is now inside the SIMD
+    `core`, where a `select` over the validity instead of a lane op would be
+    an easy and invisible way to lose it.
+    """
+    var a = Float64Builder(3)
+    a.append(nan[DType.float64]())
+    a.append_null()
+    a.append(inf[DType.float64]())
+    var b = Float64Builder(3)
+    b.append_null()
+    b.append_null()
+    b.append(inf[DType.float64]())
+
+    var total = equal[nan_safe=True](a.finish().to_dyn(), b.finish().to_dyn())
+    assert_equal(total.null_count(), 2)
+    assert_true(total.is_null(0))
+    assert_true(total.is_null(1))
+    assert_true(total[2].value())
+
+
+def test_nan_safe_equality_is_plain_equality_off_the_float_families() raises:
+    """Nothing but a float has a NaN, so nothing but a float pays for one.
+
+    Pins the `is_floating_point()` guard rather than the answer: without it an
+    integer column would reach `dispatch_floating` and raise.
+    """
+    var a = array([1, 2, 3], int64)
+    var b = array([1, 0, 3], int64)
+    var total = equal[nan_safe=True](a.copy().to_dyn(), b.copy().to_dyn())
+    assert_true(total[0].value())
+    assert_false(total[1].value())
+    assert_true(total[2].value())
 
 
 def test_not_equal() raises:

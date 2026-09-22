@@ -135,9 +135,16 @@ struct NumericCastKernel(CastKernel):
     ](a: SIMD[In, W]) -> Tuple[SIMD[Out, W], SIMD[DType.bool, W]]:
         """Checked cast — returns ``(out, bad)`` where ``bad`` marks lanes that
         don't round-trip. Casts forward **once** and reuses ``out`` for the
-        back-cast, so the safe path does no redundant work."""
+        back-cast, so the safe path does no redundant work.
+
+        `~eq`, not `ne`: Mojo's `SIMD.ne` lowers to an *ordered* compare, so it
+        answers False whenever either operand is a NaN — and `needs_check` says
+        True for every float→int pair, which is exactly where a NaN arrives. A
+        NaN round-trips to garbage and must be flagged; `ne` waved it through,
+        so a `safe=True` float→int cast silently produced whatever `fptosi`
+        gave it where `pyarrow` raises `ArrowInvalid`."""
         var out = a.cast[Out]()
-        return (out, out.cast[In]().ne(a))
+        return (out, ~out.cast[In]().eq(a))
 
     @staticmethod
     def needs_check[In: DType, Out: DType]() -> Bool:
@@ -648,7 +655,11 @@ struct NumToBoolKernel(CastKernel):
     @always_inline
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        return a.ne(0)
+        # `~eq`, not `ne`: `SIMD.ne` is an ordered compare, so `nan != 0` came
+        # back False and `cast(nan, bool)` answered False. A NaN is not zero —
+        # `pyarrow` casts it to True — and negating `eq` says so for every
+        # operand, which is what makes the docstring's "total" claim true.
+        return ~a.eq(0)
 
     @staticmethod
     def dispatch(

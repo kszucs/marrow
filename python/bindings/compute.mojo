@@ -220,12 +220,18 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_unary[NotNullKernel.dispatch]()]("is_valid")
     mb.def_function[_unary[mk.drop_null]()]("drop_null")
     mb.def_function[_binary[_filter_kernel]()]("filter")
-    mb.def_function[_binary[mk.EqKernel.dispatch]()]("equal")
-    mb.def_function[_binary[mk.NeKernel.dispatch]()]("not_equal")
-    mb.def_function[_binary[mk.LtKernel.dispatch]()]("less")
-    mb.def_function[_binary[mk.LeKernel.dispatch]()]("less_equal")
-    mb.def_function[_binary[mk.GtKernel.dispatch]()]("greater")
-    mb.def_function[_binary[mk.GeKernel.dispatch]()]("greater_equal")
+    mb.def_function[_binary[mk.EqKernel[nan_safe=False].dispatch]()]("equal")
+    mb.def_function[_binary[mk.NeKernel[nan_safe=False].dispatch]()](
+        "not_equal"
+    )
+    mb.def_function[_binary[mk.LtKernel[nan_safe=False].dispatch]()]("less")
+    mb.def_function[_binary[mk.LeKernel[nan_safe=False].dispatch]()](
+        "less_equal"
+    )
+    mb.def_function[_binary[mk.GtKernel[nan_safe=False].dispatch]()]("greater")
+    mb.def_function[_binary[mk.GeKernel[nan_safe=False].dispatch]()](
+        "greater_equal"
+    )
     mb.def_function[_sort_indices]("sort_indices")
     mb.def_function[_sort]("sort")
     mb.def_function[_take]("take")

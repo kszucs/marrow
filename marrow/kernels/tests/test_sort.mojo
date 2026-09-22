@@ -528,6 +528,32 @@ def test_sort_indices_float64_nan() raises:
     _assert_sorted(a, idx)
 
 
+def test_sort_indices_puts_both_nan_signs_last() raises:
+    """A negative NaN sorts with the positive one, not below `-inf`.
+
+    `_encode_sort_key`'s flip is sign-dependent, so before it folded the NaN
+    sign this answered `-nan, -inf, 1.0, inf, nan` — the two NaNs at opposite
+    ends. DuckDB puts both last. It is not cosmetic: `mark_changes` compares
+    adjacent rows, so NaNs that never land together were never handed to
+    `equal_nan_safe` and `rank` split them into peer groups no comparison
+    could merge.
+    """
+    var b = Float64Builder(capacity=5)
+    b.append(nan[float64.native]())
+    b.append(inf[float64.native]())
+    b.append(neg_inf[float64.native]())
+    b.append(-nan[float64.native]())
+    b.append(Float64(1.0))
+    var a: DynArray = b.finish().to_dyn()
+    var idx = sort_indices(a)
+    assert_equal(_idx(idx, 0), 2)  # -inf
+    assert_equal(_idx(idx, 1), 4)  # 1.0
+    assert_equal(_idx(idx, 2), 1)  # +inf
+    # both NaNs last, in input order (the sort is stable)
+    assert_equal(_idx(idx, 3), 0)
+    assert_equal(_idx(idx, 4), 3)
+
+
 def test_sort_indices_float64_negative() raises:
     # Negative floats must sort correctly (sign-bit encoding for all-bits XOR).
     var b = Float64Builder(capacity=4)

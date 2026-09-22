@@ -13,12 +13,13 @@ one-row partition and an all-ties partition are the two degenerate cases where
 where an off-by-one produces a plausible number rather than a crash.
 """
 
+from std.math import nan
 from std.os import remove
 from std.python import Python
 from std.testing import assert_almost_equal, assert_true
 
 from ...builders import array, nulls
-from ...dtypes import int64, string
+from ...dtypes import float64, int64, string
 from ...tabular import record_batch
 from ..optimizer import AllRules
 from ..builders import (
@@ -173,6 +174,50 @@ def test_two_nulls_in_the_order_key_are_peers() raises:
     var out = plan.execute()
     assert_true(out.column("rk").as_int64() == array([1, 1, 3], int64))
     assert_true(out.column("dr").as_int64() == array([1, 1, 2], int64))
+
+
+def test_two_nans_in_the_order_key_are_peers() raises:
+    """The NaN half of the same rule the case above states for null.
+
+    `ORDER BY` compares with `IS NOT DISTINCT FROM`, so the two NaNs are one
+    peer group and both rank 3. marrow answered 3, 4: `_encode_sort_key` sorts
+    them adjacent and `equal` then said they differ, because it is IEEE and
+    the sort is not. `mark_changes` asks `equal_nan_safe` for that reason.
+    DuckDB 1.5.5 was measured 2026-09-22 and agrees.
+
+    `dense_rank` is asserted alongside because it is a separate accumulator in
+    `WindowOperator`, not because it is more sensitive — in this shape the two
+    answer identically, and a split peer group would move both.
+
+    A mixed-sign pair is asserted alongside, because it takes *both* halves to
+    work: `equal_nan_safe` alone left `-nan` and `+nan` at opposite ends of the
+    partition, where `mark_changes` — which compares adjacent rows — never
+    handed them to it. `_encode_sort_key` folding the NaN sign is what brings
+    them together.
+    """
+    var q = nan[DType.float64]()
+    var b = record_batch([array([q, 1.0, q, 2.0], float64).copy()], names=["a"])
+    var plan = table(b^).with_columns(
+        ["rk", "dr"],
+        [
+            rank().over(order_by=[col("a", float64)]),
+            dense_rank().over(order_by=[col("a", float64)]),
+        ],
+    )
+    var out = plan.execute()
+    assert_true(out.column("rk").as_int64() == array([3, 1, 3, 2], int64))
+    assert_true(out.column("dr").as_int64() == array([3, 1, 3, 2], int64))
+
+    # the same shape with the NaNs' signs opposed answers identically
+    var mixed = record_batch(
+        [array([q, 1.0, -q, 2.0], float64).copy()], names=["a"]
+    )
+    var out2 = (
+        table(mixed^)
+        .with_columns(["rk"], [rank().over(order_by=[col("a", float64)])])
+        .execute()
+    )
+    assert_true(out2.column("rk").as_int64() == array([3, 1, 3, 2], int64))
 
 
 def test_lag_cannot_tell_a_missing_row_from_a_null_one() raises:

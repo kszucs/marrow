@@ -24,17 +24,13 @@ Two independent checks, neither of which grades marrow against itself:
 
 ## Known-wrong answers
 
-::: {.callout-warning}
-## Float division by zero answers the dividend
+**Integer arithmetic overflow wraps where SQL raises.** The `edges` fixture
+carries int64 max/min against the day a checked mode exists; the machinery is
+already in `cast`, which takes `safe` as a comptime parameter.
 
-`DivKernel` substitutes a `1` divisor so the SIMD lane cannot trap, so
-`10.0 / 0.0` is `10.0` where IEEE 754 and DuckDB both say `inf`; `-10.0 / 0.0`
-is `-10.0`, and `0.0 / 0.0` is `0.0`.
-
-**No golden case pins it**, which is how it survived — so it is the one
-known-wrong answer the corpus does not currently catch. Integer `//` and `%` by
-zero are unaffected and answer NULL, as SQL does.
-:::
+Division by zero is no longer one of these: floats answer `inf`, `-inf` and
+`nan`, and `pc.divide` raises on an integer zero divisor as
+`pyarrow.compute.divide` does.
 
 One latent trap is worth knowing too: `count(*)` desugars to `count(lit(1))`,
 whose referenced-column set is empty, so anything that prunes by "what does
