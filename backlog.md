@@ -897,3 +897,74 @@ first, independently of whether `match_any`/`match_all` end up being useful
 inside it.
 
 ---
+
+## 4. Unexplored — `wrap_host_memory()` for zero-copy uploads
+
+### What landed
+
+`DeviceContext.wrap_host_memory[dtype](host_ptr, size) -> DeviceBuffer[dtype]`
+arrived with the `dev2026091405` → `dev2026092105` toolchain bump (upstream
+`7688979e18`, *Expose Host Memory Wrapping in DeviceContext*). It makes a range
+of the caller's host memory device-accessible without allocating device memory
+and copying into it.
+
+### Why marrow would want it
+
+`Buffer.to_device` (`marrow/buffers.mojo:910`) is `enqueue_create_buffer` plus
+`enqueue_copy` — every upload allocates a device buffer and copies the whole
+range into it, and `Bitmap.to_device` and `Array.to_device` all funnel through
+it. CLAUDE.md's measured guidance is that transfer cost dominates and that
+uploading per call is 2-3x slower than just staying on the CPU; this is the API
+that removes the copy rather than amortising it.
+
+### Why it does not work on this machine
+
+**Metal requires a page-aligned base and a page-multiple length.** Marrow
+allocates at `alignment=64` (`marrow/buffers.mojo:501`) because that is Arrow's
+rule — `PoolBuffer::RoundCapacity` is `RoundUpToMultipleOf64` — and the page on
+Apple Silicon is 16 KiB. So Metal rejects every buffer marrow owns, and the
+development machine is Metal. It works on CUDA and HIP, where the wrap also
+page-locks the range (`cuMemHostRegister` / `hipHostRegister`) and so buys DMA
+overlap on top of the elided copy. Raising `Buffer`'s alignment to a page would
+unblock Metal, but that is a layout decision with its own cost — it is not a
+kernel change, and 64 is there for a reason.
+
+### Why it is not a drop-in even where it is supported
+
+The contract does not match what `Buffer` models today:
+
+- It grants **access, not ownership**. The returned `DeviceBuffer` does not keep
+  the host allocation alive — the origin is cast away — so the owner must
+  outlive every enqueued transfer and kernel touching the range.
+- The range must be addressed **through the returned buffer**, not through
+  `host_ptr`. Only on CUDA are the two the same address.
+- Dropping the buffer *queues* the release, so every context that copied the
+  range needs `synchronize()` before the host memory is unmapped.
+
+`Buffer` treats residency as a **kind** — CPU / FOREIGN / MAPPED / HOST or
+DEVICE — with exactly one active release mechanism per `Allocation`, and
+`to_device` answers with a new immutable `Buffer`. A wrapped range is neither
+side of that: one allocation, two addresses, and a lifetime borrowed from
+something else. That is a new `Allocation` kind carrying a borrow, not a sixth
+enum value added to the existing five.
+
+### What the actual spike is
+
+1. Decide whether marrow wants a *borrowed-device* residency at all, or whether
+   the answer to transfer cost stays "upload once, run several kernels
+   device-resident, download at the end" — which is what the performance
+   guidance already says and which needs no new API.
+2. If yes: it is a Linux/NVIDIA-only path until the alignment question is
+   settled, so it cannot be developed or benchmarked on the current machine.
+   Model the lifetime first — `Allocation` already checks its release rules in
+   `__del__`, and a borrowing kind has to answer them.
+3. Only then wire it behind `comptime if GPU_ENABLED`, like every other device
+   path.
+
+### Status
+
+Unexplored, and blocked on hardware before it is blocked on design. Recorded
+because the API is new and the copy it removes is the one thing measurement
+keeps pointing at — not because the precondition is met.
+
+---
