@@ -380,7 +380,8 @@ bindings currently have.
 Ten substantial pieces of the codebase have no design document and never did:
 the whole Parquet subsystem (ten modules, ~490 KB), the Arrow IPC layer, the C
 Data Interface, the GPU execution model, `utils/argparse.mojo` (769 lines),
-`Groups` (in `kernels/groupby.mojo`), `kernels/cast_decimal.mojo`, `Dispersion`, the
+`Groups` (in `kernels/groupby.mojo`), the decimal cast family in
+`kernels/cast.mojo`, `Dispersion`, the
 `comptime/temporal.mojo` nodes, and the `_drop` destructor trampoline on every
 erased box. Listed so that "there is no doc" is not mistaken for "there is no
 feature".

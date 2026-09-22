@@ -804,3 +804,117 @@ def test_binary_to_string_slice_validates_only_its_window() raises:
     assert_true(cast(src.slice(0, 2), string).dtype() == string)
     with assert_raises():
         _ = cast(src.slice(1, 2), string)
+
+
+# ---------------------------------------------------------------------------
+# Casting a slice — the result is offset 0, so its validity must be rebased
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_cast_of_a_slice_keeps_nulls_in_place() raises:
+    var sl = array([1, None, 3, 4], int64).slice(1, 3)
+    var out = cast(sl.copy(), int32)
+    assert_equal(out.null_count(), 1)
+    assert_true(not out.is_valid(0))
+    assert_true(out.is_valid(1) and out.is_valid(2))
+
+
+def test_decimal_cast_of_a_slice_keeps_nulls_in_place() raises:
+    var sl = array([1, None, 3, 4], int64).slice(1, 3)
+    var d = cast(sl.copy(), decimal128(20, 0))
+    assert_equal(d.null_count(), 1)
+    assert_true(not d.is_valid(0))
+    assert_true(d.is_valid(1) and d.is_valid(2))
+
+
+def test_temporal_cast_of_a_slice_keeps_nulls_in_place() raises:
+    var ts = cast(array([1, None, 3, 4], int64), timestamp(second))
+    var out = cast(ts.slice(1, 3), timestamp(millisecond))
+    assert_equal(out.null_count(), 1)
+    assert_true(not out.is_valid(0))
+    assert_true(out.is_valid(1) and out.is_valid(2))
+
+
+def test_num_to_bool_cast_of_a_slice_keeps_nulls_in_place() raises:
+    var sl = array([1, None, 3, 4], int64).slice(1, 3)
+    var out = cast(sl.copy(), bool_)
+    assert_equal(out.null_count(), 1)
+    assert_true(not out.is_valid(0))
+    assert_true(out.is_valid(1) and out.is_valid(2))
+
+
+def test_bool_to_num_cast_of_a_slice_keeps_nulls_in_place() raises:
+    var b = cast(array([1, None, 3, 4], int64), bool_)
+    var out = cast(b.slice(1, 3), int32)
+    assert_equal(out.null_count(), 1)
+    assert_true(not out.is_valid(0))
+    assert_true(out.is_valid(1) and out.is_valid(2))
+
+
+# ---------------------------------------------------------------------------
+# Decimal rescale bounds: overflow, truncation direction, declared precision
+# ---------------------------------------------------------------------------
+
+
+def test_decimal_upscale_negative_boundary_raises() raises:
+    # Int32.MIN // 1000 floors to -2147484, whose product is below Int32.MIN.
+    # A floored lower bound lets it through and wraps.
+    with assert_raises():
+        _ = cast(array([-2147484], int64), decimal32(9, 3), True)
+
+
+def test_decimal_upscale_positive_boundary_raises() raises:
+    with assert_raises():
+        _ = cast(array([2147484], int64), decimal32(9, 3), True)
+
+
+def test_decimal_to_int_truncates_toward_zero() raises:
+    # unscaled -15 at scale 1 (= -1.5); Arrow truncates, so -1 not -2.
+    var d = cast(array([-1.5], float64), decimal128(10, 1))
+    assert_true(cast(d, int64, False).as_int64() == array([-1], int64))
+
+
+def test_decimal_to_int_positive_is_unaffected() raises:
+    var d = cast(array([1.5], float64), decimal128(10, 1))
+    assert_true(cast(d, int64, False).as_int64() == array([1], int64))
+
+
+def test_decimal_downscale_truncates_toward_zero() raises:
+    # -1.234 at scale 3 narrowed to scale 1 is -1.2, not -1.3.
+    var d = cast(array([-1.234], float64), decimal64(18, 3))
+    var narrowed = cast(d, decimal64(18, 1), False)
+    assert_true(
+        cast(narrowed, float64, False).as_float64() == array([-1.2], float64)
+    )
+
+
+def test_decimal_downscale_positive_is_unaffected() raises:
+    var d = cast(array([1.234], float64), decimal64(18, 3))
+    var narrowed = cast(d, decimal64(18, 1), False)
+    assert_true(
+        cast(narrowed, float64, False).as_float64() == array([1.2], float64)
+    )
+
+
+def test_decimal_cast_past_target_precision_raises() raises:
+    # 7 digits into a declared precision of 5. delta == 0, so every
+    # storage-width check passes and only the digit bound can catch it.
+    var wide = cast(array([1_000_000], int64), decimal128(38, 0))
+    with assert_raises():
+        _ = cast(wide, decimal128(5, 0), True)
+
+
+def test_decimal_cast_within_target_precision_passes() raises:
+    var wide = cast(array([12_345], int64), decimal128(38, 0))
+    assert_true(cast(wide, decimal128(5, 0), True).null_count() == 0)
+
+
+def test_scale_zero_decimal_to_int_roundtrips() raises:
+    var d = cast(array([7, -7, 0], int64), decimal128(10, 0))
+    assert_true(cast(d, int64).as_int64() == array([7, -7, 0], int64))
+
+
+def test_scale_zero_decimal_to_int_overflow_raises() raises:
+    var d = cast(array([10_000_000_000], int64), decimal128(20, 0))
+    with assert_raises():
+        _ = cast(d, int32, True)

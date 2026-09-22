@@ -734,8 +734,8 @@ marrow/
 │   ├── core.mojo         # the Kernel base trait
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
 │   ├── boolean.mojo      # and/or/not/xor, is_null, is_nan, is_inf
-│   ├── cast.mojo         # cast() and the per-family cast kernels
-│   ├── cast_decimal.mojo # decimal casts, one struct per conversion
+│   ├── cast.mojo         # cast() and the per-family cast kernels,
+│                         #   decimals included (one struct per conversion)
 │   ├── conditional.mojo  # case_when, coalesce, nullif, fill_null
 │   ├── aggregate.mojo    # sum, product, min/max, count, mean, any/all, var/std
 │   ├── distinct.mojo     # (approx_)count_distinct, grouped variants

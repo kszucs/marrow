@@ -160,10 +160,13 @@ class Modules:
         """`{module: symbols naming it}`, keeping only modules that appear.
 
         Matching includes the trailing separator, because module names nest:
-        without it `marrow::kernels::cast` also counts every
+        without it a `marrow::kernels::cast` row also counts every
         `marrow::kernels::cast_decimal` symbol, and the table prints the two as
-        independent rows.  Measured on `query_dynvalue`, that over-reported
-        `cast` by 49 of 693 symbols -- 7.6%.
+        independent rows.  Measured on `query_dynvalue` while those were two
+        modules, that over-reported `cast` by 49 of 693 symbols -- 7.6%.  The
+        decimal kernels have since been folded back into `cast.mojo`, so the
+        guard has no live collision to catch; it stays because the next
+        `foo.mojo` beside a `foo_bar.mojo` would reintroduce one silently.
 
         Deliberately the naive scan.  Pulling namespace runs out of each symbol
         and looking their prefixes up sounds cheaper and is not: mangled names

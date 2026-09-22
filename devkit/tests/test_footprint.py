@@ -116,11 +116,13 @@ def test_counting_keeps_only_the_modules_a_binary_names(tmp_path):
 
 
 def test_a_nested_module_name_does_not_absorb_its_neighbour(tmp_path):
-    """`marrow::kernels::cast` is a prefix of `marrow::kernels::cast_decimal`.
+    """A module whose name is a prefix of its neighbour's must not absorb it.
 
     A bare substring test counts every `cast_decimal` symbol as a `cast` symbol
     too, and the table then prints both rows as if they were independent.
-    Measured on the real `query_dynvalue`, that inflated `cast` by 7.6%.
+    Measured on the real `query_dynvalue` back when those were two modules,
+    that inflated `cast` by 7.6%; they are one module now, so the pair here is
+    a synthetic stand-in for the next one anybody adds.
     """
     root = package(tmp_path, "kernels/cast.mojo", "kernels/cast_decimal.mojo")
     counts = Modules(root).count(
