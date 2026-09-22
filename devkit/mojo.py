@@ -236,9 +236,9 @@ class SilentProgress:
     """Reports nothing.  What tests want, and the default.
 
     Also the whole of the progress protocol `ProcessRunner` speaks -- `start`,
-    `attach`, `finish` and `peak_rss`.  `devkit.progress.ConsoleProgress` is the
-    implementation that actually shows something, and lives apart because it
-    needs `rich` and `psutil`.
+    `attach`, `finish`, `snapshot` and `peak_rss`.
+    `devkit.progress.ConsoleProgress` is the implementation that actually shows
+    something, and lives apart because it needs `rich` and `psutil`.
     """
 
     peak_rss = 0
@@ -248,6 +248,10 @@ class SilentProgress:
 
     def attach(self, pid):
         pass
+
+    def snapshot(self):
+        """No reading available; `ProcessRunner` says so rather than guessing."""
+        return None
 
     def finish(self, label, result):
         pass
@@ -264,13 +268,41 @@ class ProcessRunner:
     treat a hang like any other failure.
     """
 
-    TIMEOUT_NOTE = (
-        "\n\nTIMEOUT: killed after {timeout}s with no exit.\n"
-        "A Mojo compile or run that produces no output for this long is hung, "
-        "not slow -- compare elapsed time against CPU time with "
-        "`ps -o etime,time <pid>` to confirm. Raise the timeout if this "
-        "selection is legitimately slower than the deadline.\n"
+    TIMEOUT_NOTE = "\n\nTIMEOUT: killed after {timeout}s with no exit.\n"
+
+    #: What the process was doing when the deadline passed.  A unit that is
+    #: merely slow burns a core and its CPU time tracks elapsed; one that has
+    #: deadlocked burns nothing, and the two numbers are decades apart.  The
+    #: note used to tell the reader to compare them with `ps` -- which nobody
+    #: can do afterwards, since the tree is killed on the next line, and which
+    #: is why two CI timeouts went unattributed.
+    USAGE_NOTE = (
+        "At the deadline: {cpu:.0f}s of CPU over {elapsed:.0f}s elapsed "
+        "({cores:.2f} cores), {rss:.1f} GB resident.\n{verdict}\n"
     )
+    UNREADABLE_NOTE = (
+        "No usage reading was available at the deadline, so whether this was "
+        "a deadlock or a slow unit is unknown.\n"
+    )
+    BLOCKED = (
+        "Blocked rather than computing -- a deadlock, and raising the timeout "
+        "will not help."
+    )
+    COMPUTING = (
+        "Computing throughout -- legitimately slower than the deadline rather "
+        "than hung, so raise the timeout or shrink the unit."
+    )
+    STALLING = (
+        "Neither clearly blocked nor clearly busy -- check whether the unit is "
+        "swapping or contending for memory bandwidth."
+    )
+
+    #: Below this many cores the process was waiting, not working; above the
+    #: second it was working.  Wide apart on purpose: the interesting readings
+    #: are near 0.00 and near 1.00, and a verdict is worth less than an honest
+    #: "cannot tell" for anything in between.
+    BLOCKED_BELOW = 0.05
+    COMPUTING_ABOVE = 0.5
 
     def __init__(self, cwd, progress=None, timeout=0, suspend=None):
         self._cwd = Path(cwd)
@@ -318,11 +350,14 @@ class ProcessRunner:
         except subprocess.TimeoutExpired:
             # A hung Mojo process emits nothing and never exits, so it is
             # indistinguishable from a slow compile until the deadline passes.
-            # Kill it and turn the hang into an ordinary failure.
+            # Read its usage first -- that is the last moment the numbers
+            # telling the two apart exist -- then kill it and turn the hang
+            # into an ordinary failure.
             timed_out = True
+            usage = self._progress.snapshot()
             self._terminate(process)
             out, err = process.communicate()
-            err = (err or "") + self.TIMEOUT_NOTE.format(timeout=self._timeout)
+            err = (err or "") + self._timeout_note(usage, time.monotonic() - started)
         return CommandResult(
             argv=tuple(argv),
             returncode=124 if timed_out else process.returncode,
@@ -331,6 +366,27 @@ class ProcessRunner:
             elapsed=time.monotonic() - started,
             peak_rss=self._progress.peak_rss,
             timed_out=timed_out,
+        )
+
+    def _timeout_note(self, usage, elapsed):
+        """The deadline, what the process was spending, and what that means."""
+        note = self.TIMEOUT_NOTE.format(timeout=self._timeout)
+        if usage is None:
+            return note + self.UNREADABLE_NOTE
+        cpu, rss = usage
+        cores = cpu / elapsed if elapsed > 0 else 0.0
+        if cores < self.BLOCKED_BELOW:
+            verdict = self.BLOCKED
+        elif cores > self.COMPUTING_ABOVE:
+            verdict = self.COMPUTING
+        else:
+            verdict = self.STALLING
+        return note + self.USAGE_NOTE.format(
+            cpu=cpu,
+            elapsed=elapsed,
+            cores=cores,
+            rss=rss / 1e9,
+            verdict=verdict,
         )
 
     @staticmethod

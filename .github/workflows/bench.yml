@@ -37,6 +37,21 @@ jobs:
           sudo swapon /mnt/swapfile
           free -h
 
+      # Which CPU the runner handed us is evidence, not trivia. Compile times
+      # here swing by 50x on an unchanged tree -- `bench_string` has taken 34 s
+      # and then over 1800 s on the same source -- and the files that swing are
+      # the ones built on masked gather/compress lowerings, which `filter` and
+      # `take` are already known to be delicate about. `mojo run` JITs for the
+      # host, so a different instruction set is a different code generator.
+      # None of the logs recorded this, which is why the swing was never
+      # attributable to anything.
+      - name: Record the runner's CPU
+        run: |
+          lscpu | grep -Ei 'model name|^cpu\(s\)|thread|core|mhz' || true
+          grep -m1 ^flags /proc/cpuinfo | tr ' ' '\n' \
+            | grep -E '^(avx|sse4|bmi|f16c)' | sort | tr '\n' ' '
+          echo
+
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           frozen: true

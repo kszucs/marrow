@@ -173,7 +173,58 @@ def test_process_runner_turns_a_hang_into_an_ordinary_failure(tmp_path):
     assert result.timed_out
     assert result.returncode == 124
     assert "TIMEOUT" in result.stderr
-    assert "hung, not slow" in result.stderr
+    # `SilentProgress` reads nothing, so the note says so rather than inventing
+    # a verdict -- the failure mode that left two CI timeouts unattributed.
+    assert "unknown" in result.stderr
+
+
+def test_timeout_note_calls_an_idle_process_blocked():
+    """The reading that tells a deadlock from a unit that is merely slow."""
+    runner = ProcessRunner(".", SilentProgress(), timeout=1800)
+    note = runner._timeout_note(usage=(12.0, 3 * 10**8), elapsed=1800.0)
+    assert "0.01 cores" in note
+    assert "0.3 GB resident" in note
+    assert "Blocked rather than computing" in note
+
+
+def test_timeout_note_calls_a_busy_process_slow():
+    runner = ProcessRunner(".", SilentProgress(), timeout=1800)
+    note = runner._timeout_note(usage=(1790.0, 3 * 10**8), elapsed=1800.0)
+    assert "0.99 cores" in note
+    assert "Computing throughout" in note
+
+
+def test_timeout_note_refuses_a_verdict_in_between():
+    """A quarter of a core is neither waiting nor working; say so."""
+    runner = ProcessRunner(".", SilentProgress(), timeout=1800)
+    note = runner._timeout_note(usage=(450.0, 10**9), elapsed=1800.0)
+    assert "0.25 cores" in note
+    assert "Neither clearly blocked nor clearly busy" in note
+
+
+def test_timeout_note_reports_an_unreadable_process():
+    runner = ProcessRunner(".", SilentProgress(), timeout=1800)
+    assert "unknown" in runner._timeout_note(usage=None, elapsed=1800.0)
+
+
+def test_process_runner_reads_usage_before_killing_the_process(tmp_path):
+    """The reading has to be taken while the tree is still alive.
+
+    Taking it afterwards is the bug this guards: `_terminate` runs on the very
+    next line, and a dead process reports nothing at all.
+    """
+
+    class Reading(SilentProgress):
+        def snapshot(self):
+            return 9.0, 2 * 10**8
+
+    runner = ProcessRunner(tmp_path, Reading(), timeout=DEADLINE)
+    result = runner.run(
+        [sys.executable, "-c", "import time; time.sleep(30)"], "hanging"
+    )
+    assert result.timed_out
+    assert "9s of CPU" in result.stderr
+    assert "0.2 GB resident" in result.stderr
 
 
 def test_process_runner_uses_the_injected_suspender(tmp_path):
