@@ -1,3 +1,4 @@
+from std.math import isinf, isnan
 from std.testing import (
     assert_equal,
     assert_true,
@@ -238,6 +239,42 @@ def test_div_with_nulls() raises:
     assert_true(result.is_valid(0))
     assert_true(result.is_valid(1))
     assert_false(result.is_valid(2))
+
+
+def test_div_by_zero_is_ieee_on_floats() raises:
+    """`10.0 / 0.0` is `inf`, `-10.0 / 0.0` is `-inf`, `0.0 / 0.0` is `nan`.
+
+    All three, because `0.0 / 0.0` is the one that rules out substituting any
+    single divisor for zero. `//` and `%` answer NULL instead, which
+    `test_floordiv_and_mod_by_zero_divide_by_one_instead` and the expression
+    layer pin; `DivKernel.core` has why the two differ.
+    """
+    var a = array([10.0, -10.0, 0.0], float64)
+    var b = array([0.0, 0.0, 0.0], float64)
+    var result = DivKernel.apply[Float64Type](a, b)
+    assert_equal(result.null_count(), 0)
+    assert_true(isinf(result[0].value()) and result[0].value() > 0.0)
+    assert_true(isinf(result[1].value()) and result[1].value() < 0.0)
+    assert_true(isnan(result[2].value()))
+
+
+def test_div_by_zero_on_integers_keeps_the_trap_guard() raises:
+    """Integers keep the substituted divisor, and this pins that they do.
+
+    `idiv` by zero traps on x86 and an integer lane has no `inf` to answer
+    with, so `core` still divides by 1 there — the same substitution
+    `test_floordiv_and_mod_by_zero_divide_by_one_instead` pins, and left to
+    the layer above for the same reason. The only caller that can reach it is
+    `pc.divide`, which checks the divisor and raises; both expression lanes
+    are `float64` before `Div`.
+    """
+    var a = array([10, -10, 0], int64)
+    var b = array([0, 0, 0], int64)
+    var result = DivKernel.apply[Int64Type](a, b)
+    assert_equal(result.null_count(), 0)
+    assert_equal(result[0].value(), 10)
+    assert_equal(result[1].value(), -10)
+    assert_equal(result[2].value(), 0)
 
 
 # ---------------------------------------------------------------------------

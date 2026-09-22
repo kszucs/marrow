@@ -45,7 +45,7 @@ the sugar has exactly SQL\'s semantics and the node would not:
 - `GREATEST`/`LEAST` become `coalesce(extremum, a, b)`, because SQL\'s extrema
   **skip** nulls while `maximum`/`minimum` propagate them.
 - `SELECT DISTINCT` becomes an aggregate keyed by every output column, marrow
-  having no `Distinct` node (`backlog.md` item 7).
+  having no `Distinct` node (`backlog.md` item 6).
 """
 
 from ..dtypes import (

@@ -13,7 +13,7 @@ in the file that performs it.
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import DynArray
-from marrow.dtypes import DynType, int32
+from marrow.dtypes import DynType, bool_, int32
 import marrow.kernels as mk
 
 # ``mk.filter`` collides with the like-named submodule, so the package alias
@@ -154,6 +154,47 @@ def _cast(
     ).to_python_object()
 
 
+def _divide(
+    left: DynArray, right: DynArray, ctx: ExecContext
+) raises -> DynArray:
+    """`divide`, with pyarrow's error on an integer zero divisor.
+
+    `DivKernel.core` answers the *dividend* for a zero integer divisor, which
+    is a harmless value rather than an answer; it documents why, and why the
+    expression lanes never reach that arm. What is local to this binding is
+    the policy: `pyarrow.compute.divide`, which these names mirror, is the
+    *checked* kernel and raises, and `pc.divide` matches it on everything
+    else — integer truncation, null propagation, dtype.
+
+    Asked after the kernel, so `divide`'s own length and dtype diagnostics
+    come out under their own name; and only of rows that would produce a
+    value, since pyarrow answers a null dividend over a zero divisor with a
+    null rather than an error. The cast is `NumToBoolKernel`, `x != 0`
+    bit-packed with validity preserved, so a zero divisor is one bit.
+
+    **Three kernels, but one pass over the column**: the cast reads the
+    divisor and `or` and `all` then run over bitmaps, 1/64th of the bytes. One
+    read of the divisor is the floor for any exact check, and the cast is it,
+    so a cheaper scan in front of this does not exist.
+
+    The rule the three kernels spell out is that `ok` is *false* exactly where
+    a valid zero divisor meets a valid dividend. Every other shape is a null
+    rather than a false: the cast leaves a null divisor null, Kleene `or`
+    keeps it null against a false `is_null`, and `AllKernel` reads only valid
+    elements — which is how pyarrow's "a null row is an answer, not an error"
+    falls out of the composition instead of out of a branch.
+    """
+    var out = mk.DivKernel.dispatch(left, right, ctx)
+    if right.dtype().is_integer():
+        var nonzero = mk.cast(right, DynType(bool_), True, ctx)
+        var ok = mk.OrKernel.dispatch(
+            nonzero, IsNullKernel.dispatch(left, ctx), ctx
+        )
+        if not mk.AllKernel.dispatch(ok, ctx):
+            raise mk.DivKernel.error("divide by zero")
+    return out^
+
+
 def _concat(arrays: PythonObject, ctx: PythonObject) raises -> PythonObject:
     """Concatenate arrays of one dtype into a single array."""
     var n = Int(py=arrays.__len__())
@@ -172,7 +213,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_binary[mk.AddKernel.dispatch]()]("add")
     mb.def_function[_binary[mk.SubKernel.dispatch]()]("subtract")
     mb.def_function[_binary[mk.MulKernel.dispatch]()]("multiply")
-    mb.def_function[_binary[mk.DivKernel.dispatch]()]("divide")
+    mb.def_function[_binary[_divide]()]("divide")
     mb.def_function[_reduce[mk.AnyKernel.dispatch]()]("any")
     mb.def_function[_reduce[mk.AllKernel.dispatch]()]("all")
     mb.def_function[_unary[IsNullKernel.dispatch]()]("is_null")

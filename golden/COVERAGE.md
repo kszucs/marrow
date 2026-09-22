@@ -93,6 +93,12 @@ the dividend's sign, and a zero divisor answering NULL. All three were
 `xfail`s until 2026-09-04 and all three had the same disguise — every operand
 pair whose signs agree answers identically under both conventions.
 
+**`/` by zero is the other half of that**, and it answers a *value*:
+`math_division_by_zero_has_a_value` pins `+inf`, `-inf` and `nan` against
+`math_integer_division_by_zero`'s NULLs on the same column, so the pair
+records that the two are different questions. It asks in booleans because an
+infinity cannot be written as a result; see "Consciously omitted".
+
 ### Aggregates
 
 `sum` (int32 widening to int64, int64, float64), `product`, `mean`, `min`/`max`
@@ -274,7 +280,7 @@ The last three were one root cause with three faces, and both halves of the
 fix were needed. `FloordivKernel` and `ModKernel` correct Mojo's Python
 rounding inside `core`, which serves both lanes; and because a SIMD lane can
 neither raise nor produce a null, the zero divisor is masked *outside* it —
-`BinaryKernel.domain` in the erased path, and `DivisionBinary`'s
+`RuntimeValue._null_zeros` in the erased path, and `DivisionBinary`'s
 third `Bound` slot in the fused one, which keeps the lane fused and pays only
 one pass over the divisor.
 
@@ -297,8 +303,8 @@ Not gaps in the corpus — questions it cannot or should not ask.
 - **NaN and infinity as *results*.** `render_value` writes floats with `repr`
   and `parse_value` reads them with `ast.literal_eval`, and `nan`/`inf` are not
   Python literals. `math_round` and friends filter to the finite rows; the
-  values are still reachable as *inputs*, and `math_is_nan` / `math_is_inf`
-  assert them as booleans.
+  values are still reachable as *inputs*, and `math_is_nan` / `math_is_inf` —
+  and `math_division_by_zero_has_a_value` — assert them as booleans.
 - **List-, struct- and map-valued results.** The expectation block is typed TSV
   over `devkit.golden.ExpectedTable.TYPES`, which holds seven flat types. Every
   nested case projects something flat instead — which is why `array_agg` is

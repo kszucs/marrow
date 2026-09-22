@@ -181,9 +181,9 @@ struct DivisionBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     """The operands' bounds, plus the rows where the divisor is non-zero.
 
     `None` in the third slot when none is zero, which is the common case and
-    the same answer `Bitmap.where_ne` gives the erased path: a validity bitmap
-    means "these rows *can* be null", so an all-set one would spend a bit per
-    row saying nothing."""
+    the same answer the erased path reaches through `nullif`: a validity
+    bitmap means "these rows *can* be null", so an all-set one would spend a
+    bit per row saying nothing."""
 
     var l: Self.L
     var r: Self.R
@@ -362,8 +362,8 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Null-in, null-out — as `NumericBinary`. Division by zero is *not* a
-        null: `DivKernel` substitutes 1 for a zero divisor to dodge SIGFPE and
-        the float result is an infinity, which is a value."""
+        null: both operands are `float64` by the time `DivKernel` sees them,
+        so a zero divisor answers an infinity or a NaN, which are values."""
         return Bitmap.intersect(
             self.l.validity(bound[0]), self.r.validity(bound[1])
         )

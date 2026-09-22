@@ -36,7 +36,6 @@ every child column agreeing, which is how the hash table verifies key rows.
 """
 
 import std.math as math
-from std.sys.info import simd_width_of
 
 from ..arrays import (
     PrimitiveArray,
@@ -267,30 +266,31 @@ struct DivKernel(BinaryNumericKernel):
     @always_inline
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        """True division, with a substituted divisor so the lane cannot trap.
+        """True division: floats divide by zero, integers cannot.
 
-        **`10.0 / 0.0` therefore answers `10.0` — the dividend — and that is
-        wrong by every reference.** Measured against DuckDB 1.5.5 on
-        2026-09-04: `10.0/0.0` and `10/0` both answer `inf`, which is also
-        what IEEE 754 says and what this lane would produce on its own if the
-        divisor were left alone. Postgres is the outlier and raises. Nothing
-        pins it — no golden case asks about `/ 0`, which is how the dividend
-        survived as an answer.
+        The float lane is left alone, so `10.0 / 0.0` is `inf`, `-10.0 / 0.0`
+        is `-inf` and `0.0 / 0.0` is `nan` — IEEE 754's answers, and what
+        DuckDB 1.5.5 and `pyarrow.compute.divide` both give, measured
+        2026-09-22. Getting them is a *deletion* rather than a rule: the
+        answer depends on the dividend's sign and on whether it is zero, so no
+        substituted divisor can produce all three. That is not the rule `//`
+        and `%` follow — those answer NULL, because division by zero has a
+        value in the reals' completion and integer division by zero does not.
 
-        Note this is *not* the rule `//` and `%` follow: those answer NULL,
-        verified against the same DuckDB. So `/` is not merely un-migrated, it
-        is a different question — division by zero has a value in the reals'
-        completion and integer division by zero does not.
-
-        The fix is a one-line deletion for the floating case: stop substituting,
-        and IEEE semantics fall out of the hardware. Note it must be a deletion
-        and not a special case — `0.0 / 0.0` is `nan`, not `inf`, so anything
-        that maps a zero divisor to a single value gets that one wrong.
-
-        It is left alone because it changes an answer no test pins, and that
-        deserves a case first. `backlog.md` carries it.
+        **Integers keep the substituted divisor**, because a lane has nothing
+        else to answer with: `inf` is not an `int64`, SIMD can neither raise
+        nor write a null, and `idiv` by zero traps on x86. The 1 is a harmless
+        value rather than an answer, the same device as
+        `FloordivKernel.core`'s — and, as there, the layer above supplies the
+        meaning. No marrow query reaches this arm, both expression lanes being
+        `float64` before `Div`; the one caller that can is `pc.divide`, and
+        `python/bindings/compute.mojo` checks the divisor there and raises,
+        which is what `pyarrow.compute.divide` does.
         """
-        return a / b.eq(0).select(SIMD[T, W](1), b)
+        comptime if T.is_integral():
+            return a / b.eq(0).select(SIMD[T, W](1), b)
+        else:
+            return a / b
 
 
 struct FloordivKernel(BinaryNumericKernel):

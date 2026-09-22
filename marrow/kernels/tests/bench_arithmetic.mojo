@@ -299,8 +299,9 @@ def bench_add_int32_1m_auto(mut b: Benchmark) raises:
 
 def _bench_floordiv(mut b: Benchmark, n: Int) raises:
     var lhs = arange[Int32Type](0, n)
-    # From 1, so no divisor is zero: that is the common case, and it is the one
-    # where `domain` must return `None` without allocating.
+    # From 1, so no divisor is zero. Note this measures `core` only — the
+    # zero mask that makes `//` answer NULL is the expression layer's, and no
+    # kernel bench reaches it.
     var rhs = arange[Int32Type](1, n + 1)
     b.throughput(BenchMetric.elements, n)
 

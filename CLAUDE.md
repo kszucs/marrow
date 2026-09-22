@@ -95,7 +95,7 @@ name, and the break surfaced only when `pytest golden` failed to build
 `libmarrow.so` and bailed out of the session before running a case — reported
 as `exit code 0`, which reads like a pass. After any change to a public name
 under `marrow/`, run `pixi run build_python`, `pixi run -e dev pytest golden`
-(278 cases, 193 compiled — the rest carry `-- skip mojo`; see
+(279 cases, 216 compiled — the rest carry `-- skip mojo`; see
 `golden/COVERAGE.md`), and grep `benchmarks/binary_size/` for the name.
 
 A single test file **cannot** be compiled on its own: with no `main()` there is
@@ -798,7 +798,7 @@ That works because they carry no `main()` — see "Writing Mojo tests".
 **`backlog.md` is the only place that says what is open.** It carries the
 epics, what is missing and why, and the known-wrong answers — not architecture,
 which is this file's job. Check a claim against the tree before acting on it:
-its item 6 was recorded as done and was not.
+an item recorded there as done was not.
 
 ---
 

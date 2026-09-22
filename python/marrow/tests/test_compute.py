@@ -6,6 +6,8 @@ Covers:
   - any, all  (boolean aggregates → bool)
 """
 
+import math
+
 import pytest
 import marrow as ma
 
@@ -187,6 +189,59 @@ def test_div_propagates_nulls():
     result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count == 2
+
+
+def test_div_by_zero_on_integers_raises():
+    """`divide` mirrors `pyarrow.compute.divide`, which is the *checked*
+    kernel: an integer lane has no `inf` to answer with, so a zero divisor is
+    an error rather than the dividend the kernel substitutes its way to."""
+    a = ma.array([10, -10, 0])
+    b = ma.array([0, 0, 0])
+    with pytest.raises(Exception, match="divide by zero"):
+        ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
+
+
+def test_div_by_zero_on_floats_is_an_infinity():
+    """Floats are not checked, because there the zero divisor has an answer —
+    and pyarrow returns it too rather than raising."""
+    a = ma.array([10.0, -10.0, 0.0])
+    b = ma.array([0.0, 0.0, 0.0])
+    result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
+    assert result.null_count == 0
+    values = result.to_pylist()
+    assert values[0] == math.inf
+    assert values[1] == -math.inf
+    assert math.isnan(values[2])
+
+
+def test_div_by_zero_under_a_null_dividend_is_not_an_error():
+    """A row the output nulls anyway is not an error: pyarrow raises only for
+    a row that would have produced a value, so this answers NULL."""
+    a = ma.array([None, 10])
+    b = ma.array([0, 2])
+    result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
+    assert result.null_count == 1
+    assert result.to_pylist()[1] == 5
+
+
+def test_div_by_a_null_divisor_is_not_an_error():
+    """A *missing* divisor answers null where a zero one is an error.
+
+    The second row is the one under test, and it is the shape that needs
+    Kleene `or` and `all`'s valid-only reading to agree: the cast leaves a
+    null divisor null, `null or false` is null, and a null is not a false. A
+    null slot's data byte is unspecified, so it is the validity and not the
+    value that has to carry this.
+
+    Both non-raising shapes are in the one call — a zero divisor under a null
+    dividend and a null divisor under a valid one — since a divisor holding
+    neither never reaches the check at all.
+    """
+    a = ma.array([None, 10, 20])
+    b = ma.array([0, None, 2])
+    result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
+    assert result.null_count == 2
+    assert result.to_pylist() == [None, None, 10]
 
 
 # ── filter ───────────────────────────────────────────────────────────────────

@@ -21,21 +21,20 @@ all of them.
 
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
-| 1 | **Division by zero answers the dividend** — `10.0 / 0.0` is `10.0`, where IEEE 754 and DuckDB both say `inf` | Not a judgement call: `/` by zero has a value and integer `//`/`%` by zero do not, which is why the reference nulls one and not the other. The fix is deleting the substitute-1 hack, not adding a validity mask | **S** | — |
-| 2 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
-| 3 | **Error taxonomy** — 373 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 373 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14 | **M** | — |
-| 4 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 2 |
-| 5 | **`OpenDalSource.read_ranges` fetches serially** | One round-trip time per range where they could go out together. On a local file that is free; on S3 it is the difference between one RTT and N. The seam, the URI dispatch and `ParquetScanOperator` on `DynSource` are all in place, so this is the last piece of scanning `s3://` well. See §1.9 | **S** | — |
-| 6 | **Parallel group-by gates are uncalibrated** — `_MIN_DISTINCT_RATIO` (0.9) and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) in `kernels/groupby.mojo` | Radix-partitioned placement landed in `dcef953a`, but when it engages is a guess: the 0.9 was set from a measurement of a version since made twice as fast, and nothing has re-measured the crossover. See §2.1 | **S** | — |
-| 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 8 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
-| 9 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 8, 10 |
-| 10 | **Statistics propagation and a cost model** | Feeds 9. Not urgent on its own — it is the last piece, after 8 | **L** | — |
-| 11 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
-| 12 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 13 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 14 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 3 |
-| 15 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
+| 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
+| 2 | **Error taxonomy** — 377 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 377 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14, 377 on 2026-09-22 | **M** | — |
+| 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
+| 4 | **`OpenDalSource.read_ranges` fetches serially** | One round-trip time per range where they could go out together. On a local file that is free; on S3 it is the difference between one RTT and N. The seam, the URI dispatch and `ParquetScanOperator` on `DynSource` are all in place, so this is the last piece of scanning `s3://` well. See §1.9 | **S** | — |
+| 5 | **Parallel group-by gates are uncalibrated** — `_MIN_DISTINCT_RATIO` (0.9) and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) in `kernels/groupby.mojo` | Radix-partitioned placement landed in `dcef953a`, but when it engages is a guess: the 0.9 was set from a measurement of a version since made twice as fast, and nothing has re-measured the crossover. See §2.1 | **S** | — |
+| 6 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
+| 7 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
+| 8 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 7, 9 |
+| 9 | **Statistics propagation and a cost model** | Feeds 8. Not urgent on its own — it is the last piece, after 7 | **L** | — |
+| 10 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
+| 11 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 12 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 13 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
+| 14 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
 
@@ -45,60 +44,6 @@ Ordered by value. Some of it is partly done -- §1.9 in particular tracks a
 subsystem that moved twice this week -- and each entry says which part.
 
 ### 1.1 Correctness — known-wrong answers
-
-**Division by zero answers the dividend.** `DivKernel.core` is `a / b` with a
-zero `b` replaced by 1, so `10.0 / 0.0` is `10.0` — the numerator, which is
-wrong under every convention.
-
-The reference answers, measured against DuckDB 1.5.5 on 2026-09-04 rather than
-assumed:
-
-| expression | reference | marrow |
-|---|---|---|
-| `10.0 / 0.0` | `inf` | `10.0` |
-| `-10.0 / 0.0` | `-inf` | `-10.0` |
-| `0.0 / 0.0` | `nan` | `0.0` |
-| `10 / 0` | `inf` (`/` returns double) | — |
-| `10.0 // 0.0`, `10 // 0` | NULL | — |
-| `10.0 % 0.0`, `10 % 0` | NULL | — |
-
-**`/` and `//`/`%` want different answers.** `/` by zero has a value in the
-reals' completion and integer division by zero does not, which is why IEEE 754
-and DuckDB both give `inf` here and NULL there. Postgres raises, and is the
-outlier.
-
-That makes the fix a **deletion**, not an addition: stop substituting 1 for a
-zero divisor in the floating case and IEEE semantics fall out of the hardware.
-No validity mask, no extra pass over the divisor, and nothing needed from the
-fused lane — which is why this is `S` and the `//`/`%` work was `M`. Nothing
-pins it: no golden case asks, and the covered-arithmetic section of
-`golden/COVERAGE.md` never named `/ 0`.
-
-**SQL's null on a zero divisor costs 13-16% on `//` and `%`.** Measured
-2026-09-04 on `bench_{floordiv,mod}_int32_{10k,100k,1m}`, drift-corrected
-against a +1.0% control median. The rounding correction inside `core` is
-free — stubbing the validity back out puts both kernels within +/-1.2% of the
-old ones — so the whole cost is the extra pass over the divisor that the null
-requires. Three variants of that scan were measured:
-
-| variant | cost |
-|---|---|
-| per-chunk `reduce_or` | **+15%** (kept) |
-| vector accumulator collapsed once, via `select` | +26% |
-| vector accumulator collapsed once, via `cast` | +26% |
-| `SIMD[DType.bool, width]` accumulator | does not compile — see §3 |
-
-The accumulator losing is the counter-intuitive part, and it is specific to
-this shape: ARM collapses a vector in one instruction, and an accumulator
-sized to the *value* type is only `width` bytes wide, so it spends the loop in
-partial registers.
-
-Removing it means not scanning at all, which means computing the zero-mask
-*during* the compute pass — an accumulator threaded through `views.apply`'s
-driver, which today hands a lane a destination and nothing to fold into. That
-is a core-API change and it would serve exactly two kernels, so it is recorded
-rather than done. The fused lane already avoids the scan for a literal
-divisor, which is the common shape; this is the erased path only.
 
 **`count(*)` desugars to `count(lit(1))`.** `builders.mojo` returns
 `lit(1, int64).count().alias("count_star")`, whose `columns()` is empty — so
@@ -110,6 +55,24 @@ anything that prunes by "what does this read" prunes every column, and
 the demand is empty. The desugaring is unchanged, so the trap still waits for
 the next thing that reads `columns()` and believes the answer.
 
+**The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
+NULL by first asking "is there a zero in this column", and
+`BufferView.__contains__` (`views.mojo:199`) is that question: SIMD, early
+exit, per-chunk reduction — the variant measured fastest on 2026-09-04, where
+the scalar form cost **+45%** on `bench_floordiv_int32_*`.
+`marrow/tests/bench_views.mojo` exists to keep the scalar form from coming
+back and says `RuntimeValue._null_zeros` and `DivisionBinary` both call it.
+
+Neither does, and `grep -rn __contains__ marrow/` finds no production caller
+at all. `DivisionBinary.bind` (`expr/comptime/numeric.mojo:214`) walks the
+divisor a row at a time into a `Bitmap.alloc_zeroed(length)`, which is the
+shape the +45% measured; `RuntimeValue._null_zeros` pays a `nullif` against a
+broadcast zeros array instead. So the benchmark guards a helper nothing uses
+while the regression it was written to catch is in the tree. Re-point the two
+callers at `__contains__` before treating any cost here as measured — and a
+kernel bench cannot see it, since no kernel passes over the divisor:
+`BinaryKernel.apply` intersects the operands' validity and nothing else.
+
 ### 1.3 Latent compiler hazards
 
 **More `t"…{dtype}"` sites under `marrow/kernels/`.** A t-string
@@ -119,7 +82,7 @@ sit in the same shape.
 
 ### 1.4 Engine capability the golden corpus measures as missing
 
-`golden/COVERAGE.md` is authoritative and machine-checked: 278 cases, of which
+`golden/COVERAGE.md` is authoritative and machine-checked: 279 cases, of which
 **63 carry `-- skip mojo`** because marrow has no API for them. Their bodies
 are never compiled, so they are proposals rather than verified spellings.
 
@@ -346,20 +309,9 @@ bindings currently have.
   The same limit is why operators live in Python: a registered `__add__` would
   never fire for `+`, and a registered `__eq__` would never fire for `==`.
 
-- **No `__eq__` reaches `tp_richcompare`, and none is registered anyway.**
-  `ma.int32() == ma.int32()` is `False` and `ma.array([1,2]) == ma.array([1,2])`
-  is `False` -- both identity comparisons. The Python suite compares dtypes by
-  `str()` for exactly this reason. Fixing it needs a slot, not a method.
-
-- **`def_property` does not exist.** The `tp_getset` slot is unexposed (there
-  is a design doc for it in the modular tree, unlanded). So `Array.type()` and
-  `RecordBatch.num_rows()` are methods where PyArrow has properties. That is a
-  real divergence from the "follow PyArrow closely" rule and it is not
-  currently fixable from this side.
-
 - **A dotted type name sets `__module__` but breaks attribute lookup.** CPython
   3.14 emits `DeprecationWarning: builtin type X has no __module__ attribute`
-  once per registered type -- 11 per import today. Passing `"probe.Dotted"` to
+  once per registered type -- 13 per import today. Passing `"probe.Dotted"` to
   `add_type` does set `__module__` correctly, but `finalize(module)` uses the
   same string as the module *attribute* key, so the type lands at
   `vars(m)["probe.Dotted"]` and `m.Dotted` stops resolving. Verified both ways.
@@ -469,7 +421,7 @@ Storage itself is no longer the gap: `marrow/io/` owns the seam, and
 
 **What it would take — two pieces left, both local.** (a) Derive a `Schema`
 from the Parquet footer so `scan(path)` needs no schema — small; everything
-needed is in `marrow/parquet/schema.mojo`, and it is row 4 of the table.
+needed is in `marrow/parquet/schema.mojo`, and it is row 3 of the table.
 (b) A `MultiFileScan` relation node owning a list of sources and yielding row
 groups across them, plus hive-path parsing to synthesise partition columns.
 Both are now strictly harder than the remote piece was, which inverts this
@@ -530,7 +482,7 @@ split_part, and `ConcatKernel` behind `||` in both lanes) and 15 temporal
 extractors plus `date_trunc`.
 
 Adding one is cheap and reaches every caller: `UNARY_VERBS`/`BINARY_VERBS`/
-`TERNARY_VERBS` (`marrow/expr/runtime/values.mojo:1868`) is the single
+`TERNARY_VERBS` (`marrow/expr/runtime/values.mojo:1896`) is the single
 vocabulary, and a verb added there is callable from Python without touching the
 bindings or `python/marrow/expr.py`.
 
@@ -558,8 +510,9 @@ what is missing is the null-skipping variant.
 
 The float group-key and integer `//`/`%` entries that stood here are **merged**,
 in `136b3529`, and the golden corpus now carries **zero `xfail`s** — every case
-it compiles, marrow answers the way DuckDB does. Float `/` by zero was not part
-of that fix and remains row 1 of the table; see §1.1.
+it compiles, marrow answers the way DuckDB does. `/` by zero was not part of
+that fix and landed separately on 2026-09-22 — floats answer `inf`/`-inf`/
+`nan`, and `pc.divide` raises on an integer zero divisor as pyarrow does.
 
 - **Integer overflow wraps where SQL raises** (`golden/COVERAGE.md`). The
   `edges` fixture already carries int64 max/min for the day a checked-arithmetic
@@ -622,11 +575,15 @@ canonical list; marrow has 8 of it.
 
 #### 2.4 Join breadth
 
-**What exists.** Hash equi-join in seven kinds — inner, left, right, full, semi,
-anti, mark — over a Swiss table with a CSR probe index
+**What exists.** Hash equi-join in six kinds — inner, left, right, full, semi,
+anti — over a Swiss table with a CSR probe index
 (`marrow/kernels/join.mojo:190`, `hashtable.mojo:76-87`), with radix partitioning
 and parallel probing. Multi-column keys work because keys go through
 `StructArray`.
+
+**Declared but rejected:** `JOIN_CROSS`, `JOIN_MARK` and `JOIN_SINGLE` are
+`JoinKind` constants whose `is_supported()` is False; `hash_join` raises for
+all three, which `test_join.mojo` pins.
 
 **Absent:** cross join, non-equi / inequality join, asof join, and — the
 semantically dangerous one — an outer join with a residual non-key `ON`

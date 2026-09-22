@@ -18,7 +18,7 @@ The three rules are the whole design, and the file is organised around them:
   NULL, which is the entire difference from `is_null`.
 """
 
-from std.math import inf, nan
+from std.math import inf, isinf, isnan, nan
 from std.testing import (
     assert_almost_equal,
     assert_equal,
@@ -161,6 +161,20 @@ def test_true_division_of_integers_is_not_integer_division() raises:
     assert_true(got.is_null(3))
 
 
+def test_division_by_zero_is_an_infinity_or_a_nan() raises:
+    """`/` by zero answers a value where `//` and `%` answer a null, and which
+    value depends on the dividend — so `_ints`'s negative, zero and positive
+    give `-inf`, `nan` and `+inf`. The null row stays null: an infinity is a
+    value, a missing dividend is still missing. `test_division_by_zero_is_null`
+    below asks the other half on the same shape."""
+    var got = _as_f64(col("n", int64) / lit(0, int64), _ints())
+    assert_equal(got.null_count(), 1)
+    assert_true(isinf(got[0].value()) and got[0].value() < 0.0)
+    assert_true(isnan(got[1].value()))
+    assert_true(isinf(got[2].value()) and got[2].value() > 0.0)
+    assert_true(got.is_null(3))
+
+
 def test_floordiv_truncates_and_mod_follows_the_dividend() raises:
     """SQL's convention, which is not Mojo's: `//` truncates toward zero and
     `%` takes the sign of the **dividend**, so `-1 // 3` is 0 and `-1 % 3` is
@@ -274,18 +288,9 @@ def test_is_nan_and_is_inf_are_null_on_a_null() raises:
 
 
 def test_is_nan_finds_a_nan_and_is_inf_finds_an_infinity() raises:
-    """The values are put into the column, not produced by dividing by zero.
-
-    That is worth stating, because the obvious construction does not work:
-    `DivKernel.core` substitutes 1 for **any** zero divisor — `a /
-    b.eq(0).select(1, b)` — to dodge SIGFPE on integers, and the guard is not
-    conditioned on the dtype. So `0.0 / 0.0` evaluates to 0.0 here and
-    `1.0 / 0.0` to 1.0, where IEEE 754 says NaN and +inf. Whether marrow's `/`
-    should produce an infinity on a float column is a question about
-    `DivKernel`, not about these nodes, so this case sidesteps it and the
-    golden corpus's `math_div_float64` avoids it by using a divisor column with
-    no zero.
-    """
+    """The values are put into the column rather than produced by dividing,
+    which keeps this case about the two predicates rather than about
+    `DivKernel` — `test_division_by_zero_is_an_infinity_or_a_nan` asks that."""
     var vals: List[Optional[Float64]] = [
         nan[DType.float64](),
         inf[DType.float64](),

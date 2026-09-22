@@ -6,6 +6,7 @@ itself before anything evaluates it. Those answers are what the optimizer reads,
 and a wrong one is silent — a plan that narrows the wrong columns still runs.
 """
 
+from std.math import isinf, isnan
 from std.testing import (
     assert_almost_equal,
     assert_equal,
@@ -384,6 +385,22 @@ def test_runtime_division_is_always_float64() raises:
     var got = _ints(truediv(column("b"), _lit(4)))
     assert_true(got.dtype() == DynType(float64))
     assert_true(got == array([2.5, 5.0, 7.5, 10.0], float64))
+
+
+def test_runtime_division_by_zero_is_an_infinity_not_a_null() raises:
+    """`/` by zero has a value where `//` and `%` have a null.
+
+    `_float_binary` casts to `float64` and hands the divisor to the kernel
+    untouched, where `//` and `%` wrap theirs in `_null_zeros` first — the
+    whole of the difference from
+    `test_runtime_division_follows_sql_like_the_fused_lane` above.
+    """
+    var got = _ints(truediv(column("b"), _lit(0))).as_float64().copy()
+    assert_equal(got.null_count(), 0)
+    for i in range(4):
+        assert_true(isinf(got[i].value()) and got[i].value() > 0.0)
+    var zero_over_zero = _ints(truediv(_lit(0), _lit(0))).as_float64().copy()
+    assert_true(isnan(zero_over_zero[0].value()))
 
 
 def test_runtime_arithmetic_widens_rather_than_narrows() raises:

@@ -43,7 +43,14 @@ def multiply(left, right, memory_pool=None, ctx=None):
 def divide(left, right, memory_pool=None, ctx=None):
     """Divide *left* by *right* element-wise.
 
-    Equivalent to ``pyarrow.compute.divide``.
+    Equivalent to ``pyarrow.compute.divide``, which is the *checked* kernel:
+    two integers divide to an integer, so ``-1 / 3`` is 0, and a zero divisor
+    raises rather than answering.
+
+    ``/`` on an :class:`~marrow.expr.Expr` is the other division, Python's:
+    both operands widen to ``float64`` first, so ``-1 / 3`` is -0.333 and a
+    zero divisor answers an infinity or a NaN. Floats behave the same either
+    way; only the integers and the zero divisor differ.
     """
     return Array.wrap(_ma.divide(left.unwrap(), right.unwrap(), (ctx or _serial())))
 

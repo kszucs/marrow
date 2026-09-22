@@ -164,6 +164,13 @@ class Column(_Wrapper):
         return _call("mul", other, self)
 
     def __truediv__(self, other):
+        """``l / r`` — Python's true division, not ``marrow.compute.divide``.
+
+        Both operands widen to ``float64`` before the kernel, so ``-1 / 3`` is
+        -0.333 and a zero divisor answers an infinity or a NaN. The like-named
+        compute function follows ``pyarrow.compute.divide`` instead: integer
+        in, integer out, and a zero divisor raises.
+        """
         return _call("truediv", self, other)
 
     def __rtruediv__(self, other):
