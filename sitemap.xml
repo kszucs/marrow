@@ -2,74 +2,74 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://marrow.kszucs.dev/examples/datafusion.html</loc>
-    <lastmod>2026-09-22T17:02:35.994Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.615Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/reference/architecture.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/tables.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/scalars.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/io.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/gpu.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/compute.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/arrays.html</loc>
-    <lastmod>2026-09-22T17:02:35.994Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.615Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/tutorials/data-pipeline.html</loc>
-    <lastmod>2026-09-22T17:02:35.996Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.617Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/index.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/tutorials/quickstart.html</loc>
-    <lastmod>2026-09-22T17:02:35.997Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.617Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/compile.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/expressions.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/interop.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/queries-lazy.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/sorting.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/guide/types.html</loc>
-    <lastmod>2026-09-22T17:02:35.995Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.616Z</lastmod>
   </url>
   <url>
     <loc>https://marrow.kszucs.dev/reference/status.html</loc>
-    <lastmod>2026-09-22T17:02:35.996Z</lastmod>
+    <lastmod>2026-09-21T14:36:23.617Z</lastmod>
   </url>
 </urlset>
