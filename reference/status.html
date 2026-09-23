@@ -559,20 +559,8 @@ document.addEventListener("DOMContentLoaded", function () {
 </section>
 <section id="known-wrong-answers" class="level2">
 <h2 class="anchored" data-anchor-id="known-wrong-answers">Known-wrong answers</h2>
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-<span class="screen-reader-only">Warning</span>Float division by zero answers the dividend
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p><code>DivKernel</code> substitutes a <code>1</code> divisor so the SIMD lane cannot trap, so <code>10.0 / 0.0</code> is <code>10.0</code> where IEEE 754 and DuckDB both say <code>inf</code>; <code>-10.0 / 0.0</code> is <code>-10.0</code>, and <code>0.0 / 0.0</code> is <code>0.0</code>.</p>
-<p><strong>No golden case pins it</strong>, which is how it survived — so it is the one known-wrong answer the corpus does not currently catch. Integer <code>//</code> and <code>%</code> by zero are unaffected and answer NULL, as SQL does.</p>
-</div>
-</div>
+<p><strong>Integer arithmetic overflow wraps where SQL raises.</strong> The <code>edges</code> fixture carries int64 max/min against the day a checked mode exists; the machinery is already in <code>cast</code>, which takes <code>safe</code> as a comptime parameter.</p>
+<p>Division by zero is no longer one of these: floats answer <code>inf</code>, <code>-inf</code> and <code>nan</code>, and <code>pc.divide</code> raises on an integer zero divisor as <code>pyarrow.compute.divide</code> does.</p>
 <p>One latent trap is worth knowing too: <code>count(*)</code> desugars to <code>count(lit(1))</code>, whose referenced-column set is empty, so anything that prunes by “what does this read” would prune every column. Column pruning handles it by never narrowing a source to zero columns.</p>
 </section>
 <section id="what-the-corpus-measures-as-missing" class="level2">
