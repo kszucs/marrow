@@ -590,7 +590,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> marrow</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run build_python     <span class="co"># compiles the native extension (python/marrow/libmarrow.so)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Then bring it in under the customary <code>ma</code> alias:</p>
-<div id="87d14b5e" class="cell" data-execution_count="2">
+<div id="a31564d8" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
@@ -611,7 +611,7 @@ Tip
 <section id="create-an-array" class="level2">
 <h2 class="anchored" data-anchor-id="create-an-array">Create an array</h2>
 <p><code>ma.array()</code> turns a Python list into a columnar array. The type is inferred, and <code>None</code> marks a null position:</p>
-<div id="9970b4ef" class="cell" data-execution_count="3">
+<div id="d5c04361" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(a)</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, <span class="bu">len</span>(a))</span>
@@ -625,7 +625,7 @@ type:       int64</code></pre>
 </div>
 </div>
 <p>Pass <code>type=</code> to skip inference and coerce the data to a specific type:</p>
-<div id="d7832b89" class="cell" data-execution_count="4">
+<div id="df0a14da" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>], <span class="bu">type</span><span class="op">=</span>ma.float32())</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(f)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -633,7 +633,7 @@ type:       int64</code></pre>
 </div>
 </div>
 <p>Strings, nested lists and structs all work the same way:</p>
-<div id="4b58fda2" class="cell" data-execution_count="5">
+<div id="0eb37eb4" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.array([<span class="st">"hello"</span>, <span class="va">None</span>, <span class="st">"world"</span>]))</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="va">None</span>]))</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.array([{<span class="st">"x"</span>: <span class="dv">1</span>, <span class="st">"y"</span>: <span class="fl">1.5</span>}, {<span class="st">"x"</span>: <span class="dv">2</span>, <span class="st">"y"</span>: <span class="fl">2.5</span>}]))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -647,7 +647,7 @@ StructArray({'x': PrimitiveArray[int64]([1, 2]), 'y': PrimitiveArray[float64]([1
 <section id="compute-on-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="compute-on-arrays">Compute on arrays</h2>
 <p>Compute kernels live in <code>marrow.compute</code> (imported here as <code>mc</code>), vectorized and null-aware, with names that mirror <code>pyarrow.compute</code>. A null in either operand propagates to the result:</p>
-<div id="f8e315fb" class="cell" data-execution_count="6">
+<div id="511be6d1" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>x <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>y <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -672,7 +672,7 @@ Note
 </div>
 </div>
 <p>Comparisons return a boolean array, which you can feed straight into <code>filter</code>:</p>
-<div id="3b32d54b" class="cell" data-execution_count="7">
+<div id="dccd4bae" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>big  <span class="op">=</span> mc.greater(y, ma.array([<span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>, <span class="dv">15</span>]))</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"mask:  "</span>, big)</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"kept:  "</span>, mc.<span class="bu">filter</span>(y, big))</span>
@@ -684,7 +684,7 @@ no nulls: PrimitiveArray[int64]([1, 2, 3, 5])</code></pre>
 </div>
 </div>
 <p>Sorting handles nulls explicitly and returns either the sorted values or the sort indices:</p>
-<div id="a558b908" class="cell" data-execution_count="8">
+<div id="2a011010" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="dv">3</span>, <span class="dv">1</span>, <span class="va">None</span>, <span class="dv">2</span>, <span class="dv">5</span>])</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sorted:  "</span>, mc.sort(s))</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"desc:    "</span>, mc.sort(s, [(<span class="st">""</span>, <span class="st">"descending"</span>)], null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span>
@@ -699,7 +699,7 @@ argsort:  PrimitiveArray[int32]([1, 3, 0, 4, 2])</code></pre>
 <section id="assemble-a-table" class="level2">
 <h2 class="anchored" data-anchor-id="assemble-a-table">Assemble a table</h2>
 <p>A <code>RecordBatch</code> is a schema plus a set of equal-length columns — the workhorse tabular structure:</p>
-<div id="670661fe" class="cell" data-execution_count="9">
+<div id="85bd2dc4" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>:   ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"age"</span>:    ma.array([<span class="dv">34</span>, <span class="dv">28</span>, <span class="dv">45</span>, <span class="dv">52</span>]),</span>
@@ -713,7 +713,7 @@ shape: (4, 3)</code></pre>
 </div>
 </div>
 <p>Inspect it as native Python with <code>to_pydict()</code> (column-oriented) or <code>to_pylist()</code> (row-oriented):</p>
-<div id="096cff89" class="cell" data-execution_count="10">
+<div id="7ab02e6c" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.to_pydict())</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -722,7 +722,7 @@ shape: (4, 3)</code></pre>
 </div>
 </div>
 <p>Select columns, slice rows, and sort by one or more keys:</p>
-<div id="747ca897" class="cell" data-execution_count="11">
+<div id="e9389120" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.select([<span class="st">"name"</span>, <span class="st">"salary"</span>]).to_pydict())</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.<span class="bu">slice</span>(<span class="dv">1</span>, <span class="dv">2</span>).to_pylist())</span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"descending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
