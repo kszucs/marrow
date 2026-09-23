@@ -1459,9 +1459,9 @@ struct ParquetScanOperator(Operator):
     Empty when nothing was pushed and when the file carries no page index; an
     entry is `None` when that group's pages all survived. Both mean "read the
     group whole", and both are decided **here, once**, so `drain` asks a
-    question rather than re-deriving one per morsel — `selects_all` walks every
-    row of the group, and a selection that removes nothing costs the decoder a
-    per-row check to answer what no selection answers.
+    question rather than re-deriving one per morsel: a selection that removes
+    nothing still costs the decoder a per-page check to answer what no
+    selection answers.
 
     The second granularity of the same decision: `_plan` skips groups, this
     skips pages inside the ones that survive."""

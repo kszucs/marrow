@@ -48,9 +48,16 @@ from ..io import (
     BufferSource,
     ByteSource,
     DynSource,
+    Fetched,
     StorageOptions,
 )
-from .schema import SchemaMapping, DecodedLeaf, LeafColumn, NODE_LEAF
+from .schema import (
+    SchemaMapping,
+    DecodedLeaf,
+    LeafColumn,
+    NODE_LEAF,
+    Projection,
+)
 from .statistics import Statistics
 from .format import (
     FileMetaData,
@@ -125,23 +132,40 @@ struct Page[o: Origin[mut=False]](Movable):
 
     def scatter[
         Body: def(Bool, Bool, Int) raises -> None,
-    ](self, max_def: Int, mask: Optional[List[Bool]], body: Body) raises:
+    ](
+        self,
+        max_def: Int,
+        runs: Optional[List[Tuple[Int, Int]]],
+        body: Body,
+    ) raises:
         """Walk this page's `num_values` output slots — the flat skeleton every
         `LeafBuilder` shares.
 
         For each row `body(present, selected, vi)` fires with whether the slot
-        holds a present value (`present_at`), whether the selection mask keeps
-        it, and the running index into the page's decoded present values
-        (advanced on every present slot, regardless of the mask). Only the
-        per-slot placement differs across leaves, and that lives in `body`.
+        holds a present value (`present_at`), whether the selection keeps it,
+        and the running index into the page's decoded present values (advanced
+        on every present slot, regardless of the selection). Only the per-slot
+        placement differs across leaves, and that lives in `body`.
+
+        `runs` is page-relative and ascending, so it is walked with a cursor
+        rather than indexed: `None` selects every slot, which is the whole-page
+        path. It used to be a `List[Bool]` the selection materialised per page
+        and every caller then copied again -- two page-length allocations to
+        answer what a handful of ranges already said.
 
         A free `_walk_slots(page, ...)` before this; walking a page's slots is
         the page's own business, and it already needed nothing but `self`.
         """
         var vi = 0
+        var ri = 0
         for row in range(self.num_values):
             var present_here = self.present_at(row, max_def)
-            var selected = not mask or mask.value()[row]
+            var selected = True
+            if runs:
+                ref rs = runs.value()
+                while ri < len(rs) and rs[ri][1] <= row:
+                    ri += 1
+                selected = ri < len(rs) and rs[ri][0] <= row
             body(present_here, selected, vi)
             if present_here:
                 vi += 1
@@ -577,7 +601,9 @@ trait LeafBuilder(Deinitable, Movable):
     def consume(mut self, var page: Page) raises:
         ...
 
-    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
         """Append only the rows of `page` where `mask[row]` is set (page-relative
         row index) — used for a data page partially covered by a row selection.
         """
@@ -636,16 +662,16 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         mut self,
         page: Page,
         present: Pointer[Scalar[Self.store_dt], _],
-        mask: Optional[List[Bool]] = None,
+        runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """Place `page.num_present` contiguous decoded values into the output
         buffer, honoring definition levels — one unsafe_memcpy when the page is
         all-present and fully selected, else a per-row scatter that materializes
-        the validity bitmap. With `mask`, only the rows it selects are placed
+        the validity bitmap. With `runs`, only the rows they select are placed
         (the page-boundary partial-page path). Every encoding funnels its decoded
         present values through here."""
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
-        if not mask and page.all_present():
+        if not runs and page.all_present():
             unsafe_memcpy(
                 dest=vptr.unsafe_offset(self.wpos),
                 src=present,
@@ -672,7 +698,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                     self.null_count += 1
                 self.wpos += 1
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
@@ -719,7 +745,9 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             )
             self._scatter(page, present.unsafe_ptr())
 
-    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
         # Decode every present value through the general per-encoding decoder
         # (PLAIN / dictionary / DELTA / BYTE_STREAM_SPLIT), then place only the
         # rows `mask` selects. Partial pages are the page-boundary minority, so
@@ -728,7 +756,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         page.encoding.decode_primitive[Self.store_dt, Self.phys_dt](
             page.values(), page.num_present, self.dict, present
         )
-        self._scatter(page, present.unsafe_ptr(), mask.copy())
+        self._scatter(page, present.unsafe_ptr(), runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         return _finish_primitive(
@@ -764,7 +792,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
         mut self,
         page: Page,
         values: List[List[UInt8]],
-        mask: Optional[List[Bool]] = None,
+        runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """Append the decoded present values honoring definition levels — the
         shared placement path for the materializing encodings (dictionary,
@@ -779,13 +807,13 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def _place_plain(
         mut self,
         page: Page,
         vspan: Span[UInt8, _],
-        mask: Optional[List[Bool]] = None,
+        runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """PLAIN in place: walk the length-prefixed present values, appending or
         emitting nulls by def level. With `mask`, only selected rows are kept.
@@ -805,7 +833,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
             elif selected:
                 self.builder.append_null()
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -832,10 +860,12 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
             )
             self._scatter_values(page, values)
 
-    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
         var vspan = page.values()
         if page.is_plain():
-            self._place_plain(page, vspan, mask.copy())
+            self._place_plain(page, vspan, runs.copy())
         else:
             var values = page.encoding.decode_bytes(
                 page.values(),
@@ -844,7 +874,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
                 self.dict_off,
                 self.dict_len,
             )
-            self._scatter_values(page, values, mask.copy())
+            self._scatter_values(page, values, runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         var b = self.builder^
@@ -925,7 +955,9 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         """Big-endian, sign-extended from `width` bytes to the native width."""
         return Plain.decode_be_flba[Self.native](span, off, self.width)
 
-    def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
+    def _place(
+        mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
         var vspan = page.values()
         var idx = List[Int32]()
         var is_dict = page.is_dictionary()
@@ -959,7 +991,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
                 else:
                     self.acc.append_null()
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -969,8 +1001,10 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         else:
             self._place(page, None)
 
-    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
-        self._place(page, mask.copy())
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._place(page, runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         return self.acc^.finish(self.dtype^)
@@ -993,7 +1027,9 @@ struct Int96LeafBuilder(LeafBuilder):
         self.acc = _FixedWidthAcc[DType.int64](num_rows)
         self.dict = List[Int64]()
 
-    def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
+    def _place(
+        mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
         var vspan = page.values()
         var idx = List[Int32]()
         var is_dict = page.is_dictionary()
@@ -1014,7 +1050,7 @@ struct Int96LeafBuilder(LeafBuilder):
                 else:
                     self.acc.append_null()
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -1024,8 +1060,10 @@ struct Int96LeafBuilder(LeafBuilder):
         else:
             self._place(page, None)
 
-    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
-        self._place(page, mask.copy())
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._place(page, runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         return self.acc^.finish(self.dtype^)
@@ -1046,7 +1084,9 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
         self.max_def = leaf.max_def
         self.dict_body = List[UInt8]()
 
-    def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
+    def _place(
+        mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
         var vspan = page.values()
         var idx = List[Int32]()
         var is_dict = page.is_dictionary()
@@ -1081,7 +1121,7 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -1090,8 +1130,10 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
         else:
             self._place(page, None)
 
-    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
-        self._place(page, mask.copy())
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._place(page, runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         var b = self.builder^
@@ -1113,7 +1155,7 @@ struct BoolLeafBuilder(LeafBuilder):
         mut self,
         page: Page,
         vspan: Span[UInt8, _],
-        mask: Optional[List[Bool]] = None,
+        runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """Unpack the bit-packed present booleans honoring def levels; with
         `mask`, only selected rows are appended. `vi` is the present-value index,
@@ -1130,16 +1172,16 @@ struct BoolLeafBuilder(LeafBuilder):
             elif selected:
                 self.builder.append_null()
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def _place_values(
         mut self,
         page: Page,
         values: List[Bool],
-        mask: Optional[List[Bool]] = None,
+        runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """Scatter already-decoded present booleans (the RLE path) honoring def
-        levels; with `mask`, only selected rows are appended."""
+        levels; with `runs`, only selected rows are appended."""
 
         def place(
             present_here: Bool, selected: Bool, vi: Int
@@ -1150,7 +1192,7 @@ struct BoolLeafBuilder(LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        page.scatter(self.max_def, mask, place)
+        page.scatter(self.max_def, runs, place)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -1163,14 +1205,16 @@ struct BoolLeafBuilder(LeafBuilder):
                 page, page.encoding.decode_bool(page.values(), page.num_present)
             )
 
-    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
         if page.is_plain():
-            self._place(page, page.values(), mask.copy())
+            self._place(page, page.values(), runs.copy())
         else:
             self._place_values(
                 page,
                 page.encoding.decode_bool(page.values(), page.num_present),
-                mask.copy(),
+                runs.copy(),
             )
 
     def finish(deinit self) raises -> DynArray:
@@ -1669,13 +1713,13 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
                 builder.consume(self.pages.next(codecs))  # build the dictionary
             else:
                 var start = self.pages.produced
-                var kept = sel.selected_in(start, nv)
-                if kept == 0:
+                var kept = sel.covers(start, nv)
+                if kept == Coverage.NONE:
                     _ = self.pages.skip_next()
-                elif kept == nv:
+                elif kept == Coverage.ALL:
                     builder.consume(self.pages.next(codecs))
                 else:
-                    var m = sel.mask(start, nv)
+                    var m = sel.runs_in(start, nv)
                     builder.consume_selected(self.pages.next(codecs), m)
 
     def _build[
@@ -2192,6 +2236,142 @@ def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
     return FileMetaData.read_footer(source.read_at(size - want, want))
 
 
+struct ChunkRead(Copyable, Movable):
+    """One column chunk's part of a read: which of its rows to decode, where
+    its pages sit, and which of its bytes that takes.
+
+    The constructor makes those decisions -- arrow-rs makes them per row group
+    in `InMemoryRowGroup::fetch_ranges` -- so nothing downstream re-derives
+    them. What it does not know is where its bytes land in the batch a read
+    asks the source for; that belongs to the `ReadPlan` that batches them.
+    """
+
+    var row_group: Int
+    """The row group's index in the file."""
+    var leaf: Int
+    """The column chunk's index within the row group."""
+    var num_rows: Int
+    var selection: Optional[RowSelection]
+    """The row group's selection, shared by all of its leaves; `None` when
+    nothing was pushed down, which decodes every row."""
+    var locs: OffsetIndex
+    """Page locations, when there is a selection and a page index to use."""
+    var start: Int
+    """The chunk's offset in the file."""
+    var ranges: List[Tuple[Int, Int]]
+    """Chunk-relative `(offset, length)` of each byte range to fetch."""
+    var compressed: Bool
+
+    def __init__(
+        out self,
+        row_group: Int,
+        leaf: Int,
+        cc: ColumnChunk,
+        num_rows: Int,
+        var selection: Optional[RowSelection],
+        var locs: OffsetIndex,
+    ) raises:
+        var start, length = cc.meta_data.byte_range()
+        self.row_group = row_group
+        self.leaf = leaf
+        self.num_rows = num_rows
+        self.start = start
+        self.compressed = cc.meta_data.codec != 0
+        # **Only as far into the chunk as the selection reaches.** The
+        # offset index says where the page holding the last selected row
+        # ends; nothing after it will be decoded, so nothing after it is
+        # worth asking the source for. A `limit`-shaped selection reads the
+        # front of the chunk and stops; a scattered one reads each run and
+        # skips the gaps.
+        self.ranges = List[Tuple[Int, Int]]()
+        if selection and locs.num_pages() > 0:
+            self.ranges = scan_ranges(selection.value(), locs, cc, num_rows)
+        else:
+            self.ranges.append((0, length))
+        self.selection = selection^
+        self.locs = locs^
+
+    def seg_at(self) -> List[Int]:
+        """Where in the chunk each fetched segment begins -- what the page
+        reader needs to find a page's bytes among the segments."""
+        var out = List[Int](capacity=len(self.ranges))
+        for ref r in self.ranges:
+            out.append(r[0])
+        return out^
+
+
+struct ReadPlan(Movable):
+    """One `ParquetFile.read`, settled before any of it runs: the projection,
+    the row groups, one `ChunkRead` per (row group, leaf) -- group-major -- and
+    every byte range they need, batched so the source is asked once.
+
+    The batch is the plan's, so the plan is what knows where each chunk's
+    bytes sit in it: `segments` hands a chunk its slices of what came back,
+    and `assemble` folds the decoded leaves back in the order they were
+    planned.
+    """
+
+    var projection: Projection
+    var row_groups: List[Int]
+    var chunks: List[ChunkRead]
+    var ranges: List[Tuple[Int, Int]]
+    """Every chunk's file-absolute byte ranges, in chunk order."""
+    var compressed: Bool
+    """Whether any chunk needs a codec -- which decides whether to open them."""
+    var _first: List[Int]
+    """Chunk `t`'s ranges start at `ranges[_first[t]]`."""
+
+    def __init__(
+        out self, var projection: Projection, var row_groups: List[Int]
+    ):
+        self.projection = projection^
+        self.row_groups = row_groups^
+        self.chunks = List[ChunkRead]()
+        self.ranges = List[Tuple[Int, Int]]()
+        self.compressed = False
+        self._first = List[Int]()
+
+    def add(mut self, var chunk: ChunkRead):
+        """Append a chunk, placing its ranges at the end of the batch."""
+        self._first.append(len(self.ranges))
+        for ref r in chunk.ranges:
+            self.ranges.append((chunk.start + r[0], r[1]))
+        self.compressed = self.compressed or chunk.compressed
+        self.chunks.append(chunk^)
+
+    def segments(
+        self, t: Int, ref fetched: Fetched
+    ) raises -> List[Span[UInt8, origin_of(fetched)]]:
+        """Chunk `t`'s bytes, sliced out of the batch `ranges` came back as.
+
+        Borrowed rather than copied: `Fetched.span` is a read, so every worker
+        can slice its own chunk out of the one value nobody is mutating.
+        """
+        var n = len(self.chunks[t].ranges)
+        var out = List[Span[UInt8, origin_of(fetched)]](capacity=n)
+        for i in range(self._first[t], self._first[t] + n):
+            out.append(fetched.span(i))
+        return out^
+
+    def assemble(
+        self, mut decoded: List[Optional[DecodedLeaf]]
+    ) raises -> Table:
+        """Fold each row group's decoded leaves back into the Arrow tree, one
+        batch per group, taking them out of `decoded` as it goes."""
+        var num_leaves = len(self.projection.decode_order)
+        var batches = List[RecordBatch](capacity=len(self.row_groups))
+        for g in range(len(self.row_groups)):
+            var leaves = List[DecodedLeaf](capacity=num_leaves)
+            for c in range(num_leaves):
+                leaves.append(decoded[g * num_leaves + c].take())
+            batches.append(self.projection.assemble(leaves))
+        if len(batches) == 0:
+            batches.append(
+                RecordBatch.empty(Schema(copy=self.projection.schema))
+            )
+        return Table.from_batches(Schema(copy=self.projection.schema), batches)
+
+
 struct ParquetFile[
     S: ByteSource = BufferSource, leaves: LeafSet = LeafSet.all()
 ](Movable):
@@ -2295,67 +2475,23 @@ struct ParquetFile[
         workers. Each worker owns a `CompressionLibs` (the lazy `dlopen` handles
         and reused size cell are not shareable across threads); the mmap and
         metadata are read-only."""
-        # the read plan: which column chunks to decode and how to reassemble them
-        var plan = self._mapping.project(
-            columns.value()
-        ) if columns else self._mapping.full()
-
-        # which row groups to decode (all, or the given subset in order)
-        var rg_list = List[Int]()
-        if row_groups:
-            for rg in row_groups.value():
-                if rg < 0 or rg >= len(self._meta.row_groups):
-                    raise Error("parquet: row group index out of range")
-                rg_list.append(rg)
-        else:
-            for rg in range(len(self._meta.row_groups)):
-                rg_list.append(rg)
-
-        if row_selections and len(row_selections.value()) != len(rg_list):
-            raise Error(
-                "parquet: row_selections must match the selected row groups"
-            )
-
-        # **A selection this reader cannot apply is refused, not ignored.**
-        # `ColumnReader.decode` picks the flat or the leveled path from the
-        # leaf's max repetition and only the flat one consults `selection`, so
-        # a repeated column would silently decode *all* its rows while its flat
-        # neighbours decoded a subset -- columns of different lengths, which is
-        # a wrong answer rather than a slow one. Leaving that as an unwritten
-        # rule made it every caller's job to know; a leaf count does not reveal
-        # it either, since `list<int>` is one leaf.
-        if row_selections:
-            for orig in plan.decode_order:
-                if self._mapping.leaves[orig].max_rep >= 1:
-                    raise Error(
-                        (
-                            "parquet: row_selections cannot be applied to a"
-                            " repeated column ('"
-                        ),
-                        self._mapping.leaves[orig].name,
-                        "'); read it without a selection",
-                    )
-
-        var num_leaves = len(plan.decode_order)
-        var num_rg = len(rg_list)
-        var total = num_rg * num_leaves
+        var plan = self._plan(columns, row_groups, row_selections)
+        var total = len(plan.chunks)
 
         # rows across selected groups — governs the parallel-dispatch threshold
         var selected_rows = 0
-        for rg in rg_list:
+        for rg in plan.row_groups:
             selected_rows += self._meta.row_groups[rg].num_rows
-
         var nt = 1
         if total >= 2 and selected_rows >= _PARALLEL_MIN_ROWS:
             nt = min(num_physical_cores(), total)
 
-        # One result slot per (row group, selected leaf), pre-sized so workers
-        # assign by index without racing on list growth. (DecodedLeaf is
-        # move-only, so slots are filled by appending, not the copy-based
-        # `fill=`.)
-        var grid = List[Optional[DecodedLeaf]](capacity=total)
+        # One result slot per chunk, pre-sized so workers assign by index
+        # without racing on list growth. (DecodedLeaf is move-only, so slots
+        # are filled by appending, not the copy-based `fill=`.)
+        var decoded = List[Optional[DecodedLeaf]](capacity=total)
         for _ in range(total):
-            grid.append(None)
+            decoded.append(None)
 
         # Per-worker codec scratch, reused across calls. The `dlopen` handles
         # are process-wide now (`_CodecLibs`), so what a `CompressionLibs`
@@ -2368,25 +2504,14 @@ struct ParquetFile[
         var codecs = self._codecs
         while len(codecs[]) < nt:
             codecs[].append(CompressionLibs())
-
         # Open the compression libraries here, on the calling thread, if any
         # chunk about to be decoded is compressed. `_Global` vends its pointer
         # without locking and promises nothing about racing *creation*, so the
         # first touch must not be several workers at once; after this every
         # worker's use of the handle set is a pure read. Guarded rather than
         # unconditional so an all-uncompressed file still `dlopen`s nothing.
-        for rg_idx in rg_list:
-            var compressed = False
-            for orig in plan.decode_order:
-                if (
-                    self._meta.row_groups[rg_idx].columns[orig].meta_data.codec
-                    != 0
-                ):
-                    compressed = True
-                    break
-            if compressed:
-                CompressionLibs.preload()
-                break
+        if plan.compressed:
+            CompressionLibs.preload()
 
         # One slot per worker, like the result slots above: a single shared
         # `Optional[Error]` would be written by every failing thread at once.
@@ -2410,65 +2535,9 @@ struct ParquetFile[
         # the workers borrow a value nobody is mutating, and the absence of a
         # race is a property of the types rather than a rule to remember. It is
         # what `Fetched` was built for.
-        var slot_sel = List[Optional[RowSelection]](capacity=total)
-        var slot_locs = List[OffsetIndex](capacity=total)
-        var slot_seg_at = List[List[Int]](capacity=total)
-        var slot_lo = List[Int](capacity=total)
-        var slot_n = List[Int](capacity=total)
-        var all_ranges = List[Tuple[Int, Int]]()
+        var fetched = self._source.read_ranges(plan.ranges)
 
-        for t in range(total):
-            var slot = t // num_leaves
-            var rg_idx = rg_list[slot]
-            # original column-chunk index for this compact slot
-            var orig = plan.decode_order[t % num_leaves]
-            ref rg = self._meta.row_groups[rg_idx]
-            # the row selection for this group (shared by all its leaf
-            # columns), None when nothing is pushed down or the group is
-            # fully selected.
-            var sel: Optional[RowSelection] = None
-            var locs = OffsetIndex()
-            if row_selections:
-                sel = row_selections.value()[slot].copy()
-                # Only worth decoding when there is something to skip: with no
-                # selection every page is read, and the index would answer
-                # questions nobody asks. Offsets only -- the `ColumnIndex`'s
-                # per-page bounds are decode-time dead weight here, and they
-                # are the bulky half. Not for a leveled leaf: `ColumnReader`
-                # discards the index there (page skipping is a flat-path
-                # optimisation), so decoding one is pure waste.
-                if self._mapping.leaves[orig].max_rep == 0:
-                    locs = self._chunk_offsets(rg.columns[orig], rg.num_rows)
-
-            var start, length = rg.columns[orig].meta_data.byte_range()
-            # **Only as far into the chunk as the selection reaches.** The
-            # offset index says where the page holding the last selected row
-            # ends; nothing after it will be decoded, so nothing after it is
-            # worth asking the source for. A `limit`-shaped selection reads the
-            # front of the chunk and stops; a scattered one reads each run and
-            # skips the gaps.
-            var ranges = List[Tuple[Int, Int]]()
-            if sel and locs.num_pages() > 0:
-                ranges = sel.value().scan_ranges(
-                    locs, rg.columns[orig], rg.num_rows
-                )
-            else:
-                ranges.append((0, length))
-
-            var seg_at = List[Int](capacity=len(ranges))
-            slot_lo.append(len(all_ranges))
-            slot_n.append(len(ranges))
-            for ref r in ranges:
-                seg_at.append(r[0])
-                all_ranges.append((start + r[0], r[1]))
-            slot_sel.append(sel^)
-            slot_locs.append(locs^)
-            slot_seg_at.append(seg_at^)
-
-        # One ask, before any fan-out.
-        var fetched = self._source.read_ranges(all_ranges)
-
-        def worker(w: Int) {mut worker_errs, mut grid, imm}:
+        def worker(w: Int) {mut worker_errs, mut decoded, imm}:
             # `sync_parallelize`'s value form takes a non-raising worker. The
             # body still unwinds at its first error; the other workers cannot be
             # cancelled, so their errors are collected and raised after the join.
@@ -2476,31 +2545,23 @@ struct ParquetFile[
                 ref codecs_w = codecs[][w]
                 var t = w
                 while t < total:
-                    var slot = t // num_leaves
-                    var rg_idx = rg_list[slot]
-                    var orig = plan.decode_order[t % num_leaves]
-                    ref rg = self._meta.row_groups[rg_idx]
-                    # Borrowing the batch, not the source: `Fetched.span` is a
-                    # read, so every worker can slice its own chunk out of the
-                    # one value nobody is mutating.
-                    var segs = List[Span[UInt8, origin_of(fetched)]](
-                        capacity=slot_n[t]
-                    )
-                    for i in range(slot_lo[t], slot_lo[t] + slot_n[t]):
-                        segs.append(fetched.span(i))
+                    ref chunk = plan.chunks[t]
                     # ColumnReader.decode picks the flat vs leveled path from
                     # the leaf's max repetition, so one call serves every column
-                    # shape. Nothing here touches the source.
+                    # shape. Nothing here touches the source: the segments are
+                    # slices of the one batch nobody is mutating.
                     var reader = ColumnReader[origin_of(fetched), Self.leaves](
-                        segs^,
-                        rg.columns[orig].meta_data.copy(),
-                        self._mapping.leaves[orig].copy(),
-                        rg.num_rows,
-                        slot_sel[t].copy(),
-                        slot_locs[t].copy(),
-                        slot_seg_at[t].copy(),
+                        plan.segments(t, fetched),
+                        self._meta.row_groups[chunk.row_group]
+                        .columns[chunk.leaf]
+                        .meta_data.copy(),
+                        self._mapping.leaves[chunk.leaf].copy(),
+                        chunk.num_rows,
+                        chunk.selection.copy(),
+                        chunk.locs.copy(),
+                        chunk.seg_at(),
                     )
-                    grid[t] = reader.decode(codecs_w)
+                    decoded[t] = reader.decode(codecs_w)
                     t += nt
 
             except e:
@@ -2510,23 +2571,88 @@ struct ParquetFile[
         for err in worker_errs:
             if err:
                 raise err.value()
+        return plan.assemble(decoded)
 
-        # Fold each selected row group's decoded leaves back into the Arrow tree.
-        var batches = List[RecordBatch]()
-        for i in range(num_rg):
-            var decoded = List[DecodedLeaf]()
-            for ci in range(num_leaves):
-                decoded.append(grid[i * num_leaves + ci].take())
-            var cols = List[DynArray]()
-            for ref node in plan.nodes:
-                cols.append(node.assemble(decoded))
-            batches.append(
-                RecordBatch(schema=Schema(copy=plan.schema), columns=cols^)
+    def _plan(
+        self,
+        columns: Optional[List[String]],
+        row_groups: Optional[List[Int]],
+        row_selections: Optional[List[RowSelection]],
+    ) raises -> ReadPlan:
+        """What `read` will do, settled before it does any of it.
+
+        On the file rather than on `ReadPlan` because planning reads: a chunk
+        with a selection needs its `OffsetIndex`, and only the file can fetch
+        one. Everything else here is a function of the footer and the request.
+        """
+        var projection = self._mapping.project(
+            columns.value()
+        ) if columns else self._mapping.full()
+
+        var groups = List[Int]()
+        if row_groups:
+            for rg in row_groups.value():
+                if rg < 0 or rg >= len(self._meta.row_groups):
+                    raise Error("parquet: row group index out of range")
+                groups.append(rg)
+        else:
+            for rg in range(len(self._meta.row_groups)):
+                groups.append(rg)
+
+        if row_selections and len(row_selections.value()) != len(groups):
+            raise Error(
+                "parquet: row_selections must match the selected row groups"
             )
+        # **A selection this reader cannot apply is refused, not ignored.**
+        # `ColumnReader.decode` picks the flat or the leveled path from the
+        # leaf's max repetition and only the flat one consults `selection`, so
+        # a repeated column would silently decode *all* its rows while its flat
+        # neighbours decoded a subset -- columns of different lengths, which is
+        # a wrong answer rather than a slow one. Leaving that as an unwritten
+        # rule made it every caller's job to know; a leaf count does not reveal
+        # it either, since `list<int>` is one leaf.
+        if row_selections:
+            for orig in projection.decode_order:
+                if self._mapping.leaves[orig].max_rep >= 1:
+                    raise Error(
+                        (
+                            "parquet: row_selections cannot be applied to a"
+                            " repeated column ('"
+                        ),
+                        self._mapping.leaves[orig].name,
+                        "'); read it without a selection",
+                    )
 
-        if len(batches) == 0:
-            batches.append(RecordBatch.empty(Schema(copy=plan.schema)))
-        return Table.from_batches(Schema(copy=plan.schema), batches)
+        var plan = ReadPlan(projection^, groups^)
+        for slot in range(len(plan.row_groups)):
+            ref rg = self._meta.row_groups[plan.row_groups[slot]]
+            for orig in plan.projection.decode_order:
+                var sel: Optional[RowSelection] = None
+                var locs = OffsetIndex()
+                if row_selections:
+                    sel = row_selections.value()[slot].copy()
+                    # Only worth decoding when there is something to skip: with no
+                    # selection every page is read, and the index would answer
+                    # questions nobody asks. Offsets only -- the `ColumnIndex`'s
+                    # per-page bounds are decode-time dead weight here, and they
+                    # are the bulky half. Not for a leveled leaf: `ColumnReader`
+                    # discards the index there (page skipping is a flat-path
+                    # optimisation), so decoding one is pure waste.
+                    if self._mapping.leaves[orig].max_rep == 0:
+                        locs = self._chunk_offsets(
+                            rg.columns[orig], rg.num_rows
+                        )
+                plan.add(
+                    ChunkRead(
+                        plan.row_groups[slot],
+                        orig,
+                        rg.columns[orig],
+                        rg.num_rows,
+                        sel^,
+                        locs^,
+                    )
+                )
+        return plan^
 
     def _trusted_leaf(self, ci: Int) -> Optional[LeafColumn]:
         """The leaf behind column chunk `ci`, when its stored statistics
@@ -2588,7 +2714,7 @@ struct ParquetFile[
 
         **Given `num_rows`, the locations are checked here and nowhere else.**
         An index that does not tile its chunk answers *empty*, which is already
-        the sentinel every consumer honours -- `RowSelection.scan_ranges` asks
+        the sentinel every consumer honours -- `scan_ranges` asks
         for the whole chunk and `PageReader` walks page headers.
         """
         if cc.offset_index_offset < 0:
@@ -2740,61 +2866,140 @@ def read_table[
 # ---------------------------------------------------------------------------
 
 
+struct Coverage(Equatable, ImplicitlyCopyable, Movable):
+    """What a `RowSelection` says about one page: skip it, take it whole, or
+    decode it from the selection's runs. `RowSelection.covers` answers it."""
+
+    var code: Int
+
+    comptime NONE = Self(0)
+    comptime ALL = Self(1)
+    comptime SOME = Self(2)
+
+    def __init__(out self, code: Int):
+        self.code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.code == other.code
+
+
 struct RowSelection(Copyable, Movable):
     """Which rows of a row group to decode when a pushed-down predicate lets the
     reader skip pages.
 
-    Row-group-relative, one flag per row: a data page whose
-    rows are all deselected is skipped without decoding; a partially selected
-    page keeps only its chosen rows, so every column yields the same rows and
-    stays aligned. Built from per-page keep flags, combined with `intersect`, and
-    queried by the decoder over each page's row range. (A run-length form is a
-    possible future optimisation; it would not change this interface.)"""
+    Row-group-relative: a data page whose rows are all deselected is skipped
+    without decoding; a partially selected page keeps only its chosen rows, so
+    every column yields the same rows and stays aligned. Built from per-page
+    keep flags, combined with `intersect`, and queried by the decoder over each
+    page's row range.
 
-    var _selected: List[Bool]
+    **Stored as runs, because that is the shape it is produced in.** Per-row
+    flags made every query rediscover that by scanning, and `last_selected`
+    worst of all: its cost was the rows *discarded*, which is why page skipping
+    used to make a read slower than reading everything. As runs it is the last
+    run's end. `selects_any`, `selects_all` and `total_rows` are equally free,
+    `intersect` is a two-pointer merge that allocates nothing row-length, and
+    the range queries binary search. Only `mask` still answers per row, because
+    `consume_selected` places values one at a time.
+
+    The `List[Bool]` constructor stays for callers holding flags, and
+    compresses; `_from_runs` is private because the normal form is load-bearing
+    and nothing in the type enforces it. `backlog.md` has the measurements, and
+    the reason to distrust the next one taken here."""
+
+    var _runs: List[Tuple[Int, Int]]
+    """Ascending, disjoint, never adjacent, half-open `[start, end)` runs.
+
+    Every O(1) query rests on that normal form; `_normalised` states it."""
+
+    var _total: Int
 
     def __init__(out self, var selected: List[Bool]):
-        self._selected = selected^
+        """Compress per-row flags into runs."""
+        self._runs = List[Tuple[Int, Int]]()
+        self._total = len(selected)
+        var at = 0
+        while at < self._total:
+            if selected[at]:
+                var start = at
+                while at < self._total and selected[at]:
+                    at += 1
+                self._runs.append((start, at))
+            else:
+                at += 1
+
+    @staticmethod
+    def _from_runs(var runs: List[Tuple[Int, Int]], total: Int) -> Self:
+        """From runs already in normal form.
+
+        Private because every O(1) query rests on that form and nothing in
+        `List[Tuple[Int, Int]]` says so: overlapping or unsorted runs would
+        leave `selects_all` answering False for a full selection and the
+        binary searches looking in the wrong place. The three constructors
+        below are the only ways in, and the assert holds them to it.
+        """
+        debug_assert(
+            Self._normalised(runs, total),
+            "RowSelection: runs not in normal form",
+        )
+        var out = Self(List[Bool]())
+        out._runs = runs^
+        out._total = total
+        return out^
+
+    @staticmethod
+    def _normalised(runs: List[Tuple[Int, Int]], total: Int) -> Bool:
+        """Ascending, disjoint, never adjacent, non-empty, inside `total`."""
+        var prev = -1
+        for ref r in runs:
+            if r[0] >= r[1] or r[0] <= prev or r[1] > total:
+                return False
+            prev = r[1]
+        return True
 
     @staticmethod
     def all(n: Int) -> Self:
         """Select every one of `n` rows."""
-        var s = List[Bool](capacity=n)
-        for _ in range(n):
-            s.append(True)
-        return Self(s^)
+        var runs = List[Tuple[Int, Int]]()
+        if n > 0:
+            runs.append((0, n))
+        return Self._from_runs(runs^, n)
 
     @staticmethod
     def from_pages(keep: List[Bool], page_rows: List[Int]) -> Self:
-        """Expand per-page keep flags into per-row flags. `keep[i]` decides all
-        `page_rows[i]` rows of page `i` (pages begin on row boundaries)."""
-        var rows = 0
+        """Per-page keep flags as runs. `keep[i]` decides all `page_rows[i]`
+        rows of page `i` (pages begin on row boundaries).
+
+        This is how every selection the reader sees is built -- `page_selections`
+        has nothing finer than a page to say -- so the runs it produces are at
+        most one per page however scattered the pages are.
+        """
+        var runs = List[Tuple[Int, Int]](capacity=len(page_rows))
+        var at = 0
         for p in range(len(page_rows)):
-            rows += page_rows[p]
-        var s = List[Bool](capacity=rows)
-        for p in range(len(keep)):
-            for _ in range(page_rows[p]):
-                s.append(keep[p])
-        return Self(s^)
+            var end = at + page_rows[p]
+            if p < len(keep) and keep[p]:
+                if len(runs) > 0 and runs[len(runs) - 1][1] == at:
+                    runs[len(runs) - 1] = (runs[len(runs) - 1][0], end)
+                else:
+                    runs.append((at, end))
+            at = end
+        return Self._from_runs(runs^, at)
 
     def total_rows(self) -> Int:
-        return len(self._selected)
+        return self._total
 
     def selected(self, row: Int) -> Bool:
-        return self._selected[row]
+        return self.any_selected_in(row, 1)
 
     def num_selected(self) -> Int:
         var n = 0
-        for i in range(len(self._selected)):
-            if self._selected[i]:
-                n += 1
+        for ref r in self._runs:
+            n += r[1] - r[0]
         return n
 
     def selects_any(self) -> Bool:
-        for i in range(len(self._selected)):
-            if self._selected[i]:
-                return True
-        return False
+        return len(self._runs) > 0
 
     def last_selected(self) -> Int:
         """The last selected row, or `-1` when nothing is selected.
@@ -2804,90 +3009,47 @@ struct RowSelection(Copyable, Movable):
         is nothing left to decode — and, with a trimmed fetch, nothing left
         that was even read.
         """
-        for i in range(len(self._selected) - 1, -1, -1):
-            if self._selected[i]:
-                return i
-        return -1
+        if len(self._runs) == 0:
+            return -1
+        return self._runs[len(self._runs) - 1][1] - 1
 
     def selects_all(self) -> Bool:
-        for i in range(len(self._selected)):
-            if not self._selected[i]:
-                return False
-        return True
+        if self._total == 0:
+            return True
+        return (
+            len(self._runs) == 1
+            and self._runs[0][0] == 0
+            and self._runs[0][1] == self._total
+        )
 
     def intersect(self, other: Self) raises -> Self:
         """AND two selections over the same row group (a row survives only if
-        both keep it)."""
-        if self.total_rows() != other.total_rows():
-            raise Error("parquet: RowSelection size mismatch")
-        var s = List[Bool](capacity=self.total_rows())
-        for i in range(self.total_rows()):
-            s.append(self._selected[i] and other._selected[i])
-        return Self(s^)
+        both keep it).
 
-    def scan_ranges(
-        self, oi: OffsetIndex, cc: ColumnChunk, num_rows: Int
-    ) raises -> List[Tuple[Int, Int]]:
-        """The chunk-relative `(offset, length)` ranges this selection needs.
-
-        Named after parquet-rs's `RowSelection::scan_ranges`, and on the
-        selection for the same reason: mapping *rows* to the pages that hold
-        them is what a selection knows how to do, where `oi` only knows where
-        pages sit and `cc` only where the chunk does.
-
-        The dictionary page comes first when the chunk has one — it is the
-        chunk's first byte and every dictionary-encoded page is unreadable
-        without it — followed by each data page holding a selected row.
-        Adjacent ranges are merged, so a run of selected pages is one read;
-        parquet-rs leaves that to its IO layer, and marrow does it here because
-        `ByteSource` has no batch entry point.
-
-        Everything else is left unread, which is sound only because a page is
-        skipped from the index: `PageReader.skip_next` takes its row count and
-        its size from `oi`, so stepping over a page touches none of its bytes.
-
-        `oi` is assumed to tile the chunk — `OffsetIndex.tiles_chunk` is asked
-        when it is decoded, and an index that fails answers no pages at all —
-        so the only retreats here are the two this method owns: no pages, and a
-        chunk whose dictionary has nowhere to live.
+        A two-pointer merge over the runs, so it costs the runs rather than the
+        rows and allocates nothing row-length. `page_selections` runs it once
+        per predicate column per row group, which is where that matters.
         """
-        var start, length = cc.meta_data.byte_range()
-        var out = List[Tuple[Int, Int]]()
-        if oi.num_pages() == 0:
-            out.append((0, length))
-            return out^
-
-        if cc.meta_data.dictionary_page_offset != -1:
-            var head = oi.page_locations[0].offset - start
-            if head <= 0:
-                out.append((0, length))
-                return out^
-            out.append((0, head))
-
-        for i in range(oi.num_pages()):
-            ref loc = oi.page_locations[i]
-            if not self.any_selected_in(
-                loc.first_row_index, oi.page_rows(i, num_rows)
-            ):
-                continue
-            var at = loc.offset - start
-            var n = loc.compressed_page_size
-            if (
-                len(out) > 0
-                and out[len(out) - 1][0] + out[len(out) - 1][1] == at
-            ):
-                out[len(out) - 1] = (
-                    out[len(out) - 1][0],
-                    out[len(out) - 1][1] + n,
-                )
+        if self._total != other._total:
+            raise Error("parquet: RowSelection size mismatch")
+        var runs = List[Tuple[Int, Int]](
+            capacity=len(self._runs) + len(other._runs)
+        )
+        var i = 0
+        var j = 0
+        while i < len(self._runs) and j < len(other._runs):
+            var lo = max(self._runs[i][0], other._runs[j][0])
+            var hi = min(self._runs[i][1], other._runs[j][1])
+            if lo < hi:
+                runs.append((lo, hi))
+            if self._runs[i][1] < other._runs[j][1]:
+                i += 1
+            elif self._runs[i][1] > other._runs[j][1]:
+                j += 1
             else:
-                out.append((at, n))
-
-        if len(out) == 0:
-            # Nothing selected at all; the caller should not have asked, but a
-            # zero-length read is worse than a small one.
-            out.append((0, length))
-        return out^
+                i += 1
+                j += 1
+        return Self._from_runs(runs^, self._total)
 
     def any_selected_in(self, start: Int, length: Int) -> Bool:
         """Whether *any* row of `[start, start+length)` is selected.
@@ -2896,26 +3058,157 @@ struct RowSelection(Copyable, Movable):
         zero -- over a page of a million-row group that is a million tests to
         answer a question the first set bit settles.
         """
-        for i in range(start, start + length):
-            if self._selected[i]:
-                return True
-        return False
+        if length <= 0:
+            return False
+        var i = self._first_run_from(start)
+        return i < len(self._runs) and self._runs[i][0] < start + length
+
+    def _first_run_from(self, row: Int) -> Int:
+        """Index of the first run ending after `row`; `len(_runs)` if none."""
+        var lo = 0
+        var hi = len(self._runs)
+        while lo < hi:
+            var mid = (lo + hi) // 2
+            if self._runs[mid][1] <= row:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    def covers(self, start: Int, length: Int) -> Coverage:
+        """Whether `[start, start+length)` is skipped, whole, or partial.
+
+        What the decoder actually asks of a page: skip it, take it whole, or
+        build a mask. `selected_in` would answer by counting every run that
+        overlaps, and the count is then thrown away -- but the runs are
+        disjoint and never adjacent, so one lookup settles it. A run that does
+        not cover the page cannot be completed by the next one.
+        """
+        if length <= 0:
+            return Coverage.NONE
+        var stop = start + length
+        var i = self._first_run_from(start)
+        if i >= len(self._runs) or self._runs[i][0] >= stop:
+            return Coverage.NONE
+        if self._runs[i][0] <= start and self._runs[i][1] >= stop:
+            return Coverage.ALL
+        return Coverage.SOME
 
     def selected_in(self, start: Int, length: Int) -> Int:
         """How many rows in the half-open range `[start, start+length)` are
         selected — lets the decoder decide skip / keep-all / mask for a page."""
+        var stop = start + length
         var n = 0
-        for i in range(start, start + length):
-            if self._selected[i]:
-                n += 1
+        var i = self._first_run_from(start)
+        while i < len(self._runs) and self._runs[i][0] < stop:
+            n += min(self._runs[i][1], stop) - max(self._runs[i][0], start)
+            i += 1
         return n
 
-    def mask(self, start: Int, length: Int) -> List[Bool]:
-        """The per-row keep flags for the page rows `[start, start+length)`."""
-        var m = List[Bool](capacity=length)
-        for i in range(start, start + length):
-            m.append(self._selected[i])
-        return m^
+    def runs_in(self, start: Int, length: Int) -> List[Tuple[Int, Int]]:
+        """This selection over `[start, start+length)`, rebased to the page.
+
+        What a partially selected page needs, and all it needs: `Page.scatter`
+        walks these with a cursor. It used to get a `List[Bool]` built here and
+        copied again by every `consume_selected` -- two page-length allocations
+        per partial page per leaf, to say what a handful of ranges says.
+        """
+        var out = List[Tuple[Int, Int]]()
+        if length <= 0:
+            # Without this an empty range still emits a run when one starts
+            # before `start`: clipping gives `[start, start)`, which breaks the
+            # ascending-and-non-empty form `Page.scatter`'s cursor assumes.
+            return out^
+        var stop = start + length
+        var i = self._first_run_from(start)
+        while i < len(self._runs) and self._runs[i][0] < stop:
+            out.append(
+                (
+                    max(self._runs[i][0], start) - start,
+                    min(self._runs[i][1], stop) - start,
+                )
+            )
+            i += 1
+        return out^
+
+
+def scan_ranges(
+    selection: RowSelection, oi: OffsetIndex, cc: ColumnChunk, num_rows: Int
+) raises -> List[Tuple[Int, Int]]:
+    """The chunk-relative `(offset, length)` ranges this selection needs.
+
+    Where rows meet layout, so it belongs to neither: `selection` knows which
+    rows, `oi` where pages sit, `cc` where the chunk does. It was a method on
+    `RowSelection` (parquet-rs's `RowSelection::scan_ranges` is too), which
+    gave the row algebra a dependency on page offsets, chunk byte ranges and
+    dictionary placement. A free function here keeps `RowSelection` pure and
+    `format.mojo` a leaf -- a method on `OffsetIndex` would have made `format`
+    import the reader.
+
+    The dictionary page comes first when the chunk has one — it is the
+    chunk's first byte and every dictionary-encoded page is unreadable
+    without it — followed by each data page holding a selected row.
+    Adjacent ranges are merged, so a run of selected pages is one read;
+    parquet-rs leaves that to its IO layer, and marrow does it here because
+    `ByteSource` has no batch entry point.
+
+    Everything else is left unread, which is sound only because a page is
+    skipped from the index: `PageReader.skip_next` takes its row count and
+    its size from `oi`, so stepping over a page touches none of its bytes.
+
+    `oi` is assumed to tile the chunk — `OffsetIndex.tiles_chunk` is asked
+    when it is decoded, and an index that fails answers no pages at all —
+    so the only retreats here are the two this method owns: no pages, and a
+    chunk whose dictionary has nowhere to live.
+
+    **The walk stops at `last_selected()`.** Page locations ascend, so
+    once a page starts past the last selected row every page after it is
+    dead. Without the stop a `limit`-shaped selection asks
+    `any_selected_in` about each dead page, and each answers `False` only
+    after reading every one of its flags — on the calling thread, before
+    the decode fans out.
+    """
+    var stop = selection.last_selected()
+    var start, length = cc.meta_data.byte_range()
+    var out = List[Tuple[Int, Int]]()
+    if stop < 0:
+        # Nothing selected: `_run_selected` breaks before its first page,
+        # so every byte asked for here would go unread. The fallback below
+        # would ask for the whole chunk, which is free on a memory map and
+        # a full column chunk over HTTP. Reachable from the pushdown path,
+        # where a group can survive statistics pruning and still lose every
+        # page.
+        return out^
+    if oi.num_pages() == 0:
+        out.append((0, length))
+        return out^
+
+    if cc.meta_data.dictionary_page_offset != -1:
+        var head = oi.page_locations[0].offset - start
+        if head <= 0:
+            out.append((0, length))
+            return out^
+        out.append((0, head))
+
+    for i in range(oi.num_pages()):
+        ref loc = oi.page_locations[i]
+        if loc.first_row_index > stop:
+            break
+        if not selection.any_selected_in(
+            loc.first_row_index, oi.page_rows(i, num_rows)
+        ):
+            continue
+        var at = loc.offset - start
+        var n = loc.compressed_page_size
+        if len(out) > 0 and out[len(out) - 1][0] + out[len(out) - 1][1] == at:
+            out[len(out) - 1] = (
+                out[len(out) - 1][0],
+                out[len(out) - 1][1] + n,
+            )
+        else:
+            out.append((at, n))
+
+    return out^
 
 
 def read_metadata(

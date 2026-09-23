@@ -573,6 +573,7 @@ def test_all() raises:
     assert_equal(s.num_selected(), 5)
     assert_true(s.selects_all())
     assert_true(s.selects_any())
+    assert_equal(s.last_selected(), 4)
 
 
 def test_from_pages() raises:
@@ -589,6 +590,7 @@ def test_from_pages() raises:
     assert_true(s.selected(5))  # page 2 kept
     assert_false(s.selects_all())
     assert_true(s.selects_any())
+    assert_equal(s.last_selected(), 6)  # last row of the last kept page
 
 
 def test_intersect() raises:
@@ -602,6 +604,7 @@ def test_intersect() raises:
     assert_false(c.selected(1))
     assert_false(c.selected(2))
     assert_true(c.selected(3))
+    assert_equal(c.last_selected(), 3)  # derived, not inherited
 
 
 def test_intersect_size_mismatch() raises:
@@ -611,16 +614,152 @@ def test_intersect_size_mismatch() raises:
         _ = a.intersect(b)
 
 
-def test_selected_in() raises:
-    var sv: List[Bool] = [True, False, True, True, False]
-    var s = RowSelection(sv^)
-    assert_equal(s.selected_in(0, 5), 3)
-    assert_equal(s.selected_in(1, 2), 1)  # rows 1,2 -> only 2
-    assert_equal(s.selected_in(3, 2), 1)  # rows 3,4 -> only 3
+def test_last_selected() raises:
+    """Where the decoder stops: `read` trims the fetch to the page holding this
+    row, so an answer past it walks off the bytes the reader was given and one
+    short drops rows. The constructors pin it in their own tests; what is left
+    here is where the row sits — a deselected tail, and the final row."""
+    var tail: List[Bool] = [True, True, False, False, False]
+    var s = RowSelection(tail^)
+    assert_equal(s.last_selected(), 1)
+    assert_true(s.selects_any())  # forward scan, unlike last_selected
+
+    var edge: List[Bool] = [False, False, True]
+    var e = RowSelection(edge^)
+    assert_equal(e.last_selected(), 2)
 
 
-def test_none_selected() raises:
-    var sv: List[Bool] = [False, False, False]
-    var s = RowSelection(sv^)
-    assert_false(s.selects_any())
-    assert_equal(s.num_selected(), 0)
+def _agrees(sel: RowSelection, flags: List[Bool]) raises:
+    """`sel` answers every query the way a direct scan of `flags` does.
+
+    Takes the selection rather than building one, so the constructors that
+    never see flags -- `all`, `from_pages`, `intersect` -- get the same full
+    surface instead of a weaker hand-written subset each. Pins behaviour
+    against an independent oracle rather than an implementation, so the
+    representation can change underneath -- per-row bytes, a bitmap, runs --
+    and this still says whether it is right. The range loop is O(n^3), so
+    callers keep `n` small.
+    """
+    var n = len(flags)
+    assert_equal(sel.total_rows(), n)
+
+    var want_num = 0
+    var want_last = -1
+    for i in range(n):
+        if flags[i]:
+            want_num += 1
+            want_last = i
+    assert_equal(sel.num_selected(), want_num, "num_selected")
+    assert_equal(sel.last_selected(), want_last, "last_selected")
+    assert_equal(sel.selects_any(), want_num > 0, "selects_any")
+    assert_equal(sel.selects_all(), want_num == n, "selects_all")
+    for i in range(n):
+        assert_equal(sel.selected(i), flags[i], "selected(" + String(i) + ")")
+
+    for start in range(n + 1):
+        for length in range(n - start + 1):
+            var count = 0
+            for i in range(start, start + length):
+                if flags[i]:
+                    count += 1
+            assert_equal(sel.selected_in(start, length), count, "selected_in")
+            assert_equal(
+                sel.any_selected_in(start, length), count > 0, "any_selected_in"
+            )
+            # `runs_in` is what a partial page is decoded from, so it is
+            # pinned both ways: it expands to the same flags, and it comes back
+            # in the normal form `Page.scatter`'s cursor walk depends on.
+            var rs = sel.runs_in(start, length)
+            var want = List[Bool](length=length, fill=False)
+            var prev = -1
+            for ref r in rs:
+                assert_true(r[0] < r[1], "runs_in: empty run")
+                assert_true(r[0] > prev, "runs_in: not ascending or adjacent")
+                assert_true(r[1] <= length, "runs_in: past the range")
+                prev = r[1]
+                for k in range(r[0], r[1]):
+                    want[k] = True
+            for j in range(length):
+                assert_equal(want[j], flags[start + j], "runs_in")
+
+
+def _shapes() -> List[List[Bool]]:
+    """Selection shapes worth pinning: the empties, the extremes, the
+    boundaries a run-based form would get wrong, and a couple of irregulars."""
+    var out = List[List[Bool]]()
+    out.append(List[Bool]())  # no rows at all
+    out.append([False])
+    out.append([True])
+    out.append([False, False, False, False])  # nothing selected
+    out.append([True, True, True, True])  # everything
+    out.append([True, True, False, False, False])  # prefix
+    out.append([False, False, False, True, True])  # suffix
+    out.append([False, True, True, False, True, False])  # two runs, gaps ends
+    out.append([True, False, True, False, True, False, True])  # alternating
+    out.append([False, True, False])  # single interior row
+    out.append([True, False, False, False, False, False, True])  # far ends
+    return out^
+
+
+def test_row_selection_agrees_with_its_flags() raises:
+    for ref flags in _shapes():
+        _agrees(RowSelection(flags.copy()), flags)
+
+
+def test_all_agrees_with_its_flags() raises:
+    """`RowSelection.all` is the one constructor the flag shapes never reach."""
+    for n in range(5):
+        _agrees(RowSelection.all(n), List[Bool](length=n, fill=True))
+
+
+def _intersect_shapes() -> List[List[Bool]]:
+    """Width-6 shapes, so every pair intersects rather than being skipped.
+
+    The straddle pair is the one that matters: `intersect` takes `lo` from one
+    side and `hi` from the other only when a run of one crosses a run boundary
+    of the other, and a same-width family is the only way to reach that
+    systematically.
+    """
+    var out = List[List[Bool]]()
+    out.append([False, False, False, False, False, False])
+    out.append([True, True, True, True, True, True])
+    out.append([True, True, True, True, False, False])  # straddles the next
+    out.append([False, False, True, True, True, True])  # ... this one
+    out.append([True, False, True, False, True, False])
+    out.append([False, True, False, True, False, True])
+    out.append([True, True, False, False, True, True])
+    out.append([False, False, True, True, False, False])
+    return out^
+
+
+def test_intersect_agrees_with_its_flags() raises:
+    """`intersect` never sees a `List[Bool]`, so its result is pinned against
+    one built the long way -- including that it derives its own stop row rather
+    than inheriting either side's."""
+    var shapes = _intersect_shapes()
+    for i in range(len(shapes)):
+        for j in range(len(shapes)):
+            var both = List[Bool](capacity=6)
+            for k in range(6):
+                both.append(shapes[i][k] and shapes[j][k])
+            var got = RowSelection(shapes[i].copy()).intersect(
+                RowSelection(shapes[j].copy())
+            )
+            _agrees(got, both)
+
+
+def test_from_pages_agrees_with_its_flags() raises:
+    """`from_pages` is the producer the reader actually uses -- `page_selections`
+    builds every selection this way -- so its expansion is pinned too."""
+    var keeps = List[List[Bool]]()
+    keeps.append([True, False, True])
+    keeps.append([False, False, False])
+    keeps.append([True, True, True])
+    keeps.append([False, True, False])
+    var rows: List[Int] = [2, 3, 2]
+    for ref keep in keeps:
+        var want = List[Bool]()
+        for p in range(len(keep)):
+            for _ in range(rows[p]):
+                want.append(keep[p])
+        _agrees(RowSelection.from_pages(keep, rows), want)

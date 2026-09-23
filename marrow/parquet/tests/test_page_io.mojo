@@ -33,6 +33,7 @@ from ...parquet.reader import (
     ParquetFile,
     RowSelection,
     read_page_index,
+    scan_ranges,
 )
 from ...io import ByteSource, Fetched, BufferSource
 
@@ -71,7 +72,9 @@ struct _Recorder(ByteSource):
         return self._inner.read_ranges(ranges)
 
 
-def _write_paged(path: String, rows: Int, page_rows: Int) raises:
+def _write_paged(
+    path: String, rows: Int, page_rows: Int, group_rows: Int = -1
+) raises:
     """`0..rows` ascending in pages of `page_rows`, one row group, page index.
 
     `write_batch_size` is what fixes the page length — parquet-cpp only checks
@@ -80,13 +83,13 @@ def _write_paged(path: String, rows: Int, page_rows: Int) raises:
     """
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var a = Python.list()
-    for i in range(rows):
-        a.append(i)
+    var builtins = Python.import_module("builtins")
     pq.write_table(
-        pa.table(Python.dict(a=pa.array(a, type=pa.int64()))),
+        pa.table(
+            Python.dict(a=pa.array(builtins.range(rows), type=pa.int64()))
+        ),
         path,
-        row_group_size=rows,
+        row_group_size=rows if group_rows < 0 else group_rows,
         data_page_size=1,
         write_batch_size=page_rows,
         write_page_index=True,
@@ -112,11 +115,11 @@ def _touched(reads: Reads, after: Int, start: Int, length: Int) -> Bool:
     return False
 
 
-def _page_ranges(path: String) raises -> List[Tuple[Int, Int]]:
-    """Each data page's `(offset, compressed_size)` for column 0, group 0."""
+def _page_ranges(path: String, group: Int = 0) raises -> List[Tuple[Int, Int]]:
+    """Each data page's `(offset, compressed_size)` for column 0 of `group`."""
     var out = List[Tuple[Int, Int]]()
     var pi = read_page_index(path)
-    ref oi = pi[0][0].offset_index.value()
+    ref oi = pi[group][0].offset_index.value()
     for ref loc in oi.page_locations:
         out.append((loc.offset, loc.compressed_page_size))
     return out^
@@ -393,14 +396,8 @@ def test_a_leading_selection_reads_almost_nothing() raises:
     var sels = List[RowSelection]()
     sels.append(_sel(10000, [(0, 10)]))
 
-    var reads = Reads(List[Tuple[Int, Int]]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
-    var opened = len(reads[])
-    assert_equal(f.read(row_selections=Optional(sels^)).num_rows(), 10)
-
-    var fetched = 0
-    for i in range(opened, len(reads[])):
-        fetched += reads[][i][1]
+    var fetched, rows = _bytes_after_open(path, Optional(sels^))
+    assert_equal(rows, 10)
     var chunk = 0
     for ref r in ranges:
         chunk += r[1]
@@ -454,7 +451,7 @@ def test_a_skipped_row_group_is_never_fetched() raises:
 
 
 # ---------------------------------------------------------------------------
-# `RowSelection.scan_ranges` / `OffsetIndex.tiles_chunk`
+# `scan_ranges` / `OffsetIndex.tiles_chunk`
 # ---------------------------------------------------------------------------
 #
 # The planner's happy path is measured end to end above, by watching the reads.
@@ -504,8 +501,8 @@ def test_scan_ranges_plans_runs_and_merges_neighbours() raises:
     """The contract the fallbacks below are a retreat from: one range per run
     of selected pages, adjacent pages merged."""
     var locs = _pages(count=7, size=100, rows=10, at=0)
-    var got = _sel(70, [(10, 30), (50, 60)]).scan_ranges(
-        locs, _chunk(0, 700), 70
+    var got = scan_ranges(
+        _sel(70, [(10, 30), (50, 60)]), locs, _chunk(0, 700), 70
     )
     assert_equal(len(got), 2)
     assert_equal(got[0][0], 100)
@@ -514,13 +511,33 @@ def test_scan_ranges_plans_runs_and_merges_neighbours() raises:
     assert_equal(got[1][1], 100)
 
 
+def test_scan_ranges_stops_after_the_last_selected_row() raises:
+    """Page locations ascend, so a page starting past the last selected row
+    ends the walk — and every page after it is dead by construction. The
+    boundary is `>`, not `>=`: a row that *is* a page's first row keeps that
+    page. Without the stop a `limit` selection asks each dead page whether it
+    holds anything, and each answers only after reading all of its flags."""
+    var locs = _pages(count=7, size=100, rows=10, at=0)
+
+    var got = scan_ranges(_sel(70, [(0, 5)]), locs, _chunk(0, 700), 70)
+    assert_equal(len(got), 1, "only the page holding rows 0-4")
+    assert_equal(got[0][0], 0)
+    assert_equal(got[0][1], 100)
+
+    # last selected row is page 2's first row: the break must not swallow it
+    got = scan_ranges(_sel(70, [(5, 21)]), locs, _chunk(0, 700), 70)
+    assert_equal(len(got), 1, "pages 0, 1 and 2 merge into one read")
+    assert_equal(got[0][0], 0)
+    assert_equal(got[0][1], 300, "page 2 is kept, page 3 is not")
+
+
 def test_scan_ranges_puts_the_dictionary_first() raises:
     """The dictionary page is the bytes before the first data page, and it
     comes back as its own range rather than as a licence to read from the
     chunk's start onward."""
     var locs = _pages(count=7, size=100, rows=10, at=40)
-    var got = _sel(70, [(50, 60)]).scan_ranges(
-        locs, _chunk(0, 740, dictionary=True), 70
+    var got = scan_ranges(
+        _sel(70, [(50, 60)]), locs, _chunk(0, 740, dictionary=True), 70
     )
     assert_equal(len(got), 2)
     assert_equal(got[0][0], 0)
@@ -531,7 +548,7 @@ def test_scan_ranges_puts_the_dictionary_first() raises:
 def test_scan_ranges_without_a_page_index_reads_everything() raises:
     """No locations, nothing to plan with."""
     _whole(
-        _sel(70, [(10, 20)]).scan_ranges(OffsetIndex(), _chunk(0, 700), 70),
+        scan_ranges(_sel(70, [(10, 20)]), OffsetIndex(), _chunk(0, 700), 70),
         700,
     )
 
@@ -553,7 +570,7 @@ def test_index_tiles_chunk_accepts_a_short_final_page() raises:
     """The other side of that line: 25 rows across three ten-row pages means
     the last one holds five, and the plan is made as usual."""
     var locs = _pages(count=3, size=100, rows=10, at=0)
-    var got = _sel(25, [(20, 25)]).scan_ranges(locs, _chunk(0, 300), 25)
+    var got = scan_ranges(_sel(25, [(20, 25)]), locs, _chunk(0, 300), 25)
     assert_equal(len(got), 1)
     assert_equal(got[0][0], 200, "only the final page")
     assert_equal(got[0][1], 100)
@@ -600,20 +617,86 @@ def test_scan_ranges_refuses_a_dictionary_with_nowhere_to_live() raises:
     starts at the chunk's first byte — so there is no room for one."""
     var locs = _pages(count=3, size=100, rows=10, at=0)
     _whole(
-        _sel(30, [(0, 5)]).scan_ranges(
-            locs, _chunk(0, 300, dictionary=True), 30
+        scan_ranges(
+            _sel(30, [(0, 5)]), locs, _chunk(0, 300, dictionary=True), 30
         ),
         300,
     )
 
 
-def test_scan_ranges_with_nothing_selected_reads_everything() raises:
-    """An empty selection never reaches this in practice — the caller skips the
-    whole row group instead — and a zero-length fetch would be worse than a
-    redundant one."""
-    _whole(
-        _sel(30, List[Tuple[Int, Int]]()).scan_ranges(
-            _pages(count=3, size=100, rows=10, at=0), _chunk(0, 300), 30
-        ),
-        300,
+def test_scan_ranges_with_nothing_selected_asks_for_nothing() raises:
+    """A selection that keeps no row asks for no bytes.
+
+    It used to fall through to the whole-chunk retreat, on the grounds that a
+    zero-length fetch is worse than a redundant one. That is true of a *short*
+    read and false of this one: `_run_selected` stops before its first page, so
+    every byte fetched here goes unread -- free on a memory map, a whole column
+    chunk over HTTP. It is reachable too, from the pushdown path: a row group
+    can survive statistics pruning and still lose every page.
+    """
+    var got = scan_ranges(
+        _sel(30, List[Tuple[Int, Int]]()),
+        _pages(count=3, size=100, rows=10, at=0),
+        _chunk(0, 300),
+        30,
     )
+    assert_equal(len(got), 0, "no rows kept, so no bytes wanted")
+
+
+def _bytes_after(reads: Reads, after: Int) -> Int:
+    """Bytes asked for by the reads past the first `after`.
+
+    `after` excludes the footer, which every read pays and which would flatten
+    any ratio asserted on the rest.
+    """
+    var fetched = 0
+    for i in range(after, len(reads[])):
+        fetched += reads[][i][1]
+    return fetched
+
+
+def _bytes_after_open(
+    path: String, var sels: Optional[List[RowSelection]]
+) raises -> Tuple[Int, Int]:
+    """`(bytes, rows)` one read asks its source for, footer excluded."""
+    var reads = Reads(List[Tuple[Int, Int]]())
+    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
+    var opened = len(reads[])
+    var rows = f.read(row_selections=sels^).num_rows()
+    return (_bytes_after(reads, opened), rows)
+
+
+def test_each_row_group_stops_at_its_own_last_selected_row() raises:
+    """Two groups, two different stop rows, and no recorder test before this
+    one used more than one row group.
+
+    `read` finds where a selection stops once per row group and hands that to
+    `_scan_ranges` for each of the group's leaves. If the value leaked across
+    groups -- carried in a loop variable rather than looked up per group -- the
+    second group here would stop at the first group's row 499, fetch short, and
+    return four hundred rows too few. The asymmetry is the point: group 0 keeps
+    its head and group 1 keeps its tail, so one group's answer is wrong for the
+    other.
+    """
+    var path = String("/tmp/marrow_pageio_two_groups.parquet")
+    _write_paged(path, 4000, 500, group_rows=2000)
+
+    var sels = List[RowSelection]()
+    sels.append(_sel(2000, [(0, 500)]))  # group 0: first page
+    sels.append(_sel(2000, [(1500, 2000)]))  # group 1: last page
+
+    var bytes, rows = _bytes_after_open(path, Optional(sels^))
+    assert_equal(rows, 1000, "500 from each group, neither truncated")
+
+    # Two pages of eight. The denominator spans both groups: `_page_ranges`
+    # answers for one, and charging a two-group fetch against one group's pages
+    # is how this assertion first failed.
+    var chunk = 0
+    for g in range(2):
+        for ref r in _page_ranges(path, g):
+            chunk += r[1]
+    assert_true(
+        bytes * 2 < chunk,
+        "fetched " + String(bytes) + " of " + String(chunk),
+    )
+    remove(path)

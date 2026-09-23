@@ -279,8 +279,49 @@ work". What is left:
   decode loop -- `locs` and the byte ranges are pure functions of the footer,
   so they can be computed once before dispatch while the fetches stay in the
   workers, and every chunk's `OffsetIndex` lives in one contiguous page-index
-  region, so a hoisted plan is what makes one read replace N.
+  region, so a hoisted plan is what makes one read replace N. **Measured**: it
+  is the whole ~350 us gap between a read with no selection and one that
+  selects every row, on a 4-group x 3-leaf 1M-row file, and nothing is cached
+  between reads -- a loop of 20 reads over one `ParquetFile` decodes all 12
+  indexes 20 times.
 
+- **Page skipping made a read slower, and the cause was `last_selected`.** Its
+  cost is the rows *discarded* -- a backward walk over the deselected tail --
+  and the read path asked it once per row group and once per leaf, so a `limit`
+  selection walked the same tail sixteen times. That is why the cost was a step
+  rather than a gradient: the walk is one iteration when the last row is
+  selected and ~N when it is not, so it turns on the moment a selection stops
+  being total and barely moves after. Finding it once, when the flags arrive,
+  measured 2.09x at an eighth kept and 2.33x at one row, 1.02x when nothing is
+  excluded -- and put the feature the right way round, skipping now costing
+  less than reading everything where it used to cost 1.8x more.
+
+  **The instrument is the lesson.** This fix was rejected twice on numbers that
+  could not see it: `bench_read_selected_*` builds its selections *inside* the
+  timed body, so caching relocated the walk rather than removing it and read as
+  1.03x. `benchmarks/profiles/profile_page_skip.mojo` builds them outside,
+  which is the difference. Before trusting a measurement of selection
+  machinery, check which side of the timed body the selection is built on.
+
+  Two facts about the local path still stand and bound what any of this can
+  buy: a local `ByteSource` is `Buffer.mmap_file`, so a trimmed fetch skips no
+  I/O, and an uncompressed all-present page decodes to a memcpy.
+  `bench_read_selected_prefix_snappy_1m` is the row that can move when page
+  pruning improves; its uncompressed sibling mostly cannot.
+
+  **Done.** `RowSelection` stores runs, which is the shape `page_selections`
+  always produced. Measured against the per-row form: 1.13x on a total
+  selection, 1.11x at an eighth kept, 1.05x on a 1-in-8 per-row scatter -- the
+  shape expected to regress, since per-row scatter is one run per row. The
+  benchmark understates it, handing `read` a selection directly and so never
+  paying the `1 + 2W` row-length allocations per row group that
+  `page_selections` used to make.
+
+  Still per-row on the decode side: a partially selected page builds a
+  `List[Bool]` mask, and every `consume_selected` copies it again before
+  placing values one at a time. Handing the runs down instead -- so a primitive
+  builder can `unsafe_memcpy` a run -- retires `mask` and both allocations, at
+  the cost of one signature across seven builders.
 - **`LIMIT` never becomes a `RowSelection`.** `LimitOperator.done()` stops the
   driver, so row groups past the limit are never opened -- but within the first
   surviving group every row is decoded. `limit 10` over a million-row group
@@ -296,14 +337,6 @@ work". What is left:
   prune with, since a temporal type carries a unit and `Stat()` does not exist
   where `NumericType(Defaultable, ...)` makes it free; that was judged not worth
   a required trait member for one dtype family.
-
-- **A `RowSelection` is copied per (row group x leaf) and walked per page.**
-  It is a `List[Bool]`, one byte per row, `.copy()`-ed into every
-  `ColumnReader` -- a megabyte per leaf on a million-row group -- and
-  `last_selected` rescans it per leaf. Sharing it behind an `ArcPointer` and
-  caching `last_selected`/`num_selected` at construction removes both; a prefix
-  sum would make `selected_in` O(1) as well. Nothing measured yet, so this is
-  a shape complaint rather than a profile.
 
 ### 1.10 Python binding limits, measured 2026-08-30
 

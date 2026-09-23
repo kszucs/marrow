@@ -590,8 +590,9 @@ def page_selections[
 
     **Only the columns a predicate names are read.** Any other column answers
     all-null, so its selection is all-true and intersecting it is the identity
-    — at the cost of two row-length allocations per column. On a wide file that
-    is the dominant cost of the whole pass, and it buys nothing.
+    — a page-index decode and a merge per column that cannot change the
+    answer. Cheaper than it was, since a selection is runs rather than a row
+    per byte, but still bought with nothing.
 
     **Nested columns are refused outright, and the test is positive.**
     `ColumnReader.decode` *ignores* a selection for a leveled leaf, so a
@@ -653,8 +654,9 @@ def page_selections[
 
     if not read_any:
         # Not one column had a usable page index, so every selection built
-        # above is `RowSelection.all` — a row-length allocation per group that
-        # says exactly what no selection says. Answer the empty list instead,
+        # above is `RowSelection.all`, which says exactly what no selection
+        # says -- and an empty list additionally tells `read` not to decode an
+        # `OffsetIndex` per (group, leaf). Answer the empty list instead,
         # which is the same "read them whole" the other early returns give.
         return List[RowSelection]()
     return out^

@@ -14,6 +14,7 @@ from std.sys import bit_width_of
 
 from .. import dtypes as dt
 from ..schema import Schema
+from ..tabular import RecordBatch
 from ..arrays import DynArray, StructArray, BoolArray, ListArray
 from ..builders import BoolBuilder, PrimitiveBuilder
 from ..buffers import Bitmap
@@ -1260,9 +1261,13 @@ struct SchemaMapping(Movable):
 
 
 struct Projection(Movable):
-    """A read plan: the output Arrow schema, the assembly nodes (leaf indices
-    remapped to a compact decoded list), and `decode_order` — the original flat
-    leaf/column-chunk indices to decode, in that compact order."""
+    """Which leaves a read decodes, and how they fold back into Arrow: the
+    output schema, the assembly nodes (leaf indices remapped to a compact
+    decoded list), and `decode_order` — the original flat leaf/column-chunk
+    indices to decode, in that compact order.
+
+    `SchemaMapping.project` cuts a schema into leaves; `assemble` is the way
+    back, and it lives here because the nodes it walks do."""
 
     var schema: Schema
     var nodes: List[SchemaNode]
@@ -1277,6 +1282,14 @@ struct Projection(Movable):
         self.schema = schema^
         self.nodes = nodes^
         self.decode_order = decode_order^
+
+    def assemble(self, ref decoded: List[DecodedLeaf]) raises -> RecordBatch:
+        """One row group's decoded leaves, in `decode_order`, as the batch
+        this projection describes."""
+        var cols = List[DynArray](capacity=len(self.nodes))
+        for ref node in self.nodes:
+            cols.append(node.assemble(decoded))
+        return RecordBatch(schema=Schema(copy=self.schema), columns=cols^)
 
 
 struct LeafColumn(Copyable, Movable):
