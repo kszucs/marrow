@@ -514,7 +514,22 @@ struct Field(
         )
 
     def write_to[W: Writer](self, mut writer: W):
+        """`name: type`, then ` not null` for a required field and `{k: v}`
+        for any metadata: Arrow C++'s `Field::ToString`, with the metadata on
+        one line because a field renders inside `struct<...>`.
+        """
         writer.write(self.name, ": ", self.dtype)
+        if not self.nullable:
+            writer.write(" not null")
+        if len(self.metadata) > 0:
+            writer.write(" {")
+            var first = True
+            for ref entry in self.metadata.items():
+                if not first:
+                    writer.write(", ")
+                first = False
+                writer.write(entry.key, ": ", entry.value)
+            writer.write("}")
 
     def write_repr_to[W: Writer](self, mut writer: W):
         writer.write(

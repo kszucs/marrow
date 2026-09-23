@@ -39,9 +39,9 @@ from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant
 
-from ..arrays import BoolArray, DynArray
+from ..arrays import BoolArray, DynArray, StructArray
 from ..execution import ExecContext
-from ..kernels.join import JoinKind, JOIN_INNER
+from ..kernels.join import JoinKind, JOIN_INNER, JoinBuildSide, BUILD_LEFT
 from ..kernels.window import (
     DenseRank,
     Edge,
@@ -60,12 +60,20 @@ from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, StringType, field, int64
 from .bindings import Bindings, ParamSpec, distinct_params
+from .estimates import (
+    Approx,
+    ColumnEstimate,
+    Cost,
+    DEFAULT_SELECTIVITY,
+    Estimate,
+)
 from .index import Index, keep_every
 from .optimizer import RuleSet, optimize
 from .`comptime`.leaves import StringParam
 from .runtime.values import column
 from .physical import (
     Datum,
+    Evaluable,
     GroupByOperator,
     BatchSourceOperator,
     DynOperator,
@@ -637,6 +645,77 @@ def reject_aggregate(
         )
 
 
+def reject_non_boolean_filter(dtype: DynType) raises:
+    """Refuse a `FILTER` predicate that is not boolean. Called at plan time in
+    `to_operator`, so the per-morsel path can read the predicate's column as a
+    `BoolArray`, which for a non-boolean column would abort the process rather
+    than raise.
+    """
+    if not dtype.is_bool():
+        raise Error(
+            "filter: an aggregate's FILTER predicate must be boolean, got ",
+            dtype,
+        )
+
+
+# ---------------------------------------------------------------------------
+# The empty operand slot
+# ---------------------------------------------------------------------------
+trait Absent(Evaluable, Value):
+    """The type of an optional operand slot that holds nothing.
+
+    It declares no members of its own; `is_filled[P]` asks whether a slot's
+    type `P` is one. A trait rather than a comparison with `Nothing` because
+    `conforms_to` takes a trait and there is no type-equality test.
+    """
+
+    pass
+
+
+struct Nothing(Absent):
+    """The empty slot: no fields and no behaviour. Its members exist to
+    satisfy the bound and are never reached, because a slot is read only
+    under `comptime if is_filled[P]`.
+    """
+
+    comptime shape = Shape.scalar
+
+    def __init__(out self):
+        pass
+
+    def references(self, mut into: References):
+        """Nothing to read. An override rather than the reflected walk, which
+        `comptime assert`s that a leaf says what it reads."""
+        pass
+
+    def name(self) -> String:
+        return String()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        raise Error("an empty operand slot has no type")
+
+    def to_operator(
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+    ) raises -> DynOperator:
+        raise Error("an empty operand slot cannot run")
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        raise Error("an empty operand slot has no value")
+
+    def write_to[W: Writer](self, mut writer: W):
+        pass
+
+
+comptime is_filled[P: Evaluable] = not conforms_to(P, Absent)
+"""Whether an optional-operand slot of type `P` holds an operand.
+
+The question `Absent` exists to answer, asked in one place. A node that
+carries an optional operand and every operator it lowers to each need the
+answer for their own `P`, so they name this rather than restating
+`conforms_to`: a slot type gaining a second empty representation would
+otherwise have to be taught to each of them separately."""
+
+
 # ---------------------------------------------------------------------------
 # Window functions — the description
 # ---------------------------------------------------------------------------
@@ -1028,6 +1107,27 @@ trait Relation(Copyable, Deinitable, Movable, Writable):
         """
         ...
 
+    def estimate(self) raises -> Estimate:
+        """How many rows this node produces, and what is known about each
+        column.
+
+        The default knows nothing, `Estimate()`, which every formula
+        propagates as unknown, so a node without an estimate costs an
+        optimization and never a wrong answer. Resolved on the variant ladder
+        rather than through a trampoline slot: it reaches no kernel, and a
+        slot would be paid by every binary that holds a plan.
+        """
+        return Estimate()
+
+    def cost(self) raises -> Cost:
+        """What running this subtree should take; see `estimates.Cost`.
+
+        The default is unknown, not free: a model whose untaught nodes cost
+        nothing would pick exactly the plan nobody modelled. Unknown is
+        absorbing, so one such node makes the whole plan incomparable.
+        """
+        return Cost.unknown()
+
     def to_operator(
         self,
         ctx: ExecContext,
@@ -1178,6 +1278,29 @@ struct DynRelation(Copyable, Movable, Writable):
             return self._dispatch(job)
         except:
             abort("DynRelation.schema: no arm matched")
+
+    def estimate(self) raises -> Estimate:
+        """`estimate` on whichever node this is.
+
+        Raising rather than aborting, unlike `schema` and `references`: an
+        estimate reads a predicate through `DynValue.mask`, which reads a
+        source's statistics and can fail on a footer this build cannot decode.
+        `schema` returns a stored field and cannot.
+        """
+
+        def job[T: Relation](node: T) raises {imm} -> Estimate:
+            return node.estimate()
+
+        return self._dispatch(job)
+
+    def cost(self) raises -> Cost:
+        """`cost` on whichever node this is — the subtree's cost, not this
+        node's own, since every node charges its children before itself."""
+
+        def job[T: Relation](node: T) raises {imm} -> Cost:
+            return node.cost()
+
+        return self._dispatch(job)
 
     def to_operator(
         self,
@@ -1491,9 +1614,22 @@ struct DynRelation(Copyable, Movable, Writable):
         var left_keys: List[Int],
         var right_keys: List[Int],
         kind: JoinKind = JOIN_INNER,
+        build_side: JoinBuildSide = BUILD_LEFT,
     ) raises -> DynRelation:
-        """Equijoin. `self` is the build side and `right` streams."""
-        return Join(self.copy(), right^, left_keys^, right_keys^, kind)
+        """Equijoin. The output is `self`'s columns then `right`'s.
+
+        `build_side` names the side to index, `BUILD_LEFT` (`self`) by
+        default. It changes the cost and nothing else, and `SelectBuildSide`
+        may change it.
+        """
+        return Join(
+            self.copy(),
+            right^,
+            left_keys^,
+            right_keys^,
+            kind,
+            build_side=build_side,
+        )
 
     def optimize[R: RuleSet](self) raises -> DynRelation:
         """This plan, rewritten by `R` until nothing changes.
@@ -1547,6 +1683,16 @@ struct EmptyRelation(Relation, Writable):
     def schema(self) -> Schema:
         return self.batch.schema.copy()
 
+    def estimate(self) raises -> Estimate:
+        """Exactly zero rows, and so exactly zero of everything: a rewrite
+        proved this subtree empty."""
+        return Estimate.empty(self.batch.schema)
+
+    def cost(self) raises -> Cost:
+        """Free. Its operator reports `done` before emitting a row, which is
+        what lets a `LIMIT 0` stop a scan before it reads a byte."""
+        return Cost()
+
     def to_operator(
         self,
         ctx: ExecContext,
@@ -1571,6 +1717,33 @@ struct InMemoryTable(Relation, Writable):
 
     def schema(self) -> Schema:
         return self.batch.schema.copy()
+
+    def estimate(self) raises -> Estimate:
+        """The exact row and null counts, which the batch stores. Bounds and
+        distinct counts stay unknown, because computing them scans the data.
+        """
+        var cols = List[ColumnEstimate](capacity=self.batch.num_columns())
+        for i in range(self.batch.num_columns()):
+            ref f = self.batch.schema.fields[i]
+            cols.append(
+                ColumnEstimate(
+                    f.name.copy(),
+                    nulls=Approx.exact(self.batch.column(i).null_count()),
+                    width=ColumnEstimate.width_of(f.dtype),
+                )
+            )
+        return Estimate(Approx.exact(self.batch.num_rows()), cols^)
+
+    def cost(self) raises -> Cost:
+        """The rows it hands on, and the bytes they occupy.
+
+        Charged the same as a scan even though the data is already in memory:
+        the two are interchangeable as plan inputs, and pricing an in-memory
+        source at zero would make every rewrite that materialises one look
+        free.
+        """
+        var estimate = self.estimate()
+        return Cost.source(estimate.rows, estimate.row_width())
 
     def to_operator(
         self,
@@ -1659,6 +1832,43 @@ struct Filter(Relation, Writable):
 
     def schema(self) -> Schema:
         return self.input[].schema()
+
+    def estimate(self) raises -> Estimate:
+        """The input's rows, reduced by what the predicate can be shown to do.
+
+        Selectivity is `Value.mask` over a one-chunk index built from the
+        input's estimate, so it uses the comparisons a scan prunes with. A
+        `false` bit proves no row can match, and the answer is exactly zero;
+        otherwise it is `DEFAULT_SELECTIVITY`, an estimate that never reaches
+        zero. A predicate folded to a constant needs no index, and one that
+        cannot be evaluated, such as one naming an unbound parameter, falls
+        back to the default.
+        """
+        var input = self.input[].estimate()
+        if self.constant:
+            if self.constant.value():
+                return input^
+            return input.filtered(Approx.exact(0))
+
+        var index = input.to_index()
+        var live = keep_every(index.chunks)
+        try:
+            live = self.predicate.mask(index)
+        except:
+            pass
+        if len(live) == 1 and not live.is_null(0) and not live[0].value():
+            return input.filtered(Approx.exact(0))
+        return input.filtered(input.rows.scaled(DEFAULT_SELECTIVITY))
+
+    def cost(self) raises -> Cost:
+        """Its input's cost, plus one evaluation per row arriving.
+
+        The predicate is charged against the *input's* cardinality and not its
+        own output's, which is the point of pushing a filter down: the work is
+        what it reads, and the saving is what everything above it no longer
+        reads.
+        """
+        return self.input[].cost() + Cost.per_row(self.input[].estimate().rows)
 
     def to_operator(
         self,
@@ -1795,6 +2005,33 @@ struct Project(Relation, Writable):
     ](self, f: F) raises -> DynRelation:
         return Project(f(self.input[]), self.names.copy(), self.values.copy())
 
+    def estimate(self) raises -> Estimate:
+        """The input's rows unchanged. A column that `passes_through` keeps
+        its summary; any other output, a rename included, is new and keeps
+        only the width of its declared dtype, so this and predicate pushdown
+        agree on what a rename is.
+        """
+        var input = self.input[].estimate()
+        var cols = List[ColumnEstimate](capacity=len(self._schema.fields))
+        for i in range(len(self._schema.fields)):
+            ref f = self._schema.fields[i]
+            var j = -1
+            if self.passes_through(f.name):
+                j = input.index_of(f.name)
+            if j >= 0:
+                cols.append(input.columns[j].copy())
+            else:
+                cols.append(ColumnEstimate.unknown(f.name.copy(), f.dtype))
+        return Estimate(input.rows, cols^)
+
+    def cost(self) raises -> Cost:
+        """One evaluation per value per row — a projection of fifty columns is
+        not a projection of one, and a cost model that says otherwise cannot
+        prefer the narrower of two equivalent plans."""
+        return self.input[].cost() + Cost.per_row(
+            self.input[].estimate().rows.times(len(self.values))
+        )
+
     def references(self, mut into: References):
         self.input[].references(into)
         for ref v in self.values:
@@ -1892,6 +2129,37 @@ struct Aggregate(Relation, Writable):
     ](self, f: F) raises -> DynRelation:
         return Aggregate(f(self.input[]), self.keys.copy(), self.aggs.copy())
 
+    def estimate(self) raises -> Estimate:
+        """One row per distinct key combination; exactly one when there are no
+        keys. The formula and its honesty are in `estimates.grouped`.
+
+        A key is named by `DynValue.name()`, which is the column's own name
+        for a bare column and empty for anything computed — so a computed key
+        finds no summary and the group count goes unknown. That is the right
+        answer: nothing here knows how many distinct values `a + b` takes, and
+        `grouped` will not invent one.
+        """
+        var keys = List[String](capacity=len(self.keys))
+        for ref k in self.keys:
+            keys.append(k.name())
+        return self.input[].estimate().grouped(keys, self._schema)
+
+    def cost(self) raises -> Cost:
+        """Hash every input row, then hold one entry per group.
+
+        Two terms because they scale differently and a plan should be able to
+        tell them apart: the probe is paid per *input* row and the table is
+        paid per *output* group, which is why a high-cardinality group-by is
+        expensive in a way a low-cardinality one is not.
+        """
+        var input = self.input[].estimate()
+        var output = self.estimate()
+        return (
+            self.input[].cost()
+            + Cost.hash_probe(input.rows)
+            + Cost.hash_build(output.rows, output.row_width())
+        )
+
     def references(self, mut into: References):
         self.input[].references(into)
         for ref k in self.keys:
@@ -1958,6 +2226,20 @@ struct Limit(Relation, Writable):
 
     def schema(self) -> Schema:
         return self.input[].schema()
+
+    def estimate(self) raises -> Estimate:
+        """`min(length, rows - offset)`: arithmetic on a cardinality rather
+        than a guess, so an exact input gives an exact answer.
+        """
+        return self.input[].estimate().limited(self.offset, self.length)
+
+    def cost(self) raises -> Cost:
+        """Charged on what it emits. The input is still charged in full,
+        although `LimitOperator` stops its source early: modelling that needs
+        the bound pushed down while costing, so the model undervalues a limit
+        rather than overvaluing it.
+        """
+        return self.input[].cost() + Cost.per_row(self.estimate().rows)
 
     def to_operator(
         self,
@@ -2054,6 +2336,28 @@ struct Sort(Relation, Writable):
 
     def schema(self) -> Schema:
         return self.input[].schema()
+
+    def estimate(self) raises -> Estimate:
+        """The input's estimate, unchanged — except for a `TopN` bound.
+
+        Ordering moves rows and creates none, so every count and every bound
+        survives it exactly. `limit` is a `Limit` this node absorbed, so it is
+        applied as one rather than as a second rule.
+        """
+        var input = self.input[].estimate()
+        if self.limit:
+            return input.limited(0, self.limit.value())
+        return input^
+
+    def cost(self) raises -> Cost:
+        """`n log n` comparisons over the whole input, all of it held.
+
+        Charged against the **input**, not the `TopN` bound: the bound changes
+        how much comes out, and `SortOperator` still has to see every row to
+        know which ones they are.
+        """
+        var input = self.input[].estimate()
+        return self.input[].cost() + Cost.sort(input.rows, input.row_width())
 
     def to_operator(
         self,
@@ -2172,6 +2476,26 @@ struct Window(Relation, Writable):
     ](self, f: F) raises -> DynRelation:
         return Window(f(self.input[]), self.names.copy(), self.exprs.copy())
 
+    def estimate(self) raises -> Estimate:
+        """Every input row, plus one unsummarised column per expression.
+
+        A window function appends; it never filters. So the row count and
+        every input column's summary carry over untouched, and each appended
+        column answers unknown-but-for-its-width — a rank, a lag and a framed
+        sum are all values nothing has described.
+        """
+        return self.input[].estimate().carried(self._schema)
+
+    def cost(self) raises -> Cost:
+        """A sort, because that is what it does.
+
+        `WindowOperator` buffers and orders by the partition and order keys
+        before it can evaluate anything, so this is priced identically to
+        `Sort` — a window is not a cheaper way to order.
+        """
+        var input = self.input[].estimate()
+        return self.input[].cost() + Cost.sort(input.rows, input.row_width())
+
     def references(self, mut into: References):
         self.input[].references(into)
         for ref e in self.exprs:
@@ -2223,10 +2547,9 @@ struct Join(Relation, Writable):
     different kind of thing from a stage, and there was nowhere to put a second
     one.
 
-    `left` is the build side and `right` streams. That is the usual convention
-    and it is not arbitrary — the build side is materialised and indexed, so it
-    should be the smaller one. Choosing it automatically is an optimiser's job
-    and this layer does not have one.
+    `left` and `right` say what the answer is and `build_side` what it costs:
+    the output is the left side's columns then the right side's, whichever
+    side is indexed.
     """
 
     var left: ArcPointer[DynRelation]
@@ -2247,6 +2570,10 @@ struct Join(Relation, Writable):
     actually has when the plan runs, which is the point."""
     var kind: JoinKind
     var strictness: UInt8
+    var build_side: JoinBuildSide
+    """Which input the hash table is built over. Not part of the schema:
+    `_output_schema` does not read it, so a rewrite may change it without
+    changing what the join returns."""
     var _schema: Schema
 
     def __init__(
@@ -2257,6 +2584,7 @@ struct Join(Relation, Writable):
         var right_keys: List[Int],
         kind: JoinKind = JOIN_INNER,
         strictness: UInt8 = 0,
+        build_side: JoinBuildSide = BUILD_LEFT,
     ) raises:
         if len(left_keys) != len(right_keys):
             raise Error(
@@ -2279,6 +2607,7 @@ struct Join(Relation, Writable):
         )
         self.kind = kind
         self.strictness = strictness
+        self.build_side = build_side
 
     def __init__(
         out self,
@@ -2289,6 +2618,7 @@ struct Join(Relation, Writable):
         var right_names: List[String],
         kind: JoinKind = JOIN_INNER,
         strictness: UInt8 = 0,
+        build_side: JoinBuildSide = BUILD_LEFT,
     ) raises:
         """By name, for a rewrite putting a join back together.
 
@@ -2296,6 +2626,9 @@ struct Join(Relation, Writable):
         `optimizer.mojo` use, because a rewrite already holds names and
         converting back to indices only to have them re-resolved would be a
         round trip through the representation this node exists to avoid.
+
+        `build_side` defaults to `BUILD_LEFT`; the rules in `optimizer.mojo`
+        pass `j.build_side` through, so a rebuilt join keeps its choice.
         """
         self._schema = Self._output_schema(left.schema(), right.schema(), kind)
         self.left = ArcPointer(left^)
@@ -2304,6 +2637,7 @@ struct Join(Relation, Writable):
         self.right_keys = right_names^
         self.kind = kind
         self.strictness = strictness
+        self.build_side = build_side
 
     @staticmethod
     def _names_for(
@@ -2352,17 +2686,15 @@ struct Join(Relation, Writable):
     def _output_schema(
         left: Schema, right: Schema, kind: JoinKind
     ) raises -> Schema:
-        """Left fields then right fields — except for the kinds that emit only
-        the left side.
-
-        `SEMI` and `ANTI` answer "which left rows had a match", so the right
-        side contributes nothing to the output. `JoinKind.emits_right_columns`
-        owns that rule; asking it here keeps the schema and the kernel from
-        disagreeing about the shape of the same result.
+        """Left fields then right fields, or one side's alone for the
+        existence filters, as `JoinKind.emits_left_columns` and
+        `emits_right_columns` say. It takes no build side: which side is
+        indexed does not change what the join returns.
         """
         var fields = List[Field]()
-        for ref f in left.fields:
-            fields.append(f.copy())
+        if kind.emits_left_columns():
+            for ref f in left.fields:
+                fields.append(f.copy())
         if kind.emits_right_columns():
             for ref f in right.fields:
                 fields.append(f.copy())
@@ -2380,6 +2712,23 @@ struct Join(Relation, Writable):
             right_names=self.right_keys.copy(),
             kind=self.kind,
             strictness=self.strictness,
+            build_side=self.build_side,
+        )
+
+    def with_build_side(self, build_side: JoinBuildSide) raises -> Join:
+        """This join, indexing the other input: the same answer at a different
+        cost. `schema()` is unchanged, since `_output_schema` does not read the
+        build side. On the node so a rule need not rebuild the join field by
+        field and risk dropping one.
+        """
+        return Join(
+            self.left[].copy(),
+            self.right[].copy(),
+            left_names=self.left_keys.copy(),
+            right_names=self.right_keys.copy(),
+            kind=self.kind,
+            strictness=self.strictness,
+            build_side=build_side,
         )
 
     def references(self, mut into: References):
@@ -2389,34 +2738,111 @@ struct Join(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
+    def estimate(self) raises -> Estimate:
+        """The containment estimate, computed by `Estimate.joined`. The keys
+        are names, so each side's summary is found by name and a narrowed child
+        schema cannot misdirect the lookup.
+        """
+        return Estimate.joined(
+            self.left[].estimate(),
+            self.right[].estimate(),
+            self.left_keys,
+            self.right_keys,
+            self.kind,
+        )
+
+    def cost_with(self, build_side: JoinBuildSide) raises -> Cost:
+        """What this join would cost if it indexed `build_side`.
+
+        A hypothetical rather than a reading of `self.build_side`, so
+        `SelectBuildSide` can ask for both arrangements from one formula. The
+        children cost the same either way; only the build and probe terms
+        move, and an unknown on either side makes both answers unknown.
+        """
+        var left = self.left[].estimate()
+        var right = self.right[].estimate()
+        var children = self.left[].cost() + self.right[].cost()
+        if build_side == BUILD_LEFT:
+            return (
+                children
+                + Cost.hash_build(left.rows, left.row_width())
+                + Cost.hash_probe(right.rows)
+            )
+        else:
+            return (
+                children
+                + Cost.hash_build(right.rows, right.row_width())
+                + Cost.hash_probe(left.rows)
+            )
+
+    def cost(self) raises -> Cost:
+        """What this join costs as written, `cost_with(self.build_side)`, so a
+        plan's cost reflects the build side chosen for it.
+        """
+        return self.cost_with(self.build_side)
+
     def to_operator(
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
     ) raises -> Pipeline:
-        """The probe side is the pipeline; the build side is a stage's cargo."""
-        var probe = self.right[].to_operator(ctx, bindings)
-        probe.append(
-            JoinOperator(
-                self.left[].to_operator(ctx, bindings),
-                Self._indices_for(self.left[].schema(), self.left_keys, "left"),
-                Self._indices_for(
-                    self.right[].schema(), self.right_keys, "right"
-                ),
-                self.kind,
-                self.strictness,
-                self._schema.copy(),
-                self.left[].schema(),
-                self.right[].schema(),
-                ctx.copy(),
-            )
+        """The probe side is the pipeline and the build side a stage within it.
+        The operator is given build/probe roles, not left and right, and passes
+        `build_side` to the kernel to restore the left-then-right order.
+        """
+        var left_on = Self._indices_for(
+            self.left[].schema(), self.left_keys, "left"
         )
-        return probe^
+        var right_on = Self._indices_for(
+            self.right[].schema(), self.right_keys, "right"
+        )
+        # Two arrangements, spelled out. Picking the roles into locals first
+        # and building one `JoinOperator` reads as the tighter code and
+        # measured **+3,840 bytes** of `__text` on `query_join`: the branches
+        # inline away, while `DynRelation.copy()` on each side does not.
+        if self.build_side == BUILD_LEFT:
+            var probe = self.right[].to_operator(ctx, bindings)
+            probe.append(
+                JoinOperator(
+                    self.left[].to_operator(ctx, bindings),
+                    left_on^,
+                    right_on^,
+                    self.kind,
+                    self.strictness,
+                    self.build_side,
+                    self._schema.copy(),
+                    self.left[].schema(),
+                    self.right[].schema(),
+                    ctx.copy(),
+                )
+            )
+            return probe^
+        else:
+            var probe = self.left[].to_operator(ctx, bindings)
+            probe.append(
+                JoinOperator(
+                    self.right[].to_operator(ctx, bindings),
+                    right_on^,
+                    left_on^,
+                    self.kind,
+                    self.strictness,
+                    self.build_side,
+                    self._schema.copy(),
+                    self.right[].schema(),
+                    self.left[].schema(),
+                    ctx.copy(),
+                )
+            )
+            return probe^
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(
-            "Join(", self.left[], ", ", self.right[], ", ", self.kind, ")"
-        )
+        writer.write("Join(", self.left[], ", ", self.right[], ", ", self.kind)
+        if self.build_side != BUILD_LEFT:
+            # Printed only when it is not the default, so a plan that made no
+            # physical choice still diffs against the plans in every test that
+            # predates the field.
+            writer.write(", ", self.build_side)
+        writer.write(")")
 
 
 struct ScanPath(Copyable, Movable, Writable):
@@ -2489,15 +2915,27 @@ struct ParquetScan(Relation, Writable):
     here costs time and never an answer.
     """
 
+    var statistics: Optional[ArcPointer[Estimate]]
+    """What this file's footer says, supplied by a caller that has read it:
+    `scan(path, schema).with_statistics(Estimate.from_index(
+    Index.from_parquet(file), schema))`. The scan does not open the file
+    itself, which would link the Parquet reader into every binary that
+    estimates a plan. Behind an `ArcPointer` because a relation node's fields
+    are copied wherever a plan is; `ScanPath` measured an inline one at
+    23,904 bytes on `query_join`.
+    """
+
     def __init__(
         out self,
         var path: ScanPath,
         var schema: Schema,
         var pruners: List[DynValue] = [],
+        var statistics: Optional[ArcPointer[Estimate]] = None,
     ):
         self.path = path^
         self._schema = schema^
         self.pruners = pruners^
+        self.statistics = statistics^
 
     def references(self, mut into: References):
         self.path.references(into)
@@ -2508,14 +2946,55 @@ struct ParquetScan(Relation, Writable):
         return self._schema.copy()
 
     def with_schema(self, var schema: Schema) -> ParquetScan:
-        """This scan over a narrower schema, carrying its pruners.
-
-        The rule `Filter.with_input` states, on the node that grew a third
-        field: `ColumnPruning` rebuilding a scan as `ParquetScan(path, schema)`
-        drops the pruners silently, and dropping them costs an optimization
-        rather than an answer — so no test would have failed.
+        """This scan over a narrower schema, keeping its pruners and
+        statistics. On the node so `ColumnPruning` cannot drop either by
+        rebuilding the scan from its path and schema. The statistics are kept
+        whole: a summary for a column no longer projected is never read.
         """
-        return ParquetScan(self.path.copy(), schema^, self.pruners.copy())
+        return ParquetScan(
+            self.path.copy(),
+            schema^,
+            self.pruners.copy(),
+            self.statistics.copy(),
+        )
+
+    def with_statistics(self, var statistics: Estimate) -> ParquetScan:
+        """This scan, told what its file's footer says. Separate from the
+        constructor because building a plan does no I/O and reading a footer
+        does.
+        """
+        return ParquetScan(
+            self.path.copy(),
+            self._schema.copy(),
+            self.pruners.copy(),
+            ArcPointer(statistics^),
+        )
+
+    def estimate(self) raises -> Estimate:
+        """What the footer said, or a column-shaped unknown.
+
+        Unknown is the honest answer for a scan nobody read a footer for, and
+        it is what a plan built by `scan(path, schema)` alone gets. It is
+        column-shaped rather than empty so that positional readers line up
+        with the schema, and so a `Join` above it still concatenates the right
+        number of summaries.
+        """
+        if self.statistics:
+            return self.statistics.value()[].copy()
+        return Estimate.unknown(self._schema)
+
+    def cost(self) raises -> Cost:
+        """The rows it decodes and the bytes they become.
+
+        **Pruning is not subtracted**, though it is the whole reason the
+        pruners are on this node: which row groups survive depends on this
+        execution's `Bindings`, which a plan does not have — `param` is
+        resolved per run, and `ParquetScanOperator.drain` builds the read plan
+        with the values it was given. A cost that guessed at it would be a
+        different number for the same plan on every run.
+        """
+        var estimate = self.estimate()
+        return Cost.source(estimate.rows, estimate.row_width())
 
     def to_operator(
         self,

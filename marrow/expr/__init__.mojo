@@ -63,6 +63,13 @@ from .logical import (
 )
 from .physical import Datum, DynOperator, Morsel, Operator, Pipeline
 from .index import ColumnZones, Index, ZoneMaps, keep_every
+from .estimates import (
+    Approx,
+    ColumnEstimate,
+    Cost,
+    DEFAULT_SELECTIVITY,
+    Estimate,
+)
 
 # -- the comptime lane, spelled here so nothing else has to --------------------
 from .`comptime`.aggregates import (

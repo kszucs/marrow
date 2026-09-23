@@ -650,3 +650,282 @@ def test_a_fused_subtree_and_a_buffered_aggregate_share_one_grouping() raises:
     assert_equal(out.num_rows(), 2)
     assert_true(out.columns[1].as_int64() == array([1000, 700], int64))
     assert_true(out.columns[2].as_int64() == array([1, 3], int64))
+
+
+# ---------------------------------------------------------------------------
+# FILTER (WHERE ...) — the predicate the node carries
+#
+# Every expectation below is DuckDB's, taken over the golden corpus's `basic`
+# fixture so the two agree row for row; `golden/cases/agg_filter_clause.mojo`
+# is the same question asked end to end.
+# ---------------------------------------------------------------------------
+
+
+def _basic() raises -> RecordBatch:
+    """`golden/fixtures/basic.arrow`, row for row.
+
+    Reproduced here rather than read, so these cases stay a unit test — but
+    reproduced *exactly*, so every expectation is one DuckDB already answered
+    over the same rows.
+    """
+    var k: List[Optional[String]] = ["a", "b", "a", "c", "b", "a", None]
+    var v: List[Optional[Int]] = [1, 2, 3, 4, None, 6, 7]
+    var w: List[Optional[Int]] = [10, None, 30, 40, 50, 60, 70]
+    return record_batch(
+        [
+            array(k).to_dyn(),
+            array(v, int64).to_dyn(),
+            array(w, int64).to_dyn(),
+        ],
+        names=["k", "v", "w"],
+    )
+
+
+def test_filtering_an_aggregate_leaves_it_fused() raises:
+    """The constraint the whole design is under: a predicate must not cost the
+    fold its lane loop.
+
+    `fuses` is the one place that answers, so this asks it directly rather than
+    inferring from a number. `Agg` and `A` are untouched by `filter`, which is
+    why it holds — the predicate is a third parameter, not a rewrite of the
+    operand.
+    """
+    var plain = col("v", int64).sum()
+    var filtered = plain.filter(col("v", int64) > lit(2, int64))
+    assert_true(plain.fuses)
+    assert_true(not plain.filters)
+    assert_true(filtered.fuses)
+    assert_true(filtered.filters)
+    # Both are still the same aggregate over the same operand — `filter` adds
+    # a parameter, it does not rewrite what is folded.
+    assert_equal(plain.name(), filtered.name())
+
+
+def test_filtered_sum_admitting_nothing_is_null_not_zero() raises:
+    """An aggregate whose predicate admits no row answers what it answers over
+    an empty input — NULL for `sum`, which is not the same as 0."""
+    var plan = table(_basic()).aggregate(
+        [
+            col("v", int64)
+            .sum()
+            .filter(col("v", int64) > lit(100, int64))
+            .alias("total")
+        ]
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64().is_null(0))
+
+
+def test_filtered_aggregate_reads_a_null_predicate_as_a_reject() raises:
+    """SQL admits TRUE and nothing else, so the row whose `w` is null is out.
+
+    `count(*) FILTER (WHERE w > 20)` is 5 and not 6: `w` is
+    [10, NULL, 30, 40, 50, 60, 70], and the comparison kernel computes a data
+    bit for the null row whatever its payload says. DuckDB answers 5.
+    """
+    var plan = table(_basic()).aggregate(
+        [count_star().filter(col("w", int64) > lit(20, int64)).alias("n")]
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([5], int64))
+
+
+def test_filtered_count_star_counts_rows_and_not_a_masked_column() raises:
+    """The case a desugaring gets wrong.
+
+    `count(*) FILTER (WHERE v > 2)` is 4. Rewriting it as
+    `sum(if_else(p, 1, 0))` would change the kernel, and rewriting it as
+    `count(if_else(p, 1, NULL))` would unfuse the literal into a materialised
+    `CaseWhen`. The predicate is carried instead, and `CountFold` counts the
+    rows its mask admits.
+    """
+    var plan = table(_basic()).aggregate(
+        [count_star().filter(col("v", int64) > lit(2, int64)).alias("n")]
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([4], int64))
+
+
+def test_filtered_grouped_sum_keeps_every_group() raises:
+    """`FILTER` is not `WHERE`: a group all of whose rows are rejected still
+    appears, with the empty answer.
+
+    `sum(v) FILTER (WHERE v > 2) GROUP BY k` over `basic` — DuckDB answers
+    a -> 9, b -> NULL, c -> 4, NULL -> 7, and group `b` is the one a `WHERE`
+    would have removed entirely.
+    """
+    var plan = table(_basic()).aggregate(
+        [
+            col("v", int64)
+            .sum()
+            .filter(col("v", int64) > lit(2, int64))
+            .alias("total")
+        ],
+        [col("k", string)],
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 4)
+    var expected: List[Optional[String]] = ["a", "b", "c", None]
+    ref keys = out.columns[0].as_string()
+    assert_true(keys == array(expected))
+    ref totals = out.columns[1].as_int64()
+    assert_equal(totals[0].value(), 9)
+    assert_true(totals.is_null(1))
+    assert_equal(totals[2].value(), 4)
+    assert_equal(totals[3].value(), 7)
+
+
+def test_filtered_grouped_count_star_answers_zero_for_an_empty_group() raises:
+    """The same query with `count`, whose empty answer is 0 rather than NULL.
+
+    Two kernels, one mask: the rule is "this row is invisible", and what an
+    aggregate makes of seeing nothing stays the kernel's own business.
+    DuckDB: a -> 2, b -> 0, c -> 1, NULL -> 1.
+    """
+    var plan = table(_basic()).aggregate(
+        [count_star().filter(col("v", int64) > lit(2, int64)).alias("n")],
+        [col("k", string)],
+    )
+    var out = plan.execute()
+    assert_true(out.columns[1].as_int64() == array([2, 0, 1, 1], int64))
+
+
+def test_filtered_buffered_aggregate_admits_the_same_rows() raises:
+    """The arm that compacts instead of masking.
+
+    `min` over a string column is a bytewise scan and `count_distinct` keeps a
+    hash set, so neither fuses and both evaluate their operand to a column.
+    `min(k) FILTER (WHERE v > 2)` is 'a' and
+    `count(DISTINCT k) FILTER (WHERE v > 2)` is 2 — the admitted rows carry
+    k = a, c, a, NULL. DuckDB agrees on both.
+    """
+    var plan = table(_basic()).aggregate(
+        [
+            col("k", string)
+            .min()
+            .filter(col("v", int64) > lit(2, int64))
+            .alias("lo"),
+            col("k", string)
+            .count_distinct()
+            .filter(col("v", int64) > lit(2, int64))
+            .alias("nd"),
+        ]
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_string() == array(["a"]))
+    assert_true(out.columns[1].as_int64() == array([2], int64))
+
+
+def test_filtered_buffered_aggregate_compacts_its_group_ids_too() raises:
+    """Compaction has to renumber nothing and drop everything together.
+
+    The grouped buffered arm filters the operand column *and* the morsel's
+    group ids with one mask, so row `i` of the compacted column still names
+    group `i`. Dropping only the column would credit every surviving value to
+    the wrong group. `min(k) FILTER (WHERE v > 5) GROUP BY k` is DuckDB's
+    a -> 'a' and NULL for every other group.
+    """
+    var plan = table(_basic()).aggregate(
+        [
+            col("k", string)
+            .min()
+            .filter(col("v", int64) > lit(5, int64))
+            .alias("lo")
+        ],
+        [col("k", string)],
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 4)
+    ref lo = out.columns[1].as_string()
+    assert_equal(String(lo[0].value()), "a")
+    assert_true(lo.is_null(1))
+    assert_true(lo.is_null(2))
+    assert_true(lo.is_null(3))
+
+
+def test_filtered_aggregate_declares_the_columns_its_predicate_reads() raises:
+    """`ColumnPruning` reads `references`, so a column only the filter names
+    has to survive the pruning pass — otherwise the scan drops `w` and the
+    predicate has nothing to compare.
+
+    It costs no walk code: the predicate is a typed field, so the reflected
+    walk on `Value.references` visits it like any other operand.
+    """
+    var agg = col("v", int64).sum().filter(col("w", int64) > lit(20, int64))
+    var cols = agg.columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "v")
+    assert_equal(cols[1], "w")
+
+
+def test_filtered_aggregate_prints_its_predicate() raises:
+    """A plan says what it does. `filter` is part of the aggregate, so it is
+    part of how the aggregate reads."""
+    var agg = col("v", int64).sum().filter(col("v", int64) > lit(2, int64))
+    assert_equal(String(agg), "sum(col(v)) filter (greater(col(v), lit(2)))")
+
+
+def test_filter_and_alias_are_independent_of_each_other() raises:
+    """Both return a copy, and neither forgets the other's field: the two
+    orders build the same node."""
+    var a = col("v", int64).sum().filter(col("v", int64) > lit(2, int64))
+    var first = a.alias("total")
+    var second = (
+        col("v", int64)
+        .sum()
+        .alias("total")
+        .filter(col("v", int64) > lit(2, int64))
+    )
+    assert_equal(first.name(), "total")
+    assert_equal(second.name(), "total")
+    assert_equal(String(first), String(second))
+
+
+def test_filtered_aggregate_rejects_a_non_boolean_predicate() raises:
+    """At plan time, from `to_operator`, which is the only way into an
+    operator — so the per-morsel path may narrow the predicate's column to a
+    `BoolArray` without asking twice. Without the check that narrowing is a
+    `Variant` misaccess, which aborts rather than raising."""
+    var plan = table(_basic()).aggregate(
+        [col("v", int64).sum().filter(col("w", int64)).alias("total")]
+    )
+    var raised = False
+    try:
+        _ = plan.execute()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_a_filtered_fused_subtree_still_folds_without_materialising() raises:
+    """The property the whole design is under, end to end.
+
+    `sum(qty * price) FILTER (WHERE qty > 2)` is the fused case *with* a
+    predicate: `Agg` is `Foldable` and the operand is a `PrimitiveValue`, so
+    `fuses` is True and the product is never written to a column — the
+    admitted rows arrive as validity bits and the fold reads `lane[W]` exactly
+    as it does unfiltered. A desugaring to `sum(if_else(p, qty * price, NULL))`
+    is what would have lost that: `if_else` is a `CaseWhen`, whose `Bound` is
+    a materialised column.
+
+    Group 1 keeps both lines: 3*100 + 7*100 = 1000. Group 2 keeps only the
+    first — `qty = 2` is not greater than 2, and the null `qty` makes the
+    predicate null, which is not TRUE — so 10*20 = 200. Keyless it is 1200.
+    DuckDB answers 1000, 200 and 1200.
+    """
+    var agg = (
+        (col("qty", int64) * col("price", int64))
+        .sum()
+        .filter(col("qty", int64) > lit(2, int64))
+    )
+    assert_true(agg.fuses)
+    var grouped = table(_lines()).aggregate(
+        [agg.alias("revenue")], [col("g", int64)]
+    )
+    var out = grouped.execute()
+    assert_true(grouped.schema() == out.schema)
+    assert_true(out.columns[1].as_int64() == array([1000, 200], int64))
+    # And the register path, which is the 14.6x one: no keys, one slot, the
+    # whole morsel folded in registers behind the same mask.
+    var keyless = table(_lines()).aggregate([agg.alias("revenue")])
+    assert_true(keyless.execute().columns[0].as_int64() == array([1200], int64))

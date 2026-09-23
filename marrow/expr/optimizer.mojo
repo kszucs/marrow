@@ -80,6 +80,8 @@ Soundness is by construction, not by review:
 """
 
 from ..kernels.join import (
+    BUILD_LEFT,
+    BUILD_RIGHT,
     JOIN_ANTI,
     JOIN_FULL,
     JOIN_INNER,
@@ -118,9 +120,9 @@ trait Rule(Copyable, Movable):
     when another ran first is a rule that is not correct.
 
     **A rule has no name field.** There was one, declared on this trait and
-    spelled out by all sixteen conformers, and nothing ever read it; when a
+    spelled out by all eighteen conformers, and nothing ever read it; when a
     rule does need naming, `reflect[Self].name()` derives it. A trait
-    requirement no caller consumes is sixteen places to keep in sync with
+    requirement no caller consumes is eighteen places to keep in sync with
     nothing.
     """
 
@@ -606,6 +608,7 @@ struct PushFilterBelowJoin(Rule):
                 right_names=j.right_keys.copy(),
                 kind=j.kind,
                 strictness=j.strictness,
+                build_side=j.build_side,
             )
             return out^
         var out: DynRelation = Join(
@@ -615,6 +618,7 @@ struct PushFilterBelowJoin(Rule):
             right_names=j.right_keys.copy(),
             kind=j.kind,
             strictness=j.strictness,
+            build_side=j.build_side,
         )
         return out^
 
@@ -742,7 +746,10 @@ struct PushFilterIntoScan(Rule):
             var pruners = source.pruners.copy()
             pruners.append(predicate.copy())
             var grown = ParquetScan(
-                source.path.copy(), source.schema(), pruners^
+                source.path.copy(),
+                source.schema(),
+                pruners^,
+                source.statistics.copy(),
             )
             var out: DynRelation = grown^
             return out^
@@ -850,6 +857,127 @@ struct TopN(Rule):
             limit.length,
         )
         return built^
+
+
+# ---------------------------------------------------------------------------
+# Rules — cost-based
+# ---------------------------------------------------------------------------
+struct SelectBuildSide(Rule):
+    """`Join(a, b)` -> the same join, indexing whichever side is cheaper.
+
+    Compares `Join.cost_with` for both build sides and keeps the strictly
+    cheaper one. The answer cannot change: the build side is the one field
+    `Join._output_schema` does not read. The join is left as it is when
+    either cost is unknown, when the two tie, and when `JoinKind.commutes`
+    says the kind has no mirror. `cost_with` does not read the current side,
+    so a second pass computes the same two costs and declines.
+
+    Not part of `ScanPruning`, whose binaries would otherwise link the
+    estimation layer for plans without a join.
+    """
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Join]():
+            return node.copy()
+        ref j = node.get[Join]()
+        if not j.kind.commutes():
+            return node.copy()
+
+        var here = j.cost_with(j.build_side).total().known()
+        var other = BUILD_RIGHT if j.build_side == BUILD_LEFT else BUILD_LEFT
+        var there = j.cost_with(other).total().known()
+        if not here or not there:
+            return node.copy()
+        if there.value() >= here.value():
+            return node.copy()
+
+        var out: DynRelation = j.with_build_side(other)
+        return out^
+
+
+struct JoinReassociation(Rule):
+    """`(A ⋈ B) ⋈ C` -> `A ⋈ (B ⋈ C)`, when that is cheaper.
+
+    Both shapes output the columns of `A`, `B` and `C` in that order, so the
+    rewrite moves no column. It applies only when:
+
+    - both joins are INNER and `JOIN_ALL`, since the rows an outer join pads
+      depend on the association;
+    - every left key of the outer join names a column of `B` and none of `A`,
+      so the outer predicate does not read `A` and no name is ambiguous;
+    - no right key of the inner join names a column of `C`, which would
+      capture it once the keys are read against `B ⋈ C`;
+    - the result is strictly cheaper by `cost()`.
+
+    It is one local rewrite, not a search over join orders; a longer chain
+    reaches its shape by the rule firing again on the result. Without a
+    recorded distinct count every join estimates at `min(|L|, |R|)` rows, so
+    the rule then decides on row width alone.
+    """
+
+    @staticmethod
+    def _names_only_in(
+        names: List[String], present: Schema, absent: Schema
+    ) -> Bool:
+        """Every name resolves in `present` and in none of `absent`."""
+        for ref n in names:
+            if present.get_field_index(n) < 0:
+                return False
+            if absent.get_field_index(n) >= 0:
+                return False
+        return True
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Join]():
+            return node.copy()
+        ref outer = node.get[Join]()
+        if outer.kind != JOIN_INNER or outer.strictness != 0:
+            return node.copy()
+        var left = outer.left[].copy()
+        if not left.isa[Join]():
+            return node.copy()
+        ref inner = left.get[Join]()
+        if inner.kind != JOIN_INNER or inner.strictness != 0:
+            return node.copy()
+        if len(outer.left_keys) == 0:
+            return node.copy()
+
+        var a = inner.left[].schema()
+        var b = inner.right[].schema()
+        var c = outer.right[].schema()
+        # The outer predicate must live entirely in (B, C) ...
+        if not Self._names_only_in(outer.left_keys, b, a):
+            return node.copy()
+        # ... and the inner one's right half must still read as B afterwards.
+        if not Self._names_only_in(inner.right_keys, b, c):
+            return node.copy()
+
+        # Compare both shapes with their build sides chosen, since
+        # `SelectBuildSide` tunes whichever survives. `node`'s children were
+        # offered to it on the way up; the new inner join is offered here.
+        var fresh: DynRelation = Join(
+            inner.right[].copy(),
+            outer.right[].copy(),
+            left_names=outer.left_keys.copy(),
+            right_names=outer.right_keys.copy(),
+        )
+        var rebuilt: DynRelation = Join(
+            inner.left[].copy(),
+            SelectBuildSide.apply(fresh),
+            left_names=inner.left_keys.copy(),
+            right_names=inner.right_keys.copy(),
+        )
+        var tuned = SelectBuildSide.apply(rebuilt)
+
+        var here = SelectBuildSide.apply(node).cost().total().known()
+        var there = tuned.cost().total().known()
+        if not here or not there:
+            return node.copy()
+        if there.value() >= here.value():
+            return node.copy()
+        return tuned^
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1132,7 @@ struct ColumnPruning(Copyable, Movable):
                 right_names=j.right_keys.copy(),
                 kind=j.kind,
                 strictness=j.strictness,
+                build_side=j.build_side,
             )
             return out^
 
@@ -1143,7 +1272,12 @@ struct AllRules(RuleSet):
         out = PushFilterBelowJoin.apply(out)
         out = PushFilterBelowAggregate.apply(out)
         out = PushLimitBelowProject.apply(out)
-        return TopN.apply(out)
+        out = TopN.apply(out)
+        # The cost-based rules run last: they read cardinalities, and every
+        # rule above moves rows. Reassociation goes first so that build sides
+        # are chosen for the final shape; either order reaches the same plan.
+        out = JoinReassociation.apply(out)
+        return SelectBuildSide.apply(out)
 
 
 # ---------------------------------------------------------------------------

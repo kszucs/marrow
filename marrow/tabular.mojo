@@ -241,7 +241,8 @@ struct RecordBatch(
 
         `right_keys` empty means "same names as `keys`". `how` is PyArrow's
         spelling — `inner`, `left outer`, `right outer`, `full outer`,
-        `left semi`, `left anti`, with the short forms also accepted.
+        `left semi`, `left anti`, with the short forms also accepted, plus
+        `right semi` and `right anti`, which PyArrow has no name for.
 
         This lived in `python/bindings/tabular.mojo`: name resolution, join-kind
         parsing and result assembly existed **only** for Python callers, and the

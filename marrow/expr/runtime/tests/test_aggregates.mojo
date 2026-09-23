@@ -32,10 +32,11 @@ from ....kernels.aggregate import (
     ValidCount,
 )
 from ....tabular import RecordBatch, record_batch
-from ...builders import col, table
+from ...builders import col, lit, table
+from ....scalars import DynScalar, Int64Scalar
 from ...logical import DynValue, Shape
 from ..aggregates import RuntimeAggregate, resolve_aggregate
-from ..values import column
+from ..values import RuntimeValue, column, gt
 
 
 def _batch() raises -> RecordBatch:
@@ -202,3 +203,110 @@ def test_named_aggregate_vocabulary_all_resolves() raises:
     for ref name in RuntimeAggregate.vocabulary():
         var node = RuntimeAggregate(column("g"), name.copy())
         # Raises if the ladder has no arm for it; int64 is in every domain.
+
+
+# ---------------------------------------------------------------------------
+# FILTER (WHERE ...) — the same verb, the other lane
+#
+# The comptime lane carries its predicate as a type parameter; here it is an
+# `Optional[RuntimeValue]` field, because a lane that discovers its operand's
+# dtype at run time gains nothing from discovering the predicate's presence at
+# compile time. The *answers* must not differ, and these are DuckDB's over the
+# golden corpus's `basic` fixture.
+# ---------------------------------------------------------------------------
+
+
+def _int(value: Int) -> RuntimeValue:
+    """An int64 constant in the runtime lane, where a literal is an erased
+    scalar rather than a typed node."""
+    return lit(DynScalar(Int64Scalar(Int64(value))))
+
+
+def _basic_rows() raises -> RecordBatch:
+    """`golden/fixtures/basic.arrow`, row for row."""
+    var k: List[Optional[String]] = ["a", "b", "a", "c", "b", "a", None]
+    var v: List[Optional[Int]] = [1, 2, 3, 4, None, 6, 7]
+    var w: List[Optional[Int]] = [10, None, 30, 40, 50, 60, 70]
+    return record_batch(
+        [
+            array(k).to_dyn(),
+            array(v, int64).to_dyn(),
+            array(w, int64).to_dyn(),
+        ],
+        names=["k", "v", "w"],
+    )
+
+
+def test_named_aggregate_filter_restricts_what_it_sees() raises:
+    """`sum(v) FILTER (WHERE v > 2)` built entirely from names — DuckDB
+    answers 20."""
+    var plan = table(_basic_rows()).aggregate(
+        [col("v").sum().filter(gt(col("v"), _int(2))).alias("total")],
+        List[DynValue](),
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([20], int64))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_named_aggregate_filter_keeps_a_group_with_no_admitted_row() raises:
+    """`FILTER` restricts the aggregate, never the query: group `b` survives
+    with a null total, which is what tells it apart from a `WHERE`. DuckDB:
+    a -> 9, b -> NULL, c -> 4, NULL -> 7."""
+    var plan = table(_basic_rows()).aggregate(
+        [col("v").sum().filter(gt(col("v"), _int(2))).alias("total")],
+        [col("k")],
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 4)
+    ref totals = out.columns[1].as_int64()
+    assert_equal(totals[0].value(), 9)
+    assert_true(totals.is_null(1))
+    assert_equal(totals[2].value(), 4)
+    assert_equal(totals[3].value(), 7)
+
+
+def test_named_aggregate_filter_excludes_a_null_predicate() raises:
+    """A predicate that is NULL is not TRUE. `count(v) FILTER (WHERE w > 20)`
+    counts the non-null `v` of the rows where `w` is greater than 20, and the
+    row whose `w` is null is not one of them: DuckDB answers 4."""
+    var plan = table(_basic_rows()).aggregate(
+        [col("v").count().filter(gt(col("w"), _int(20))).alias("n")],
+        List[DynValue](),
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([4], int64))
+
+
+def test_named_aggregate_filter_is_declared_and_printed() raises:
+    """Two things a field has to carry that a type parameter carries for free.
+
+    `references` is written out here because an `Optional[RuntimeValue]` is not
+    a field the reflected walk can see — and if it went unseen, `ColumnPruning`
+    would drop the column only the predicate names.
+    """
+    var predicate = gt(col("w"), _int(20))
+    var agg = col("v").sum().filter(predicate.copy()).alias("total")
+    var cols = agg.columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "v")
+    assert_equal(cols[1], "w")
+    assert_equal(agg.name(), "total")
+    assert_equal(
+        String(agg), String("sum(v) filter (") + String(predicate) + ")"
+    )
+
+
+def test_named_aggregate_filter_rejects_a_non_boolean_predicate() raises:
+    """At plan time, from the same `reject_non_boolean_filter` the comptime
+    lane calls, so one rule serves both lanes."""
+    var plan = table(_basic_rows()).aggregate(
+        [col("v").sum().filter(col("w")).alias("total")],
+        List[DynValue](),
+    )
+    var raised = False
+    try:
+        _ = plan.execute()
+    except:
+        raised = True
+    assert_true(raised)

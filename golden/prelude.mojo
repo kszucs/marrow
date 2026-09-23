@@ -22,6 +22,11 @@ this file different:
 A case using a name that is not here fails at compile time in the Mojo lane
 and with a `NameError` in the Python lane, so the two lists cannot drift apart
 silently.
+
+`AllRules` is the one entry with no Python counterpart, because `optimize` takes
+its rule set as a *comptime parameter* and `plan.optimize[AllRules]()` has no
+reading in Python. A case that names it therefore carries `-- skip python`; the
+join-reordering cases are the ones that do.
 """
 
 from golden.helpers import table
@@ -38,7 +43,7 @@ from marrow.dtypes import (
 )
 from marrow.expr import array_length, col, count_star, if_else, lit
 from marrow.expr import dense_rank, rank, row_number
-from marrow.expr import DynRelation
+from marrow.expr import AllRules, DynRelation
 from marrow.kernels.join import (
     JOIN_ALL,
     JOIN_ANTI,

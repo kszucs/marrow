@@ -70,7 +70,42 @@ with an offset, *followed by* a filter), `sort_by` (asc, desc, nulls first,
 nulls last, mixed directions, three keys of mixed types, an all-null key, a
 **computed** key), `aggregate` with and without keys, `join` in all seven
 kinds, and the compositions: filter→aggregate, join→aggregate,
-aggregate→join, aggregate→aggregate, filter→join→sort→limit.
+aggregate→join, aggregate→aggregate, filter→join→sort→limit, and chains of
+three and four joins — see below.
+
+### Multi-join, and the two cost-based rules
+
+Six cases, and the only place the corpus runs a plan the **optimizer** touched.
+Every other case body ends at `execute()`, which applies no rules at all.
+
+`join_three_way_chain` is `sales ⋈ emp ⋈ dept` as written — left-deep, three
+inner joins, run unrewritten. `join_three_way_reassociated` is the same query
+and, character for character, the same expectation, with
+`.optimize[AllRules]()` on the end; `JoinReassociation` really fires on it, so
+`(sales ⋈ emp) ⋈ dept` comes back as `sales ⋈ (emp ⋈ dept)` and
+`SelectBuildSide` then indexes the right input of both joins where the written
+plan indexed the left. That pair is the point of the group: three physical
+decisions change and the answer may not.
+
+The other four say where the rewrite stops, one guard each.
+`join_three_way_key_on_first_input` breaks the condition that matters — the
+outer predicate reads a column of the *first* input, which has nowhere to go on
+the other side — with everything else holding, including a cost that prefers
+the right-deep form. `join_three_way_inner_then_left` and
+`join_three_way_left_then_inner` put a LEFT join above and below the inner one;
+the second is the one that would change the *answer* rather than the cost,
+widening two `emp` rows a second time. `join_four_way_chain` is three joins,
+where the rule has two associations to choose between and a fixpoint to reach.
+
+All five optimized cases carry `-- skip python`: `optimize` takes its rule set
+as a comptime parameter, and `plan.optimize[AllRules]()` has no reading in
+Python.
+
+**A case asserts an answer, never a plan.** A rule that silently stopped firing
+would leave all six green, so the shape evidence — which rule fires, which
+declines and which build sides move — lives in
+`python/marrow/tests/test_join_reorder.py`, which builds these same plans over
+these same fixture bytes and reads `explain()`.
 
 ### Predicates and three-valued logic
 
@@ -158,7 +193,7 @@ surface is Mojo-only.
 
 ## Recorded as unsupported
 
-63 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+62 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **Set operations** (4) — `setop_union_all`, `setop_union_distinct`,
 `setop_except`, `setop_intersect`. There is no set-operation node in

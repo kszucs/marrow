@@ -21,20 +21,35 @@ from ...tabular import RecordBatch, record_batch
 from ...scalars import BoolScalar, Int64Scalar
 from ..builders import col, count_star, lit, row_number, scan, table
 from ..runtime.values import and_, column, gt, literal, not_
-from ...kernels.join import JOIN_INNER, JOIN_LEFT
+from ...kernels.join import (
+    JOIN_ANTI,
+    JOIN_CROSS,
+    JOIN_FULL,
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_RIGHT_ANTI,
+    JOIN_RIGHT_SEMI,
+    JOIN_SEMI,
+    JoinKind,
+)
 from ..logical import DynRelation, DynValue, Filter, ParquetScan
 from ...schema import schema
 from ..optimizer import (
     AllRules,
+    JoinReassociation,
     MergeLimits,
     NoRules,
+    Optimizer,
     PushFilterBelowProject,
     PushFilterBelowSort,
     PushFilterIntoScan,
     PushLimitBelowProject,
     RemoveNoOpProject,
     RemoveRedundantSort,
+    RuleSet,
     ScanPruning,
+    SelectBuildSide,
     TopN,
 )
 
@@ -408,6 +423,14 @@ def test_optimizer_keeps_a_topn_sort_before_an_aggregate() raises:
 
     Built as `Limit(Sort)` so `TopN` bounds the sort first; the aggregate then
     sees a sort that is load-bearing rather than cosmetic.
+
+    **What actually stops the rule here is the `Limit` between them**, not the
+    bound — `RemoveSortBeforeAggregate` matches `Aggregate(Sort(x))` and this
+    plan is `Aggregate(Limit(Sort(x)))`. `sort_by` exposes no bound, and `TopN`
+    only ever sets one directly under a `Limit`, so `Aggregate(Sort(top k))` is
+    not reachable from the public verbs at all and the rule's own `sort.limit`
+    guard is belt-and-braces. The surviving `Sort` is asserted because that is
+    what this case's name claims and the rows alone do not show it.
     """
     var plan = (
         table(_batch())
@@ -415,6 +438,9 @@ def test_optimizer_keeps_a_topn_sort_before_an_aggregate() raises:
         .limit(3)
         .aggregate([col("a", int64).sum().alias("total")])
     )
+    var out = String(plan.optimize[AllRules]())
+    assert_equal(_occurrences(out, "Sort("), 1, out)
+    assert_true("top 3" in out, out)
     # the three smallest values of a are 1, 1, 3
     _check(plan, [[5]])
 
@@ -1117,3 +1143,725 @@ def test_push_filter_into_scan_lands_each_conjunct_separately() raises:
     var out = plan.optimize[AllRules]()
     assert_equal(_occurrences(String(out), String("Filter(")), 2)
     assert_equal(_occurrences(String(out), String("pruned by 2")), 1)
+
+
+# ---------------------------------------------------------------------------
+# SelectBuildSide — the one rule that spends a cost
+#
+# Every other rule here is true by inspection; this one is true by arithmetic.
+# So each case says which of the two numbers it is relying on, and the pair
+# `_fires` / `_inert` is load-bearing in both directions: a rule that never
+# fires and a rule that fires on everything both pass an equivalence check.
+# ---------------------------------------------------------------------------
+def _big_left() raises -> RecordBatch:
+    """Twelve rows against `_right_table`'s three.
+
+    Four times the rows is well clear of any rounding in `Cost`: indexing this
+    side charges twelve rows of `hash_build` — twelve comparisons and 192
+    bytes held — where indexing the other charges three.
+    """
+    var ids = List[Optional[Int]](capacity=12)
+    var vals = List[Optional[Int]](capacity=12)
+    for i in range(12):
+        ids.append(i + 1)
+        vals.append((i + 1) * 10)
+    return record_batch(
+        [array(ids, int64).copy(), array(vals, int64).copy()],
+        names=["id", "lval"],
+    )
+
+
+def test_select_build_side_flips_to_the_smaller_input() raises:
+    """Twelve rows on the left, three on the right: index the right.
+
+    The rewrite that was inexpressible before a join's build side became a
+    field the output schema never sees. `Join.write_to` prints a non-default
+    build side, so the flip is visible in the plan rather than only in the
+    operator.
+    """
+    var plan = table(_big_left()).join(
+        table(_right_table()), [0], [0], JOIN_INNER
+    )
+    assert_false(String(plan).find("build=right") >= 0, String(plan))
+    _fires(plan)
+
+    var out = String(plan.optimize[AllRules]())
+    assert_true(out.find("build=right") >= 0, out)
+
+
+def test_select_build_side_leaves_the_smaller_left_alone() raises:
+    """Three rows on the left, twelve on the right: already right.
+
+    A tie keeps the current side and so does a loss, which is what makes the
+    rule idempotent — `cost_with` reads the two children and the side it was
+    asked about, never `self.build_side`, so a second pass re-derives the same
+    pair and declines. `Optimizer.run` detects convergence on the rendered
+    plan, and a rule that flipped every pass would spin to `MAX_PASSES`.
+    """
+    var plan = table(_right_table()).join(
+        table(_big_left()), [0], [0], JOIN_INNER
+    )
+    _inert(plan)
+
+
+def test_select_build_side_is_a_no_op_when_nothing_is_known() raises:
+    """An unknown is not a number that can lose a comparison.
+
+    A scan nobody read a footer for estimates unknown, so `Cost.total()` is
+    unknown on both sides and `known()` answers `None`. Treating that as zero
+    would make the unestimable plan win every comparison, which is the failure
+    `Approx`'s absorbing unknown exists to prevent one layer down.
+    """
+    var s = schema([field("id", int64), field("v", int64)])
+    var plan = scan("/nonexistent-left.parquet", s).join(
+        scan("/nonexistent-right.parquet", s), [0], [0], JOIN_INNER
+    )
+    _inert(plan)
+
+
+def test_select_build_side_declines_a_kind_it_cannot_mirror() raises:
+    """`commutes` is the guard, and a rule declines where a kernel raises.
+
+    `JOIN_CROSS` has a constant and no implementation, so `JoinKind.mirror`
+    raises for it. Reaching `mirror` from inside a rule would turn an
+    optimization into an error on a plan that was merely unexecutable.
+    """
+    var plan = table(_big_left()).join(
+        table(_right_table()), [0], [0], JOIN_CROSS
+    )
+    _inert(plan)
+
+
+def test_select_build_side_does_not_move_the_schema() raises:
+    """Bit-identical, for every kind the kernel implements.
+
+    The property the whole rewrite rests on: `Join._output_schema` takes no
+    build side, so flipping one cannot rename or reorder a column. Compared as
+    whole `Schema`s — `Schema.__eq__` compares `Field`s, which compare all four
+    of their members — rather than through a rendering, which is how a join
+    dropping `nullable` went unnoticed in the first place.
+    """
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for ref k in kinds:
+        var plan = table(_big_left()).join(table(_right_table()), [0], [0], k)
+        var optimized = plan.optimize[AllRules]()
+        assert_true(
+            plan.schema() == optimized.schema(),
+            String("kind ", k, ": the schema moved"),
+        )
+
+
+def test_select_build_side_returns_the_same_rows() raises:
+    """Same rows, same columns, after the flip.
+
+    Sorted, because row order *does* move with the build side — it follows the
+    probe side — and that is the one thing the rewrite does not promise. The
+    multiset is what it promises, and a trailing sort is how `_check`'s
+    positional comparison is made to test it.
+    """
+    var plan = (
+        table(_big_left())
+        .join(table(_right_table()), [0], [0], JOIN_INNER)
+        .sort_by([col("id", int64)], [True])
+    )
+    _fires(plan)
+    _check(plan, [[1, 2, 3], [10, 20, 30], [1, 2, 3], [100, 200, 300]])
+
+
+def test_select_build_side_returns_the_same_rows_for_a_left_join() raises:
+    """The kind whose *physical* kind changes when the side flips.
+
+    A LEFT join built on its right input is a physical RIGHT join, which is
+    also the case where `JoinOperator._blocks_on_probe_side` has to ask the
+    physical kind: a logical LEFT buffers its probe side, the physical RIGHT
+    it becomes streams. Getting that backwards is a wrong answer, not a slow
+    one, and only an end-to-end case sees it.
+    """
+    var plan = (
+        table(_big_left())
+        .join(table(_right_table()), [0], [0], JOIN_LEFT)
+        .sort_by([col("id", int64)], [True])
+    )
+    _fires(plan)
+    _check(
+        plan,
+        [
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+            [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+            [
+                1,
+                2,
+                3,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+            ],
+            [
+                100,
+                200,
+                300,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+                _NULL,
+            ],
+        ],
+    )
+
+
+def test_select_build_side_is_absent_from_scan_pruning() raises:
+    """The rule set is a comptime parameter, so a binary links exactly what it
+    names — and `ScanPruning` exists so an AOT program can name row-group
+    pruning and nothing else."""
+    var plan = table(_big_left()).join(
+        table(_right_table()), [0], [0], JOIN_INNER
+    )
+    assert_equal(String(plan), String(plan.optimize[ScanPruning]()))
+    assert_equal(String(plan), String(plan.optimize[NoRules]()))
+
+
+# ---------------------------------------------------------------------------
+# JoinReassociation — the same rows, a smaller intermediate
+#
+# The dangerous rule in this file. A wrong association is a silent wrong
+# answer, so the one case that asserts it fires is paired with a `_check`
+# against hand-written rows, and the cases that assert it declines outnumber
+# it four to one.
+#
+# `_inert` is **not** usable here: `SelectBuildSide` runs on the same nodes and
+# legitimately fires on most of these plans, so "no rule fired" cannot
+# distinguish a declining reassociation from a missing one. The assertion is
+# the *shape* instead — `Join(Join(` is a left-deep chain and appears exactly
+# once in one, never in a right-deep one.
+# ---------------------------------------------------------------------------
+def _nesting(plan: DynRelation) raises -> Int:
+    """How many `Join(Join(` nestings the optimized plan has: 1 left-deep, 0
+    right-deep."""
+    return _occurrences(String(plan.optimize[AllRules]()), String("Join(Join("))
+
+
+def _facts() raises -> RecordBatch:
+    """Twelve rows carrying two foreign keys — the big input."""
+    var did = List[Optional[Int]](capacity=12)
+    var eid = List[Optional[Int]](capacity=12)
+    var amt = List[Optional[Int]](capacity=12)
+    for i in range(12):
+        did.append((i % 3) + 1)
+        eid.append((i % 2) + 1)
+        amt.append(i + 1)
+    return record_batch(
+        [
+            array(did, int64).copy(),
+            array(eid, int64).copy(),
+            array(amt, int64).copy(),
+        ],
+        names=["fdid", "feid", "amt"],
+    )
+
+
+def _dim() raises -> RecordBatch:
+    """`A` — three rows, two columns. Its `dval` is `_mid`'s key."""
+    return record_batch(
+        [array([1, 2, 3], int64).copy(), array([11, 22, 33], int64).copy()],
+        names=["did", "dval"],
+    )
+
+
+def _mid() raises -> RecordBatch:
+    """`B` — three rows, **one** column, joined to `A` on one side and to `C`
+    on the other.
+
+    One column on purpose: the two shapes differ only in how wide a row the
+    intermediate they build holds, so the fixture has to make that width
+    differ. Right-deep builds `B` alone (8 bytes a row); left-deep builds
+    `A|B` (24). See `JoinReassociation`'s note on why the *cardinality* term,
+    which would normally decide this, is blind today.
+    """
+    return record_batch([array([11, 22, 33], int64).copy()], names=["mid"])
+
+
+def _leaf() raises -> RecordBatch:
+    """`C` — six rows, two columns, referencing `_mid` three ways over.
+
+    Six rather than three because at three the two shapes tie exactly, and a
+    tie keeps the plan as written.
+    """
+    return record_batch(
+        [
+            array([11, 22, 33, 11, 22, 33], int64).copy(),
+            array([1, 2, 3, 4, 5, 6], int64).copy(),
+        ],
+        names=["ck", "cv"],
+    )
+
+
+def _linking() raises -> RecordBatch:
+    """Three rows, two columns, keyed on `_dim.dval` — the third input of the
+    fixture where the *left*-deep shape is the cheaper one."""
+    return record_batch(
+        [array([11, 22, 33], int64).copy(), array([1, 2, 3], int64).copy()],
+        names=["dval_key", "rank"],
+    )
+
+
+def _other() raises -> RecordBatch:
+    """Two rows keyed by `eid`, which `_facts.feid` references."""
+    return record_batch(
+        [array([1, 2], int64).copy(), array([100, 200], int64).copy()],
+        names=["eid", "eval"],
+    )
+
+
+def _three_way() raises -> DynRelation:
+    """`(A ⋈ B) ⋈ C`, keyed on `mid` — a column of `B`.
+
+    The inner join's schema is `did, dval, mid`, so index 2 is `B`'s only
+    column: the outer predicate reads `B` and `C` and never `A`, which is
+    exactly the condition that makes the two associations agree.
+    """
+    var inner = table(_dim()).join(table(_mid()), [1], [0], JOIN_INNER)
+    return inner.join(table(_leaf()), [2], [0], JOIN_INNER)
+
+
+def test_reassociation_moves_a_join_whose_predicate_skips_the_first_input() raises:
+    """`(A ⋈ B) ⋈ C` -> `A ⋈ (B ⋈ C)`.
+
+    Both spell the same five columns in the same order, because
+    `Join._output_schema` is left-then-right and `A|B` then `C` is the same
+    list as `A` then `B|C`. What changes is the intermediate the plan has to
+    hold: right-deep builds `B` alone at 8 bytes a row, left-deep builds
+    `A|B` at 24, and with six rows on the probe side that is the difference
+    between 297 and 321.
+    """
+    var plan = _three_way()
+    assert_equal(
+        _occurrences(String(plan), String("Join(Join(")),
+        1,
+        "the fixture is not left-deep: " + String(plan),
+    )
+    assert_equal(_nesting(plan), 0, String(plan.optimize[AllRules]()))
+    assert_true(
+        plan.schema() == plan.optimize[AllRules]().schema(),
+        "the schema moved",
+    )
+
+
+def test_reassociation_returns_the_same_rows() raises:
+    """Hand-written rows on both sides — the assertion that says *sound*
+    rather than merely different.
+
+    Sorted on `cv`, which is unique, so neither the join's probe order nor the
+    build side it ends up with can reorder the comparison.
+    """
+    var plan = _three_way().sort_by([col("cv", int64)], [True])
+    _fires(plan)
+    _check(
+        plan,
+        [
+            [1, 2, 3, 1, 2, 3],
+            [11, 22, 33, 11, 22, 33],
+            [11, 22, 33, 11, 22, 33],
+            [11, 22, 33, 11, 22, 33],
+            [1, 2, 3, 4, 5, 6],
+        ],
+    )
+
+
+def test_reassociation_declines_when_the_outer_key_names_the_first_input() raises:
+    """The condition that decides soundness.
+
+    Here the outer join keys on `fdid`, a column of `F`. `D ⋈ L` has no such
+    column, so the rewrite is not merely more expensive — it is a different
+    query, and the key has nowhere to go.
+    """
+    var inner = table(_facts()).join(table(_dim()), [0], [0], JOIN_INNER)
+    var plan = inner.join(table(_other()), [1], [0], JOIN_INNER)
+    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
+
+
+def test_reassociation_declines_an_ambiguous_key() raises:
+    """A name both `A` and `B` carry could mean either.
+
+    `Join._output_schema` keeps both spellings, so `A|B` really does hold two
+    fields called `k`, and `Schema.get_field_index` answers the first. A rule
+    that re-read the name after the frame moved would silently join on the
+    other column — the same hazard `PushFilterBelowJoin` declines at.
+    """
+    var a = record_batch(
+        [array([1, 2, 3], int64).copy(), array([7, 8, 9], int64).copy()],
+        names=["k", "av"],
+    )
+    var b = record_batch(
+        [array([1, 2, 3], int64).copy(), array([70, 80, 90], int64).copy()],
+        names=["k", "bv"],
+    )
+    var c = record_batch(
+        [array([1, 2, 3], int64).copy(), array([5, 6, 7], int64).copy()],
+        names=["ck", "cv"],
+    )
+    var plan = (
+        table(a^)
+        .join(table(b^), [0], [0], JOIN_INNER)
+        .join(table(c^), [0], [0], JOIN_INNER)
+    )
+    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
+
+
+def test_reassociation_declines_an_outer_join() raises:
+    """Associativity is a property of the *inner* join.
+
+    An outer join manufactures rows for non-matches, and when it does so
+    depends on the association. Checked in both positions, because a guard
+    that read only one of the two kinds would pass the other.
+    """
+    var outer_inner = table(_dim()).join(table(_mid()), [1], [0], JOIN_LEFT)
+    var plan = outer_inner.join(table(_leaf()), [2], [0], JOIN_INNER)
+    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
+
+    var inner = table(_dim()).join(table(_mid()), [1], [0], JOIN_INNER)
+    var plan2 = inner.join(table(_leaf()), [2], [0], JOIN_LEFT)
+    assert_equal(_nesting(plan2), 1, String(plan2.optimize[AllRules]()))
+
+
+def test_reassociation_declines_when_the_right_deep_shape_costs_more() raises:
+    """Right-deep is not better *per se*, and without a cost this rewrite has
+    no direction.
+
+    `(F ⋈ D) ⋈ L` keyed on `dval`: every guard passes — the outer predicate
+    reads `D` and `L` only, and nothing is ambiguous — and the rule still
+    declines. Twelve rows on the far left is what does it: left-deep probes
+    the top join with `L`'s three rows, where right-deep has to put `F`'s
+    twelve through it, and 207 against 159 is not close.
+    """
+    var inner = table(_facts()).join(table(_dim()), [0], [0], JOIN_INNER)
+    var plan = inner.join(table(_linking()), [4], [0], JOIN_INNER)
+    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
+
+
+def test_reassociation_is_a_no_op_when_nothing_is_known() raises:
+    """Three unestimable scans: neither association can be shown cheaper, so
+    neither is chosen — and no build side is either, which is why `_inert`
+    still holds here and nowhere else in this section."""
+    var s = schema([field("k", int64), field("v", int64)])
+    var t = schema([field("k2", int64), field("v2", int64)])
+    var plan = (
+        scan("/nonexistent-a.parquet", s)
+        .join(scan("/nonexistent-b.parquet", t), [0], [0], JOIN_INNER)
+        .join(scan("/nonexistent-c.parquet", s), [2], [0], JOIN_INNER)
+    )
+    _inert(plan)
+
+
+# ---------------------------------------------------------------------------
+# The two cost-based rules together — fixpoint, order, oscillation
+#
+# `test_optimizer_reaches_a_fixpoint` above optimizes a plan with **no join in
+# it**, so neither `SelectBuildSide` nor `JoinReassociation` is covered by any
+# fixpoint case — and the two interact. `JoinReassociation` compares the cost
+# of the shape it was handed against the shape it would build, and both numbers
+# depend on build sides `SelectBuildSide` chose; its first version declined
+# every time because it compared a tuned plan against an untuned one.
+#
+# Two rules that rewrite the same node, each reading the other's output, driven
+# to a fixpoint by a *rendered* comparison, is an oscillation hazard: a rule
+# that flipped on every pass would spin to `MAX_PASSES` and answer a
+# half-optimized plan with no diagnostic anywhere.
+# ---------------------------------------------------------------------------
+struct _ReassociateThenSide(RuleSet):
+    """`AllRules.rewrite`'s last two lines, in its order and alone.
+
+    `prepare` is the identity, so `ColumnPruning` is not involved and this set
+    and the one below differ in exactly one variable: which of the two cost
+    rules sees the other's output.
+    """
+
+    @staticmethod
+    def prepare(plan: DynRelation) raises -> DynRelation:
+        return plan.copy()
+
+    @staticmethod
+    def rewrite(node: DynRelation) raises -> DynRelation:
+        return SelectBuildSide.apply(JoinReassociation.apply(node))
+
+
+struct _SideThenReassociate(RuleSet):
+    """The same two rules, the other way round."""
+
+    @staticmethod
+    def prepare(plan: DynRelation) raises -> DynRelation:
+        return plan.copy()
+
+    @staticmethod
+    def rewrite(node: DynRelation) raises -> DynRelation:
+        return JoinReassociation.apply(SelectBuildSide.apply(node))
+
+
+def _tail() raises -> RecordBatch:
+    """`D` — three rows keyed on `_leaf.cv`, so a four-way chain is
+    expressible."""
+    return record_batch(
+        [
+            array([1, 2, 3], int64).copy(),
+            array([1000, 2000, 3000], int64).copy(),
+        ],
+        names=["tk", "tv"],
+    )
+
+
+def _four_way() raises -> DynRelation:
+    """`((A ⋈ B) ⋈ C) ⋈ D`, left-deep, every join INNER.
+
+    Two associations are available rather than one — reassociating the top
+    join leaves `A ⋈ B` as the new top's left child, which the rule may then
+    reassociate again — so this is the shape where a second pass does real work
+    and the fixpoint is not reached by the first.
+    """
+    return (
+        table(_dim())
+        .join(table(_mid()), [1], [0], JOIN_INNER)
+        .join(table(_leaf()), [2], [0], JOIN_INNER)
+        .join(table(_tail()), [4], [0], JOIN_INNER)
+    )
+
+
+def _right_deep_three_way() raises -> DynRelation:
+    """`A ⋈ (B ⋈ C)` written by hand — the shape `JoinReassociation` produces.
+
+    It must be a fixpoint *as written*. The rule only ever turns left-deep into
+    right-deep, so a plan already in this shape is the one place where firing
+    again could only be an oscillation.
+    """
+    var inner = table(_mid()).join(table(_leaf()), [0], [0], JOIN_INNER)
+    return table(_dim()).join(inner^, [1], [0], JOIN_INNER)
+
+
+def _mixed_kinds() raises -> DynRelation:
+    """LEFT, then INNER, then SEMI over one chain.
+
+    Both cost rules guard on kind — `SelectBuildSide` on `commutes`,
+    `JoinReassociation` on INNER — so a chain that mixes them exercises the
+    arms where one rule fires and the other declines on the same node.
+    """
+    return (
+        table(_dim())
+        .join(table(_mid()), [1], [0], JOIN_LEFT)
+        .join(table(_leaf()), [2], [0], JOIN_INNER)
+        .join(table(_other()), [0], [0], JOIN_SEMI)
+    )
+
+
+def _partly_estimable() raises -> DynRelation:
+    """A three-way chain whose middle input nobody read a footer for.
+
+    Neither rule may spend a number here, and the interesting part is that the
+    other two inputs are exactly estimable: a cost model that let a known side
+    stand in for an unknown one would fire, and a fixpoint is the cheapest
+    place to notice that it did.
+    """
+    var s = schema([field("k", int64), field("v", int64)])
+    return (
+        table(_dim())
+        .join(scan("/nonexistent-middle.parquet", s), [0], [0], JOIN_INNER)
+        .join(table(_leaf()), [1], [0], JOIN_INNER)
+    )
+
+
+def _filtered_three_way() raises -> DynRelation:
+    """`(A ⋈ B) ⋈ C` with a filter under the first join and one above the last.
+
+    Both filters move — the lower one is already where it belongs, the upper
+    one is pushed into the side it names — so the two cost rules see
+    cardinalities that changed under them, which is the reason `AllRules` runs
+    them last.
+    """
+    return (
+        table(_dim())
+        .filter(col("did", int64) > lit(1, int64))
+        .join(table(_mid()), [1], [0], JOIN_INNER)
+        .join(table(_leaf()), [2], [0], JOIN_INNER)
+        .filter(col("cv", int64) > lit(2, int64))
+    )
+
+
+def _join_shapes() raises -> List[DynRelation]:
+    """The join plans the cost-rule tests run over."""
+    return [
+        _three_way(),
+        _right_deep_three_way(),
+        _four_way(),
+        _filtered_three_way(),
+        _mixed_kinds(),
+        _partly_estimable(),
+        table(_big_left()).join(table(_right_table()), [0], [0], JOIN_INNER),
+    ]
+
+
+def _settles(plan: DynRelation) raises:
+    """Re-optimizing an optimized plan changes nothing, `prepare` included.
+    `optimize` is deterministic, so one re-application proves it."""
+    var once = plan.optimize[AllRules]()
+    var twice = once.optimize[AllRules]()
+    assert_equal(
+        String(twice),
+        String(once),
+        String("re-optimizing moved the plan:\n", once, "\n", twice),
+    )
+
+
+def _single_passes_settle(plan: DynRelation) raises:
+    """One bottom-up pass at a time: the plan stops changing and stays stopped.
+
+    **`optimize()` cannot make this assertion.** `Optimizer.run` caps at
+    `MAX_PASSES` and answers whatever the sixteenth pass produced, so two rules
+    alternating a plan between two shapes return the *same* answer every time
+    `optimize` is called — an even-period oscillation is invisible from outside
+    the driver, and re-optimizing an already-optimized plan agrees with itself
+    forever. Stepping the driver a pass at a time is the only way to see one.
+
+    `AllRules.prepare` runs first because that is what `run` does; the loop body
+    is `Optimizer.rewrite`, one whole-plan pass.
+    """
+    var current = AllRules.prepare(plan)
+    var rendered = String(current)
+    var settled = -1
+    for i in range(12):
+        var next = Optimizer[AllRules].rewrite(current)
+        var next_rendered = String(next)
+        if next_rendered == rendered:
+            if settled < 0:
+                settled = i + 1
+        else:
+            assert_true(
+                settled < 0,
+                String(
+                    "pass ",
+                    i + 1,
+                    " moved a plan that settled at pass ",
+                    settled,
+                    ":\n",
+                    rendered,
+                    "\n",
+                    next_rendered,
+                ),
+            )
+        current = next^
+        rendered = next_rendered^
+    assert_true(settled >= 0, "no fixpoint in twelve passes: " + rendered)
+
+
+def _orders_agree(plan: DynRelation) raises:
+    """The two cost rules answer the same plan whichever order they run in."""
+    var forward = plan.optimize[_ReassociateThenSide]()
+    var backward = plan.optimize[_SideThenReassociate]()
+    assert_equal(
+        String(forward),
+        String(backward),
+        String(
+            "the cost rules are not confluent on:\n",
+            plan,
+            "\nreassociate-then-side: ",
+            forward,
+            "\nside-then-reassociate: ",
+            backward,
+        ),
+    )
+
+
+def test_optimizer_is_idempotent_on_join_plans() raises:
+    var shapes = _join_shapes()
+    for ref plan in shapes:
+        _settles(plan)
+
+
+def test_the_cost_rules_do_not_oscillate() raises:
+    """`optimize` stops at a fixed pass count and answers whatever that pass
+    produced, so an oscillation is invisible from outside it. Step single
+    passes instead, and require the plan to stop changing and stay stopped."""
+    var shapes = _join_shapes()
+    for ref plan in shapes:
+        _single_passes_settle(plan)
+
+
+def test_the_cost_rules_compose_in_either_order() raises:
+    """Either order of the two cost rules reaches the same plan, so the order
+    in `AllRules` is a preference and not a requirement."""
+    var shapes = _join_shapes()
+    for ref plan in shapes:
+        _orders_agree(plan)
+
+
+def test_a_four_way_join_returns_the_same_rows_optimized() raises:
+    """The rows, on both arms, for the shape that reassociates twice.
+
+    `A ⋈ B` is three rows on `dval = mid`, each matching two rows of `C`, of
+    which `D` keeps the three whose `cv` is 1, 2 or 3. Sorted on `cv`, which is
+    unique in the result, so neither probe order nor a chosen build side can
+    reorder the comparison.
+    """
+    var plan = _four_way().sort_by([col("cv", int64)], [True])
+    _fires(plan)
+    _check(
+        plan,
+        [
+            [1, 2, 3],
+            [11, 22, 33],
+            [11, 22, 33],
+            [11, 22, 33],
+            [1, 2, 3],
+            [1, 2, 3],
+            [1000, 2000, 3000],
+        ],
+    )
+
+
+def test_a_filtered_three_way_join_returns_the_same_rows_optimized() raises:
+    """A filter below the chain and a filter above it, with both cost rules
+    free to act on what they left behind."""
+    var plan = _filtered_three_way().sort_by([col("cv", int64)], [True])
+    _fires(plan)
+    _check(
+        plan,
+        [
+            [3, 2, 3],
+            [33, 22, 33],
+            [33, 22, 33],
+            [33, 22, 33],
+            [3, 5, 6],
+        ],
+    )
+
+
+def test_a_four_way_join_keeps_its_schema_through_the_optimizer() raises:
+    """Bit-identical, not merely equivalent — `Schema.__eq__` compares every
+    member of every `Field`, which is how a join that dropped `nullable` stayed
+    hidden through two reimplementations."""
+    var plan = _four_way()
+    assert_true(
+        plan.schema() == plan.optimize[AllRules]().schema(),
+        String("the schema moved: ", plan.optimize[AllRules]()),
+    )
+    var mixed = _mixed_kinds()
+    assert_true(
+        mixed.schema() == mixed.optimize[AllRules]().schema(),
+        String("the schema moved: ", mixed.optimize[AllRules]()),
+    )

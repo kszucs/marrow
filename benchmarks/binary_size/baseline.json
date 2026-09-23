@@ -1,14 +1,14 @@
 {
-  "_comment": "__text baseline for the binary-size CI gate (see devkit size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-09-15, on mojo 1.2.0.dev2026091405. Regenerate after an intentional size change with: pixi run -e dev python -m devkit size check --update. Re-recorded for plans that declare their own parameters: one reflected `references` walk replaces `columns()`, `DynRelation.params()` feeds `QueryCli(plan).run()`, and a scan path can be a `param`. query_cli +21,120 (+0.71%) is the program built on it -- the parameter walk, typed token parsers and the late-bound scan path. Every other gate stays flat: query_streaming -4,968 (-0.34%), query_expr2_streaming -4,708 (-0.33%), query_streaming_agg -5,952 (-0.05%), query_dynvalue -5,184 (-0.05%), query_join +856 (+0.05%), query_streaming_agg_fused +1,028 (+0.07%), query_expr2_agg_fused +964 (+0.07%). Deltas are against the parent commit measured on the same machine.",
+  "_comment": "__text baseline for the binary-size CI gate (see devkit size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-09-23, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit size check --update. Re-recorded for a join's build side, the cost model and aggregate FILTER. query_streaming_agg +1,124,544 (+8.43%) is almost all FILTER in the runtime lane, paid once per aggregate kernel `resolve_aggregate` can bind; query_join +20,228 (+1.22%) is mostly the build side becoming a physical choice. Every other gate grows 0.05-0.46%. Deltas are against the parent commit measured on the same machine.",
   "threshold_pct": 0.5,
   "gates": {
-    "query_streaming": 1446564,
-    "query_join": 1653144,
-    "query_streaming_agg_fused": 1453708,
-    "query_streaming_agg": 13198892,
-    "query_dynvalue": 9883052,
-    "query_expr2_streaming": 1432776,
-    "query_expr2_agg_fused": 1437340,
-    "query_cli": 2994476
+    "query_streaming": 1452940,
+    "query_join": 1677536,
+    "query_streaming_agg_fused": 1459112,
+    "query_streaming_agg": 14462692,
+    "query_dynvalue": 10098084,
+    "query_expr2_streaming": 1439320,
+    "query_expr2_agg_fused": 1442296,
+    "query_cli": 3002092
   }
 }

@@ -7,8 +7,9 @@ def plan() raises -> DynRelation:
 
     Two columns, one aggregate: return `k` from the row where `v` is smallest
     and largest. Every aggregate marrow has reads a single operand, so this is
-    a shape gap and not only a missing kernel — `Aggregate[Agg, A]` has one
-    `A`.
+    a shape gap and not only a missing kernel: `Aggregate[Agg, A, P]` grew a
+    slot for a `FILTER` predicate, not for a second operand, and
+    `AggKernel.update` still takes one column.
 
     The rows where `v` is null are skipped rather than winning the minimum.
 

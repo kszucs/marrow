@@ -39,7 +39,8 @@ appends one stage.
 
 from std.memory import ArcPointer
 
-from ..arrays import DynArray, Int32Array, StructArray
+from ..arrays import BoolArray, DynArray, Int32Array, StructArray
+from ..buffers import Bitmap
 from ..scalars import ArrowScalar, DynScalar, NullScalar
 from std.utils import Variant
 from ..builders import Int32Builder, nulls
@@ -53,7 +54,7 @@ from ..kernels.groupby import HashGrouping
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..io import ByteSource, DynSource
-from ..kernels.join import HashJoin, JoinKind
+from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
 from ..utils import RapidHash64
 from .bindings import Bindings
 from .logical import DynValue, WindowExpr
@@ -1253,19 +1254,30 @@ struct JoinOperator(Operator):
     one morsel, so it streams correctly. the previous expression package
     reached the same conclusion
     and this carries it over deliberately.
+
+    Every field is in build/probe terms except `_schema`, the column order
+    this stage promises, and `_build_side`, which says which logical side
+    `_build` is.
     """
 
     var _build: DynOperator
-    var _left_keys: List[Int]
-    var _right_keys: List[Int]
+    var _build_keys: List[Int]
+    """Key column indices into the **build** input's own schema."""
+    var _probe_keys: List[Int]
+    """Key column indices into the **probe** input's own schema."""
     var _kind: JoinKind
     var _strictness: UInt8
+    var _build_side: JoinBuildSide
+    """Which logical side `_build` is; the kernel uses it to emit the columns
+    in `_schema`'s order."""
     var _schema: Schema
-    """What this stage promises its consumers: left fields then right, or left
-    alone for the kinds that emit no right columns."""
+    """What this stage promises its consumers: left fields then right, or one
+    side alone for the kinds that emit a single side. Independent of
+    `_build_side`."""
 
     var _build_schema: Schema
-    """The **build** input's own fields — the left side's, not this stage's.
+    """The **build** input's own fields — not this stage's, and not
+    necessarily the left side's.
 
     A separate field because the two genuinely differ and confusing them is a
     wrong answer rather than a crash. It was a `_build_schema()` *method*
@@ -1283,10 +1295,10 @@ struct JoinOperator(Operator):
     batch."""
 
     var _probe_schema: Schema
-    """The **probe** input's own fields — the right side's. Same argument, and
-    the same latent defect: `drain` concatenates the buffered probe morsels,
-    and for `SEMI`/`ANTI` the output schema is the *left* side's, so an empty
-    probe side was described with the wrong columns entirely."""
+    """The **probe** input's own fields. Same argument, and the same latent
+    defect: `drain` concatenates the buffered probe morsels, and for
+    `SEMI`/`ANTI` the output schema is one side's alone, so an empty probe
+    side was described with the wrong columns entirely."""
 
     var _ctx: ExecContext
     var _index: Optional[HashJoin[RapidHash64]]
@@ -1296,20 +1308,22 @@ struct JoinOperator(Operator):
     def __init__(
         out self,
         var build: DynOperator,
-        var left_keys: List[Int],
-        var right_keys: List[Int],
+        var build_keys: List[Int],
+        var probe_keys: List[Int],
         kind: JoinKind,
         strictness: UInt8,
+        build_side: JoinBuildSide,
         var schema: Schema,
         var build_schema: Schema,
         var probe_schema: Schema,
         var ctx: ExecContext,
     ):
         self._build = build^
-        self._left_keys = left_keys^
-        self._right_keys = right_keys^
+        self._build_keys = build_keys^
+        self._probe_keys = probe_keys^
         self._kind = kind
         self._strictness = strictness
+        self._build_side = build_side
         self._schema = schema^
         self._build_schema = build_schema^
         self._probe_schema = probe_schema^
@@ -1318,11 +1332,18 @@ struct JoinOperator(Operator):
         self._buffered = List[StructArray]()
         self._emitted = False
 
-    def _blocks_on_probe_side(self) -> Bool:
-        """Whether this kind's output depends on the whole probe side."""
+    def _blocks_on_probe_side(self) raises -> Bool:
+        """Whether this kind's output depends on the whole probe side.
+
+        Asked of the physical kind, where "left" means the build side: a
+        logical `LEFT` join built on its right input is a physical `RIGHT`
+        join, and it streams, because each unmatched probe row belongs to
+        exactly one morsel.
+        """
+        var physical = self._build_side.physical(self._kind)
         return (
-            self._kind.emits_unmatched_left()
-            or not self._kind.emits_right_columns()
+            physical.emits_unmatched_left()
+            or not physical.emits_right_columns()
         )
 
     def _ensure_built(mut self) raises:
@@ -1336,22 +1357,45 @@ struct JoinOperator(Operator):
                 parts.append(b.value().struct_array())
             else:
                 break
-        var left = _concat_batches(parts, self._build_schema.copy(), self._ctx)
+        var side = _concat_batches(parts, self._build_schema.copy(), self._ctx)
         var index = HashJoin[RapidHash64](self._ctx.copy())
-        index.build(left.copy(), self._left_keys)
+        index.build(side.copy(), self._build_keys)
         self._index = index^
 
     def _probe(mut self, batch: StructArray) raises -> StructArray:
         var result = self._index.value().probe(
             batch.copy(),
-            self._right_keys,
+            self._probe_keys,
             self._kind,
             self._strictness,
+            self._build_side,
         )
         # Re-typed with the *declared* schema: the kernel names its output from
         # the arrays it joined, while `Join.schema()` is what the plan promised
         # its consumers. Handing back the kernel's dtype makes
         # `plan.schema() != plan.execute().schema`.
+        #
+        # The relabel is positional, so first check that the kernel produced
+        # the declared columns in the declared order. Only arity and dtypes are
+        # compared: names differ by design (the kernel suffixes a collision
+        # `_right`), and an array's struct dtype may widen a required column to
+        # nullable.
+        ref want = self._schema.fields
+        ref got = result.dtype.as_struct().fields
+        var matches = len(want) == len(got)
+        if matches:
+            for i in range(len(want)):
+                if want[i].dtype != got[i].dtype:
+                    matches = False
+                    break
+        if not matches:
+            raise Error(
+                "join: the kernel produced ",
+                result.dtype,
+                " for a plan that declared ",
+                len(want),
+                " columns in a different shape",
+            )
         return _struct_of(self._schema, result.children.copy(), len(result))
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -1556,6 +1600,58 @@ struct ParquetScanOperator(Operator):
         return Datum(self._pending.pop(0).to_dyn())
 
 
+def admitted_bits(mask: DynArray) raises -> Bitmap[mut=False]:
+    """The rows a `FILTER` predicate admits: TRUE, and neither FALSE nor NULL.
+
+    `values & validity`, the same expression `kernels.filter.filter` applies
+    to its mask. The fused machine masks the operand's validity with it and
+    the buffered one compacts, and either is enough because every
+    `AggKernel` already skips nulls. A function rather than inline code
+    because `intersect_views` needs views with an immutable origin, which a
+    borrowed argument has and a local `var` does not. The mask is boolean:
+    `reject_non_boolean_filter` refuses anything else at plan time.
+    """
+    ref m = mask.as_bool()
+    return Bitmap.intersect_views(Optional(m.values()), m.validity()).value()
+
+
+@no_inline
+def compact_to_admitted(
+    mut column: DynArray,
+    mut groups: Groups,
+    mut predicate: DynOperator,
+    morsel: Morsel,
+) raises:
+    """Run a buffered aggregate's `FILTER` predicate and drop the rows it
+    rejects from both the operand column and the group ids.
+
+    Non-generic and not inlined because `BufferedAggregateOperator.push` is
+    instantiated once per kernel the runtime resolver can bind, 163 times in
+    `query_streaming_agg`, and anything inlined into it is emitted that many
+    times: written inline, these lines cost that gate +7,178,304 bytes. It
+    takes the predicate rather than the evaluated mask so the evaluation's
+    temporaries stay out of `push` too, which is another +1,793,408.
+
+    The ids are filtered by the same mask so each surviving value keeps its
+    group. `num_groups` does not shrink: a group whose rows were all
+    rejected still produces a row, with its kernel's answer over no input.
+    """
+    var rows = len(column)
+    var keep = BoolArray(
+        length=rows,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=admitted_bits(predicate.push(morsel).value().to_array(rows)),
+    ).to_dyn()
+    if not groups.is_single():
+        var ids = (
+            filter(groups.ids.copy().to_dyn(), keep.copy()).as_int32().copy()
+        )
+        groups = Groups(ids^, groups.num_groups)
+    column = filter(column, keep^)
+
+
 struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
     """The aggregate that cannot fold lanes: evaluate the operand to a column,
     hand it to the kernel.
@@ -1578,8 +1674,13 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
     **Here, not in `comptime/`, because it is not lane-specific.** Its two
     siblings bind on `PrimitiveValue` and belong to the fused lane; this one
     needs only that the operand can be evaluated to a column, which both lanes
-    can do. Hence the bound is `Evaluable` alone -- `physical.mojo` does not
-    import `logical.mojo`, so naming `Value` here would create a cycle.
+    can do. Hence the operand's bound is `Evaluable` alone, not `Value`.
+
+    The `FILTER` predicate is held as a `DynOperator` although the operand
+    is typed: this struct is instantiated once per kernel the runtime
+    resolver can bind, so every field held by type is duplicated that many
+    times, and a second typed field cost `query_streaming_agg` +2,820,216
+    bytes. The operand stays typed to keep its subtree fused.
     """
 
     var _input: Self.A
@@ -1587,6 +1688,9 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
     """This execution's parameter values, held by the *operator* rather than
     the node — which is what keeps the plan immutable and lets two executions
     of it bind different values."""
+
+    var _where: Optional[DynOperator]
+    """The `FILTER` predicate, lowered; pushed once per morsel."""
 
     var _state: Self.Agg
     """The accumulator, built at construction from the operand's dtype."""
@@ -1605,11 +1709,13 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
     def __init__(
         out self,
         var input: Self.A,
+        var predicate: Optional[DynOperator],
         var bindings: Bindings,
         scatters: Bool,
         in_dtype: DynType,
     ) raises:
         self._input = input^
+        self._where = predicate^
         self._bindings = bindings^
         self._state = Self.Agg(in_dtype)
         self._scatters = scatters
@@ -1623,6 +1729,11 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
         var groups = morsel.groups.copy() if self._scatters else Groups.single(
             n
         )
+        if self._where:
+            # Compaction, not a validity mask: this column was evaluated, so
+            # it may carry a sliced batch's offset, which a bitmap built over
+            # row 0 cannot be attached to.
+            compact_to_admitted(column, groups, self._where.value(), morsel)
         # The one narrowing in this lane, and it is comptime-resolved:
         # `Agg` is a parameter here, so `InArray` is a concrete type and
         # this is a conversion rather than a dispatch.

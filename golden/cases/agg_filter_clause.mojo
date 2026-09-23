@@ -10,9 +10,10 @@ def plan() raises -> DynRelation:
     is excluded from the sum, and a group with *no* surviving row still
     appears, with a null total.
 
-    marrow would have to carry a predicate on the aggregate node.
+    The aggregate node carries the predicate, so the fold still fuses: the
+    admitted rows arrive as validity bits and `sum(v)` reads its operand from
+    registers exactly as it does unfiltered.
 
-    -- skip mojo
     -- skip python
 
     -- expected

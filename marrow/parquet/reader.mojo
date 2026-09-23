@@ -3266,25 +3266,35 @@ struct PageBounds(Copyable, Movable):
 
 
 struct ColumnStatistics(Copyable, Movable):
-    """Decoded per-column-chunk statistics: `null_count` (-1 if absent) and the
-    `min`/`max` bounds as typed scalars (each `None` when the file stored no
-    usable bound, so absence is in the type rather than a separate flag)."""
+    """Decoded per-column-chunk statistics: `null_count` / `distinct_count`
+    (-1 if absent) and the `min`/`max` bounds as typed scalars (each `None`
+    when the file stored no usable bound, so absence is in the type rather than
+    a separate flag)."""
 
     var null_count: Int
+    var distinct_count: Int
+    """This chunk's distinct non-null value count, `-1` when the writer
+    recorded none, which most writers do. Per chunk, so the chunks' counts do
+    not add up to the column's (`Index.distinct_count` reduces them), and an
+    estimate even for its own chunk: a writer may take it from a dictionary
+    holding values no row uses."""
     var min: Optional[DynScalar]
     var max: Optional[DynScalar]
 
     def __init__(out self):
         self.null_count = -1
+        self.distinct_count = -1
         self.min = None
         self.max = None
 
     @staticmethod
     def from_metadata(leaf: LeafColumn, cm: ColumnMetaData) raises -> Self:
-        """Decode a column chunk's `ColumnMetaData` statistics: `null_count` plus
-        the min/max bounds as typed scalars (kept only when both decode)."""
+        """Decode a column chunk's `ColumnMetaData` statistics: `null_count`
+        and `distinct_count` plus the min/max bounds as typed scalars (kept
+        only when both decode)."""
         var cs = Self()
         cs.null_count = cm.null_count
+        cs.distinct_count = cm.distinct_count
         if cm.has_min_max:
             var mn = Statistics.decode(leaf, cm.min_value)
             var mx = Statistics.decode(leaf, cm.max_value)

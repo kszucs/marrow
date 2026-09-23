@@ -83,7 +83,13 @@ from ...kernels.aggregate import (
     ValidCount,
 )
 from ...schema import Schema
-from ..logical import DynValue, Shape, Value
+from ..logical import (
+    DynValue,
+    References,
+    Shape,
+    Value,
+    reject_non_boolean_filter,
+)
 from .values import RuntimeValue
 from ..bindings import Bindings
 from ...execution import ExecContext
@@ -231,6 +237,25 @@ def resolve_aggregate[
         raise Error("unknown aggregate '", name, "'")
 
 
+@no_inline
+def _lower_filter(
+    predicate: Optional[RuntimeValue], schema: Schema, bindings: Bindings
+) raises -> Optional[DynOperator]:
+    """A `FILTER` predicate, lowered to the `DynOperator` the operator holds.
+
+    Not inlined: it is called from inside `resolve_aggregate`'s job, which is
+    instantiated once per kernel the ladder can bind, 163 times in
+    `query_streaming_agg`, and lowering copies a `RuntimeValue` whose variant
+    ladders cost that gate +660,000 bytes when written out there. It cannot
+    be lowered once outside the job and captured, because a `DynOperator` is
+    move-only. `grouped` is passed as `False`, which `to_operator` ignores.
+    """
+    if predicate:
+        return predicate.value().to_operator(schema, False, bindings.copy())
+    else:
+        return None
+
+
 struct RuntimeAggregate(Value):
     """An aggregate resolved by name, over erased operands.
 
@@ -279,20 +304,34 @@ struct RuntimeAggregate(Value):
     Defaults to the aggregate's own name, the same way
     `col("a", int64).sum()` is named `"sum"`."""
 
-    def __init__(out self, var input: RuntimeValue, var name: String) raises:
+    var _where: Optional[RuntimeValue]
+    """The `FILTER` predicate, if any. An `Optional` rather than the comptime
+    lane's type parameter: `resolve_aggregate` binds a kernel per name and
+    dtype, and a comptime answer here would double that ladder to save one
+    branch per morsel."""
+
+    def __init__(
+        out self,
+        var input: RuntimeValue,
+        var name: String,
+        var predicate: Optional[RuntimeValue] = None,
+    ) raises:
         self._input = input^
         self._alias = name.copy()
         self._name = Self._checked(name^)
+        self._where = predicate^
 
     def __init__(
         out self,
         var input: RuntimeValue,
         var name: String,
         var display: String,
+        var predicate: Optional[RuntimeValue] = None,
     ) raises:
         self._input = input^
         self._name = Self._checked(name^)
         self._alias = display^
+        self._where = predicate^
 
     comptime VOCABULARY = [
         StaticString(SUM),
@@ -353,6 +392,17 @@ struct RuntimeAggregate(Value):
     comptime shape = Shape.scalar
     """One value per group, so scalar-shaped in the same sense a literal is."""
 
+    def references(self, mut into: References):
+        """The operand's columns, then the predicate's.
+
+        Written out because the derived walk visits only fields that are a
+        `Value`, which `Optional[RuntimeValue]` is not; without it,
+        `ColumnPruning` would drop a column only the predicate reads.
+        """
+        self._input.references(into)
+        if self._where:
+            self._where.value().references(into)
+
     # -- plan time ----------------------------------------------------------
 
     def dtype(self, schema: Schema) raises -> DynType:
@@ -394,12 +444,21 @@ struct RuntimeAggregate(Value):
         `DynArray` per node by construction — so `grouped` stays a plain `Bool`
         field here rather than becoming a comptime parameter. Reusing the
         comptime lane's operator is what deleted this lane's own copy of it.
+
+        A `FILTER` predicate is refused here, at plan time, unless it is
+        boolean, and is lowered through `_lower_filter`.
         """
         var d = self._input.dtype(schema)
+        if self._where:
+            reject_non_boolean_filter(self._where.value().dtype(schema))
 
         def job[Agg: AggKernel]() raises {imm} -> DynOperator:
             return BufferedAggregateOperator[Agg, RuntimeValue](
-                self._input.copy(), bindings.copy(), grouped, d
+                self._input.copy(),
+                _lower_filter(self._where, schema, bindings),
+                bindings.copy(),
+                grouped,
+                d,
             )
 
         return resolve_aggregate(self._name, d, job)
@@ -407,7 +466,26 @@ struct RuntimeAggregate(Value):
     def alias(self, var name: String) raises -> Self:
         """Rename this aggregate. Changes **only** `_alias`, so the resolver
         still sees `_name` and `.alias("n")` cannot change which kernel runs."""
-        return Self(self._input.copy(), self._name.copy(), name^)
+        return Self(
+            self._input.copy(),
+            self._name.copy(),
+            name^,
+            self._where.copy(),
+        )
+
+    def filter(self, var predicate: RuntimeValue) raises -> Self:
+        """`FILTER (WHERE predicate)`: this aggregate sees only the rows the
+        predicate answers TRUE for, with the same meaning as the comptime
+        lane's `Aggregate.filter`. Returns a copy.
+        """
+        return Self(
+            self._input.copy(),
+            self._name.copy(),
+            self._alias.copy(),
+            Optional(predicate^),
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._name, "(", self._input, ")")
+        if self._where:
+            writer.write(" filter (", self._where.value(), ")")

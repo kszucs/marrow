@@ -27,6 +27,10 @@ ungrouped path folds into registers, but those are *per-batch scratch* — the
 same status `Bound` has — and hand off through `combine_at` once per morsel. So
 `K.finalize`, `K.empty_is_null` and the count-is-zero rule stay defined in
 exactly one place.
+
+`FILTER (WHERE ...)` is a third type parameter defaulting to `Nothing`, so
+an unfiltered aggregate compiles exactly as it did without one. A fused
+fold applies the predicate to its operand's validity before the lane loop.
 """
 
 from ...dtypes import DynType, NumericType
@@ -50,9 +54,17 @@ from ...kernels.aggregate import (
     LexicalExtremum,
     SumFold,
 )
+from ...buffers import Bitmap
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Shape, Value
+from ..logical import (
+    Nothing,
+    References,
+    Shape,
+    Value,
+    is_filled,
+    reject_non_boolean_filter,
+)
 from ..bindings import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
@@ -66,13 +78,23 @@ from ..physical import (
     DynOperator,
     Morsel,
     Operator,
+    admitted_bits,
 )
 
 from .core import ComptimeValue, NumericValue, PrimitiveValue, StringValue
 
 
-struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
-    """One aggregate over one operand — every aggregate, both ways of running.
+struct Aggregate[
+    Agg: AggKernel,
+    A: Evaluable & Value,
+    P: Evaluable & Value = Nothing,
+](Value):
+    """One aggregate: its operand, its `FILTER` predicate, and both ways of
+    running.
+
+    The predicate is the type parameter `P`, defaulting to `Nothing`, so an
+    unfiltered aggregate is the same instantiation as before `P` existed and
+    compiles no filtering code.
 
     **Whether this fuses is computed, not declared.** `to_operator` asks two
     independent comptime questions, and there is no runtime test:
@@ -129,6 +151,9 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
     and `Filter` read this and raise, which is what makes
     `project([col("a").sum()])` a plan-time error naming the mistake."""
 
+    comptime filters = is_filled[Self.P]
+    """Whether this aggregate carries a `FILTER` predicate."""
+
     comptime fuses = conforms_to(Self.Agg, Foldable) and conforms_to(
         Self.A, PrimitiveValue
     )
@@ -153,17 +178,26 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
     """
 
     var _input: Self.A
+    var _where: Self.P
+    """The `FILTER` predicate, or `Nothing`. A typed field rather than an
+    `Optional`, so the reflected `references` walk declares the columns the
+    predicate reads and `ColumnPruning` keeps them."""
+
     var _alias: String
     """What `Value.name()` answers. The aggregate itself is `Agg`, a comptime
     parameter, so `alias` cannot possibly change which kernel runs — the
     two-field split `RuntimeAggregate` needs is structural here."""
 
-    def __init__(out self, var input: Self.A):
+    def __init__(out self, var input: Self.A, var predicate: Self.P):
         self._input = input^
+        self._where = predicate^
         self._alias = String(Self.Agg.name)
 
-    def __init__(out self, var input: Self.A, var name: String):
+    def __init__(
+        out self, var input: Self.A, var predicate: Self.P, var name: String
+    ):
         self._input = input^
+        self._where = predicate^
         self._alias = name^
 
     # -- Value --------------------------------------------------------------
@@ -198,13 +232,12 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
         property of `Agg` and `A`. Resolving them here is what keeps them out
         of the inner loop.
 
-        All three operators are parameterised, so nothing in this lane is
-        erased: the two fused ones because their bodies *are* the per-row
-        loop, and `BufferedAggregateOperator` because keeping `A` means its
-        operand is evaluated through a direct call rather than through a
-        `DynOperator` box. All three are boxed once, here, in the
-        `DynOperator` every operator already pays for, so the return type does
-        not depend on the branch.
+        All three operators keep the operand as a parameter, so nothing this
+        lane folds over is erased: the fused pair because their bodies are the
+        per-row loop, and `BufferedAggregateOperator` so its operand is
+        evaluated by a direct call. The predicate is a parameter on the fused
+        pair and a lowered `DynOperator` on the buffered one. All three are
+        boxed once, here, so the return type does not depend on the branch.
 
         **Placement is a comptime choice for a fused fold and a runtime one
         for a buffered fold**, and that asymmetry is the measurement rather
@@ -215,22 +248,39 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
         placement once per morsel to build a `Groups`, never per row, so
         instantiating it twice would double the code for nothing — measured
         at +4.6%.
+
+        A `FILTER` predicate is checked here, at plan time: it must be
+        boolean and must not itself aggregate.
         """
+        comptime if Self.filters:
+            comptime assert not Self.P.aggregates, (
+                "filter: an aggregate's FILTER predicate has no value per row;"
+                " filter on the rows instead"
+            )
+            reject_non_boolean_filter(self._where.dtype(schema))
         comptime if Self.fuses:
             if grouped:
-                return ScatteredAggregateOperator[Self.Agg, Self.A](
+                return ScatteredAggregateOperator[Self.Agg, Self.A, Self.P](
                     self._input.copy(),
+                    self._where.copy(),
                     bindings.copy(),
                     self._input.dtype(schema),
                 )
-            return RegisterAggregateOperator[Self.Agg, Self.A](
+            return RegisterAggregateOperator[Self.Agg, Self.A, Self.P](
                 self._input.copy(),
+                self._where.copy(),
                 bindings.copy(),
                 self._input.dtype(schema),
             )
         else:
+            var predicate: Optional[DynOperator] = None
+            comptime if Self.filters:
+                predicate = Optional(
+                    self._where.to_operator(schema, False, bindings.copy())
+                )
             return BufferedAggregateOperator[Self.Agg, Self.A](
                 self._input.copy(),
+                predicate^,
                 bindings.copy(),
                 grouped,
                 self._input.dtype(schema),
@@ -240,12 +290,31 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
         """Rename this aggregate. `col("x", int64).sum().alias("total")`.
 
         Returns a copy rather than mutating, so an aggregate stays a pure
-        description and the same subtree can be named twice.
+        description and the same subtree can be named twice. The predicate
+        rides along — `.filter(p).alias("n")` and `.alias("n").filter(p)` are
+        the same node.
         """
-        return Self(self._input.copy(), name^)
+        return Self(self._input.copy(), self._where.copy(), name^)
+
+    def filter[
+        Pred: Evaluable & Value
+    ](self, var predicate: Pred) -> Aggregate[Self.Agg, Self.A, Pred]:
+        """`FILTER (WHERE predicate)`: this aggregate sees only the rows the
+        predicate answers TRUE for.
+
+        `col("v", int64).sum().filter(col("v", int64) > lit(2, int64))`. Unlike
+        `WHERE` it removes no rows from the query, so a group whose rows are
+        all rejected still appears, with its kernel's empty answer (NULL for
+        `sum`, 0 for `count`).
+        """
+        return Aggregate[Self.Agg, Self.A, Pred](
+            self._input.copy(), predicate^, self._alias.copy()
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.Agg.name, "(", self._input, ")")
+        comptime if Self.filters:
+            writer.write(" filter (", self._where, ")")
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +416,35 @@ def _emit_fold[Agg: AggKernel](mut state: Agg, slots: Int) raises -> Datum:
     return Datum(state.finish().to_dyn())
 
 
-struct ScatteredAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
+@no_inline
+def _admitted_validity[
+    A: PrimitiveValue, P: Evaluable
+](
+    input: A,
+    bound: A.Bound,
+    predicate: P,
+    batch: StructArray,
+    bindings: Bindings,
+) raises -> Optional[Bitmap[mut=False]]:
+    """The operand's validity intersected with the rows `predicate` admits.
+
+    What a `FILTER` costs a fused fold: one bitmap AND per morsel, before the
+    lane loop, which then takes the arm it already has for a nullable column.
+    A fold cannot compact instead, because row `i` is folded into the group
+    `ids[i]` names. Not inlined, so the two operators that call it share one
+    copy per operand and predicate type rather than each inlining the
+    predicate's evaluation. Both bitmaps are offset-0, so the offset-unaware
+    `Bitmap.intersect` applies.
+    """
+    var admitted = admitted_bits(
+        predicate.evaluate(batch, bindings).to_array(len(batch))
+    )
+    return Bitmap.intersect(input.validity(bound), Optional(admitted^))
+
+
+struct ScatteredAggregateOperator[
+    Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing
+](Operator):
     """A fused fold that scatters into the slot each row's group id names —
     `GROUP BY` with a lane-readable operand and a lane algebra.
 
@@ -374,7 +471,13 @@ struct ScatteredAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
     `comptime if Self.fuses`, where `conforms_to` has already established them.
     """
 
+    comptime filters = is_filled[Self.P]
+    """Whether `P` holds a `FILTER` predicate."""
+
     var _input: Self.A
+    var _where: Self.P
+    """The `FILTER (WHERE ...)` predicate, or the empty slot."""
+
     var _bindings: Bindings
     """This execution's parameter values, held by the *operator* rather than
     the node — which is what keeps the plan immutable and lets two executions
@@ -396,10 +499,12 @@ struct ScatteredAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
     def __init__(
         out self,
         var input: Self.A,
+        var predicate: Self.P,
         var bindings: Bindings,
         in_dtype: DynType,
     ) raises:
         self._input = input^
+        self._where = predicate^
         self._bindings = bindings^
         self._state = Self.Agg(in_dtype)
         self._num_groups = 0
@@ -422,7 +527,13 @@ struct ScatteredAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
             return None
         comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
         var bound = self._input.bind(batch, self._bindings)
-        var v = self._input.validity(bound)
+        var v: Optional[Bitmap[mut=False]]
+        comptime if Self.filters:
+            v = _admitted_validity(
+                self._input, bound, self._where, batch, self._bindings
+            )
+        else:
+            v = self._input.validity(bound)
 
         # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
         # reads past the view on the final chunk and **aborts the process**:
@@ -479,7 +590,9 @@ struct ScatteredAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
         return _emit_fold(self._state, self._num_groups)
 
 
-struct RegisterAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
+struct RegisterAggregateOperator[
+    Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing
+](Operator):
     """A fused fold with **one** slot, accumulated in registers — no `GROUP
     BY`, a lane-readable operand and a lane algebra.
 
@@ -500,7 +613,13 @@ struct RegisterAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
     exactly one place.
     """
 
+    comptime filters = is_filled[Self.P]
+    """Whether `P` holds a `FILTER` predicate."""
+
     var _input: Self.A
+    var _where: Self.P
+    """The `FILTER (WHERE ...)` predicate, or the empty slot."""
+
     var _bindings: Bindings
     """This execution's parameter values, held by the *operator* rather than
     the node — which is what keeps the plan immutable and lets two executions
@@ -514,10 +633,12 @@ struct RegisterAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
     def __init__(
         out self,
         var input: Self.A,
+        var predicate: Self.P,
         var bindings: Bindings,
         in_dtype: DynType,
     ) raises:
         self._input = input^
+        self._where = predicate^
         self._bindings = bindings^
         self._state = Self.Agg(in_dtype)
         self._emitted = False
@@ -531,7 +652,13 @@ struct RegisterAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
             return None
         comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
         var bound = self._input.bind(batch, self._bindings)
-        var v = self._input.validity(bound)
+        var v: Optional[Bitmap[mut=False]]
+        comptime if Self.filters:
+            v = _admitted_validity(
+                self._input, bound, self._where, batch, self._bindings
+            )
+        else:
+            v = self._input.validity(bound)
 
         # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
         # reads past the view on the final chunk and **aborts the process**:

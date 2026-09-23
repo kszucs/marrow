@@ -75,7 +75,7 @@ def _bench_build(mut b: Benchmark, n: Int) raises:
     def call() raises {imm}:
         var j = HashJoin()
         j.build(left, keys)
-        keep(j.num_left_rows())
+        keep(j.num_build_rows())
 
     b.iter(call)
     keep(left)

@@ -99,7 +99,7 @@ from ..parquet.reader import (
     RowSelection,
 )
 from ..io import ByteSource
-from ..scalars import BoolScalar, DynScalar, NullScalar
+from ..scalars import BoolScalar, DynScalar, NullScalar, PrimitiveScalar
 from .bindings import Bindings
 from .logical import DynValue
 
@@ -128,6 +128,10 @@ struct ColumnZones(Copyable, Movable):
     """Nulls per chunk, or `-1` where the source recorded none. Never silently
     zero -- reading a missing count as zero is a soundness choice this type
     declines to make."""
+    var distinct_counts: List[Int]
+    """Distinct non-null values per chunk, `-1` where the source recorded
+    none. Per chunk: the counts do not combine into the column's, which is
+    why `Index.distinct_count` estimates it."""
 
     def __init__(
         out self,
@@ -135,8 +139,11 @@ struct ColumnZones(Copyable, Movable):
         var mins: List[DynScalar],
         var maxes: List[DynScalar],
         var null_counts: List[Int],
+        var distinct_counts: List[Int] = [],
     ) raises:
-        """The three lists must agree in length -- one entry per chunk each.
+        """The bound and count lists must agree in length -- one entry per
+        chunk each. `distinct_counts` may instead be empty, meaning no chunk
+        recorded one.
 
         Checked rather than assumed because nothing else can check it: the
         chunk count lives on `Index`, so a column shorter than the index it
@@ -144,7 +151,13 @@ struct ColumnZones(Copyable, Movable):
         statistic appends a *null* for that chunk, which is what keeps the
         lengths equal without pretending to know anything.
         """
-        if len(mins) != len(maxes) or len(mins) != len(null_counts):
+        var distinct = len(distinct_counts)
+        var distinct_ok = distinct == 0 or distinct == len(mins)
+        if (
+            len(mins) != len(maxes)
+            or len(mins) != len(null_counts)
+            or not distinct_ok
+        ):
             raise Error(
                 "ColumnZones '",
                 name,
@@ -152,14 +165,20 @@ struct ColumnZones(Copyable, Movable):
                 len(mins),
                 " mins, ",
                 len(maxes),
-                " maxes and ",
+                " maxes, ",
                 len(null_counts),
-                " null counts -- one of each per chunk",
+                " null counts and ",
+                len(distinct_counts),
+                (
+                    " distinct counts -- one of each per chunk (distinct counts"
+                    " may also be absent entirely)"
+                ),
             )
         self.name = name^
         self.mins = mins^
         self.maxes = maxes^
         self.null_counts = null_counts^
+        self.distinct_counts = distinct_counts^
 
     def num_chunks(self) -> Int:
         """How many chunks this column describes."""
@@ -317,6 +336,14 @@ struct ZoneMaps(Copyable, Movable):
             return List[Int]()
         return self._cols[i].null_counts.copy()
 
+    def distinct_counts(self, name: String) -> List[Int]:
+        """This column's per-chunk distinct counts as recorded, `-1` for
+        unknown; empty when none were recorded."""
+        var i = self._index_of(name)
+        if i < 0:
+            return List[Int]()
+        return self._cols[i].distinct_counts.copy()
+
 
 struct Index(Copyable, Movable):
     """Everything a source knows about its own data without reading it.
@@ -379,6 +406,83 @@ struct Index(Copyable, Movable):
         """
         return self.zones.dtype(name)
 
+    def num_rows(self) -> Optional[Int]:
+        """The source's row count, or `None` unless every chunk recorded one."""
+        if self.chunks > 0 and len(self.rows) == self.chunks:
+            var total = 0
+            for r in self.rows:
+                total += r
+            return total
+        else:
+            return None
+
+    def null_count(self, name: String) -> Optional[Int]:
+        """`name`'s null count over the source, or `None` unless every chunk
+        recorded one: a sum over some of the chunks is not the total."""
+        var counts = self.zones.null_counts(name)
+        var complete = self.chunks > 0 and len(counts) == self.chunks
+        var total = 0
+        for c in counts:
+            if c < 0:
+                complete = False
+            else:
+                total += c
+        if complete:
+            return total
+        else:
+            return None
+
+    def distinct_count(self, name: String) -> Optional[Int]:
+        """The largest distinct count any chunk recorded for `name`, or `None`
+        when none did.
+
+        This estimates the source's distinct count and bounds it in neither
+        direction: a value can repeat across chunks, so the maximum can
+        undercount, and a chunk's figure is a dictionary size that can include
+        values no row uses, so it can overcount. The maximum is taken rather
+        than the sum because the sum overcounts a key that every chunk repeats
+        by up to the number of chunks, and an overcounted distinct count
+        underestimates a join.
+        """
+        var counts = self.zones.distinct_counts(name)
+        var best = -1
+        for c in range(min(len(counts), self.chunks)):
+            best = max(best, counts[c])
+        if best < 0:
+            return None
+        else:
+            return best
+
+    def extreme(self, name: String, upper: Bool) raises -> DynScalar:
+        """`name`'s largest (`upper`) or smallest recorded value over the
+        source, or a null scalar when there is none.
+
+        Compared in the column's own dtype: `DynScalar` has no ordering, and
+        `date32` and `int32` share a representation but not an order.
+        """
+        var dtype = self.dtype_of(name)
+
+        def arm[T: PrimitiveType](witness: T) raises {imm} -> DynScalar:
+            var stats = self.maxes[T](name, witness) if upper else self.mins[T](
+                name, witness
+            )
+            var best = Optional[Scalar[T.native]](None)
+            for c in range(len(stats)):
+                if stats.is_valid(c):
+                    var value = stats[c].value()
+                    if not best:
+                        best = value
+                    elif upper and value > best.value():
+                        best = value
+                    elif not upper and value < best.value():
+                        best = value
+            return PrimitiveScalar[T](best, witness).to_dyn()
+
+        if dtype.is_primitive():
+            return dtype.dispatch_primitive(arm)
+        else:
+            return NullScalar().to_dyn()
+
     def defined(self, name: String) raises -> BoolArray:
         """Where `name` has at least one non-null value, as far as can be shown.
 
@@ -431,6 +535,8 @@ struct Index(Copyable, Movable):
         if len(pages) == 0 or covered != rows:
             return Index()
 
+        # A page index records no distinct count either, so the list is left
+        # absent rather than filled with sentinels.
         var zones = ZoneMaps(capacity=1)
         zones.add(ColumnZones(name^, mins^, maxes^, nulls^))
         return Index(chunks=len(pages), zones=zones^, rows=page_rows^)
@@ -439,8 +545,13 @@ struct Index(Copyable, Movable):
     def from_parquet[
         S: ByteSource, leaves: LeafSet
     ](file: ParquetFile[S, leaves]) raises -> Index:
-        """A row group is a chunk: one min, max and null count per column per
-        row group, keyed by the file's top-level column names.
+        """A row group is a chunk: one min, max, null count and distinct count
+        per column per row group, keyed by the file's top-level column names.
+
+        The distinct count is almost always `-1` — pyarrow and parquet-cpp
+        omit `Statistics.distinct_count` outright, and marrow's own writer
+        emits it only for a `RLE_DICTIONARY` chunk. An absent one is unknown
+        and stays unknown; see `ColumnZones.distinct_counts`.
 
         **The leaf-alignment guard is the load-bearing line.**
         `ParquetFile.statistics()` is indexed by *leaf* position, and an expression
@@ -487,12 +598,20 @@ struct Index(Copyable, Movable):
             var mins = List[DynScalar](capacity=chunks)
             var maxes = List[DynScalar](capacity=chunks)
             var nulls = List[Int](capacity=chunks)
+            var distinct = List[Int](capacity=chunks)
             for rg in range(chunks):
                 mins.append(_or_null(stats[rg][i].min))
                 maxes.append(_or_null(stats[rg][i].max))
                 nulls.append(stats[rg][i].null_count)
+                distinct.append(stats[rg][i].distinct_count)
             zones.add(
-                ColumnZones(arrow.fields[i].name.copy(), mins^, maxes^, nulls^)
+                ColumnZones(
+                    arrow.fields[i].name.copy(),
+                    mins^,
+                    maxes^,
+                    nulls^,
+                    distinct^,
+                )
             )
         return Index(chunks=chunks, zones=zones^, rows=rows^)
 

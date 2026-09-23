@@ -17,7 +17,21 @@ from ...arrays import StructArray, DynArray
 from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
 from ...execution import ExecContext
-from ...kernels.join import JOIN_INNER, JOIN_LEFT, JOIN_SEMI
+from ...kernels.join import (
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_FULL,
+    JOIN_SEMI,
+    JOIN_ANTI,
+    JOIN_RIGHT_SEMI,
+    JOIN_RIGHT_ANTI,
+    JoinKind,
+    BUILD_LEFT,
+    BUILD_RIGHT,
+)
+from ...kernels.sort import sort
+from ..optimizer import AllRules, PushFilterBelowJoin
 from ...dtypes import Field, field
 from ...schema import Schema, schema
 from ...parquet.writer import write_table
@@ -804,3 +818,331 @@ def test_filter_above_limit_with_offset_reads_the_limited_rows() raises:
     ref erased_v = got2.column("v").as_int64()
     assert_equal(Int(erased_v[0].value()), 5)
     assert_equal(Int(erased_v[1].value()), 7)
+
+
+# ---------------------------------------------------------------------------
+# Join.build_side — a physical choice carried through a logical plan
+#
+# `left` and `right` say what the answer is; `build_side` says what it costs.
+# The three claims below are what make that true at the plan layer: the schema
+# does not move, the rows do not move, and a rewrite does not lose the choice.
+# ---------------------------------------------------------------------------
+
+
+def _canonical_rows(batch: RecordBatch) raises -> StructArray:
+    """`batch`'s rows in a canonical order — sorted on every column.
+
+    Row order follows the probe side, so it genuinely differs between the two
+    build sides; the multiset of rows is what must not.
+    """
+    var sa = batch.to_struct_array()
+    var keys = List[Int](capacity=len(sa.children))
+    var asc = List[Bool](capacity=len(sa.children))
+    for i in range(len(sa.children)):
+        keys.append(i)
+        asc.append(True)
+    return sort(sa, keys, asc)
+
+
+def _assert_plan_build_sides_agree(kind: JoinKind) raises:
+    var built_left = table(_left()).join(
+        table(_right()), [0], [0], kind, BUILD_LEFT
+    )
+    var built_right = table(_left()).join(
+        table(_right()), [0], [0], kind, BUILD_RIGHT
+    )
+    assert_true(
+        built_left.schema() == built_right.schema(),
+        String("kind ", kind, ": the declared schema moved"),
+    )
+    var a = built_left.execute()
+    var b = built_right.execute()
+    # The relabel in `JoinOperator._probe` is only honest if what it relabels
+    # already matched, so the executed schema is checked against the declared
+    # one on both sides rather than against each other.
+    assert_true(built_left.schema() == a.schema)
+    assert_true(built_right.schema() == b.schema)
+    assert_equal(
+        a.num_rows(), b.num_rows(), String("kind ", kind, ": row count")
+    )
+    assert_true(
+        _canonical_rows(a) == _canonical_rows(b),
+        String("kind ", kind, ": the rows differ"),
+    )
+
+
+def test_plan_build_side_agrees_for_every_kind() raises:
+    """Through a plan, either build side returns the declared schema and the
+    same rows, for every kind."""
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for ref k in kinds:
+        _assert_plan_build_sides_agree(k)
+
+
+# ---------------------------------------------------------------------------
+# The two mirrored existence filters, at the plan layer
+#
+# `JOIN_RIGHT_SEMI` and `JOIN_RIGHT_ANTI` are what made `JoinKind.mirror`
+# total, which is what made a build side free to choose — so the kernel tests
+# them and `Estimate.joined` tests them, and until now this file did not
+# mention them at all. They are reachable as logical kinds
+# (`JoinKind.parse("right semi")`, `Join(kind=...)`), so every claim the other
+# six carry here has to hold for them too: the schema, the rows, survival
+# through `traverse`, and survival through a rule that rebuilds the node.
+# ---------------------------------------------------------------------------
+def test_a_right_semi_join_emits_only_the_right_side() raises:
+    """The mirror of `test_a_semi_join_emits_only_the_left_side`.
+
+    `_output_schema` asks `emits_left_columns` / `emits_right_columns`, so a
+    kind whose arm was missing there would come back with four columns rather
+    than two — and the declared schema is what everything above the join reads.
+    """
+    var plan = table(_left()).join(table(_right()), [0], [0], JOIN_RIGHT_SEMI)
+    var s = plan.schema()
+    assert_equal(len(s.fields), 2)
+    assert_equal(s.fields[0].name, "k")
+    assert_equal(s.fields[1].name, "rv")
+
+    var out = plan.execute()
+    assert_true(plan.schema() == out.schema)
+    # right keys 2 and 3 match a left key; 4 does not
+    assert_equal(out.num_rows(), 2)
+    assert_equal(out.num_columns(), 2)
+    var canonical = _canonical_rows(out)
+    assert_true(canonical.children[0].as_int64() == array([2, 3], int64))
+    assert_true(canonical.children[1].as_int64() == array([200, 300], int64))
+
+
+def test_a_right_anti_join_emits_the_unmatched_right_rows() raises:
+    """The complement of the case above, and the reason a boolean-shaped
+    reading of the kind is not enough: SEMI and ANTI agree on both
+    `emits_*_columns` predicates and differ only in which rows they keep."""
+    var plan = table(_left()).join(table(_right()), [0], [0], JOIN_RIGHT_ANTI)
+    assert_equal(len(plan.schema().fields), 2)
+
+    var out = plan.execute()
+    assert_true(plan.schema() == out.schema)
+    assert_equal(out.num_rows(), 1)
+    var canonical = _canonical_rows(out)
+    assert_true(canonical.children[0].as_int64() == array([4], int64))
+    assert_true(canonical.children[1].as_int64() == array([400], int64))
+
+
+def test_a_right_sided_existence_filter_survives_traverse() raises:
+    """`traverse` rebuilds a join through the by-name constructor, which takes
+    the kind as an argument like any other field.
+
+    Paired with the build side because the two fail the same way: a rebuild
+    that dropped either produces a plan that still runs, and only a kind that
+    changed would change the answer."""
+
+    def identity(node: DynRelation) raises {imm} -> DynRelation:
+        return node.copy()
+
+    var kinds: List[JoinKind] = [JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI]
+    for ref k in kinds:
+        var j = Join(
+            table(_left()),
+            table(_right()),
+            [0],
+            [0],
+            k,
+            build_side=BUILD_RIGHT,
+        )
+        var again = j.traverse(identity)
+        assert_true(again.isa[Join]())
+        assert_true(
+            again.get[Join]().kind == k,
+            String("traverse dropped the kind: ", again),
+        )
+        assert_true(
+            again.get[Join]().build_side == BUILD_RIGHT,
+            String("traverse dropped the build side: ", again),
+        )
+        assert_true(
+            j.schema() == again.schema(), String("the schema moved: ", again)
+        )
+
+
+def test_a_right_sided_existence_filter_survives_the_optimizer() raises:
+    """`optimize[AllRules]()` may re-take the build side and must not touch
+    anything else.
+
+    The kind decides *which* rows come back, so a rule that lost it is a wrong
+    answer rather than a slow one — and `SelectBuildSide` reaches these two
+    precisely because `commutes` admits them.
+    """
+    var kinds: List[JoinKind] = [JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI]
+    for ref k in kinds:
+        var plan = table(_left()).join(table(_right()), [0], [0], k)
+        var optimized = plan.optimize[AllRules]()
+        assert_true(optimized.isa[Join](), String(optimized))
+        assert_true(
+            optimized.get[Join]().kind == k,
+            String("kind ", k, ": the optimizer changed it — ", optimized),
+        )
+        assert_true(
+            plan.schema() == optimized.schema(),
+            String("kind ", k, ": the schema moved — ", optimized),
+        )
+        assert_true(
+            _canonical_rows(plan.execute())
+            == _canonical_rows(optimized.execute()),
+            String("kind ", k, ": the rows moved — ", optimized),
+        )
+
+
+def test_a_right_sided_existence_filter_is_reachable_by_name() raises:
+    """`JoinKind.parse` is how a frontend names a kind, and the plan layer
+    takes whatever it answers — so the two spellings must reach the two
+    constants rather than raising."""
+    assert_true(JoinKind.parse(String("right semi")) == JOIN_RIGHT_SEMI)
+    assert_true(JoinKind.parse(String("right anti")) == JOIN_RIGHT_ANTI)
+    var plan = table(_left()).join(
+        table(_right()), [0], [0], JoinKind.parse(String("right semi"))
+    )
+    assert_equal(plan.execute().num_rows(), 2)
+
+
+def test_a_right_built_left_join_still_streams_its_morsels() raises:
+    """A LEFT join built on its *right* input is a physical RIGHT join.
+
+    Its extra rows are then unmatched *probe* rows, each of which belongs to
+    exactly one morsel, so it streams — and key 1 must still appear exactly
+    once rather than once per morsel. `_blocks_on_probe_side` asking the
+    logical kind would buffer here for nothing; asking the physical kind and
+    getting the mirror wrong would duplicate the tail.
+    """
+    var plan = table(_left()).join(
+        table(_right()), [0], [0], JOIN_LEFT, BUILD_RIGHT
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 3)  # 2 and 3 matched, 1 null-widened once
+    assert_equal(out.num_columns(), 4)
+
+
+def test_join_build_side_survives_traverse() raises:
+    """`traverse` rebuilds a join through the by-name constructor.
+
+    Losing `build_side` there costs an optimization rather than an answer, so
+    nothing else in this file would fail — the same argument `ParquetScan`'s
+    pruners carry, and the reason they are tested the same way.
+    """
+    var j = Join(
+        table(_left()),
+        table(_right()),
+        [0],
+        [0],
+        JOIN_INNER,
+        build_side=BUILD_RIGHT,
+    )
+
+    def identity(node: DynRelation) raises {imm} -> DynRelation:
+        return node.copy()
+
+    var again = j.traverse(identity)
+    assert_true(again.isa[Join]())
+    assert_true(
+        again.get[Join]().build_side == BUILD_RIGHT,
+        "traverse dropped the build side",
+    )
+
+
+def test_join_build_side_survives_a_rule_that_rebuilds_the_node() raises:
+    """The rewrite that actually happens: a filter pushed below the join.
+
+    `PushFilterBelowJoin` rebuilds the node, so this is `traverse`'s claim one
+    level up, through a rule that has its own `Join(...)` call. Asked of that
+    rule *alone*, because `AllRules` also contains a rule whose whole job is to
+    change this field — see the case below, which is the one that would fail if
+    the two were run together and could not be told apart.
+    """
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT)
+        .filter(col("lv", int64) > lit(15, int64))
+    )
+    var rewritten = PushFilterBelowJoin.apply(plan)
+    assert_true(
+        rewritten.isa[Join](),
+        String("expected the filter below the join, got ", rewritten),
+    )
+    assert_true(
+        rewritten.get[Join]().build_side == BUILD_RIGHT,
+        "the rule dropped the build side",
+    )
+    # A right-built join prints its build side, so a plan that lost it is
+    # visible in the rendering as well as in the field.
+    assert_true("build=right" in String(rewritten), String(rewritten))
+
+
+def test_the_optimizer_may_overrule_a_hand_written_build_side() raises:
+    """And here it does, which is the field doing its job rather than losing
+    it.
+
+    `build_side` is a physical choice, not part of what the query means, so a
+    cost-based rule is entitled to re-take it. Pushing the filter below the
+    join is what changes the arithmetic: the left input drops to an estimated
+    one row against the right's three, so indexing the left becomes the cheaper
+    arrangement and `SelectBuildSide` says so — even though the author asked
+    for `BUILD_RIGHT` when both sides still had three rows.
+
+    The distinction this pins is between *chosen* and *lost*. A rule that
+    silently dropped the field would also leave `BUILD_LEFT` here, so the
+    assertion is paired with the case above, which proves the rebuild carries
+    it when nothing decides otherwise.
+    """
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT)
+        .filter(col("lv", int64) > lit(15, int64))
+    )
+    var rewritten = plan.optimize[AllRules]()
+    assert_true(rewritten.isa[Join](), String(rewritten))
+    assert_true(
+        rewritten.get[Join]().build_side == BUILD_LEFT,
+        String("expected the cheaper side to win, got ", rewritten),
+    )
+
+    # Nothing shrank the right side, so the author's choice stands there.
+    var other = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT)
+        .filter(col("rv", int64) > lit(150, int64))
+    )
+    var kept = other.optimize[AllRules]()
+    assert_true(kept.isa[Join](), String(kept))
+    assert_true(
+        kept.get[Join]().build_side == BUILD_RIGHT,
+        String(
+            "the filter went to the right side, so should the build: ", kept
+        ),
+    )
+
+
+def test_join_schema_ignores_the_build_side() raises:
+    """The field `_output_schema` is not allowed to see.
+
+    A schema that moved with the build side would make choosing one a change
+    of meaning, which is the coupling this field exists to break.
+    """
+    var built_left = table(_left()).join(
+        table(_right()), [0], [0], JOIN_SEMI, BUILD_LEFT
+    )
+    var built_right = table(_left()).join(
+        table(_right()), [0], [0], JOIN_SEMI, BUILD_RIGHT
+    )
+    var s = built_right.schema()
+    assert_equal(len(s.fields), 2)
+    assert_equal(s.fields[0].name, "k")
+    assert_equal(s.fields[1].name, "lv")
+    assert_true(s == built_left.schema())

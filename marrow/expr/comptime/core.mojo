@@ -62,7 +62,7 @@ from ...builders import BinaryLikeBuilder, PrimitiveBuilder
 from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
-from ..logical import Shape, Value
+from ..logical import Nothing, Shape, Value
 from ..bindings import Bindings
 from ...kernels.aggregate import (
     COUNT,
@@ -376,12 +376,12 @@ trait PrimitiveValue(ComptimeValue):
         Names the array its values evaluate to, `PrimitiveArray[Self.Type]`,
         which is what lets `DistinctCount` hash a typed column instead of
         walking an erased one."""
-        return CountDistinct[Self](self.copy())
+        return CountDistinct[Self](self.copy(), Nothing())
 
     def approx_count_distinct(self) -> ApproxCountDistinct[Self]:
         """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
         standard error, nulls excluded."""
-        return ApproxCountDistinct[Self](self.copy())
+        return ApproxCountDistinct[Self](self.copy(), Nothing())
 
     comptime Bound: Copyable & Deinitable
     """Everything the lane loop needs, resolved once per batch.
@@ -525,12 +525,12 @@ trait StringValue(ComptimeValue):
 
     def count_distinct(self) -> StringCountDistinct[Self]:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
-        return StringCountDistinct[Self](self.copy())
+        return StringCountDistinct[Self](self.copy(), Nothing())
 
     def approx_count_distinct(self) -> StringApproxCountDistinct[Self]:
         """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
         standard error, nulls excluded."""
-        return StringApproxCountDistinct[Self](self.copy())
+        return StringApproxCountDistinct[Self](self.copy(), Nothing())
 
     comptime Bound: Copyable & Deinitable
     """This subtree's column references, bound to this batch — as
@@ -948,12 +948,12 @@ trait StringValue(ComptimeValue):
     def min(self) -> StringMin[Self]:
         """`MIN(self)` — lexicographic (bytewise), matching Arrow's
         `hash_min`. Keeps the input's type."""
-        return StringMin[Self](self.copy())
+        return StringMin[Self](self.copy(), Nothing())
 
     def max(self) -> StringMax[Self]:
         """`MAX(self)` — lexicographic (bytewise), matching Arrow's
         `hash_max`."""
-        return StringMax[Self](self.copy())
+        return StringMax[Self](self.copy(), Nothing())
 
 
 trait NumericValue(PrimitiveValue):
@@ -1042,24 +1042,24 @@ trait NumericValue(PrimitiveValue):
 
     def sum(self) -> Sum[Self]:
         """`SUM(self)`. Integers widen to int64; floats stay float64."""
-        return Sum[Self](self.copy(), String(SUM))
+        return Sum[Self](self.copy(), Nothing(), String(SUM))
 
     def product(self) -> Product[Self]:
         """`PRODUCT(self)`."""
-        return Product[Self](self.copy(), String(PRODUCT))
+        return Product[Self](self.copy(), Nothing(), String(PRODUCT))
 
     def mean(self) -> Mean[Self]:
         """`AVG(self)`. Accumulates in float64 and divides by the valid count,
         so nulls are excluded rather than counted as zero."""
-        return Mean[Self](self.copy(), String(MEAN))
+        return Mean[Self](self.copy(), Nothing(), String(MEAN))
 
     def min(self) -> Min[Self]:
         """`MIN(self)`. Keeps the input's type."""
-        return Min[Self](self.copy(), String(MIN))
+        return Min[Self](self.copy(), Nothing(), String(MIN))
 
     def max(self) -> Max[Self]:
         """`MAX(self)`."""
-        return Max[Self](self.copy(), String(MAX))
+        return Max[Self](self.copy(), Nothing(), String(MAX))
 
     def variance[ddof: Int = 0](self) -> Variance[ddof, Self]:
         """`VAR_POP(self)` by default, `VAR_SAMP(self)` at `ddof=1`.
@@ -1076,7 +1076,7 @@ trait NumericValue(PrimitiveValue):
         `(col("a", int64) * 2).variance()` compiles the multiply into one loop
         and only the dispersion materialises.
         """
-        return Variance[ddof, Self](self.copy(), String(VARIANCE))
+        return Variance[ddof, Self](self.copy(), Nothing(), String(VARIANCE))
 
     def stddev[ddof: Int = 0](self) -> StdDev[ddof, Self]:
         """`STDDEV_POP(self)` by default, `STDDEV_SAMP(self)` at `ddof=1`.
@@ -1084,7 +1084,7 @@ trait NumericValue(PrimitiveValue):
         The square root of `variance[ddof]()`, computed from the same Welford
         state rather than by aggregating twice.
         """
-        return StdDev[ddof, Self](self.copy(), String(STDDEV))
+        return StdDev[ddof, Self](self.copy(), Nothing(), String(STDDEV))
 
     def count(self) -> Count[Self]:
         """`COUNT(self)` — the *non-null* values of `self`, not the row count.
@@ -1092,7 +1092,7 @@ trait NumericValue(PrimitiveValue):
         `COUNT(*)` is `count_star()` in `builders.mojo`, which is this same
         aggregate over a literal.
         """
-        return Count[Self](self.copy(), String(COUNT))
+        return Count[Self](self.copy(), Nothing(), String(COUNT))
 
     # -- operators ----------------------------------------------------------
     # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`
@@ -1329,12 +1329,12 @@ trait TemporalValue(PrimitiveValue):
     def min(self) -> Min[Self]:
         """`MIN(self)`. Keeps the input's dtype — unit and timezone
         included."""
-        return Min[Self](self.copy())
+        return Min[Self](self.copy(), Nothing())
 
     def max(self) -> Max[Self]:
         """`MAX(self)`. Keeps the input's dtype — unit and timezone
         included."""
-        return Max[Self](self.copy())
+        return Max[Self](self.copy(), Nothing())
 
     # -- comparison ---------------------------------------------------------
     #

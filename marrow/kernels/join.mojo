@@ -7,19 +7,25 @@ Public API
 
 Internal types
 --------------
-``IndexPairs``  — (left_indices, right_indices) result of a probe phase.
+``JoinIndex``   — (build_indices, probe_indices) result of a probe phase.
 
 Supported join kinds (pass the JOIN_* constants defined below):
-  JOIN_INNER  — only matched rows
-  JOIN_LEFT   — all left + matched right (NULLs for non-matches)
-  JOIN_RIGHT  — all right + matched left (NULLs for non-matches)
-  JOIN_FULL   — all rows from both sides
-  JOIN_SEMI   — left rows with at least one match (left columns only)
-  JOIN_ANTI   — left rows with no match (left columns only)
+  JOIN_INNER       — only matched rows
+  JOIN_LEFT        — all left + matched right (NULLs for non-matches)
+  JOIN_RIGHT       — all right + matched left (NULLs for non-matches)
+  JOIN_FULL        — all rows from both sides
+  JOIN_SEMI        — left rows with at least one match (left columns only)
+  JOIN_ANTI        — left rows with no match (left columns only)
+  JOIN_RIGHT_SEMI  — right rows with at least one match (right columns only)
+  JOIN_RIGHT_ANTI  — right rows with no match (right columns only)
 
 Supported strictness:
   JOIN_ALL    — default: return all matching pairs (Cartesian for multi-match)
   JOIN_ANY    — return at most one matching right row per left row
+
+Which side is indexed is separate from which side's columns come first:
+``hash_join(a, b, kind, build_side=BUILD_RIGHT)`` indexes ``b``, streams ``a``
+and returns the same fields in the same order as ``BUILD_LEFT``.
 
 Future join algorithms (see `backlog.md`); operators name the concrete
 algorithm, so a new one is a new struct, not a conformance:
@@ -66,6 +72,10 @@ from ..utils import Hasher, RapidHash64
 struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
     """Which rows a join emits — and therefore which *columns*.
 
+    "Left" and "right" mean a kind's first and second side. A caller reads
+    them against its own inputs; inside the kernel they are read against
+    `(build, probe)`, which `JoinBuildSide.physical` converts to.
+
     A value type rather than a bare `UInt8` for two reasons, both of which had
     already cost something:
 
@@ -102,30 +112,76 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
     def __ne__(self, other: Self) -> Bool:
         return self.code != other.code
 
-    def emits_right_columns(self) -> Bool:
-        """Whether the output carries the right side's columns.
-
-        False only for the existence filters, which project the left side and
-        use the right purely as a predicate. **This is the single source for
-        the join's output width** — `output_dtype` and `_assemble` must agree or
-        the result `StructArray` is malformed.
+    def emits_left_columns(self) -> Bool:
+        """Whether the output carries the left side's columns: false only for
+        RIGHT_SEMI and RIGHT_ANTI. With `emits_right_columns` it fixes the
+        output width, which `output_dtype` and `_assemble` must agree on.
         """
+        return self != JOIN_RIGHT_SEMI and self != JOIN_RIGHT_ANTI
+
+    def emits_right_columns(self) -> Bool:
+        """Whether the output carries the right side's columns: false only
+        for SEMI and ANTI."""
         return self != JOIN_SEMI and self != JOIN_ANTI
 
     def emits_unmatched_left(self) -> Bool:
-        """Whether unmatched *build*-side rows appear, padded with nulls."""
+        """Whether unmatched left-side rows appear, padded with nulls."""
         return self == JOIN_LEFT or self == JOIN_FULL
 
     def emits_unmatched_right(self) -> Bool:
-        """Whether unmatched *probe*-side rows appear, padded with nulls."""
+        """Whether unmatched right-side rows appear, padded with nulls."""
         return self == JOIN_RIGHT or self == JOIN_FULL
+
+    def negates(self) -> Bool:
+        """Whether this existence filter keeps the rows that did not match:
+        true for ANTI and RIGHT_ANTI. With `emits_left_columns` and
+        `emits_right_columns`, which say which side a filter projects, it
+        describes an existence filter completely.
+        """
+        return self == JOIN_ANTI or self == JOIN_RIGHT_ANTI
+
+    def commutes(self) -> Bool:
+        """Whether the two sides may exchange roles: `mirror` without the
+        raise, for a rule that declines rather than fails. It answers what
+        `is_supported` does, because every supported kind has a mirror; it is
+        a separate method because the two ask different questions.
+        """
+        return self.is_supported()
+
+    def mirror(self) raises -> Self:
+        """This kind with its two sides exchanged: joining `(b, a)` under
+        `k.mirror()` returns the rows that joining `(a, b)` under `k` does.
+        An involution over the supported kinds.
+
+        Raises:
+            Error: for CROSS, MARK and SINGLE, which have no mirror.
+        """
+        if self == JOIN_INNER:
+            return JOIN_INNER
+        elif self == JOIN_FULL:
+            return JOIN_FULL
+        elif self == JOIN_LEFT:
+            return JOIN_RIGHT
+        elif self == JOIN_RIGHT:
+            return JOIN_LEFT
+        elif self == JOIN_SEMI:
+            return JOIN_RIGHT_SEMI
+        elif self == JOIN_RIGHT_SEMI:
+            return JOIN_SEMI
+        elif self == JOIN_ANTI:
+            return JOIN_RIGHT_ANTI
+        elif self == JOIN_RIGHT_ANTI:
+            return JOIN_ANTI
+        else:
+            raise Error("join: join kind '", self, "' cannot be mirrored")
 
     def is_supported(self) -> Bool:
         """Whether a kernel actually implements this kind.
 
         CROSS, MARK and SINGLE have constants and no implementation. They used
         to fall through to the outer-join arm and silently produce wrong output;
-        `hash_join` now rejects them.
+        `hash_join` now rejects them. Every supported kind has a `mirror`, or
+        the build side could change the answer.
         """
         return (
             self == JOIN_INNER
@@ -134,6 +190,8 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
             or self == JOIN_FULL
             or self == JOIN_SEMI
             or self == JOIN_ANTI
+            or self == JOIN_RIGHT_SEMI
+            or self == JOIN_RIGHT_ANTI
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -151,6 +209,10 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
             writer.write("left semi")
         elif self == JOIN_ANTI:
             writer.write("left anti")
+        elif self == JOIN_RIGHT_SEMI:
+            writer.write("right semi")
+        elif self == JOIN_RIGHT_ANTI:
+            writer.write("right anti")
         elif self == JOIN_CROSS:
             writer.write("cross")
         elif self == JOIN_MARK:
@@ -183,6 +245,10 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
             return JOIN_SEMI
         elif how == "left anti" or how == "anti":
             return JOIN_ANTI
+        elif how == "right semi":
+            return JOIN_RIGHT_SEMI
+        elif how == "right anti":
+            return JOIN_RIGHT_ANTI
         else:
             raise Error("join: unknown join type '", how, "'")
 
@@ -209,6 +275,15 @@ comptime JOIN_CROSS = JoinKind(6)
 """CROSS JOIN: Cartesian product; no key columns required. **Not implemented** —
 `is_supported()` is False and `hash_join` rejects it."""
 
+comptime JOIN_RIGHT_SEMI = JoinKind(7)
+"""RIGHT SEMI JOIN: right rows that have at least one match in left (right
+columns only). `JOIN_SEMI.mirror()`, and the reason a semi-join may index
+either side."""
+
+comptime JOIN_RIGHT_ANTI = JoinKind(8)
+"""RIGHT ANTI JOIN: right rows with no match in left (right columns only).
+`JOIN_ANTI.mirror()`."""
+
 # Internal join kinds — generated by the planner for subquery decorrelation.
 # Not intended for direct use. **Neither is implemented**; both are rejected.
 comptime JOIN_MARK = JoinKind(10)
@@ -228,8 +303,72 @@ comptime JOIN_ANY: UInt8 = 1
 """ANY strictness: return at most one matching right row per left row (no row duplication)."""
 
 
+# ---------------------------------------------------------------------------
+# Join build side — which input is materialised and indexed
+# ---------------------------------------------------------------------------
+
+
+struct JoinBuildSide(
+    Copyable, Equatable, ImplicitlyCopyable, Movable, Writable
+):
+    """Which of a join's two logical sides is hashed into the table.
+
+    A cost decision only: either way a join returns the same rows in the
+    caller's column order and field names. That takes two things: `physical`
+    restates the kind for `_emit_unmatched`, and `_assemble` and
+    `output_dtype` use this to put the logical left side first.
+
+    Unlike `JoinKind` it has no `@implicit` constructor. It sits beside a bare
+    `UInt8 strictness`, and `BUILD_LEFT` and `JOIN_ALL` are both 0, so an
+    implicit conversion would let the two be swapped silently.
+    """
+
+    var code: UInt8
+    """The wire value. Stable — `expr.logical.Join` stores it."""
+
+    def __init__(out self, code: UInt8):
+        self.code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.code == other.code
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.code != other.code
+
+    def physical(self, kind: JoinKind) raises -> JoinKind:
+        """`kind` restated against `(build, probe)`, the terms
+        `_emit_unmatched` reads it in: the kind itself when the left side is
+        built, its mirror otherwise.
+
+        Raises:
+            Error: through `JoinKind.mirror`, for a kind with no mirror.
+        """
+        if self == BUILD_LEFT:
+            return kind
+        else:
+            return kind.mirror()
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self == BUILD_LEFT:
+            writer.write("build=left")
+        elif self == BUILD_RIGHT:
+            writer.write("build=right")
+        else:
+            writer.write("build side ", self.code)
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+comptime BUILD_LEFT = JoinBuildSide(0)
+"""Index the left input and stream the right; the default."""
+
+comptime BUILD_RIGHT = JoinBuildSide(1)
+"""Index the right input, stream the left. Same answer, different cost."""
+
+
 @fieldwise_init
-struct JoinIndex(Copyable, Movable):
+struct JoinIndex(Copyable, Movable, Sized):
     """Which build row pairs with which probe row, one entry per output row.
 
     A named pair rather than `Tuple[Int32Array, Int32Array]`, which is what this
@@ -245,16 +384,12 @@ struct JoinIndex(Copyable, Movable):
     """
 
     var build: Int32Array
-    """Row indices into the build (left) side."""
+    """Row indices into the build side, whichever input that was."""
     var probe: Int32Array
-    """Row indices into the probe (right) side."""
+    """Row indices into the probe side."""
 
     def __len__(self) -> Int:
         return len(self.build)
-
-
-comptime IndexPairs = JoinIndex
-"""Parallel (left_indices, right_indices) arrays from the probe phase."""
 
 
 def _concat_int32(
@@ -263,7 +398,7 @@ def _concat_int32(
     """Concatenate a list of Int32 index arrays into one.
 
     Used by the parallel probe path to merge per-partition pair arrays
-    into a single ``IndexPairs``. Direct buffer-level memcpy rather than
+    into a single ``JoinIndex``. Direct buffer-level memcpy rather than
     going through the generic ``concat(DynArray)`` path — the per-
     partition pair arrays are always valid dense Int32 buffers with
     ``nulls == 0``, so we can skip bitmap and type-dispatch overhead.
@@ -353,27 +488,20 @@ paying for 8x oversubscription. Fanout stays a runtime parameter on
 
 
 def _key_struct(source: StructArray, indices: List[Int]) raises -> StructArray:
-    """The key columns, renamed to **positional** field names.
+    """The key columns under a canonical key dtype: positional names,
+    nullable, no metadata.
 
-    `StructArray.select` keeps each field's original name, and a struct's
-    dtype includes those names — so a build side of `struct<dept: int64>` and
-    a probe side of `struct<did: int64>` are *different dtypes*, and the
-    `EqKernel.apply` that filters hash collisions rejects the pair through
-    `expect_same_dtype`. Join keys are matched by position, never by name, so
-    the names are normalised away here.
-
-    Without this, `left_on="dept", right_on="did"` — the ordinary shape, since
-    a foreign key rarely shares its referent's name — raised
-    `equal: dtype mismatch: struct<dept: int64> vs struct<did: int64>`. Only
-    joins whose key columns happened to share a name worked.
+    `expect_same_dtype` compares whole struct dtypes, and keys are matched by
+    value, so every field member but the dtype is normalised away. Otherwise a
+    `dept` key could not join a `did` key, nor a required column a nullable
+    one. Marking a required column nullable changes no comparison: the
+    equality kernel reads the arrays' validity, not the flag.
     """
     var selected = source.select(indices)
     ref st = selected.dtype.as_struct()
     var fields = List[Field]()
     for i in range(len(st.fields)):
-        fields.append(
-            Field(String(i), st.fields[i].dtype.copy(), st.fields[i].nullable)
-        )
+        fields.append(Field(String(i), st.fields[i].dtype.copy()))
     return StructArray(
         dtype=struct_(fields^),
         length=selected.length,
@@ -387,9 +515,13 @@ def _key_struct(source: StructArray, indices: List[Int]) raises -> StructArray:
 struct HashJoin[Hash: Hasher = RapidHash64]:
     """Hash join using SwissHashTable.
 
-    Build phase: hash left-side key columns, insert rows into hash table.
-    Probe phase: hash right-side key columns, look up in hash table,
-    emit index pairs, verify key equality (filter hash collisions).
+    Build phase: hash the build side's key columns, insert rows into the hash
+    table. Probe phase: hash the probe side's key columns, look up in the hash
+    table, emit index pairs, verify key equality (filter hash collisions).
+
+    Everything here is in build/probe terms. Which of the caller's inputs was
+    built is the `JoinBuildSide` passed to `probe`, which restates the
+    caller's kind and puts the columns back in the caller's order.
 
     Supports two execution paths, chosen by ``ctx.worth_parallel``:
 
@@ -415,10 +547,10 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     then rebuilt into `ExecContext.parallel(n)`; every one of those
     silently dropped the caller's GPU device, since that factory sets
     `device=None`."""
-    var _left_key_indices: List[Int]
-    var _left_dtype: DynType
-    var _left_data: Optional[StructArray]
-    var _left_rows: Int
+    var _build_key_indices: List[Int]
+    var _build_type: DynType
+    var _build_data: Optional[StructArray]
+    var _build_rows: Int
 
     # Serial path state
     var _table: SwissHashTable[Self.Hash]
@@ -426,9 +558,9 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     # Parallel path state (populated by build_parallel)
     var _tables: List[SwissHashTable[Self.Hash]]
     """One SwissHashTable per partition (parallel path only)."""
-    var _left_partition_keys: List[StructArray]
+    var _build_partition_keys: List[StructArray]
     """Per-partition build-side keys, used for equality verification."""
-    var _left_partition_rows: List[Int32Array]
+    var _build_partition_rows: List[Int32Array]
     """Per-partition original row indices — maps partition-local row
     numbers back to the original build-side row index after probe."""
     var _radix_bits: Int
@@ -439,7 +571,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     `probe_serial` reads `_table`, `probe_parallel` reads `_tables`, and only
     the matching `build_*` populates either. So the probe path is not a free
     choice: it is dictated by what build did. This used to be re-derived by
-    asking `worth_parallel` about `_left_rows` a second time and trusting the
+    asking `worth_parallel` about `_build_rows` a second time and trusting the
     two calls to agree, which conflated it with the throughput decision below.
     """
 
@@ -454,14 +586,14 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
                 ``_PARALLEL_THRESHOLD`` fall back to serial regardless.
         """
         self._ctx = ctx^
-        self._left_key_indices = List[Int]()
-        self._left_dtype = null
-        self._left_data = None
-        self._left_rows = 0
+        self._build_key_indices = List[Int]()
+        self._build_type = null
+        self._build_data = None
+        self._build_rows = 0
         self._table = SwissHashTable[Self.Hash]()
         self._tables = List[SwissHashTable[Self.Hash]]()
-        self._left_partition_keys = List[StructArray]()
-        self._left_partition_rows = List[Int32Array]()
+        self._build_partition_keys = List[StructArray]()
+        self._build_partition_rows = List[Int32Array]()
         self._radix_bits = _DEFAULT_RADIX_BITS
         self._built_parallel = False
 
@@ -469,26 +601,33 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     # Public dispatchers — route to serial or parallel implementations.
     # ------------------------------------------------------------------
 
-    def build(mut self, left: StructArray, left_key_indices: List[Int]) raises:
-        if not self._ctx.worth_parallel(left.length, _PARALLEL_THRESHOLD):
-            self.build_serial(left, left_key_indices)
+    def build(mut self, data: StructArray, key_indices: List[Int]) raises:
+        if not self._ctx.worth_parallel(data.length, _PARALLEL_THRESHOLD):
+            self.build_serial(data, key_indices)
         else:
-            self.build_parallel(left, left_key_indices)
+            self.build_parallel(data, key_indices)
 
     def probe(
         self,
-        right: StructArray,
-        right_key_indices: List[Int],
+        data: StructArray,
+        key_indices: List[Int],
         kind: JoinKind = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
+        build_side: JoinBuildSide = BUILD_LEFT,
     ) raises -> StructArray:
+        """Probe `data` against the built side and assemble the result.
+
+        `kind` is the caller's, read against its own `(left, right)`, and
+        `build_side` says which of those was built. `_emit_unmatched` gets
+        `build_side.physical(kind)`; `_assemble` and `output_dtype` get both.
+        """
         # Layout, not throughput: `probe_parallel` reads the per-partition
         # tables that only `build_parallel` populates, and `probe_serial` reads
         # the single table that only `build_serial` populates. Whichever build
         # ran decides this, and nothing else may.
         #
         # Throughput is a separate question, and asking it here was the bug:
-        # `worth_parallel(self._left_rows, ...)` let one row count answer both,
+        # `worth_parallel(self._build_rows, ...)` let one row count answer both,
         # so a 1M-row build put every 8192-row morsel the plan layer streams
         # through the partitioned path. The throughput levers live where the
         # per-call cost actually is — `_DEFAULT_RADIX_BITS` (how much work each
@@ -499,25 +638,27 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         # batch size tested, 8192 rows included.
         if self._built_parallel:
             return self.probe_parallel(
-                right, right_key_indices, kind, strictness
+                data, key_indices, kind, strictness, build_side
             )
         else:
-            return self.probe_serial(right, right_key_indices, kind, strictness)
+            return self.probe_serial(
+                data, key_indices, kind, strictness, build_side
+            )
 
     # ------------------------------------------------------------------
     # Serial path — one SwissHashTable over the whole build side.
     # ------------------------------------------------------------------
 
     def build_serial(
-        mut self, left: StructArray, left_key_indices: List[Int]
+        mut self, data: StructArray, key_indices: List[Int]
     ) raises:
-        self._left_dtype = left.dtype.copy()
-        self._left_rows = left.length
-        self._left_data = left.copy()
-        self._left_key_indices = left_key_indices.copy()
+        self._build_type = data.dtype.copy()
+        self._build_rows = data.length
+        self._build_data = data.copy()
+        self._build_key_indices = key_indices.copy()
         self._built_parallel = False
         var ctx = self._ctx.copy()
-        self._table.build(_key_struct(left, left_key_indices), ctx)
+        self._table.build(_key_struct(data, key_indices), ctx)
 
     def _probe_ctx(self, probe_rows: Int) -> ExecContext:
         """The context to spend on a probe call of `probe_rows` rows.
@@ -536,25 +677,26 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
 
     def probe_serial(
         self,
-        right: StructArray,
-        right_key_indices: List[Int],
+        data: StructArray,
+        key_indices: List[Int],
         kind: JoinKind,
         strictness: UInt8,
+        build_side: JoinBuildSide = BUILD_LEFT,
     ) raises -> StructArray:
-        var left_keys = _key_struct(
-            self._left_data.value(), self._left_key_indices
+        var build_keys = _key_struct(
+            self._build_data.value(), self._build_key_indices
         )
-        var right_keys = _key_struct(right, right_key_indices)
+        var probe_keys = _key_struct(data, key_indices)
         # Sized by *this call's* probe rows, not by the build side and not by
         # the raw worker count: `SwissHashTable.probe` spends `ctx` on hashing
         # the probe keys, and striping 8192 of them across a forced 8 workers
         # costs ~16x what hashing them on the calling thread does.
         var pairs = self._table.probe(
-            left_keys,
-            right_keys,
-            self._left_rows,
+            build_keys,
+            probe_keys,
+            self._build_rows,
             single_match=strictness == JOIN_ANY,
-            ctx=self._probe_ctx(len(right)),
+            ctx=self._probe_ctx(len(data)),
         )
         # `SwissHashTable.probe` still returns a bare tuple -- it cannot name
         # `JoinIndex`, since `join` imports `hashtable` and not the other way
@@ -562,16 +704,16 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         # stop being interchangeable.
         var verified = JoinIndex(pairs[0].copy(), pairs[1].copy())
         var final = self._emit_unmatched(
-            verified^, len(right), kind, strictness
+            verified^, len(data), build_side.physical(kind), strictness
         )
-        return self._assemble(right, final, kind)
+        return self._assemble(data, final, kind, build_side)
 
     # ------------------------------------------------------------------
     # Parallel path — radix-partitioned, one table per partition.
     # ------------------------------------------------------------------
 
     def build_parallel(
-        mut self, left: StructArray, left_key_indices: List[Int]
+        mut self, data: StructArray, key_indices: List[Int]
     ) raises:
         """Radix-partitioned build.
 
@@ -583,12 +725,12 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
            on ``self``. No cross-partition synchronization: each worker
            writes to a distinct index slot.
         """
-        self._left_dtype = left.dtype.copy()
-        self._left_rows = left.length
-        self._left_data = left.copy()
-        self._left_key_indices = left_key_indices.copy()
+        self._build_type = data.dtype.copy()
+        self._build_rows = data.length
+        self._build_data = data.copy()
+        self._build_key_indices = key_indices.copy()
 
-        var left_keys = _key_struct(left, left_key_indices)
+        var build_keys = _key_struct(data, key_indices)
 
         # Pre-size one table per partition; each is built *in place* by the
         # matching worker (avoids moving/copying a SwissHashTable out of a
@@ -606,9 +748,9 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises {mut tables, imm} -> StructArray:
             tables[i].build_hashes(part_hashes)
-            return TakeKernel.apply(left_keys, rows)
+            return TakeKernel.apply(build_keys, rows)
 
-        var hashes = HashKernel[Self.Hash].apply(left_keys, self._ctx.copy())
+        var hashes = HashKernel[Self.Hash].apply(build_keys, self._ctx.copy())
         # The row mapping comes back with the split rather than through the
         # op's result — it is an input, not something the worker produced.
         var split = partitioner.map_partitions[StructArray](
@@ -624,16 +766,17 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
             rows_out.append(routed[i].row_indices.copy())
 
         self._tables = tables^
-        self._left_partition_keys = keys_out^
-        self._left_partition_rows = rows_out^
+        self._build_partition_keys = keys_out^
+        self._build_partition_rows = rows_out^
         self._built_parallel = True
 
     def probe_parallel(
         self,
-        right: StructArray,
-        right_key_indices: List[Int],
+        data: StructArray,
+        key_indices: List[Int],
         kind: JoinKind,
         strictness: UInt8,
+        build_side: JoinBuildSide = BUILD_LEFT,
     ) raises -> StructArray:
         """Radix-partitioned probe.
 
@@ -645,8 +788,8 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         4. Concatenate per-partition index pairs, then run the shared
            ``_emit_unmatched`` + ``_assemble`` steps.
         """
-        var right_keys = _key_struct(right, right_key_indices)
-        var right_n = len(right)
+        var probe_keys = _key_struct(data, key_indices)
+        var probe_n = len(data)
         var single = strictness == JOIN_ANY
 
         # Per-partition probe: gather this partition's probe keys, look them up
@@ -654,31 +797,31 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         # partition), and remap partition-local indices to global row numbers.
         def probe_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
-        ) raises {imm} -> IndexPairs:
-            var probe_keys_i = TakeKernel.apply(right_keys, rows)
+        ) raises {imm} -> JoinIndex:
+            var probe_keys_i = TakeKernel.apply(probe_keys, rows)
             var pairs = self._tables[i].probe(
-                self._left_partition_keys[i],
+                self._build_partition_keys[i],
                 probe_keys_i,
-                len(self._left_partition_keys[i]),
+                len(self._build_partition_keys[i]),
                 single_match=single,
                 hashes=part_hashes.copy(),
             )
             return JoinIndex(
-                TakeKernel.apply(self._left_partition_rows[i], pairs[0]),
+                TakeKernel.apply(self._build_partition_rows[i], pairs[0]),
                 TakeKernel.apply(rows, pairs[1]),
             )
 
         # 1. Hash probe side in parallel; 2-3. partition + parallel probe.
         var probe_hashes = HashKernel[Self.Hash].apply(
-            right_keys, self._ctx.copy()
+            probe_keys, self._ctx.copy()
         )
         var probe_split = RadixPartitioner(
             num_bits=self._radix_bits,
             ctx=self._ctx.copy(),
-        ).map_partitions[IndexPairs](probe_hashes^, probe_partition)
+        ).map_partitions[JoinIndex](probe_hashes^, probe_partition)
         ref pairs_per_partition = probe_split[1]
 
-        # 4. Concat per-partition pairs into a single IndexPairs.
+        # 4. Concat per-partition pairs into a single JoinIndex.
         var p = len(pairs_per_partition)
         var part_build_idx = List[Optional[Int32Array]](length=p, fill=None)
         var part_probe_idx = List[Optional[Int32Array]](length=p, fill=None)
@@ -689,16 +832,18 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         var combined_probe = _concat_int32(part_probe_idx^)
         var verified = JoinIndex(combined_build^, combined_probe^)
 
-        var final = self._emit_unmatched(verified^, right_n, kind, strictness)
-        return self._assemble(right, final, kind)
+        var final = self._emit_unmatched(
+            verified^, probe_n, build_side.physical(kind), strictness
+        )
+        return self._assemble(data, final, kind, build_side)
 
     def _emit_unmatched(
         self,
-        var pairs: IndexPairs,
-        right_rows: Int,
+        var pairs: JoinIndex,
+        probe_rows: Int,
         kind: JoinKind,
         strictness: UInt8,
-    ) raises -> IndexPairs:
+    ) raises -> JoinIndex:
         """Phase 3: add unmatched rows for outer/semi/anti joins.
 
         Scans the verified pairs to determine which build/probe rows
@@ -706,14 +851,17 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         INNER: returns pairs unchanged.
         SEMI: emits matched build rows only.
         ANTI: emits unmatched build rows only.
-        LEFT/RIGHT/FULL: appends unmatched rows from the appropriate side.
+        RIGHT_SEMI / RIGHT_ANTI: the same two, over probe rows.
+
+        `kind` is the physical kind, so "left" is the build side: a left
+        semi-join built on its right input arrives here as RIGHT_SEMI.
         """
         if kind == JOIN_INNER:
             return pairs^
 
         # Compute which build/probe rows appear in the verified pairs.
-        var matched_build = List[Bool](length=self._left_rows, fill=False)
-        var matched_probe = List[Bool](length=right_rows, fill=False)
+        var matched_build = List[Bool](length=self._build_rows, fill=False)
+        var matched_probe = List[Bool](length=probe_rows, fill=False)
         var n_pairs = len(pairs.build)
         for i in range(n_pairs):
             var lid = Int(pairs.build.unsafe_get(i))
@@ -723,47 +871,52 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
             if rid >= 0:
                 matched_probe[rid] = True
 
-        if kind == JOIN_SEMI:
-            var lb = Int32Builder(capacity=self._left_rows)
-            var rb = Int32Builder(capacity=self._left_rows)
-            for i in range(self._left_rows):
-                if matched_build[i]:
+        if kind == JOIN_SEMI or kind == JOIN_ANTI:
+            var want = kind == JOIN_SEMI
+            var lb = Int32Builder(capacity=self._build_rows)
+            var rb = Int32Builder(capacity=self._build_rows)
+            for i in range(self._build_rows):
+                if matched_build[i] == want:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
             return JoinIndex(lb.finish(), rb.finish())
 
-        if kind == JOIN_ANTI:
-            var lb = Int32Builder(capacity=self._left_rows)
-            var rb = Int32Builder(capacity=self._left_rows)
-            for i in range(self._left_rows):
-                if not matched_build[i]:
-                    lb.append(Scalar[int32.native](i))
-                    rb.append_null()
+        if kind == JOIN_RIGHT_SEMI or kind == JOIN_RIGHT_ANTI:
+            # The mirror of the arm above, and the whole of what the two extra
+            # kinds cost: a probe row is emitted once, with no build row, so
+            # `_assemble` gathers the probe side alone.
+            var want = kind == JOIN_RIGHT_SEMI
+            var lb = Int32Builder(capacity=probe_rows)
+            var rb = Int32Builder(capacity=probe_rows)
+            for i in range(probe_rows):
+                if matched_probe[i] == want:
+                    lb.append_null()
+                    rb.append(Scalar[int32.native](i))
             return JoinIndex(lb.finish(), rb.finish())
 
         # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
-        var lb = Int32Builder(capacity=n_pairs + self._left_rows)
-        var rb = Int32Builder(capacity=n_pairs + right_rows)
+        var lb = Int32Builder(capacity=n_pairs + self._build_rows)
+        var rb = Int32Builder(capacity=n_pairs + probe_rows)
         for i in range(n_pairs):
             lb.append(pairs.build.unsafe_get(i))
             rb.append(pairs.probe.unsafe_get(i))
         if kind.emits_unmatched_left():
-            for i in range(self._left_rows):
+            for i in range(self._build_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
         if kind.emits_unmatched_right():
-            for i in range(right_rows):
+            for i in range(probe_rows):
                 if not matched_probe[i]:
                     lb.append_null()
                     rb.append(Scalar[int32.native](i))
         return JoinIndex(lb.finish(), rb.finish())
 
     def build_dtype(self) -> DynType:
-        return self._left_dtype.copy()
+        return self._build_type.copy()
 
-    def num_left_rows(self) -> Int:
-        return self._left_rows
+    def num_build_rows(self) -> Int:
+        return self._build_rows
 
     def built_parallel(self) -> Bool:
         """Whether `build` produced the radix-partitioned layout.
@@ -775,33 +928,73 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         """
         return self._built_parallel
 
-    def output_dtype(self, probe: StructArray, kind: JoinKind) -> DynType:
-        """Build the output struct DataType for a join result."""
+    def output_dtype(
+        self,
+        probe: StructArray,
+        kind: JoinKind,
+        build_side: JoinBuildSide = BUILD_LEFT,
+    ) -> DynType:
+        """The output struct dtype for a join result: the logical left side's
+        fields, then the right side's, whichever side was built.
+        """
+        if build_side == BUILD_LEFT:
+            return Self._joined_dtype(
+                self._build_type.as_struct().fields,
+                probe.dtype.as_struct().fields,
+                kind,
+            )
+        else:
+            return Self._joined_dtype(
+                probe.dtype.as_struct().fields,
+                self._build_type.as_struct().fields,
+                kind,
+            )
+
+    @staticmethod
+    def _joined_dtype(
+        left: List[Field], right: List[Field], kind: JoinKind
+    ) -> DynType:
+        """Left fields then right fields, a right field suffixed `_right` where
+        its name collides. The suffix follows the logical right side, not the
+        probe side, and a renamed field keeps its nullability and metadata.
+        """
         var fields = List[Field]()
-        for ref f in self._left_dtype.as_struct().fields:
-            fields.append(f.copy())
+        if kind.emits_left_columns():
+            for ref f in left:
+                fields.append(f.copy())
 
         if kind.emits_right_columns():
-            var left_names = List[String]()
-            for ref f in self._left_dtype.as_struct().fields:
-                left_names.append(f.name)
-            for ref f in probe.dtype.as_struct().fields:
-                var name = f.name
+            # Only the fields emitted above can be collided with, which is why
+            # this reads `fields` rather than `left`: a kind that emits one
+            # side alone has no collisions to resolve.
+            var emitted = len(fields)
+            for ref f in right:
                 var collides = False
-                for ref ln in left_names:
-                    if ln == name:
+                for i in range(emitted):
+                    if fields[i].name == f.name:
                         collides = True
                         break
                 if collides:
-                    name = name + "_right"
-                fields.append(Field(name, f.dtype.copy()))
+                    fields.append(
+                        Field(
+                            f.name + "_right",
+                            f.dtype.copy(),
+                            f.nullable,
+                            f.metadata.copy(),
+                        )
+                    )
+                else:
+                    fields.append(f.copy())
 
         return struct_(fields^)
 
-    def _assemble(
-        self, right: StructArray, pairs: IndexPairs, kind: JoinKind
-    ) raises -> StructArray:
-        """Gather left + right columns using index pairs.
+    def _gather(
+        self,
+        columns: List[DynArray],
+        indices: Int32Array,
+        mut into: List[DynArray],
+    ) raises:
+        """One ``take`` per column, appended in order.
 
         After ``sync_parallelize`` in ``probe_parallel`` has finished
         there's no outer parallel region, so each per-column ``take``
@@ -810,23 +1003,41 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         decides per-column whether it's big enough to stripe (its own grain
         threshold inside ``apply``).
         """
-        ref left = self._left_data.value()
-        var out_cols = List[DynArray]()
         var ctx = self._ctx.copy()
+        for c in range(len(columns)):
+            into.append(take(columns[c].copy(), indices, ctx))
 
-        for c in range(len(left.children)):
-            out_cols.append(take(left.children[c].copy(), pairs.build, ctx))
+    def _assemble(
+        self,
+        probe: StructArray,
+        pairs: JoinIndex,
+        kind: JoinKind,
+        build_side: JoinBuildSide = BUILD_LEFT,
+    ) raises -> StructArray:
+        """Gather the output columns in the caller's left-then-right order.
+
+        Each side is gathered with its own indices, `pairs.build` or
+        `pairs.probe`, so `build_side` only decides which goes first. The row
+        count is `len(pairs)`, which holds even when a side has no columns.
+        """
+        ref build = self._build_data.value()
+        var out_cols = List[DynArray]()
+
+        if kind.emits_left_columns():
+            if build_side == BUILD_LEFT:
+                self._gather(build.children, pairs.build, out_cols)
+            else:
+                self._gather(probe.children, pairs.probe, out_cols)
 
         if kind.emits_right_columns():
-            for c in range(len(right.children)):
-                out_cols.append(
-                    take(right.children[c].copy(), pairs.probe, ctx)
-                )
+            if build_side == BUILD_LEFT:
+                self._gather(probe.children, pairs.probe, out_cols)
+            else:
+                self._gather(build.children, pairs.build, out_cols)
 
-        var out_length = out_cols[0].length() if len(out_cols) > 0 else 0
         return StructArray(
-            dtype=self.output_dtype(right, kind),
-            length=out_length,
+            dtype=self.output_dtype(probe, kind, build_side),
+            length=len(pairs),
             nulls=0,
             offset=0,
             bitmap=None,
@@ -846,20 +1057,28 @@ def hash_join(
     right_on: List[Int],
     kind: JoinKind = JOIN_INNER,
     strictness: UInt8 = JOIN_ALL,
+    build_side: JoinBuildSide = BUILD_LEFT,
     ctx: ExecContext = ExecContext.auto(),
 ) raises -> StructArray:
     """Equijoin two StructArrays on positional key column indices.
 
-    The left side is always the build side; the right side is the probe side.
+    ``build_side`` decides which input is materialised and indexed; it decides
+    nothing else. The answer — field names, field order and rows — is the same
+    either way, which is the property that makes "index the smaller side" a
+    cost decision an optimizer may take on its own.
 
     Args:
-        left: Build-side data as a StructArray (one child per column).
-        right: Probe-side data as a StructArray (one child per column).
+        left: The left side as a StructArray (one child per column).
+        right: The right side as a StructArray (one child per column).
         left_on: Positional column indices in ``left`` to join on.
         right_on: Positional column indices in ``right`` to join on.
         kind: Join direction (JOIN_INNER, JOIN_LEFT, JOIN_RIGHT, JOIN_FULL,
-              JOIN_SEMI, JOIN_ANTI).
+              JOIN_SEMI, JOIN_ANTI, JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI).
         strictness: JOIN_ALL (default) or JOIN_ANY.
+        build_side: BUILD_LEFT (default) indexes ``left`` and streams
+            ``right``; BUILD_RIGHT does the opposite. Row *order* within the
+            result follows the probe side and so does change; the multiset of
+            rows does not.
         ctx: How to execute. ``.auto()`` (default) picks
             ``num_physical_cores()`` workers; ``.serial()`` forces the serial
             single-table path; ``.parallel(n)`` runs radix-partitioned parallel
@@ -872,6 +1091,7 @@ def hash_join(
         Output StructArray:
         * INNER/LEFT/RIGHT/FULL: left columns + right columns.
         * SEMI/ANTI: left columns only.
+        * RIGHT_SEMI/RIGHT_ANTI: right columns only.
     """
     if len(left_on) != len(right_on):
         raise Error("hash_join: len(left_on) != len(right_on)")
@@ -886,5 +1106,9 @@ def hash_join(
         )
 
     var join = HashJoin(ctx.copy())
-    join.build(left, left_on)
-    return join.probe(right, right_on, kind, strictness)
+    if build_side == BUILD_LEFT:
+        join.build(left, left_on)
+        return join.probe(right, right_on, kind, strictness, build_side)
+    else:
+        join.build(right, right_on)
+        return join.probe(left, left_on, kind, strictness, build_side)

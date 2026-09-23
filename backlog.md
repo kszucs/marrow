@@ -9,6 +9,7 @@ Two things are recorded per item: why a user cares, and what standing in the
 way is real rather than assumed. Claims were re-verified against the tree on
 2026-09-14; where a claim did not survive that check it says so inline.
 
+
 ## What is missing, in priority order
 
 One table for the whole backlog. **Priority** is what a first user hits soonest;
@@ -22,19 +23,17 @@ all of them.
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
 | 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
-| 2 | **Error taxonomy** — 377 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 377 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14, 377 on 2026-09-22 | **M** | — |
+| 2 | **Error taxonomy** — 373 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 373 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14 | **M** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
 | 4 | **`OpenDalSource.read_ranges` fetches serially** | One round-trip time per range where they could go out together. On a local file that is free; on S3 it is the difference between one RTT and N. The seam, the URI dispatch and `ParquetScanOperator` on `DynSource` are all in place, so this is the last piece of scanning `s3://` well. See §1.9 | **S** | — |
 | 5 | **Parallel group-by gates are uncalibrated** — `_MIN_DISTINCT_RATIO` (0.9) and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) in `kernels/groupby.mojo` | Radix-partitioned placement landed in `dcef953a`, but when it engages is a guess: the 0.9 was set from a measurement of a version since made twice as fast, and nothing has re-measured the crossover. See §2.1 | **S** | — |
 | 6 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 7 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
-| 8 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 7, 9 |
-| 9 | **Statistics propagation and a cost model** | Feeds 8. Not urgent on its own — it is the last piece, after 7 | **L** | — |
-| 10 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
-| 11 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 12 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 13 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
-| 14 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
+| 7 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
+| 8 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
+| 9 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 10 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 11 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
+| 12 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
 
@@ -68,6 +67,19 @@ it no longer decodes. Dropping the clamp for the in-memory source alone would
 make `ColumnPruning`'s rule depend on which source is below it, which is a
 worse rule than the uniform clamp — so the two halves land together or not at
 all.
+
+### 1.2 Known-wrong answers
+
+**`GROUP BY` is probabilistic, not exact.** `SwissHashTable` resolves a key
+by its 64-bit rapidhash alone, so two distinct keys whose hashes collide land
+in one group and `key_columns` reports whichever arrived first. The
+probability is roughly `n²/2⁶⁴` in the number of distinct keys — negligible at
+a million, a coin-flip near four billion — and the radix-partitioned path
+routes on the same hash, so both paths collide identically. The join does
+*not* have this defect: `HashJoin` verifies key equality after a hash match
+and filters collisions out, so the fix has a precedent in the tree — compare
+the keys on a match, as the join does. Until then the behaviour is recorded
+only in `kernels/groupby.mojo`'s module docstring.
 
 ### 1.3 Latent compiler hazards
 
@@ -467,7 +479,7 @@ section's original ordering.
 #### 1.4 The optimizer: no cost model, no CSE
 
 **What exists.** A plan-to-plan rewriter in `marrow/expr/optimizer.mojo` —
-**16 rules and one downward pass**, invoked as `plan.optimize[AllRules]()`,
+**18 rules and one downward pass**, invoked as `plan.optimize[AllRules]()`,
 which returns an ordinary `DynRelation` that prints, diffs and executes:
 
     Limit(Sort(Filter(ParquetScan(...))))  ->  Sort(Filter(ParquetScan(...)) top 10)
@@ -494,15 +506,30 @@ lowering and `ParquetScan.to_operator` reaches `kernels::cast` in a plan with no
 Parquet in it.
 
 **Still absent:** common-subexpression elimination, duplicate group/sort key
-elimination, statistics propagation, aggregate pushdown, and any cost model.
+elimination, and aggregate pushdown.
 
-**Blocked in the kernel, not the optimizer:** join reordering and build-side
-selection. `Join._output_schema` is positional (left fields then right) and
-`JoinOperator` hardcodes build=left, so both rewrites change the output column
-order and are not expressible as plan rewrites at all. They need
-`kernels/join.mojo` to accept an output ordering.
+**Rendering is the blocker for the first two, not equality.** Comparing two
+boxed expressions needs no new slot — `WindowExpr.spec()` (`logical.mojo`)
+already does it by comparing `String(k)`, because `DynValue` exposes `write`
+and `write` is non-raising, so a rule can call it. That makes it exactly as
+sound as the rendering, and the rendering is not faithful: `BinaryLiteral`
+prints `lit(<N bytes>)` and never its value, so two different blobs compare
+equal; every other literal prints `lit(v)` with no dtype, so `lit(1)` as int32
+and as int64 are indistinguishable. A deduplicating rule written today would
+merge keys that differ. The work is making every node's `write_to` injective
+over what distinguishes it, then the rule is small.
 
-A credible engine ships without a cost model, so none of this is urgent — but
+**Still missing in the join path:** the **search**. Choosing among the
+Catalan-many associations of an *n*-join chain is a `prepare` pass, not a
+`Rule`. And a reassociation is only as well-informed as its sources' NDV:
+over a pyarrow-written file, which records no `distinct_count`,
+`max_distinct` falls back to the row count, every join estimates at
+`min(|L|, |R|)` rows and only the intermediate's *width* is left to decide on.
+From Python the rules see no source statistics at all: `parquet_scan` in
+`python/bindings/plan.mojo` attaches none, and an in-memory table records no
+distinct count.
+
+A credible engine ships without a join-tree search, so none of this is urgent. But
 the `count_star()` hazard in §1.1 is the mirror image of it: the same
 expression that blocks projection pushdown is the one an optimizer most wants
 to special-case. `ColumnPruning` clamps rather than special-cases, never
@@ -621,11 +648,14 @@ canonical list; marrow has 8 of it.
 
 #### 2.4 Join breadth
 
-**What exists.** Hash equi-join in six kinds — inner, left, right, full, semi,
-anti — over a Swiss table with a CSR probe index
-(`marrow/kernels/join.mojo:190`, `hashtable.mojo:76-87`), with radix partitioning
-and parallel probing. Multi-column keys work because keys go through
-`StructArray`.
+**What exists.** Hash equi-join in eight *implemented* kinds — inner, left,
+right, full, left semi, left anti, right semi, right anti — over a Swiss table
+with a CSR probe index (`marrow/kernels/join.mojo`, `hashtable.mojo:76-87`),
+with radix partitioning and parallel probing, and either input may be the build
+side. Multi-column keys work because keys go through `StructArray`. `mark`,
+`single` and `cross` have constants and no kernel; `is_supported()` says so and
+`hash_join` rejects them.
+
 
 **Declared but rejected:** `JOIN_CROSS`, `JOIN_MARK` and `JOIN_SINGLE` are
 `JoinKind` constants whose `is_supported()` is False; `hash_join` raises for
@@ -650,14 +680,33 @@ a categorical improvement for a small amount of code.
   and/or/xor.
 - **Missing nodes over kernels marrow already has:** `bool_and`/`bool_or` over
   `AnyKernel`/`AllKernel`.
-- **Missing *shapes*:** `Aggregate[Agg, A]` binds exactly one operand, so
-  `arg_min`/`arg_max`, `corr`/`covar`, `ORDER BY`-carrying `first`/`last`,
-  `string_agg`/`array_agg`, multi-column `count(DISTINCT a, b)`, the
-  `FILTER (WHERE ...)` clause and the `DISTINCT` modifier have nowhere to
-  attach. **This is a node redesign, not kernel work**, and ibis shows how far
-  it must go: every reduction there inherits `Filterable`, which supplies
-  `where: Optional[Value[Boolean]]` (`ibis/expr/operations/reductions.py:27-29`),
-  i.e. the FILTER clause is not a special case but a property of the base class.
+- **Missing *shapes* — arity, ordering and `DISTINCT`.** `arg_min`/`arg_max`,
+  `corr`/`covar`, `ORDER BY`-carrying `first`/`last`, multi-column
+  `count(DISTINCT a, b)` and the `DISTINCT` modifier still have nowhere to
+  attach, and the node now has the shape to take one more operand cheaply — a
+  second `Evaluable & Value` parameter defaulting to `Nothing`, read under
+  `comptime if`, exactly as `P` is. What blocks them is the **kernel**
+  contract and, in the runtime lane, the instantiation space:
+
+  - `AggKernel` declares `InArray` and `update(groups, input)`, so a
+    two-operand aggregate needs a sibling trait (`dtype`, `name`, `reserve`
+    and `finish` are common and would move to a shared base) plus a fourth
+    physical operator that evaluates two operands per morsel. `ArgExtremum`'s
+    state is a bounded per-slot pair — the best key and the value at it — so
+    it streams like every other kernel here; it is `AggState[K, V]` with two
+    accumulator columns rather than one, which is the same shape `Dispersion`
+    already declined to fit.
+  - **The comptime lane is where a two-operand aggregate is cheap and the
+    runtime lane is where it is not.** A comptime plan names one `(value, key)`
+    pair and links one `ArgExtremum[Op, V, K]`; `resolve_aggregate` would have
+    to dispatch the key *inside* the value's dispatch, which is every primitive
+    dtype squared — order 800 instantiations across `arg_min`/`arg_max`, on the
+    two gates that are already the largest. Affording it there means erasing
+    the key side (a `DynArray` key compared per row), which is a different
+    kernel, not the same one resolved twice.
+  - `string_agg`/`array_agg` remain a separate epic whatever the node does:
+    their fold is neither associative nor bounded, so `Foldable`'s
+    `combine_at` contract does not describe them.
 
 #### 2.6 Nested-type and decimal operations
 
@@ -687,7 +736,9 @@ hash group-by keys.
 
 marrow instead does column-oriented LSD multi-key sort — one stable pass per
 key, re-gathering each key column per pass — and
-routes group-by/join keys through `StructArray` with per-column hashing. Both
+routes join keys through `StructArray` with per-column hashing
+(`_key_struct` in `kernels/join.mojo`); group-by does not, and takes its keys
+as a `List[DynArray]` (`HashGrouping.assign`). Both
 work and neither is wrong, but this is the structural reason a future
 sort-merge join has no cheap path and why multi-key sort re-gathers. Worth
 naming as a design decision rather than discovering it under a benchmark.
@@ -745,18 +796,25 @@ stripped, `__text`):
 
 | Gate | Bytes | |
 |---|---:|---|
-| `query_streaming_agg_fused` (comptime) | 1,452,744 | |
-| `query_streaming_agg` (runtime-named) | 13,204,780 | **9.09x** |
-| `query_dynvalue` (erased values) | 9,888,172 | |
-| `query_streaming` (fused filter + project floor) | 1,451,532 | |
-| `query_cli` (the AOT lane as a program) | 2,973,356 | |
+| `query_streaming_agg_fused` (comptime) | 1,459,112 | |
+| `query_streaming_agg` (runtime-named) | 14,255,908 | **9.77x** |
+| `query_dynvalue` (erased values) | 9,891,236 | |
+| `query_streaming` (fused filter + project floor) | 1,452,940 | |
+| `query_cli` (the AOT lane as a program) | 3,000,940 | |
 
-Re-read from `baseline.json` on 2026-09-14 (mojo 1.2.0.dev2026091405). In
-2026-08 the ratio was 6.71x, with `query_dynvalue` at 6,227,524, so the gap has
-**widened**, not narrowed. That is the erasure boundary doing its job, but the
-gate compares each change only against the last recording, so the runtime
-lane's floor drifts one accepted re-recording at a time — worth a note the day
-a `query_dynvalue` regression matters.
+Re-read from `baseline.json` on 2026-09-22 (mojo 1.2.0.dev2026092105). In
+2026-08 the ratio was 6.71x, with `query_dynvalue` at 6,227,524, and on
+2026-09-14 it was 9.09x, so the gap keeps **widening**. The last step is not
+drift: `FILTER (WHERE ...)` on aggregates put **+1,119,360 bytes on
+`query_streaming_agg` and zero on every AOT gate**, because the runtime lane
+instantiates `BufferedAggregateOperator` once per kernel `resolve_aggregate`
+can bind — 163 of them — where an unfiltered comptime aggregate is the
+instantiation it always was. That is the erasure boundary doing its job, and
+it is also the shape of what a second aggregate operand would cost there; see
+§2.5. The gate compares each change only against
+the last recording, so the runtime lane's floor still drifts one accepted
+re-recording at a time — worth a note the day a `query_dynvalue` regression
+matters.
 
 The runtime lane's cost is not incidental: it links the whole name-resolution
 ladder and, through it, `marrow.kernels.cast` — 693 cast symbols in

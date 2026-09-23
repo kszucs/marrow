@@ -290,8 +290,21 @@ def test_field() raises:
     assert_false(f == field("other", DynType(Int64Type())))
     assert_false(f == field("val", DynType(Float32Type())))
 
+    # Rendering shows the members `__eq__` compares, when not at their
+    # defaults, as Arrow C++'s `Field::ToString` does.
     var f3 = field("a", DynType(Int64Type()), nullable=False)
-    assert_equal(String(f3), "a: int64")
+    assert_equal(String(f3), "a: int64 not null")
+    assert_true(f3 != field("a", DynType(Int64Type())))
+    var meta = Dict[String, String]()
+    meta["unit"] = "cents"
+    assert_equal(
+        String(Field("a", DynType(Int64Type()), True, meta.copy())),
+        "a: int64 {unit: cents}",
+    )
+    assert_equal(
+        String(Field("a", DynType(Int64Type()), False, meta^)),
+        "a: int64 not null {unit: cents}",
+    )
 
 
 def test_temporal_dtypes_predicates() raises:

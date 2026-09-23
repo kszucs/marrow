@@ -32,8 +32,10 @@ from ...dtypes import (
     BinaryLikeType,
     BinaryType,
     LargeBinaryType,
+    struct_,
 )
-from ...tabular import record_batch
+from ...schema import Schema
+from ...tabular import record_batch, RecordBatch
 from ...utils import Hasher
 from ...kernels.join import (
     hash_join,
@@ -44,13 +46,19 @@ from ...kernels.join import (
     JOIN_FULL,
     JOIN_SEMI,
     JOIN_ANTI,
+    JOIN_RIGHT_SEMI,
+    JOIN_RIGHT_ANTI,
     JOIN_MARK,
     JOIN_SINGLE,
     JOIN_CROSS,
     JOIN_ALL,
     JOIN_ANY,
     JoinKind,
+    JoinBuildSide,
+    BUILD_LEFT,
+    BUILD_RIGHT,
 )
+from ...kernels.sort import sort
 
 
 # ---------------------------------------------------------------------------
@@ -1297,3 +1305,587 @@ def test_semi_join_bool_key_null_has_no_match() raises:
     var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_SEMI)
     assert_equal(len(result), 1)
     assert_equal(Int(result.field(1).as_int32()[0].value()), 1)
+
+
+# ---------------------------------------------------------------------------
+# build side vs output order — indexing the other input must change nothing
+#
+# `JoinBuildSide` is the only thing that says which of the two inputs is
+# materialised, and it is *supposed* to be invisible in the answer: same field
+# names, same field order, same rows. Row order is the one thing that does
+# move, because it follows the probe side, so these compare the two results
+# sorted on every column rather than as they came out. `_join_fingerprint`
+# would not do here: it is a sum, and two columns with equal sums could swap
+# places under it unnoticed — which is the precise failure a build-side swap
+# used to cause.
+# ---------------------------------------------------------------------------
+
+
+def _swap_left() raises -> StructArray:
+    """Duplicate keys, an unmatched key and a NULL key.
+
+    Every kind then has matched rows, unmatched rows and a key that matches
+    nothing at all; the shared `k` name is what makes the `_right` suffix
+    rule observable.
+    """
+    return record_batch(
+        [
+            array([1, 2, 3, 3, None], int32).copy(),
+            array([10, 20, 30, 31, 50], int32).copy(),
+        ],
+        names=["k", "lv"],
+    ).to_struct_array()
+
+
+def _swap_right() raises -> StructArray:
+    return record_batch(
+        [
+            array([2, 3, 3, 4, None], int32).copy(),
+            array([200, 300, 301, 400, 500], int32).copy(),
+        ],
+        names=["k", "rv"],
+    ).to_struct_array()
+
+
+def _canonical(result: StructArray) raises -> StructArray:
+    """`result` with its rows in a canonical order — sorted on every column.
+
+    A multiset comparison rather than a set one: sorting keeps duplicate rows,
+    which a join over duplicate keys produces on purpose.
+    """
+    var keys = List[Int](capacity=len(result.children))
+    var asc = List[Bool](capacity=len(result.children))
+    for i in range(len(result.children)):
+        keys.append(i)
+        asc.append(True)
+    return sort(result, keys, asc)
+
+
+def _assert_build_sides_agree(kind: JoinKind) raises:
+    var left = _swap_left()
+    var right = _swap_right()
+    var built_left = hash_join(
+        left, right, _left_on(), _right_on(), kind, JOIN_ALL, BUILD_LEFT
+    )
+    var built_right = hash_join(
+        left, right, _left_on(), _right_on(), kind, JOIN_ALL, BUILD_RIGHT
+    )
+    assert_true(
+        built_left.dtype == built_right.dtype,
+        String(
+            "kind ",
+            kind,
+            ": the schema moved with the build side — ",
+            built_left.dtype,
+            " vs ",
+            built_right.dtype,
+        ),
+    )
+    assert_equal(
+        len(built_left),
+        len(built_right),
+        String("kind ", kind, ": row count changed with the build side"),
+    )
+    assert_true(
+        _canonical(built_left) == _canonical(built_right),
+        String("kind ", kind, ": the rows differ"),
+    )
+
+
+def test_build_side_agrees_for_every_kind() raises:
+    """Either build side returns the same schema and rows, for every kind."""
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for ref k in kinds:
+        _assert_build_sides_agree(k)
+
+
+# ---------------------------------------------------------------------------
+# The same claim over a composite key
+#
+# Every case above joins on `_left_on()` / `_right_on()`, which are one column
+# each. A single-member key struct cannot distinguish a per-struct rule from a
+# per-member one, and `_key_struct` — which normalises the key struct's field
+# names, nullability and metadata before `expect_same_dtype` compares the whole
+# dtype — is a per-struct rule. So is the build side: swapping it exchanges the
+# two key structs, and a normalisation that got a member's *position* wrong
+# would still match a one-column key.
+# ---------------------------------------------------------------------------
+def _both_keys() -> List[Int]:
+    var out = List[Int]()
+    out.append(0)
+    out.append(1)
+    return out^
+
+
+def _multi_left() raises -> StructArray:
+    """Composite keys: a duplicate, an unmatched one, and a NULL member.
+
+    `(1,7)` matches nothing, `(1,8)` matches once, `(2,7)` appears twice on
+    each side, and `(NULL,7)` matches nothing on either — so every kind has
+    matched rows, unmatched rows and a null-keyed row to place.
+    """
+    return record_batch(
+        [
+            array([1, 1, 2, 2, None], int32).copy(),
+            array([7, 8, 7, 7, 7], int32).copy(),
+            array([10, 20, 30, 31, 50], int32).copy(),
+        ],
+        names=["k1", "k2", "lv"],
+    ).to_struct_array()
+
+
+def _multi_right() raises -> StructArray:
+    return record_batch(
+        [
+            array([1, 2, 2, 3, None], int32).copy(),
+            array([8, 7, 7, 9, 7], int32).copy(),
+            array([200, 300, 301, 400, 500], int32).copy(),
+        ],
+        names=["k1", "k2", "rv"],
+    ).to_struct_array()
+
+
+def test_build_side_agrees_on_a_multi_column_key() raises:
+    """Both arrangements, over a two-column key, for every kind that
+    commutes.
+
+    One case over a list rather than eight named ones, because what varies is
+    the kind and the failure message carries it — the eight above are separate
+    cases only because they predate the list.
+    """
+    var left = _multi_left()
+    var right = _multi_right()
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for ref kind in kinds:
+        var built_left = hash_join(
+            left,
+            right,
+            _both_keys(),
+            _both_keys(),
+            kind,
+            JOIN_ALL,
+            BUILD_LEFT,
+        )
+        var built_right = hash_join(
+            left,
+            right,
+            _both_keys(),
+            _both_keys(),
+            kind,
+            JOIN_ALL,
+            BUILD_RIGHT,
+        )
+        assert_true(
+            built_left.dtype == built_right.dtype,
+            String(
+                "kind ",
+                kind,
+                ": the schema moved with the build side — ",
+                built_left.dtype,
+                " vs ",
+                built_right.dtype,
+            ),
+        )
+        assert_equal(
+            len(built_left),
+            len(built_right),
+            String("kind ", kind, ": row count changed with the build side"),
+        )
+        assert_true(
+            _canonical(built_left) == _canonical(built_right),
+            String("kind ", kind, ": the rows differ"),
+        )
+
+    # Not vacuous: the composite key really does match. `(1,8)` once and
+    # `(2,7)` two-by-two, so an INNER join is five rows — a fixture whose keys
+    # never met would agree on nothing and pass the loop above.
+    assert_equal(
+        len(
+            hash_join(
+                left,
+                right,
+                _both_keys(),
+                _both_keys(),
+                JOIN_INNER,
+                JOIN_ALL,
+                BUILD_LEFT,
+            )
+        ),
+        5,
+    )
+
+
+def test_join_multi_member_keys_may_differ_in_nullability() raises:
+    """A *two-column* key whose members disagree with the other side's.
+
+    `expect_same_dtype` compares the whole key struct, and a struct dtype
+    carries every field's name, nullability and metadata — so a composite key
+    is where `_key_struct`'s normalisation has to hold for each member rather
+    than merely for the one. The single-column case beside this one is passed
+    by a fix that normalises only the first field.
+    """
+    var meta = Dict[String, String]()
+    meta["source"] = "warehouse"
+    var annotated = List[Field]()
+    annotated.append(Field("k1", int32, False, meta^))
+    annotated.append(Field("k2", int32, False))
+    annotated.append(Field("v", int32, True))
+    var left = StructArray(
+        dtype=struct_(annotated^),
+        length=3,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        children=[
+            array([1, 2, 3], int32).to_dyn(),
+            array([7, 7, 7], int32).to_dyn(),
+            array([10, 20, 30], int32).to_dyn(),
+        ],
+    )
+    var right = record_batch(
+        [
+            array([2, 3, 4], int32).to_dyn(),
+            array([7, 7, 7], int32).to_dyn(),
+            array([200, 300, 400], int32).to_dyn(),
+        ],
+        names=["k1", "k2", "rv"],
+    ).to_struct_array()
+
+    var out = hash_join(left, right, _both_keys(), _both_keys())
+    assert_equal(len(out), 2)
+    # The members survive into the output unnormalised, for both key columns —
+    # `_key_struct` normalises only the copy it hands the equality kernel.
+    ref fields = out.dtype.as_struct().fields
+    assert_false(fields[0].nullable)
+    assert_equal(fields[0].metadata["source"], "warehouse")
+    assert_false(fields[1].nullable)
+
+
+def test_build_side_suffixes_the_logical_right_side() raises:
+    """`_right` marks where a column came from in the *query*.
+
+    Both sides call their key `k`, so one of the two must be renamed. The
+    output is left-then-right whichever side was indexed, so it is always the
+    right side's `k` that becomes `k_right` — following the *probe* side
+    instead would rename the left one the moment the build side flipped.
+    """
+    var left = _swap_left()
+    var right = _swap_right()
+    var expected: List[String] = ["k", "lv", "k_right", "rv"]
+    var sides: List[JoinBuildSide] = [BUILD_LEFT, BUILD_RIGHT]
+    for ref side in sides:
+        var out = hash_join(
+            left, right, _left_on(), _right_on(), JOIN_INNER, JOIN_ALL, side
+        )
+        ref fields = out.dtype.as_struct().fields
+        assert_equal(len(fields), len(expected), String(side, ": width"))
+        for i in range(len(expected)):
+            assert_equal(fields[i].name, expected[i], String(side, ": name"))
+
+
+def test_build_side_agrees_on_the_partitioned_path() raises:
+    """The same claim on the radix-partitioned build and probe.
+
+    `probe_parallel` assembles from concatenated per-partition pairs and is a
+    second wiring of `build_side` — sized above `_PARALLEL_THRESHOLD` so the
+    partitioned layout is the one under test rather than a silent fallback to
+    the serial path the cases above already cover.
+    """
+    var n = 150_000
+    var left = _join_side(n, 0, 10)
+    var right = _join_side(n, n // 2, 100)
+    var ctx = ExecContext.parallel(4)
+
+    var probe = HashJoin(ctx.copy())
+    probe.build(left, _left_on())
+    assert_true(
+        probe.built_parallel(),
+        (
+            "expected the partitioned layout at 150k rows / 4 workers —"
+            " without it this test would re-check the serial path"
+        ),
+    )
+
+    var built_left = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        JOIN_LEFT,
+        JOIN_ALL,
+        BUILD_LEFT,
+        ctx.copy(),
+    )
+    var built_right = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        JOIN_LEFT,
+        JOIN_ALL,
+        BUILD_RIGHT,
+        ctx.copy(),
+    )
+    assert_true(built_left.dtype == built_right.dtype)
+    assert_equal(_join_fingerprint(built_left), _join_fingerprint(built_right))
+
+
+# ---------------------------------------------------------------------------
+# JoinKind.mirror — the exchange that makes the build side free
+# ---------------------------------------------------------------------------
+
+
+def test_join_kind_mirror_is_an_involution() raises:
+    """Every supported kind has a supported mirror, and mirroring twice is a
+    no-op. A kind whose mirror was unsupported would make the build side
+    change the answer for that kind alone."""
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for ref k in kinds:
+        assert_true(k.is_supported(), String(k, ": not supported"))
+        assert_true(
+            k.mirror().is_supported(), String(k, ": mirror unsupported")
+        )
+        assert_true(k.mirror().mirror() == k, String(k, ": not an involution"))
+    assert_true(JOIN_LEFT.mirror() == JOIN_RIGHT)
+    assert_true(JOIN_SEMI.mirror() == JOIN_RIGHT_SEMI)
+    assert_true(JOIN_ANTI.mirror() == JOIN_RIGHT_ANTI)
+    assert_true(JOIN_INNER.mirror() == JOIN_INNER)
+    assert_true(JOIN_FULL.mirror() == JOIN_FULL)
+
+
+def test_join_kind_mirror_refuses_an_unimplemented_kind() raises:
+    """CROSS, MARK and SINGLE have no mirror because they have no kernel.
+    Answering `self` would swap the sides of a join and keep the kind."""
+    var kinds: List[JoinKind] = [JOIN_CROSS, JOIN_MARK, JOIN_SINGLE]
+    for ref k in kinds:
+        var raised = False
+        try:
+            _ = k.mirror()
+        except e:
+            raised = True
+            assert_true("cannot be mirrored" in String(e))
+        assert_true(raised, String(k, ": mirror did not raise"))
+
+
+def test_right_semi_and_right_anti_emit_the_right_side_only() raises:
+    """The two kinds `mirror` added. They are the left-handed pair read the
+    other way round: right rows, right columns, one row per match or
+    non-match."""
+    var left = _swap_left()
+    var right = _swap_right()
+
+    var semi = hash_join(left, right, _left_on(), _right_on(), JOIN_RIGHT_SEMI)
+    ref semi_fields = semi.dtype.as_struct().fields
+    assert_equal(len(semi_fields), 2)
+    assert_equal(semi_fields[0].name, "k")
+    assert_equal(semi_fields[1].name, "rv")
+    # Right keys 2, 3, 3 match; 4 and NULL do not.
+    assert_equal(len(semi), 3)
+
+    var anti = hash_join(left, right, _left_on(), _right_on(), JOIN_RIGHT_ANTI)
+    assert_equal(len(anti.dtype.as_struct().fields), 2)
+    assert_equal(len(anti), 2)
+
+
+def test_right_semi_is_a_mirrored_semi_over_swapped_inputs() raises:
+    """The property `mirror` claims, checked against the kernel rather than
+    against itself: `semi(a, b)` and `right_semi(b, a)` are the same rows."""
+    var left = _swap_left()
+    var right = _swap_right()
+    var semi = hash_join(left, right, _left_on(), _right_on(), JOIN_SEMI)
+    var mirrored = hash_join(
+        right, left, _right_on(), _left_on(), JOIN_RIGHT_SEMI
+    )
+    assert_true(semi.dtype == mirrored.dtype)
+    assert_true(_canonical(semi) == _canonical(mirrored))
+
+
+# ---------------------------------------------------------------------------
+# a Field has four members, and a join used to carry one and a half
+#
+# `output_dtype` built every renamed field as `Field(name, dtype)`, taking the
+# defaults for `nullable` and `metadata` — so a colliding right-hand column
+# came out nullable with its metadata gone. `RecordBatch.join` reads its result
+# schema straight off this dtype, so the loss is user-visible and not internal.
+#
+# Nothing caught it because `Field.__eq__` compares four members while
+# `Field.write_to` rendered two, and every schema assertion in the tree went
+# through `String(...)`. Both halves are fixed; these pin both.
+# ---------------------------------------------------------------------------
+
+
+def _annotated_side(
+    key: String, value: String, unit: String
+) raises -> StructArray:
+    """A two-column side whose *value* column is required and annotated.
+
+    The key column stays ordinary: it is the value column that has to survive,
+    and giving both the same treatment would let a fix that carried only the
+    first field's members pass.
+    """
+    var meta = Dict[String, String]()
+    meta["unit"] = unit
+    var fields = List[Field]()
+    fields.append(Field(key, int32, True))
+    fields.append(Field(value, int32, False, meta^))
+    var cols = List[DynArray]()
+    cols.append(array([1, 2, 3], int32).to_dyn())
+    cols.append(array([10, 20, 30], int32).to_dyn())
+    return StructArray(
+        dtype=struct_(fields^),
+        length=3,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        children=cols^,
+    )
+
+
+def _assert_annotations_survive(side: JoinBuildSide) raises:
+    """Both sides' `v` columns collide, so the right one is renamed — which is
+    the path that used to rebuild the field from its dtype alone."""
+    var left = _annotated_side("k", "v", "cents")
+    var right = _annotated_side("k", "v", "grams")
+    var out = hash_join(
+        left, right, _left_on(), _right_on(), JOIN_INNER, JOIN_ALL, side
+    )
+    ref fields = out.dtype.as_struct().fields
+    assert_equal(len(fields), 4, String(side, ": width"))
+
+    assert_equal(fields[1].name, "v")
+    assert_false(fields[1].nullable, String(side, ": left v went nullable"))
+    assert_equal(fields[1].metadata["unit"], "cents")
+
+    # The renamed one — the field the old spelling reconstructed.
+    assert_equal(fields[3].name, "v_right")
+    assert_false(fields[3].nullable, String(side, ": right v went nullable"))
+    assert_equal(fields[3].metadata["unit"], "grams")
+
+
+def test_join_preserves_field_nullability_and_metadata() raises:
+    """Output fields keep their nullability and metadata, renamed or not,
+    under either build side."""
+    var sides: List[JoinBuildSide] = [BUILD_LEFT, BUILD_RIGHT]
+    for ref side in sides:
+        _assert_annotations_survive(side)
+
+
+def test_join_preserves_field_members_through_record_batch() raises:
+    """The user-visible half: `RecordBatch.join` reads its schema off the
+    kernel's dtype, so a dropped member reaches a caller who never touched the
+    kernel."""
+    var left = RecordBatch(
+        schema=Schema(fields=[Field("k", int32, True)]),
+        columns=[array([1, 2, 3], int32).to_dyn()],
+    )
+    var meta = Dict[String, String]()
+    meta["unit"] = "grams"
+    var right = RecordBatch(
+        schema=Schema(
+            fields=[Field("rk", int32, True), Field("w", int32, False, meta^)]
+        ),
+        columns=[
+            array([2, 3, 4], int32).to_dyn(),
+            array([20, 30, 40], int32).to_dyn(),
+        ],
+    )
+    var out = left.join(right, ["k"], ["rk"])
+    ref fields = out.schema.fields
+    assert_equal(len(fields), 3)
+    assert_equal(fields[2].name, "w")
+    assert_false(fields[2].nullable)
+    assert_equal(fields[2].metadata["unit"], "grams")
+
+
+# ---------------------------------------------------------------------------
+# commutes — the total predicate a rule guards on
+# ---------------------------------------------------------------------------
+
+
+def test_commutes_agrees_with_mirror_on_every_kind() raises:
+    """`commutes` is `mirror` without the raise, and the two must not drift.
+
+    Checked against `mirror` itself rather than against a second hand-written
+    list: a kind that gained a mirror and not a `commutes` arm would be a
+    reorder rule declining a swap it could have made, which nothing else in
+    the tree would notice.
+    """
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+        JOIN_CROSS,
+        JOIN_MARK,
+        JOIN_SINGLE,
+    ]
+    for ref k in kinds:
+        var mirrors = True
+        try:
+            _ = k.mirror()
+        except:
+            mirrors = False
+        assert_equal(
+            k.commutes(),
+            mirrors,
+            String("kind ", k, ": commutes() disagrees with mirror()"),
+        )
+
+
+def test_negates_is_invariant_under_mirror() raises:
+    """Exchanging a join's sides cannot change whether it keeps the unmatched
+    rows, so `negates` must agree with its own mirror on every kind that has
+    one -- a kind added to the anti family on one side only fails here.
+    """
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for ref k in kinds:
+        assert_equal(
+            k.negates(),
+            k.mirror().negates(),
+            String("kind ", k, ": negates() changes under mirror()"),
+        )
+    assert_true(JOIN_ANTI.negates())
+    assert_true(JOIN_RIGHT_ANTI.negates())
+    assert_false(JOIN_SEMI.negates())
+    assert_false(JOIN_RIGHT_SEMI.negates())
+    assert_false(JOIN_INNER.negates())
