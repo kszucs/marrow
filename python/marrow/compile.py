@@ -25,18 +25,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-MIN_VERSION = "1.1.0"
+MIN_VERSION = "1.2.0"
 MAX_VERSION = "2"
 REQUIRED_RANGE = f">={MIN_VERSION},<{MAX_VERSION}"
 
 # marrow pins this nightly build exactly (see `pixi.toml`); kept as a
 # constant purely so it shows up in one place if the pin moves.
-PINNED_NIGHTLY = "1.1.0.dev2026081705"
+# `devkit/tests/test_pins.py` fails if it drifts from `pixi.toml`.
+PINNED_NIGHTLY = "1.2.0.dev2026092105"
 
 _NIGHTLY_HELP = (
     "marrow pins a Mojo *nightly* build (currently "
-    f"{PINNED_NIGHTLY}), while PyPI's stable `mojo` package tops out at "
-    "1.0.0. A wheel cannot force `--extra-index-url`, so `pip install "
+    f"{PINNED_NIGHTLY}), while PyPI carries only stable `mojo` releases. "
+    "A wheel cannot force `--extra-index-url`, so `pip install "
     "marrow[compile]` cannot resolve marrow's exact compiler today. "
     "Install the nightly explicitly with:\n"
     "  pip install --pre mojo-compiler --extra-index-url "
@@ -528,7 +529,7 @@ def resolve_marrow_path(explicit: str | None = None) -> Path:
 def check_mojo_version() -> str:
     """Verify `mojo` is on PATH and within marrow's required range.
 
-    Raises `RuntimeError` naming the required range (`>=1.1.0,<2`), plus —
+    Raises `RuntimeError` naming the required range (`REQUIRED_RANGE`), plus —
     since the most likely reason mojo is missing or too old is that only
     PyPI's stable wheel was installed — the nightly-vs-stable limitation and
     where to get the nightly instead of letting an opaque compiler error
@@ -555,8 +556,9 @@ def check_mojo_version() -> str:
         )
 
     version = match.group(0).removeprefix("Mojo ")
-    major, minor, _patch = (int(g) for g in match.groups())
-    if not (major == 1 and minor >= 1):
+    found = tuple(int(g) for g in match.groups())
+    lowest = tuple(int(p) for p in MIN_VERSION.split("."))
+    if not (lowest <= found and found[0] < int(MAX_VERSION)):
         raise RuntimeError(
             f"marrow requires mojo {REQUIRED_RANGE}, found {version}.\n{_NIGHTLY_HELP}"
         )

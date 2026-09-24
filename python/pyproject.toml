@@ -13,7 +13,7 @@ requires-python = ">=3.14"
 marrow = "marrow.compile:main"
 
 [project.optional-dependencies]
-compile = ["mojo>=1.1,<2"]
+compile = ["mojo>=1.2,<2"]
 
 [tool.hatch.build.hooks.custom]
 path = "build.py"
@@ -28,28 +28,14 @@ only-include = []
 # finds python/marrow/__init__.py directly; the hook still builds libmarrow.so.
 packages = ["marrow"]
 
-[tool.pixi.workspace]
-channels = [
-  "https://prefix.dev/mojo-community",
-  "https://conda.modular.com/max-nightly/",
-  "conda-forge",
-]
-platforms = ["osx-arm64", "linux-64"]
-preview = ["pixi-build"]
-
-[tool.pixi.dependencies]
-mojo-compiler = "==1.1.0.dev2026090305"
-mojo = "==1.1.0.dev2026090305"
-python = ">=3.14,<3.15"
-
-[tool.pixi.pypi-dependencies]
-marrow = { path = ".", editable = true }
-
 [tool.cibuildwheel]
 build = "cp314-*"
 skip = "*-musllinux*"
 enable = ["cpython-prerelease"]
-before-build = "pip install --pre 'mojo-compiler==1.1.0.dev2026090305' --extra-index-url https://whl.modular.com/nightly/simple/"
+# The pins are `pixi.toml`'s -- `mojo-compiler` from `[package.build-dependencies]`,
+# `max-core` matching `[dependencies] max` -- and `devkit/tests/test_pins.py`
+# fails if they drift. `max-core` is needed because marrow imports `max.*`.
+before-build = "pip install --pre 'mojo-compiler==1.2.0.dev2026092105' 'max-core==26.7.0.dev2026092105' --extra-index-url https://whl.modular.com/nightly/simple/"
 
 # `build.py` embeds every `dlopen`-ed library it can resolve at build time --
 # the page codecs and `libopendal_c`. Neither `delocate` nor `auditwheel` can

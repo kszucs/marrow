@@ -12,10 +12,10 @@ a selection under `python/` triggers a full `libmarrow.so` build
 (`LaneSelector.needs_libmarrow`), and this check reads two text files.
 """
 
-import importlib.util
 import re
 
 from devkit.mojo import Repo
+from devkit.wheel import compile_module
 
 # Anchored on the closing paren, with the trailing comma optional: `mojo
 # format` writes a short declaration on one line (no trailing comma) and a
@@ -33,15 +33,6 @@ _SOURCES = (
     ("utils", "compression.mojo"),
     ("io", "opendal.mojo"),
 )
-
-
-def _load_compile_module():
-    """`compile.py` by path: importing `marrow` would pull in the extension."""
-    path = Repo.locate().python_dir / Repo.PACKAGE / "compile.py"
-    spec = importlib.util.spec_from_file_location("_marrow_compile", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _declared_specs():
@@ -66,14 +57,14 @@ def _declared_specs():
 def test_every_mojo_libspec_is_staged_by_compile_py():
     """A library Mojo can open that Python does not know to ship is a wheel
     that imports fine and fails on first use."""
-    compile_module = _load_compile_module()
+    module = compile_module(Repo.locate())
     declared = _declared_specs()
     assert declared, "no LibSpec declarations found -- did the syntax change?"
 
     staged = {
         tuple(v)
-        for v in list(compile_module._CODEC_LIB_CANDIDATES.values())
-        + list(compile_module._OPTIONAL_LIB_CANDIDATES.values())
+        for v in list(module._CODEC_LIB_CANDIDATES.values())
+        + list(module._OPTIONAL_LIB_CANDIDATES.values())
     }
     missing = {
         name: sonames
@@ -97,7 +88,6 @@ def test_opendal_env_overrides_match():
     build; if Mojo grows a third override and Python does not, the wheel
     stages a different library than the one a run would open.
     """
-    compile_module = _load_compile_module()
     declared = _declared_specs()
     assert declared["opendal_c"][1] == [
         "MARROW_OPENDAL_LIBRARY",
@@ -107,4 +97,3 @@ def test_opendal_env_overrides_match():
     source = (Repo.locate().python_dir / Repo.PACKAGE / "compile.py").read_text()
     for env in declared["opendal_c"][1]:
         assert env in source, f"{env} is declared in Mojo but unknown to compile.py"
-    _ = compile_module

@@ -168,24 +168,27 @@ def test_check_mojo_version_missing_raises_with_range(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         check_mojo_version()
     message = str(exc.value)
-    assert ">=1.1.0,<2" in message
+    assert ">=1.2.0,<2" in message
     assert "nightly" in message
 
 
-def test_check_mojo_version_too_old_raises_with_found_version(monkeypatch):
+@pytest.mark.parametrize("found", ["1.0.0", "1.1.0", "2.0.0"])
+def test_check_mojo_version_out_of_range_raises_with_found_version(
+    monkeypatch, found
+):
     monkeypatch.setattr("marrow.compile.shutil.which", lambda name: "/usr/bin/mojo")
 
     def fake_run(cmd, capture_output, text, check):
         return subprocess.CompletedProcess(
-            cmd, 0, stdout="Mojo 1.0.0 (deadbeef)\n", stderr=""
+            cmd, 0, stdout=f"Mojo {found} (deadbeef)\n", stderr=""
         )
 
     monkeypatch.setattr("marrow.compile.subprocess.run", fake_run)
     with pytest.raises(RuntimeError) as exc:
         check_mojo_version()
     message = str(exc.value)
-    assert "1.0.0" in message
-    assert ">=1.1.0,<2" in message
+    assert found in message
+    assert ">=1.2.0,<2" in message
 
 
 def test_check_mojo_version_in_range_returns_version_string(monkeypatch):
@@ -193,11 +196,11 @@ def test_check_mojo_version_in_range_returns_version_string(monkeypatch):
 
     def fake_run(cmd, capture_output, text, check):
         return subprocess.CompletedProcess(
-            cmd, 0, stdout="Mojo 1.1.0.dev2026081705 (18b45e5c)\n", stderr=""
+            cmd, 0, stdout="Mojo 1.2.0.dev2026092105 (18b45e5c)\n", stderr=""
         )
 
     monkeypatch.setattr("marrow.compile.subprocess.run", fake_run)
-    assert check_mojo_version() == "1.1.0"
+    assert check_mojo_version() == "1.2.0"
 
 
 # --- dylib_closure / bundle --------------------------------------------------
