@@ -435,13 +435,19 @@ def codec_lib_dir() -> Path | None:
     """The directory holding marrow's `dlopen`-ed codec libraries, resolved
     from the active environment rather than a hardcoded pixi path.
 
-    Tries `$CONDA_PREFIX/lib` first — set by `pixi run`/`pixi shell` for
-    whichever environment is active — then falls back to two directories up
-    from `mojo` on `PATH` (`.../bin/mojo` -> `.../lib`), the same layout any
-    conda/pixi environment uses. Returns `None` if neither resolves, so the
-    caller can skip codec staging with a warning instead of guessing a path
-    that may not exist on this machine.
+    Tries `$MARROW_CODEC_LIB_DIR` first -- a wheel build outside any conda
+    environment (cibuildwheel) names its codec directory with it, rather than
+    repointing `CONDA_PREFIX`, which the pip-installed compiler may read too.
+    Then `$CONDA_PREFIX/lib` — set by `pixi run`/`pixi shell` for whichever
+    environment is active — and then two directories up from `mojo` on `PATH`
+    (`.../bin/mojo` -> `.../lib`), the same layout any conda/pixi environment
+    uses. Returns `None` if none resolves, so the caller can skip codec staging
+    with a warning instead of guessing a path that may not exist on this
+    machine.
     """
+    explicit = os.environ.get("MARROW_CODEC_LIB_DIR")
+    if explicit and Path(explicit).is_dir():
+        return Path(explicit)
     conda_prefix = os.environ.get("CONDA_PREFIX")
     if conda_prefix:
         candidate = Path(conda_prefix) / "lib"

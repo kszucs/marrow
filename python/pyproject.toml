@@ -42,28 +42,31 @@ packages = ["marrow"]
 build = "cp314-*"
 skip = "*-musllinux*"
 enable = ["cpython-prerelease"]
+# `build.py` embeds every `dlopen`-ed library it can resolve at build time --
+# the page codecs and `libopendal_c` -- because neither `delocate` nor
+# `auditwheel` can find them: both walk load commands, and a `dlopen`-ed library
+# has none. cibuildwheel builds from a bare Python, so `wheel_deps.sh` puts them
+# in one directory first (inside the container on Linux; `{project}` is the
+# repository root, since the config is read from `python/`), and
+# `codec_lib_dir()` finds it through `MARROW_CODEC_LIB_DIR`.
+before-all = "bash {project}/scripts/wheel_deps.sh /tmp/marrow-deps"
+environment = { MARROW_CODEC_LIB_DIR = "/tmp/marrow-deps/lib" }
 # The pins are `pixi.toml`'s -- `mojo-compiler` from `[package.build-dependencies]`,
 # `max-core` matching `[dependencies] max` -- and `devkit/tests/test_pins.py`
 # fails if they drift. `max-core` is needed because marrow imports `max.*`.
 before-build = "pip install --pre 'mojo-compiler==1.2.0.dev2026092105' 'max-core==26.7.0.dev2026092105' --extra-index-url https://whl.modular.com/nightly/simple/"
+# The Python suite against the *installed* wheel, the selection `pixi run -e
+# wheel wheel_test` makes: `pythonpath={project}` keeps `devkit` importable and
+# drops pytest.ini's `python`, which would test the checkout instead;
+# `python_files` leaves the benchmarks out. `test_build.py` tests the build
+# hook itself, which needs hatchling and a checkout, not a wheel.
+test-requires = ["pytest", "pyarrow>=23.0.1,<24", "numpy>=2.4.4,<3"]
+test-command = "pytest {project}/python/marrow/tests -o pythonpath={project} -o 'python_files=test_*.py' --noconftest -p no:cacheprovider -m 'not gpu' --ignore={project}/python/marrow/tests/test_build.py"
 
-# `build.py` embeds every `dlopen`-ed library it can resolve at build time --
-# the page codecs and `libopendal_c`. Neither `delocate` nor `auditwheel` can
-# find those for us: both walk load commands, and a `dlopen`-ed library has
-# none. `MARROW_OPENDAL_LIBRARY` is what `optional_lib_paths()` reads; the
-# codecs come from the environment `mojo` itself lives in. UNVERIFIED on CI --
-# see the header of `.github/workflows/wheels.yml`.
+# delocate and auditwheel repair with their defaults.
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
-before-all = "pip install delocate && bash {project}/../scripts/build_opendal_c.sh"
-environment = { MARROW_OPENDAL_LIBRARY = "{project}/../vendor/opendal/bindings/c/target/release/libopendal_c.dylib" }
-repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
 manylinux-x86_64-image = "manylinux_2_34"
-# The manylinux image has no rust; the wheel simply ships without OpenDAL if
-# this leg is left as is. `optional_lib_paths()` is silent about that on
-# purpose -- remote storage is opt-in and a wheel without it reads every local
-# file.
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"

@@ -1,64 +1,70 @@
 name: Wheels
 
-# Manual only, and unverified.  It last ran on 2026-05-11, when both legs
-# failed, and nothing has run it since: it fires on pull requests to main and on
-# tags, and there have been none.  Since then `python/build.py` was fixed to
-# build `python/bindings/lib.mojo`, which is what the macOS leg died on, so this
-# may be closer to working than the last run suggests -- but "may be" is the
-# point.  Two things are known to be wrong as of 2026-09-07:
+# Builds the macOS arm64 and manylinux x86_64 wheels with cibuildwheel (its
+# configuration is `[tool.cibuildwheel]` in python/pyproject.toml), tests each
+# installed wheel, and checks every library it bundles carries its licence
+# (`python -m devkit wheel check`).
 #
-#   - `python/pyproject.toml` pinned mojo `1.0.0b2.dev2026051106` in both
-#     `[tool.pixi.dependencies]` and the cibuildwheel `before-build`, four
-#     months behind the toolchain the tree compiles against.  Corrected in this
-#     change, untested.
-#   - Both legs install only `mojo-compiler` before building.  `marrow` imports
-#     `max.algorithm.*` and `max.gpu.host` unconditionally -- in `buffers.mojo`,
-#     `views.mojo`, `arrays.mojo`, `execution.mojo` and more -- so MAX is needed
-#     on the search path whether or not GPU codegen is on, and nothing here puts
-#     it there.
-#   - The Linux leg needs a mojo compiler inside the manylinux container; in
-#     2026-05 it could not even pull its image
-#     (`No such image: quay.io/pypa/manylinux_2_34_x86_64:2025.06.08-1`), which
-#     the cibuildwheel bump below may or may not settle.
-#   - The macOS `before-all` now builds `libopendal_c` so the wheel can embed
-#     it, and that step has never run here.  Two things about it are guesses:
-#     whether cibuildwheel expands `{project}` inside `[tool.cibuildwheel.macos]
-#     environment`, and whether the runner's rust is new enough (opendal-c wants
-#     >=1.91).  The *mechanism* it feeds is verified -- `pixi run -e wheel wheel`
-#     with `MARROW_OPENDAL_LIBRARY` set produces a wheel whose `fs://` reads work
-#     with no OpenDAL anywhere in the environment -- so what is unproven is this
-#     plumbing, not the result.  The Linux leg deliberately does not build it:
-#     the manylinux image has no rust, and a wheel without OpenDAL still reads
-#     every local file.
+# Manual only until a dispatched run passes both legs; add the `pull_request`
+# and `v*` tag triggers in the change that records that run, not before. What
+# no run has exercised yet: the pip-installed `mojo` finding `max.*` from the
+# `max-core` wheel, the codecs and OpenDAL built by scripts/wheel_deps.sh inside
+# the manylinux container, and conda-forge's snappy passing auditwheel's GLIBCXX
+# policy without its libstdc++. `pixi run -e wheel wheel` is the verified path
+# on macOS.
 #
-# `pixi run -e wheel wheel` builds and tests a macOS wheel locally and is the
-# working path today; docs/backlog.md tracks the rest.  Restore the
-# `pull_request` and tag triggers in the same change that makes a leg pass on a
-# real run, not before.
+# Publishing has two locks, and both must open:
+#   - the repository variable MODULAR_REDISTRIBUTION_CONFIRMED is 'true' -- set
+#     it only once Modular has confirmed in writing that the Mojo runtime
+#     libraries in every wheel may be redistributed (NOTICE.txt);
+#   - the `pypi` environment's trusted publisher is registered on PyPI, which is
+#     deliberately not done until then, so no credential exists before it.
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write  # OIDC for PyPI trusted publisher
 
 jobs:
   build-wheels:
     name: Build wheel (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
-      - name: Build wheels
+      # The -O3 libmarrow build peaks near 20 GB; the Linux runner has 16 and
+      # the manylinux container shares the host's swap. As in test.yml.
+      - name: More swap
+        if: runner.os == 'Linux'
+        run: |
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Build and test wheels
         uses: pypa/cibuildwheel@v3.2.1
         with:
           package-dir: python
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # devkit's CLI imports click, and rich and psutil through its progress
+      # display; nothing else, and nothing from marrow.
+      - name: Check every bundled library's licence
+        run: |
+          pip install click rich psutil
+          python -m devkit wheel check --require opendal wheelhouse/*.whl
 
       - uses: actions/upload-artifact@v4
         with:
@@ -68,14 +74,29 @@ jobs:
   publish:
     needs: build-wheels
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v') && vars.MODULAR_REDISTRIBUTION_CONFIRMED == 'true'
     environment: pypi
+    permissions:
+      contents: read
+      id-token: write  # OIDC for the PyPI trusted publisher
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           merge-multiple: true
           path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # The artifacts are checked again here, where the upload happens.
+      - name: Check every bundled library's licence
+        run: |
+          pip install click rich psutil
+          python -m devkit wheel check --require opendal dist/*.whl
 
       - uses: pypa/gh-action-pypi-publish@release/v1

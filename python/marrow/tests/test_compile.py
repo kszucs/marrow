@@ -263,13 +263,24 @@ def test_bundle_copies_closure_and_rewrites_rpath_to_loader_path(tmp_path):
 # tries to `dlopen` — no `mojo build` involved either way.
 
 
+def test_codec_lib_dir_prefers_the_explicit_directory(tmp_path, monkeypatch):
+    """A wheel build names its codec directory; that beats any environment."""
+    (tmp_path / "codecs").mkdir()
+    (tmp_path / "lib").mkdir()
+    monkeypatch.setenv("MARROW_CODEC_LIB_DIR", str(tmp_path / "codecs"))
+    monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
+    assert codec_lib_dir() == tmp_path / "codecs"
+
+
 def test_codec_lib_dir_prefers_conda_prefix(tmp_path, monkeypatch):
+    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
     (tmp_path / "lib").mkdir()
     monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
     assert codec_lib_dir() == tmp_path / "lib"
 
 
 def test_codec_lib_dir_falls_back_to_mojo_location(tmp_path, monkeypatch):
+    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
     (tmp_path / "lib").mkdir()
     (tmp_path / "bin").mkdir()
@@ -283,6 +294,7 @@ def test_codec_lib_dir_falls_back_to_mojo_location(tmp_path, monkeypatch):
 
 
 def test_codec_lib_dir_returns_none_when_unresolved(monkeypatch):
+    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
     monkeypatch.setattr("marrow.compile.shutil.which", lambda name: None)
     assert codec_lib_dir() is None
@@ -457,6 +469,7 @@ def test_optional_lib_paths_is_empty_and_quiet_when_absent(
     this warns about nothing."""
     monkeypatch.delenv("MARROW_OPENDAL_LIBRARY", raising=False)
     monkeypatch.delenv("OPENDAL_C_LIBRARY", raising=False)
+    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
     monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
     (tmp_path / "lib").mkdir()
     monkeypatch.setattr(sys, "platform", "darwin")
