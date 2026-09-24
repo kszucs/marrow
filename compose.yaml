@@ -1,5 +1,6 @@
-# Two services, one Dockerfile: the image is platform-neutral and the platform
-# is set here. See Dockerfile.linux for which one runs where.
+# Two test services, one Dockerfile: the image is platform-neutral and the
+# platform is set here. See Dockerfile.linux for which one runs where. The
+# `wheel` service builds the Linux wheels; see Dockerfile.wheel.
 services:
   x86:
     platform: linux/amd64
@@ -21,6 +22,20 @@ services:
       # binaries under the same path, and sharing one would leave whichever ran
       # second executing the other's.
       - pixi_arm64:/marrow/.pixi
+
+  # The Linux leg of .github/workflows/wheels.yml. No `platform`: cibuildwheel
+  # builds for the Docker host's own architecture (scripts/wheel_linux.sh sets
+  # CIBW_ARCHS_LINUX), because Mojo does not run under emulation. It is handed
+  # an export of the tree, never the working tree itself -- cibuildwheel copies
+  # its directory into the build container whole, host build outputs included.
+  wheel:
+    build:
+      context: .
+      dockerfile: Dockerfile.wheel
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.wheel-linux/src:/project
+      - ./.wheel-linux/wheelhouse:/wheelhouse
 
 volumes:
   pixi_x86:

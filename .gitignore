@@ -229,3 +229,6 @@ notes/
 # Apache OpenDAL, cloned by `pixi run -e opendal clone_opendal` to build
 # libopendal_c (it is `publish = false` upstream, so there is no package).
 vendor/
+
+# `scripts/wheel_linux.sh`: the exported tree and the Linux wheels it builds.
+.wheel-linux/

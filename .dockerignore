@@ -13,3 +13,7 @@ output/
 results/
 presentation/
 docs/
+vendor/
+.wheel-linux/
+dist/
+python/marrow/libmarrow.so

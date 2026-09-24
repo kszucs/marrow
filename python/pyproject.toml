@@ -55,18 +55,30 @@ environment = { MARROW_CODEC_LIB_DIR = "/tmp/marrow-deps/lib" }
 # `max-core` matching `[dependencies] max` -- and `devkit/tests/test_pins.py`
 # fails if they drift. `max-core` is needed because marrow imports `max.*`.
 before-build = "pip install --pre 'mojo-compiler==1.2.0.dev2026092105' 'max-core==26.7.0.dev2026092105' --extra-index-url https://whl.modular.com/nightly/simple/"
-# The Python suite against the *installed* wheel, the selection `pixi run -e
-# wheel wheel_test` makes: `pythonpath={project}` keeps `devkit` importable and
-# drops pytest.ini's `python`, which would test the checkout instead;
-# `python_files` leaves the benchmarks out. `test_build.py` tests the build
-# hook itself, which needs hatchling and a checkout, not a wheel.
-test-requires = ["pytest", "pyarrow>=23.0.1,<24", "numpy>=2.4.4,<3"]
-test-command = "pytest {project}/python/marrow/tests -o pythonpath={project} -o 'python_files=test_*.py' --noconftest -p no:cacheprovider -m 'not gpu' --ignore={project}/python/marrow/tests/test_build.py"
+# The installed wheel's Python suite, in a fresh venv: scripts/wheel_test.sh is
+# its one definition, shared with the local and the Linux runs.
+test-command = "bash {project}/scripts/wheel_test.sh {wheel}"
 
-# delocate and auditwheel repair with their defaults.
+# delocate repairs with its default.
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
+# Modular's Linux wheels are manylinux_2_34, so the build container must be too.
+# CI builds x86_64; aarch64 is what `pixi run -e docker wheel_linux` builds on an
+# Apple Silicon host, where x86_64 Mojo cannot run under emulation.
 manylinux-x86_64-image = "manylinux_2_34"
+manylinux-aarch64-image = "manylinux_2_34"
+# Yet they need GLIBCXX_3.4.30, which manylinux_2_34's libstdc++ (GCC 11) lacks:
+# the pip-installed `mojo` does not start without it, and auditwheel finds the
+# same requirement in what the wheel bundles -- not in the codecs, which stay at
+# GCC 11's symbols -- so manylinux_2_35 is the lowest honest tag. The build sees
+# conda-forge's libstdc++ (scripts/wheel_deps.sh); a platform `environment`
+# replaces the global one, hence MARROW_CODEC_LIB_DIR again.
+environment = { MARROW_CODEC_LIB_DIR = "/tmp/marrow-deps/lib", LD_LIBRARY_PATH = "/tmp/marrow-deps/cxx" }
+repair-wheel-command = "auditwheel repair --plat manylinux_2_35_$(uname -m) -w {dest_dir} {wheel}"
+# pip in this manylinux_2_34 container rightly refuses a manylinux_2_35 wheel,
+# so the Linux wheels are tested after the build, on the machine that ran
+# cibuildwheel, with the same scripts/wheel_test.sh (wheels.yml, Dockerfile.wheel).
+test-command = ""

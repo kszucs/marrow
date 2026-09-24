@@ -1,17 +1,16 @@
 name: Wheels
 
-# Builds the macOS arm64 and manylinux x86_64 wheels with cibuildwheel (its
-# configuration is `[tool.cibuildwheel]` in python/pyproject.toml), tests each
-# installed wheel, and checks every library it bundles carries its licence
+# Builds the macOS arm64 and manylinux_2_35 x86_64 wheels with cibuildwheel
+# (its configuration is `[tool.cibuildwheel]` in python/pyproject.toml), tests
+# each installed wheel, and checks every library it bundles carries its licence
 # (`python -m devkit wheel check`).
 #
 # Manual only until a dispatched run passes both legs; add the `pull_request`
-# and `v*` tag triggers in the change that records that run, not before. What
-# no run has exercised yet: the pip-installed `mojo` finding `max.*` from the
-# `max-core` wheel, the codecs and OpenDAL built by scripts/wheel_deps.sh inside
-# the manylinux container, and conda-forge's snappy passing auditwheel's GLIBCXX
-# policy without its libstdc++. `pixi run -e wheel wheel` is the verified path
-# on macOS.
+# and `v*` tag triggers in the change that records that run, not before.
+# Locally, `pixi run -e wheel wheel` builds the macOS wheel, and `pixi run -e
+# docker wheel_linux` runs this Linux leg -- the same cibuildwheel and
+# configuration -- for the Docker host's architecture: aarch64 on Apple Silicon,
+# since x86_64 Mojo does not run under emulation there.
 #
 # Publishing has two locks, and both must open:
 #   - the repository variable MODULAR_REDISTRIBUTION_CONFIRMED is 'true' -- set
@@ -65,6 +64,14 @@ jobs:
         run: |
           pip install click rich psutil
           python -m devkit wheel check --require opendal wheelhouse/*.whl
+
+      # cibuildwheel tests the macOS wheel itself. The Linux wheel is
+      # manylinux_2_35 -- Modular's runtime needs GLIBCXX_3.4.30 -- so pip in
+      # the manylinux_2_34 build container refuses it; it is tested here, on
+      # the runner's newer glibc, with the same script.
+      - name: Test the installed Linux wheel
+        if: runner.os == 'Linux'
+        run: bash scripts/wheel_test.sh wheelhouse/*.whl
 
       - uses: actions/upload-artifact@v4
         with:

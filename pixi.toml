@@ -273,6 +273,11 @@ build_x86 = { cmd = "docker compose build x86" }
 build_arm64 = { cmd = "docker compose build arm64" }
 test_x86 = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build_x86"] }
 test_arm64 = { cmd = "docker compose run --rm arm64 pixi run -e dev pytest", depends-on = ["build_arm64"] }
+# The Linux leg of wheels.yml -- cibuildwheel, then `devkit wheel check` -- for
+# the Docker host's architecture; wheels land in .wheel-linux/wheelhouse/. See
+# scripts/wheel_linux.sh and Dockerfile.wheel.
+build_wheel = { cmd = "docker compose build wheel" }
+wheel_linux = { cmd = "scripts/wheel_linux.sh", depends-on = ["build_wheel"] }
 
 # Wheel — local wheel building for macOS development.
 [feature.wheel.dependencies]
@@ -290,13 +295,9 @@ numpy = ">=2.4.4,<3"
 # repair and install a stale wheel beside the new one.
 wheel_build = { cmd = "rm -rf python/dist dist/repaired && strip -x python/marrow/libmarrow.so && (cd python && python -m hatchling build --target wheel) && delocate-wheel -w dist/repaired/ -v python/dist/marrow-*.whl", depends-on = ["build_python"] }
 wheel_check = { cmd = "python -m devkit wheel check dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
-wheel_install = { cmd = "python -m pip install -q --force-reinstall --no-deps dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
-wheel_import = { cmd = "python -c \"import marrow; assert 'site-packages' in marrow.__file__, marrow.__file__; print(marrow.__file__)\"", depends-on = ["wheel_install"] }
-# `-o pythonpath=.` drops pytest.ini's `python` entry, which would otherwise
-# import the source tree and test it instead of the installed wheel; `.` stays
-# for `devkit` (the golden corpus). The root's `marrow/` holds Mojo sources and
-# no `__init__.py`, so it cannot shadow the installed regular package.
-wheel_test = { cmd = "pytest python/marrow/tests/test_*.py -o pythonpath=. -v --noconftest -m 'not gpu'", depends-on = ["wheel_import"] }
+# Installs the wheel into a fresh venv and tests that install -- the same script
+# cibuildwheel and the Linux runs use.
+wheel_test = { cmd = "bash scripts/wheel_test.sh dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
 wheel = { depends-on = ["wheel_check", "wheel_test"] }
 
 # Object store — builds Apache OpenDAL's C binding and runs the storage tests
