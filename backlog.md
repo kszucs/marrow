@@ -229,7 +229,27 @@ the reason it has not been done yet rather than a reason never to.
 
 Order of work if picked up: link the codecs behind a `BuildOptions` flag,
 measure the size gate and the wheel, then delete the staging only once both
-platforms are green.
+platforms are green. Linked codecs still need their `LIBRARY_LICENSES` entries:
+`devkit wheel check` asks the same of a grafted library as of a staged one.
+
+### Wheels: built and checked, not published
+
+As of 2026-09-24 a wheel carries a licence for everything it bundles, and
+`devkit wheel check` enforces it; `pixi run -e wheel wheel` is verified on
+macOS. Two things stand between that and PyPI.
+
+- **Modular's written answer** on redistributing the Mojo/MAX runtime libraries
+  the wheel bundles (`libKGENCompilerRTShared`, `libAsyncRTRuntimeGlobals`,
+  `libMSupportGlobals`, `libAsyncRTMojoBindings`). The Community License allows
+  only components its "Documentation" lists, and no list is published; the same
+  question is open for others (modular/modular#6944, tamnd/firepanda#197).
+  Until then `MODULAR_REDISTRIBUTION_CONFIRMED` stays unset, no PyPI trusted
+  publisher exists, and `LicenseRef-Modular` in `python/pyproject.toml` and the
+  `licenses/modular-*` texts are placeholders to replace per the answer.
+- **The Linux leg of `wheels.yml` has never run.** Unproven there: the
+  pip-installed `mojo` finding `max.*` from the `max-core` wheel, conda-forge's
+  snappy passing auditwheel's manylinux_2_34 GLIBCXX policy without its own
+  libstdc++, and the `-O3` build fitting a runner with swap.
 
 ### 1.9 The Parquet reader, after page-level pruning landed
 
