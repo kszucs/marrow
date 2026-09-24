@@ -110,6 +110,11 @@ class CustomBuildHook(BuildHookInterface):
             + compile_mod.optional_lib_paths()
         )
         for lib in libs:
+            # manylinux guarantees these two, and a wheel carrying a conda
+            # copy would hide from `auditwheel` whether the codecs fit the
+            # policy's GLIBCXX. `devkit wheel check` refuses them.
+            if lib.name.split(".", 1)[0] in ("libstdc++", "libgcc_s"):
+                continue
             staged.setdefault(lib.name, lib)
         return list(staged.values())
 

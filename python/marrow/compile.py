@@ -283,6 +283,125 @@ _OPTIONAL_LIB_CANDIDATES: dict[str, list[str]] = {
 }
 
 
+# --- Licences ----------------------------------------------------------------
+#
+# Every library a wheel or a `--bundle` directory ships, by file-name stem, and
+# the texts that must travel with it. Paths are relative to `python/` -- the
+# same strings a wheel's `License-File` metadata carries -- and resolve through
+# its `licenses/` symlink to the repository root. `devkit/tests/test_licenses.py`
+# fails if a staged library is missing here or a text from `licenses/`, and
+# `devkit wheel check` fails a built wheel the same way.
+_MARROW_LICENSES = ("LICENSE.txt", "NOTICE.txt")
+_MODULAR_LICENSES = (
+    "licenses/modular-LICENSE.txt",
+    "licenses/modular-Third-Party-Notices.txt",
+)
+LIBRARY_LICENSES: dict[str, tuple[str, ...]] = {
+    "libmarrow": _MARROW_LICENSES,
+    # The Mojo runtime (`mojo-compiler`) and MAX (`max-core`), linked by every
+    # Mojo binary; `libMGPRT` only by a `-D MARROW_GPU=true` build.
+    "libKGENCompilerRTShared": _MODULAR_LICENSES,
+    "libAsyncRTRuntimeGlobals": _MODULAR_LICENSES,
+    "libMSupportGlobals": _MODULAR_LICENSES,
+    "libAsyncRTMojoBindings": _MODULAR_LICENSES,
+    "libMGPRT": _MODULAR_LICENSES,
+    # The page codecs (`_CODEC_LIB_CANDIDATES`) and their own dependencies.
+    "libzstd": ("licenses/zstd.txt",),
+    "libsnappy": ("licenses/snappy.txt",),
+    "liblz4": ("licenses/lz4.txt",),
+    "libz": ("licenses/zlib.txt",),
+    "libbrotlienc": ("licenses/brotli.txt",),
+    "libbrotlidec": ("licenses/brotli.txt",),
+    "libbrotlicommon": ("licenses/brotli.txt",),
+    # The C++ runtime conda-forge's snappy links. On Linux only a `--bundle`
+    # directory carries it: manylinux guarantees libstdc++ and libgcc_s, so the
+    # wheel build skips them and `devkit wheel check` refuses them.
+    "libc++": ("licenses/libcxx.txt",),
+    "libstdc++": ("licenses/bundle-only/gcc-runtime.txt",),
+    "libgcc_s": ("licenses/bundle-only/gcc-runtime.txt",),
+    # Remote storage (`_OPTIONAL_LIB_CANDIDATES`): Apache-2.0 itself, plus the
+    # ASF NOTICE and every Rust crate statically linked into it.
+    "libopendal_c": (
+        "LICENSE.txt",
+        "licenses/opendal-NOTICE.txt",
+        "licenses/opendal-third-party.txt",
+    ),
+}
+
+# `auditwheel repair` renames a grafted library `libfoo-0a1b2c3d.so.1`.
+_AUDITWHEEL_HASH = re.compile(r"-[0-9a-f]{8}$")
+
+
+def library_stem(filename: str) -> str:
+    """The name a shared library is known by, whatever its file is called:
+    `libzstd` for `libzstd.1.dylib`, `libzstd.so.1`, an auditwheel-renamed
+    `libzstd-0a1b2c3d.so.1`; `libmarrow` for `libmarrow.cpython-314-darwin.so`.
+    """
+    return _AUDITWHEEL_HASH.sub("", filename.split(".", 1)[0])
+
+
+def license_files(filename: str) -> tuple[str, ...] | None:
+    """The licence texts `filename` needs, or `None` if it is not recorded."""
+    return LIBRARY_LICENSES.get(library_stem(filename))
+
+
+def _license_text(rel: str) -> bytes:
+    """A licence text by its `python/`-relative path, as bytes -- copied, never
+    re-encoded (several are UTF-8, and a manylinux container's locale is not).
+
+    From the checkout this module lives in when there is one -- `build.py`
+    beside the package marks `python/` -- and otherwise from the installed
+    distribution, whose wheel carries every text under
+    `*.dist-info/licenses/<rel>`.
+    """
+    python_dir = Path(__file__).resolve().parent.parent
+    if (python_dir / "build.py").is_file() and (python_dir / rel).is_file():
+        return (python_dir / rel).read_bytes()
+    from importlib import metadata
+
+    try:
+        files = metadata.distribution("marrow").files or []
+    except metadata.PackageNotFoundError:
+        files = []
+    suffix = f".dist-info/licenses/{rel}"
+    for path in files:
+        if str(path).endswith(suffix):
+            return path.read_binary()
+    raise FileNotFoundError(
+        f"licence text {rel} is in neither a marrow checkout nor the "
+        "installed marrow distribution"
+    )
+
+
+def write_licenses(names: list[str], dest: Path) -> list[Path]:
+    """Write marrow's `LICENSE.txt` and `NOTICE.txt`, and the texts every file
+    in `names` needs, into `dest`, keeping their relative paths.
+
+    marrow's own texts always go in: every binary `marrow compile` builds
+    embeds marrow. A library with no recorded licence is written without one
+    and warned about, the same judgement `stage_codec_libs` makes about a
+    missing codec. Returns the files written.
+    """
+    wanted = dict.fromkeys(_MARROW_LICENSES)
+    for name in names:
+        files = license_files(name)
+        if files is None:
+            print(
+                f"marrow: warning: no licence recorded for {name}; "
+                "it is bundled without one",
+                file=sys.stderr,
+            )
+            continue
+        wanted.update(dict.fromkeys(files))
+    written = []
+    for rel in wanted:
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_license_text(rel))
+        written.append(target)
+    return written
+
+
 def optional_lib_paths() -> list[Path]:
     """The optional `dlopen`-ed libraries present on this machine.
 
@@ -415,8 +534,10 @@ def bundle(binary: Path, dest: Path) -> Path:
     codec libraries (zstd, snappy, lz4, zlib, brotli — see `stage_codec_libs`)
     are `dlopen`-ed rather than linked, so they need no rpath entry; they are
     found via the executable-relative candidate `compression.mojo` now tries
-    before the bare soname. Returns the path to the copied binary inside
-    `dest`.
+    before the bare soname. `dest` also gets `LICENSE.txt`, `NOTICE.txt` and
+    `licenses/` for exactly the libraries copied (`write_licenses`) -- whoever
+    redistributes the directory redistributes those libraries. Returns the path
+    to the copied binary inside `dest`.
     """
     binary = binary.resolve()
     dest = Path(dest)
@@ -431,6 +552,7 @@ def bundle(binary: Path, dest: Path) -> Path:
     out_binary = dest / binary.name
     shutil.copy2(binary, out_binary)
     _copy_deduped(staged, dest)
+    write_licenses(list(staged), dest)
 
     if sys.platform == "darwin":
         for rpath in _otool_rpaths(out_binary):
@@ -616,7 +738,8 @@ def _add_compile_subparser(
         help="copy the built binary and its dylib closure into DIR, with "
         "the rpath rewritten to @loader_path/$ORIGIN, so DIR is a "
         "self-contained, relocatable directory that runs without the "
-        "local pixi environment (default: emit a bare binary)",
+        "local pixi environment; the licences of everything copied are "
+        "written beside it (default: emit a bare binary)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="print the build command"

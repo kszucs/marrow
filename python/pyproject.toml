@@ -1,5 +1,6 @@
 [build-system]
-requires = ["hatchling"]
+# 1.27 is the first hatchling with PEP 639 (`license` expression, `license-files`).
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,6 +9,15 @@ version = "0.1.0"
 description = "Apache Arrow implementation in Mojo"
 readme = "README.md"
 requires-python = ">=3.14"
+# marrow's own code is Apache-2.0; the rest is what a wheel bundles beside it.
+# `NOTICE.txt` says which component carries which licence, and
+# `licenses/` holds every text. `LicenseRef-Modular` stands for the Mojo
+# runtime libraries' terms until Modular confirms which ones apply.
+license = "Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND ISC AND Unicode-3.0 AND Zlib AND Apache-2.0 WITH LLVM-exception AND LicenseRef-Modular"
+# Symlinks to the repository root (PEP 639 forbids paths outside `python/`).
+# `licenses/*` matches files only, so `licenses/bundle-only/` -- texts that a
+# `marrow compile --bundle` directory may need but a wheel never ships -- stays out.
+license-files = ["LICENSE.txt", "NOTICE.txt", "licenses/*"]
 
 [project.scripts]
 marrow = "marrow.compile:main"

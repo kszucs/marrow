@@ -24,10 +24,12 @@ from marrow.compile import (
     check_mojo_version,
     codec_lib_dir,
     dylib_closure,
+    license_files,
     main,
     optional_lib_paths,
     resolve_marrow_path,
     stage_codec_libs,
+    write_licenses,
 )
 
 
@@ -385,6 +387,37 @@ def test_bundle_includes_codec_libraries(tmp_path):
         assert any(n in names for n in _CODEC_LIB_CANDIDATES[codec]), (
             f"{codec} missing from bundle: {names}"
         )
+
+    # Whoever ships the directory ships these libraries: each needs its text.
+    assert (dest / "LICENSE.txt").is_file() and (dest / "NOTICE.txt").is_file()
+    for name in names:
+        if name.endswith((".dylib", ".so")) or ".so." in name:
+            files = license_files(name)
+            assert files is not None, f"{name} bundled without a recorded licence"
+            assert all((dest / rel).is_file() for rel in files), name
+
+
+# --- licences ------------------------------------------------------------------
+
+
+def test_write_licenses_writes_exactly_what_the_libraries_need(tmp_path):
+    written = write_licenses(
+        ["libzstd.1.dylib", "libzstd.dylib", "libKGENCompilerRTShared.so"], tmp_path
+    )
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in written) == [
+        "LICENSE.txt",
+        "NOTICE.txt",
+        "licenses/modular-LICENSE.txt",
+        "licenses/modular-Third-Party-Notices.txt",
+        "licenses/zstd.txt",
+    ]
+    assert b"Zstandard" in (tmp_path / "licenses" / "zstd.txt").read_bytes()
+
+
+def test_write_licenses_warns_about_an_unrecorded_library(tmp_path, capsys):
+    written = write_licenses(["libmystery.so"], tmp_path)
+    assert {p.name for p in written} == {"LICENSE.txt", "NOTICE.txt"}
+    assert "libmystery.so" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
