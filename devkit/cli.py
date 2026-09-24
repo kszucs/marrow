@@ -143,14 +143,22 @@ def wheel():
     required=True,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
+@click.option(
+    "--require",
+    multiple=True,
+    metavar="NAME",
+    help="Also require an optional library (e.g. `opendal`); every codec is "
+    "always required.",
+)
 @pass_context
-def wheel_check(ctx, wheels):
+def wheel_check(ctx, wheels, require):
     """Fail unless every shared library in each (repaired) wheel carries its
-    licence texts, METADATA declares them, and nothing forbidden ships."""
+    licence texts, METADATA declares them, every codec (and each --require'd
+    library) is present, and nothing forbidden ships."""
     catalog = compile_module(ctx.repo)
     failures = []
     for path in wheels:
-        problems = check_wheel(path, catalog)
+        problems = check_wheel(path, catalog, require)
         failures.extend(f"{path.name}: {problem}" for problem in problems)
         if not problems:
             click.echo(f"{path.name}: ok")

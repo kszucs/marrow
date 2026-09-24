@@ -35,12 +35,15 @@ def compile_module(repo):
     return module
 
 
-def check_wheel(path, catalog):
+def check_wheel(path, catalog, require=()):
     """Every way the wheel at `path` misstates what it ships, as messages.
 
     `catalog` is `compile.py` (see `compile_module`): its `library_stem` and
-    `license_files` are the one definition of which texts a library needs.
-    An empty list means the wheel is consistent.
+    `license_files` are the one definition of which texts a library needs, and
+    its tables say what a wheel must carry -- every page codec always (the
+    build only *warns* when one is missing, and a wheel without snappy cannot
+    read most Parquet files), and each `_OPTIONAL_LIB_CANDIDATES` key named in
+    `require`. An empty list means the wheel is consistent.
     """
     with zipfile.ZipFile(path) as wheel:
         names = wheel.namelist()
@@ -74,10 +77,20 @@ def check_wheel(path, catalog):
         if rel not in shipped:
             problems.append(f"{rel} is not under {prefix}")
 
-    for name in names:
+    libraries = [n for n in names if _SHARED_LIBRARY.search(n.rsplit("/", 1)[-1])]
+    stems = {catalog.library_stem(n.rsplit("/", 1)[-1]) for n in libraries}
+    expected = dict(catalog._CODEC_LIB_CANDIDATES)
+    for key in require:
+        if key in catalog._OPTIONAL_LIB_CANDIDATES:
+            expected[key] = catalog._OPTIONAL_LIB_CANDIDATES[key]
+        else:
+            problems.append(f"cannot require {key!r}: not an optional library")
+    for key, candidates in expected.items():
+        if not stems & {catalog.library_stem(c) for c in candidates}:
+            problems.append(f"no {key} library in the wheel")
+
+    for name in libraries:
         base = name.rsplit("/", 1)[-1]
-        if not _SHARED_LIBRARY.search(base):
-            continue
         if catalog.library_stem(base) in FORBIDDEN_IN_WHEEL:
             problems.append(f"{name} must not ship in a wheel")
             continue
