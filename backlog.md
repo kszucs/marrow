@@ -246,10 +246,17 @@ macOS. Two things stand between that and PyPI.
   Until then `MODULAR_REDISTRIBUTION_CONFIRMED` stays unset, no PyPI trusted
   publisher exists, and `LicenseRef-Modular` in `python/pyproject.toml` and the
   `licenses/modular-*` texts are placeholders to replace per the answer.
-- **The Linux leg of `wheels.yml` has never run.** Unproven there: the
-  pip-installed `mojo` finding `max.*` from the `max-core` wheel, conda-forge's
-  snappy passing auditwheel's manylinux_2_34 GLIBCXX policy without its own
-  libstdc++, and the `-O3` build fitting a runner with swap.
+- **The Linux leg of `wheels.yml` has never run on CI.** `pixi run -e docker
+  wheel_linux` runs the same cibuildwheel locally, and on Apple Silicon that
+  proves the aarch64 build end to end; x86_64 -- what CI builds -- needs an
+  x86_64 host, since Mojo does not run under emulation. Untested there: only the
+  `-O3` build fitting a 16 GB runner with swap.
+- **Linux wheels are manylinux_2_35, not 2_34.** Modular tags `mojo-compiler`
+  and `max-core` manylinux_2_34, yet the pip-installed `mojo` needs
+  GLIBCXX_3.4.30 to start and auditwheel finds the same requirement in what the
+  wheel bundles (not in the codecs). So RHEL/Alma 9 users cannot install the
+  wheel, and the build borrows conda-forge's libstdc++. If Modular's runtime
+  moves back to GCC 11's symbols, drop the `--plat` and the `cxx/` workaround.
 
 ### 1.9 The Parquet reader, after page-level pruning landed
 
