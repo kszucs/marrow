@@ -93,6 +93,17 @@ def test_the_wheel_carries_every_text_but_the_bundle_only_ones():
     assert not bundle_only & covered
 
 
+def test_notice_names_every_text():
+    """NOTICE.txt is where a reader learns which component a text belongs to;
+    a text it does not name is attribution nobody can place."""
+    root = Repo.locate().root
+    notice = (root / "NOTICE.txt").read_text()
+    texts = [p.relative_to(root).as_posix() for p in (root / "licenses").rglob("*.txt")]
+    assert texts
+    unnamed = [rel for rel in texts if rel not in notice]
+    assert not unnamed, f"NOTICE.txt does not mention {unnamed}"
+
+
 def test_opendal_licences_match_the_build_script():
     """The generated file must describe the TAG and FEATURES actually built."""
     repo = Repo.locate()

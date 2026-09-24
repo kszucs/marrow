@@ -18,6 +18,7 @@ where one side must stay free of something the other needs:
 * `license`     -- the Apache-2.0 header every file carries.
 * `footprint`   -- the AOT size gate: nm, size -m, strip.
 * `profiling`   -- Instruments and macOS `sample`.
+* `wheel`       -- a built wheel against the licence each library needs.
 * `cli`         -- the only module that imports click.
 
 `Repo` is the single source of layout truth: no other module spells a directory
