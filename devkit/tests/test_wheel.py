@@ -127,6 +127,17 @@ def test_a_forbidden_library_fails(tmp_path, catalog, lib):
     assert check_wheel(wheel, catalog) == [f"{lib} must not ship in a wheel"]
 
 
+def test_a_library_both_staged_and_grafted_fails(tmp_path, catalog):
+    """The broken Linux wheel: marrow staged brotlicommon under its real name,
+    so auditwheel grafted the build image's older one beside it."""
+    grafted = "marrow.libs/libbrotlicommon-97d45a34.so.1.0.9"
+    libraries = _libraries(catalog, "marrow/libbrotlicommon.so.1.2.0", grafted)
+    wheel = _write_wheel(tmp_path, libraries, _texts(catalog, libraries))
+    assert check_wheel(wheel, catalog) == [
+        f"{grafted} was grafted beside marrow's own copy of the same library"
+    ]
+
+
 def test_auditwheel_renamed_libraries_resolve(tmp_path, catalog):
     codecs = [
         f"marrow/{names[-1]}" for names in catalog._CODEC_LIB_CANDIDATES.values()
