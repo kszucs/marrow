@@ -190,6 +190,12 @@ marrow install; copy the directory to a machine with the same OS and CPU
 architecture. The object-store backend is not bundled, so a bundle reads local
 files.
 
+Whoever hands the directory on redistributes the libraries in it, so the bundle
+carries their licences too: marrow's `LICENSE.txt` and `NOTICE.txt`, and under
+`licenses/` the text each copied library needs — the codecs', and Modular's for
+the Mojo runtime. Keep them with the executable. A library marrow has no licence
+recorded for is copied with a warning on stderr, and without a text.
+
 ## Limits worth knowing
 
 - The plan's shape is fixed at compile time; only parameter values change per

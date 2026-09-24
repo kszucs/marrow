@@ -31,6 +31,15 @@ Dependencies (pinned in `pixi.toml`):
 - `zstd` / `snappy` / `lz4-c` / `brotli` — Parquet page codecs, opened at runtime
   via `dlopen` (no link-time dependency).
 
+`pixi.toml` is the only Mojo pin. The cibuildwheel step in
+`python/pyproject.toml` and `PINNED_NIGHTLY` in `python/marrow/compile.py` copy
+it, and `devkit/tests/test_pins.py` fails when either drifts.
+
+**Never inspect Modular's closed binaries** — `libmax`, `libMGPRT`,
+`libAsyncRTMojoBindings`, `max/_core` — with `nm`, `strings`, `otool` or a
+disassembler: honour the licence. Work from the Apache-licensed source in
+modular/modular, vendor documentation and third-party open source.
+
 ## Build, Test, Benchmark
 
 **pixi** is the package manager; commands are scoped to environments.
@@ -703,6 +712,12 @@ by URI scheme — and both formats read and write through it, so a backend is
 written once and every format gains it. A new `dlopen`ed library must also be
 added to the wheel staging in `python/marrow/compile.py`; nothing links it, so
 `delocate`/`auditwheel` cannot find it and the wheel would silently omit it.
+**Anything a wheel or a `--bundle` directory ships travels with its licence**:
+it needs a `LIBRARY_LICENSES` entry in `compile.py`, its text under `licenses/`,
+and a line in `NOTICE.txt` — `pixi run -e dev selftest` and `python -m devkit
+wheel check` fail otherwise. OpenDAL's crate licences are generated, not
+written: `pixi run -e opendal opendal_licenses` after moving its tag or
+features.
 `marrow/parquet/tests/test_page_io.mojo` pins that with a recording
 `ByteSource` — the only way to tell "returned the right rows" from "did less
 work".
@@ -782,6 +797,7 @@ devkit/                   # the developer tooling; `python -m devkit --help`
 ├── integration.py        # the archery suite
 ├── footprint.py          # the AOT size gate
 ├── profiling.py          # Instruments and macOS `sample`
+├── wheel.py              # `wheel check`: every shipped library's licence
 ├── cli.py                # the click CLI -- the only click import
 └── tests/                # the devkit suite (`pixi run -e dev selftest`)
 benchmarks/               # standalone programs (they own a `main()`, so they

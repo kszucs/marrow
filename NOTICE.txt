@@ -3,15 +3,18 @@ Copyright 2026 Krisztian Szucs
 
 This product is licensed under the Apache License, Version 2.0; see LICENSE.txt.
 
-It includes code derived from the third-party projects below. Each notice is
-reproduced because that project's licence requires it to travel with the source.
-Both licences are compatible with Apache-2.0.
+Attribution is owed here for what marrow *redistributes*: source it copied or
+ported (a port is a derivative work), listed first, and -- in a binary
+distribution only -- the libraries listed under "Binary distributions" below.
+It is not owed for what marrow uses without shipping: the dev-time oracles
+(pyarrow, python-xxhash) and the build and test tooling.
 
-Attribution is owed here for code marrow *redistributes* -- copied or ported,
-since a port is a derivative work. It is not owed for dependencies marrow merely
-uses and does not ship: the dev-time oracles (pyarrow, python-xxhash), the test
-and build tooling, and the compression codecs (zstd, snappy, lz4, zlib, brotli)
-which are opened at runtime via dlopen and never bundled.
+================================================================================
+Source derived from third-party projects
+================================================================================
+
+Each notice is reproduced because that project's licence requires it to travel
+with the source. Both licences are compatible with Apache-2.0.
 
 --------------------------------------------------------------------------------
 
@@ -82,3 +85,74 @@ xxHash -- BSD 2-Clause
     ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+Binary distributions
+================================================================================
+
+A wheel, and a directory written by `marrow compile --bundle`, also contain the
+libraries below. None of them is covered by marrow's Apache licence: each is
+distributed, unmodified, under its own licence, whose full text is in the file
+named, under `licenses/` -- in a wheel, `marrow-*.dist-info/licenses/licenses/`.
+`LIBRARY_LICENSES` in python/marrow/compile.py maps each library to its texts,
+and `python -m devkit wheel check` refuses a wheel where one is missing.
+
+--------------------------------------------------------------------------------
+
+Mojo and MAX runtime -- Modular Inc.
+    libKGENCompilerRTShared, libAsyncRTRuntimeGlobals, libMSupportGlobals
+    (from the `mojo-compiler` package) and libAsyncRTMojoBindings (from
+    `max-core`), linked by every Mojo-built binary.
+    licenses/modular-LICENSE.txt, licenses/modular-Third-Party-Notices.txt
+
+    Which terms govern redistributing these is awaiting Modular's written
+    confirmation; marrow publishes no wheel until it has one.
+
+zstd -- Copyright (c) Meta Platforms, Inc. and affiliates.
+    libzstd. Upstream offers BSD-3-Clause or GPL-2.0; marrow distributes it
+    under BSD-3-Clause.
+    licenses/zstd.txt
+
+snappy -- Copyright 2011, Google Inc.
+    libsnappy, BSD-3-Clause.
+    licenses/snappy.txt
+
+lz4 -- Copyright (c) 2011-2020, Yann Collet
+    liblz4, the library, BSD-2-Clause. (lz4's command-line programs are GPL and
+    are not distributed.)
+    licenses/lz4.txt
+
+brotli -- Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
+    libbrotlienc, libbrotlidec, libbrotlicommon, MIT.
+    licenses/brotli.txt
+
+zlib -- (C) 1995-2026 Jean-loup Gailly and Mark Adler
+    libz, Zlib.
+    licenses/zlib.txt
+
+    The five codecs are conda-forge builds, opened at runtime with dlopen.
+
+libc++ -- The LLVM Project
+    libc++, Apache-2.0 WITH LLVM-exception. macOS only: conda-forge's snappy
+    links it.
+    licenses/libcxx.txt
+
+GCC runtime -- Free Software Foundation, Inc.
+    libstdc++ and libgcc_s, GPL-3.0 with the GCC Runtime Library Exception 3.1.
+    Only in a Linux `--bundle` directory built from a conda environment; a wheel
+    never carries them, since manylinux guarantees both.
+    licenses/bundle-only/gcc-runtime.txt
+
+Apache OpenDAL -- libopendal_c, Apache-2.0 (see LICENSE.txt)
+    Its NOTICE, reproduced as section 4(d) of the Apache License requires:
+
+        Apache OpenDAL
+        Copyright 2023-2026 The Apache Software Foundation
+
+        This product includes software developed at
+        The Apache Software Foundation (http://www.apache.org/).
+
+    libopendal_c statically links about two hundred Rust crates;
+    licenses/opendal-third-party.txt names every one and reproduces its
+    licence. Where a crate offers a choice, marrow takes Apache-2.0 or MIT.
+    licenses/opendal-NOTICE.txt

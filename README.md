@@ -38,6 +38,10 @@ git clone https://github.com/kszucs/marrow && cd marrow
 pixi run build_python          # compiles python/marrow/libmarrow.so
 ```
 
+There is no wheel on PyPI yet: wheels bundle Modular's Mojo runtime libraries,
+and marrow will not publish one until Modular confirms in writing that they may
+be redistributed. `pixi run -e wheel wheel` builds and tests one locally.
+
 ## Sixty seconds
 
 ```python
@@ -105,7 +109,7 @@ marrow compile query.mojo -o orders
 ```
 
 The executable still loads the Mojo runtime libraries, which `--bundle` copies
-alongside it.
+alongside it, together with the licences of everything it copied.
 See the [compile guide](https://marrow.kszucs.dev/guide/compile.html).
 
 ## What's in it
@@ -148,4 +152,10 @@ and the compiler gotchas; `backlog.md` carries the open work.
 
 ## License
 
-Apache 2.0 — see [LICENSE.txt](LICENSE.txt).
+marrow is Apache 2.0 — see [LICENSE.txt](LICENSE.txt).
+
+A binary distribution — a wheel, or a `marrow compile --bundle` directory —
+also contains third-party libraries under their own licences: the Parquet
+codecs, Apache OpenDAL and its Rust crates, and Modular's Mojo runtime, which is
+under Modular's terms rather than marrow's. [NOTICE.txt](NOTICE.txt) lists each
+one, and [licenses/](licenses/) holds every text.
