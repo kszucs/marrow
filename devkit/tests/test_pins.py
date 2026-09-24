@@ -7,6 +7,7 @@ messages. Each copy drifted independently before this test existed -- three
 different Mojo versions were pinned at once.
 """
 
+import re
 import tomllib
 
 from devkit.mojo import Repo
@@ -48,3 +49,14 @@ def test_compile_extra_matches_the_minimum_version():
 
 def test_pyproject_is_not_a_second_pixi_manifest():
     assert "pixi" not in _pyproject(Repo.locate()).get("tool", {})
+
+
+def test_the_local_linux_wheel_runs_ci_s_cibuildwheel():
+    """`pixi run -e docker wheel_linux` stands in for CI's Linux leg only while
+    it runs the same cibuildwheel."""
+    repo = Repo.locate()
+    workflow = (repo.root / ".github" / "workflows" / "wheels.yml").read_text()
+    dockerfile = (repo.root / "Dockerfile.wheel").read_text()
+    ci = re.search(r"pypa/cibuildwheel@v([\d.]+)", workflow).group(1)
+    local = re.search(r"cibuildwheel==([\d.]+)", dockerfile).group(1)
+    assert local == ci

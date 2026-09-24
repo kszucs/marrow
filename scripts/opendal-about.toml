@@ -14,9 +14,10 @@ accepted = [
     "Unicode-3.0",
 ]
 
-# The wheels marrow builds: macOS arm64 and manylinux x86_64. Crates that only
-# a Windows or UEFI build would link (r-efi, windows-sys, ...) are not shipped.
-targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# The wheels marrow builds: macOS arm64, manylinux x86_64 (CI) and manylinux
+# aarch64 (a local `wheel_linux` build on Apple Silicon). Crates that only a
+# Windows or UEFI build would link (r-efi, windows-sys, ...) are not shipped.
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 # cbindgen (MPL-2.0) generates the C header at build time; nothing of it is
 # linked into `libopendal_c`.
