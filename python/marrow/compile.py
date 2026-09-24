@@ -208,19 +208,29 @@ def _ldd_deps(path: Path) -> list[str]:
 
 
 def _dylib_closure_linux(binary: Path) -> list[Path]:
+    """The Linux closure, each dependency under the name its dependent asks for.
+
+    `ldd` reports `libbrotlicommon.so.1 => .../libbrotlicommon.so.1`, a symlink
+    to `libbrotlicommon.so.1.2.0`. Staging the resolved name -- as this once
+    did -- left the requested `.so.1` absent beside `libbrotlidec`, so
+    auditwheel grafted the build image's own, older brotli in its place and the
+    wheel's decoder failed to load against it. Same rule as
+    `_resolve_macos_dep`: keep the name, dereference only when copying.
+    """
     seen: dict[Path, None] = {}
+    real: set[Path] = {binary}
     frontier = [binary]
     while frontier:
         current = frontier.pop()
         for dep in _ldd_deps(current):
             if _is_system_dep(dep):
                 continue
-            resolved = Path(dep).resolve()
-            if not resolved.exists() or resolved == binary:
+            path = Path(dep)
+            if not path.exists() or path.resolve() in real:
                 continue
-            if resolved not in seen:
-                seen[resolved] = None
-                frontier.append(resolved)
+            real.add(path.resolve())
+            seen[path] = None
+            frontier.append(path)
     return list(seen.keys())
 
 

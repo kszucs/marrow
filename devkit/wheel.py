@@ -26,6 +26,12 @@ FORBIDDEN_IN_WHEEL = frozenset({"libMGPRT", "libmax", "libstdc++", "libgcc_s"})
 _SHARED_LIBRARY = re.compile(r"\.(so|dylib)(\.\d+)*$")
 
 
+def _grafted(name):
+    """Whether the repair tool put `name` there: auditwheel grafts into
+    `<package>.libs/`, delocate into `<package>/.dylibs/`."""
+    return any(p.endswith(".libs") or p == ".dylibs" for p in name.split("/")[:-1])
+
+
 def compile_module(repo):
     """`python/marrow/compile.py`, loaded by path from `repo`."""
     path = repo.python_dir / repo.PACKAGE / "compile.py"
@@ -88,6 +94,17 @@ def check_wheel(path, catalog, require=()):
     for key, candidates in expected.items():
         if not stems & {catalog.library_stem(c) for c in candidates}:
             problems.append(f"no {key} library in the wheel")
+
+    # A library the repair tool grafted although marrow staged its own copy:
+    # the staged one was not found under the name its dependent asks for, so
+    # the loader takes the grafted one -- once the build image's older brotli.
+    staged = {catalog.library_stem(n.rsplit("/", 1)[-1]) for n in libraries
+              if not _grafted(n)}
+    problems.extend(
+        f"{name} was grafted beside marrow's own copy of the same library"
+        for name in libraries
+        if _grafted(name) and catalog.library_stem(name.rsplit("/", 1)[-1]) in staged
+    )
 
     for name in libraries:
         base = name.rsplit("/", 1)[-1]

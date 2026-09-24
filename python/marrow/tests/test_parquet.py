@@ -1,5 +1,7 @@
 """Parquet reader/writer bindings, verified against PyArrow as the oracle."""
 
+import os
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -39,6 +41,34 @@ def test_marrow_reads_pyarrow(tmp_path):
     pq.write_table(want, p)
     got = _to_pa(mpq.read_table(p))
     _assert_equiv(got, pq.read_table(p))
+
+
+@pytest.mark.parametrize("compression", ["snappy", "zstd", "lz4", "brotli", "gzip"])
+def test_marrow_reads_every_codec(tmp_path, compression):
+    """Each page codec is a library marrow opens at runtime -- from a wheel,
+    the copy staged beside the extension -- so a missing or mis-staged one
+    fails here and nowhere else: a Linux wheel once shipped a brotli decoder
+    that could not load."""
+    p = tmp_path / "t.parquet"
+    want = _sample()
+    pq.write_table(want, p, compression=compression)
+    _assert_equiv(_to_pa(mpq.read_table(p)), want)
+
+
+def test_marrow_reads_through_opendal(tmp_path):
+    """`fs://` goes through `libopendal_c`. A checkout that never built it
+    skips; a run that must have it -- MARROW_REQUIRE_OPENDAL, set when the
+    wheel under test ships OpenDAL -- fails."""
+    p = tmp_path / "t.parquet"
+    want = _sample()
+    pq.write_table(want, p)
+    try:
+        got = mpq.read_table(f"fs://{p}")
+    except Exception as e:
+        if os.environ.get("MARROW_REQUIRE_OPENDAL") or "opendal" not in str(e):
+            raise
+        pytest.skip(f"libopendal_c is not available: {e}")
+    _assert_equiv(_to_pa(got), want)
 
 
 @pytest.mark.parametrize("compression", ["none", "snappy", "zstd", "lz4"])

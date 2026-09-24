@@ -230,6 +230,27 @@ def test_dylib_closure_is_transitive_and_excludes_system():
     assert not any(n.startswith("libSystem") for n in names)
 
 
+def test_linux_closure_keeps_the_name_the_dependent_asks_for(tmp_path, monkeypatch):
+    """`libbrotlidec` asks for `libbrotlicommon.so.1`, a symlink; staging the
+    real `.so.1.2.0` instead left the wheel's decoder loading the build image's
+    older brotli. `ldd` is faked, so this runs on any platform."""
+    (tmp_path / "libbrotlicommon.so.1.2.0").write_bytes(b"common")
+    (tmp_path / "libbrotlicommon.so.1").symlink_to("libbrotlicommon.so.1.2.0")
+    dec = tmp_path / "libbrotlidec.so.1"
+    dec.write_bytes(b"dec")
+    ldd = {
+        dec.resolve(): [
+            f"\tlibbrotlicommon.so.1 => {tmp_path}/libbrotlicommon.so.1 (0x0)",
+            "\tlibc.so.6 => /lib64/libc.so.6 (0x0)",
+        ]
+    }
+    monkeypatch.setattr(
+        "marrow.compile._inspect", lambda cmd, path: ldd.get(Path(path).resolve(), [])
+    )
+    monkeypatch.setattr("marrow.compile.sys.platform", "linux")
+    assert [p.name for p in dylib_closure(dec)] == ["libbrotlicommon.so.1"]
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: install_name_tool")
 def test_bundle_copies_closure_and_rewrites_rpath_to_loader_path(tmp_path):
     if not _GATE_BINARY.exists():
