@@ -314,6 +314,14 @@ test_opendal = { cmd = "MARROW_REQUIRE_OPENDAL=1 pytest -v marrow/io/tests marro
   "build_opendal",
 ] }
 # Lives here rather than under `examples` because it is the one example that
+# `licenses/opendal-third-party.txt` -- every Rust crate linked into
+# `libopendal_c`, for the script's TAG and FEATURES. `cargo-about` is not on
+# conda-forge, so the pinned release is installed into the workspace (`.pixi/`,
+# gitignored) rather than into `~/.cargo`; a second run is a no-op.
+install_cargo_about = "cargo install --locked --features cli --root $PIXI_PROJECT_ROOT/.pixi/cargo-about cargo-about@0.9.2"
+opendal_licenses = { cmd = "PATH=$PIXI_PROJECT_ROOT/.pixi/cargo-about/bin:$PATH scripts/build_opendal_c.sh licenses", depends-on = [
+  "install_cargo_about",
+] }
 # needs `libopendal_c` -- it queries a Parquet file over HTTPS. It also needs
 # the network, so it is not wired into any test task.
 huggingface = { cmd = "python examples/huggingface/main.py", depends-on = [
