@@ -286,11 +286,18 @@ pyarrow = ">=23.0.1,<24"
 numpy = ">=2.4.4,<3"
 
 [feature.wheel.tasks]
-wheel_build = { cmd = "strip -x python/marrow/libmarrow.so && (cd python && python -m hatchling build --target wheel) && delocate-wheel -w dist/repaired/ -v python/dist/marrow-*.whl", depends-on = ["build_python"] }
+# Both output directories are emptied first: the globs below would otherwise
+# repair and install a stale wheel beside the new one.
+wheel_build = { cmd = "rm -rf python/dist dist/repaired && strip -x python/marrow/libmarrow.so && (cd python && python -m hatchling build --target wheel) && delocate-wheel -w dist/repaired/ -v python/dist/marrow-*.whl", depends-on = ["build_python"] }
+wheel_check = { cmd = "python -m devkit wheel check dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
 wheel_install = { cmd = "python -m pip install -q --force-reinstall --no-deps dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
-wheel_import = { cmd = "python -c 'import marrow; print(marrow.__file__)'", depends-on = ["wheel_install"] }
-wheel_test = { cmd = "pytest python/marrow/tests/test_*.py -v --noconftest -m 'not gpu'", depends-on = ["wheel_install"] }
-wheel = { depends-on = ["wheel_import", "wheel_test"] }
+wheel_import = { cmd = "python -c \"import marrow; assert 'site-packages' in marrow.__file__, marrow.__file__; print(marrow.__file__)\"", depends-on = ["wheel_install"] }
+# `-o pythonpath=.` drops pytest.ini's `python` entry, which would otherwise
+# import the source tree and test it instead of the installed wheel; `.` stays
+# for `devkit` (the golden corpus). The root's `marrow/` holds Mojo sources and
+# no `__init__.py`, so it cannot shadow the installed regular package.
+wheel_test = { cmd = "pytest python/marrow/tests/test_*.py -o pythonpath=. -v --noconftest -m 'not gpu'", depends-on = ["wheel_import"] }
+wheel = { depends-on = ["wheel_check", "wheel_test"] }
 
 # Object store — builds Apache OpenDAL's C binding and runs the storage tests
 # against it. Separate from `dev` on purpose: `rust` pulls ~400 crates, and
@@ -307,13 +314,6 @@ cmake = "*"       # aws-lc-rs, pulled in by the default rustls transport
 # corrupt ABI mirror rather than a build failure. See the comment there.
 clone_opendal = "scripts/build_opendal_c.sh clone"
 build_opendal = "scripts/build_opendal_c.sh"
-# MARROW_REQUIRE_OPENDAL turns "library absent" from a silent skip into a
-# failure -- without it a suite that tests nothing looks exactly like one that
-# passes.
-test_opendal = { cmd = "MARROW_REQUIRE_OPENDAL=1 pytest -v marrow/io/tests marrow/utils/tests/test_utils_uri.mojo", depends-on = [
-  "build_opendal",
-] }
-# Lives here rather than under `examples` because it is the one example that
 # `licenses/opendal-third-party.txt` -- every Rust crate linked into
 # `libopendal_c`, for the script's TAG and FEATURES. `cargo-about` is not on
 # conda-forge, so the pinned release is installed into the workspace (`.pixi/`,
@@ -322,6 +322,13 @@ install_cargo_about = "cargo install --locked --features cli --root $PIXI_PROJEC
 opendal_licenses = { cmd = "PATH=$PIXI_PROJECT_ROOT/.pixi/cargo-about/bin:$PATH scripts/build_opendal_c.sh licenses", depends-on = [
   "install_cargo_about",
 ] }
+# MARROW_REQUIRE_OPENDAL turns "library absent" from a silent skip into a
+# failure -- without it a suite that tests nothing looks exactly like one that
+# passes.
+test_opendal = { cmd = "MARROW_REQUIRE_OPENDAL=1 pytest -v marrow/io/tests marrow/utils/tests/test_utils_uri.mojo", depends-on = [
+  "build_opendal",
+] }
+# Lives here rather than under `examples` because it is the one example that
 # needs `libopendal_c` -- it queries a Parquet file over HTTPS. It also needs
 # the network, so it is not wired into any test task.
 huggingface = { cmd = "python examples/huggingface/main.py", depends-on = [

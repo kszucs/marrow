@@ -21,6 +21,7 @@ from .mojo import (
     SilentProgress,
 )
 from .progress import ConsoleProgress
+from .wheel import check_wheel, compile_module
 
 
 class Context:
@@ -123,6 +124,38 @@ def _precompile(ctx, out):
     if toolchain.reports_errors(result):
         ctx.fail(f"precompile reported errors; {out} is not usable")
     click.echo(f"precompiled to {out}")
+
+
+# ---------------------------------------------------------------------------
+# wheel
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def wheel():
+    """Check what a built wheel ships against what it declares."""
+
+
+@wheel.command("check")
+@click.argument(
+    "wheels",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@pass_context
+def wheel_check(ctx, wheels):
+    """Fail unless every shared library in each (repaired) wheel carries its
+    licence texts, METADATA declares them, and nothing forbidden ships."""
+    catalog = compile_module(ctx.repo)
+    failures = []
+    for path in wheels:
+        problems = check_wheel(path, catalog)
+        failures.extend(f"{path.name}: {problem}" for problem in problems)
+        if not problems:
+            click.echo(f"{path.name}: ok")
+    if failures:
+        ctx.fail("\n".join(failures))
 
 
 # ---------------------------------------------------------------------------
