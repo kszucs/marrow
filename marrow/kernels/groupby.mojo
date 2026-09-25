@@ -138,8 +138,7 @@ struct Groups(Copyable, Movable):
 
         Read it back with `is_single`, never with `len(self.ids)`.
         """
-        var empty = Int32Builder(0)
-        var g = Groups(empty.finish(), 1)
+        var g = Groups(Int32Array.empty(int32), 1)
         g._single = True
         return g^
 

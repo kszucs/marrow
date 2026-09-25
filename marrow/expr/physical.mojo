@@ -1121,7 +1121,7 @@ struct WindowOperator(Operator):
         extents: WindowExtents,
         sorted_batch: StructArray,
     ) raises -> DynArray:
-        """An aggregate evaluated once per frame.
+        """An aggregate evaluated once per distinct frame.
 
         **The aggregate runs through its own operator**, on a slice of the
         sorted batch. That is what makes every aggregate a window aggregate at
@@ -1130,74 +1130,77 @@ struct WindowOperator(Operator):
         them: `SUM` over an all-null frame answers null here because `SumFold`
         answers null, not because this file decided it should.
 
-        The cost is one operator per row, since an aggregate accumulates and
-        frames overlap, so nothing can be carried from one frame to the next
-        through this interface. That is O(rows) operator constructions and it
-        is the honest price of the reuse; a running accumulator would be a
-        per-aggregate, per-dtype kernel and is what to write when this shows up
-        in a profile.
+        The cost is one operator per distinct frame. Overlapping frames that
+        are not identical share nothing: an operator's `drain` is one-shot, so
+        a partial result cannot be carried forward and extended. A running
+        accumulator would be a per-aggregate, per-dtype kernel reached through
+        a new `DynValue` slot — `backlog.md` 1.13.
+
+        **A frame equal to the previous row's is not re-evaluated.** Under
+        `RANGE` that is every row of a peer group, and under `ROWS` every row
+        whose frame both partition edges clip, such as `rows=(-1000, 1000)` on
+        a short partition. A bounded `ROWS` frame moves with the row and never
+        repeats. Equal bounds are the same aggregate over the same slice, and
+        two partitions never share a non-empty frame, so the reuse cannot
+        carry an answer across a partition boundary. Each distinct answer is
+        kept once and the column is one gather over them, rather than `n`
+        one-row arrays handed to `concat`.
+
+        **An empty frame still runs the aggregate**, on a zero-row slice,
+        rather than short-circuiting to null: `COUNT` over no rows is 0 and
+        `MIN` over no rows is NULL, and that is the aggregate's to decide.
+        Short-circuiting once made every `COUNT(*) OVER (... ROWS BETWEEN 30
+        PRECEDING AND 1 PRECEDING)` report NULL for a partition's first row.
 
         Slicing rather than gathering keeps the per-frame cost at O(1) for the
         batch itself — `StructArray.slice` is zero-copy and `field()` pushes
         the offset down to each child — so only the aggregate's own scan is
-        linear in the frame.
+        linear in the frame. Zero-copy is not free, though: a slice copies the
+        struct's dtype, one `Field` per column. So the batch is first narrowed
+        to the columns the aggregate reads, which keeps each frame's slice
+        independent of how wide the input is.
         """
         var n = len(extents)
         var dtype = expr.dtype(self._input_schema)
         if n == 0:
             return nulls(0, dtype^)
-        var parts = List[DynArray](capacity=n)
+        ref aggregate = expr.argument.value()
+        var reads = List[Int]()
+        for name in aggregate.columns():
+            # A name missing here is left for `to_operator` to report.
+            var i = self._input_schema.get_field_index(name)
+            if i >= 0:
+                reads.append(i)
+        var input = sorted_batch.select(reads)
+        var input_schema = schema(input.dtype.as_struct().fields.copy())
+        var answers = List[DynArray]()
+        var which = Int32Builder(n)
+        var prev_lo = -1
+        var prev_hi = -1
         for j in range(n):
-            var start: Int
-            var stop: Int
-            if expr.frame.is_rows:
-                start = max(
-                    extents.partition_start[j], j + expr.frame.preceding
-                )
-                stop = min(
-                    extents.partition_end[j], j + expr.frame.following + 1
-                )
-            else:
-                # The default `RANGE` frame ends at the current row's peer
-                # group, not at the current row — which is why `LAST_VALUE`
-                # is not the partition's last value.
-                start = extents.partition_start[j]
-                stop = extents.peer_end[j]
-            # **An empty frame still runs the aggregate**, on a zero-row
-            # slice, rather than short-circuiting to null. The identity of the
-            # empty set is the aggregate's to decide, not this loop's:
-            # `COUNT` over no rows is 0 and `MIN` over no rows is NULL, and
-            # the aggregate operator already answers both: a fused ungrouped
-            # `count` lands in `RegisterAggregateOperator`, whose `drain`
-            # emits `AggState.finish`'s `c == 0` case, and `CountFold` sets
-            # `empty_is_null = False`. (`BufferedAggregateOperator` covers
-            # `count_distinct` and the string extrema and agrees.)
-            # Short-circuiting discarded
-            # that and made every `COUNT(*) OVER (... ROWS BETWEEN 30
-            # PRECEDING AND 1 PRECEDING)` report NULL for a partition's first
-            # row where SQL reports 0.
-            #
-            # The upper bounds are clamped into the batch first: a frame
-            # lying wholly past the end (`rows=(5, 10)` on a 3-row partition)
-            # gives `start > len`, and slicing there would be out of range.
-            # `max(0, ...)` cannot fire -- both branches above give a
-            # non-negative `start` -- and is kept only so the two bounds read
-            # symmetrically.
-            var limit = len(sorted_batch)
-            var lo = max(0, min(start, limit))
-            var hi = max(lo, min(stop, limit))
-            var frame = sorted_batch.slice(lo, hi - lo)
-            var op = expr.argument.value().to_operator(
-                self._input_schema, False, self._bindings
+            var lo, hi = extents.frame(
+                j,
+                expr.frame.is_rows,
+                expr.frame.preceding,
+                expr.frame.following,
             )
-            var produced = op.push(Morsel.ungrouped(frame^))
-            if not produced:
-                produced = op.drain()
-            if produced:
-                parts.append(produced.value().to_array(1))
-            else:
-                parts.append(nulls(1, dtype.copy()))
-        return concat(parts^, self._ctx)
+            if lo != prev_lo or hi != prev_hi:
+                var op = aggregate.to_operator(
+                    input_schema, False, self._bindings
+                )
+                var produced = op.push(
+                    Morsel.ungrouped(input.slice(lo, hi - lo))
+                )
+                if not produced:
+                    produced = op.drain()
+                if produced:
+                    answers.append(produced.value().to_array(1))
+                else:
+                    answers.append(nulls(1, dtype.copy()))
+                prev_lo = lo
+                prev_hi = hi
+            which.append(Int32(len(answers) - 1))
+        return take(concat(answers^, self._ctx), which.finish(), self._ctx)
 
 
 struct BatchSourceOperator(Operator):

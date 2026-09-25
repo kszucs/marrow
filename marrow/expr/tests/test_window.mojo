@@ -25,6 +25,7 @@ from ...tabular import record_batch
 from ..optimizer import AllRules
 from ..builders import (
     col,
+    count_star,
     cume_dist,
     dense_rank,
     lit,
@@ -344,6 +345,63 @@ def test_the_default_frame_runs_to_the_peer_group_not_the_row() raises:
     assert_true(out.column("s").as_int64() == array([1, 5, 5], int64))
 
 
+def test_a_frame_that_spans_its_partition_repeats_for_every_row() raises:
+    """Every row's frame is the whole partition, so every row shares one
+    answer — the shape `_framed_aggregate` evaluates once and reuses.
+
+    Two partitions of equal size, because the reuse is what a partition
+    boundary has to interrupt: a memo that compared only the frame's *length*,
+    or that never noticed the bounds had moved, would carry the first
+    partition's total into the second and answer 3 everywhere.
+    """
+    var b = record_batch(
+        [
+            array(["a", "a", "b", "b"]).copy(),
+            array([1, 2, 10, 20], int64).copy(),
+        ],
+        names=["k", "v"],
+    )
+    var plan = table(b^).with_columns(
+        ["s"],
+        [
+            col("v", int64)
+            .sum()
+            .over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(-1000, 1000),
+            )
+        ],
+    )
+    var out = plan.execute()
+    assert_true(out.column("s").as_int64() == array([3, 3, 30, 30], int64))
+
+
+def test_a_windowed_count_star_reads_no_column() raises:
+    """`COUNT(*)` names no column, so the batch its frames slice is narrowed
+    to no columns at all — and must still carry each frame's row count."""
+    var b = record_batch(
+        [
+            array(["a", "a", "b", "c"]).copy(),
+            array([2, 1, 5, 9], int64).copy(),
+        ],
+        names=["k", "v"],
+    )
+    var plan = table(b^).with_columns(
+        ["n"],
+        [
+            count_star().over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(-1000, 1000),
+            )
+        ],
+    )
+    assert_true(
+        plan.execute().column("n").as_int64() == array([2, 2, 1, 1], int64)
+    )
+
+
 def test_a_sum_over_an_all_null_frame_is_null() raises:
     """The window aggregate inherits the kernel's null rule rather than
     restating it.
@@ -503,6 +561,29 @@ def test_an_empty_frame_takes_the_aggregate_s_identity_not_null() raises:
     assert_true(
         m == array(expected_min, int64), "min of an empty frame is null"
     )
+
+
+def test_a_frame_wholly_past_its_partition_is_empty() raises:
+    """`ROWS BETWEEN 5 FOLLOWING AND 10 FOLLOWING` on a three-row input starts
+    past the last row for every row, so every frame is empty — the aggregate
+    and the edge gather both read it, and neither may slice or index past the
+    batch."""
+    var b = record_batch([array([1, 2, 3], int64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["c", "l"],
+        [
+            col("v", int64)
+            .count()
+            .over(order_by=[col("v", int64)], rows=(5, 10)),
+            col("v", int64)
+            .last_value()
+            .over(order_by=[col("v", int64)], rows=(5, 10)),
+        ],
+    )
+    var out = plan.execute()
+    assert_true(out.column("c").as_int64() == array([0, 0, 0], int64))
+    var expected: List[Optional[Int]] = [None, None, None]
+    assert_true(out.column("l").as_int64() == array(expected, int64))
 
 
 # ---------------------------------------------------------------------------

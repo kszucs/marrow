@@ -125,6 +125,29 @@ struct WindowExtents(Copyable, Movable, Sized):
     def __len__(self) -> Int:
         return len(self.partition_start)
 
+    def frame(
+        self, j: Int, is_rows: Bool, preceding: Int, following: Int
+    ) -> Tuple[Int, Int]:
+        """Row `j`'s frame as a half-open `[start, stop)` of sorted rows.
+
+        Under `ROWS` the offsets are clipped to the partition. Under `RANGE`
+        the frame runs from the partition start to the end of the current
+        row's peer group, not to the current row — which is why `LAST_VALUE`
+        is not the partition's last value.
+
+        An empty frame answers `start == stop`, never `start > stop`: a frame
+        lying wholly past its partition (`rows=(5, 10)` on a 3-row partition)
+        is pulled back to the partition end, so the range can be sliced as is.
+        """
+        if is_rows:
+            var start = min(
+                max(self.partition_start[j], j + preceding),
+                self.partition_end[j],
+            )
+            var stop = max(start, min(self.partition_end[j], j + following + 1))
+            return (start, stop)
+        return (self.partition_start[j], self.peer_end[j])
+
 
 def mark_changes(key: DynArray, mut flags: List[Bool], ctx: ExecContext) raises:
     """Set `flags[j]` where sorted `key` differs between rows `j-1` and `j`.
@@ -368,15 +391,8 @@ struct Edge[first: Bool](WindowFunction):
     ) raises -> DynArray:
         var idx = Int32Builder(len(extents))
         for j in range(len(extents)):
-            var start: Int
-            var stop: Int
-            if is_rows:
-                start = max(extents.partition_start[j], j + preceding)
-                stop = min(extents.partition_end[j], j + following + 1)
-            else:
-                start = extents.partition_start[j]
-                stop = extents.peer_end[j]
-            if stop <= start:
+            var start, stop = extents.frame(j, is_rows, preceding, following)
+            if stop == start:
                 idx.append_null()
             elif Self.first:
                 idx.append(Int32(start))
@@ -527,14 +543,7 @@ struct NthValue(WindowFunction):
             raise Error("nth_value: n must be positive, got ", offset)
         var idx = Int32Builder(len(extents))
         for j in range(len(extents)):
-            var lo: Int
-            var hi: Int
-            if is_rows:
-                lo = max(extents.partition_start[j], j + preceding)
-                hi = min(extents.partition_end[j], j + following + 1)
-            else:
-                lo = extents.partition_start[j]
-                hi = extents.peer_end[j]
+            var lo, hi = extents.frame(j, is_rows, preceding, following)
             var at = lo + offset - 1
             if at < hi:
                 idx.append(Int32(at))

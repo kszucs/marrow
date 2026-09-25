@@ -423,10 +423,6 @@ and is what to write when this shows up in a profile"* — and the trade it buys
 is real: every aggregate is a window aggregate at once, with the kernel's own
 null semantics rather than a second implementation of them.
 
-**Nothing measures it.** The golden fixture is seven rows and there is no
-window benchmark, so the quadratic is invisible. A `bench_window.mojo` belongs
-with the fix, not after it.
-
 Note this is the *one* window cost a comptime lane cannot address. Fusion has
 nothing to fuse in a breaker, the per-row work is already typed kernels, and
 `lag`/`lead`/`first_value`/`last_value` reduce to one `take`. The accumulator
