@@ -250,15 +250,10 @@ work". What is left:
   have, and raising the worker count does not substitute for one -- the pool is
   fixed, so extra work items queue rather than overlap.
 
-- **Most file-backed tests still write fixed names under `/tmp`** -- 18 files,
-  mostly `marrow/io/tests/test_io_opendal_formats.mojo` and the Parquet suite.
-  Two concurrent runs of one file race on the same path, and a failed
-  assertion leaves the file behind. `test_io_opendal.mojo` has moved to a
-  per-test `mkdtemp` directory (`_Scratch`). **Do not use
-  `std.tempfile.TemporaryDirectory` for this**: its error-path `__exit__`
-  answers `True` once cleanup succeeds, which suppresses the error, so an
-  assertion failing inside it reports a pass (checked on
-  `1.2.0.dev2026092105`).
+- **`bench_read_selected_prefix_snappy_1m` reads an uncompressed file.**
+  `_prepare_groups` in `marrow/parquet/tests/bench_parquet.mojo` takes a
+  `compression` argument and writes `compression="none"` regardless, so the
+  row its docstring calls "where page skipping shows" measures no codec at all.
 
 - **`pytest marrow/tests/test_ipc.mojo` on its own deadlocks the compiler.**
   `%cpu=0.0`, RSS flat at ~900 MB, CPU time frozen at ~13.7 s while elapsed

@@ -7,15 +7,16 @@ nullable, string/dict)."""
 
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.python import Python, PythonObject
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet import read_table
 from ...parquet.reader import ParquetFile, RowSelection
 from ...tabular import Table
 
 
-def _write(tbl: PythonObject) raises -> String:
+def _write(dir: String, tbl: PythonObject) raises -> String:
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_pageskip.parquet")
+    var path = join(dir, "marrow_pageskip.parquet")
     # tiny pages -> many pages per chunk; single row group
     pq.write_table(
         tbl,
@@ -28,6 +29,7 @@ def _write(tbl: PythonObject) raises -> String:
 
 
 def _write_pages(
+    dir: String,
     tbl: PythonObject,
     page_rows: Int,
     codec: String = "none",
@@ -49,7 +51,7 @@ def _write_pages(
     body, so its length is not the v1 arithmetic.
     """
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_pageskip_boundary.parquet")
+    var path = join(dir, "marrow_pageskip_boundary.parquet")
     pq.write_table(
         tbl,
         path,
@@ -101,13 +103,13 @@ def _assert_matches_full(
 
 
 def _check(tbl: PythonObject, sel: RowSelection) raises:
-    var path = _write(tbl)
-    var full = read_table(path)
-    var rs = List[RowSelection]()
-    rs.append(sel.copy())
-    var got = read_table(path, row_selections=rs^)
-    _assert_matches_full(got^, full^, sel)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _write(dir, tbl)
+        var full = read_table(path)
+        var rs = List[RowSelection]()
+        rs.append(sel.copy())
+        var got = read_table(path, row_selections=rs^)
+        _assert_matches_full(got^, full^, sel)
 
 
 def _col(arr: PythonObject) raises -> PythonObject:
@@ -241,37 +243,42 @@ def test_selection_across_every_page_boundary_case() raises:
     """
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    var path = _write_pages(_col(pa.array(np.arange(70), type=pa.int64())), 10)
-
-    var f = ParquetFile(path)
-    assert_equal(
-        len(f.page_bounds()[0][0]),
-        7,
-        "the fixture must write seven pages or this proves nothing",
-    )
-
-    var keep = List[Bool](capacity=70)
-    for i in range(70):
-        keep.append(
-            (10 <= i < 13) or (16 <= i < 20) or (25 <= i < 30) or (42 <= i < 54)
+    with ScratchDir() as dir:
+        var path = _write_pages(
+            dir, _col(pa.array(np.arange(70), type=pa.int64())), 10
         )
-    var sel = RowSelection(keep^)
 
-    var full = read_table(path)
-    var rs = List[RowSelection]()
-    rs.append(sel.copy())
-    var got = read_table(path, row_selections=rs^)
-    assert_equal(got.num_rows(), 24)
-    _assert_matches_full(got^, full^, sel)
-    remove(path)
+        var f = ParquetFile(path)
+        assert_equal(
+            len(f.page_bounds()[0][0]),
+            7,
+            "the fixture must write seven pages or this proves nothing",
+        )
+
+        var keep = List[Bool](capacity=70)
+        for i in range(70):
+            keep.append(
+                (10 <= i < 13)
+                or (16 <= i < 20)
+                or (25 <= i < 30)
+                or (42 <= i < 54)
+            )
+        var sel = RowSelection(keep^)
+
+        var full = read_table(path)
+        var rs = List[RowSelection]()
+        rs.append(sel.copy())
+        var got = read_table(path, row_selections=rs^)
+        assert_equal(got.num_rows(), 24)
+        _assert_matches_full(got^, full^, sel)
 
 
-def _seventy_in_pages_of_ten() raises -> String:
+def _seventy_in_pages_of_ten(dir: String) raises -> String:
     """`0..69` in seven pages of ten — the shape parquet-rs's `test_scan_ranges`
     reasons over, so the boundary cases below can be read straight across."""
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    return _write_pages(_col(pa.array(np.arange(70), type=pa.int64())), 10)
+    return _write_pages(dir, _col(pa.array(np.arange(70), type=pa.int64())), 10)
 
 
 def _mask(n: Int, runs: List[Tuple[Int, Int]]) -> RowSelection:
@@ -306,48 +313,48 @@ def test_selection_spilling_one_row_into_the_next_page() raises:
     contributes exactly one row. A reader that rounds a partial page down drops
     that row; one that rounds up returns nine extra.
     """
-    var path = _seventy_in_pages_of_ten()
-    _read_selected(path, _mask(70, [(10, 13), (16, 20), (25, 31)]))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _seventy_in_pages_of_ten(dir)
+        _read_selected(path, _mask(70, [(10, 13), (16, 20), (25, 31)]))
 
 
 def test_selection_running_to_the_last_row_of_the_group() raises:
     """A run that ends on the final row, so the last page is partially read and
     nothing follows it to catch an overrun."""
-    var path = _seventy_in_pages_of_ten()
-    _read_selected(path, _mask(70, [(10, 13), (42, 70)]))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _seventy_in_pages_of_ten(dir)
+        _read_selected(path, _mask(70, [(10, 13), (42, 70)]))
 
 
 def test_selection_of_the_final_page_alone() raises:
     """Everything before the last page skipped — the mirror of the first case
     in the boundary matrix, where the skipped run is a prefix."""
-    var path = _seventy_in_pages_of_ten()
-    _read_selected(path, _mask(70, [(60, 70)]))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _seventy_in_pages_of_ten(dir)
+        _read_selected(path, _mask(70, [(60, 70)]))
 
 
 def test_selection_of_one_row_per_page() raises:
     """Every page partially read and none skipped, which is the case a
     whole-page fast path gets wrong in the opposite direction from a mask that
     skips whole pages."""
-    var path = _seventy_in_pages_of_ten()
-    _read_selected(
-        path,
-        _mask(
-            70,
-            [
-                (0, 1),
-                (10, 11),
-                (20, 21),
-                (30, 31),
-                (40, 41),
-                (50, 51),
-                (60, 61),
-            ],
-        ),
-    )
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _seventy_in_pages_of_ten(dir)
+        _read_selected(
+            path,
+            _mask(
+                70,
+                [
+                    (0, 1),
+                    (10, 11),
+                    (20, 21),
+                    (30, 31),
+                    (40, 41),
+                    (50, 51),
+                    (60, 61),
+                ],
+            ),
+        )
 
 
 def test_selection_over_compressed_pages() raises:
@@ -361,11 +368,11 @@ def test_selection_over_compressed_pages() raises:
     """
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    var path = _write_pages(
-        _col(pa.array(np.arange(70), type=pa.int64())), 10, "snappy"
-    )
-    _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _write_pages(
+            dir, _col(pa.array(np.arange(70), type=pa.int64())), 10, "snappy"
+        )
+        _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
 
 
 def test_selection_over_v2_data_pages() raises:
@@ -374,22 +381,30 @@ def test_selection_over_v2_data_pages() raises:
     the `OffsetIndex`'s size either way; this is what says so."""
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    var path = _write_pages(
-        _col(pa.array(np.arange(70), type=pa.int64())), 10, "none", "2.0"
-    )
-    _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _write_pages(
+            dir,
+            _col(pa.array(np.arange(70), type=pa.int64())),
+            10,
+            "none",
+            "2.0",
+        )
+        _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
 
 
 def test_selection_over_compressed_v2_data_pages() raises:
     """Both at once, which is what a real file tends to be."""
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    var path = _write_pages(
-        _col(pa.array(np.arange(70), type=pa.int64())), 10, "snappy", "2.0"
-    )
-    _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _write_pages(
+            dir,
+            _col(pa.array(np.arange(70), type=pa.int64())),
+            10,
+            "snappy",
+            "2.0",
+        )
+        _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
 
 
 def test_per_group_selections_are_positional() raises:
@@ -404,41 +419,41 @@ def test_per_group_selections_are_positional() raises:
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_pageskip_groups.parquet")
-    pq.write_table(
-        _col(pa.array(np.arange(30), type=pa.int64())),
-        path,
-        row_group_size=10,
-        data_page_size=1,
-        write_batch_size=5,
-        write_page_index=True,
-        use_dictionary=False,
-        compression="none",
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageskip_groups.parquet")
+        pq.write_table(
+            _col(pa.array(np.arange(30), type=pa.int64())),
+            path,
+            row_group_size=10,
+            data_page_size=1,
+            write_batch_size=5,
+            write_page_index=True,
+            use_dictionary=False,
+            compression="none",
+        )
 
-    var groups = List[Int]()
-    groups.append(0)
-    groups.append(1)
-    groups.append(2)
-    var rs = List[RowSelection]()
-    rs.append(_mask(10, [(0, 2)]))  # group 0 -> 0, 1
-    rs.append(_mask(10, [(5, 6)]))  # group 1 -> 15
-    rs.append(_mask(10, [(7, 10)]))  # group 2 -> 27, 28, 29
+        var groups = List[Int]()
+        groups.append(0)
+        groups.append(1)
+        groups.append(2)
+        var rs = List[RowSelection]()
+        rs.append(_mask(10, [(0, 2)]))  # group 0 -> 0, 1
+        rs.append(_mask(10, [(5, 6)]))  # group 1 -> 15
+        rs.append(_mask(10, [(7, 10)]))  # group 2 -> 27, 28, 29
 
-    var got = read_table(
-        path, row_groups=Optional(groups^), row_selections=Optional(rs^)
-    )
-    assert_equal(got.num_rows(), 6)
-    # One batch per row group, so the values are read across them rather than
-    # out of the first — a selection applied to the wrong group would keep the
-    # right count and the wrong rows, which is the whole point of this case.
-    var seen = List[Int]()
-    for ref batch in got.to_batches():
-        ref c = batch.columns[0].as_int64()
-        for i in range(len(c)):
-            seen.append(Int(c[i].value()))
-    assert_equal(seen, [0, 1, 15, 27, 28, 29])
-    remove(path)
+        var got = read_table(
+            path, row_groups=Optional(groups^), row_selections=Optional(rs^)
+        )
+        assert_equal(got.num_rows(), 6)
+        # One batch per row group, so the values are read across them rather than
+        # out of the first — a selection applied to the wrong group would keep the
+        # right count and the wrong rows, which is the whole point of this case.
+        var seen = List[Int]()
+        for ref batch in got.to_batches():
+            ref c = batch.columns[0].as_int64()
+            for i in range(len(c)):
+                seen.append(Int(c[i].value()))
+        assert_equal(seen, [0, 1, 15, 27, 28, 29])
 
 
 def test_selection_and_column_projection_together() raises:
@@ -447,37 +462,37 @@ def test_selection_and_column_projection_together() raises:
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_pageskip_project.parquet")
-    pq.write_table(
-        pa.table(
-            Python.dict(
-                a=pa.array(np.arange(70), type=pa.int64()),
-                b=pa.array(np.arange(70) * 2, type=pa.int64()),
-            )
-        ),
-        path,
-        row_group_size=1000000,
-        data_page_size=1,
-        write_batch_size=10,
-        write_page_index=True,
-        use_dictionary=False,
-        compression="none",
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageskip_project.parquet")
+        pq.write_table(
+            pa.table(
+                Python.dict(
+                    a=pa.array(np.arange(70), type=pa.int64()),
+                    b=pa.array(np.arange(70) * 2, type=pa.int64()),
+                )
+            ),
+            path,
+            row_group_size=1000000,
+            data_page_size=1,
+            write_batch_size=10,
+            write_page_index=True,
+            use_dictionary=False,
+            compression="none",
+        )
 
-    var sel = _mask(70, [(10, 13), (42, 54)])
-    var cols = List[String]()
-    cols.append(String("b"))
-    var rs = List[RowSelection]()
-    rs.append(sel.copy())
-    var got = read_table(
-        path, columns=Optional(cols^), row_selections=Optional(rs^)
-    )
-    assert_equal(got.num_rows(), sel.num_selected())
-    assert_equal(len(got.schema.fields), 1)
-    ref b = got.to_batches()[0].columns[0].as_int64()
-    assert_equal(Int(b[0].value()), 20)
-    assert_equal(Int(b[3].value()), 84)
-    remove(path)
+        var sel = _mask(70, [(10, 13), (42, 54)])
+        var cols = List[String]()
+        cols.append(String("b"))
+        var rs = List[RowSelection]()
+        rs.append(sel.copy())
+        var got = read_table(
+            path, columns=Optional(cols^), row_selections=Optional(rs^)
+        )
+        assert_equal(got.num_rows(), sel.num_selected())
+        assert_equal(len(got.schema.fields), 1)
+        ref b = got.to_batches()[0].columns[0].as_int64()
+        assert_equal(Int(b[0].value()), 20)
+        assert_equal(Int(b[3].value()), 84)
 
 
 def test_row_selection_on_a_repeated_column_is_refused() raises:
@@ -493,72 +508,72 @@ def test_row_selection_on_a_repeated_column_is_refused() raises:
     """
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_pageskip_repeated.parquet")
-    pq.write_table(
-        pa.table(
-            Python.dict(
-                flat=pa.array(Python.list(1, 2, 3), type=pa.int64()),
-                items=pa.array(
-                    Python.list(
-                        Python.list(1, 2),
-                        Python.list(),
-                        Python.list(3),
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageskip_repeated.parquet")
+        pq.write_table(
+            pa.table(
+                Python.dict(
+                    flat=pa.array(Python.list(1, 2, 3), type=pa.int64()),
+                    items=pa.array(
+                        Python.list(
+                            Python.list(1, 2),
+                            Python.list(),
+                            Python.list(3),
+                        ),
+                        type=pa.list_(pa.int64()),
                     ),
-                    type=pa.list_(pa.int64()),
-                ),
-            )
-        ),
-        path,
-        compression="none",
-    )
+                )
+            ),
+            path,
+            compression="none",
+        )
 
-    var rs = List[RowSelection]()
-    rs.append(_selection(3, 0, 2))
-    with assert_raises(contains="repeated column"):
-        _ = read_table(path, row_selections=rs^)
+        var rs = List[RowSelection]()
+        rs.append(_selection(3, 0, 2))
+        with assert_raises(contains="repeated column"):
+            _ = read_table(path, row_selections=rs^)
 
-    # The same file reads fine without one -- the refusal is about the
-    # selection, not about the file.
-    assert_equal(read_table(path).num_rows(), 3)
-    remove(path)
+        # The same file reads fine without one -- the refusal is about the
+        # selection, not about the file.
+        assert_equal(read_table(path).num_rows(), 3)
 
 
 def test_select_none() raises:
     # an empty selection reads zero rows
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    var path = _write(_col(pa.array(np.arange(2000), type=pa.int64())))
-    var s = List[Bool](capacity=2000)
-    for _ in range(2000):
-        s.append(False)
-    var rs = List[RowSelection]()
-    rs.append(RowSelection(s^))
-    var got = read_table(path, row_selections=rs^)
-    assert_equal(got.num_rows(), 0)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _write(dir, _col(pa.array(np.arange(2000), type=pa.int64())))
+        var s = List[Bool](capacity=2000)
+        for _ in range(2000):
+            s.append(False)
+        var rs = List[RowSelection]()
+        rs.append(RowSelection(s^))
+        var got = read_table(path, row_selections=rs^)
+        assert_equal(got.num_rows(), 0)
 
 
 def test_read_row_group_out_of_range() raises:
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    var path = _write(_col(pa.array(np.arange(100), type=pa.int64())))
-    var groups: List[Int] = [5]  # the file has a single row group
-    with assert_raises():
-        _ = read_table(path, row_groups=groups^)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _write(dir, _col(pa.array(np.arange(100), type=pa.int64())))
+        var groups: List[Int] = [5]  # the file has a single row group
+        with assert_raises():
+            _ = read_table(path, row_groups=groups^)
 
 
 def test_row_selections_count_mismatch() raises:
     var pa = Python.import_module("pyarrow")
     var np = Python.import_module("numpy")
-    var path = _write(_col(pa.array(np.arange(100), type=pa.int64())))
-    # two selections but only one (selected) row group
-    var rs = List[RowSelection]()
-    rs.append(RowSelection.all(100))
-    rs.append(RowSelection.all(100))
-    with assert_raises():
-        _ = read_table(path, row_selections=rs^)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = _write(dir, _col(pa.array(np.arange(100), type=pa.int64())))
+        # two selections but only one (selected) row group
+        var rs = List[RowSelection]()
+        rs.append(RowSelection.all(100))
+        rs.append(RowSelection.all(100))
+        with assert_raises():
+            _ = read_table(path, row_selections=rs^)
 
 
 # ---------------------------------------------------------------------------

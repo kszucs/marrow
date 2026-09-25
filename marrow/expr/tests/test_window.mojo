@@ -14,10 +14,11 @@ where an off-by-one produces a plausible number rather than a crash.
 """
 
 from std.math import nan
-from std.os import remove
 from std.python import Python
 from std.testing import assert_almost_equal, assert_true
+from std.os.path import join
 
+from ...utils.testing import ScratchDir
 from ...builders import array, nulls
 from ...dtypes import float64, int64, string
 from ...tabular import record_batch
@@ -421,44 +422,46 @@ def test_a_filter_above_a_window_does_not_prune_the_window_s_input() raises:
     it 1..25 instead: a plausible answer, and the reason a wrong-population
     bug like this is invisible without an assertion on the *values*.
     """
-    var path = String("/tmp/marrow_window_pushdown.parquet")
-    var pa = Python.import_module("pyarrow")
-    var pq = Python.import_module("pyarrow.parquet")
-    var a = Python.list()
-    for i in range(100):
-        a.append(i)
-    pq.write_table(
-        pa.table(Python.dict(a=pa.array(a))),
-        path,
-        row_group_size=25,
-        compression="none",
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_window_pushdown.parquet")
+        var pa = Python.import_module("pyarrow")
+        var pq = Python.import_module("pyarrow.parquet")
+        var a = Python.list()
+        for i in range(100):
+            a.append(i)
+        pq.write_table(
+            pa.table(Python.dict(a=pa.array(a))),
+            path,
+            row_group_size=25,
+            compression="none",
+        )
 
-    # The file is written by pyarrow because marrow's writer does not expose
-    # `row_group_size`, and disjoint row groups are the whole point here. Its
-    # schema comes from a matching batch rather than being spelled out.
-    var proto = record_batch([array([0], int64).copy()], names=["a"])
-    var plan = (
-        scan(path, proto.schema.copy())
-        .with_columns(["rn"], [row_number().over(order_by=[col("a", int64)])])
-        .filter(col("a", int64) > lit(74, int64))
-    )
-    var optimized = plan.optimize[AllRules]()
-    assert_true(
-        "pruned by" not in String(optimized),
-        "a pruner reached the scan through a window: " + String(optimized),
-    )
-    var out = optimized.execute()
+        # The file is written by pyarrow because marrow's writer does not expose
+        # `row_group_size`, and disjoint row groups are the whole point here. Its
+        # schema comes from a matching batch rather than being spelled out.
+        var proto = record_batch([array([0], int64).copy()], names=["a"])
+        var plan = (
+            scan(path, proto.schema.copy())
+            .with_columns(
+                ["rn"], [row_number().over(order_by=[col("a", int64)])]
+            )
+            .filter(col("a", int64) > lit(74, int64))
+        )
+        var optimized = plan.optimize[AllRules]()
+        assert_true(
+            "pruned by" not in String(optimized),
+            "a pruner reached the scan through a window: " + String(optimized),
+        )
+        var out = optimized.execute()
 
-    assert_true(out.num_rows() == 25, "expected the 25 rows above 74")
-    ref rn = out.column("rn").as_int64()
-    assert_true(
-        Int(rn[0].value()) == 76,
-        "row_number restarted -- a pruner reached the scan: got "
-        + String(rn[0].value()),
-    )
-    assert_true(Int(rn[24].value()) == 100, String(rn[24].value()))
-    remove(path)
+        assert_true(out.num_rows() == 25, "expected the 25 rows above 74")
+        ref rn = out.column("rn").as_int64()
+        assert_true(
+            Int(rn[0].value()) == 76,
+            "row_number restarted -- a pruner reached the scan: got "
+            + String(rn[0].value()),
+        )
+        assert_true(Int(rn[24].value()) == 100, String(rn[24].value()))
 
 
 def test_an_empty_frame_takes_the_aggregate_s_identity_not_null() raises:

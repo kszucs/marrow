@@ -20,8 +20,11 @@ and none of them should pull `std.benchmark` in behind it.
 
 from std.benchmark import Bench, BenchConfig, Bencher, BenchMetric
 from std.collections import Set
+from std.os import listdir, remove, rmdir
+from std.os.path import join
 from std.reflection import get_function_name, call_location, SourceLocation
 from std.sys import argv
+from std.tempfile import mkdtemp
 from std.testing import TestSuite as _StdTestSuite
 from std.testing.suite import TestResult, TestSuiteReport
 
@@ -613,3 +616,50 @@ def assert_values_equal(
         raise Error(
             "assert_values_equal: values differ, ", a, " != ", b, " " + msg
         )
+
+
+struct ScratchDir:
+    """A fresh directory for one test, removed on the way out whether or not
+    the body raised -- so two concurrent runs never share a file, and a failed
+    assertion does not leave one behind for the next.
+
+    ```mojo
+    with ScratchDir() as dir:
+        var path = join(dir, "data.parquet")
+        write_table(t, path)
+    ```
+
+    Not `std.tempfile.TemporaryDirectory`: its error-path `__exit__` answers
+    `True` once cleanup succeeds, which *suppresses* the error, so a failing
+    assertion inside it would report a pass. This one answers `False`.
+
+    The compiler cannot see that, so a function returning a value from inside
+    the block fails with "return expected at end of function": a helper that
+    produces a file takes `dir` from its caller instead.
+
+    Removal is one level deep: a test that leaves a subdirectory behind fails
+    on the way out rather than having it deleted silently.
+    """
+
+    var path: String
+
+    def __init__(out self) raises:
+        self.path = mkdtemp(prefix="marrow_")
+
+    def __enter__(self) -> String:
+        return self.path
+
+    def _remove(self) raises:
+        for name in listdir(self.path):
+            remove(join(self.path, name))
+        rmdir(self.path)
+
+    def __exit__(self) raises:
+        self._remove()
+
+    def __exit__(self, err: Error) -> Bool:
+        try:
+            self._remove()
+        except:
+            pass
+        return False

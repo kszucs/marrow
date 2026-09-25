@@ -18,10 +18,11 @@ the tally cannot live in a mutable field.
 """
 
 from std.memory import ArcPointer
-from std.os import remove
 from std.python import Python, PythonObject
 from std.testing import assert_equal, assert_false, assert_true
+from std.os.path import join
 
+from ...utils.testing import ScratchDir
 from ...parquet.format import (
     ColumnChunk,
     ColumnMetaData,
@@ -153,28 +154,30 @@ def test_opening_a_file_reads_only_its_tail() raises:
     The fixture is deliberately large enough that a whole-file read is
     unmistakable: ~800 KB of data against a footer of a few hundred bytes.
     """
-    var path = String("/tmp/marrow_pageio_footer.parquet")
-    _write_paged(path, 100000, 10000)
-    var total = BufferSource(path).size()
-    assert_true(total > 400000, "the fixture must dwarf its own footer")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_footer.parquet")
+        _write_paged(path, 100000, 10000)
+        var total = BufferSource(path).size()
+        assert_true(total > 400000, "the fixture must dwarf its own footer")
 
-    var reads = Reads(List[Tuple[Int, Int]]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var f = ParquetFile[_Recorder, LeafSet.all()](
+            _Recorder(path, reads.copy())
+        )
 
-    var fetched = 0
-    for ref r in reads[]:
-        fetched += r[1]
-    assert_true(
-        fetched <= 64 * 1024,
-        "opening read " + String(fetched) + " bytes of " + String(total),
-    )
-    # One round trip, and it is the file's *tail*: a second read of the same
-    # bytes is what a naive "measure then parse" does, and it costs a remote
-    # source twice.
-    assert_equal(len(reads[]), 1, "opening should cost one read")
-    assert_equal(reads[][0][0] + reads[][0][1], total, "read the tail")
-    assert_equal(f.num_row_groups(), 1)
-    remove(path)
+        var fetched = 0
+        for ref r in reads[]:
+            fetched += r[1]
+        assert_true(
+            fetched <= 64 * 1024,
+            "opening read " + String(fetched) + " bytes of " + String(total),
+        )
+        # One round trip, and it is the file's *tail*: a second read of the same
+        # bytes is what a naive "measure then parse" does, and it costs a remote
+        # source twice.
+        assert_equal(len(reads[]), 1, "opening should cost one read")
+        assert_equal(reads[][0][0] + reads[][0][1], total, "read the tail")
+        assert_equal(f.num_row_groups(), 1)
 
 
 def test_only_the_selected_pages_are_fetched() raises:
@@ -190,31 +193,33 @@ def test_only_the_selected_pages_are_fetched() raises:
     closing that needs a discontiguous span, and so does the dictionary case
     below.
     """
-    var path = String("/tmp/marrow_pageio_skip.parquet")
-    _write_paged(path, 70, 10)
-    var ranges = _page_ranges(path)
-    assert_equal(len(ranges), 7, "the fixture must write seven pages")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_skip.parquet")
+        _write_paged(path, 70, 10)
+        var ranges = _page_ranges(path)
+        assert_equal(len(ranges), 7, "the fixture must write seven pages")
 
-    var sels = List[RowSelection]()
-    sels.append(_sel(70, [(25, 35)]))
+        var sels = List[RowSelection]()
+        sels.append(_sel(70, [(25, 35)]))
 
-    var reads = Reads(List[Tuple[Int, Int]]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
-    var opened = len(reads[])
-    var got = f.read(row_selections=Optional(sels^))
-    assert_equal(got.num_rows(), 10, "only the selected rows come back")
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var f = ParquetFile[_Recorder, LeafSet.all()](
+            _Recorder(path, reads.copy())
+        )
+        var opened = len(reads[])
+        var got = f.read(row_selections=Optional(sels^))
+        assert_equal(got.num_rows(), 10, "only the selected rows come back")
 
-    _assert_fetched(reads, opened, ranges, [2, 3])
+        _assert_fetched(reads, opened, ranges, [2, 3])
 
-    # **The values, not just the count.** The reader walks the whole chunk
-    # logically while reading only inside the fetched segments, so its row
-    # cursor has to start at the chunk and not at the first byte it was given.
-    # When it did start at the first fetched byte, page 2 was treated as row 0
-    # and this returned ten rows -- the wrong ten.
-    ref c = got.to_batches()[0].columns[0].as_int64()
-    for i in range(10):
-        assert_equal(Int(c[i].value()), 25 + i, "row " + String(i))
-    remove(path)
+        # **The values, not just the count.** The reader walks the whole chunk
+        # logically while reading only inside the fetched segments, so its row
+        # cursor has to start at the chunk and not at the first byte it was given.
+        # When it did start at the first fetched byte, page 2 was treated as row 0
+        # and this returned ten rows -- the wrong ten.
+        ref c = got.to_batches()[0].columns[0].as_int64()
+        for i in range(10):
+            assert_equal(Int(c[i].value()), 25 + i, "row " + String(i))
 
 
 def test_a_dictionary_page_is_fetched_without_the_pages_around_it() raises:
@@ -231,41 +236,43 @@ def test_a_dictionary_page_is_fetched_without_the_pages_around_it() raises:
     dictionary been left out, decoding these pages would not have produced the
     right strings, it would have failed or produced nonsense.
     """
-    var path = String("/tmp/marrow_pageio_dict.parquet")
-    var pa = Python.import_module("pyarrow")
-    var pq = Python.import_module("pyarrow.parquet")
-    var a = Python.list()
-    for i in range(70):
-        a.append(Python.str("k") + Python.str(i % 5))
-    pq.write_table(
-        pa.table(Python.dict(a=pa.array(a))),
-        path,
-        row_group_size=70,
-        data_page_size=1,
-        write_batch_size=10,
-        write_page_index=True,
-        use_dictionary=True,
-        compression="none",
-    )
-    var ranges = _page_ranges(path)
-    assert_equal(len(ranges), 7)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_dict.parquet")
+        var pa = Python.import_module("pyarrow")
+        var pq = Python.import_module("pyarrow.parquet")
+        var a = Python.list()
+        for i in range(70):
+            a.append(Python.str("k") + Python.str(i % 5))
+        pq.write_table(
+            pa.table(Python.dict(a=pa.array(a))),
+            path,
+            row_group_size=70,
+            data_page_size=1,
+            write_batch_size=10,
+            write_page_index=True,
+            use_dictionary=True,
+            compression="none",
+        )
+        var ranges = _page_ranges(path)
+        assert_equal(len(ranges), 7)
 
-    var sels = List[RowSelection]()
-    sels.append(_sel(70, [(25, 35)]))
+        var sels = List[RowSelection]()
+        sels.append(_sel(70, [(25, 35)]))
 
-    var reads = Reads(List[Tuple[Int, Int]]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
-    var opened = len(reads[])
-    var got = f.read(row_selections=Optional(sels^))
-    assert_equal(got.num_rows(), 10)
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var f = ParquetFile[_Recorder, LeafSet.all()](
+            _Recorder(path, reads.copy())
+        )
+        var opened = len(reads[])
+        var got = f.read(row_selections=Optional(sels^))
+        assert_equal(got.num_rows(), 10)
 
-    _assert_fetched(reads, opened, ranges, [2, 3])
+        _assert_fetched(reads, opened, ranges, [2, 3])
 
-    # The dictionary really was read, and really was used.
-    ref c = got.to_batches()[0].columns[0].as_string()
-    assert_equal(String(c[0].value()), "k0")
-    assert_equal(String(c[9].value()), "k4")
-    remove(path)
+        # The dictionary really was read, and really was used.
+        ref c = got.to_batches()[0].columns[0].as_string()
+        assert_equal(String(c[0].value()), "k0")
+        assert_equal(String(c[9].value()), "k4")
 
 
 def _sel(n: Int, runs: List[Tuple[Int, Int]]) -> RowSelection:
@@ -328,32 +335,34 @@ def test_a_scattered_selection_fetches_one_range_per_run() raises:
     unexercised. Pages 1 and 2 are adjacent and must coalesce; page 5 is
     separated from them by two skipped pages and must not.
     """
-    var path = String("/tmp/marrow_pageio_scatter.parquet")
-    _write_paged(path, 70, 10)
-    var ranges = _page_ranges(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_scatter.parquet")
+        _write_paged(path, 70, 10)
+        var ranges = _page_ranges(path)
 
-    var sels = List[RowSelection]()
-    sels.append(_sel(70, [(10, 30), (50, 60)]))
+        var sels = List[RowSelection]()
+        sels.append(_sel(70, [(10, 30), (50, 60)]))
 
-    var reads = Reads(List[Tuple[Int, Int]]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
-    var opened = len(reads[])
-    var got = f.read(row_selections=Optional(sels^))
-    assert_equal(got.num_rows(), 30)
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var f = ParquetFile[_Recorder, LeafSet.all()](
+            _Recorder(path, reads.copy())
+        )
+        var opened = len(reads[])
+        var got = f.read(row_selections=Optional(sels^))
+        assert_equal(got.num_rows(), 30)
 
-    # Two reads: pages 1+2 as one, page 5 as another. The count is the
-    # assertion — three reads would mean the merge never happened, one would
-    # mean the gap was fetched.
-    assert_equal(
-        _page_reads(reads, opened, ranges), 2, "one read per run of pages"
-    )
-    _assert_fetched(reads, opened, ranges, [1, 2, 5])
+        # Two reads: pages 1+2 as one, page 5 as another. The count is the
+        # assertion — three reads would mean the merge never happened, one would
+        # mean the gap was fetched.
+        assert_equal(
+            _page_reads(reads, opened, ranges), 2, "one read per run of pages"
+        )
+        _assert_fetched(reads, opened, ranges, [1, 2, 5])
 
-    ref c = got.to_batches()[0].columns[0].as_int64()
-    assert_equal(Int(c[0].value()), 10)
-    assert_equal(Int(c[20].value()), 50)
-    assert_equal(Int(c[29].value()), 59)
-    remove(path)
+        ref c = got.to_batches()[0].columns[0].as_int64()
+        assert_equal(Int(c[0].value()), 10)
+        assert_equal(Int(c[20].value()), 50)
+        assert_equal(Int(c[29].value()), 59)
 
 
 def test_a_footer_larger_than_the_speculative_read() raises:
@@ -363,38 +372,40 @@ def test_a_footer_larger_than_the_speculative_read() raises:
     footer did not fit. Nothing reached that branch — real footers are
     kilobytes — so the fixture manufactures one out of many row groups.
     """
-    var path = String("/tmp/marrow_pageio_bigfooter.parquet")
-    var pa = Python.import_module("pyarrow")
-    var pq = Python.import_module("pyarrow.parquet")
-    var a = Python.list()
-    for i in range(4000):
-        a.append(i)
-    # One row group per row: the footer carries per-group, per-column metadata,
-    # so this is the cheapest way to make it large.
-    pq.write_table(
-        pa.table(Python.dict(a=pa.array(a, type=pa.int64()))),
-        path,
-        row_group_size=1,
-        compression="none",
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_bigfooter.parquet")
+        var pa = Python.import_module("pyarrow")
+        var pq = Python.import_module("pyarrow.parquet")
+        var a = Python.list()
+        for i in range(4000):
+            a.append(i)
+        # One row group per row: the footer carries per-group, per-column metadata,
+        # so this is the cheapest way to make it large.
+        pq.write_table(
+            pa.table(Python.dict(a=pa.array(a, type=pa.int64()))),
+            path,
+            row_group_size=1,
+            compression="none",
+        )
 
-    var reads = Reads(List[Tuple[Int, Int]]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
-    assert_equal(f.num_row_groups(), 4000)
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var f = ParquetFile[_Recorder, LeafSet.all()](
+            _Recorder(path, reads.copy())
+        )
+        assert_equal(f.num_row_groups(), 4000)
 
-    var total = BufferSource(path).size()
-    assert_true(
-        len(reads[]) == 2,
-        "a footer over the speculative read costs exactly two reads, got "
-        + String(len(reads[])),
-    )
-    for ref r in reads[]:
-        assert_equal(r[0] + r[1], total, "both reads end at the file's end")
-    assert_true(
-        reads[][1][1] > 64 * 1024,
-        "the second read is sized to the footer",
-    )
-    remove(path)
+        var total = BufferSource(path).size()
+        assert_true(
+            len(reads[]) == 2,
+            "a footer over the speculative read costs exactly two reads, got "
+            + String(len(reads[])),
+        )
+        for ref r in reads[]:
+            assert_equal(r[0] + r[1], total, "both reads end at the file's end")
+        assert_true(
+            reads[][1][1] > 64 * 1024,
+            "the second read is sized to the footer",
+        )
 
 
 def test_a_leading_selection_reads_almost_nothing() raises:
@@ -404,24 +415,24 @@ def test_a_leading_selection_reads_almost_nothing() raises:
     worth of bytes is fetched, not ten — the shape of `select … limit 10` once
     a limit reaches the scan as a row range.
     """
-    var path = String("/tmp/marrow_pageio_head.parquet")
-    _write_paged(path, 10000, 1000)
-    var ranges = _page_ranges(path)
-    assert_equal(len(ranges), 10)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_head.parquet")
+        _write_paged(path, 10000, 1000)
+        var ranges = _page_ranges(path)
+        assert_equal(len(ranges), 10)
 
-    var sels = List[RowSelection]()
-    sels.append(_sel(10000, [(0, 10)]))
+        var sels = List[RowSelection]()
+        sels.append(_sel(10000, [(0, 10)]))
 
-    var fetched, rows = _bytes_after_open(path, Optional(sels^))
-    assert_equal(rows, 10)
-    var chunk = 0
-    for ref r in ranges:
-        chunk += r[1]
-    assert_true(
-        fetched * 4 < chunk,
-        "fetched " + String(fetched) + " of " + String(chunk),
-    )
-    remove(path)
+        var fetched, rows = _bytes_after_open(path, Optional(sels^))
+        assert_equal(rows, 10)
+        var chunk = 0
+        for ref r in ranges:
+            chunk += r[1]
+        assert_true(
+            fetched * 4 < chunk,
+            "fetched " + String(fetched) + " of " + String(chunk),
+        )
 
 
 def test_a_skipped_row_group_is_never_fetched() raises:
@@ -432,38 +443,40 @@ def test_a_skipped_row_group_is_never_fetched() raises:
     `read` is over the selected groups, so an unselected group's byte range is
     never handed to the source.
     """
-    var path = String("/tmp/marrow_pageio_groups.parquet")
-    var pa = Python.import_module("pyarrow")
-    var pq = Python.import_module("pyarrow.parquet")
-    var a = Python.list()
-    for i in range(30):
-        a.append(i)
-    pq.write_table(
-        pa.table(Python.dict(a=pa.array(a, type=pa.int64()))),
-        path,
-        row_group_size=10,
-        write_page_index=True,
-        use_dictionary=False,
-        compression="none",
-    )
-
-    var pi = read_page_index(path)
-    var reads = Reads(List[Tuple[Int, Int]]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
-    var opened = len(reads[])
-    var groups = List[Int]()
-    groups.append(1)
-    assert_equal(f.read(row_groups=Optional(groups^)).num_rows(), 10)
-
-    for g in range(3):
-        ref oi = pi[g][0].offset_index.value()
-        ref loc = oi.page_locations[0]
-        assert_equal(
-            _touched(reads, opened, loc.offset, loc.compressed_page_size),
-            g == 1,
-            "row group " + String(g),
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_groups.parquet")
+        var pa = Python.import_module("pyarrow")
+        var pq = Python.import_module("pyarrow.parquet")
+        var a = Python.list()
+        for i in range(30):
+            a.append(i)
+        pq.write_table(
+            pa.table(Python.dict(a=pa.array(a, type=pa.int64()))),
+            path,
+            row_group_size=10,
+            write_page_index=True,
+            use_dictionary=False,
+            compression="none",
         )
-    remove(path)
+
+        var pi = read_page_index(path)
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var f = ParquetFile[_Recorder, LeafSet.all()](
+            _Recorder(path, reads.copy())
+        )
+        var opened = len(reads[])
+        var groups = List[Int]()
+        groups.append(1)
+        assert_equal(f.read(row_groups=Optional(groups^)).num_rows(), 10)
+
+        for g in range(3):
+            ref oi = pi[g][0].offset_index.value()
+            ref loc = oi.page_locations[0]
+            assert_equal(
+                _touched(reads, opened, loc.offset, loc.compressed_page_size),
+                g == 1,
+                "row group " + String(g),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -522,20 +535,20 @@ def test_read_hands_its_context_to_the_source() raises:
     plan asked for. `auto()` is the default and must stay so -- it is what a
     plan or a Python caller that names no budget runs under.
     """
-    var path = String("/tmp/marrow_pageio_budget.parquet")
-    _write_paged(path, rows=100, page_rows=10)
-    var budgets = Budgets(List[Int]())
-    var f = ParquetFile[_Recorder, LeafSet.all()](
-        _Recorder(path, Reads(List[Tuple[Int, Int]]()), budgets.copy())
-    )
-    _ = f.read()
-    _ = f.read(ctx=ExecContext.serial())
-    _ = f.read(ctx=ExecContext.parallel(3))
-    assert_equal(len(budgets[]), 3)
-    assert_equal(budgets[][0], ExecContext.auto().num_threads)
-    assert_equal(budgets[][1], 1)
-    assert_equal(budgets[][2], 3)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_budget.parquet")
+        _write_paged(path, rows=100, page_rows=10)
+        var budgets = Budgets(List[Int]())
+        var f = ParquetFile[_Recorder, LeafSet.all()](
+            _Recorder(path, Reads(List[Tuple[Int, Int]]()), budgets.copy())
+        )
+        _ = f.read()
+        _ = f.read(ctx=ExecContext.serial())
+        _ = f.read(ctx=ExecContext.parallel(3))
+        assert_equal(len(budgets[]), 3)
+        assert_equal(budgets[][0], ExecContext.auto().num_threads)
+        assert_equal(budgets[][1], 1)
+        assert_equal(budgets[][2], 3)
 
 
 def test_scan_ranges_plans_runs_and_merges_neighbours() raises:
@@ -719,25 +732,25 @@ def test_each_row_group_stops_at_its_own_last_selected_row() raises:
     its head and group 1 keeps its tail, so one group's answer is wrong for the
     other.
     """
-    var path = String("/tmp/marrow_pageio_two_groups.parquet")
-    _write_paged(path, 4000, 500, group_rows=2000)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageio_two_groups.parquet")
+        _write_paged(path, 4000, 500, group_rows=2000)
 
-    var sels = List[RowSelection]()
-    sels.append(_sel(2000, [(0, 500)]))  # group 0: first page
-    sels.append(_sel(2000, [(1500, 2000)]))  # group 1: last page
+        var sels = List[RowSelection]()
+        sels.append(_sel(2000, [(0, 500)]))  # group 0: first page
+        sels.append(_sel(2000, [(1500, 2000)]))  # group 1: last page
 
-    var bytes, rows = _bytes_after_open(path, Optional(sels^))
-    assert_equal(rows, 1000, "500 from each group, neither truncated")
+        var bytes, rows = _bytes_after_open(path, Optional(sels^))
+        assert_equal(rows, 1000, "500 from each group, neither truncated")
 
-    # Two pages of eight. The denominator spans both groups: `_page_ranges`
-    # answers for one, and charging a two-group fetch against one group's pages
-    # is how this assertion first failed.
-    var chunk = 0
-    for g in range(2):
-        for ref r in _page_ranges(path, g):
-            chunk += r[1]
-    assert_true(
-        bytes * 2 < chunk,
-        "fetched " + String(bytes) + " of " + String(chunk),
-    )
-    remove(path)
+        # Two pages of eight. The denominator spans both groups: `_page_ranges`
+        # answers for one, and charging a two-group fetch against one group's pages
+        # is how this assertion first failed.
+        var chunk = 0
+        for g in range(2):
+            for ref r in _page_ranges(path, g):
+                chunk += r[1]
+        assert_true(
+            bytes * 2 < chunk,
+            "fetched " + String(bytes) + " of " + String(chunk),
+        )

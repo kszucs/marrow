@@ -7,7 +7,9 @@ empty, overlapping, out-of-order, out-of-bounds — are the ones worth pinning:
 """
 
 from std.testing import assert_equal, assert_true
+from std.os.path import join
 
+from ...utils.testing import ScratchDir
 from ...buffers import Buffer
 from ...execution import ExecContext
 from ...io import Fetched, BufferSource
@@ -137,58 +139,63 @@ def test_io_source_fetched_outlives_its_source() raises:
 
 
 def test_io_source_mapped_file_read_at() raises:
-    var path = "/tmp/marrow_io_source_mapped.bin"
-    var data = _pattern(1024)
-    _write(path, Span(data))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_source_mapped.bin")
+        var data = _pattern(1024)
+        _write(path, Span(data))
 
-    var src = BufferSource(path)
-    assert_equal(src.size(), 1024)
-    _assert_span_is(src.read_at(0, 1024), Span(data))
-    _assert_span_is(src.read_at(512, 64), Span(data)[512:576])
-    # The last byte: `Buffer`'s size is padded up to a multiple of 64, but the
-    # *mapping's* extent is what bounds a file offset.
-    _assert_span_is(src.read_at(1023, 1), Span(data)[1023:])
-    _ = data^
+        var src = BufferSource(path)
+        assert_equal(src.size(), 1024)
+        _assert_span_is(src.read_at(0, 1024), Span(data))
+        _assert_span_is(src.read_at(512, 64), Span(data)[512:576])
+        # The last byte: `Buffer`'s size is padded up to a multiple of 64, but the
+        # *mapping's* extent is what bounds a file offset.
+        _assert_span_is(src.read_at(1023, 1), Span(data)[1023:])
+        _ = data^
 
 
 def test_io_source_mapped_file_read_at_past_end_raises() raises:
-    var path = "/tmp/marrow_io_source_mapped_oob.bin"
-    var data = _pattern(100)
-    _write(path, Span(data))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_source_mapped_oob.bin")
+        var data = _pattern(100)
+        _write(path, Span(data))
 
-    var src = BufferSource(path)
-    assert_equal(src.size(), 100)
-    var raised = False
-    try:
-        # Within the 64-byte-padded `Buffer`, past the end of the file. Reading
-        # it would return real memory holding garbage rather than failing, which
-        # is why the bound is the mapped size and not `len(_buf)`.
-        _ = src.read_at(96, 32)
-    except:
-        raised = True
-    assert_true(raised)
-    _ = data^
+        var src = BufferSource(path)
+        assert_equal(src.size(), 100)
+        var raised = False
+        try:
+            # Within the 64-byte-padded `Buffer`, past the end of the file. Reading
+            # it would return real memory holding garbage rather than failing, which
+            # is why the bound is the mapped size and not `len(_buf)`.
+            _ = src.read_at(96, 32)
+        except:
+            raised = True
+        assert_true(raised)
+        _ = data^
 
 
 def test_io_source_mapped_file_read_ranges_matches_read_at() raises:
     """The differential: a batch says exactly what N single reads say."""
-    var path = "/tmp/marrow_io_source_mapped_ranges.bin"
-    var data = _pattern(4096)
-    _write(path, Span(data))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_source_mapped_ranges.bin")
+        var data = _pattern(4096)
+        _write(path, Span(data))
 
-    var src = BufferSource(path)
-    var ranges: List[Tuple[Int, Int]] = [
-        (0, 64),
-        (4032, 64),
-        (1000, 1),
-        (2048, 512),
-        (7, 13),
-    ]
-    var got = src.read_ranges(ranges, ExecContext.serial())
-    assert_equal(len(got), len(ranges))
-    for i in range(len(ranges)):
-        _assert_span_is(got.span(i), src.read_at(ranges[i][0], ranges[i][1]))
-    _ = data^
+        var src = BufferSource(path)
+        var ranges: List[Tuple[Int, Int]] = [
+            (0, 64),
+            (4032, 64),
+            (1000, 1),
+            (2048, 512),
+            (7, 13),
+        ]
+        var got = src.read_ranges(ranges, ExecContext.serial())
+        assert_equal(len(got), len(ranges))
+        for i in range(len(ranges)):
+            _assert_span_is(
+                got.span(i), src.read_at(ranges[i][0], ranges[i][1])
+            )
+        _ = data^
 
 
 def test_io_source_mapped_file_batch_shares_one_mapping() raises:
@@ -196,31 +203,33 @@ def test_io_source_mapped_file_batch_shares_one_mapping() raises:
     allocation, not N copies. `unsafe_ptr` is confined to the buffer layer, so
     this cannot compare addresses — what it can show is that a 1,000-range batch
     over a 4 MiB file is not paying per byte. `bench_io.mojo` measures it."""
-    var path = "/tmp/marrow_io_source_mapped_share.bin"
-    var data = _pattern(65536)
-    _write(path, Span(data))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_source_mapped_share.bin")
+        var data = _pattern(65536)
+        _write(path, Span(data))
 
-    var src = BufferSource(path)
-    var ranges = List[Tuple[Int, Int]](capacity=1024)
-    for i in range(1024):
-        ranges.append((i * 64, 64))
-    var got = src.read_ranges(ranges, ExecContext.serial())
-    assert_equal(len(got), 1024)
-    _assert_span_is(got.span(0), Span(data)[:64])
-    _assert_span_is(got.span(1023), Span(data)[65472:])
-    _ = data^
+        var src = BufferSource(path)
+        var ranges = List[Tuple[Int, Int]](capacity=1024)
+        for i in range(1024):
+            ranges.append((i * 64, 64))
+        var got = src.read_ranges(ranges, ExecContext.serial())
+        assert_equal(len(got), 1024)
+        _assert_span_is(got.span(0), Span(data)[:64])
+        _assert_span_is(got.span(1023), Span(data)[65472:])
+        _ = data^
 
 
 def test_io_source_memory_source_matches_mapped_file() raises:
     """The two resident backends are interchangeable, which is what makes
     `BufferSource` usable as the in-memory stand-in for a file in tests."""
-    var path = "/tmp/marrow_io_source_equivalence.bin"
-    var data = _pattern(777)
-    _write(path, Span(data))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_source_equivalence.bin")
+        var data = _pattern(777)
+        _write(path, Span(data))
 
-    var mapped = BufferSource(path)
-    var mem = BufferSource(Span(data))
-    assert_equal(mapped.size(), mem.size())
-    for r in [(0, 777), (100, 200), (776, 1), (0, 0)]:
-        _assert_span_is(mapped.read_at(r[0], r[1]), mem.read_at(r[0], r[1]))
-    _ = data^
+        var mapped = BufferSource(path)
+        var mem = BufferSource(Span(data))
+        assert_equal(mapped.size(), mem.size())
+        for r in [(0, 777), (100, 200), (776, 1), (0, 0)]:
+            _assert_span_is(mapped.read_at(r[0], r[1]), mem.read_at(r[0], r[1]))
+        _ = data^

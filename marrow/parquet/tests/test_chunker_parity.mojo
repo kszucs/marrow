@@ -51,7 +51,8 @@ silent skip is how a parity regression would slip through.
 
 from std.testing import assert_equal
 from std.python import Python, PythonObject
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...arrays import DynArray
 from ...builders import Int64Builder, StringBuilder, ListBuilder, arange
 from ...dtypes import Field, Int64Type, DynType, decimal128, decimal256
@@ -176,14 +177,17 @@ def _assert_page_parity(path_marrow: String, path_pyarrow: String) raises:
 
 
 def _check_parity(t: Table, tag: String, row_group_size: Int) raises:
-    var path_marrow = "/tmp/marrow_cdc_parity_" + tag + "_marrow.parquet"
-    var path_pyarrow = "/tmp/marrow_cdc_parity_" + tag + "_pyarrow.parquet"
-    _write_marrow_cdc(t, path_marrow, row_group_size)
-    var want = _to_pyarrow(t.copy())
-    _write_pyarrow_cdc(want, path_pyarrow, row_group_size)
-    _assert_page_parity(path_marrow, path_pyarrow)
-    remove(path_marrow)
-    remove(path_pyarrow)
+    with ScratchDir() as dir:
+        var path_marrow = join(
+            dir, "marrow_cdc_parity_" + tag + "_marrow.parquet"
+        )
+        var path_pyarrow = join(
+            dir, "marrow_cdc_parity_" + tag + "_pyarrow.parquet"
+        )
+        _write_marrow_cdc(t, path_marrow, row_group_size)
+        var want = _to_pyarrow(t.copy())
+        _write_pyarrow_cdc(want, path_pyarrow, row_group_size)
+        _assert_page_parity(path_marrow, path_pyarrow)
 
 
 # ---------------------------------------------------------------------------

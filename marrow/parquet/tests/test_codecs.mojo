@@ -6,7 +6,8 @@ PyArrow-written files across the compression codecs marrow supports on read."""
 
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet import read_table
 from ...parquet.codecs import Rle, Compression
 from ...utils import CompressionLibs
@@ -93,36 +94,36 @@ def _delta_roundtrip(compression: String) raises:
             ),
         )
     )
-    var path = String("/tmp/marrow_delta.parquet")
-    pq.write_table(
-        t,
-        path,
-        use_dictionary=False,
-        column_encoding="DELTA_BINARY_PACKED",
-        compression=compression,
-    )
-    # confirm PyArrow actually used DELTA_BINARY_PACKED
-    var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.str("DELTA_BINARY_PACKED") in enc))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_delta.parquet")
+        pq.write_table(
+            t,
+            path,
+            use_dictionary=False,
+            column_encoding="DELTA_BINARY_PACKED",
+            compression=compression,
+        )
+        # confirm PyArrow actually used DELTA_BINARY_PACKED
+        var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
+        assert_true(Bool(Python.str("DELTA_BINARY_PACKED") in enc))
 
-    var back = read_table(path)
-    assert_equal(back.num_rows(), 1000)
-    var bat = back.to_batches()[0].copy()
+        var back = read_table(path)
+        assert_equal(back.num_rows(), 1000)
+        var bat = back.to_batches()[0].copy()
 
-    var ca = bat.columns[0].copy()
-    ref a = ca.as_int64()
-    assert_equal(a[0].value(), -500)
-    assert_equal(a[1].value(), -497)
-    assert_equal(a[999].value(), 2497)
+        var ca = bat.columns[0].copy()
+        ref a = ca.as_int64()
+        assert_equal(a[0].value(), -500)
+        assert_equal(a[1].value(), -497)
+        assert_equal(a[999].value(), 2497)
 
-    var cb = bat.columns[1].copy()
-    ref b = cb.as_int32()
-    assert_equal(b.null_count(), 143)  # ceil(1000/7)
-    assert_false(b.is_valid(0))
-    assert_true(b.is_valid(1))
-    assert_equal(b[1].value(), -99999)
-    assert_equal(b[999].value(), 898001)
-    remove(path)
+        var cb = bat.columns[1].copy()
+        ref b = cb.as_int32()
+        assert_equal(b.null_count(), 143)  # ceil(1000/7)
+        assert_false(b.is_valid(0))
+        assert_true(b.is_valid(1))
+        assert_equal(b[1].value(), -99999)
+        assert_equal(b[999].value(), 898001)
 
 
 def test_read_delta_binary_packed() raises:
@@ -149,32 +150,32 @@ def _bss_roundtrip(compression: String) raises:
             g=pa.array(idx * 1.5, mask=(idx % 5 == 0), type=pa.float32()),
         )
     )
-    var path = String("/tmp/marrow_bss.parquet")
-    pq.write_table(
-        t,
-        path,
-        use_byte_stream_split=True,
-        use_dictionary=False,
-        compression=compression,
-    )
-    var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.str("BYTE_STREAM_SPLIT") in enc))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bss.parquet")
+        pq.write_table(
+            t,
+            path,
+            use_byte_stream_split=True,
+            use_dictionary=False,
+            compression=compression,
+        )
+        var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
+        assert_true(Bool(Python.str("BYTE_STREAM_SPLIT") in enc))
 
-    var back = read_table(path)
-    assert_equal(back.num_rows(), 500)
-    var bat = back.to_batches()[0].copy()
+        var back = read_table(path)
+        assert_equal(back.num_rows(), 500)
+        var bat = back.to_batches()[0].copy()
 
-    var cf = bat.columns[0].copy()
-    ref f = cf.as_float64()
-    assert_true(f[0].value() == -3.0)
-    assert_true(f[499].value() == 121.75)
+        var cf = bat.columns[0].copy()
+        ref f = cf.as_float64()
+        assert_true(f[0].value() == -3.0)
+        assert_true(f[499].value() == 121.75)
 
-    var cg = bat.columns[1].copy()
-    ref g = cg.as_float32()
-    assert_equal(g.null_count(), 100)  # every 5th of 500
-    assert_false(g.is_valid(0))
-    assert_true(g[1].value() == 1.5)
-    remove(path)
+        var cg = bat.columns[1].copy()
+        ref g = cg.as_float32()
+        assert_equal(g.null_count(), 100)  # every 5th of 500
+        assert_false(g.is_valid(0))
+        assert_true(g[1].value() == 1.5)
 
 
 def test_read_byte_stream_split() raises:
@@ -199,38 +200,38 @@ def _bss_int_roundtrip(dtype: String) raises:
             b=pa.array(idx * idx, mask=(idx % 6 == 0), type=ty),
         )
     )
-    var path = String("/tmp/marrow_bss_int.parquet")
-    pq.write_table(
-        t,
-        path,
-        use_byte_stream_split=True,
-        use_dictionary=False,
-        compression="none",
-    )
-    var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.str("BYTE_STREAM_SPLIT") in enc))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bss_int.parquet")
+        pq.write_table(
+            t,
+            path,
+            use_byte_stream_split=True,
+            use_dictionary=False,
+            compression="none",
+        )
+        var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
+        assert_true(Bool(Python.str("BYTE_STREAM_SPLIT") in enc))
 
-    var back = read_table(path)
-    assert_equal(back.num_rows(), 300)
-    var bat = back.to_batches()[0].copy()
+        var back = read_table(path)
+        assert_equal(back.num_rows(), 300)
+        var bat = back.to_batches()[0].copy()
 
-    if dtype == "int32":
-        ref a = bat.columns[0].copy().as_int32()
-        assert_equal(a[0].value(), -500)
-        assert_equal(a[299].value(), 397)
-        ref b = bat.columns[1].copy().as_int32()
-        assert_equal(b.null_count(), 50)  # every 6th of 300
-        assert_false(b.is_valid(0))
-        assert_equal(b[1].value(), 1)
-        assert_equal(b[299].value(), 299 * 299)
-    else:
-        ref a = bat.columns[0].copy().as_int64()
-        assert_equal(a[0].value(), -500)
-        assert_equal(a[299].value(), 397)
-        ref b = bat.columns[1].copy().as_int64()
-        assert_equal(b.null_count(), 50)
-        assert_equal(b[299].value(), 299 * 299)
-    remove(path)
+        if dtype == "int32":
+            ref a = bat.columns[0].copy().as_int32()
+            assert_equal(a[0].value(), -500)
+            assert_equal(a[299].value(), 397)
+            ref b = bat.columns[1].copy().as_int32()
+            assert_equal(b.null_count(), 50)  # every 6th of 300
+            assert_false(b.is_valid(0))
+            assert_equal(b[1].value(), 1)
+            assert_equal(b[299].value(), 299 * 299)
+        else:
+            ref a = bat.columns[0].copy().as_int64()
+            assert_equal(a[0].value(), -500)
+            assert_equal(a[299].value(), 397)
+            ref b = bat.columns[1].copy().as_int64()
+            assert_equal(b.null_count(), 50)
+            assert_equal(b[299].value(), 299 * 299)
 
 
 def test_read_byte_stream_split_int32() raises:
@@ -264,28 +265,28 @@ def _dba_roundtrip(encoding: String, compression: String) raises:
                 + Python.str("x") * (i % 13)
             )
     var t = pa.table(Python.dict(s=pa.array(vals, type=pa.string())))
-    var path = String("/tmp/marrow_dba.parquet")
-    pq.write_table(
-        t,
-        path,
-        use_dictionary=False,
-        column_encoding=encoding,
-        compression=compression,
-    )
-    var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.str(encoding) in enc))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_dba.parquet")
+        pq.write_table(
+            t,
+            path,
+            use_dictionary=False,
+            column_encoding=encoding,
+            compression=compression,
+        )
+        var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
+        assert_true(Bool(Python.str(encoding) in enc))
 
-    var back = read_table(path)
-    assert_equal(back.num_rows(), 600)
-    var bat = back.to_batches()[0].copy()
-    var cs = bat.columns[0].copy()
-    ref s = cs.as_string()
-    assert_equal(s.null_count(), 67)  # ceil(600/9)
-    assert_false(s.is_valid(0))
-    assert_equal(String(s[1]), "item-0001-x")
-    assert_equal(String(s[12]), "item-0012-xxxxxxxxxxxx")  # 12 % 13 = 12
-    assert_equal(String(s[599]), "item-0599-x")  # 599 % 13 = 1
-    remove(path)
+        var back = read_table(path)
+        assert_equal(back.num_rows(), 600)
+        var bat = back.to_batches()[0].copy()
+        var cs = bat.columns[0].copy()
+        ref s = cs.as_string()
+        assert_equal(s.null_count(), 67)  # ceil(600/9)
+        assert_false(s.is_valid(0))
+        assert_equal(String(s[1]), "item-0001-x")
+        assert_equal(String(s[12]), "item-0012-xxxxxxxxxxxx")  # 12 % 13 = 12
+        assert_equal(String(s[599]), "item-0599-x")  # 599 % 13 = 1
 
 
 def test_delta_byte_array() raises:
@@ -343,18 +344,18 @@ def _roundtrip_read(compression: String) raises:
             s=pa.array(Python.list("a", "bb", "ccc", "d", "ee")),
         )
     )
-    var path = String("/tmp/marrow_codec_" + compression + ".parquet")
-    pq.write_table(tbl, path, compression=compression)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_codec_" + compression + ".parquet")
+        pq.write_table(tbl, path, compression=compression)
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 5)
-    var b = t.to_batches()[0].copy()
-    var ci = b.columns[0].copy()
-    assert_equal(ci.as_int64()[0].value(), 1)
-    assert_equal(ci.as_int64()[4].value(), 5)
-    var cs = b.columns[1].copy()
-    assert_equal(String(cs.as_string()[2]), "ccc")
-    remove(path)
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 5)
+        var b = t.to_batches()[0].copy()
+        var ci = b.columns[0].copy()
+        assert_equal(ci.as_int64()[0].value(), 1)
+        assert_equal(ci.as_int64()[4].value(), 5)
+        var cs = b.columns[1].copy()
+        assert_equal(String(cs.as_string()[2]), "ccc")
 
 
 def test_read_gzip() raises:

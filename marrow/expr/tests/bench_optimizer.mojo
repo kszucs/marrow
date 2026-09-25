@@ -36,6 +36,7 @@ Run with:
 """
 
 from std.benchmark import BenchMetric, keep
+from std.os.path import join
 
 from ...builders import array
 from ...dtypes import field, int64
@@ -46,7 +47,7 @@ from ...parquet.reader import ParquetFile
 from ...parquet.writer import FileWriter
 from ...schema import Schema, schema
 from ...tabular import RecordBatch, Table, record_batch
-from ...utils.testing import Benchmark
+from ...utils.testing import Benchmark, ScratchDir
 from ..estimates import Approx, ColumnEstimate, Estimate
 from ..index import Index
 from ..logical import DynRelation, ParquetScan, ScanPath
@@ -64,9 +65,9 @@ comptime A_ROW_GROUP = 5_000
 reduced rather than read. Every group holds all 25 values, so the maximum is
 exactly right — the case the maximum is chosen for."""
 
-comptime A_PATH = "/tmp/marrow_bench_reassoc_a.parquet"
-comptime B_PATH = "/tmp/marrow_bench_reassoc_b.parquet"
-comptime C_PATH = "/tmp/marrow_bench_reassoc_c.parquet"
+comptime A_FILE = "marrow_bench_reassoc_a.parquet"
+comptime B_FILE = "marrow_bench_reassoc_b.parquet"
+comptime C_FILE = "marrow_bench_reassoc_c.parquet"
 
 
 # ---------------------------------------------------------------------------
@@ -80,13 +81,13 @@ def _write(batch: RecordBatch, path: String, row_group: Int) raises:
     w.write(Table.from_batches(s^, [batch.copy()]), row_group_size=row_group)
 
 
-def _fixture() raises:
+def _fixture(dir: String) raises:
     var ak = List[Optional[Int]](capacity=A_ROWS)
     for i in range(A_ROWS):
         ak.append(i % KEYS)
     _write(
         record_batch([array(ak^, int64).to_dyn()], names=["ak"]),
-        String(A_PATH),
+        join(dir, A_FILE),
         A_ROW_GROUP,
     )
 
@@ -100,7 +101,7 @@ def _fixture() raises:
             [array(bak^, int64).to_dyn(), array(bbc^, int64).to_dyn()],
             names=["ak", "bc"],
         ),
-        String(B_PATH),
+        join(dir, B_FILE),
         B_ROWS,
     )
 
@@ -117,7 +118,7 @@ def _fixture() raises:
             [array(cbc^, int64).to_dyn(), array(cv^, int64).to_dyn()],
             names=["bc", "cv"],
         ),
-        String(C_PATH),
+        join(dir, C_FILE),
         C_ROWS,
     )
 
@@ -171,18 +172,18 @@ def _source(path: String, s: Schema, ndv: Bool) raises -> DynRelation:
     return out^
 
 
-def _three_way(ndv: Bool) raises -> DynRelation:
+def _three_way(dir: String, ndv: Bool) raises -> DynRelation:
     """`(A ⋈ B) ⋈ C`, left-deep as written.
 
     The inner join is `A.ak = B.ak`; the outer is `B.bc = C.bc`, read off the
     inner join's schema `[ak, ak, bc]` at index 2. The outer predicate names a
     column of `B` and none of `A`, which is `JoinReassociation`'s condition.
     """
-    var inner = _source(String(A_PATH), _a_schema(), ndv).join(
-        _source(String(B_PATH), _b_schema(), ndv), [0], [0], JOIN_INNER
+    var inner = _source(join(dir, A_FILE), _a_schema(), ndv).join(
+        _source(join(dir, B_FILE), _b_schema(), ndv), [0], [0], JOIN_INNER
     )
     return inner.join(
-        _source(String(C_PATH), _c_schema(), ndv), [2], [0], JOIN_INNER
+        _source(join(dir, C_FILE), _c_schema(), ndv), [2], [0], JOIN_INNER
     )
 
 
@@ -192,54 +193,57 @@ def _three_way(ndv: Bool) raises -> DynRelation:
 def bench_reassoc_blind(mut b: Benchmark) raises:
     """The plan chosen without a distinct count: left-deep, materialising a
     1,000,000-row intermediate the model believes is 1,000 rows."""
-    _fixture()
-    var plan = _three_way(ndv=False).optimize[AllRules]()
-    b.throughput(BenchMetric.elements, A_ROWS)
+    with ScratchDir() as dir:
+        _fixture(dir)
+        var plan = _three_way(dir, ndv=False).optimize[AllRules]()
+        b.throughput(BenchMetric.elements, A_ROWS)
 
-    @always_inline
-    def call() raises {imm}:
-        keep(plan.execute().num_rows())
+        @always_inline
+        def call() raises {imm}:
+            keep(plan.execute().num_rows())
 
-    b.iter(call)
-    keep(plan)
+        b.iter(call)
+        keep(plan)
 
 
 def bench_reassoc_informed(mut b: Benchmark) raises:
     """The plan chosen with one: right-deep, building the 25 rows of
     `B ⋈ C` and probing `A` once."""
-    _fixture()
-    var plan = _three_way(ndv=True).optimize[AllRules]()
-    b.throughput(BenchMetric.elements, A_ROWS)
+    with ScratchDir() as dir:
+        _fixture(dir)
+        var plan = _three_way(dir, ndv=True).optimize[AllRules]()
+        b.throughput(BenchMetric.elements, A_ROWS)
 
-    @always_inline
-    def call() raises {imm}:
-        keep(plan.execute().num_rows())
+        @always_inline
+        def call() raises {imm}:
+            keep(plan.execute().num_rows())
 
-    b.iter(call)
-    keep(plan)
+        b.iter(call)
+        keep(plan)
 
 
 # ---------------------------------------------------------------------------
 # the control — identical work, twice
 # ---------------------------------------------------------------------------
-def _two_way() raises -> DynRelation:
+def _two_way(dir: String) raises -> DynRelation:
     """`B ⋈ C`, which has no association to choose and so cannot move."""
-    return _source(String(B_PATH), _b_schema(), ndv=True).join(
-        _source(String(C_PATH), _c_schema(), ndv=True), [1], [0], JOIN_INNER
+    return _source(join(dir, B_FILE), _b_schema(), ndv=True).join(
+        _source(join(dir, C_FILE), _c_schema(), ndv=True), [1], [0], JOIN_INNER
     )
 
 
 def _bench_noise(mut b: Benchmark) raises:
-    _fixture()
-    var plan = _two_way().optimize[AllRules]()
-    b.throughput(BenchMetric.elements, B_ROWS)
+    with ScratchDir() as dir:
+        _fixture(dir)
+        var plan = _two_way(dir).optimize[AllRules]()
+        b.throughput(BenchMetric.elements, B_ROWS)
 
-    @always_inline
-    def call() raises {imm}:
-        keep(plan.execute().num_rows())
+        @always_inline
+        def call() raises {imm}:
+            keep(plan.execute().num_rows())
 
-    b.iter(call)
-    keep(plan)
+        b.iter(call)
+        keep(plan)
 
 
 def bench_reassoc_noise_a(mut b: Benchmark) raises:

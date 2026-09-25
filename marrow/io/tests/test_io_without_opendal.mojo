@@ -18,9 +18,11 @@ returning early when the assumption fails. A case that returns early is a PASS
 to this harness, so "assume and bail" is indistinguishable from a real pass.
 """
 
-from std.os import getenv, remove, setenv
+from std.os import getenv, setenv
 from std.testing import assert_equal, assert_true
+from std.os.path import join
 
+from ...utils.testing import ScratchDir
 from ...execution import ExecContext
 from ...io import BufferSource, DynSink, DynSource
 from ...io.opendal import OpenDalStore
@@ -50,27 +52,27 @@ def test_io_local_reads_work_without_opendal() raises:
         "MARROW_OPENDAL_LIBRARY", "/nonexistent/libopendal_c.dylib", True
     )
 
-    var path = String("/tmp/marrow_io_without_opendal.bin")
-    var data = List[UInt8](capacity=256)
-    for i in range(256):
-        data.append(UInt8(i))
-    with open(path, "w") as f:
-        f.write_bytes(Span(data))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_without_opendal.bin")
+        var data = List[UInt8](capacity=256)
+        for i in range(256):
+            data.append(UInt8(i))
+        with open(path, "w") as f:
+            f.write_bytes(Span(data))
 
-    var mapped = BufferSource(path)
-    assert_equal(mapped.size(), 256)
-    var got = mapped.read_at(64, 32)
-    for i in range(32):
-        assert_equal(got[i], data[64 + i])
+        var mapped = BufferSource(path)
+        assert_equal(mapped.size(), 256)
+        var got = mapped.read_at(64, 32)
+        for i in range(32):
+            assert_equal(got[i], data[64 + i])
 
-    var mem = BufferSource(Span(data))
-    assert_equal(mem.size(), 256)
-    assert_equal(
-        len(mem.read_ranges([(0, 16), (240, 16)], ExecContext.serial())), 2
-    )
+        var mem = BufferSource(Span(data))
+        assert_equal(mem.size(), 256)
+        assert_equal(
+            len(mem.read_ranges([(0, 16), (240, 16)], ExecContext.serial())), 2
+        )
 
-    remove(path)
-    _ = data^
+        _ = data^
 
 
 def test_io_missing_opendal_raises_naming_the_library() raises:
@@ -111,28 +113,28 @@ def test_io_dispatch_local_uri_needs_no_opendal() raises:
     _ = setenv(
         "MARROW_OPENDAL_LIBRARY", "/nonexistent/libopendal_c.dylib", True
     )
-    var path = String("/tmp/marrow_io_dispatch_local.bin")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_dispatch_local.bin")
 
-    var payload = List[UInt8](capacity=64)
-    for i in range(64):
-        payload.append(UInt8(i))
+        var payload = List[UInt8](capacity=64)
+        for i in range(64):
+            payload.append(UInt8(i))
 
-    var sink = DynSink.open(path)
-    sink.write(Span(payload))
-    sink.close()
+        var sink = DynSink.open(path)
+        sink.write(Span(payload))
+        sink.close()
 
-    var src = DynSource.open(path)
-    assert_equal(src.size(), 64)
-    var got = src.read_at(16, 8)
-    for i in range(8):
-        assert_equal(got[i], payload[16 + i])
+        var src = DynSource.open(path)
+        assert_equal(src.size(), 64)
+        var got = src.read_at(16, 8)
+        for i in range(8):
+            assert_equal(got[i], payload[16 + i])
 
-    # And a `file://` URI is the same bytes by the same route.
-    var via_file = DynSource.open(String("file://", path))
-    assert_equal(via_file.size(), 64)
+        # And a `file://` URI is the same bytes by the same route.
+        var via_file = DynSource.open(String("file://", path))
+        assert_equal(via_file.size(), 64)
 
-    remove(path)
-    _ = payload^
+        _ = payload^
 
 
 # `test_io_dispatch_remote_uri_without_opendal_raises` used to live here and

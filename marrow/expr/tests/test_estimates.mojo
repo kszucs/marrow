@@ -22,11 +22,12 @@ below pin both halves: the proof when the bounds decide it, and
 `DEFAULT_SELECTIVITY` when they do not, which must never itself be zero.
 """
 
-from std.os import remove
 from std.python import Python
 from std.sys import stderr
 from std.testing import assert_equal, assert_false, assert_true
+from std.os.path import join
 
+from ...utils.testing import ScratchDir
 from ...builders import array
 from ...dtypes import Field, field, int64
 from ...kernels.join import (
@@ -620,29 +621,28 @@ def test_estimate_reads_a_parquet_footer_without_reading_the_file() raises:
     its caller can see it. The companion case below writes the same shape with
     marrow's own writer and does get one.
     """
-    var path = String("/tmp/marrow_estimate_footer.parquet")
-    var pa = Python.import_module("pyarrow")
-    var pq = Python.import_module("pyarrow.parquet")
-    var a = Python.list()
-    var b = Python.list()
-    for i in range(400):
-        a.append(i)
-        b.append(i % 7)
-    var tbl = pa.table(Python.dict(a=pa.array(a), b=pa.array(b)))
-    pq.write_table(tbl, path, row_group_size=100, compression="none")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_estimate_footer.parquet")
+        var pa = Python.import_module("pyarrow")
+        var pq = Python.import_module("pyarrow.parquet")
+        var a = Python.list()
+        var b = Python.list()
+        for i in range(400):
+            a.append(i)
+            b.append(i % 7)
+        var tbl = pa.table(Python.dict(a=pa.array(a), b=pa.array(b)))
+        pq.write_table(tbl, path, row_group_size=100, compression="none")
 
-    var f = ParquetFile(path)
-    var s = schema([field("a", int64), field("b", int64)])
-    var est = Estimate.from_index(Index.from_parquet(f), s)
+        var f = ParquetFile(path)
+        var s = schema([field("a", int64), field("b", int64)])
+        var est = Estimate.from_index(Index.from_parquet(f), s)
 
-    assert_true(est.rows.is_exact())
-    assert_equal(est.rows.known().value(), 400)
-    assert_equal(est.columns[0].min.as_int64().value(), 0)
-    assert_equal(est.columns[0].max.as_int64().value(), 399)
-    assert_equal(est.columns[0].nulls.known().value(), 0)
-    assert_false(est.columns[0].ndv.is_known())
-
-    remove(path)
+        assert_true(est.rows.is_exact())
+        assert_equal(est.rows.known().value(), 400)
+        assert_equal(est.columns[0].min.as_int64().value(), 0)
+        assert_equal(est.columns[0].max.as_int64().value(), 399)
+        assert_equal(est.columns[0].nulls.known().value(), 0)
+        assert_false(est.columns[0].ndv.is_known())
 
 
 def test_estimate_scan_statistics_survive_the_optimizer() raises:
@@ -765,33 +765,34 @@ def test_estimate_reads_a_distinct_count_from_marrows_own_footer() raises:
     parquet-format lets a writer overstate, and the maximum is a lower bound
     on the column regardless.
     """
-    var path = String("/tmp/marrow_estimate_ndv.parquet")
-    var keys = List[Optional[Int]](capacity=400)
-    var uniq = List[Optional[Int]](capacity=400)
-    for i in range(400):
-        keys.append(i % 25)
-        uniq.append(i)
-    var b = record_batch(
-        [array(keys, int64).copy(), array(uniq, int64).copy()],
-        names=["k", "b"],
-    )
-    var s = Schema(copy=b.schema)
-    var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
-    w.write(Table.from_batches(s.copy(), [b^]), row_group_size=100)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_estimate_ndv.parquet")
+        var keys = List[Optional[Int]](capacity=400)
+        var uniq = List[Optional[Int]](capacity=400)
+        for i in range(400):
+            keys.append(i % 25)
+            uniq.append(i)
+        var b = record_batch(
+            [array(keys, int64).copy(), array(uniq, int64).copy()],
+            names=["k", "b"],
+        )
+        var s = Schema(copy=b.schema)
+        var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
+        w.write(Table.from_batches(s.copy(), [b^]), row_group_size=100)
 
-    var f = ParquetFile(path)
-    var index = Index.from_parquet(f)
-    assert_equal(index.chunks, 4)
-    assert_equal(index.zones.distinct_counts(String("k")), [25, 25, 25, 25])
-    assert_equal(index.zones.distinct_counts(String("b")), [100, 100, 100, 100])
+        var f = ParquetFile(path)
+        var index = Index.from_parquet(f)
+        assert_equal(index.chunks, 4)
+        assert_equal(index.zones.distinct_counts(String("k")), [25, 25, 25, 25])
+        assert_equal(
+            index.zones.distinct_counts(String("b")), [100, 100, 100, 100]
+        )
 
-    var est = Estimate.from_index(index, s)
-    assert_true(est.columns[0].ndv.is_known())
-    assert_false(est.columns[0].ndv.is_exact())
-    assert_equal(est.columns[0].ndv.known().value(), 25)
-    assert_equal(est.columns[1].ndv.known().value(), 100)
-
-    remove(path)
+        var est = Estimate.from_index(index, s)
+        assert_true(est.columns[0].ndv.is_known())
+        assert_false(est.columns[0].ndv.is_exact())
+        assert_equal(est.columns[0].ndv.known().value(), 25)
+        assert_equal(est.columns[1].ndv.known().value(), 100)
 
 
 comptime _DICT_FALLBACK_DISTINCT = 135_000
@@ -810,32 +811,31 @@ def test_estimate_reduces_across_mixed_dictionary_and_plain_chunks() raises:
     only for a dictionary-encoded chunk, so a high-cardinality group falls
     back to PLAIN and records none. The column still answers the recorded
     count, read from a real file rather than from hand-written lists."""
-    var path = String("/tmp/marrow_estimate_mixed_encoding.parquet")
-    var n = _DICT_FALLBACK_DISTINCT
-    var vals = List[Optional[Int]](capacity=n + 100)
-    for i in range(n):
-        vals.append(i)
-    for i in range(100):
-        vals.append(i % 7)
-    var b = record_batch([array(vals^, int64).to_dyn()], names=["v"])
-    var s = Schema(copy=b.schema)
-    var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
-    w.write(Table.from_batches(s.copy(), [b^]), row_group_size=n)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_estimate_mixed_encoding.parquet")
+        var n = _DICT_FALLBACK_DISTINCT
+        var vals = List[Optional[Int]](capacity=n + 100)
+        for i in range(n):
+            vals.append(i)
+        for i in range(100):
+            vals.append(i % 7)
+        var b = record_batch([array(vals^, int64).to_dyn()], names=["v"])
+        var s = Schema(copy=b.schema)
+        var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
+        w.write(Table.from_batches(s.copy(), [b^]), row_group_size=n)
 
-    var index = Index.from_parquet(ParquetFile(path))
-    assert_equal(index.chunks, 2)
-    # The mixed shape itself: the big group fell back to PLAIN and recorded
-    # nothing, the hundred-row group dictionary-encoded and recorded seven.
-    assert_equal(index.zones.distinct_counts(String("v")), [-1, 7])
+        var index = Index.from_parquet(ParquetFile(path))
+        assert_equal(index.chunks, 2)
+        # The mixed shape itself: the big group fell back to PLAIN and recorded
+        # nothing, the hundred-row group dictionary-encoded and recorded seven.
+        assert_equal(index.zones.distinct_counts(String("v")), [-1, 7])
 
-    var est = Estimate.from_index(index, s)
-    assert_true(est.rows.is_exact())
-    assert_equal(est.rows.known().value(), n + 100)
-    assert_true(est.columns[0].ndv.is_known())
-    assert_false(est.columns[0].ndv.is_exact())
-    assert_equal(est.columns[0].ndv.known().value(), 7)
-
-    remove(path)
+        var est = Estimate.from_index(index, s)
+        assert_true(est.rows.is_exact())
+        assert_equal(est.rows.known().value(), n + 100)
+        assert_true(est.columns[0].ndv.is_known())
+        assert_false(est.columns[0].ndv.is_exact())
+        assert_equal(est.columns[0].ndv.known().value(), 7)
 
 
 def test_estimate_reduces_per_chunk_distinct_counts_with_the_maximum() raises:
@@ -943,9 +943,9 @@ def test_estimate_join_cardinality_changes_when_ndv_is_known() raises:
 # ---------------------------------------------------------------------------
 # End to end: a footer's distinct count changes the plan
 # ---------------------------------------------------------------------------
-comptime _A_PATH = "/tmp/marrow_reassoc_a.parquet"
-comptime _B_PATH = "/tmp/marrow_reassoc_b.parquet"
-comptime _C_PATH = "/tmp/marrow_reassoc_c.parquet"
+comptime _A_FILE = "marrow_reassoc_a.parquet"
+comptime _B_FILE = "marrow_reassoc_b.parquet"
+comptime _C_FILE = "marrow_reassoc_c.parquet"
 
 
 def _reassoc_write(batch: RecordBatch, path: String, row_group: Int) raises:
@@ -962,7 +962,7 @@ def _count(haystack: String, needle: String) -> Int:
     return len(haystack.split(needle)) - 1
 
 
-def _reassoc_fixture() raises:
+def _reassoc_fixture(dir: String) raises:
     """`A ⋈ B` many-to-many on `ak`, `B ⋈ C` nearly empty on `bc`.
 
     Deliberately the smallest shape that separates the two arms: 25,000 rows
@@ -977,7 +977,7 @@ def _reassoc_fixture() raises:
     # than read: every group holds all 25 values, and the maximum is right.
     _reassoc_write(
         record_batch([array(ak^, int64).to_dyn()], names=["ak"]),
-        String(_A_PATH),
+        join(dir, _A_FILE),
         5_000,
     )
 
@@ -991,7 +991,7 @@ def _reassoc_fixture() raises:
             [array(bak^, int64).to_dyn(), array(bbc^, int64).to_dyn()],
             names=["ak", "bc"],
         ),
-        String(_B_PATH),
+        join(dir, _B_FILE),
         1_000,
     )
 
@@ -1005,7 +1005,7 @@ def _reassoc_fixture() raises:
             [array(cbc^, int64).to_dyn(), array(cv^, int64).to_dyn()],
             names=["bc", "cv"],
         ),
-        String(_C_PATH),
+        join(dir, _C_FILE),
         1_000,
     )
 
@@ -1043,16 +1043,16 @@ def _reassoc_source(path: String, s: Schema, ndv: Bool) raises -> DynRelation:
     return out^
 
 
-def _reassoc_plan(ndv: Bool) raises -> DynRelation:
+def _reassoc_plan(dir: String, ndv: Bool) raises -> DynRelation:
     """`(A ⋈ B) ⋈ C`, left-deep as written, over the fixture's own footers."""
     var a = schema([field("ak", int64)])
     var b = schema([field("ak", int64), field("bc", int64)])
     var c = schema([field("bc", int64), field("cv", int64)])
-    var inner = _reassoc_source(String(_A_PATH), a, ndv).join(
-        _reassoc_source(String(_B_PATH), b, ndv), [0], [0], JOIN_INNER
+    var inner = _reassoc_source(join(dir, _A_FILE), a, ndv).join(
+        _reassoc_source(join(dir, _B_FILE), b, ndv), [0], [0], JOIN_INNER
     )
     return inner.join(
-        _reassoc_source(String(_C_PATH), c, ndv), [2], [0], JOIN_INNER
+        _reassoc_source(join(dir, _C_FILE), c, ndv), [2], [0], JOIN_INNER
     )
 
 
@@ -1068,43 +1068,40 @@ def test_estimate_a_footers_distinct_count_changes_the_chosen_plan() raises:
     `Join(Join(` counts the left-deep nestings, the idiom `test_optimizer`
     uses: one in a left-deep plan, none in a right-deep one.
     """
-    _reassoc_fixture()
+    with ScratchDir() as dir:
+        _reassoc_fixture(dir)
 
-    var blind = _reassoc_plan(ndv=False)
-    var informed = _reassoc_plan(ndv=True)
+        var blind = _reassoc_plan(dir, ndv=False)
+        var informed = _reassoc_plan(dir, ndv=True)
 
-    # The fixture is left-deep as written, both ways.
-    assert_equal(_count(String(blind), String("Join(Join(")), 1)
-    assert_equal(_count(String(informed), String("Join(Join(")), 1)
+        # The fixture is left-deep as written, both ways.
+        assert_equal(_count(String(blind), String("Join(Join(")), 1)
+        assert_equal(_count(String(informed), String("Join(Join(")), 1)
 
-    # The cardinality the two arms disagree about.
-    ref bj = blind.get[Join]()
-    ref ij = informed.get[Join]()
-    assert_equal(bj.left[].estimate().rows.known().value(), 1_000)
-    assert_equal(ij.left[].estimate().rows.known().value(), 1_000_000)
+        # The cardinality the two arms disagree about.
+        ref bj = blind.get[Join]()
+        ref ij = informed.get[Join]()
+        assert_equal(bj.left[].estimate().rows.known().value(), 1_000)
+        assert_equal(ij.left[].estimate().rows.known().value(), 1_000_000)
 
-    var blind_out = blind.optimize[AllRules]()
-    var informed_out = informed.optimize[AllRules]()
+        var blind_out = blind.optimize[AllRules]()
+        var informed_out = informed.optimize[AllRules]()
 
-    # The diff itself, on stderr rather than described in prose: `pytest -s`
-    # shows it, and a failure below shows it anyway.
-    print("\n[blind]    ", blind_out, file=stderr)
-    print("[informed] ", informed_out, file=stderr)
-    assert_equal(
-        _count(String(blind_out), String("Join(Join(")),
-        1,
-        "blind should stay left-deep: " + String(blind_out),
-    )
-    assert_equal(
-        _count(String(informed_out), String("Join(Join(")),
-        0,
-        "informed should reassociate: " + String(informed_out),
-    )
-    # Same answer either way — the property the rewrite rests on.
-    assert_true(blind_out.schema() == informed_out.schema())
-    assert_equal(blind_out.execute().num_rows(), 25_000)
-    assert_equal(informed_out.execute().num_rows(), 25_000)
-
-    remove(String(_A_PATH))
-    remove(String(_B_PATH))
-    remove(String(_C_PATH))
+        # The diff itself, on stderr rather than described in prose: `pytest -s`
+        # shows it, and a failure below shows it anyway.
+        print("\n[blind]    ", blind_out, file=stderr)
+        print("[informed] ", informed_out, file=stderr)
+        assert_equal(
+            _count(String(blind_out), String("Join(Join(")),
+            1,
+            "blind should stay left-deep: " + String(blind_out),
+        )
+        assert_equal(
+            _count(String(informed_out), String("Join(Join(")),
+            0,
+            "informed should reassociate: " + String(informed_out),
+        )
+        # Same answer either way — the property the rewrite rests on.
+        assert_true(blind_out.schema() == informed_out.schema())
+        assert_equal(blind_out.execute().num_rows(), 25_000)
+        assert_equal(informed_out.execute().num_rows(), 25_000)

@@ -10,7 +10,8 @@ only marrow can read.
 
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet import read_table, write_table, SplitBlockBloomFilter, XxHash64
 from ...parquet.reader import ParquetFile
 from ...tabular import Table
@@ -147,23 +148,23 @@ def test_write_bloom_filter_string() raises:
         strs.append(Python.str("key_") + Python.str(i % 40))
     var want = pa.table(Python.dict(s=pa.array(strs)))
     var t = _to_marrow(want)
-    var path = String("/tmp/marrow_bloom_str.parquet")
-    write_table(t, path, use_dictionary=False, write_bloom_filter=True)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bloom_str.parquet")
+        write_table(t, path, use_dictionary=False, write_bloom_filter=True)
 
-    # PyArrow still reads the file (bloom filter is out of the way)
-    var back = pq.read_table(path)
-    assert_true(Bool(back.column(0).equals(want.column(0))))
+        # PyArrow still reads the file (bloom filter is out of the way)
+        var back = pq.read_table(path)
+        assert_true(Bool(back.column(0).equals(want.column(0))))
 
-    # marrow reads the bloom filter: all present, no false negatives
-    var pf = ParquetFile(path)
-    var sbf = pf.bloom_filter(0, 0)
-    assert_true(Bool(sbf))
-    ref f = sbf.value()
-    for i in range(40):
-        assert_true(_contains(f, "key_" + String(i)))
-    # a clearly-absent value should be pruned (allowing a rare false positive)
-    assert_false(_contains(f, "definitely_absent_key_99999"))
-    remove(path)
+        # marrow reads the bloom filter: all present, no false negatives
+        var pf = ParquetFile(path)
+        var sbf = pf.bloom_filter(0, 0)
+        assert_true(Bool(sbf))
+        ref f = sbf.value()
+        for i in range(40):
+            assert_true(_contains(f, "key_" + String(i)))
+        # a clearly-absent value should be pruned (allowing a rare false positive)
+        assert_false(_contains(f, "definitely_absent_key_99999"))
 
 
 def test_write_bloom_filter_int() raises:
@@ -173,21 +174,21 @@ def test_write_bloom_filter_int() raises:
         ints.append(i % 50)
     var want = pa.table(Python.dict(n=pa.array(ints, type=pa.int64())))
     var t = _to_marrow(want)
-    var path = String("/tmp/marrow_bloom_int.parquet")
-    write_table(t, path, use_dictionary=False, write_bloom_filter=True)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bloom_int.parquet")
+        write_table(t, path, use_dictionary=False, write_bloom_filter=True)
 
-    var pf = ParquetFile(path)
-    var nbf = pf.bloom_filter(0, 0)
-    assert_true(Bool(nbf))
-    ref f = nbf.value()
-    # int64 values are hashed over their 8 little-endian bytes
-    for i in range(50):
-        var b = List[UInt8]()
-        var v = Int64(i)
-        for k in range(8):
-            b.append(UInt8((v >> Int64(k * 8)) & 0xFF))
-        assert_true(f.might_contain(Span(b)))
-    remove(path)
+        var pf = ParquetFile(path)
+        var nbf = pf.bloom_filter(0, 0)
+        assert_true(Bool(nbf))
+        ref f = nbf.value()
+        # int64 values are hashed over their 8 little-endian bytes
+        for i in range(50):
+            var b = List[UInt8]()
+            var v = Int64(i)
+            for k in range(8):
+                b.append(UInt8((v >> Int64(k * 8)) & 0xFF))
+            assert_true(f.might_contain(Span(b)))
 
 
 def _le(v: Int, width: Int) -> List[UInt8]:
@@ -217,19 +218,22 @@ def test_write_bloom_filter_temporal() raises:
     for i in range(300):
         vals.append((i % 50) * 1000)
     var want = pa.table(Python.dict(t=pa.array(vals, type=pa.timestamp("us"))))
-    var path = String("/tmp/marrow_bloom_ts.parquet")
-    write_table(
-        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bloom_ts.parquet")
+        write_table(
+            _to_marrow(want),
+            path,
+            use_dictionary=False,
+            write_bloom_filter=True,
+        )
 
-    var pf = ParquetFile(path)
-    var bf = pf.bloom_filter(0, 0)
-    assert_true(Bool(bf))
-    ref f = bf.value()
-    for i in range(50):
-        assert_true(f.might_contain(Span(_le((i % 50) * 1000, 8))))
-    assert_false(f.might_contain(Span(_le(987654321, 8))))
-    remove(path)
+        var pf = ParquetFile(path)
+        var bf = pf.bloom_filter(0, 0)
+        assert_true(Bool(bf))
+        ref f = bf.value()
+        for i in range(50):
+            assert_true(f.might_contain(Span(_le((i % 50) * 1000, 8))))
+        assert_false(f.might_contain(Span(_le(987654321, 8))))
 
 
 def test_write_bloom_filter_decimal() raises:
@@ -240,20 +244,23 @@ def test_write_bloom_filter_decimal() raises:
     for i in range(300):
         vals.append(Python.str(i % 40) + Python.str(".00"))
     var want = pa.table(Python.dict(d=pa.array(vals).cast(pa.decimal128(9, 2))))
-    var path = String("/tmp/marrow_bloom_dec.parquet")
-    write_table(
-        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bloom_dec.parquet")
+        write_table(
+            _to_marrow(want),
+            path,
+            use_dictionary=False,
+            write_bloom_filter=True,
+        )
 
-    var pf = ParquetFile(path)
-    var bf = pf.bloom_filter(0, 0)
-    assert_true(Bool(bf))
-    ref f = bf.value()
-    # value "i.00" has unscaled integer i*100
-    for i in range(40):
-        assert_true(f.might_contain(Span(_be16(i * 100))))
-    assert_false(f.might_contain(Span(_be16(99999999))))
-    remove(path)
+        var pf = ParquetFile(path)
+        var bf = pf.bloom_filter(0, 0)
+        assert_true(Bool(bf))
+        ref f = bf.value()
+        # value "i.00" has unscaled integer i*100
+        for i in range(40):
+            assert_true(f.might_contain(Span(_be16(i * 100))))
+        assert_false(f.might_contain(Span(_be16(99999999))))
 
 
 def _k3(i: Int) -> String:
@@ -269,19 +276,22 @@ def test_write_bloom_filter_fixed_size_binary() raises:
     for i in range(300):
         vals.append(Python.str(_k3(i % 30)))
     var want = pa.table(Python.dict(f=pa.array(vals).cast(pa.binary(3))))
-    var path = String("/tmp/marrow_bloom_fsb.parquet")
-    write_table(
-        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bloom_fsb.parquet")
+        write_table(
+            _to_marrow(want),
+            path,
+            use_dictionary=False,
+            write_bloom_filter=True,
+        )
 
-    var pf = ParquetFile(path)
-    var bf = pf.bloom_filter(0, 0)
-    assert_true(Bool(bf))
-    ref f = bf.value()
-    for i in range(30):
-        assert_true(_contains(f, _k3(i)))
-    assert_false(_contains(f, "zzz"))
-    remove(path)
+        var pf = ParquetFile(path)
+        var bf = pf.bloom_filter(0, 0)
+        assert_true(Bool(bf))
+        ref f = bf.value()
+        for i in range(30):
+            assert_true(_contains(f, _k3(i)))
+        assert_false(_contains(f, "zzz"))
 
 
 def test_write_bloom_filter_float16() raises:
@@ -291,28 +301,33 @@ def test_write_bloom_filter_float16() raises:
     for i in range(300):
         vals.append(Float64(i % 40) * 0.5)  # 0, 0.5 .. 19.5 — exact in float16
     var want = pa.table(Python.dict(h=pa.array(vals, type=pa.float16())))
-    var path = String("/tmp/marrow_bloom_f16.parquet")
-    write_table(
-        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bloom_f16.parquet")
+        write_table(
+            _to_marrow(want),
+            path,
+            use_dictionary=False,
+            write_bloom_filter=True,
+        )
 
-    var pf = ParquetFile(path)
-    var bf = pf.bloom_filter(0, 0)
-    assert_true(Bool(bf))
-    ref f = bf.value()
-    for i in range(40):
-        var bits = Int(Float16(Float64(i) * 0.5).to_bits())
-        assert_true(f.might_contain(Span(_le(bits, 2))))
-    assert_false(f.might_contain(Span(_le(Int(Float16(999.0).to_bits()), 2))))
-    remove(path)
+        var pf = ParquetFile(path)
+        var bf = pf.bloom_filter(0, 0)
+        assert_true(Bool(bf))
+        ref f = bf.value()
+        for i in range(40):
+            var bits = Int(Float16(Float64(i) * 0.5).to_bits())
+            assert_true(f.might_contain(Span(_le(bits, 2))))
+        assert_false(
+            f.might_contain(Span(_le(Int(Float16(999.0).to_bits()), 2)))
+        )
 
 
 def test_no_bloom_filter_by_default() raises:
     var pa = Python.import_module("pyarrow")
     var want = pa.table(Python.dict(n=pa.array([1, 2, 3], type=pa.int64())))
     var t = _to_marrow(want)
-    var path = String("/tmp/marrow_no_bloom.parquet")
-    write_table(t, path)  # write_bloom_filter defaults to False
-    var pf = ParquetFile(path)
-    assert_false(Bool(pf.bloom_filter(0, 0)))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_no_bloom.parquet")
+        write_table(t, path)  # write_bloom_filter defaults to False
+        var pf = ParquetFile(path)
+        assert_false(Bool(pf.bloom_filter(0, 0)))

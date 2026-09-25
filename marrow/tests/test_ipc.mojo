@@ -7,6 +7,7 @@ correctness in both directions.
 
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
+from ..utils.testing import ScratchDir
 from ..dtypes import *
 from ..arrays import DynArray, DictionaryArray
 from ..builders import (
@@ -29,7 +30,7 @@ from ..builders import (
     StructBuilder,
 )
 from std.memory import ArcPointer
-from std.os import remove
+from std.os.path import join
 
 from ..buffers import Buffer
 from ..execution import ExecContext
@@ -943,38 +944,38 @@ def test_ipc_file_reads_from_a_memory_source() raises:
     memory map, a heap buffer, and -- once the backend lands -- an object
     store, because it only ever asks for byte ranges.
     """
-    var path = String("/tmp/marrow_ipc_memory_source.arrow")
-    var i1: DynArray = array([1, 2, 3, 4], int64)
-    var s1: DynArray = array(["a", "b", "c", "d"])
-    var b1 = record_batch([i1^, s1^], names=["i", "s"])
-    var i2: DynArray = array([5, 6], int64)
-    var s2: DynArray = array(["e", "f"])
-    var b2 = record_batch([i2^, s2^], names=["i", "s"])
-    write_ipc_file(path, [b1.copy(), b2.copy()])
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_ipc_memory_source.arrow")
+        var i1: DynArray = array([1, 2, 3, 4], int64)
+        var s1: DynArray = array(["a", "b", "c", "d"])
+        var b1 = record_batch([i1^, s1^], names=["i", "s"])
+        var i2: DynArray = array([5, 6], int64)
+        var s2: DynArray = array(["e", "f"])
+        var b2 = record_batch([i2^, s2^], names=["i", "s"])
+        write_ipc_file(path, [b1.copy(), b2.copy()])
 
-    var r = RecordBatchFileReader(BufferSource(Span(_file_bytes(path))))
-    assert_equal(r.num_record_batches(), 2)
-    var got = r.read_all()
-    assert_equal(len(got), 2)
-    assert_true(got[0] == b1)
-    assert_true(got[1] == b2)
-    remove(path)
+        var r = RecordBatchFileReader(BufferSource(Span(_file_bytes(path))))
+        assert_equal(r.num_record_batches(), 2)
+        var got = r.read_all()
+        assert_equal(len(got), 2)
+        assert_true(got[0] == b1)
+        assert_true(got[1] == b2)
 
 
 def test_ipc_stream_reads_from_a_memory_source() raises:
     """Same for the stream reader, whose framing is sequential rather than
     indexed."""
-    var path = String("/tmp/marrow_ipc_memory_source_stream.arrow")
-    var i3: DynArray = array([7, 8, 9], int64)
-    var s3: DynArray = array(["g", "h", "i"])
-    var b = record_batch([i3^, s3^], names=["i", "s"])
-    write_ipc_stream(path, [b.copy()])
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_ipc_memory_source_stream.arrow")
+        var i3: DynArray = array([7, 8, 9], int64)
+        var s3: DynArray = array(["g", "h", "i"])
+        var b = record_batch([i3^, s3^], names=["i", "s"])
+        write_ipc_stream(path, [b.copy()])
 
-    var r = RecordBatchStreamReader(BufferSource(Span(_file_bytes(path))))
-    var got = r.read_all()
-    assert_equal(len(got), 1)
-    assert_true(got[0] == b)
-    remove(path)
+        var r = RecordBatchStreamReader(BufferSource(Span(_file_bytes(path))))
+        var got = r.read_all()
+        assert_equal(len(got), 1)
+        assert_true(got[0] == b)
 
 
 struct _CountingSource(ByteSource):
@@ -1020,34 +1021,34 @@ def test_ipc_file_reader_reads_only_its_tail() raises:
     the same reason `ParquetFile` opens by its tail. Counting the bytes read is
     the only way to tell "found the footer" from "read the file to find it".
     """
-    var path = String("/tmp/marrow_ipc_tail.arrow")
-    var bld = Int64Builder()
-    for i in range(50000):
-        bld.append(Int64(i))
-    var col: DynArray = bld.finish()
-    var b = record_batch([col^], names=["i"])
-    write_ipc_file(path, [b.copy()])
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_ipc_tail.arrow")
+        var bld = Int64Builder()
+        for i in range(50000):
+            bld.append(Int64(i))
+        var col: DynArray = bld.finish()
+        var b = record_batch([col^], names=["i"])
+        write_ipc_file(path, [b.copy()])
 
-    var whole = _file_bytes(path)
-    assert_true(
-        len(whole) > 256 * 1024,
-        "the fixture must be much bigger than one tail read",
-    )
+        var whole = _file_bytes(path)
+        assert_true(
+            len(whole) > 256 * 1024,
+            "the fixture must be much bigger than one tail read",
+        )
 
-    var counter = ArcPointer[Int](0)
-    var r = RecordBatchFileReader(_CountingSource(Span(whole), counter))
-    assert_equal(r.num_record_batches(), 1)
+        var counter = ArcPointer[Int](0)
+        var r = RecordBatchFileReader(_CountingSource(Span(whole), counter))
+        assert_equal(r.num_record_batches(), 1)
 
-    # Opening the file reads the leading magic, one bounded tail, and nothing
-    # else -- not the 400 KB of column data sitting between them.
-    assert_true(
-        counter[] < len(whole) // 4,
-        String("opening read ", counter[], " of ", len(whole), " bytes"),
-    )
+        # Opening the file reads the leading magic, one bounded tail, and nothing
+        # else -- not the 400 KB of column data sitting between them.
+        assert_true(
+            counter[] < len(whole) // 4,
+            String("opening read ", counter[], " of ", len(whole), " bytes"),
+        )
 
-    # And the batch is still readable, so the cheap open did not skip anything
-    # it needed.
-    var got = r.read_batch(0)
-    assert_equal(got.num_rows(), 50000)
-    remove(path)
-    _ = whole^
+        # And the batch is still readable, so the cheap open did not skip anything
+        # it needed.
+        var got = r.read_batch(0)
+        assert_equal(got.num_rows(), 50000)
+        _ = whole^

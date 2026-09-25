@@ -8,7 +8,8 @@ spanning many row groups, and pre-epoch dates."""
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.math import isnan, isinf
 from std.python import Python, PythonObject
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet import read_table, ParquetFile
 from ...io import BufferSource
 from ...tabular import Table
@@ -31,29 +32,29 @@ def test_read_flat_no_nulls() raises:
             ),
         )
     )
-    var path = String("/tmp/marrow_rd_flat.parquet")
-    pq.write_table(tbl, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_rd_flat.parquet")
+        pq.write_table(tbl, path, compression="snappy")
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 5)
-    assert_equal(t.num_columns(), 3)
-    var b = t.to_batches()[0].copy()
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 5)
+        assert_equal(t.num_columns(), 3)
+        var b = t.to_batches()[0].copy()
 
-    var ci = b.columns[0].copy()
-    ref col_i = ci.as_int64()
-    assert_equal(col_i[0].value(), 1)
-    assert_equal(col_i[4].value(), 5)
+        var ci = b.columns[0].copy()
+        ref col_i = ci.as_int64()
+        assert_equal(col_i[0].value(), 1)
+        assert_equal(col_i[4].value(), 5)
 
-    var cf = b.columns[1].copy()
-    ref col_f = cf.as_float64()
-    assert_true(col_f[0].value() == 1.5)
-    assert_true(col_f[4].value() == 5.5)
+        var cf = b.columns[1].copy()
+        ref col_f = cf.as_float64()
+        assert_true(col_f[0].value() == 1.5)
+        assert_true(col_f[4].value() == 5.5)
 
-    var cs = b.columns[2].copy()
-    ref col_s = cs.as_string()
-    assert_equal(String(col_s[0]), "apple")
-    assert_equal(String(col_s[2]), "cherry")
-    remove(path)
+        var cs = b.columns[2].copy()
+        ref col_s = cs.as_string()
+        assert_equal(String(col_s[0]), "apple")
+        assert_equal(String(col_s[2]), "cherry")
 
 
 def test_read_with_nulls() raises:
@@ -70,29 +71,29 @@ def test_read_with_nulls() raises:
             ),
         )
     )
-    var path = String("/tmp/marrow_rd_nulls.parquet")
-    pq.write_table(tbl, path, compression="none")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_rd_nulls.parquet")
+        pq.write_table(tbl, path, compression="none")
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 5)
-    var b = t.to_batches()[0].copy()
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 5)
+        var b = t.to_batches()[0].copy()
 
-    var ci = b.columns[0].copy()
-    ref col_i = ci.as_int64()
-    assert_equal(col_i.null_count(), 2)
-    assert_true(col_i.is_valid(0))
-    assert_false(col_i.is_valid(1))
-    assert_equal(col_i[0].value(), 10)
-    assert_equal(col_i[2].value(), 30)
+        var ci = b.columns[0].copy()
+        ref col_i = ci.as_int64()
+        assert_equal(col_i.null_count(), 2)
+        assert_true(col_i.is_valid(0))
+        assert_false(col_i.is_valid(1))
+        assert_equal(col_i[0].value(), 10)
+        assert_equal(col_i[2].value(), 30)
 
-    var cs = b.columns[1].copy()
-    ref col_s = cs.as_string()
-    assert_equal(col_s.null_count(), 2)
-    assert_true(col_s.is_valid(0))
-    assert_false(col_s.is_valid(1))
-    assert_equal(String(col_s[0]), "x")
-    assert_equal(String(col_s[3]), "w")
-    remove(path)
+        var cs = b.columns[1].copy()
+        ref col_s = cs.as_string()
+        assert_equal(col_s.null_count(), 2)
+        assert_true(col_s.is_valid(0))
+        assert_false(col_s.is_valid(1))
+        assert_equal(String(col_s[0]), "x")
+        assert_equal(String(col_s[3]), "w")
 
 
 def test_read_zstd() raises:
@@ -104,20 +105,20 @@ def test_read_zstd() raises:
             b=pa.array(Python.list(True, False, True), type=pa.bool_()),
         )
     )
-    var path = String("/tmp/marrow_rd_zstd.parquet")
-    pq.write_table(tbl, path, compression="zstd")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_rd_zstd.parquet")
+        pq.write_table(tbl, path, compression="zstd")
 
-    var t = read_table(path)
-    var b = t.to_batches()[0].copy()
-    var ci = b.columns[0].copy()
-    ref col_i = ci.as_int32()
-    assert_equal(col_i[0].value(), 1)
-    assert_equal(col_i[2].value(), 3)
-    var cb = b.columns[1].copy()
-    ref col_b = cb.as_bool()
-    assert_true(col_b[0].value())
-    assert_false(col_b[1].value())
-    remove(path)
+        var t = read_table(path)
+        var b = t.to_batches()[0].copy()
+        var ci = b.columns[0].copy()
+        ref col_i = ci.as_int32()
+        assert_equal(col_i[0].value(), 1)
+        assert_equal(col_i[2].value(), 3)
+        var cb = b.columns[1].copy()
+        ref col_b = cb.as_bool()
+        assert_true(col_b[0].value())
+        assert_false(col_b[1].value())
 
 
 # ---------------------------------------------------------------------------
@@ -136,19 +137,19 @@ def test_read_narrow_ints() raises:
             u16=pa.array(Python.list(1, 2, 60000), type=pa.uint16()),
         )
     )
-    var path = String("/tmp/marrow_types_int.parquet")
-    pq.write_table(tbl, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_types_int.parquet")
+        pq.write_table(tbl, path, compression="snappy")
 
-    var t = read_table(path)
-    var b = t.to_batches()[0].copy()
-    var c0 = b.columns[0].copy()
-    assert_equal(c0.as_int8()[0].value(), -1)
-    assert_equal(c0.as_int8()[2].value(), -3)
-    var c1 = b.columns[1].copy()
-    assert_equal(c1.as_int16()[1].value(), -2000)
-    var c3 = b.columns[3].copy()
-    assert_equal(c3.as_uint16()[2].value(), 60000)
-    remove(path)
+        var t = read_table(path)
+        var b = t.to_batches()[0].copy()
+        var c0 = b.columns[0].copy()
+        assert_equal(c0.as_int8()[0].value(), -1)
+        assert_equal(c0.as_int8()[2].value(), -3)
+        var c1 = b.columns[1].copy()
+        assert_equal(c1.as_int16()[1].value(), -2000)
+        var c3 = b.columns[3].copy()
+        assert_equal(c3.as_uint16()[2].value(), 60000)
 
 
 def test_read_temporal() raises:
@@ -166,22 +167,22 @@ def test_read_temporal() raises:
             tm=pa.array(Python.list(5, 6), type=pa.time64("us")),
         )
     )
-    var path = String("/tmp/marrow_types_time.parquet")
-    pq.write_table(tbl, path, compression="none")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_types_time.parquet")
+        pq.write_table(tbl, path, compression="none")
 
-    var t = read_table(path)
-    var names = t.column_names()
-    assert_equal(names[0], "d")
-    # dtypes should be temporal, not raw int
-    assert_true(t.schema.field(index=1).dtype.is_timestamp())
-    assert_true(t.schema.field(index=2).dtype.is_timestamp())
-    assert_true(t.schema.field(index=3).dtype.is_time64())
+        var t = read_table(path)
+        var names = t.column_names()
+        assert_equal(names[0], "d")
+        # dtypes should be temporal, not raw int
+        assert_true(t.schema.field(index=1).dtype.is_timestamp())
+        assert_true(t.schema.field(index=2).dtype.is_timestamp())
+        assert_true(t.schema.field(index=3).dtype.is_time64())
 
-    var b = t.to_batches()[0].copy()
-    var cts = b.columns[2].copy()  # ts_ns stored as int64
-    assert_equal(cts.as_timestamp()[0].value(), 10)
-    assert_equal(cts.as_timestamp()[1].value(), 20)
-    remove(path)
+        var b = t.to_batches()[0].copy()
+        var cts = b.columns[2].copy()  # ts_ns stored as int64
+        assert_equal(cts.as_timestamp()[0].value(), 10)
+        assert_equal(cts.as_timestamp()[1].value(), 20)
 
 
 def test_read_temporal_ms_units() raises:
@@ -195,16 +196,16 @@ def test_read_temporal_ms_units() raises:
             ts=pa.array(Python.list(1, 2, 3), type=pa.timestamp("ms")),
         )
     )
-    var path = String("/tmp/marrow_types_ms.parquet")
-    pq.write_table(tbl, path, compression="none")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_types_ms.parquet")
+        pq.write_table(tbl, path, compression="none")
 
-    var t = read_table(path)
-    assert_true(t.schema.field(index=0).dtype.is_time32())
-    assert_true(t.schema.field(index=1).dtype.is_timestamp())
-    var b = t.to_batches()[0].copy()
-    assert_equal(b.columns[0].copy().as_time32()[1].value(), 1000)
-    assert_equal(b.columns[1].copy().as_timestamp()[2].value(), 3)
-    remove(path)
+        var t = read_table(path)
+        assert_true(t.schema.field(index=0).dtype.is_time32())
+        assert_true(t.schema.field(index=1).dtype.is_timestamp())
+        var b = t.to_batches()[0].copy()
+        assert_equal(b.columns[0].copy().as_time32()[1].value(), 1000)
+        assert_equal(b.columns[1].copy().as_timestamp()[2].value(), 3)
 
 
 def test_read_timestamp_with_timezone() raises:
@@ -220,16 +221,16 @@ def test_read_timestamp_with_timezone() raises:
             )
         )
     )
-    var path = String("/tmp/marrow_types_tstz.parquet")
-    pq.write_table(tbl, path, compression="none")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_types_tstz.parquet")
+        pq.write_table(tbl, path, compression="none")
 
-    var t = read_table(path)
-    assert_true(t.schema.field(index=0).dtype.is_timestamp())
-    var b = t.to_batches()[0].copy()
-    ref ts = b.columns[0].copy().as_timestamp()
-    assert_equal(ts[0].value(), 1000)
-    assert_equal(ts[2].value(), 3000)
-    remove(path)
+        var t = read_table(path)
+        assert_true(t.schema.field(index=0).dtype.is_timestamp())
+        var b = t.to_batches()[0].copy()
+        ref ts = b.columns[0].copy().as_timestamp()
+        assert_equal(ts[0].value(), 1000)
+        assert_equal(ts[2].value(), 3000)
 
 
 def test_read_binary() raises:
@@ -248,15 +249,15 @@ def test_read_binary() raises:
             )
         )
     )
-    var path = String("/tmp/marrow_types_bin.parquet")
-    pq.write_table(tbl, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_types_bin.parquet")
+        pq.write_table(tbl, path, compression="snappy")
 
-    var t = read_table(path)
-    var b = t.to_batches()[0].copy()
-    var col = b.columns[0].copy()
-    assert_true(t.schema.field(index=0).dtype.is_binary())
-    assert_equal(col.length(), 3)
-    remove(path)
+        var t = read_table(path)
+        var b = t.to_batches()[0].copy()
+        var col = b.columns[0].copy()
+        assert_true(t.schema.field(index=0).dtype.is_binary())
+        assert_equal(col.length(), 3)
 
 
 def test_read_large_binary() raises:
@@ -275,16 +276,16 @@ def test_read_large_binary() raises:
             )
         )
     )
-    var path = String("/tmp/marrow_types_lbin.parquet")
-    pq.write_table(tbl, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_types_lbin.parquet")
+        pq.write_table(tbl, path, compression="snappy")
 
-    var t = read_table(path)
-    assert_true(t.schema.field(index=0).dtype.is_binary())
-    var b = t.to_batches()[0].copy()
-    var col = b.columns[0].copy()
-    assert_equal(col.length(), 3)
-    assert_equal(col.null_count(), 1)
-    remove(path)
+        var t = read_table(path)
+        assert_true(t.schema.field(index=0).dtype.is_binary())
+        var b = t.to_batches()[0].copy()
+        var col = b.columns[0].copy()
+        assert_equal(col.length(), 3)
+        assert_equal(col.null_count(), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -302,23 +303,23 @@ def test_project_subset_and_reorder() raises:
             c=pa.array(Python.list("x", "y", "z")),
         )
     )
-    var path = String("/tmp/marrow_proj.parquet")
-    pq.write_table(tbl, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_proj.parquet")
+        pq.write_table(tbl, path, compression="snappy")
 
-    # projected subset, reordered
-    var cols: List[String] = ["c", "a"]
-    var t = read_table(path, columns=cols^)
-    assert_equal(t.num_columns(), 2)
-    var names = t.column_names()
-    assert_equal(names[0], "c")
-    assert_equal(names[1], "a")
+        # projected subset, reordered
+        var cols: List[String] = ["c", "a"]
+        var t = read_table(path, columns=cols^)
+        assert_equal(t.num_columns(), 2)
+        var names = t.column_names()
+        assert_equal(names[0], "c")
+        assert_equal(names[1], "a")
 
-    var b = t.to_batches()[0].copy()
-    assert_equal(String(b.columns[0].copy().as_string()[0]), "x")
-    assert_equal(String(b.columns[0].copy().as_string()[2]), "z")
-    assert_equal(b.columns[1].copy().as_int64()[0].value(), 1)
-    assert_equal(b.columns[1].copy().as_int64()[2].value(), 3)
-    remove(path)
+        var b = t.to_batches()[0].copy()
+        assert_equal(String(b.columns[0].copy().as_string()[0]), "x")
+        assert_equal(String(b.columns[0].copy().as_string()[2]), "z")
+        assert_equal(b.columns[1].copy().as_int64()[0].value(), 1)
+        assert_equal(b.columns[1].copy().as_int64()[2].value(), 3)
 
 
 def test_project_single_column() raises:
@@ -330,17 +331,17 @@ def test_project_single_column() raises:
             b=pa.array(Python.list(1, 2, 3, 4), type=pa.int32()),
         )
     )
-    var path = String("/tmp/marrow_proj1.parquet")
-    pq.write_table(tbl, path, compression="none")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_proj1.parquet")
+        pq.write_table(tbl, path, compression="none")
 
-    var cols: List[String] = ["b"]
-    var t = read_table(path, columns=cols^)
-    assert_equal(t.num_columns(), 1)
-    assert_equal(t.num_rows(), 4)
-    assert_equal(t.column_names()[0], "b")
-    var b = t.to_batches()[0].copy()
-    assert_equal(b.columns[0].copy().as_int32()[3].value(), 4)
-    remove(path)
+        var cols: List[String] = ["b"]
+        var t = read_table(path, columns=cols^)
+        assert_equal(t.num_columns(), 1)
+        assert_equal(t.num_rows(), 4)
+        assert_equal(t.column_names()[0], "b")
+        var b = t.to_batches()[0].copy()
+        assert_equal(b.columns[0].copy().as_int32()[3].value(), 4)
 
 
 def test_project_struct_column() raises:
@@ -360,19 +361,19 @@ def test_project_struct_column() raises:
             n=pa.array(Python.list(7, 8), type=pa.int64()),
         )
     )
-    var path = String("/tmp/marrow_proj_struct.parquet")
-    var pq = Python.import_module("pyarrow.parquet")
-    pq.write_table(t_src, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_proj_struct.parquet")
+        var pq = Python.import_module("pyarrow.parquet")
+        pq.write_table(t_src, path, compression="snappy")
 
-    # project just the struct
-    var cols: List[String] = ["s"]
-    var t = read_table(path, columns=cols^)
-    assert_equal(t.num_columns(), 1)
-    assert_true(t.schema.field(index=0).dtype.is_struct())
-    var b = t.to_batches()[0].copy()
-    ref sa = b.columns[0].copy().as_struct()
-    assert_equal(sa.children[0].as_int64()[1].value(), 2)
-    remove(path)
+        # project just the struct
+        var cols: List[String] = ["s"]
+        var t = read_table(path, columns=cols^)
+        assert_equal(t.num_columns(), 1)
+        assert_true(t.schema.field(index=0).dtype.is_struct())
+        var b = t.to_batches()[0].copy()
+        ref sa = b.columns[0].copy().as_struct()
+        assert_equal(sa.children[0].as_int64()[1].value(), 2)
 
 
 def test_project_missing_column() raises:
@@ -381,12 +382,12 @@ def test_project_missing_column() raises:
     var tbl = pa.table(
         Python.dict(a=pa.array(Python.list(1, 2), type=pa.int64()))
     )
-    var path = String("/tmp/marrow_proj_miss.parquet")
-    pq.write_table(tbl, path)
-    var cols: List[String] = ["nope"]
-    with assert_raises():
-        _ = read_table(path, columns=cols^)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_proj_miss.parquet")
+        pq.write_table(tbl, path)
+        var cols: List[String] = ["nope"]
+        with assert_raises():
+            _ = read_table(path, columns=cols^)
 
 
 # ---------------------------------------------------------------------------
@@ -403,22 +404,26 @@ def test_many_pages_plain_int() raises:
     var tbl = pa.table(
         Python.dict(x=pa.array(np.arange(10000), type=pa.int64()))
     )
-    var path = String("/tmp/marrow_pages_plain.parquet")
-    # tiny page size forces many PLAIN pages inside one chunk
-    pq.write_table(
-        tbl, path, data_page_size=256, use_dictionary=False, compression="none"
-    )
-    # sanity: a single row group holding many pages
-    assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 1)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pages_plain.parquet")
+        # tiny page size forces many PLAIN pages inside one chunk
+        pq.write_table(
+            tbl,
+            path,
+            data_page_size=256,
+            use_dictionary=False,
+            compression="none",
+        )
+        # sanity: a single row group holding many pages
+        assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 1)
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 10000)
-    var b = t.to_batches()[0].copy()
-    ref a = b.columns[0].copy().as_int64()
-    assert_equal(a[0].value(), 0)
-    assert_equal(a[5000].value(), 5000)
-    assert_equal(a[9999].value(), 9999)
-    remove(path)
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 10000)
+        var b = t.to_batches()[0].copy()
+        ref a = b.columns[0].copy().as_int64()
+        assert_equal(a[0].value(), 0)
+        assert_equal(a[5000].value(), 5000)
+        assert_equal(a[9999].value(), 9999)
 
 
 def test_many_pages_dict_string() raises:
@@ -428,18 +433,22 @@ def test_many_pages_dict_string() raises:
     # low cardinality -> dictionary-encoded data pages, split across many pages
     var colors = np.array(Python.list("red", "green", "blue"))
     var tbl = pa.table(Python.dict(s=pa.array(colors[np.arange(6000) % 3])))
-    var path = String("/tmp/marrow_pages_dict.parquet")
-    pq.write_table(
-        tbl, path, data_page_size=128, use_dictionary=True, compression="snappy"
-    )
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 6000)
-    var b = t.to_batches()[0].copy()
-    ref s = b.columns[0].copy().as_string()
-    assert_equal(String(s[0]), "red")
-    assert_equal(String(s[3001]), "green")  # 3001 % 3 == 1
-    assert_equal(String(s[5999]), "blue")  # 5999 % 3 == 2
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pages_dict.parquet")
+        pq.write_table(
+            tbl,
+            path,
+            data_page_size=128,
+            use_dictionary=True,
+            compression="snappy",
+        )
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 6000)
+        var b = t.to_batches()[0].copy()
+        ref s = b.columns[0].copy().as_string()
+        assert_equal(String(s[0]), "red")
+        assert_equal(String(s[3001]), "green")  # 3001 % 3 == 1
+        assert_equal(String(s[5999]), "blue")  # 5999 % 3 == 2
 
 
 def test_many_pages_string_with_nulls() raises:
@@ -452,23 +461,27 @@ def test_many_pages_string_with_nulls() raises:
     var tbl = pa.table(
         Python.dict(s=pa.array(vals, mask=(idx % 4 == 0), type=pa.string()))
     )
-    var path = String("/tmp/marrow_pages_strnull.parquet")
-    pq.write_table(
-        tbl, path, data_page_size=200, use_dictionary=False, compression="none"
-    )
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 4000)
-    var total_nulls = 0
-    for ref bat in t.to_batches():
-        total_nulls += bat.columns[0].copy().as_string().null_count()
-    assert_equal(total_nulls, 1000)  # i%4==0 over [0,4000)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pages_strnull.parquet")
+        pq.write_table(
+            tbl,
+            path,
+            data_page_size=200,
+            use_dictionary=False,
+            compression="none",
+        )
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 4000)
+        var total_nulls = 0
+        for ref bat in t.to_batches():
+            total_nulls += bat.columns[0].copy().as_string().null_count()
+        assert_equal(total_nulls, 1000)  # i%4==0 over [0,4000)
 
-    var b = t.to_batches()[0].copy()
-    ref s = b.columns[0].copy().as_string()
-    assert_false(s.is_valid(0))
-    assert_equal(String(s[1]), "v1")
-    assert_equal(String(s[3999]), "v3999")
-    remove(path)
+        var b = t.to_batches()[0].copy()
+        ref s = b.columns[0].copy().as_string()
+        assert_false(s.is_valid(0))
+        assert_equal(String(s[1]), "v1")
+        assert_equal(String(s[3999]), "v3999")
 
 
 # ---------------------------------------------------------------------------
@@ -476,215 +489,243 @@ def test_many_pages_string_with_nulls() raises:
 # ---------------------------------------------------------------------------
 
 
-def _read(want: PythonObject, compression: String = "snappy") raises -> Table:
-    """Write a PyArrow table to a file and read it back through marrow."""
+def _read(
+    dir: String, want: PythonObject, compression: String = "snappy"
+) raises -> Table:
+    """Write a PyArrow table into `dir` and read it back through marrow."""
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_values.parquet")
+    var path = join(dir, "marrow_values.parquet")
     pq.write_table(want, path, compression=compression)
     var t = read_table(path)
-    remove(path)
     return t^
 
 
 def test_all_null_int64() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _read(pa.table(Python.dict(x=pa.nulls(4, type=pa.int64()))))
-    assert_equal(t.num_rows(), 4)
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref a = c.as_int64()
-    assert_equal(a.null_count(), 4)
-    assert_false(a.is_valid(0))
+    with ScratchDir() as dir:
+        var t = _read(
+            dir, pa.table(Python.dict(x=pa.nulls(4, type=pa.int64())))
+        )
+        assert_equal(t.num_rows(), 4)
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref a = c.as_int64()
+        assert_equal(a.null_count(), 4)
+        assert_false(a.is_valid(0))
 
 
 def test_all_null_string() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _read(pa.table(Python.dict(s=pa.nulls(3, type=pa.string()))))
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    assert_equal(c.as_string().null_count(), 3)
+    with ScratchDir() as dir:
+        var t = _read(
+            dir, pa.table(Python.dict(s=pa.nulls(3, type=pa.string())))
+        )
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        assert_equal(c.as_string().null_count(), 3)
 
 
 def test_single_row() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                i=pa.array(Python.list(42), type=pa.int64()),
-                s=pa.array(Python.list("solo")),
-            )
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    i=pa.array(Python.list(42), type=pa.int64()),
+                    s=pa.array(Python.list("solo")),
+                )
+            ),
         )
-    )
-    assert_equal(t.num_rows(), 1)
-    var b = t.to_batches()[0].copy()
-    var ci = b.columns[0].copy()
-    var cs = b.columns[1].copy()
-    assert_equal(ci.as_int64()[0].value(), 42)
-    assert_equal(String(cs.as_string()[0]), "solo")
+        assert_equal(t.num_rows(), 1)
+        var b = t.to_batches()[0].copy()
+        var ci = b.columns[0].copy()
+        var cs = b.columns[1].copy()
+        assert_equal(ci.as_int64()[0].value(), 42)
+        assert_equal(String(cs.as_string()[0]), "solo")
 
 
 def test_int64_extremes() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                x=pa.array(
-                    Python.list(
-                        Int64(-9223372036854775808),
-                        Int64(9223372036854775807),
-                        Int64(0),
-                    ),
-                    type=pa.int64(),
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    x=pa.array(
+                        Python.list(
+                            Int64(-9223372036854775808),
+                            Int64(9223372036854775807),
+                            Int64(0),
+                        ),
+                        type=pa.int64(),
+                    )
                 )
-            )
+            ),
         )
-    )
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref a = c.as_int64()
-    assert_equal(a[0].value(), Int64(-9223372036854775808))
-    assert_equal(a[1].value(), Int64(9223372036854775807))
-    assert_equal(a[2].value(), Int64(0))
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref a = c.as_int64()
+        assert_equal(a[0].value(), Int64(-9223372036854775808))
+        assert_equal(a[1].value(), Int64(9223372036854775807))
+        assert_equal(a[2].value(), Int64(0))
 
 
 def test_uint64_max() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                x=pa.array(
-                    Python.list(UInt64(0), UInt64(18446744073709551615)),
-                    type=pa.uint64(),
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    x=pa.array(
+                        Python.list(UInt64(0), UInt64(18446744073709551615)),
+                        type=pa.uint64(),
+                    )
                 )
-            )
+            ),
         )
-    )
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref a = c.as_uint64()
-    assert_equal(a[0].value(), UInt64(0))
-    assert_equal(a[1].value(), UInt64(18446744073709551615))
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref a = c.as_uint64()
+        assert_equal(a[0].value(), UInt64(0))
+        assert_equal(a[1].value(), UInt64(18446744073709551615))
 
 
 def test_int32_extremes() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                x=pa.array(
-                    Python.list(Int32(-2147483648), Int32(2147483647)),
-                    type=pa.int32(),
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    x=pa.array(
+                        Python.list(Int32(-2147483648), Int32(2147483647)),
+                        type=pa.int32(),
+                    )
                 )
-            )
+            ),
         )
-    )
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref a = c.as_int32()
-    assert_equal(a[0].value(), Int32(-2147483648))
-    assert_equal(a[1].value(), Int32(2147483647))
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref a = c.as_int32()
+        assert_equal(a[0].value(), Int32(-2147483648))
+        assert_equal(a[1].value(), Int32(2147483647))
 
 
 def test_float64_special() raises:
     var pa = Python.import_module("pyarrow")
     var m = Python.import_module("math")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                f=pa.array(
-                    Python.list(m.nan, m.inf, -m.inf, 0.0, 1.5),
-                    type=pa.float64(),
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    f=pa.array(
+                        Python.list(m.nan, m.inf, -m.inf, 0.0, 1.5),
+                        type=pa.float64(),
+                    )
                 )
-            )
-        ),
-        "none",
-    )
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref f = c.as_float64()
-    assert_true(isnan(f[0].value()))
-    assert_true(isinf(f[1].value()) and f[1].value() > 0)
-    assert_true(isinf(f[2].value()) and f[2].value() < 0)
-    assert_true(f[3].value() == 0.0)
-    assert_true(f[4].value() == 1.5)
+            ),
+            "none",
+        )
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref f = c.as_float64()
+        assert_true(isnan(f[0].value()))
+        assert_true(isinf(f[1].value()) and f[1].value() > 0)
+        assert_true(isinf(f[2].value()) and f[2].value() < 0)
+        assert_true(f[3].value() == 0.0)
+        assert_true(f[4].value() == 1.5)
 
 
 def test_float32_special() raises:
     var pa = Python.import_module("pyarrow")
     var m = Python.import_module("math")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                f=pa.array(
-                    Python.list(m.nan, m.inf, -m.inf, -2.5),
-                    type=pa.float32(),
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    f=pa.array(
+                        Python.list(m.nan, m.inf, -m.inf, -2.5),
+                        type=pa.float32(),
+                    )
                 )
-            )
-        ),
-        "zstd",
-    )
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref f = c.as_float32()
-    assert_true(isnan(f[0].value()))
-    assert_true(isinf(f[1].value()) and f[1].value() > 0)
-    assert_true(isinf(f[2].value()) and f[2].value() < 0)
-    assert_true(f[3].value() == -2.5)
+            ),
+            "zstd",
+        )
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref f = c.as_float32()
+        assert_true(isnan(f[0].value()))
+        assert_true(isinf(f[1].value()) and f[1].value() > 0)
+        assert_true(isinf(f[2].value()) and f[2].value() < 0)
+        assert_true(f[3].value() == -2.5)
 
 
 def test_string_edge_cases() raises:
     # empty, ascii, multibyte utf-8, a long value (> a page-ish size), null
     var pa = Python.import_module("pyarrow")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                s=pa.array(
-                    Python.list(
-                        "",
-                        "a",
-                        "héllo 世界",
-                        Python.str("x") * 5000,
-                        Python.none(),
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    s=pa.array(
+                        Python.list(
+                            "",
+                            "a",
+                            "héllo 世界",
+                            Python.str("x") * 5000,
+                            Python.none(),
+                        )
                     )
                 )
-            )
+            ),
         )
-    )
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref s = c.as_string()
-    assert_equal(s.null_count(), 1)
-    assert_equal(String(s[0]), "")
-    assert_equal(String(s[1]), "a")
-    assert_equal(String(s[2]), "héllo 世界")
-    assert_equal(String(s[3]).byte_length(), 5000)
-    assert_false(s.is_valid(4))
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref s = c.as_string()
+        assert_equal(s.null_count(), 1)
+        assert_equal(String(s[0]), "")
+        assert_equal(String(s[1]), "a")
+        assert_equal(String(s[2]), "héllo 世界")
+        assert_equal(String(s[3]).byte_length(), 5000)
+        assert_false(s.is_valid(4))
 
 
 def test_bool_with_nulls() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _read(
-        pa.table(
-            Python.dict(
-                b=pa.array(
-                    Python.list(
-                        True, Python.none(), False, Python.none(), True, False
-                    ),
-                    type=pa.bool_(),
+    with ScratchDir() as dir:
+        var t = _read(
+            dir,
+            pa.table(
+                Python.dict(
+                    b=pa.array(
+                        Python.list(
+                            True,
+                            Python.none(),
+                            False,
+                            Python.none(),
+                            True,
+                            False,
+                        ),
+                        type=pa.bool_(),
+                    )
                 )
-            )
-        ),
-        "none",
-    )
-    var bat = t.to_batches()[0].copy()
-    var c = bat.columns[0].copy()
-    ref b = c.as_bool()
-    assert_equal(b.null_count(), 2)
-    assert_true(b[0].value())
-    assert_false(b.is_valid(1))
-    assert_false(b[2].value())
-    assert_true(b[4].value())
-    assert_false(b[5].value())
+            ),
+            "none",
+        )
+        var bat = t.to_batches()[0].copy()
+        var c = bat.columns[0].copy()
+        ref b = c.as_bool()
+        assert_equal(b.null_count(), 2)
+        assert_true(b[0].value())
+        assert_false(b.is_valid(1))
+        assert_false(b[2].value())
+        assert_true(b[4].value())
+        assert_false(b[5].value())
 
 
 def test_dictionary_encoded_read() raises:
@@ -694,21 +735,21 @@ def test_dictionary_encoded_read() raises:
     # 400 rows over 3 distinct strings -> pyarrow dictionary-encodes by default
     var colors = np.array(Python.list("red", "green", "blue"))
     var t_src = pa.table(Python.dict(s=pa.array(colors[np.arange(400) % 3])))
-    var path = String("/tmp/marrow_dict.parquet")
-    pq.write_table(t_src, path, use_dictionary=True, compression="snappy")
-    var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.str("RLE_DICTIONARY") in enc))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_dict.parquet")
+        pq.write_table(t_src, path, use_dictionary=True, compression="snappy")
+        var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
+        assert_true(Bool(Python.str("RLE_DICTIONARY") in enc))
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 400)
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref s = c.as_string()
-    assert_equal(String(s[0]), "red")  # 0 % 3 == 0
-    assert_equal(String(s[1]), "green")
-    assert_equal(String(s[2]), "blue")
-    assert_equal(String(s[399]), "red")  # 399 % 3 == 0
-    remove(path)
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 400)
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref s = c.as_string()
+        assert_equal(String(s[0]), "red")  # 0 % 3 == 0
+        assert_equal(String(s[1]), "green")
+        assert_equal(String(s[2]), "blue")
+        assert_equal(String(s[399]), "red")  # 399 % 3 == 0
 
 
 def test_wide_table() raises:
@@ -721,17 +762,17 @@ def test_wide_table() raises:
     for j in range(40):
         cols[Python.str("c") + String(j)] = pa.array(rows + j, type=pa.int64())
     var t_src = pa.table(cols)
-    var path = String("/tmp/marrow_wide.parquet")
-    pq.write_table(t_src, path, compression="snappy")
-    var t = read_table(path)
-    assert_equal(t.num_columns(), 40)
-    assert_equal(t.num_rows(), 5)
-    var b = t.to_batches()[0].copy()
-    var c0 = b.columns[0].copy()
-    var c39 = b.columns[39].copy()
-    assert_equal(c0.as_int64()[3].value(), 300)  # i=3, j=0
-    assert_equal(c39.as_int64()[4].value(), 439)  # i=4, j=39
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_wide.parquet")
+        pq.write_table(t_src, path, compression="snappy")
+        var t = read_table(path)
+        assert_equal(t.num_columns(), 40)
+        assert_equal(t.num_rows(), 5)
+        var b = t.to_batches()[0].copy()
+        var c0 = b.columns[0].copy()
+        var c39 = b.columns[39].copy()
+        assert_equal(c0.as_int64()[3].value(), 300)  # i=3, j=0
+        assert_equal(c39.as_int64()[4].value(), 439)  # i=4, j=39
 
 
 def test_nulls_across_row_groups() raises:
@@ -743,28 +784,28 @@ def test_nulls_across_row_groups() raises:
     var t_src = pa.table(
         Python.dict(x=pa.array(idx, mask=(idx % 3 == 0), type=pa.int64()))
     )
-    var path = String("/tmp/marrow_manyrg.parquet")
-    pq.write_table(t_src, path, row_group_size=500, compression="snappy")
-    assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 10)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_manyrg.parquet")
+        pq.write_table(t_src, path, row_group_size=500, compression="snappy")
+        assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 10)
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 5000)
-    var total_nulls = 0
-    var checked = 0
-    for ref bat in t.to_batches():
-        var c = bat.columns[0].copy()
-        total_nulls += c.as_int64().null_count()
-        checked += c.length()
-    assert_equal(checked, 5000)
-    assert_equal(total_nulls, 1667)  # count of i in [0,5000) with i%3==0
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 5000)
+        var total_nulls = 0
+        var checked = 0
+        for ref bat in t.to_batches():
+            var c = bat.columns[0].copy()
+            total_nulls += c.as_int64().null_count()
+            checked += c.length()
+        assert_equal(checked, 5000)
+        assert_equal(total_nulls, 1667)  # count of i in [0,5000) with i%3==0
 
-    var b0 = t.to_batches()[0].copy()
-    var c0 = b0.columns[0].copy()
-    ref first = c0.as_int64()
-    assert_false(first.is_valid(0))  # i=0 -> null
-    assert_true(first.is_valid(1))
-    assert_equal(first[1].value(), 1)
-    remove(path)
+        var b0 = t.to_batches()[0].copy()
+        var c0 = b0.columns[0].copy()
+        ref first = c0.as_int64()
+        assert_false(first.is_valid(0))  # i=0 -> null
+        assert_true(first.is_valid(1))
+        assert_equal(first[1].value(), 1)
 
 
 def test_date32_negative() raises:
@@ -783,17 +824,17 @@ def test_date32_negative() raises:
             )
         )
     )
-    var path = String("/tmp/marrow_date.parquet")
-    pq.write_table(t_src, path, compression="none")
-    var t = read_table(path)
-    assert_true(t.schema.field(index=0).dtype.is_date32())
-    var b = t.to_batches()[0].copy()
-    var c = b.columns[0].copy()
-    ref days = c.as_date32()
-    assert_true(days[0].value() < 0)  # pre-epoch
-    assert_equal(days[1].value(), Int32(0))  # epoch
-    assert_true(days[2].value() > 0)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_date.parquet")
+        pq.write_table(t_src, path, compression="none")
+        var t = read_table(path)
+        assert_true(t.schema.field(index=0).dtype.is_date32())
+        var b = t.to_batches()[0].copy()
+        var c = b.columns[0].copy()
+        ref days = c.as_date32()
+        assert_true(days[0].value() < 0)  # pre-epoch
+        assert_equal(days[1].value(), Int32(0))  # epoch
+        assert_true(days[2].value() > 0)
 
 
 def test_parquet_file() raises:
@@ -807,36 +848,36 @@ def test_parquet_file() raises:
             b=pa.array(Python.list("w", "x", "y", "z")),
         )
     )
-    var path = String("/tmp/marrow_rd_pqfile.parquet")
-    pq.write_table(tbl, path, row_group_size=2)  # -> 2 row groups
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_rd_pqfile.parquet")
+        pq.write_table(tbl, path, row_group_size=2)  # -> 2 row groups
 
-    var f = ParquetFile(path)
-    assert_equal(f.num_rows(), 4)
-    assert_equal(f.num_row_groups(), 2)
-    assert_equal(f.schema().num_fields(), 2)
+        var f = ParquetFile(path)
+        assert_equal(f.num_rows(), 4)
+        assert_equal(f.num_row_groups(), 2)
+        assert_equal(f.schema().num_fields(), 2)
 
-    # metadata + statistics come off the same opened file (no re-mmap)
-    assert_equal(f.metadata().num_rows, 4)
-    var stats = f.statistics()
-    assert_equal(len(stats), 2)  # 2 row groups
-    assert_equal(len(stats[0]), 2)  # 2 leaf columns
+        # metadata + statistics come off the same opened file (no re-mmap)
+        assert_equal(f.metadata().num_rows, 4)
+        var stats = f.statistics()
+        assert_equal(len(stats), 2)  # 2 row groups
+        assert_equal(len(stats[0]), 2)  # 2 leaf columns
 
-    # full read
-    var t = f.read()
-    assert_equal(t.num_rows(), 4)
-    assert_equal(t.num_columns(), 2)
+        # full read
+        var t = f.read()
+        assert_equal(t.num_rows(), 4)
+        assert_equal(t.num_columns(), 2)
 
-    # column projection through the same object
-    var cols: List[String] = [String("b")]
-    var proj = f.read(columns=cols^)
-    assert_equal(proj.num_columns(), 1)
-    assert_equal(proj.num_rows(), 4)
+        # column projection through the same object
+        var cols: List[String] = [String("b")]
+        var proj = f.read(columns=cols^)
+        assert_equal(proj.num_columns(), 1)
+        assert_equal(proj.num_rows(), 4)
 
-    # single row group
-    var rgs: List[Int] = [0]
-    var rg0 = f.read(row_groups=rgs^)
-    assert_equal(rg0.num_rows(), 2)
-    remove(path)
+        # single row group
+        var rgs: List[Int] = [0]
+        var rg0 = f.read(row_groups=rgs^)
+        assert_equal(rg0.num_rows(), 2)
 
 
 def test_read_rle_bool_v2() raises:
@@ -850,18 +891,18 @@ def test_read_rle_bool_v2() raises:
         else:
             vals.append(i % 2 == 0)
     var tbl = pa.table(Python.dict(b=pa.array(vals, type=pa.bool_())))
-    var path = String("/tmp/marrow_rle_bool.parquet")
-    pq.write_table(tbl, path, data_page_version="2.0", use_dictionary=False)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_rle_bool.parquet")
+        pq.write_table(tbl, path, data_page_version="2.0", use_dictionary=False)
 
-    var t = read_table(path)
-    var b = t.to_batches()[0].copy()
-    var cb = b.columns[0].copy()
-    ref col = cb.as_bool()
-    assert_equal(col.null_count(), 500 // 9 + 1)
-    assert_true(col[2].value())  # i=2 -> True
-    assert_false(col[1].value())  # i=1 -> False
-    assert_false(col.is_valid(0))  # i=0 -> null
-    remove(path)
+        var t = read_table(path)
+        var b = t.to_batches()[0].copy()
+        var cb = b.columns[0].copy()
+        ref col = cb.as_bool()
+        assert_equal(col.null_count(), 500 // 9 + 1)
+        assert_true(col[2].value())  # i=2 -> True
+        assert_false(col[1].value())  # i=1 -> False
+        assert_false(col.is_valid(0))  # i=0 -> null
 
 
 def test_read_int96_timestamp() raises:
@@ -875,27 +916,27 @@ def test_read_int96_timestamp() raises:
         else:
             ts.append(i * 1000000000 + 500)
     var tbl = pa.table(Python.dict(t=pa.array(ts, type=pa.timestamp("ns"))))
-    var path = String("/tmp/marrow_int96.parquet")
-    pq.write_table(tbl, path, use_deprecated_int96_timestamps=True)
-    # confirm it is really INT96 on disk
-    assert_equal(
-        String(
-            py=pq.ParquetFile(path)
-            .metadata.row_group(0)
-            .column(0)
-            .physical_type
-        ),
-        "INT96",
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_int96.parquet")
+        pq.write_table(tbl, path, use_deprecated_int96_timestamps=True)
+        # confirm it is really INT96 on disk
+        assert_equal(
+            String(
+                py=pq.ParquetFile(path)
+                .metadata.row_group(0)
+                .column(0)
+                .physical_type
+            ),
+            "INT96",
+        )
 
-    var t = read_table(path)
-    var b = t.to_batches()[0].copy()
-    var cts = b.columns[0].copy()
-    ref col = cts.as_timestamp()
-    assert_false(col.is_valid(0))  # i=0 -> null (0 % 13 == 0)
-    assert_equal(col[1].value(), 1000000000 + 500)
-    assert_equal(col[2].value(), 2000000000 + 500)
-    remove(path)
+        var t = read_table(path)
+        var b = t.to_batches()[0].copy()
+        var cts = b.columns[0].copy()
+        ref col = cts.as_timestamp()
+        assert_false(col.is_valid(0))  # i=0 -> null (0 % 13 == 0)
+        assert_equal(col[1].value(), 1000000000 + 500)
+        assert_equal(col[2].value(), 2000000000 + 500)
 
 
 def test_read_float16() raises:
@@ -910,27 +951,27 @@ def test_read_float16() raises:
     var tbl = pa.table(
         Python.dict(h=pa.array(vals, mask=mask, type=pa.float16()))
     )
-    var path = String("/tmp/marrow_read_f16.parquet")
-    pq.write_table(tbl, path, use_dictionary=False)
-    assert_equal(
-        String(
-            py=pq.ParquetFile(path)
-            .metadata.row_group(0)
-            .column(0)
-            .physical_type
-        ),
-        "FIXED_LEN_BYTE_ARRAY",
-    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_read_f16.parquet")
+        pq.write_table(tbl, path, use_dictionary=False)
+        assert_equal(
+            String(
+                py=pq.ParquetFile(path)
+                .metadata.row_group(0)
+                .column(0)
+                .physical_type
+            ),
+            "FIXED_LEN_BYTE_ARRAY",
+        )
 
-    var t = read_table(path)
-    var b = t.to_batches()[0].copy()
-    var ch = b.columns[0].copy()
-    ref col = ch.as_float16()
-    assert_true(col[0].value() == Float16(1.5))
-    assert_true(col[1].value() == Float16(-2.0))
-    assert_false(col.is_valid(2))  # masked
-    assert_true(col[4].value() == Float16(100.0))
-    remove(path)
+        var t = read_table(path)
+        var b = t.to_batches()[0].copy()
+        var ch = b.columns[0].copy()
+        ref col = ch.as_float16()
+        assert_true(col[0].value() == Float16(1.5))
+        assert_true(col[1].value() == Float16(-2.0))
+        assert_false(col.is_valid(2))  # masked
+        assert_true(col[4].value() == Float16(100.0))
 
 
 def test_read_from_byte_source() raises:
@@ -947,26 +988,26 @@ def test_read_from_byte_source() raises:
             ),
         )
     )
-    var path = String("/tmp/marrow_rd_byte_source.parquet")
-    pq.write_table(tbl, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_rd_byte_source.parquet")
+        pq.write_table(tbl, path, compression="snappy")
 
-    # Build the file from an explicit ByteSource instead of a path.
-    var pf = ParquetFile(BufferSource(path))
-    assert_equal(pf.num_rows(), 5)
-    assert_equal(pf.num_row_groups(), 1)
+        # Build the file from an explicit ByteSource instead of a path.
+        var pf = ParquetFile(BufferSource(path))
+        assert_equal(pf.num_rows(), 5)
+        assert_equal(pf.num_row_groups(), 1)
 
-    var t = pf.read()
-    assert_equal(t.num_rows(), 5)
-    assert_equal(t.num_columns(), 2)
-    var b = t.to_batches()[0].copy()
+        var t = pf.read()
+        assert_equal(t.num_rows(), 5)
+        assert_equal(t.num_columns(), 2)
+        var b = t.to_batches()[0].copy()
 
-    var ci = b.columns[0].copy()
-    ref col_i = ci.as_int64()
-    assert_equal(col_i[0].value(), 1)
-    assert_equal(col_i[4].value(), 5)
+        var ci = b.columns[0].copy()
+        ref col_i = ci.as_int64()
+        assert_equal(col_i[0].value(), 1)
+        assert_equal(col_i[4].value(), 5)
 
-    var cs = b.columns[1].copy()
-    ref col_s = cs.as_string()
-    assert_equal(String(col_s[0]), "apple")
-    assert_equal(String(col_s[4]), "elder")
-    remove(path)
+        var cs = b.columns[1].copy()
+        ref col_s = cs.as_string()
+        assert_equal(String(col_s[0]), "apple")
+        assert_equal(String(col_s[4]), "elder")

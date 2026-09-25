@@ -1,6 +1,7 @@
 from std.testing import assert_equal, assert_true
 from std.python import Python
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet import read_table, write_table
 from ...tabular import Table, RecordBatch
 from ...arrays import DynArray, PrimitiveArray, StringArray
@@ -26,33 +27,32 @@ def _make_table() raises -> Table:
 
 def test_write_read_roundtrip() raises:
     var t = _make_table()
-    var path = "/tmp/marrow_test_roundtrip.parquet"
-    write_table(t, path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_test_roundtrip.parquet")
+        write_table(t, path)
 
-    var t2 = read_table(path)
-    assert_equal(t2.num_rows(), 3)
-    assert_equal(t2.num_columns(), 3)
+        var t2 = read_table(path)
+        assert_equal(t2.num_rows(), 3)
+        assert_equal(t2.num_columns(), 3)
 
-    var names = t2.column_names()
-    assert_equal(names[0], "x")
-    assert_equal(names[1], "y")
-    assert_equal(names[2], "z")
+        var names = t2.column_names()
+        assert_equal(names[0], "x")
+        assert_equal(names[1], "y")
+        assert_equal(names[2], "z")
 
-    var batches = t2.to_batches()
-    assert_true(len(batches) >= 1)
-    var batch = batches[0].copy()
+        var batches = t2.to_batches()
+        assert_true(len(batches) >= 1)
+        var batch = batches[0].copy()
 
-    var tmp_col_x = batch.columns[0].copy()
-    ref col_x = tmp_col_x.as_int64()
-    assert_equal(col_x[0].value(), 1)
-    assert_equal(col_x[2].value(), 3)
+        var tmp_col_x = batch.columns[0].copy()
+        ref col_x = tmp_col_x.as_int64()
+        assert_equal(col_x[0].value(), 1)
+        assert_equal(col_x[2].value(), 3)
 
-    var tmp_col_z = batch.columns[2].copy()
-    ref col_z = tmp_col_z.as_string()
-    assert_equal(String(col_z[0]), "a")
-    assert_equal(String(col_z[2]), "c")
-
-    remove(path)
+        var tmp_col_z = batch.columns[2].copy()
+        ref col_z = tmp_col_z.as_string()
+        assert_equal(String(col_z[0]), "a")
+        assert_equal(String(col_z[2]), "c")
 
 
 def test_read_pyarrow_written() raises:
@@ -66,31 +66,30 @@ def test_read_pyarrow_written() raises:
             b=Python.list("hello", "world"),
         )
     )
-    var path = "/tmp/marrow_test_pa_written.parquet"
-    pq.write_table(pa_table, path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_test_pa_written.parquet")
+        pq.write_table(pa_table, path)
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 2)
-    assert_equal(t.num_columns(), 2)
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 2)
+        assert_equal(t.num_columns(), 2)
 
-    var names = t.column_names()
-    assert_equal(names[0], "a")
-    assert_equal(names[1], "b")
+        var names = t.column_names()
+        assert_equal(names[0], "a")
+        assert_equal(names[1], "b")
 
-    var batches = t.to_batches()
-    var batch = batches[0].copy()
+        var batches = t.to_batches()
+        var batch = batches[0].copy()
 
-    var tmp_col_a = batch.columns[0].copy()
-    ref col_a = tmp_col_a.as_int64()
-    assert_equal(col_a[0].value(), 10)
-    assert_equal(col_a[1].value(), 20)
+        var tmp_col_a = batch.columns[0].copy()
+        ref col_a = tmp_col_a.as_int64()
+        assert_equal(col_a[0].value(), 10)
+        assert_equal(col_a[1].value(), 20)
 
-    var tmp_col_b = batch.columns[1].copy()
-    ref col_b = tmp_col_b.as_string()
-    assert_equal(String(col_b[0]), "hello")
-    assert_equal(String(col_b[1]), "world")
-
-    remove(path)
+        var tmp_col_b = batch.columns[1].copy()
+        ref col_b = tmp_col_b.as_string()
+        assert_equal(String(col_b[0]), "hello")
+        assert_equal(String(col_b[1]), "world")
 
 
 def test_write_readable_by_pyarrow() raises:
@@ -99,13 +98,12 @@ def test_write_readable_by_pyarrow() raises:
     var pq = Python.import_module("pyarrow.parquet")
 
     var t = _make_table()
-    var path = "/tmp/marrow_test_write_pa.parquet"
-    write_table(t, path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_test_write_pa.parquet")
+        write_table(t, path)
 
-    var pa_table = pq.read_table(path)
-    assert_equal(Int(py=pa_table.num_rows), 3)
-    assert_equal(Int(py=pa_table.num_columns), 3)
-    assert_equal(Int(py=pa_table.column("x").to_pylist()[0]), 1)
-    assert_equal(String(py=pa_table.column("z").to_pylist()[0]), "a")
-
-    remove(path)
+        var pa_table = pq.read_table(path)
+        assert_equal(Int(py=pa_table.num_rows), 3)
+        assert_equal(Int(py=pa_table.num_columns), 3)
+        assert_equal(Int(py=pa_table.column("x").to_pylist()[0]), 1)
+        assert_equal(String(py=pa_table.column("z").to_pylist()[0]), "a")

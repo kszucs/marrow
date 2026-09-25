@@ -8,7 +8,8 @@ own read of the same file.
 
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet import (
     ParquetFile,
     read_table,
@@ -47,46 +48,45 @@ def _pa_struct_table() raises -> PythonObject:
 
 def test_read_struct() raises:
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_nested_read.parquet")
-    pq.write_table(_pa_struct_table(), path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nested_read.parquet")
+        pq.write_table(_pa_struct_table(), path, compression="snappy")
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 3)
-    assert_equal(t.num_columns(), 2)
-    assert_equal(t.column_names()[0], "s")
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 3)
+        assert_equal(t.num_columns(), 2)
+        assert_equal(t.column_names()[0], "s")
 
-    var b = t.to_batches()[0].copy()
-    var sc = b.columns[0].copy()
-    ref st = sc.as_struct()
-    assert_equal(len(st.children), 2)
-    var ca = st.children[0].copy()
-    ref col_a = ca.as_int64()
-    assert_equal(col_a[0].value(), 1)
-    assert_equal(col_a[2].value(), 3)
-    var cx = st.children[1].copy()
-    ref col_x = cx.as_float64()
-    assert_true(col_x[1].value() == 2.5)
-    remove(path)
+        var b = t.to_batches()[0].copy()
+        var sc = b.columns[0].copy()
+        ref st = sc.as_struct()
+        assert_equal(len(st.children), 2)
+        var ca = st.children[0].copy()
+        ref col_a = ca.as_int64()
+        assert_equal(col_a[0].value(), 1)
+        assert_equal(col_a[2].value(), 3)
+        var cx = st.children[1].copy()
+        ref col_x = cx.as_float64()
+        assert_true(col_x[1].value() == 2.5)
 
 
 def test_roundtrip_struct_via_pyarrow() raises:
     var pq = Python.import_module("pyarrow.parquet")
-    var src = String("/tmp/marrow_nested_src.parquet")
-    pq.write_table(_pa_struct_table(), src, compression="none")
+    with ScratchDir() as dir:
+        var src = join(dir, "marrow_nested_src.parquet")
+        pq.write_table(_pa_struct_table(), src, compression="none")
 
-    # marrow read -> marrow write -> pyarrow read
-    var t = read_table(src)
-    var dst = String("/tmp/marrow_nested_dst.parquet")
-    write_table(t, dst)
+        # marrow read -> marrow write -> pyarrow read
+        var t = read_table(src)
+        var dst = join(dir, "marrow_nested_dst.parquet")
+        write_table(t, dst)
 
-    var back = pq.read_table(dst)
-    assert_equal(Int(py=back.num_rows), 3)
-    var s_col = back.column("s").to_pylist()
-    assert_equal(Int(py=s_col[0]["a"]), 1)
-    assert_true(Float64(py=s_col[2]["x"]) == 3.5)
-    assert_equal(Int(py=back.column("k").to_pylist()[1]), 20)
-    remove(src)
-    remove(dst)
+        var back = pq.read_table(dst)
+        assert_equal(Int(py=back.num_rows), 3)
+        var s_col = back.column("s").to_pylist()
+        assert_equal(Int(py=s_col[0]["a"]), 1)
+        assert_true(Float64(py=s_col[2]["x"]) == 3.5)
+        assert_equal(Int(py=back.column("k").to_pylist()[1]), 20)
 
 
 # ---------------------------------------------------------------------------
@@ -110,22 +110,22 @@ def test_read_list_int() raises:
             ),
         )
     )
-    var path = String("/tmp/marrow_list_int.parquet")
-    pq.write_table(tbl, path, compression="snappy")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_list_int.parquet")
+        pq.write_table(tbl, path, compression="snappy")
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 4)
-    var b = t.to_batches()[0].copy()
-    var col = b.columns[0].copy()
-    ref lst = col.as_list()
-    # offsets: [0,3,3,5,6]
-    assert_equal(lst[0].value().length(), 3)
-    assert_equal(lst[1].value().length(), 0)  # empty list
-    assert_equal(lst[2].value().length(), 2)
-    var elem0 = lst[0].value()
-    assert_equal(elem0.as_int64()[0].value(), 1)
-    assert_equal(elem0.as_int64()[2].value(), 3)
-    remove(path)
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 4)
+        var b = t.to_batches()[0].copy()
+        var col = b.columns[0].copy()
+        ref lst = col.as_list()
+        # offsets: [0,3,3,5,6]
+        assert_equal(lst[0].value().length(), 3)
+        assert_equal(lst[1].value().length(), 0)  # empty list
+        assert_equal(lst[2].value().length(), 2)
+        var elem0 = lst[0].value()
+        assert_equal(elem0.as_int64()[0].value(), 1)
+        assert_equal(elem0.as_int64()[2].value(), 3)
 
 
 def test_read_list_string_with_nulls() raises:
@@ -143,21 +143,21 @@ def test_read_list_string_with_nulls() raises:
             ),
         )
     )
-    var path = String("/tmp/marrow_list_str.parquet")
-    pq.write_table(tbl, path, compression="none")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_list_str.parquet")
+        pq.write_table(tbl, path, compression="none")
 
-    var t = read_table(path)
-    assert_equal(t.num_rows(), 3)
-    var b = t.to_batches()[0].copy()
-    var col = b.columns[0].copy()
-    ref lst = col.as_list()
-    assert_true(lst.is_valid(0))
-    assert_false(lst.is_valid(1))  # null list
-    assert_true(lst.is_valid(2))
-    var e0 = lst[0].value()
-    assert_equal(String(e0.as_string()[0]), "a")
-    assert_equal(String(e0.as_string()[1]), "bb")
-    remove(path)
+        var t = read_table(path)
+        assert_equal(t.num_rows(), 3)
+        var b = t.to_batches()[0].copy()
+        var col = b.columns[0].copy()
+        ref lst = col.as_list()
+        assert_true(lst.is_valid(0))
+        assert_false(lst.is_valid(1))  # null list
+        assert_true(lst.is_valid(2))
+        var e0 = lst[0].value()
+        assert_equal(String(e0.as_string()[0]), "a")
+        assert_equal(String(e0.as_string()[1]), "bb")
 
 
 # ---------------------------------------------------------------------------
@@ -182,27 +182,27 @@ def _check(
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
     var want = pa.table(Python.dict(v=pa.array(data, type=dtype)))
-    var path = String("/tmp/marrow_nested.parquet")
-    if encoding != "":
-        pq.write_table(
-            want,
-            path,
-            compression=compression,
-            use_dictionary=False,
-            column_encoding=encoding,
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nested.parquet")
+        if encoding != "":
+            pq.write_table(
+                want,
+                path,
+                compression=compression,
+                use_dictionary=False,
+                column_encoding=encoding,
+            )
+        else:
+            pq.write_table(want, path, compression=compression)
+        # oracle is PyArrow's own read of the same file
+        var got = _to_pa(read_table(path))
+        assert_true(
+            Bool(
+                got.column(0).to_pylist()
+                == pq.read_table(path).column(0).to_pylist()
+            ),
+            "value mismatch",
         )
-    else:
-        pq.write_table(want, path, compression=compression)
-    # oracle is PyArrow's own read of the same file
-    var got = _to_pa(read_table(path))
-    assert_true(
-        Bool(
-            got.column(0).to_pylist()
-            == pq.read_table(path).column(0).to_pylist()
-        ),
-        "value mismatch",
-    )
-    remove(path)
 
 
 def _struct(*fields: PythonObject) raises -> PythonObject:
@@ -509,21 +509,25 @@ def test_list_across_many_pages() raises:
     var want = pa.table(
         Python.dict(v=pa.array(data, type=pa.list_(pa.int64())))
     )
-    var path = String("/tmp/marrow_nested_pages.parquet")
-    pq.write_table(
-        want, path, data_page_size=256, use_dictionary=False, compression="none"
-    )
-    assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 1)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nested_pages.parquet")
+        pq.write_table(
+            want,
+            path,
+            data_page_size=256,
+            use_dictionary=False,
+            compression="none",
+        )
+        assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 1)
 
-    var got = _to_pa(read_table(path))
-    assert_true(
-        Bool(
-            got.column(0).to_pylist()
-            == pq.read_table(path).column(0).to_pylist()
-        ),
-        "value mismatch",
-    )
-    remove(path)
+        var got = _to_pa(read_table(path))
+        assert_true(
+            Bool(
+                got.column(0).to_pylist()
+                == pq.read_table(path).column(0).to_pylist()
+            ),
+            "value mismatch",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -625,31 +629,31 @@ def test_page_split_nested() raises:
     var want = pa.table(
         Python.dict(l=pa.array(lists, type=pa.list_(pa.int64())))
     )
-    var path = String("/tmp/marrow_split_nested.parquet")
-    var t = CArrowArrayStream.from_pycapsule(
-        want.__arrow_c_stream__(Python.none())
-    ).to_table()
-    write_table(t, path, use_dictionary=False)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_split_nested.parquet")
+        var t = CArrowArrayStream.from_pycapsule(
+            want.__arrow_c_stream__(Python.none())
+        ).to_table()
+        write_table(t, path, use_dictionary=False)
 
-    # PyArrow reads every list back (proves per-page rep/def levels are valid)
-    assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
-    # marrow round-trips
-    var back = _to_pa(read_table(path))
-    assert_true(
-        Bool(
-            back.column(0)
-            .combine_chunks()
-            .equals(want.column(0).combine_chunks())
+        # PyArrow reads every list back (proves per-page rep/def levels are valid)
+        assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
+        # marrow round-trips
+        var back = _to_pa(read_table(path))
+        assert_true(
+            Bool(
+                back.column(0)
+                .combine_chunks()
+                .equals(want.column(0).combine_chunks())
+            )
         )
-    )
-    # >1 page, and the pages tile all 30 000 top-level rows
-    var pbs = ParquetFile(path).page_bounds()
-    assert_true(len(pbs[0][0]) > 1)
-    var total = 0
-    for p in range(len(pbs[0][0])):
-        total += pbs[0][0][p].copy().num_rows
-    assert_equal(total, 30000)
-    remove(path)
+        # >1 page, and the pages tile all 30 000 top-level rows
+        var pbs = ParquetFile(path).page_bounds()
+        assert_true(len(pbs[0][0]) > 1)
+        var total = 0
+        for p in range(len(pbs[0][0])):
+            total += pbs[0][0][p].copy().num_rows
+        assert_equal(total, 30000)
 
 
 def test_write_nullable_struct() raises:
@@ -673,22 +677,22 @@ def test_write_nullable_struct() raises:
     var t = CArrowArrayStream.from_pycapsule(
         want.__arrow_c_stream__(Python.none())
     ).to_table()
-    var path = String("/tmp/marrow_nullable_struct.parquet")
-    write_table(t, path, use_dictionary=False)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nullable_struct.parquet")
+        write_table(t, path, use_dictionary=False)
 
-    var back = pq.read_table(path)
-    # struct-level nulls preserved
-    assert_true(
-        Bool(
-            back.column(0).combine_chunks().is_valid().to_pylist()
-            == Python.list(True, False, True, False, True)
+        var back = pq.read_table(path)
+        # struct-level nulls preserved
+        assert_true(
+            Bool(
+                back.column(0).combine_chunks().is_valid().to_pylist()
+                == Python.list(True, False, True, False, True)
+            )
         )
-    )
-    # full value equality (incl. the child-null at row 2)
-    assert_true(Bool(back.column(0).equals(want.column(0))))
-    # marrow round-trips it too
-    assert_equal(read_table(path).num_rows(), 5)
-    remove(path)
+        # full value equality (incl. the child-null at row 2)
+        assert_true(Bool(back.column(0).equals(want.column(0))))
+        # marrow round-trips it too
+        assert_equal(read_table(path).num_rows(), 5)
 
 
 def test_list_float16() raises:

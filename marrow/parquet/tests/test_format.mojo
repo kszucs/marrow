@@ -4,7 +4,8 @@ footer / metadata parsing built on it."""
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python
 from std.pathlib import Path
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet.reader import ParquetFile, read_page_index
 from ...io import BufferSource
 from ...parquet.format import (
@@ -153,33 +154,32 @@ def _write_pyarrow(path: String, compression: String) raises:
 
 
 def test_read_footer_metadata() raises:
-    var path = String("/tmp/marrow_test_format.parquet")
-    _write_pyarrow(path, "snappy")
-    var data = Path(path).read_bytes()
-    var meta = FileMetaData.read_footer(Span(data))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_test_format.parquet")
+        _write_pyarrow(path, "snappy")
+        var data = Path(path).read_bytes()
+        var meta = FileMetaData.read_footer(Span(data))
 
-    assert_equal(meta.num_rows, 4)
-    assert_equal(len(meta.row_groups), 1)
-    # schema[0] is the root group; then one leaf per column
-    assert_equal(len(meta.schema), 4)
-    assert_equal(meta.schema[0].num_children, 3)
-    assert_equal(meta.schema[1].name, "x")
-    assert_true(meta.schema[1].type == PhysicalType.INT64)
-    assert_equal(meta.schema[2].name, "y")
-    assert_true(meta.schema[2].type == PhysicalType.DOUBLE)
-    assert_equal(meta.schema[3].name, "z")
-    assert_true(meta.schema[3].type == PhysicalType.BYTE_ARRAY)
-    # pyarrow marks value columns optional (nullable)
-    assert_true(meta.schema[1].repetition_type == Repetition.OPTIONAL)
+        assert_equal(meta.num_rows, 4)
+        assert_equal(len(meta.row_groups), 1)
+        # schema[0] is the root group; then one leaf per column
+        assert_equal(len(meta.schema), 4)
+        assert_equal(meta.schema[0].num_children, 3)
+        assert_equal(meta.schema[1].name, "x")
+        assert_true(meta.schema[1].type == PhysicalType.INT64)
+        assert_equal(meta.schema[2].name, "y")
+        assert_true(meta.schema[2].type == PhysicalType.DOUBLE)
+        assert_equal(meta.schema[3].name, "z")
+        assert_true(meta.schema[3].type == PhysicalType.BYTE_ARRAY)
+        # pyarrow marks value columns optional (nullable)
+        assert_true(meta.schema[1].repetition_type == Repetition.OPTIONAL)
 
-    ref rg = meta.row_groups[0]
-    assert_equal(len(rg.columns), 3)
-    assert_equal(rg.num_rows, 4)
-    assert_equal(rg.columns[0].meta_data.path_in_schema[0], "x")
-    assert_equal(rg.columns[0].meta_data.num_values, 4)
-    assert_true(rg.columns[0].meta_data.data_page_offset >= 4)
-
-    remove(path)
+        ref rg = meta.row_groups[0]
+        assert_equal(len(rg.columns), 3)
+        assert_equal(rg.num_rows, 4)
+        assert_equal(rg.columns[0].meta_data.path_in_schema[0], "x")
+        assert_equal(rg.columns[0].meta_data.num_values, 4)
+        assert_true(rg.columns[0].meta_data.data_page_offset >= 4)
 
 
 # ---------------------------------------------------------------------------
@@ -233,34 +233,40 @@ def test_page_location_size_covers_the_header_too() raises:
     var vals = Python.list()
     for i in range(300):
         vals.append(i)
-    var path = String("/tmp/marrow_pageheader_sizes.parquet")
-    pq.write_table(
-        pa.table(Python.dict(a=pa.array(vals, type=pa.int64()))),
-        path,
-        row_group_size=300,
-        data_page_size=1,
-        write_batch_size=100,
-        write_page_index=True,
-        use_dictionary=False,
-        compression="none",
-    )
-
-    var pf = ParquetFile(path)
-    var pi = read_page_index(path)
-    ref oi = pi[0][0].offset_index.value()
-    assert_true(len(oi.page_locations) > 1, "the fixture needs several pages")
-
-    var start = pf.metadata().row_groups[0].columns[0].meta_data.byte_range()[0]
-    var chunk = BufferSource(path)
-    for k in range(len(oi.page_locations)):
-        ref loc = oi.page_locations[k]
-        var read = PageHeader.read_at(
-            chunk.read_at(loc.offset, loc.compressed_page_size), 0
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pageheader_sizes.parquet")
+        pq.write_table(
+            pa.table(Python.dict(a=pa.array(vals, type=pa.int64()))),
+            path,
+            row_group_size=300,
+            data_page_size=1,
+            write_batch_size=100,
+            write_page_index=True,
+            use_dictionary=False,
+            compression="none",
         )
-        assert_equal(
-            read[1] + read[0].compressed_page_size,
-            loc.compressed_page_size,
-            "page " + String(k) + ": header + body must be the recorded size",
+
+        var pf = ParquetFile(path)
+        var pi = read_page_index(path)
+        ref oi = pi[0][0].offset_index.value()
+        assert_true(
+            len(oi.page_locations) > 1, "the fixture needs several pages"
         )
-    _ = start
-    remove(path)
+
+        var start = (
+            pf.metadata().row_groups[0].columns[0].meta_data.byte_range()[0]
+        )
+        var chunk = BufferSource(path)
+        for k in range(len(oi.page_locations)):
+            ref loc = oi.page_locations[k]
+            var read = PageHeader.read_at(
+                chunk.read_at(loc.offset, loc.compressed_page_size), 0
+            )
+            assert_equal(
+                read[1] + read[0].compressed_page_size,
+                loc.compressed_page_size,
+                "page "
+                + String(k)
+                + ": header + body must be the recorded size",
+            )
+        _ = start

@@ -10,28 +10,13 @@ Two properties carry most of the weight here, because both are things the old
   `len(buffer())` stops being one the moment a flush happens.
 """
 
-from std.os import listdir, remove
-from std.os.path import exists
+from std.os import listdir
+from std.os.path import exists, join
 from std.testing import assert_equal, assert_false, assert_true
 
+from ...utils.testing import ScratchDir
 from ...buffers import Buffer
 from ...io import BufferedSink, FileSink, MemorySink
-
-
-def _has_scratch(path: String) raises -> Bool:
-    """Whether a `FileSink` scratch file for `path` is still on disk.
-
-    `FileSink` writes to `path + ".marrow-tmp-" + getpid()` and renames on
-    close. The pid is not knowable here without duplicating the shim in
-    `io/local.mojo`, so this matches the prefix instead -- which is also what
-    a human would grep for.
-    """
-    var d = String("/tmp")
-    var prefix = String(path[byte = d.byte_length() + 1 :], ".marrow-tmp-")
-    for name in listdir(d):
-        if String(name).startswith(prefix):
-            return True
-    return False
 
 
 def _pattern(n: Int, seed: Int = 0) -> List[UInt8]:
@@ -112,76 +97,74 @@ def test_io_sink_empty_write_is_allowed() raises:
 
 
 def test_io_sink_file_commits_on_close() raises:
-    var path = String("/tmp/marrow_io_sink_commit.bin")
-    if exists(path):
-        remove(path)
-    var a = _pattern(100, 3)
-    var b = _pattern(50, 4)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_sink_commit.bin")
+        var a = _pattern(100, 3)
+        var b = _pattern(50, 4)
 
-    var sink = FileSink(path)
-    sink.write(Span(a))
-    sink.write(Span(b))
-    # The destination must not exist yet: an incremental writer that streamed
-    # straight to `path` would leave a truncated file behind on a mid-write
-    # failure, which `Path.write_bytes` never could.
-    assert_false(exists(path), "FileSink published before close")
-    sink.close()
+        var sink = FileSink(path)
+        sink.write(Span(a))
+        sink.write(Span(b))
+        # The destination must not exist yet: an incremental writer that streamed
+        # straight to `path` would leave a truncated file behind on a mid-write
+        # failure, which `Path.write_bytes` never could.
+        assert_false(exists(path), "FileSink published before close")
+        sink.close()
 
-    assert_true(exists(path))
-    var got = _read_file(path)
-    assert_equal(len(got), 150)
-    _assert_bytes_eq(Span(got)[:100], Span(a))
-    _assert_bytes_eq(Span(got)[100:], Span(b))
-    remove(path)
-    _ = a^
-    _ = b^
+        assert_true(exists(path))
+        var got = _read_file(path)
+        assert_equal(len(got), 150)
+        _assert_bytes_eq(Span(got)[:100], Span(a))
+        _assert_bytes_eq(Span(got)[100:], Span(b))
+        _ = a^
+        _ = b^
 
 
 def test_io_sink_file_abandoned_leaves_nothing() raises:
     """Dropping a sink without closing publishes nothing and leaves no litter.
     """
-    var path = String("/tmp/marrow_io_sink_abandoned.bin")
-    var tmp_before: Bool
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_sink_abandoned.bin")
+        var tmp_before: Bool
 
-    if exists(path):
-        remove(path)
-    var d = _pattern(64, 5)
-    var sink = FileSink(path)
-    sink.write(Span(d))
-    tmp_before = exists(path)
-    _ = sink^
+        var d = _pattern(64, 5)
+        var sink = FileSink(path)
+        sink.write(Span(d))
+        tmp_before = exists(path)
+        _ = sink^
 
-    assert_false(tmp_before, "FileSink published before close")
-    assert_false(exists(path), "an abandoned FileSink published its output")
-    # The litter half. `FileSink.__deinit__` exists only to remove the scratch
-    # file, so asserting on the destination alone would pass with that
-    # destructor deleted -- which is how this test read before.
-    assert_false(
-        _has_scratch(path),
-        "an abandoned FileSink left its .marrow-tmp-<pid> file behind",
-    )
-    _ = d^
+        assert_false(tmp_before, "FileSink published before close")
+        assert_false(exists(path), "an abandoned FileSink published its output")
+        # The litter half. `FileSink.__deinit__` exists only to remove the scratch
+        # file, so asserting on the destination alone would pass with that
+        # destructor deleted -- which is how this test read before.
+        assert_equal(
+            len(listdir(dir)),
+            0,
+            "an abandoned FileSink left its .marrow-tmp-<pid> file behind",
+        )
+        _ = d^
 
 
 def test_io_sink_file_overwrites_existing() raises:
     """The rename replaces whatever was there, which is what `write_bytes` did.
     """
-    var path = String("/tmp/marrow_io_sink_overwrite.bin")
-    var old = _pattern(200, 6)
-    with open(path, "w") as f:
-        f.write_bytes(Span(old))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_sink_overwrite.bin")
+        var old = _pattern(200, 6)
+        with open(path, "w") as f:
+            f.write_bytes(Span(old))
 
-    var new = _pattern(10, 7)
-    var sink = FileSink(path)
-    sink.write(Span(new))
-    sink.close()
+        var new = _pattern(10, 7)
+        var sink = FileSink(path)
+        sink.write(Span(new))
+        sink.close()
 
-    var got = _read_file(path)
-    assert_equal(len(got), 10)
-    _assert_bytes_eq(Span(got), Span(new))
-    remove(path)
-    _ = old^
-    _ = new^
+        var got = _read_file(path)
+        assert_equal(len(got), 10)
+        _assert_bytes_eq(Span(got), Span(new))
+        _ = old^
+        _ = new^
 
 
 # --- BufferedSink -----------------------------------------------------------
@@ -275,32 +258,30 @@ def test_io_sink_buffered_over_a_file_matches_memory() raises:
     """The adapter is backend-agnostic: the same writes produce the same bytes
     through a file as through memory. This is the property that lets a format
     writer be written once against `ByteSink`."""
-    var path = String("/tmp/marrow_io_sink_buffered_file.bin")
-    if exists(path):
-        remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_io_sink_buffered_file.bin")
 
-    var chunks: List[List[UInt8]] = [
-        _pattern(37, 13),
-        _pattern(1, 14),
-        _pattern(4096, 15),
-        _pattern(11, 16),
-    ]
+        var chunks: List[List[UInt8]] = [
+            _pattern(37, 13),
+            _pattern(1, 14),
+            _pattern(4096, 15),
+            _pattern(11, 16),
+        ]
 
-    var mem = BufferedSink(MemorySink())
-    var fil = BufferedSink(FileSink(path))
-    for ref ch in chunks:
-        mem.write(Span(ch))
-        fil.write(Span(ch))
-        # Flush at a different cadence than the writes, so `tell` is exercised
-        # with a non-empty staging buffer on one side.
-        if len(ch) > 100:
-            mem.flush()
-            fil.flush()
-    assert_equal(mem.tell(), fil.tell())
-    mem.close()
-    fil.close()
+        var mem = BufferedSink(MemorySink())
+        var fil = BufferedSink(FileSink(path))
+        for ref ch in chunks:
+            mem.write(Span(ch))
+            fil.write(Span(ch))
+            # Flush at a different cadence than the writes, so `tell` is exercised
+            # with a non-empty staging buffer on one side.
+            if len(ch) > 100:
+                mem.flush()
+                fil.flush()
+        assert_equal(mem.tell(), fil.tell())
+        mem.close()
+        fil.close()
 
-    var from_file = _read_file(path)
-    _assert_bytes_eq(Span(from_file), Span(mem.sink().bytes()))
-    remove(path)
-    _ = chunks^
+        var from_file = _read_file(path)
+        _assert_bytes_eq(Span(from_file), Span(mem.sink().bytes()))
+        _ = chunks^

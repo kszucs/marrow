@@ -16,9 +16,11 @@ uncompressed, so an all-present page decodes to a memcpy: point
 `MARROW_PROFILE_PATH` at a snappy file to see skipping win. What this driver
 found, and what is still open, is in `backlog.md`.
 
-The default file is the one `bench_parquet` writes; run
-`pixi run -e dev pytest --benchmark marrow/parquet/tests/bench_parquet.mojo`
-once first if it is missing.
+Without `MARROW_PROFILE_PATH` it first writes the file
+`bench_read_selected_prefix_1m` reads -- the same corpus through the same
+pyarrow options -- into a scratch directory removed on exit. The recording then
+opens with the pyarrow import and that write, a few seconds before the first
+read; point `MARROW_PROFILE_PATH` at a kept file to profile the reads alone.
 
 Overrides: `MARROW_PROFILE_ITERS` (default 20), `MARROW_PROFILE_FIRST` (rows
 kept at the front of each group; default an eighth, negative for all),
@@ -28,8 +30,11 @@ with no selection at all -- the control), `MARROW_PROFILE_PATH`.
 
 from std.benchmark import keep
 from std.os.env import getenv
+from std.os.path import join
+from std.python import Python
 
 from marrow.parquet import ParquetFile, RowSelection
+from marrow.utils.testing import ScratchDir
 
 
 def _parse_int(name: String, default: Int) -> Int:
@@ -42,13 +47,33 @@ def _parse_int(name: String, default: Int) -> Int:
         return default
 
 
-def main() raises:
+def _write_default(path: String) raises:
+    """`bench_parquet`'s `_prepare_groups` corpus at 4 x 250,000 rows."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var n = 1_000_000
+    var table = pa.table(
+        Python.dict(
+            a=pa.array(np.arange(n, dtype="int64")),
+            b=pa.array(np.arange(n, dtype="float64")),
+            c=pa.array(np.arange(n, dtype="int32")),
+        )
+    )
+    pq.write_table(
+        table,
+        path,
+        compression="none",
+        row_group_size=250_000,
+        data_page_size=64 * 1024,
+        write_page_index=True,
+    )
+
+
+def _profile(path: String) raises:
     var iters = _parse_int("MARROW_PROFILE_ITERS", 20)
     var keep_every = _parse_int("MARROW_PROFILE_KEEP_EVERY", 1)
     var use_selection = _parse_int("MARROW_PROFILE_SELECTION", 1) != 0
-    var path = getenv(
-        "MARROW_PROFILE_PATH", "/tmp/marrow_bench_selected_prefix.parquet"
-    )
 
     var pf = ParquetFile(path)
     var md = pf.metadata()
@@ -81,3 +106,14 @@ def main() raises:
             total += pf.read().num_rows()
     keep(total)
     keep(built)
+
+
+def main() raises:
+    var path = getenv("MARROW_PROFILE_PATH", "")
+    if path.byte_length() > 0:
+        _profile(path)
+    else:
+        with ScratchDir() as dir:
+            var fixture = join(dir, "marrow_bench_selected_prefix.parquet")
+            _write_default(fixture)
+            _profile(fixture)

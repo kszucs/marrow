@@ -1,7 +1,9 @@
 from std.testing import assert_equal, assert_true, assert_false
 from std.memory import ArcPointer
 from std.memory.alloc import unsafe_alloc
+from std.os.path import join
 
+from ..utils.testing import ScratchDir
 from ..buffers import *
 from ..views import BufferView
 
@@ -831,57 +833,55 @@ def test_buffer_mmap_file_reads_and_unmaps() raises:
     borrowed from something that must be kept alive alongside it — the property
     the parquet reader's untracked-origin spans currently work around.
     """
-    from std.os import remove
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_test_mmap_file.bin")
+        with open(path, "w") as f:
+            f.write(String("hello mmap"))
 
-    var path = "/tmp/marrow_test_mmap_file.bin"
-    with open(path, "w") as f:
-        f.write(String("hello mmap"))
+        var buf = Buffer.mmap_file(path)
+        assert_true(buf.is_cpu())
+        assert_false(buf.is_device())
 
-    var buf = Buffer.mmap_file(path)
-    assert_true(buf.is_cpu())
-    assert_false(buf.is_device())
+        # Padded to Arrow's 64 bytes even though the file is 10 — the mapping covers
+        # a whole page, so the padding is addressable. `munmap` still gets 10.
+        assert_equal(len(buf), 64)
 
-    # Padded to Arrow's 64 bytes even though the file is 10 — the mapping covers
-    # a whole page, so the padding is addressable. `munmap` still gets 10.
-    assert_equal(len(buf), 64)
+        var view = buf.view[DType.uint8](0, 10)
+        assert_equal(view.unsafe_get(0), UInt8(ord("h")))
+        assert_equal(view.unsafe_get(9), UInt8(ord("p")))
 
-    var view = buf.view[DType.uint8](0, 10)
-    assert_equal(view.unsafe_get(0), UInt8(ord("h")))
-    assert_equal(view.unsafe_get(9), UInt8(ord("p")))
-
-    # A copy shares the mapping; the unmap fires only when the last one drops.
-    var second = buf
-    _ = buf^
-    assert_equal(second.view[DType.uint8](0, 10).unsafe_get(0), UInt8(ord("h")))
-    _ = second^
-
-    remove(path)
+        # A copy shares the mapping; the unmap fires only when the last one drops.
+        var second = buf
+        _ = buf^
+        assert_equal(
+            second.view[DType.uint8](0, 10).unsafe_get(0), UInt8(ord("h"))
+        )
+        _ = second^
 
 
 def test_buffer_mmap_file_missing_path_raises() raises:
-    var raised = False
-    try:
-        _ = Buffer.mmap_file("/tmp/marrow_no_such_file_xyz.bin")
-    except:
-        raised = True
-    assert_true(raised)
+    with ScratchDir() as dir:
+        var raised = False
+        try:
+            _ = Buffer.mmap_file(join(dir, "marrow_no_such_file.bin"))
+        except:
+            raised = True
+        assert_true(raised)
 
 
 def test_buffer_mapped_size_is_the_file_length() raises:
     """`mapped_size()` is the true file length; `len()` is the padded logical
     size. Callers addressing *file* offsets — the Parquet footer does — need the
     former, and conflating them reads past the end."""
-    from std.os import remove
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_test_mapped_size.bin")
+        with open(path, "w") as f:
+            f.write(String("hello mmap"))
+        var mapped = Buffer.mmap_file(path)
 
-    var path = "/tmp/marrow_test_mapped_size.bin"
-    with open(path, "w") as f:
-        f.write(String("hello mmap"))
-    var mapped = Buffer.mmap_file(path)
-
-    assert_equal(mapped.mapped_size(), 10)
-    assert_equal(len(mapped), 64)
-    _ = mapped^
-    remove(path)
+        assert_equal(mapped.mapped_size(), 10)
+        assert_equal(len(mapped), 64)
+        _ = mapped^
 
 
 def test_buffer_mapped_size_raises_for_other_kinds() raises:

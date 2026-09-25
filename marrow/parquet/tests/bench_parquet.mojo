@@ -5,9 +5,10 @@ Run with:
 """
 
 from std.benchmark import BenchMetric, keep
+from std.os.path import join
 from std.python import Python, PythonObject
 
-from ...utils.testing import Benchmark
+from ...utils.testing import Benchmark, ScratchDir
 from ...parquet import ParquetFile, RowSelection, read_table, write_table
 from ...parquet.reader import Coverage
 
@@ -60,15 +61,17 @@ def _prepare_dict(path: String, n: Int) raises:
 
 
 def _bench_read(mut b: Benchmark, n: Int, compression: String) raises:
-    var path = String("/tmp/marrow_bench_read.parquet")
-    _prepare(path, n, compression)
-    b.throughput(BenchMetric.elements, n)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bench_read.parquet")
+        _prepare(path, n, compression)
+        b.throughput(BenchMetric.elements, n)
 
-    @always_inline
-    def call() raises {imm}:
-        keep(read_table(path))
+        @always_inline
+        def call() raises {imm}:
+            keep(read_table(path))
 
-    b.iter(call)
+        b.iter(call)
+        keep(path)
 
 
 def bench_read_snappy_100k(mut b: Benchmark) raises:
@@ -84,21 +87,22 @@ def bench_read_uncompressed_1m(mut b: Benchmark) raises:
 
 
 def bench_read_dict_1m(mut b: Benchmark) raises:
-    var path = String("/tmp/marrow_bench_dict.parquet")
-    var n = 1_000_000
-    _prepare_dict(path, n)
-    b.throughput(BenchMetric.elements, n)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bench_dict.parquet")
+        var n = 1_000_000
+        _prepare_dict(path, n)
+        b.throughput(BenchMetric.elements, n)
 
-    @always_inline
-    def call() raises {imm}:
-        keep(read_table(path))
+        @always_inline
+        def call() raises {imm}:
+            keep(read_table(path))
 
-    b.iter(call)
-    keep(path)  # keep the captured path alive through the whole benchmark
+        b.iter(call)
+        keep(path)  # keep the captured path alive through the whole benchmark
 
 
 def _bench_read_small(
-    mut b: Benchmark, path: String, compression: String
+    mut b: Benchmark, name: String, compression: String
 ) raises:
     """Per-*read* set-up cost, isolated.
 
@@ -108,16 +112,18 @@ def _bench_read_small(
     workers. Pair the `snappy` case with the `none` case below: the second
     never touches a compression library, so the difference between the two is
     the codec set-up, and `none` doubles as a drift control for the box."""
-    var n = 1_000
-    _prepare(path, n, compression)
-    b.throughput(BenchMetric.elements, n)
+    with ScratchDir() as dir:
+        var path = join(dir, name)
+        var n = 1_000
+        _prepare(path, n, compression)
+        b.throughput(BenchMetric.elements, n)
 
-    @always_inline
-    def call() raises {imm}:
-        keep(read_table(path))
+        @always_inline
+        def call() raises {imm}:
+            keep(read_table(path))
 
-    b.iter(call)
-    keep(path)
+        b.iter(call)
+        keep(path)
 
 
 def _prepare_groups(
@@ -145,7 +151,7 @@ def _prepare_groups(
 
 def _bench_read_selected(
     mut b: Benchmark,
-    path: String,
+    name: String,
     var pattern: List[Bool],
     compression: String = "none",
 ) raises:
@@ -166,20 +172,22 @@ def _bench_read_selected(
     var rows_per_group = len(pattern)
     var num_groups = 4
     var n = rows_per_group * num_groups
-    _prepare_groups(path, n, rows_per_group, compression)
+    with ScratchDir() as dir:
+        var path = join(dir, name)
+        _prepare_groups(path, n, rows_per_group, compression)
 
-    var pf = ParquetFile(path)
-    b.throughput(BenchMetric.elements, n)
+        var pf = ParquetFile(path)
+        b.throughput(BenchMetric.elements, n)
 
-    @always_inline
-    def call() raises {imm}:
-        var sels = List[RowSelection](capacity=num_groups)
-        for _ in range(num_groups):
-            sels.append(RowSelection(pattern.copy()))
-        keep(pf.read(row_selections=sels^).num_rows())
+        @always_inline
+        def call() raises {imm}:
+            var sels = List[RowSelection](capacity=num_groups)
+            for _ in range(num_groups):
+                sels.append(RowSelection(pattern.copy()))
+            keep(pf.read(row_selections=sels^).num_rows())
 
-    b.iter(call)
-    keep(pf)
+        b.iter(call)
+        keep(pf)
     keep(pattern)
 
 
@@ -241,7 +249,7 @@ def bench_row_selection_prefix_250k(mut b: Benchmark) raises:
 def bench_read_selected_all_1m(mut b: Benchmark) raises:
     _bench_read_selected(
         b,
-        "/tmp/marrow_bench_selected_all.parquet",
+        "marrow_bench_selected_all.parquet",
         _pattern(250_000),
     )
 
@@ -249,7 +257,7 @@ def bench_read_selected_all_1m(mut b: Benchmark) raises:
 def bench_read_selected_eighth_1m(mut b: Benchmark) raises:
     _bench_read_selected(
         b,
-        "/tmp/marrow_bench_selected_eighth.parquet",
+        "marrow_bench_selected_eighth.parquet",
         _pattern(250_000, keep_every=8),
     )
 
@@ -259,7 +267,7 @@ def bench_read_selected_prefix_1m(mut b: Benchmark) raises:
     pages skipped without decoding and never fetched."""
     _bench_read_selected(
         b,
-        "/tmp/marrow_bench_selected_prefix.parquet",
+        "marrow_bench_selected_prefix.parquet",
         _pattern(250_000, first=250_000 // 8),
     )
 
@@ -273,15 +281,15 @@ def bench_read_selected_prefix_snappy_1m(mut b: Benchmark) raises:
     improves."""
     _bench_read_selected(
         b,
-        "/tmp/marrow_bench_selected_prefix_snappy.parquet",
+        "marrow_bench_selected_prefix_snappy.parquet",
         _pattern(250_000, first=250_000 // 8),
         "snappy",
     )
 
 
 def bench_read_small_snappy(mut b: Benchmark) raises:
-    _bench_read_small(b, "/tmp/marrow_bench_small_snappy.parquet", "snappy")
+    _bench_read_small(b, "marrow_bench_small_snappy.parquet", "snappy")
 
 
 def bench_read_small_uncompressed(mut b: Benchmark) raises:
-    _bench_read_small(b, "/tmp/marrow_bench_small_none.parquet", "none")
+    _bench_read_small(b, "marrow_bench_small_none.parquet", "none")

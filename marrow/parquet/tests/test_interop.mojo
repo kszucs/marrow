@@ -13,7 +13,8 @@ chunk-boundary and field-metadata differences that `pa.Table.equals` rejects.
 
 from std.testing import assert_true, assert_equal
 from std.python import Python, PythonObject
-from std.os import remove
+from std.os.path import join
+from ...utils.testing import ScratchDir
 from ...parquet import read_table, write_table
 from ...parquet.codecs import Compression
 from ...tabular import Table
@@ -90,28 +91,28 @@ def _assert_equiv(got: PythonObject, want: PythonObject) raises:
 
 def _marrow_reads_pyarrow(want: PythonObject, compression: String) raises:
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_iop_a.parquet")
-    pq.write_table(want, path, compression=compression)
-    # Oracle is PyArrow's *own* read of the same file: Parquet erases some
-    # Arrow-only distinctions (large_string -> string, etc.), so both readers
-    # should agree with each other, not necessarily with the pre-write table.
-    _assert_equiv(_to_pyarrow(read_table(path)), pq.read_table(path))
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_iop_a.parquet")
+        pq.write_table(want, path, compression=compression)
+        # Oracle is PyArrow's *own* read of the same file: Parquet erases some
+        # Arrow-only distinctions (large_string -> string, etc.), so both readers
+        # should agree with each other, not necessarily with the pre-write table.
+        _assert_equiv(_to_pyarrow(read_table(path)), pq.read_table(path))
 
 
 def _pyarrow_reads_marrow(want: PythonObject, codec: Compression) raises:
     var pq = Python.import_module("pyarrow.parquet")
-    var path = String("/tmp/marrow_iop_b.parquet")
-    write_table(_to_marrow(want), path, compression=codec)
-    _assert_equiv(pq.read_table(path), want)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_iop_b.parquet")
+        write_table(_to_marrow(want), path, compression=codec)
+        _assert_equiv(pq.read_table(path), want)
 
 
 def _marrow_roundtrip(want: PythonObject, codec: Compression) raises:
-    var path = String("/tmp/marrow_iop_c.parquet")
-    write_table(_to_marrow(want), path, compression=codec)
-    _assert_equiv(_to_pyarrow(read_table(path)), want)
-    remove(path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_iop_c.parquet")
+        write_table(_to_marrow(want), path, compression=codec)
+        _assert_equiv(_to_pyarrow(read_table(path)), want)
 
 
 def _all_shapes(want: PythonObject) raises:

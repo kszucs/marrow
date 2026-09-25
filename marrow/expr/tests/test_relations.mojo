@@ -12,7 +12,9 @@ corrupt whatever reads them by index.
 """
 
 from std.testing import assert_equal, assert_true
+from std.os.path import join
 
+from ...utils.testing import ScratchDir
 from ...arrays import StructArray, DynArray
 from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
@@ -527,42 +529,44 @@ def test_a_parquet_scan_feeds_the_pipeline() raises:
     really decodes a file and that its batches flow through the same stages an
     in-memory table's do.
     """
-    var path = String("/tmp/marrow_expr2_scan.parquet")
-    var b = record_batch(
-        [
-            array([1, 2, 3, 4], int64).copy(),
-            array([10, 20, 30, 40], int64).copy(),
-        ],
-        names=["a", "b"],
-    )
-    write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_expr2_scan.parquet")
+        var b = record_batch(
+            [
+                array([1, 2, 3, 4], int64).copy(),
+                array([10, 20, 30, 40], int64).copy(),
+            ],
+            names=["a", "b"],
+        )
+        write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
 
-    var plan = scan(path.copy(), b.schema.copy()).filter(
-        (col("a", int64) > lit(2, int64))
-    )
-    var out = plan.execute()
-    assert_equal(out.num_rows(), 2)
-    assert_true(out.columns[1].as_int64() == array([30, 40], int64))
+        var plan = scan(path.copy(), b.schema.copy()).filter(
+            (col("a", int64) > lit(2, int64))
+        )
+        var out = plan.execute()
+        assert_equal(out.num_rows(), 2)
+        assert_true(out.columns[1].as_int64() == array([30, 40], int64))
 
 
 def test_a_parquet_scan_schema_is_the_projection() raises:
     """Narrowing the scan's schema is how a projection is pushed into it —
     only the named columns are read out of the file."""
-    var path = String("/tmp/marrow_expr2_proj.parquet")
-    var b = record_batch(
-        [
-            array([1, 2], int64).copy(),
-            array([10, 20], int64).copy(),
-        ],
-        names=["a", "b"],
-    )
-    write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_expr2_proj.parquet")
+        var b = record_batch(
+            [
+                array([1, 2], int64).copy(),
+                array([10, 20], int64).copy(),
+            ],
+            names=["a", "b"],
+        )
+        write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
 
-    var only_b = schema([field("b", int64)])
-    var plan = scan(path.copy(), only_b.copy())
-    var out = plan.execute()
-    assert_equal(out.num_columns(), 1)
-    assert_true(out.columns[0].as_int64() == array([10, 20], int64))
+        var only_b = schema([field("b", int64)])
+        var plan = scan(path.copy(), only_b.copy())
+        var out = plan.execute()
+        assert_equal(out.num_columns(), 1)
+        assert_true(out.columns[0].as_int64() == array([10, 20], int64))
 
 
 def _left() raises -> RecordBatch:

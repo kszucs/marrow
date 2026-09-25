@@ -7,12 +7,12 @@ pytest marker. The one case that must run either way lives in
 `test_io_dispatch.mojo`: a marrow without OpenDAL must still read a local file.
 """
 
-from std.os import getenv, listdir, remove, rmdir
+from std.os import getenv
 from std.os.path import exists, join
-from std.tempfile import mkdtemp
 from std.testing import assert_equal, assert_true
 
 from ...execution import ExecContext
+from ...utils.testing import ScratchDir
 from ..opendal import OpenDalSource, OpenDalStore
 
 
@@ -64,40 +64,6 @@ def _pattern(n: Int) -> List[UInt8]:
         state ^= state << 5
         out.append(UInt8(state >> 24))
     return out^
-
-
-struct _Scratch:
-    """A fresh directory for one test, removed on the way out whether or not
-    the body raised -- so two concurrent runs never share a file, and a failed
-    assertion does not leave one behind for the next.
-
-    Not `std.tempfile.TemporaryDirectory`: its error-path `__exit__` answers
-    `True` once cleanup succeeds, which *suppresses* the error, so a failing
-    assertion inside it would report a pass. This one answers `False`.
-    """
-
-    var path: String
-
-    def __init__(out self) raises:
-        self.path = mkdtemp(prefix="marrow_opendal_")
-
-    def __enter__(self) -> String:
-        return self.path
-
-    def _remove(self) raises:
-        for name in listdir(self.path):
-            remove(join(self.path, name))
-        rmdir(self.path)
-
-    def __exit__(self) raises:
-        self._remove()
-
-    def __exit__(self, err: Error) -> Bool:
-        try:
-            self._remove()
-        except:
-            pass
-        return False
 
 
 def _fs_store(root: String) -> Optional[OpenDalStore]:
@@ -302,7 +268,7 @@ def test_opendal_streaming_writer_commits_on_close() raises:
 def test_opendal_fs_reads_a_file_written_out_of_band() raises:
     """The `fs` service over bytes another writer produced -- proof the binding
     reads real files, not only ones it wrote itself."""
-    with _Scratch() as dir:
+    with ScratchDir() as dir:
         var found = _fs_store(dir)
         if not found:
             return
@@ -332,7 +298,7 @@ def test_opendal_source_read_ranges_many_scattered() raises:
     several times -- a bug that filled the slots in completion order rather
     than by index would be invisible with four ranges and four cores.
     """
-    with _Scratch() as dir:
+    with ScratchDir() as dir:
         var found = _fs_store(dir)
         if not found:
             return
@@ -359,7 +325,7 @@ def test_opendal_source_read_ranges_edge_counts() raises:
     """No ranges, one range, and a zero-length range: the counts at which a
     fan-out has nothing to split, and the length at which a fetch has nothing
     to ask for."""
-    with _Scratch() as dir:
+    with ScratchDir() as dir:
         var found = _fs_store(dir)
         if not found:
             return
@@ -395,7 +361,7 @@ def test_opendal_source_read_ranges_rejects_a_bad_range() raises:
     """One range past the end fails the whole batch, on the calling thread: the
     bounds check runs before any worker starts, so a caller bug costs no
     requests and the message is the one check's."""
-    with _Scratch() as dir:
+    with ScratchDir() as dir:
         var found = _fs_store(dir)
         if not found:
             return
@@ -429,7 +395,7 @@ def test_opendal_source_read_ranges_raises_the_first_failed_fetch() raises:
     the first failing one onward are spread round-robin over every worker, so
     several fail at once.
     """
-    with _Scratch() as dir:
+    with ScratchDir() as dir:
         var found = _fs_store(dir)
         if not found:
             return

@@ -7,7 +7,9 @@ belongs to an execution rather than to the plan.
 """
 
 from std.testing import assert_equal, assert_raises, assert_true
+from std.os.path import join
 
+from ...utils.testing import ScratchDir
 from ...builders import array
 from ...dtypes import DynType, Int64Type, field, float64, int64, string
 from ...parquet.writer import write_table
@@ -125,32 +127,33 @@ def test_one_name_read_as_two_types_is_refused_when_it_binds() raises:
 
 
 def test_a_scan_path_is_a_parameter() raises:
-    var path = String("/tmp/marrow_expr_scan_path_param.parquet")
-    var b = record_batch([array([1, 5, 9], int64).copy()], names=["a"])
-    write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_expr_scan_path_param.parquet")
+        var b = record_batch([array([1, 5, 9], int64).copy()], names=["a"])
+        write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
 
-    var plan = scan(param("src", string), b.schema.copy()).filter(
-        col("a", int64) > param("t", int64)
-    )
-    assert_true("ParquetScan(param(src))" in String(plan), String(plan))
+        var plan = scan(param("src", string), b.schema.copy()).filter(
+            col("a", int64) > param("t", int64)
+        )
+        assert_true("ParquetScan(param(src))" in String(plan), String(plan))
 
-    var specs = plan.params()
-    assert_equal(len(specs), 2)
-    assert_equal(specs[0].name, String("src"))
-    assert_true(specs[0].dtype == DynType(string))
-    assert_true(not specs[0].default)
-    assert_true(True if specs[0].parse else False)
+        var specs = plan.params()
+        assert_equal(len(specs), 2)
+        assert_equal(specs[0].name, String("src"))
+        assert_true(specs[0].dtype == DynType(string))
+        assert_true(not specs[0].default)
+        assert_true(True if specs[0].parse else False)
 
-    var got = plan.execute(
-        bindings={
-            "src": StringScalar(path.copy()).to_dyn(),
-            "t": Int64Scalar(4).to_dyn(),
-        }
-    )
-    assert_true(got.columns[0].as_int64() == array([5, 9], int64))
+        var got = plan.execute(
+            bindings={
+                "src": StringScalar(path.copy()).to_dyn(),
+                "t": Int64Scalar(4).to_dyn(),
+            }
+        )
+        assert_true(got.columns[0].as_int64() == array([5, 9], int64))
 
-    with assert_raises(contains="src"):
-        _ = plan.execute(bindings={"t": Int64Scalar(4).to_dyn()})
+        with assert_raises(contains="src"):
+            _ = plan.execute(bindings={"t": Int64Scalar(4).to_dyn()})
 
 
 def test_a_scan_path_parameter_survives_optimization() raises:
