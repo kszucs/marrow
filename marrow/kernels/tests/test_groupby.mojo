@@ -1,8 +1,8 @@
 """Tests for `HashGrouping` — and specifically for its two placement paths.
 
-The radix path only engages at `_PARALLEL_GROUPBY_MIN_ROWS` (60k) rows with a
-context that resolves to more than one worker, so **every case here that means
-to test it has to be that big**. A 5-row parallel context takes the serial path
+The radix path only engages at `_RADIX_MIN_ROWS` (50k) rows and
+`_RADIX_MIN_GROUPS` (30k) groups with a context that resolves to more than one
+worker, so **every case here that means to test it has to be that big**. A 5-row parallel context takes the serial path
 and asserts nothing about the code it was written for; that is why the sizes
 below look gratuitous and are not.
 
@@ -41,7 +41,7 @@ from ...kernels.groupby import Groups
 
 
 comptime _BIG: Int = 100_000
-"""Comfortably over the 60k radix threshold."""
+"""Comfortably over the 50k `_RADIX_MIN_ROWS` threshold."""
 
 
 def _int_keys(n: Int, card: Int) raises -> DynArray:
@@ -54,6 +54,15 @@ def _int_keys(n: Int, card: Int) raises -> DynArray:
     var b = Int32Builder(capacity=n)
     for i in range(n):
         b.append(Int32((i * 7919) % card))
+    return b.finish()
+
+
+def _sorted_keys(n: Int, card: Int) raises -> DynArray:
+    """`n` int32 keys over `card` distinct values, in runs: the blocked layout
+    `_int_keys` avoids, for the cases where the layout is the point."""
+    var b = Int32Builder(capacity=n)
+    for i in range(n):
+        b.append(Int32(i * card // n))
     return b.finish()
 
 
@@ -145,16 +154,9 @@ def _assert_same_placement(var a: _Placed, var b: _Placed) raises:
 
 
 def test_low_cardinality_stays_serial_under_a_parallel_context() raises:
-    """1,000 groups over 100k rows: the sample comes back ~5% distinct, so the
+    """1,000 groups over 100k rows: far under `_RADIX_MIN_GROUPS`, so the
     cardinality gate keeps placement on the single-table path even though the
     row count and the worker count would both allow radix.
-
-    ~5% and not the ~24% a *random* 4,096-row sample of a 1,000-group column
-    would give: `_looks_high_cardinality` walks a fixed golden-ratio stride,
-    and `_int_keys` is periodic, so the two alias and the probe sees about 200
-    of the 1,000 values. Both numbers are far under `_MIN_DISTINCT_RATIO`, so
-    the aliasing cannot change the decision here — and it cannot in the other
-    direction either, since a sample can only ever under-report distinctness.
 
     Asserted through the *numbering*, which is the only externally visible
     difference between the paths: radix is partition-major, so had it run these
@@ -165,6 +167,38 @@ def test_low_cardinality_stays_serial_under_a_parallel_context() raises:
     assert_equal(serial.num_groups, 1_000)
     assert_true(serial.ids == par.ids)
     _assert_same_placement(serial^, par^)
+
+
+def test_cardinality_gate_ignores_row_order() raises:
+    """The gate answers the same for sorted and interleaved keys: 10,000 groups
+    stay serial either way, and 50,000 take radix either way.
+
+    The probe used to walk an arithmetic stride, and that made the answer a
+    function of the layout: on these 100k rows it sampled 10,000 *sorted*
+    groups as all-distinct and sent them to radix, while the same 10,000
+    groups interleaved sampled at half that and stayed serial. Random draws
+    see a key distribution rather than a layout — both layouts sample within
+    ten values of the expected 3,360, against a gate at 3,828.
+    """
+    var ctx = ExecContext.parallel(4)
+    var small = List[DynArray]()
+    small.append(_int_keys(_BIG, 10_000))
+    small.append(_sorted_keys(_BIG, 10_000))
+    for i in range(len(small)):
+        var serial = _place(small[i].copy(), _BIG, ExecContext.serial())
+        var par = _place(small[i].copy(), _BIG, ctx.copy())
+        assert_equal(serial.num_groups, 10_000)
+        assert_true(serial.ids == par.ids)
+
+    var large = List[DynArray]()
+    large.append(_int_keys(_BIG, 50_000))
+    large.append(_sorted_keys(_BIG, 50_000))
+    for i in range(len(large)):
+        var serial = _place(large[i].copy(), _BIG, ExecContext.serial())
+        var par = _place(large[i].copy(), _BIG, ctx.copy())
+        assert_equal(serial.num_groups, 50_000)
+        assert_true(_any_id_differs(serial.ids, par.ids))
+        _assert_same_placement(serial^, par^)
 
 
 def test_radix_placement_matches_serial_high_cardinality() raises:
@@ -200,7 +234,7 @@ def test_radix_placement_matches_serial_with_string_keys() raises:
     var sb = StringBuilder(_BIG)
     var sb2 = StringBuilder(_BIG)
     for i in range(_BIG):
-        var s = String("key-") + String((i * 7919) % 40_000)
+        var s = String("key-") + String((i * 7919) % 60_000)
         sb.append(s)
         sb2.append(s)
 
@@ -214,9 +248,9 @@ def test_radix_placement_matches_serial_with_string_keys() raises:
     var gb = HashGrouping(ExecContext.parallel(4))
     var par_groups = gb.assign(b, _BIG)
 
-    assert_equal(serial_groups.num_groups, 40_000)
-    assert_equal(par_groups.num_groups, 40_000)
-    _ = _bijection(serial_groups.ids, par_groups.ids, 40_000)
+    assert_equal(serial_groups.num_groups, 60_000)
+    assert_equal(par_groups.num_groups, 60_000)
+    _ = _bijection(serial_groups.ids, par_groups.ids, 60_000)
 
 
 def test_radix_placement_matches_serial_with_two_keys() raises:
@@ -260,8 +294,8 @@ def test_radix_placement_handles_null_keys() raises:
             a.append_null()
             b.append_null()
         else:
-            a.append(Int32(i % 40_000))
-            b.append(Int32(i % 40_000))
+            a.append(Int32(i % 60_000))
+            b.append(Int32(i % 60_000))
 
     var sc = List[DynArray]()
     sc.append(a.finish())
@@ -316,21 +350,21 @@ def test_radix_second_batch_extends_the_grouping() raises:
     var g = HashGrouping(ExecContext.parallel(4))
 
     var first = List[DynArray]()
-    first.append(_int_keys(_BIG, 40_000))
+    first.append(_int_keys(_BIG, 60_000))
     var g1 = g.assign(first, _BIG)
-    assert_equal(g1.num_groups, 40_000)
+    assert_equal(g1.num_groups, 60_000)
 
     var b = Int32Builder(capacity=_BIG)
     for i in range(_BIG):
-        b.append(Int32(40_000 + ((i * 7919) % 30_000)))
+        b.append(Int32(60_000 + ((i * 7919) % 30_000)))
     var second = List[DynArray]()
     second.append(b.finish())
     var g2 = g.assign(second, _BIG)
-    assert_equal(g2.num_groups, 70_000)
+    assert_equal(g2.num_groups, 90_000)
     # Every key in the second batch is new, so all of its ids land past the
     # block the first batch already claimed.
     for i in range(0, _BIG, 997):
-        assert_true(Int(g2.ids[i].value()) >= 40_000)
+        assert_true(Int(g2.ids[i].value()) >= 60_000)
 
 
 def test_below_threshold_stays_serial_under_a_parallel_context() raises:
@@ -398,7 +432,7 @@ def test_grouped_mean_agrees_between_paths() raises:
     splits a group across accumulators, so there are no partial means to
     combine — the divisor is the group's whole count on both paths."""
     var sk = List[DynArray]()
-    sk.append(_int_keys(_BIG, 40_000))
+    sk.append(_int_keys(_BIG, 60_000))
     var gs = HashGrouping(ExecContext.serial())
     var sgroups = gs.assign(sk, _BIG)
     var smean = Fold[MeanFold, Int32Type].grouped(
@@ -406,16 +440,16 @@ def test_grouped_mean_agrees_between_paths() raises:
     )
 
     var pk = List[DynArray]()
-    pk.append(_int_keys(_BIG, 40_000))
+    pk.append(_int_keys(_BIG, 60_000))
     var gp = HashGrouping(ExecContext.parallel(4))
     var pgroups = gp.assign(pk, _BIG)
     var pmean = Fold[MeanFold, Int32Type].grouped(
         pgroups, _payload(_BIG).as_int32().copy()
     )
 
-    assert_equal(len(smean), 40_000)
-    var fwd = _bijection(sgroups.ids, pgroups.ids, 40_000)
-    for q in range(40_000):
+    assert_equal(len(smean), 60_000)
+    var fwd = _bijection(sgroups.ids, pgroups.ids, 60_000)
+    for q in range(60_000):
         assert_equal(pmean[q].value(), smean[fwd[q]].value())
 
 
@@ -469,7 +503,7 @@ def test_grouped_variance_agrees_between_paths() raises:
     ascending row order, so the Welford recurrence sees the identical sequence
     and no reassociation occurs.
     """
-    var pair = _grouped_pair(40_000)
+    var pair = _grouped_pair(60_000)
     var payload = _payload(_BIG)
     var sv = Dispersion[1, False, Int32Type].grouped(
         pair[0], _in[Dispersion[1, False, Int32Type]](payload.copy())
@@ -477,10 +511,10 @@ def test_grouped_variance_agrees_between_paths() raises:
     var pv = Dispersion[1, False, Int32Type].grouped(
         pair[1], _in[Dispersion[1, False, Int32Type]](payload.copy())
     )
-    assert_equal(len(sv), 40_000)
-    var fwd = _bijection(pair[0].ids, pair[1].ids, 40_000)
+    assert_equal(len(sv), 60_000)
+    var fwd = _bijection(pair[0].ids, pair[1].ids, 60_000)
     var checked = 0
-    for q in range(40_000):
+    for q in range(60_000):
         assert_equal(pv.is_valid(q), sv.is_valid(fwd[q]))
         if pv.is_valid(q):
             assert_equal(pv[q].value(), sv[fwd[q]].value())
@@ -492,7 +526,7 @@ def test_grouped_stddev_agrees_between_paths() raises:
     """`root=True` takes the square root of the same triple, so it inherits the
     argument above; asserted separately because it is a distinct
     instantiation."""
-    var pair = _grouped_pair(40_000)
+    var pair = _grouped_pair(60_000)
     var payload = _payload(_BIG)
     var ss = Dispersion[0, True, Int32Type].grouped(
         pair[0], _in[Dispersion[0, True, Int32Type]](payload.copy())
@@ -500,8 +534,8 @@ def test_grouped_stddev_agrees_between_paths() raises:
     var ps = Dispersion[0, True, Int32Type].grouped(
         pair[1], _in[Dispersion[0, True, Int32Type]](payload.copy())
     )
-    var fwd = _bijection(pair[0].ids, pair[1].ids, 40_000)
-    for q in range(40_000):
+    var fwd = _bijection(pair[0].ids, pair[1].ids, 60_000)
+    for q in range(60_000):
         assert_equal(ps.is_valid(q), ss.is_valid(fwd[q]))
         if ps.is_valid(q):
             assert_equal(ps[q].value(), ss[fwd[q]].value())
@@ -513,7 +547,7 @@ def test_grouped_count_distinct_agrees_between_paths() raises:
     tables would carry incompatible bucket numbering and double-count any value
     both threads saw. Radix placement never splits a group, so the question
     never arises."""
-    var pair = _grouped_pair(40_000)
+    var pair = _grouped_pair(60_000)
     var payload = _int64_payload(_BIG)
     var sd = DistinctCount[True, Int64Array].grouped(
         pair[0], _in[DistinctCount[True, Int64Array]](payload.copy())
@@ -521,9 +555,9 @@ def test_grouped_count_distinct_agrees_between_paths() raises:
     var pd = DistinctCount[True, Int64Array].grouped(
         pair[1], _in[DistinctCount[True, Int64Array]](payload.copy())
     )
-    assert_equal(len(sd), 40_000)
-    var fwd = _bijection(pair[0].ids, pair[1].ids, 40_000)
-    for q in range(40_000):
+    assert_equal(len(sd), 60_000)
+    var fwd = _bijection(pair[0].ids, pair[1].ids, 60_000)
+    for q in range(60_000):
         assert_equal(pd[q].value(), sd[fwd[q]].value())
 
 
@@ -535,7 +569,7 @@ def test_grouped_count_distinct_agrees_between_paths() raises:
 
 
 comptime _SMALL: Int = 1_000
-"""Under the 60k threshold, so a batch this size cannot qualify on its own."""
+"""Under the 50k threshold, so a batch this size cannot qualify on its own."""
 
 comptime _SMALL_CARD: Int = 37
 """Keys 0..36 — every one of them reappears in the large batch below."""

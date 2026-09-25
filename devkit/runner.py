@@ -10,6 +10,7 @@ line through duck-typed `parser`/`config` objects, and `conftest.py` builds a
 reachable from a plain unit test.
 """
 
+import argparse
 import hashlib
 import json
 import re
@@ -23,6 +24,14 @@ from .mojo import write_if_changed
 # ---------------------------------------------------------------------------
 # Options and lanes
 # ---------------------------------------------------------------------------
+
+
+def define_arg(text):
+    """Validate one `--define` argument: `NAME=VALUE`, NAME an identifier."""
+    name, sep, _ = text.partition("=")
+    if not sep or not name.isidentifier():
+        raise argparse.ArgumentTypeError(f"expected NAME=VALUE, got {text!r}")
+    return text
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,7 @@ class RunnerOptions:
     save_benchmarks: str = ""
     benchmark_history: str = ""
     num_threads: int = 0
+    define: tuple = ()
 
     @staticmethod
     def flag(name):
@@ -129,6 +139,19 @@ class RunnerOptions:
             "(implies --benchmark).",
         )
         add(
+            "--define",
+            action="append",
+            default=[],
+            metavar="NAME=VALUE",
+            type=define_arg,
+            help="Pass `-D NAME=VALUE` to the Mojo test and benchmark builds "
+            "(repeatable). For comptime knobs read through "
+            "`get_defined_int`/`get_defined_bool`, such as "
+            "`MARROW_GROUPBY_RADIX_MIN_ROWS`. Not applied to libmarrow.so, and "
+            "refused with --save-benchmarks: results built with a define are "
+            "not the tree's numbers.",
+        )
+        add(
             "--benchmark-history",
             metavar="FILE",
             default="",
@@ -152,9 +175,20 @@ class RunnerOptions:
         # argparse hands back None for an unset string option.
         for name in ("save_benchmarks", "benchmark_history"):
             values[name] = values[name] or ""
+        # argparse hands back a list for an appending option.
+        values["define"] = tuple(values["define"] or ())
         # Saving results is pointless without producing them, so the one
         # implies the other rather than failing on the combination.
         values["benchmark"] = bool(values["benchmark"] or values["save_benchmarks"])
+        # A define exists to build something other than the tree -- a forced
+        # code path, a moved threshold -- so its numbers would land in the
+        # rolling history under the same names as the real ones.
+        if values["define"] and values["save_benchmarks"]:
+            raise ValueError(
+                "--define cannot be combined with --save-benchmarks: results "
+                "built with " + ", ".join(values["define"]) + " would be "
+                "recorded as the tree's own"
+            )
         return cls(**values)
 
 
@@ -394,10 +428,11 @@ class DriverGenerator:
 
     SUITES = {"test": "TestSuite", "bench": "BenchSuite"}
 
-    def __init__(self, repo, kind):
+    def __init__(self, repo, kind, defines=()):
         self.repo = repo
         self.kind = kind
         self.suite = self.SUITES[kind]
+        self.defines = tuple(defines)
 
     def module_path(self, path):
         """`marrow/expr/tests/test_relations.mojo` -> `marrow.expr.tests.test_relations`."""
@@ -408,7 +443,12 @@ class DriverGenerator:
         )
 
     def render(self, selection):
-        lines = [f"from {self.repo.testing_module} import {self.suite}"]
+        # The defines change the program without changing its imports, so they
+        # are written into the source: that is what keeps two builds of one
+        # selection under different `-D`s at different content-addressed paths,
+        # and the ASAN binary shares the driver's stem.
+        lines = [f"# built with -D {define}" for define in self.defines]
+        lines.append(f"from {self.repo.testing_module} import {self.suite}")
         names = []
         for path, cases in selection.by_file().items():
             if not cases:

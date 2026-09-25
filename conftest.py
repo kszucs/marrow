@@ -71,7 +71,10 @@ class Harness:
     def __init__(self, config):
         self.config = config
         self.repo = Repo(config.rootpath)
-        self.options = RunnerOptions.from_config(config)
+        try:
+            self.options = RunnerOptions.from_config(config)
+        except ValueError as error:
+            raise pytest.UsageError(str(error)) from None
         self.lanes = LaneSelector(
             self.options,
             config.args,
@@ -129,8 +132,12 @@ class Harness:
         build = BuildOptions.for_benches if kind == "bench" else BuildOptions.for_tests
         return SuiteRunner(
             self.toolchain,
-            DriverGenerator(self.repo, kind),
-            build(gpu=self.options.gpu, asan=self.options.asan),
+            DriverGenerator(self.repo, kind, self.options.define),
+            build(
+                gpu=self.options.gpu,
+                asan=self.options.asan,
+                defines=self.options.define,
+            ),
             notify=lambda message: print(message, flush=True),
         )
 

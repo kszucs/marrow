@@ -204,6 +204,173 @@ def bench_groupby_string_par8_1m_card10k(mut b: Benchmark) raises:
 
 
 # ---------------------------------------------------------------------------
+# Calibration sweeps — the two gates, and nothing else.
+#
+# `_RADIX_MIN_ROWS` and `_RADIX_MIN_GROUPS` decide *when* radix placement
+# engages. Every row here runs under `ExecContext.auto()`, because what a gate
+# chooses between is two placements under the context a query actually gets —
+# `execute()` passes `auto()`. Not `parallel(8)`: a forced count stripes every
+# loop eight ways however small, which made *serial* placement of a 15k-row
+# batch 5x slower (675 us against 129 us) and credited radix with a 3x win no
+# query would see. Nor `serial()`: that also changes the hashing, and moves the
+# crossover by the difference.
+#
+# **Reading them takes two runs**, one per placement, forced from the command
+# line — both gates are read through `get_defined_int`:
+#
+#   radix:  pytest --benchmark marrow/kernels/tests/bench_groupby.mojo \
+#             -k "sweep or anchor" \
+#             --define MARROW_GROUPBY_RADIX_MIN_ROWS=0 \
+#             --define MARROW_GROUPBY_RADIX_MIN_GROUPS=0
+#   serial: pytest --benchmark marrow/kernels/tests/bench_groupby.mojo \
+#             -k "sweep or anchor" \
+#             --define MARROW_GROUPBY_RADIX_MIN_ROWS=1000000000000
+#
+# The crossover is where a row's two timings cross, after normalising each run
+# against `bench_groupby_anchor_swiss_insert_1m`, which neither gate can touch.
+# The serial run closes the *row* gate because the groups gate cannot be closed:
+# at any setting its threshold stays under 4,096 distinct draws, which an
+# all-distinct sample reaches.
+#
+# The rows name cardinality, which is the gate's own unit. The probe draws with
+# replacement at random positions, so a column of `c` equally frequent groups
+# samples `c (1 - e^(-4096/c))` distinct values whatever the row count and the
+# layout — the model `_RADIX_MIN_SAMPLE_DISTINCT` is computed from.
+# ---------------------------------------------------------------------------
+
+
+# Cardinality at 1M rows, over the row gate at any setting worth considering, so
+# only the groups gate is in question.
+
+
+def bench_groupby_sweep_auto_1m_card2k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 2_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card5k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 5_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card10k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 10_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card20k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 20_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card25k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 25_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card30k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 30_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card40k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 40_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card50k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 50_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_1m_card100k(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(_N, 100_000), _N, ExecContext.auto())
+
+
+# Row count at half-distinct keys, so the groups gate is in question too: these
+# rows hold 7,500 to 125,000 groups. Read the row gate off the rows whose
+# groups are over whatever the sweep above chose.
+
+
+def bench_groupby_sweep_auto_15k_half(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(15_000, 7_500), 15_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_30k_half(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(30_000, 15_000), 30_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_40k_half(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(40_000, 20_000), 40_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_50k_half(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(50_000, 25_000), 50_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_60k_half(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(60_000, 30_000), 60_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_125k_half(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(125_000, 62_500), 125_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_auto_250k_half(mut b: Benchmark) raises:
+    _bench_group(b, _int_keys(250_000, 125_000), 250_000, ExecContext.auto())
+
+
+# The same two sweeps over string keys. One pair of constants gates every key
+# type, and hashing is a far larger share of a string grouping — it stripes in
+# both placements, so it dilutes the difference between them and can move the
+# crossover. If these cross somewhere else, the gates need a per-type answer.
+
+
+def bench_groupby_sweep_string_auto_1m_card2k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 2_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_1m_card5k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 5_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_1m_card20k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 20_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_1m_card50k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 50_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_1m_card75k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 75_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_1m_card100k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 100_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_1m_card150k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 150_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_1m_card200k(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(_N, 200_000), _N, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_30k_half(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(30_000, 15_000), 30_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_60k_half(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(60_000, 30_000), 60_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_90k_half(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(90_000, 45_000), 90_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_125k_half(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(125_000, 62_500), 125_000, ExecContext.auto())
+
+
+def bench_groupby_sweep_string_auto_250k_half(mut b: Benchmark) raises:
+    _bench_group(b, _string_keys(250_000, 125_000), 250_000, ExecContext.auto())
+
+
+# ---------------------------------------------------------------------------
 # Drift anchor — no group-by code on this path. If this row moves, the batch
 # moved; subtract it before reading anything above.
 # ---------------------------------------------------------------------------

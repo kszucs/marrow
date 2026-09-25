@@ -25,14 +25,13 @@ all of them.
 | 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
 | 2 | **Error taxonomy** — 373 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 373 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14 | **M** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
-| 4 | **Parallel group-by gates are uncalibrated** — `_MIN_DISTINCT_RATIO` (0.9) and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) in `kernels/groupby.mojo` | Radix-partitioned placement landed in `dcef953a`, but when it engages is a guess: the 0.9 was set from a measurement of a version since made twice as fast, and nothing has re-measured the crossover. See §2.1 | **S** | — |
-| 5 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 6 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
-| 7 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
-| 8 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 9 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 10 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
-| 11 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
+| 4 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
+| 5 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
+| 6 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
+| 7 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 8 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 9 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
+| 10 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
 
@@ -140,10 +139,10 @@ blocked, four separate times.
   `test_parity.mojo` across four axes; it went with the previous expression
   package and has no replacement. The invariant is currently unenforced.
 - **Group-by is covered at the kernel, not through the engine.**
-  `kernels/tests/test_groupby.mojo` (24 cases) pins both placement paths
+  `kernels/tests/test_groupby.mojo` (23 cases) pins both placement paths
   directly on `HashGrouping`, but nothing drives the radix path through
   `GroupByOperator`: every group-by case in `expr/tests`, `golden/` and
-  `python/marrow/tests` is far under the 60,000-row gate, so the engine's
+  `python/marrow/tests` is far under the 50,000-row gate, so the engine's
   wiring to the parallel path is untested end to end.
 
 **The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
@@ -608,10 +607,28 @@ exact `count_distinct` makes impossible. There is no pipeline parallelism:
 
 **What it would take.** True pipeline parallelism is the remaining item: the
 push `Operator` contract is a good foundation, but nothing owns a task queue
-today. Two group-by knobs are also uncalibrated — `_MIN_DISTINCT_RATIO` (0.9)
-and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) have no measurement in the tree, and
-`bench_groupby.mojo` has no row-count tier between 1M and 10M to find the
-crossover with.
+today.
+
+Group-by placement has three open costs, all measured by the "Calibration
+sweeps" in `bench_groupby.mojo`:
+
+- **String keys cross about twice as late** as the gates in
+  `kernels/groupby.mojo` — near 65,000 groups and 75,000 rows, against
+  int32's 30,000 and 50,000 — so one pair of constants costs a string batch
+  between the edges up to 5%. A per-type gate would recover it, but the cause
+  is unprofiled: from 2k to 100k groups at 1M rows radix's string time grows by
+  1.3 ms and its int32 time by 0.3 ms, while serial's grows by 1.8 ms and
+  1.4 ms. The key gather of the new groups' rows, which the radix path issues
+  in partition-major rather than row order, is the first suspect.
+- **Serial placement pays for table growth on insert-heavy batches.** At 15k
+  rows and 7,500 groups the bare insert takes 102 us growing adaptively and
+  29 us into a table reserved for the answer — most of the batch's 129 us. The
+  radix path already reserves per partition; the serial one has no size hint,
+  because the cardinality probe only runs above the row gate.
+- **`ExecContext.parallel(N)` stripes every loop N ways however small.** That
+  is its contract, but it made serial placement of a 15k-row batch 5x slower
+  (675 us against 129 us) with nothing else changed, and every caller that
+  passes an explicit worker count pays it. `auto()` does not.
 
 #### 2.2 Larger-than-memory execution
 

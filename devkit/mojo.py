@@ -484,17 +484,30 @@ class BuildOptions:
     include: tuple = (".",)
     debug_info_language: str = ""
     link_libm: bool = False
+    defines: tuple = ()
 
     @classmethod
-    def for_tests(cls, *, gpu=False, asan=False):
+    def for_tests(cls, *, gpu=False, asan=False, defines=()):
         return cls(
-            opt="-O1", debug="-g1", asserts=True, gpu=gpu, asan=asan, link_libm=True
+            opt="-O1",
+            debug="-g1",
+            asserts=True,
+            gpu=gpu,
+            asan=asan,
+            link_libm=True,
+            defines=tuple(defines),
         )
 
     @classmethod
-    def for_benches(cls, *, gpu=False, asan=False):
+    def for_benches(cls, *, gpu=False, asan=False, defines=()):
         return cls(
-            opt="-O3", debug="-g1", asserts=False, gpu=gpu, asan=asan, link_libm=True
+            opt="-O3",
+            debug="-g1",
+            asserts=False,
+            gpu=gpu,
+            asan=asan,
+            link_libm=True,
+            defines=tuple(defines),
         )
 
     @classmethod
@@ -536,6 +549,8 @@ class BuildOptions:
             # this the device paths are elaborated away and every GPU test
             # would exercise the CPU fallback instead of failing honestly.
             flags += ["-D", "MARROW_GPU=true"]
+        for define in self.defines:
+            flags += ["-D", define]
         if self.asan:
             if asan_runtime is None:
                 raise RuntimeError(

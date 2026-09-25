@@ -274,9 +274,12 @@ struct ExecContext(
           must still take the serial path, or the setup dwarfs the query.
 
         ``min_parallel_size`` is deliberately required rather than defaulted.
-        There is no meaningful default — each of the three callers has measured
-        its own crossover (60k rows for group-by, 100k for join, 200k for
-        distinct) and they are not the same number, nor `stripe`'s 32768.
+        There is no meaningful default — the crossover belongs to the algorithm
+        being chosen, so each caller owns its own constant
+        (``_RADIX_MIN_ROWS`` in ``kernels/groupby.mojo``,
+        ``_PARALLEL_THRESHOLD`` and ``_PROBE_STRIPE_THRESHOLD`` in
+        ``kernels/join.mojo``, ``_PARALLEL_DISTINCT_MIN_ROWS`` in
+        ``kernels/distinct.mojo``) and documents there whether it was measured.
 
         Like ``wants_parallel`` this answers False on a GPU context, which the
         three hand-rolled copies of this test did not: they asked

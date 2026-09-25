@@ -53,6 +53,9 @@ parallel path and is unchanged by it: the radix split routes on the same hash,
 so the two paths collide identically.
 """
 
+from std.math import exp
+from std.sys import get_defined_int
+
 from max.algorithm.functional import sync_parallelize
 
 from ..arrays import (
@@ -157,12 +160,25 @@ struct Groups(Copyable, Movable):
         return self._single
 
 
-comptime _PARALLEL_GROUPBY_MIN_ROWS: Int = 60_000
+comptime _RADIX_MIN_ROWS: Int = get_defined_int[
+    "MARROW_GROUPBY_RADIX_MIN_ROWS", 50_000
+]()
 """Batch size below which placement stays serial.
 
-Matches the number ``ExecContext.worth_parallel``'s own docstring records for
-group-by. Below it the radix pass, the 64 tables and the two extra row-order
-passes cost more than the probe loop they replace.
+Below it the radix pass, the 64 tables and the two extra row-order passes cost
+more than the probe loop they replace. Measured by the calibration sweep in
+`tests/bench_groupby.mojo` under `ExecContext.auto()` on an M4 Max, int32 keys
+at half-distinct — an insert-heavy shape, where radix has the most to win — as
+serial time over radix time:
+
+    rows    15k   30k   40k   50k   60k   90k   125k   250k
+    int32  0.60  0.77  1.04  0.97  1.26     —   2.98   2.09
+    string    —  0.79     —     —  0.95  1.12   1.31   1.27
+
+The int32 edge sits between 40k and 60k and 50k is its middle. String keys
+cross later, near 75k, for a reason not yet profiled. One constant serves both,
+and costs a string batch at most ~5% between the two edges. Overridable with `-D MARROW_GROUPBY_RADIX_MIN_ROWS=N`,
+which is how the sweep forces either path.
 """
 
 comptime _GROUPBY_RADIX_BITS: Int = 6
@@ -207,11 +223,13 @@ So the idle is a cost of dense ids, not an implementation defect. Anyone
 attacking it should start there, not at the fan-out or the pool."""
 
 comptime _SAMPLE_ROWS: Int = 4096
-"""How many rows the cardinality probe looks at. Small enough that its table
-stays in L1 and the probe costs tens of microseconds on a million rows."""
+"""How many rows the cardinality probe draws. Small enough that its table stays
+in L1 and the probe costs tens of microseconds on a million rows."""
 
-comptime _MIN_DISTINCT_RATIO: Float64 = 0.9
-"""How nearly-distinct the sample must be before radix placement is worth it.
+comptime _RADIX_MIN_GROUPS: Int = get_defined_int[
+    "MARROW_GROUPBY_RADIX_MIN_GROUPS", 30_000
+]()
+"""How many distinct groups a batch must hold before radix placement pays.
 
 **Row count alone is the wrong question.** Radix reads the rows three extra
 times — histogram, scatter, and the id write-back — where the serial path
@@ -220,51 +238,87 @@ there is little for those passes to win back; at 500,000 groups it does not fit
 in cache, the probe dominates, and splitting it 64 ways is what the
 partitioning is for.
 
-0.9 keeps radix off unless the sample is *almost all distinct*, which happens
-only when cardinality is large relative to `_SAMPLE_ROWS`. A 1,000-group column
-samples at ~0.24 and stays serial; a 500,000-group one samples at ~1.0.
+Measured by the same sweep, at 1M rows, as serial time over radix time:
 
-**The threshold is not calibrated against this implementation.** It was set
-from a 2.7 ms vs 6.4 ms measurement quoted in `_consume_keys_radix` below, and
-that number came from a version whose *serial* O(rows) numbering pass has since
-been removed — along with, later, the table pre-size and the write-back's id
-loads. The structural argument above survives all three; the crossover point
-does not, and 0.9 is now a conservative guess rather than a measured edge.
-Re-measure before moving it.
+    groups   2k    5k   10k   20k   25k   30k   40k   50k   75k   100k   150k
+    int32  0.81  0.88  0.92  0.98  0.97  1.03  1.08  1.10     —   1.28      —
+    string 0.98  0.94     —  0.95     —     —     —  0.97  1.04   1.07   1.24
+
+The int32 edge is 30,000. Strings again cross later, near 65,000; the one
+point measured in between, 50k, loses 3%.
+
+**The unit is groups, not a sample ratio**, because groups is what the cost
+depends on and what the calibration sweep names. The probe cannot count groups
+directly — see `_looks_high_cardinality` — so the gate compares its distinct
+count against `_RADIX_MIN_SAMPLE_DISTINCT`, what a column of exactly this many
+equally frequent groups is expected to produce. Overridable with
+`-D MARROW_GROUPBY_RADIX_MIN_GROUPS=N`; `0` opens the gate for every batch.
 """
 
 
-def _looks_high_cardinality(hashes: UInt64Array) raises -> Bool:
-    """Is this batch distinct enough that radix placement pays for itself?
+def _expected_distinct(groups: Int, draws: Int) -> Int:
+    """Distinct values expected among `draws` uniform draws, with replacement,
+    from `groups` equally frequent values: `g (1 - e^(-draws/g))`.
 
-    Probes ``_SAMPLE_ROWS`` hashes into a throwaway table and asks what
-    fraction came back distinct. The sample is taken on a large odd stride
-    modulo ``n`` rather than every ``n / _SAMPLE_ROWS``-th row: a fixed stride
-    aliases with any periodic key pattern — including the ones the tests and
-    benchmarks build — and can report a handful of distinct values for a
-    column that has millions.
+    Non-raising so it can run at comptime, which is where the gate uses it.
     """
-    var n = len(hashes)
-    var want = min(_SAMPLE_ROWS, n)
-    # The probe is asking whether the sample is *almost all* distinct, so size
-    # the table for `want` keys up front. Left adaptive it grows out of
+    if groups <= 0:
+        return 0
+    return Int(Float64(groups) * (1.0 - exp(-Float64(draws) / Float64(groups))))
+
+
+comptime _RADIX_MIN_SAMPLE_DISTINCT: Int = _expected_distinct(
+    _RADIX_MIN_GROUPS, _SAMPLE_ROWS
+)
+"""`_RADIX_MIN_GROUPS` in the probe's units: 3,828 of 4,096 at 30,000 groups.
+
+The mapping flattens as groups grow — 5,000 groups expect 2,796, 50,000 expect
+3,932, 100,000 expect 4,013, 200,000 expect 4,054 — while the draw-to-draw
+spread is about 15 at 30,000 groups and 9 at 100,000. A batch 10% either side
+of the gate lands ~25 draws away, so the edge is soft by about ±15% of
+`_RADIX_MIN_GROUPS`; the sweep puts the cost of misplacing a batch in that band
+under 5%. A gate much past 100,000 needs a larger sample rather than a
+different constant."""
+
+
+def _looks_high_cardinality(hashes: UInt64Array) raises -> Bool:
+    """Does this batch hold at least ``_RADIX_MIN_GROUPS`` distinct groups?
+
+    Draws ``_SAMPLE_ROWS`` rows **at pseudo-random positions, with
+    replacement**, and counts the distinct hashes among them. With replacement
+    is what makes the answer a function of the key *distribution* alone: each
+    draw is then a uniform draw of a key, so a column of `g` equally frequent
+    groups yields `g (1 - e^(-4096/g))` distinct values whatever `n` is and
+    whatever order the rows are in — sorted, interleaved or random.
+
+    **Positions must not be an arithmetic sequence.** The previous probe walked
+    `k * C mod n` for the golden-ratio constant `C`. `C` ends in `...485`, so
+    whenever 5 divides `n` — every round batch size — it visited one row in
+    five; and any stride aliases with a key generated as a linear function of
+    the row index, which is what `(i * 7919) % card` in the tests and benches
+    is. On 1M rows it saw 5,000 groups as 0.24 distinct and 20,000 as 0.98,
+    against 0.68 and 0.90 for a random sample. The positions here come from
+    wyhash's PRNG step and are reduced to `[0, n)` with a multiply-high, so
+    there is no division per draw and no arithmetic structure to alias with.
+
+    `hashes` must be non-empty; `assign` returns before hashing an empty
+    batch.
+    """
+    var n = UInt64(len(hashes))
+    # Sized for every draw up front. Left adaptive it grows out of
     # `_GROUP_WIDTH`, and every doubling re-inserts everything already in it —
     # about nine rehashes to answer one Bool, repeated on every serial batch
     # over the row threshold.
-    var table = SwissHashTable[RapidHash64](capacity=want)
-    var sample = UInt64Builder(capacity=want, zeroed=False)
-    # Same indices as `(k * C) % n`, with one division instead of `want` of
-    # them: consecutive terms differ by `C % n`, and two values below `n` sum
-    # to less than `2n`, so a compare-and-subtract closes the modulo.
-    var step = UInt64(0x9E3779B97F4A7C15) % UInt64(n)
-    var idx = UInt64(0)
-    for _ in range(want):
+    var table = SwissHashTable[RapidHash64](capacity=_SAMPLE_ROWS)
+    var sample = UInt64Builder(capacity=_SAMPLE_ROWS, zeroed=False)
+    var seed = UInt64(0)
+    for _ in range(_SAMPLE_ROWS):
+        seed += 0x2D358DCCAA6C78A5
+        var r = RapidHash64.mix(seed, seed ^ 0x8BB84B93962EACC9)
+        var idx = RapidHash64.mum(r, n)[1]
         sample.unsafe_append(hashes.unsafe_get(Int(idx)))
-        idx += step
-        if idx >= UInt64(n):
-            idx -= UInt64(n)
     _ = table.insert_hashes(sample.finish(), grow_adaptively=False)
-    return Float64(table.num_keys()) >= _MIN_DISTINCT_RATIO * Float64(want)
+    return table.num_keys() >= _RADIX_MIN_SAMPLE_DISTINCT
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +343,7 @@ struct HashGrouping(Movable):
 
     * **Serial** — one ``SwissHashTable`` over the whole batch. Unchanged from
       the pre-parallel grouper, and what a serial context, a GPU context or a
-      batch below ``_PARALLEL_GROUPBY_MIN_ROWS`` gets.
+      batch below ``_RADIX_MIN_ROWS`` gets.
     * **Radix** — ``2 ** _GROUPBY_RADIX_BITS`` persistent tables, one per
       partition of the key hash's top bits, filled by one worker each.
 
@@ -416,7 +470,7 @@ struct HashGrouping(Movable):
         # for a batch already large enough to qualify.
         if (
             not self._is_radix()
-            and self._ctx.worth_parallel(num_rows, _PARALLEL_GROUPBY_MIN_ROWS)
+            and self._ctx.worth_parallel(num_rows, _RADIX_MIN_ROWS)
             and _looks_high_cardinality(batch_hashes)
         ):
             self._migrate_to_radix()
@@ -435,7 +489,7 @@ struct HashGrouping(Movable):
         ``_consume_keys_radix``: same arguments, same answer, different shape.
 
         What a serial context, a GPU context, or a batch below
-        ``_PARALLEL_GROUPBY_MIN_ROWS`` gets.
+        ``_RADIX_MIN_ROWS`` gets.
 
         Bucket ids are dense and assigned in row order, so first occurrences
         appear in increasing id order — one forward scan collects them all and
@@ -615,10 +669,10 @@ struct HashGrouping(Movable):
             # themselves and the id write-back.
             #
             # **Half the partition's rows, not all of them.** The gate above
-            # only says the sample came back at least `_MIN_DISTINCT_RATIO`
-            # distinct, and a 4,096-row sample saturates: 5M groups over 10M
-            # rows and 10M over 10M both sample at ~1.0, so the ratio cannot
-            # be used as a key-count estimate. Half is within one doubling of
+            # only says the batch holds at least `_RADIX_MIN_GROUPS` groups,
+            # and a 4,096-row sample saturates: 5M groups over 10M rows and 10M
+            # over 10M both sample at ~1.0, so the probe cannot be used as a
+            # key-count estimate. Half is within one doubling of
             # either — `insert_hashes` still grows adaptively when the guess
             # is low, and a high guess costs one power of two and no rehash.
             self._parts[i].reserve(prev + len(part_hashes) // 2)

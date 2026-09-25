@@ -1,5 +1,6 @@
 """Options, lanes, selections, drivers and the suite runner."""
 
+import argparse
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from devkit.runner import (
     RunnerOptions,
     Selection,
     SuiteRunner,
+    define_arg,
 )
 
 
@@ -64,6 +66,32 @@ def test_saving_benchmarks_implies_running_them():
     options = RunnerOptions.from_config(FakeConfig(save_benchmarks="results"))
     assert options.benchmark
     assert options.save_benchmarks == "results"
+
+
+def test_defines_are_read_as_a_tuple():
+    options = RunnerOptions.from_config(
+        FakeConfig(define=["MARROW_GROUPBY_RADIX_MIN_ROWS=0", "X=1"])
+    )
+    assert options.define == ("MARROW_GROUPBY_RADIX_MIN_ROWS=0", "X=1")
+    assert RunnerOptions.from_config(FakeConfig()).define == ()
+
+
+def test_defines_are_refused_with_saved_benchmarks():
+    """A define builds something other than the tree; its numbers must not land
+    in the history under the tree's names."""
+    with pytest.raises(ValueError, match="--save-benchmarks"):
+        RunnerOptions.from_config(FakeConfig(define=["X=1"], save_benchmarks="out"))
+
+
+@pytest.mark.parametrize("text", ["X", "=1", "1X=2", "A-B=1"])
+def test_define_arg_rejects_malformed_input(text):
+    with pytest.raises(argparse.ArgumentTypeError):
+        define_arg(text)
+
+
+def test_define_arg_accepts_name_value():
+    assert define_arg("MARROW_GPU=true") == "MARROW_GPU=true"
+    assert define_arg("EMPTY=") == "EMPTY="
 
 
 def test_options_declare_every_flag_it_reads():
@@ -331,6 +359,16 @@ def test_driver_module_path_backticks_reserved_words(repo):
     # `comptime` is a keyword -- unbackticked the import fails to parse.
     reserved = repo.root / "marrow/expr/comptime/tests/test_x.mojo"
     assert generator.module_path(reserved) == "marrow.expr.`comptime`.tests.test_x"
+
+
+def test_defines_give_a_selection_its_own_driver(repo):
+    """Two builds of one selection under different `-D`s must not share a
+    content-addressed path -- the ASAN binary is named after it."""
+    plain = DriverGenerator(repo, "bench").write(two_file_selection(repo))
+    forced = DriverGenerator(repo, "bench", ("X=1",)).write(two_file_selection(repo))
+    assert plain != forced
+    assert forced.read_text().startswith("# built with -D X=1\n")
+    assert "# built with" not in plain.read_text()
 
 
 def test_driver_is_deterministic(repo):

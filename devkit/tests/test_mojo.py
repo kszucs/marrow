@@ -71,6 +71,15 @@ def test_flags_gpu_is_opt_in():
     assert "MARROW_GPU=true" in BuildOptions.for_benches(gpu=True).flags()
 
 
+def test_flags_pass_every_define():
+    assert BuildOptions.for_benches().flags().count("-D") == 0
+    flags = BuildOptions.for_benches(defines=("A=1", "B=2")).flags()
+    assert flags[flags.index("A=1") - 1] == "-D"
+    assert flags[flags.index("B=2") - 1] == "-D"
+    tests = BuildOptions.for_tests(defines=("A=1",)).flags()
+    assert tests[tests.index("A=1") - 1] == "-D" and "ASSERT=all" in tests
+
+
 def test_flags_asan_only_when_requested():
     assert "--sanitize" not in BuildOptions.for_tests().flags()
     runtime = AsanRuntime("/tmp/libclang_rt.asan.dylib")

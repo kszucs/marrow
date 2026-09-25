@@ -120,7 +120,10 @@ Options: `--mojo` / `--python` / `--cpu` / `--gpu` and their `--no-*` inverses
 select suites (GPU needs a Metal/CUDA device); `--benchmark` includes
 `bench_*.mojo` and enables `-O3`; `--asan` runs under AddressSanitizer (needs the
 `asan` environment); `--competition` prints a side-by-side comparison table after
-benchmarks; `--save-benchmarks DIR` / `--benchmark-history FILE` persist results.
+benchmarks; `--save-benchmarks DIR` / `--benchmark-history FILE` persist results;
+`--define NAME=VALUE` (repeatable) passes `-D` to the Mojo test and bench builds,
+for comptime knobs such as `MARROW_GROUPBY_RADIX_MIN_ROWS`, and is refused with
+`--save-benchmarks` so a forced build never lands in the history.
 
 **Only run the tests the change could have broken.** Select the directories that
 import the code you touched; the rest tells you nothing extra.
