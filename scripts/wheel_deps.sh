@@ -42,12 +42,10 @@ fi
 "$MICROMAMBA" create --yes --quiet --prefix "$PREFIX" --channel conda-forge \
     zstd=1.5.7 snappy=1.2.2 lz4-c=1.10.0 brotli=1.2.0 zlib=1.3.2
 
-# The pip-installed `mojo` needs GLIBCXX_3.4.30, which manylinux_2_34's own
-# libstdc++ (GCC 11) does not have, although Modular tags the wheel
-# manylinux_2_34. conda-forge's, which snappy pulls in, does. PREFIX/cxx holds
-# only that runtime, so `LD_LIBRARY_PATH` can hand it to the build without also
-# swapping the codecs in under every other process. Nothing of it ships, and the
-# wheel is tested outside this container (see python/pyproject.toml).
+# The build needs a newer libstdc++ than manylinux_2_34's (see
+# [tool.cibuildwheel.linux] in python/pyproject.toml). PREFIX/cxx holds only
+# conda-forge's, which snappy pulls in, so `LD_LIBRARY_PATH` can hand it to the
+# build without swapping the codecs in under every other process.
 if [ "$(uname -s)" = Linux ]; then
     mkdir -p "$PREFIX/cxx"
     ln -sf "$PREFIX/lib/libstdc++.so.6" "$PREFIX/lib/libgcc_s.so.1" "$PREFIX/cxx/"

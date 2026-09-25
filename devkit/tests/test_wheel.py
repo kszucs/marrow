@@ -15,38 +15,29 @@ from devkit.cli import Context, cli
 from devkit.mojo import Repo
 from devkit.wheel import check_wheel, compile_module
 
+CATALOG = compile_module(Repo.locate())
 _DIST_INFO = "marrow-0.1.0.dist-info"
+_ZSTD = f"marrow/{CATALOG._CODEC_LIB_CANDIDATES['zstd'][0]}"
 
 
-@pytest.fixture(scope="module")
-def catalog():
-    return compile_module(Repo.locate())
-
-
-def _libraries(catalog, *extra):
-    """What a macOS wheel ships: the extension, one file per codec, and the
-    Mojo runtime delocate grafts in."""
-    codecs = [
-        f"marrow/{names[0]}" for names in catalog._CODEC_LIB_CANDIDATES.values()
-    ]
-    return (
+def _wheel(directory, *extra, drop=(), expression=True, codecs=0):
+    """A macOS-shaped wheel -- the extension, one file per codec (candidate
+    `codecs` of each), the Mojo runtime delocate grafts in, and `extra` -- with
+    exactly the texts those need, less any library or text in `drop`."""
+    libraries = [
         "marrow/libmarrow.cpython-314-darwin.so",
-        *codecs,
+        *(f"marrow/{names[codecs]}" for names in CATALOG._CODEC_LIB_CANDIDATES.values()),
         "marrow/.dylibs/libKGENCompilerRTShared.dylib",
         *extra,
-    )
-
-
-def _texts(catalog, libraries):
-    """Exactly the texts `libraries` need, as the wheel would carry them."""
-    texts = {"LICENSE.txt", "NOTICE.txt"}
-    for lib in libraries:
-        texts.update(catalog.license_files(lib.rsplit("/", 1)[-1]) or ())
-    return texts
-
-
-def _write_wheel(tmp_path, libraries, texts, expression=True):
-    path = tmp_path / "marrow-0.1.0-cp314-cp314-macosx_13_0_arm64.whl"
+    ]
+    libraries = [lib for lib in libraries if lib not in drop]
+    texts = {
+        rel
+        for lib in libraries
+        for rel in CATALOG.license_files(lib.rsplit("/", 1)[-1]) or ()
+    } - set(drop)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "marrow-0.1.0-cp314-cp314-macosx_13_0_arm64.whl"
     metadata = ["Metadata-Version: 2.4", "Name: marrow", "Version: 0.1.0"]
     if expression:
         metadata.append("License-Expression: Apache-2.0 AND LicenseRef-Modular")
@@ -63,102 +54,76 @@ def _write_wheel(tmp_path, libraries, texts, expression=True):
     return path
 
 
-def _consistent_wheel(tmp_path, catalog, *extra):
-    libraries = _libraries(catalog, *extra)
-    return _write_wheel(tmp_path, libraries, _texts(catalog, libraries))
+def test_a_consistent_wheel_passes(tmp_path):
+    assert check_wheel(_wheel(tmp_path), CATALOG) == []
 
 
-def test_a_consistent_wheel_passes(tmp_path, catalog):
-    assert check_wheel(_consistent_wheel(tmp_path, catalog), catalog) == []
-
-
-def test_an_unrecorded_library_fails(tmp_path, catalog):
-    libraries = _libraries(catalog, "marrow/.dylibs/libmystery.dylib")
-    wheel = _write_wheel(tmp_path, libraries, _texts(catalog, libraries))
-    assert check_wheel(wheel, catalog) == [
+def test_an_unrecorded_library_fails(tmp_path):
+    wheel = _wheel(tmp_path, "marrow/.dylibs/libmystery.dylib")
+    assert check_wheel(wheel, CATALOG) == [
         "marrow/.dylibs/libmystery.dylib has no LIBRARY_LICENSES entry"
     ]
 
 
-def test_a_missing_text_names_the_library_that_needs_it(tmp_path, catalog):
-    libraries = _libraries(catalog)
-    texts = _texts(catalog, libraries) - {"licenses/zstd.txt"}
-    problems = check_wheel(_write_wheel(tmp_path, libraries, texts), catalog)
-    zstd = next(lib for lib in libraries if "libzstd" in lib)
-    assert problems == [
-        f"{zstd} needs licenses/zstd.txt, which is not under {_DIST_INFO}/licenses/"
+def test_a_missing_text_names_the_library_that_needs_it(tmp_path):
+    wheel = _wheel(tmp_path, drop={"licenses/zstd.txt"})
+    assert check_wheel(wheel, CATALOG) == [
+        f"{_ZSTD} needs licenses/zstd.txt, which is not under {_DIST_INFO}/licenses/"
     ]
 
 
-def test_a_missing_license_expression_fails(tmp_path, catalog):
-    libraries = _libraries(catalog)
-    wheel = _write_wheel(
-        tmp_path, libraries, _texts(catalog, libraries), expression=False
-    )
-    assert check_wheel(wheel, catalog) == ["METADATA has no License-Expression"]
+def test_a_missing_license_expression_fails(tmp_path):
+    wheel = _wheel(tmp_path, expression=False)
+    assert check_wheel(wheel, CATALOG) == ["METADATA has no License-Expression"]
 
 
-def test_a_missing_codec_fails(tmp_path, catalog):
-    """The build only warns when a codec is absent; the check must not."""
-    libraries = [lib for lib in _libraries(catalog) if "libsnappy" not in lib]
-    wheel = _write_wheel(tmp_path, libraries, _texts(catalog, libraries))
-    assert check_wheel(wheel, catalog) == ["no snappy library in the wheel"]
+def test_a_missing_codec_fails(tmp_path):
+    """The build refuses a missing codec; the check is the backstop."""
+    snappy = f"marrow/{CATALOG._CODEC_LIB_CANDIDATES['snappy'][0]}"
+    wheel = _wheel(tmp_path, drop={snappy})
+    assert check_wheel(wheel, CATALOG) == ["no snappy library in the wheel"]
 
 
-def test_a_required_optional_library_must_be_present(tmp_path, catalog):
-    wheel = _consistent_wheel(tmp_path, catalog)
-    assert check_wheel(wheel, catalog, require=["opendal"]) == [
+def test_a_required_optional_library_must_be_present(tmp_path):
+    without = _wheel(tmp_path / "without")
+    assert check_wheel(without, CATALOG, require=["opendal"]) == [
         "no opendal library in the wheel"
     ]
-    (tmp_path / "with").mkdir()
-    with_opendal = _consistent_wheel(
-        tmp_path / "with", catalog, "marrow/libopendal_c.dylib"
-    )
-    assert check_wheel(with_opendal, catalog, require=["opendal"]) == []
+    with_opendal = _wheel(tmp_path / "with", "marrow/libopendal_c.dylib")
+    assert check_wheel(with_opendal, CATALOG, require=["opendal"]) == []
 
 
 @pytest.mark.parametrize(
     "lib",
     ["marrow/.dylibs/libMGPRT.dylib", "marrow.libs/libstdc++-0a1b2c3d.so.6"],
 )
-def test_a_forbidden_library_fails(tmp_path, catalog, lib):
-    libraries = _libraries(catalog, lib)
-    wheel = _write_wheel(tmp_path, libraries, _texts(catalog, libraries))
-    assert check_wheel(wheel, catalog) == [f"{lib} must not ship in a wheel"]
+def test_a_forbidden_library_fails(tmp_path, lib):
+    wheel = _wheel(tmp_path, lib)
+    assert check_wheel(wheel, CATALOG) == [f"{lib} must not ship in a wheel"]
 
 
-def test_a_library_both_staged_and_grafted_fails(tmp_path, catalog):
+def test_a_library_both_staged_and_grafted_fails(tmp_path):
     """The broken Linux wheel: marrow staged brotlicommon under its real name,
     so auditwheel grafted the build image's older one beside it."""
     grafted = "marrow.libs/libbrotlicommon-97d45a34.so.1.0.9"
-    libraries = _libraries(catalog, "marrow/libbrotlicommon.so.1.2.0", grafted)
-    wheel = _write_wheel(tmp_path, libraries, _texts(catalog, libraries))
-    assert check_wheel(wheel, catalog) == [
+    wheel = _wheel(tmp_path, "marrow/libbrotlicommon.so.1.2.0", grafted)
+    assert check_wheel(wheel, CATALOG) == [
         f"{grafted} was grafted beside marrow's own copy of the same library"
     ]
 
 
-def test_auditwheel_renamed_libraries_resolve(tmp_path, catalog):
-    codecs = [
-        f"marrow/{names[-1]}" for names in catalog._CODEC_LIB_CANDIDATES.values()
-    ]
-    libraries = (
-        "marrow/libmarrow.cpython-314-x86_64-linux-gnu.so",
-        *codecs,
-        "marrow.libs/libKGENCompilerRTShared-0a1b2c3d.so",
+def test_auditwheel_renamed_libraries_resolve(tmp_path):
+    wheel = _wheel(
+        tmp_path,
+        "marrow.libs/libMSupportGlobals-0a1b2c3d.so",
+        codecs=-1,  # the `.so.1` spelling of each codec
     )
-    wheel = _write_wheel(tmp_path, libraries, _texts(catalog, libraries))
-    assert check_wheel(wheel, catalog) == []
+    assert check_wheel(wheel, CATALOG) == []
 
 
-def test_the_command_fails_listing_every_problem(tmp_path, catalog):
-    good = _consistent_wheel(tmp_path, catalog)
-    bad_dir = tmp_path / "bad"
-    bad_dir.mkdir()
-    libraries = _libraries(catalog)
-    bad = _write_wheel(
-        bad_dir, libraries, _texts(catalog, libraries), expression=False
-    )
+def test_the_command_fails_listing_every_problem(tmp_path):
+    good = _wheel(tmp_path / "good")
+    bad = _wheel(tmp_path / "bad", expression=False)
     result = CliRunner().invoke(
         cli, ["wheel", "check", str(good), str(bad)], obj=Context(Repo.locate())
     )

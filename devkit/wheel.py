@@ -13,17 +13,14 @@ shared library that travels without its licence.
 """
 
 import importlib.util
-import re
+import posixpath
 import zipfile
 from email.parser import Parser
 
-#: What a wheel must never carry. MAX's GPU runtime and engine: a CPU wheel
-#: links neither, so one appearing means the build picked up a GPU flag. And the
-#: two C++ runtimes manylinux guarantees: a conda copy would hide from
-#: `auditwheel` whether the codecs fit the policy.
-FORBIDDEN_IN_WHEEL = frozenset({"libMGPRT", "libmax", "libstdc++", "libgcc_s"})
-
-_SHARED_LIBRARY = re.compile(r"\.(so|dylib)(\.\d+)*$")
+#: MAX's GPU runtime and engine: a CPU wheel links neither, so one appearing
+#: means the build picked up a GPU flag. With `compile.py`'s `WHEEL_EXCLUDED`,
+#: what a wheel must never carry.
+_NEVER_LINKED = frozenset({"libMGPRT", "libmax"})
 
 
 def _grafted(name):
@@ -34,8 +31,7 @@ def _grafted(name):
 
 def compile_module(repo):
     """`python/marrow/compile.py`, loaded by path from `repo`."""
-    path = repo.python_dir / repo.PACKAGE / "compile.py"
-    spec = importlib.util.spec_from_file_location("_marrow_compile", path)
+    spec = importlib.util.spec_from_file_location("_marrow_compile", repo.compile_py)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -45,11 +41,11 @@ def check_wheel(path, catalog, require=()):
     """Every way the wheel at `path` misstates what it ships, as messages.
 
     `catalog` is `compile.py` (see `compile_module`): its `library_stem` and
-    `license_files` are the one definition of which texts a library needs, and
-    its tables say what a wheel must carry -- every page codec always (the
-    build only *warns* when one is missing, and a wheel without snappy cannot
-    read most Parquet files), and each `_OPTIONAL_LIB_CANDIDATES` key named in
-    `require`. An empty list means the wheel is consistent.
+    `LIBRARY_LICENSES` are the one definition of which texts a library needs,
+    and its tables say what a wheel must carry -- every page codec, a backstop
+    to the build that already refuses to leave one out, and each
+    `_OPTIONAL_LIB_CANDIDATES` key named in `require`. An empty list means the
+    wheel is consistent.
     """
     with zipfile.ZipFile(path) as wheel:
         names = wheel.namelist()
@@ -79,12 +75,12 @@ def check_wheel(path, catalog, require=()):
             f"License-File entries {sorted(declared ^ shipped)} do not match "
             f"the files under {prefix}"
         )
-    for rel in ("LICENSE.txt", "NOTICE.txt"):
-        if rel not in shipped:
-            problems.append(f"{rel} is not under {prefix}")
 
-    libraries = [n for n in names if _SHARED_LIBRARY.search(n.rsplit("/", 1)[-1])]
-    stems = {catalog.library_stem(n.rsplit("/", 1)[-1]) for n in libraries}
+    libraries = {
+        name: catalog.library_stem(posixpath.basename(name))
+        for name in names
+        if catalog.is_shared_library(name)
+    }
     expected = dict(catalog._CODEC_LIB_CANDIDATES)
     for key in require:
         if key in catalog._OPTIONAL_LIB_CANDIDATES:
@@ -92,26 +88,21 @@ def check_wheel(path, catalog, require=()):
         else:
             problems.append(f"cannot require {key!r}: not an optional library")
     for key, candidates in expected.items():
-        if not stems & {catalog.library_stem(c) for c in candidates}:
+        if not set(libraries.values()) & {catalog.library_stem(c) for c in candidates}:
             problems.append(f"no {key} library in the wheel")
 
-    # A library the repair tool grafted although marrow staged its own copy:
-    # the staged one was not found under the name its dependent asks for, so
-    # the loader takes the grafted one -- once the build image's older brotli.
-    staged = {catalog.library_stem(n.rsplit("/", 1)[-1]) for n in libraries
-              if not _grafted(n)}
-    problems.extend(
-        f"{name} was grafted beside marrow's own copy of the same library"
-        for name in libraries
-        if _grafted(name) and catalog.library_stem(name.rsplit("/", 1)[-1]) in staged
-    )
-
-    for name in libraries:
-        base = name.rsplit("/", 1)[-1]
-        if catalog.library_stem(base) in FORBIDDEN_IN_WHEEL:
+    forbidden = catalog.WHEEL_EXCLUDED | _NEVER_LINKED
+    staged = {stem for name, stem in libraries.items() if not _grafted(name)}
+    for name, stem in libraries.items():
+        if stem in forbidden:
             problems.append(f"{name} must not ship in a wheel")
             continue
-        files = catalog.license_files(base)
+        # Grafted although marrow staged its own copy: the staged one was not
+        # found under the name its dependent asks for, so the loader takes the
+        # grafted one -- once the build image's older brotli.
+        if _grafted(name) and stem in staged:
+            problems.append(f"{name} was grafted beside marrow's own copy of the same library")
+        files = catalog.LIBRARY_LICENSES.get(stem)
         if files is None:
             problems.append(f"{name} has no LIBRARY_LICENSES entry")
             continue

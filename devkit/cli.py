@@ -24,7 +24,6 @@ from .mojo import (
     SilentProgress,
 )
 from .progress import ConsoleProgress
-from .wheel import check_wheel, compile_module
 
 
 class Context:
@@ -158,6 +157,8 @@ def wheel_check(ctx, wheels, require):
     """Fail unless every shared library in each (repaired) wheel carries its
     licence texts, METADATA declares them, every codec (and each --require'd
     library) is present, and nothing forbidden ships."""
+    from .wheel import check_wheel, compile_module
+
     catalog = compile_module(ctx.repo)
     failures = []
     for path in wheels:

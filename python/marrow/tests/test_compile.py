@@ -27,6 +27,7 @@ from marrow.compile import (
     check_mojo_version,
     codec_lib_dir,
     dylib_closure,
+    is_shared_library,
     license_files,
     main,
     optional_lib_paths,
@@ -296,15 +297,21 @@ def test_codec_lib_dir_prefers_the_explicit_directory(tmp_path, monkeypatch):
     assert codec_lib_dir() == tmp_path / "codecs"
 
 
-def test_codec_lib_dir_prefers_conda_prefix(tmp_path, monkeypatch):
+@pytest.fixture
+def no_codec_override(monkeypatch):
+    """A wheel build's `MARROW_CODEC_LIB_DIR` beats whatever a test sets up."""
     monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
+
+
+@pytest.mark.usefixtures("no_codec_override")
+def test_codec_lib_dir_prefers_conda_prefix(tmp_path, monkeypatch):
     (tmp_path / "lib").mkdir()
     monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
     assert codec_lib_dir() == tmp_path / "lib"
 
 
+@pytest.mark.usefixtures("no_codec_override")
 def test_codec_lib_dir_falls_back_to_mojo_location(tmp_path, monkeypatch):
-    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
     (tmp_path / "lib").mkdir()
     (tmp_path / "bin").mkdir()
@@ -317,8 +324,8 @@ def test_codec_lib_dir_falls_back_to_mojo_location(tmp_path, monkeypatch):
     assert codec_lib_dir() == tmp_path / "lib"
 
 
+@pytest.mark.usefixtures("no_codec_override")
 def test_codec_lib_dir_returns_none_when_unresolved(monkeypatch):
-    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
     monkeypatch.setattr("marrow.compile.shutil.which", lambda name: None)
     assert codec_lib_dir() is None
@@ -427,7 +434,7 @@ def test_bundle_includes_codec_libraries(tmp_path):
     # Whoever ships the directory ships these libraries: each needs its text.
     assert (dest / "LICENSE.txt").is_file() and (dest / "NOTICE.txt").is_file()
     for name in names:
-        if name.endswith((".dylib", ".so")) or ".so." in name:
+        if is_shared_library(name):
             files = license_files(name)
             assert files is not None, f"{name} bundled without a recorded licence"
             assert all((dest / rel).is_file() for rel in files), name
@@ -448,6 +455,12 @@ def test_write_licenses_writes_exactly_what_the_libraries_need(tmp_path):
         "licenses/zstd.txt",
     ]
     assert b"Zstandard" in (tmp_path / "licenses" / "zstd.txt").read_bytes()
+
+
+def test_a_wheel_build_refuses_a_missing_codec(tmp_path):
+    """`--bundle` warns and ships what it found; a wheel must not."""
+    with pytest.raises(RuntimeError, match="library not found"):
+        stage_codec_libs(tmp_path, required=True)
 
 
 def test_write_licenses_warns_about_an_unrecorded_library(tmp_path, capsys):
@@ -486,6 +499,7 @@ def test_optional_lib_paths_prefers_the_env_override(tmp_path, monkeypatch):
     assert lib in optional_lib_paths()
 
 
+@pytest.mark.usefixtures("no_codec_override")
 def test_optional_lib_paths_is_empty_and_quiet_when_absent(
     tmp_path, monkeypatch, capsys
 ):
@@ -493,7 +507,6 @@ def test_optional_lib_paths_is_empty_and_quiet_when_absent(
     this warns about nothing."""
     monkeypatch.delenv("MARROW_OPENDAL_LIBRARY", raising=False)
     monkeypatch.delenv("OPENDAL_C_LIBRARY", raising=False)
-    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
     monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
     (tmp_path / "lib").mkdir()
     monkeypatch.setattr(sys, "platform", "darwin")

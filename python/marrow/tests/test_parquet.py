@@ -4,11 +4,13 @@
 """Parquet reader/writer bindings, verified against PyArrow as the oracle."""
 
 import os
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import marrow
 import marrow.parquet as mpq
 
 
@@ -38,16 +40,8 @@ def _assert_equiv(got, want):
         assert got.column(i).to_pylist() == want.column(i).to_pylist()
 
 
-def test_marrow_reads_pyarrow(tmp_path):
-    p = tmp_path / "t.parquet"
-    want = _sample()
-    pq.write_table(want, p)
-    got = _to_pa(mpq.read_table(p))
-    _assert_equiv(got, pq.read_table(p))
-
-
 @pytest.mark.parametrize("compression", ["snappy", "zstd", "lz4", "brotli", "gzip"])
-def test_marrow_reads_every_codec(tmp_path, compression):
+def test_marrow_reads_pyarrow(tmp_path, compression):
     """Each page codec is a library marrow opens at runtime -- from a wheel,
     the copy staged beside the extension -- so a missing or mis-staged one
     fails here and nowhere else: a Linux wheel once shipped a brotli decoder
@@ -58,20 +52,23 @@ def test_marrow_reads_every_codec(tmp_path, compression):
     _assert_equiv(_to_pa(mpq.read_table(p)), want)
 
 
+def _opendal_present():
+    """Whether marrow will find `libopendal_c`: named by an override, or staged
+    beside the extension, as a wheel that bundles it has it."""
+    overrides = (os.environ.get(v) for v in ("MARROW_OPENDAL_LIBRARY", "OPENDAL_C_LIBRARY"))
+    return any(p and Path(p).exists() for p in overrides) or any(
+        Path(marrow.__file__).parent.glob("libopendal_c.*")
+    )
+
+
+@pytest.mark.skipif(not _opendal_present(), reason="no libopendal_c to read through")
 def test_marrow_reads_through_opendal(tmp_path):
-    """`fs://` goes through `libopendal_c`. A checkout that never built it
-    skips; a run that must have it -- MARROW_REQUIRE_OPENDAL, set when the
-    wheel under test ships OpenDAL -- fails."""
+    """`fs://` goes through `libopendal_c`: where it is present, the read must
+    succeed."""
     p = tmp_path / "t.parquet"
     want = _sample()
     pq.write_table(want, p)
-    try:
-        got = mpq.read_table(f"fs://{p}")
-    except Exception as e:
-        if os.environ.get("MARROW_REQUIRE_OPENDAL") or "opendal" not in str(e):
-            raise
-        pytest.skip(f"libopendal_c is not available: {e}")
-    _assert_equiv(_to_pa(got), want)
+    _assert_equiv(_to_pa(mpq.read_table(f"fs://{p}")), want)
 
 
 @pytest.mark.parametrize("compression", ["none", "snappy", "zstd", "lz4"])

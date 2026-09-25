@@ -7,56 +7,34 @@ messages. Each copy drifted independently before this test existed -- three
 different Mojo versions were pinned at once.
 """
 
-import re
 import tomllib
 
 from devkit.mojo import Repo
 from devkit.wheel import compile_module
 
-
-def _pixi_pins(repo):
-    manifest = tomllib.loads((repo.root / "pixi.toml").read_text())
-    mojo = manifest["package"]["build-dependencies"]["mojo-compiler"]
-    max_ = manifest["dependencies"]["max"]
-    return mojo.removeprefix("=="), max_.removeprefix("==")
-
-
-def _pyproject(repo):
-    return tomllib.loads((repo.python_dir / "pyproject.toml").read_text())
+REPO = Repo.locate()
+CATALOG = compile_module(REPO)
+PYPROJECT = tomllib.loads(REPO.pyproject.read_text())
+_PIXI = tomllib.loads((REPO.root / "pixi.toml").read_text())
+MOJO = _PIXI["package"]["build-dependencies"]["mojo-compiler"].removeprefix("==")
+MAX = _PIXI["dependencies"]["max"].removeprefix("==")
 
 
 def test_compile_py_names_the_pixi_nightly():
-    repo = Repo.locate()
-    mojo, _ = _pixi_pins(repo)
-    assert compile_module(repo).PINNED_NIGHTLY == mojo
+    assert CATALOG.PINNED_NIGHTLY == MOJO
 
 
 def test_cibuildwheel_installs_the_pixi_pins():
-    repo = Repo.locate()
-    mojo, max_ = _pixi_pins(repo)
-    before_build = _pyproject(repo)["tool"]["cibuildwheel"]["before-build"]
-    assert f"mojo-compiler=={mojo}" in before_build
-    assert f"max-core=={max_}" in before_build
+    before_build = PYPROJECT["tool"]["cibuildwheel"]["before-build"]
+    assert f"mojo-compiler=={MOJO}" in before_build
+    assert f"max-core=={MAX}" in before_build
 
 
 def test_compile_extra_matches_the_minimum_version():
-    repo = Repo.locate()
-    minimum = compile_module(repo).MIN_VERSION
-    major, minor, _ = minimum.split(".")
-    extra = _pyproject(repo)["project"]["optional-dependencies"]["compile"]
-    assert extra == [f"mojo>={major}.{minor},<{compile_module(repo).MAX_VERSION}"]
+    major, minor, _ = CATALOG.MIN_VERSION.split(".")
+    extra = PYPROJECT["project"]["optional-dependencies"]["compile"]
+    assert extra == [f"mojo>={major}.{minor},<{CATALOG.MAX_VERSION}"]
 
 
 def test_pyproject_is_not_a_second_pixi_manifest():
-    assert "pixi" not in _pyproject(Repo.locate()).get("tool", {})
-
-
-def test_the_local_linux_wheel_runs_ci_s_cibuildwheel():
-    """`pixi run -e docker wheel_linux` stands in for CI's Linux leg only while
-    it runs the same cibuildwheel."""
-    repo = Repo.locate()
-    workflow = (repo.root / ".github" / "workflows" / "wheels.yml").read_text()
-    dockerfile = (repo.root / "Dockerfile.wheel").read_text()
-    ci = re.search(r"pypa/cibuildwheel@v([\d.]+)", workflow).group(1)
-    local = re.search(r"cibuildwheel==([\d.]+)", dockerfile).group(1)
-    assert local == ci
+    assert "pixi" not in PYPROJECT.get("tool", {})

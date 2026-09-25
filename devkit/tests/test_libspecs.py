@@ -97,6 +97,6 @@ def test_opendal_env_overrides_match():
         "OPENDAL_C_LIBRARY",
     ]
 
-    source = (Repo.locate().python_dir / Repo.PACKAGE / "compile.py").read_text()
+    source = Repo.locate().compile_py.read_text()
     for env in declared["opendal_c"][1]:
         assert env in source, f"{env} is declared in Mojo but unknown to compile.py"

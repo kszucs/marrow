@@ -26,11 +26,8 @@ services:
       # second executing the other's.
       - pixi_arm64:/marrow/.pixi
 
-  # The Linux leg of .github/workflows/wheels.yml. No `platform`: cibuildwheel
-  # builds for the Docker host's own architecture (scripts/wheel_linux.sh sets
-  # CIBW_ARCHS_LINUX), because Mojo does not run under emulation. It is handed
-  # an export of the tree, never the working tree itself -- cibuildwheel copies
-  # its directory into the build container whole, host build outputs included.
+  # The Linux wheel leg (scripts/wheel_linux.sh). No `platform`: it builds for
+  # the Docker host's own architecture.
   wheel:
     build:
       context: .

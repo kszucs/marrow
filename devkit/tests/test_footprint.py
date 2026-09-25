@@ -346,14 +346,10 @@ def test_marrow_compile_builds_a_query_the_way_the_gate_builds_one():
 
     Loaded by path rather than imported: `marrow/__init__.py` pulls in the
     compiled extension, and this suite must run without `libmarrow.so`.
-    `compile.py` needs only the standard library, so a path load is enough.
     """
-    import importlib.util
+    from devkit.wheel import compile_module as load_compile_py
 
-    path = Repo.locate().python_dir / Repo.PACKAGE / "compile.py"
-    spec = importlib.util.spec_from_file_location("_marrow_compile", path)
-    compile_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(compile_module)
+    compile_module = load_compile_py(Repo.locate())
 
     gate = BuildOptions.for_size_gate()
     expected = ["mojo", "build", *gate.flags(), "q.mojo", "-o", "q"]

@@ -3,17 +3,13 @@
 
 name: Wheels
 
-# Builds the macOS arm64 and manylinux_2_35 x86_64 wheels with cibuildwheel
-# (its configuration is `[tool.cibuildwheel]` in python/pyproject.toml), tests
-# each installed wheel, and checks every library it bundles carries its licence
-# (`python -m devkit wheel check`).
+# The macOS arm64 and manylinux_2_35 x86_64 wheels: scripts/wheel_ci.sh builds
+# each with cibuildwheel (`[tool.cibuildwheel]` in python/pyproject.toml),
+# checks every bundled library carries its licence, and tests the installed
+# wheel. `pixi run -e docker wheel_linux` runs the same script locally.
 #
 # Manual only until a dispatched run passes both legs; add the `pull_request`
 # and `v*` tag triggers in the change that records that run, not before.
-# Locally, `pixi run -e wheel wheel` builds the macOS wheel, and `pixi run -e
-# docker wheel_linux` runs this Linux leg -- the same cibuildwheel and
-# configuration -- for the Docker host's architecture: aarch64 on Apple Silicon,
-# since x86_64 Mojo does not run under emulation there.
 #
 # Publishing has two locks, and both must open:
 #   - the repository variable MODULAR_REDISTRIBUTION_CONFIRMED is 'true' -- set
@@ -52,29 +48,12 @@ jobs:
           sudo swapon /mnt/swapfile
           free -h
 
-      - name: Build and test wheels
-        uses: pypa/cibuildwheel@v3.2.1
-        with:
-          package-dir: python
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
-      # devkit's CLI imports click, and rich and psutil through its progress
-      # display; nothing else, and nothing from marrow.
-      - name: Check every bundled library's licence
-        run: |
-          pip install click rich psutil
-          python -m devkit wheel check --require opendal wheelhouse/*.whl
-
-      # cibuildwheel tests the macOS wheel itself. The Linux wheel is
-      # manylinux_2_35 -- Modular's runtime needs GLIBCXX_3.4.30 -- so pip in
-      # the manylinux_2_34 build container refuses it; it is tested here, on
-      # the runner's newer glibc, with the same script.
-      - name: Test the installed Linux wheel
-        if: runner.os == 'Linux'
-        run: bash scripts/wheel_test.sh wheelhouse/*.whl
+      - name: Build, check and test the wheel
+        run: bash scripts/wheel_ci.sh wheelhouse
 
       - uses: actions/upload-artifact@v4
         with:
@@ -91,22 +70,10 @@ jobs:
       id-token: write  # OIDC for the PyPI trusted publisher
 
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           merge-multiple: true
           path: dist
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      # The artifacts are checked again here, where the upload happens.
-      - name: Check every bundled library's licence
-        run: |
-          pip install click rich psutil
-          python -m devkit wheel check --require opendal dist/*.whl
 
       - uses: pypa/gh-action-pypi-publish@release/v1

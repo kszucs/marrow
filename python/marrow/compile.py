@@ -32,9 +32,7 @@ MIN_VERSION = "1.2.0"
 MAX_VERSION = "2"
 REQUIRED_RANGE = f">={MIN_VERSION},<{MAX_VERSION}"
 
-# marrow pins this nightly build exactly (see `pixi.toml`); kept as a
-# constant purely so it shows up in one place if the pin moves.
-# `devkit/tests/test_pins.py` fails if it drifts from `pixi.toml`.
+# The nightly `pixi.toml` pins; `devkit/tests/test_pins.py` fails if it drifts.
 PINNED_NIGHTLY = "1.2.0.dev2026092105"
 
 _NIGHTLY_HELP = (
@@ -180,21 +178,12 @@ def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
     return None
 
 
-def _dylib_closure_macos(binary: Path) -> list[Path]:
-    seen: dict[Path, None] = {}
-    frontier = [binary]
-    while frontier:
-        current = frontier.pop()
-        for dep in _otool_deps(current):
-            if _is_system_dep(dep):
-                continue
-            resolved = _resolve_macos_dep(dep, current)
-            if resolved is None or not resolved.exists() or resolved == binary:
-                continue
-            if resolved not in seen:
-                seen[resolved] = None
-                frontier.append(resolved)
-    return list(seen.keys())
+def _macos_deps(path: Path) -> list[Path | None]:
+    return [
+        _resolve_macos_dep(dep, path)
+        for dep in _otool_deps(path)
+        if not _is_system_dep(dep)
+    ]
 
 
 def _ldd_deps(path: Path) -> list[str]:
@@ -210,31 +199,8 @@ def _ldd_deps(path: Path) -> list[str]:
     return deps
 
 
-def _dylib_closure_linux(binary: Path) -> list[Path]:
-    """The Linux closure, each dependency under the name its dependent asks for.
-
-    `ldd` reports `libbrotlicommon.so.1 => .../libbrotlicommon.so.1`, a symlink
-    to `libbrotlicommon.so.1.2.0`. Staging the resolved name -- as this once
-    did -- left the requested `.so.1` absent beside `libbrotlidec`, so
-    auditwheel grafted the build image's own, older brotli in its place and the
-    wheel's decoder failed to load against it. Same rule as
-    `_resolve_macos_dep`: keep the name, dereference only when copying.
-    """
-    seen: dict[Path, None] = {}
-    real: set[Path] = {binary}
-    frontier = [binary]
-    while frontier:
-        current = frontier.pop()
-        for dep in _ldd_deps(current):
-            if _is_system_dep(dep):
-                continue
-            path = Path(dep)
-            if not path.exists() or path.resolve() in real:
-                continue
-            real.add(path.resolve())
-            seen[path] = None
-            frontier.append(path)
-    return list(seen.keys())
+def _linux_deps(path: Path) -> list[Path]:
+    return [Path(dep) for dep in _ldd_deps(path) if not _is_system_dep(dep)]
 
 
 def dylib_closure(binary: Path) -> list[Path]:
@@ -252,11 +218,25 @@ def dylib_closure(binary: Path) -> list[Path]:
     transitively, and a `-D MARROW_GPU=true` build pulls in a 5th
     (`libMGPRT.dylib`). A fixed list silently ships a broken bundle the
     moment that closure changes.
+
+    Each dependency keeps the name its dependent asks for -- the path `otool`
+    or `ldd` reports, not the file it resolves to; only the copy dereferences
+    (`_copy_deduped`). A library installed as a version-symlink chain is asked
+    for as `libbrotlicommon.so.1`, and staging the real `.so.1.2.0` left that
+    name absent: auditwheel grafted the build image's older brotli instead, and
+    the wheel's decoder failed to load against it.
     """
     binary = binary.resolve()
-    if sys.platform == "darwin":
-        return _dylib_closure_macos(binary)
-    return _dylib_closure_linux(binary)
+    deps_of = _macos_deps if sys.platform == "darwin" else _linux_deps
+    seen: dict[Path, None] = {}
+    frontier = [binary]
+    while frontier:
+        for dep in deps_of(frontier.pop()):
+            if dep is None or dep in seen or not dep.exists() or dep.resolve() == binary:
+                continue
+            seen[dep] = None
+            frontier.append(dep)
+    return list(seen)
 
 
 # --- Parquet compression codecs -------------------------------------------
@@ -327,8 +307,7 @@ LIBRARY_LICENSES: dict[str, tuple[str, ...]] = {
     "libbrotlidec": ("licenses/brotli.txt",),
     "libbrotlicommon": ("licenses/brotli.txt",),
     # The C++ runtime conda-forge's snappy links. On Linux only a `--bundle`
-    # directory carries it: manylinux guarantees libstdc++ and libgcc_s, so the
-    # wheel build skips them and `devkit wheel check` refuses them.
+    # directory carries it (see WHEEL_EXCLUDED).
     "libc++": ("licenses/libcxx.txt",),
     "libstdc++": ("licenses/bundle-only/gcc-runtime.txt",),
     "libgcc_s": ("licenses/bundle-only/gcc-runtime.txt",),
@@ -341,8 +320,18 @@ LIBRARY_LICENSES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# What a wheel never carries: manylinux guarantees these two, and a conda copy
+# would hide from auditwheel whether the codecs fit the policy's GLIBCXX.
+# `python/build.py` skips them, and `devkit wheel check` refuses them.
+WHEEL_EXCLUDED = frozenset({"libstdc++", "libgcc_s"})
+
 # `auditwheel repair` renames a grafted library `libfoo-0a1b2c3d.so.1`.
 _AUDITWHEEL_HASH = re.compile(r"-[0-9a-f]{8}$")
+_SHARED_LIBRARY = re.compile(r"\.(so|dylib)(\.\d+)*$")
+
+
+def is_shared_library(filename: str) -> bool:
+    return _SHARED_LIBRARY.search(filename) is not None
 
 
 def library_stem(filename: str) -> str:
@@ -486,7 +475,7 @@ def _find_codec_lib(lib_dir: Path, names: list[str]) -> Path | None:
     return None
 
 
-def stage_codec_libs(lib_dir: Path | None) -> list[Path]:
+def stage_codec_libs(lib_dir: Path | None, required: bool = False) -> list[Path]:
     """The compression-codec libraries marrow's Parquet reader can `dlopen`,
     plus their own transitive dependency closure (`libbrotlienc.dylib` pulls
     in `libbrotlicommon.dylib`, for instance).
@@ -494,24 +483,30 @@ def stage_codec_libs(lib_dir: Path | None) -> list[Path]:
     A codec whose library is not installed in `lib_dir` — or `lib_dir`
     itself unresolved — is skipped with a warning rather than raising: a
     bundle missing one codec still reads every file compressed with the
-    others, and still reads uncompressed Parquet.
+    others, and still reads uncompressed Parquet. A wheel build passes
+    `required=True` and gets an error instead: a wheel is built once and
+    installed everywhere, and one without snappy reads few Parquet files.
     """
+
+    def skip(message: str) -> None:
+        if required:
+            raise RuntimeError(f"marrow: {message}")
+        print(f"marrow: warning: {message}", file=sys.stderr)
+
     if lib_dir is None:
-        print(
-            "marrow: warning: could not resolve the codec library directory "
-            "(checked $CONDA_PREFIX/lib and the mojo binary's ../lib); "
-            "--bundle will ship with no zstd/snappy/lz4/zlib/brotli support",
-            file=sys.stderr,
+        skip(
+            "could not resolve the codec library directory (checked "
+            "$MARROW_CODEC_LIB_DIR, $CONDA_PREFIX/lib and the mojo binary's "
+            "../lib); --bundle will ship with no zstd/snappy/lz4/zlib/brotli support"
         )
         return []
     staged: dict[str, Path] = {}
     for codec, names in _CODEC_LIB_CANDIDATES.items():
         lib = _find_codec_lib(lib_dir, names)
         if lib is None:
-            print(
-                f"marrow: warning: {codec} library not found in {lib_dir}, "
-                "skipping (--bundle will not support that codec)",
-                file=sys.stderr,
+            skip(
+                f"{codec} library not found in {lib_dir}, "
+                "skipping (--bundle will not support that codec)"
             )
             continue
         staged.setdefault(lib.name, lib)
@@ -524,12 +519,11 @@ def _copy_deduped(staged: dict[str, Path], dest: Path) -> None:
     """Copy `staged` (destination filename -> source path) into `dest`,
     writing each distinct file's bytes exactly once.
 
-    A conda-forge codec library's un-resolved candidate names
-    (`_resolve_macos_dep`'s self-id-as-dependency case: `libzstd.dylib` and
-    `libzstd.1.dylib` both naming the same real file) would otherwise be
-    copied twice under `shutil.copy2` — harmless for correctness but doubled
-    the codec footprint. Every name past the first real copy of a given file
-    becomes a symlink to it instead.
+    Two staged names for one real file -- a version-symlink chain asked for
+    under both of its names -- would otherwise be copied twice under
+    `shutil.copy2`, harmless for correctness but double the footprint. Every
+    name past the first real copy of a given file becomes a symlink to it
+    instead.
     """
     by_real: dict[Path, list[str]] = {}
     for name, src in staged.items():
