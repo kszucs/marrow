@@ -1845,4 +1845,9 @@ trait ColumnBound(ComptimeValue):
     comptime Bound: Array
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        return bound.to_data().owned_validity()
+        # `None` when nothing is null, even if a bitmap is present: the fused
+        # loop then takes its unmasked arm and no bitmap is copied.
+        if bound.null_count() == 0:
+            return None
+        else:
+            return bound.to_data().owned_validity()

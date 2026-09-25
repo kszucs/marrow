@@ -2,8 +2,8 @@
 
 `sum(a * 2 + b)` folds **without materialising `a * 2 + b`**. The input is a
 `NumericValue`, so the state binds the subtree itself and reads `lane[W]`
-straight into a register. Measured 2026-08-22: 1.17-1.68x over
-materialise-then-scatter when grouped, and 14.6x when not.
+straight into a register. Ungrouped that measured 14.6x over
+materialise-then-scatter; grouped it is at parity (2026-09-25).
 
 That is the one thing no other engine can do. DataFusion's `GroupsAccumulator`
 takes `&[ArrayRef]`, ClickHouse's `IAggregateFunction::add` takes `IColumn**`,
@@ -106,7 +106,7 @@ struct Aggregate[
       all it needs, temporal columns included.
 
     Both yes, and the fold is fused into the operand's loop: `sum(a * 2 + b)`
-    never builds `a * 2 + b`, worth 1.17-1.68x grouped and **14.6x** ungrouped.
+    never builds `a * 2 + b` — at parity grouped, **14.6x** ungrouped.
     Otherwise the operand is evaluated to a column and the aggregate runs over
     it.
 
@@ -449,8 +449,9 @@ struct ScatteredAggregateOperator[
     `GROUP BY` with a lane-readable operand and a lane algebra.
 
     `sum(a * 2 + b)` never builds `a * 2 + b`: the state binds the subtree and
-    reads `lane[W]` straight into a register before scattering. Measured
-    2026-08-22 at 1.17-1.68x over materialise-then-scatter.
+    reads `lane[W]` straight into a register before scattering. That is at
+    parity with materialise-then-scatter, and only because `agg.scatter`
+    inlines — see `Foldable.scatter`.
 
     The scatter stays scalar per lane even at `W > 1`, and that is not an
     oversight — two lanes may carry the same group, and a vector
@@ -461,9 +462,7 @@ struct ScatteredAggregateOperator[
     `scatters` parameter.** The two bodies share no statement: this one issues
     a random write per row through `agg.scatter[W]`, the other accumulates in
     registers and calls `combine_at` once per morsel — and that register path
-    is where the **14.6x** came from. A merged struct also had to carry
-    `_num_groups` in the instantiation that never reads it, because a struct
-    body admits no `comptime if` and therefore no conditional field.
+    is where the **14.6x** came from.
 
     **The bounds are the honest ones.** `Agg: Foldable` because this calls
     `scatter`; `A: PrimitiveValue` because it calls `bind`, `validity` and
@@ -489,11 +488,6 @@ struct ScatteredAggregateOperator[
     before the first morsel, which is what let `AggKernel.open` and the
     `_opened` latch that guarded it disappear."""
 
-    var _num_groups: Int
-    """How many slots the last morsel asked for. `drain` reads it to seed the
-    slots an input of zero rows never grew — it stays 0 when no morsel arrived,
-    and a grouped query over nothing correctly emits no rows."""
-
     var _emitted: Bool
 
     def __init__(
@@ -507,7 +501,6 @@ struct ScatteredAggregateOperator[
         self._where = predicate^
         self._bindings = bindings^
         self._state = Self.Agg(in_dtype)
-        self._num_groups = 0
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -519,10 +512,10 @@ struct ScatteredAggregateOperator[
         `A` is bound only on `PrimitiveValue` at the point of the call.
         """
         ref batch = morsel.batch
-        self._num_groups = morsel.groups.num_groups
-        var num_groups = self._num_groups
         var n = len(batch)
         ref agg = self._state
+        # Once per morsel, because `scatter` does not grow.
+        agg.reserve(morsel.groups.num_groups)
         if n == 0:
             return None
         comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
@@ -550,7 +543,6 @@ struct ScatteredAggregateOperator[
                     gids.load[W](i),
                     self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
                     bits.load[W](i),
-                    num_groups,
                 )
                 i += W
             while i < n:
@@ -558,7 +550,6 @@ struct ScatteredAggregateOperator[
                     gids.load[1](i),
                     self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
                     bits.load[1](i),
-                    num_groups,
                 )
                 i += 1
         else:
@@ -567,7 +558,6 @@ struct ScatteredAggregateOperator[
                     gids.load[W](i),
                     self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
                     SIMD[DType.bool, W](fill=True),
-                    num_groups,
                 )
                 i += W
             while i < n:
@@ -575,7 +565,6 @@ struct ScatteredAggregateOperator[
                     gids.load[1](i),
                     self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
                     SIMD[DType.bool, 1](True),
-                    num_groups,
                 )
                 i += 1
         return None
@@ -584,10 +573,9 @@ struct ScatteredAggregateOperator[
         if self._emitted:
             return None
         self._emitted = True
-        # No "did a morsel arrive?" branch: the kernel is built at
-        # construction, so this answers from an untouched state exactly as it
-        # would after a morsel that folded nothing.
-        return _emit_fold(self._state, self._num_groups)
+        # Nothing to seed: `push` reserved every group a morsel named, and over
+        # no morsel at all a grouped query correctly emits no rows.
+        return _emit_fold(self._state, 0)
 
 
 struct RegisterAggregateOperator[

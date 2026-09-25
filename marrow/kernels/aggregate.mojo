@@ -628,9 +628,6 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         self.acc = PrimitiveBuilder[Self.Acc](dtype)
         self.cnt = PrimitiveBuilder[Self.Seen]()
 
-    def num_groups(self) -> Int:
-        return self.acc.length()
-
     def update(
         mut self,
         group_ids: Int32Array,
@@ -684,7 +681,8 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         Public rather than private because `Fold` forwards `AggKernel.reserve`
         onto it: an aggregate over **zero** morsels never calls `update` at
         all, and the plan still owes one row per slot — `sum` of nothing is one
-        NULL, not no rows.
+        NULL, not no rows. A fused caller also reserves through it once per
+        morsel, because `accumulate` does not grow.
         """
         comptime A = Self.Acc.native
         comptime S = Self.Seen.native
@@ -729,8 +727,7 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         groups: SIMD[DType.int32, W],
         values: SIMD[Self.Acc.native, W],
         mask: SIMD[DType.bool, W],
-        num_groups: Int,
-    ) raises:
+    ):
         """Scatter-fold one SIMD lane of already-computed values.
 
         The entry point a **fused** caller needs: it takes values in registers
@@ -752,12 +749,16 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         `mask` is validity: a false lane contributes nothing and is not counted,
         which is what keeps a null out of both the accumulator and `K.finalize`'s
         divisor.
+
+        **Does not grow**: the caller reserves every group id first, once per
+        morsel. Growing here put the `append` path in the per-chunk loop.
         """
-        self.reserve(num_groups)
         comptime A = Self.Acc.native
-        for j in range(W):
+        # `comptime for`: a runtime `j` reads each lane back through the stack.
+        comptime for j in range(W):
             if mask[j]:
                 var g = Int(groups[j])
+                debug_assert(g < self.acc.length(), "accumulate: not reserved")
                 self.acc.unsafe_set(
                     g, Self.K.combine[A, 1](self.acc.unsafe_get(g), values[j])
                 )
@@ -914,11 +915,13 @@ trait AggKernel(Deinitable, Kernel, Movable):
         """Ensure `slots` per-group slots exist, seeded with this aggregate's
         empty answer.
 
-        **The zero-morsel seed, and nothing else.** `update` grows the state on
-        its own; this exists for the one case `update` never sees — an
-        aggregate over an input that produced no batch at all, which still owes
-        one row per slot. `sum` of nothing is one NULL, `count` of nothing is
-        one 0, and neither is "no rows".
+        **The zero-morsel seed, and the fused scatter's growth.** `update`
+        grows the state on its own; this exists for the one case `update`
+        never sees — an aggregate over an input that produced no batch at all,
+        which still owes one row per slot. `sum` of nothing is one NULL,
+        `count` of nothing is one 0, and neither is "no rows". A caller of
+        `Foldable.scatter` also calls it once per morsel, since `scatter` does
+        not grow.
 
         It replaced `Foldable.grow`, which said the same thing but only for the
         aggregates that fold: the seed is not lane machinery, so it does not
@@ -1009,9 +1012,13 @@ trait Foldable(AggKernel):
         groups: SIMD[DType.int32, W],
         values: SIMD[Self.Acc, W],
         valid: SIMD[DType.bool, W],
-        num_groups: Int,
-    ) raises:
-        """Fold `W` lanes into the groups their ids name."""
+    ):
+        """Fold `W` lanes into the groups their ids name.
+
+        Called once per `W` rows by the fused loop, so a conformer must inline
+        it: out of line, every call copied the whole state in and out, which
+        made the fused lane 1.9-2.4x slower than materialising. It does not
+        grow — the caller `reserve`s every group id once per morsel."""
         ...
 
     def combine_at(
@@ -1124,7 +1131,6 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
                 acc = reduce[Self.V.native, Self.K.combine, Acc](
                     column.values(), identity, ExecContext.serial()
                 )
-            self._state.reserve(1)
             self._state.combine_at(0, acc, len(column) - column.null_count())
         else:
             self._state.update(groups.ids, column, groups.num_groups)
@@ -1137,6 +1143,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
 
     # -- Foldable: the lane-facing half, forwarded onto `AggState` -----------
 
+    @always_inline
     def scatter[
         W: Int
     ](
@@ -1144,9 +1151,8 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
         groups: SIMD[DType.int32, W],
         values: SIMD[Self.Acc, W],
         valid: SIMD[DType.bool, W],
-        num_groups: Int,
-    ) raises:
-        self._state.accumulate[W](groups, values, valid, num_groups)
+    ):
+        self._state.accumulate[W](groups, values, valid)
 
     def combine_at(
         mut self, slot: Int, value: Scalar[Self.Acc], count: Int

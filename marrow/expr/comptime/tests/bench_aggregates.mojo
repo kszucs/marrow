@@ -11,8 +11,8 @@ Two comparisons, each holding everything but one variable fixed:
   (comptime) or a `DynOperator` box and an `AggregateFn` pointer (runtime).
 
 The second pair is the one that says whether typing the buffered operator was
-worth it. The first says what fusion is worth, and is the number CLAUDE.md's
-14.6x claim comes from.
+worth it. The first says what fusion is worth *grouped*; the 14.6x quoted
+elsewhere is the ungrouped register path, which this file does not measure.
 
 Run with:
     pixi run -e dev pytest marrow/expr/comptime/tests/bench_aggregates.mojo --benchmark
