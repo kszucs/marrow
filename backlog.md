@@ -25,15 +25,14 @@ all of them.
 | 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
 | 2 | **Error taxonomy** — 373 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 373 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14 | **M** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
-| 4 | **`OpenDalSource.read_ranges` fetches serially** | One round-trip time per range where they could go out together. On a local file that is free; on S3 it is the difference between one RTT and N. The seam, the URI dispatch and `ParquetScanOperator` on `DynSource` are all in place, so this is the last piece of scanning `s3://` well. See §1.9 | **S** | — |
-| 5 | **Parallel group-by gates are uncalibrated** — `_MIN_DISTINCT_RATIO` (0.9) and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) in `kernels/groupby.mojo` | Radix-partitioned placement landed in `dcef953a`, but when it engages is a guess: the 0.9 was set from a measurement of a version since made twice as fast, and nothing has re-measured the crossover. See §2.1 | **S** | — |
-| 6 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 7 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
-| 8 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
-| 9 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 10 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 11 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
-| 12 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
+| 4 | **Parallel group-by gates are uncalibrated** — `_MIN_DISTINCT_RATIO` (0.9) and `_PARALLEL_GROUPBY_MIN_ROWS` (60,000) in `kernels/groupby.mojo` | Radix-partitioned placement landed in `dcef953a`, but when it engages is a guess: the 0.9 was set from a measurement of a version since made twice as fast, and nothing has re-measured the crossover. See §2.1 | **S** | — |
+| 5 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
+| 6 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
+| 7 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
+| 8 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 9 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 10 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
+| 11 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
 
@@ -240,22 +239,26 @@ skipped page is stepped over from the index rather than by parsing its header.
 `ByteSource` -- the only way to tell "returned the right rows" from "did less
 work". What is left:
 
-- **A remote `read_ranges` fetches its ranges serially.** The storage seam is
-  done -- `marrow/io/` owns `ByteSource`/`ByteSink`, both formats read and
-  write through them, `DynSource`/`DynSink` pick a backend from the URI scheme,
-  and `ParquetScanOperator` holds a `ParquetFile[DynSource]` so a *plan* can
-  scan `s3://` (measured: `query_cli` +50,048, +1.64%; every other gate under
-  800 bytes). `ParquetFile.read` also plans first and issues one `read_ranges`
-  before the fan-out, so the decode workers borrow a value nobody mutates,
-  which is the property `Fetched` exists to give.
+- **A remote `read_ranges` fans out, but over a compute pool.**
+  `OpenDalSource.read_ranges` issues its fetches concurrently through
+  `execution.fan_out`, the helper `ParquetFile.read` and `map_partitions` use
+  too. What it is not is asynchrony: `fan_out` runs on a fixed pool, so at most
+  `min(len(ranges), num_physical_cores())` requests are ever in flight where
+  `object_store::get_ranges` hands the whole set to a runtime, and a thread
+  blocked on a socket is a pool thread doing nothing. That is N/nt round trips
+  instead of N. Closing the rest needs an async I/O primitive marrow does not
+  have, and raising the worker count does not substitute for one -- the pool is
+  fixed, so extra work items queue rather than overlap.
 
-  What is left is inside `OpenDalSource.read_ranges`: it issues its fetches one
-  after another, where parquet-rs hands the whole set to
-  `object_store::ObjectStore::get_ranges` and they go out together. On a local file that is
-  free; on S3 it is the difference between one round-trip time and N. The shape
-  to copy is the pattern at `reader.mojo`'s existing fan-out -- a pre-sized
-  `List[Optional[Buffer]]`, disjoint slots, `sync_parallelize`, a per-worker
-  `Optional[Error]`.
+- **Most file-backed tests still write fixed names under `/tmp`** -- 18 files,
+  mostly `marrow/io/tests/test_io_opendal_formats.mojo` and the Parquet suite.
+  Two concurrent runs of one file race on the same path, and a failed
+  assertion leaves the file behind. `test_io_opendal.mojo` has moved to a
+  per-test `mkdtemp` directory (`_Scratch`). **Do not use
+  `std.tempfile.TemporaryDirectory` for this**: its error-path `__exit__`
+  answers `True` once cleanup succeeds, which suppresses the error, so an
+  assertion failing inside it reports a pass (checked on
+  `1.2.0.dev2026092105`).
 
 - **`pytest marrow/tests/test_ipc.mojo` on its own deadlocks the compiler.**
   `%cpu=0.0`, RSS flat at ~900 MB, CPU time frozen at ~13.7 s while elapsed

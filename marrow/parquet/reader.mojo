@@ -10,15 +10,14 @@ this module is the entire deserialization layer; the metadata / statistics /
 page-index readers reuse the same footer decode without touching column data.
 """
 
-from max.algorithm.functional import sync_parallelize
 from std.memory import ArcPointer
 from std.builtin.rebind import downcast
 from std.sys import size_of
-from std.sys.info import num_physical_cores
 from std.memory import unsafe_memcpy
 
 from ..arrays import DynArray, ArrayData
 from ..buffers import Buffer, Bitmap
+from ..execution import ExecContext, fan_out
 from ..builders import (
     BinaryLikeBuilder,
     BoolBuilder,
@@ -2458,6 +2457,7 @@ struct ParquetFile[
         columns: Optional[List[String]] = None,
         row_groups: Optional[List[Int]] = None,
         row_selections: Optional[List[RowSelection]] = None,
+        ctx: ExecContext = ExecContext.auto(),
     ) raises -> Table:
         """Decode columns into a Marrow `Table`.
 
@@ -2471,10 +2471,17 @@ struct ParquetFile[
 
         Every (row group, selected leaf) pair decodes independently — each reads
         a disjoint byte range of the shared read-only mmap and writes its own
-        result slot — so the whole grid is decoded across `num_physical_cores()`
-        workers. Each worker owns a `CompressionLibs` (the lazy `dlopen` handles
-        and reused size cell are not shareable across threads); the mmap and
-        metadata are read-only."""
+        result slot — so the grid is decoded across `ctx`'s workers, and the
+        same budget bounds how many ranges the source fetches at once. Each
+        worker owns a `CompressionLibs` (the lazy `dlopen` handles and reused
+        size cell are not shareable across threads); the mmap and metadata are
+        read-only.
+
+        `ctx` follows `stripe`'s contract: `serial()` decodes and fetches on
+        the calling thread, `parallel(n)` uses `n` workers whatever the size,
+        and the default `auto()` uses every core once the selected row groups
+        hold `_PARALLEL_MIN_ROWS` rows. A scan operator passes the context its
+        plan runs under."""
         var plan = self._plan(columns, row_groups, row_selections)
         var total = len(plan.chunks)
 
@@ -2483,8 +2490,8 @@ struct ParquetFile[
         for rg in plan.row_groups:
             selected_rows += self._meta.row_groups[rg].num_rows
         var nt = 1
-        if total >= 2 and selected_rows >= _PARALLEL_MIN_ROWS:
-            nt = min(num_physical_cores(), total)
+        if total >= 2 and ctx.wants_parallel(selected_rows, _PARALLEL_MIN_ROWS):
+            nt = min(ctx.resolved_num_threads(), total)
 
         # One result slot per chunk, pre-sized so workers assign by index
         # without racing on list growth. (DecodedLeaf is move-only, so slots
@@ -2513,10 +2520,6 @@ struct ParquetFile[
         if plan.compressed:
             CompressionLibs.preload()
 
-        # One slot per worker, like the result slots above: a single shared
-        # `Optional[Error]` would be written by every failing thread at once.
-        var worker_errs = List[Optional[Error]](length=nt, fill=None)
-
         # --- plan, then fetch, then decode -------------------------------
         #
         # All three used to happen inside the worker, which was wrong twice
@@ -2535,42 +2538,28 @@ struct ParquetFile[
         # the workers borrow a value nobody is mutating, and the absence of a
         # race is a property of the types rather than a rule to remember. It is
         # what `Fetched` was built for.
-        var fetched = self._source.read_ranges(plan.ranges)
+        var fetched = self._source.read_ranges(plan.ranges, ctx)
 
-        def worker(w: Int) {mut worker_errs, mut decoded, imm}:
-            # `sync_parallelize`'s value form takes a non-raising worker. The
-            # body still unwinds at its first error; the other workers cannot be
-            # cancelled, so their errors are collected and raised after the join.
-            try:
-                ref codecs_w = codecs[][w]
-                var t = w
-                while t < total:
-                    ref chunk = plan.chunks[t]
-                    # ColumnReader.decode picks the flat vs leveled path from
-                    # the leaf's max repetition, so one call serves every column
-                    # shape. Nothing here touches the source: the segments are
-                    # slices of the one batch nobody is mutating.
-                    var reader = ColumnReader[origin_of(fetched), Self.leaves](
-                        plan.segments(t, fetched),
-                        self._meta.row_groups[chunk.row_group]
-                        .columns[chunk.leaf]
-                        .meta_data.copy(),
-                        self._mapping.leaves[chunk.leaf].copy(),
-                        chunk.num_rows,
-                        chunk.selection.copy(),
-                        chunk.locs.copy(),
-                        chunk.seg_at(),
-                    )
-                    decoded[t] = reader.decode(codecs_w)
-                    t += nt
+        def decode(w: Int, t: Int) raises {mut decoded, imm}:
+            ref chunk = plan.chunks[t]
+            # ColumnReader.decode picks the flat vs leveled path from the
+            # leaf's max repetition, so one call serves every column shape.
+            # Nothing here touches the source: the segments are slices of the
+            # one batch nobody is mutating.
+            var reader = ColumnReader[origin_of(fetched), Self.leaves](
+                plan.segments(t, fetched),
+                self._meta.row_groups[chunk.row_group]
+                .columns[chunk.leaf]
+                .meta_data.copy(),
+                self._mapping.leaves[chunk.leaf].copy(),
+                chunk.num_rows,
+                chunk.selection.copy(),
+                chunk.locs.copy(),
+                chunk.seg_at(),
+            )
+            decoded[t] = reader.decode(codecs[][w])
 
-            except e:
-                worker_errs[w] = e
-
-        sync_parallelize(worker, nt)
-        for err in worker_errs:
-            if err:
-                raise err.value()
+        fan_out(total, nt, decode)
         return plan.assemble(decoded)
 
     def _plan(
@@ -2838,6 +2827,7 @@ def read_table[
     row_groups: Optional[List[Int]] = None,
     row_selections: Optional[List[RowSelection]] = None,
     options: StorageOptions = StorageOptions(),
+    ctx: ExecContext = ExecContext.auto(),
 ) raises -> Table:
     """Read a Parquet file into a Marrow `Table` — a convenience wrapper over
     `ParquetFile(uri).read(...)` (mirrors `pyarrow.parquet.read_table`).
@@ -2857,7 +2847,7 @@ def read_table[
     compiles all of them. An AOT program that knows its schema can cut the
     decode ladder it links — see `LeafSet`."""
     var pf = ParquetFile[DynSource, leaves](DynSource.open(uri, options))
-    return pf.read(columns, row_groups, row_selections)
+    return pf.read(columns, row_groups, row_selections, ctx)
 
 
 # ---------------------------------------------------------------------------

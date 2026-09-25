@@ -18,6 +18,7 @@ from std.io.file import FileHandle
 from std.os import remove
 
 from ..buffers import Buffer
+from ..execution import ExecContext
 from .core import ByteSink, ByteSource, Fetched, require_range
 
 
@@ -105,11 +106,14 @@ struct BufferSource(ByteSource):
             self._buf.view[DType.uint8](offset, length).as_span()
         )
 
-    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
-        # One allocation, N handles: a `Buffer` copy is a ref-count bump, so
-        # this moves no bytes. Batching buys resident data nothing -- it costs
-        # it nothing either, which is what lets one call shape serve both ends
-        # of the seam.
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
+        # `ctx` is unused: nothing here is fetched, so there is nothing to
+        # spread across workers. One allocation, N handles: a `Buffer` copy is
+        # a ref-count bump, so this moves no bytes. Batching buys resident data
+        # nothing -- it costs it nothing either, which is what lets one call
+        # shape serve both ends of the seam.
         var out = Fetched(capacity=len(ranges))
         for ref r in ranges:
             require_range(r[0], r[1], self._size, "BufferSource.read_ranges")

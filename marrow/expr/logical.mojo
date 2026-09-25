@@ -3005,6 +3005,7 @@ struct ParquetScan(Relation, Writable):
             ParquetScanOperator(
                 self.path.resolve(bindings),
                 self._schema.copy(),
+                ctx.copy(),
                 self.pruners.copy(),
                 bindings.copy(),
             )

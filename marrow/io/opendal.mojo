@@ -54,6 +54,7 @@ from std.memory import ArcPointer, unsafe_memcpy
 from std.sys import size_of
 
 from ..buffers import Buffer
+from ..execution import ExecContext, fan_out
 from ..utils.dylib import (
     CString,
     LibSet,
@@ -624,8 +625,10 @@ struct OpenDalSource(ByteSource):
         Rust `Bytes` satisfies neither except by luck -- under `ASSERT=all`
         that is an abort on some inputs and a pass on others. So the bytes are
         read straight into an aligned buffer, which is one copy, not two.
+
+        The range is not checked here: each entry point checks its own, on the
+        calling thread and under its own name, before anything is fetched.
         """
-        require_range(offset, length, self._size, "OpenDalSource.read")
         var buf = Buffer.alloc_uninit[DType.uint8](max(length, 1))
         if length > 0:
             var got = self._store[].read_range_into(
@@ -652,6 +655,7 @@ struct OpenDalSource(ByteSource):
     def read_at(
         ref self, offset: Int, length: Int
     ) raises -> Span[UInt8, origin_of(self)]:
+        require_range(offset, length, self._size, "OpenDalSource.read_at")
         var buf = self._fetch(offset, length)
         self._arena[].append(buf^)
         return rebind[Span[UInt8, origin_of(self)]](
@@ -660,15 +664,52 @@ struct OpenDalSource(ByteSource):
             .as_span()
         )
 
-    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
         """Every range at once, in a batch the caller owns.
 
         Nothing lands in the arena: the point of the batch is that its storage
         belongs to whoever asked for it, so a decode fan-out can borrow it
-        without anyone mutating anything. Requests still go out one at a time;
-        issuing them concurrently is a worthwhile change and not this one.
+        without anyone mutating anything.
+
+        **The requests go out concurrently**, which is the whole reason this
+        method exists rather than a loop over `read_at` at the call site: a
+        remote fetch is a round trip, so N ranges served one after another cost
+        N round-trip times where they could cost one. Each range gets a slot of
+        its own, so no two workers touch the same memory, and `fan_out` raises
+        the error of the lowest failing range -- the same one a serial loop
+        would have stopped at, on any core count. Every range is
+        bounds-checked *before* dispatch, so a caller bug stays on the calling
+        thread and costs no requests at all.
+
+        **`ctx` sets the concurrency, and a compute pool caps it.** At most
+        `min(len(ranges), ctx.resolved_num_threads())` requests are ever in
+        flight: one at a time under `ExecContext.serial()`, one per core under
+        `auto()`. `object_store::get_ranges` instead hands the whole set to an
+        async runtime and issues them all, where here a thread blocked on a
+        socket is a pool thread doing nothing. Marrow has no async runtime and
+        no other way to overlap I/O, so this is N/nt round trips instead of N
+        -- the right shape, at a fraction of the reach. Do not ask for more
+        workers than cores to chase more: the pool is fixed, so extra work
+        items queue rather than overlap.
         """
-        var out = Fetched(capacity=len(ranges))
+        var n = len(ranges)
         for ref r in ranges:
-            out.append(self._fetch(r[0], r[1]), 0, r[1])
+            require_range(r[0], r[1], self._size, "OpenDalSource.read_ranges")
+
+        # `Buffer` is move-only, so the slots are filled by appending `None`
+        # rather than with the copy-based `fill=`.
+        var slots = List[Optional[Buffer[mut=False]]](capacity=n)
+        for _ in range(n):
+            slots.append(None)
+
+        def fetch(wid: Int, i: Int) raises {mut slots, imm}:
+            slots[i] = self._fetch(ranges[i][0], ranges[i][1])
+
+        fan_out(n, ctx.resolved_num_threads(), fetch)
+
+        var out = Fetched(capacity=n)
+        for i in range(n):
+            out.append(slots[i].take(), 0, ranges[i][1])
         return out^

@@ -32,6 +32,7 @@ from std.memory import ArcPointer
 from std.os import remove
 
 from ..buffers import Buffer
+from ..execution import ExecContext
 from ..io import ByteSource, Fetched, BufferSource
 from ..schema import Schema
 from ..tabular import RecordBatch, record_batch
@@ -1002,10 +1003,12 @@ struct _CountingSource(ByteSource):
             self._inner.read_at(offset, length)
         )
 
-    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
         for ref r in ranges:
             self._read[] += r[1]
-        return self._inner.read_ranges(ranges)
+        return self._inner.read_ranges(ranges, ctx)
 
 
 def test_ipc_file_reader_reads_only_its_tail() raises:

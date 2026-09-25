@@ -46,6 +46,7 @@ from std.utils import Variant
 from .opendal import OpenDalStore, OpenDalWriter, OpenDalSource
 from .core import ByteSink, ByteSource, Fetched
 from .local import BufferSource, FileSink, MemorySink
+from ..execution import ExecContext
 from ..utils.uri import StorageOptions, Uri
 
 
@@ -88,12 +89,14 @@ struct DynSource(ByteSource):
                     )
         raise Error("DynSource.read_at: no arm matched")
 
-    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
         comptime for i in range(len(Self.VariantType.Ts)):
             comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, ByteSource):
                 if self._v.isa[T]():
-                    return self._v[T].read_ranges(ranges)
+                    return self._v[T].read_ranges(ranges, ctx)
         raise Error("DynSource.read_ranges: no arm matched")
 
     @staticmethod

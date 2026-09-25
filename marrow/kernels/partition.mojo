@@ -12,12 +12,10 @@ thread, collect the results — shared by the hash join (build + probe) and the
 radix group-by path.
 """
 
-from max.algorithm.functional import sync_parallelize
-
 from ..arrays import Int32Array, UInt64Array
 from ..buffers import Buffer
 from ..dtypes import int32, uint64
-from ..execution import ExecContext
+from ..execution import ExecContext, fan_out
 
 
 comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
@@ -268,7 +266,7 @@ struct RadixPartitioner(Movable):
         results.
 
         Partitions ``hashes`` (one radix pass), then dispatches one worker per
-        partition via ``sync_parallelize`` — each worker calls
+        partition via ``fan_out`` — each worker calls
         ``op(partition_index, row_indices, hashes)`` and produces one ``R``. The
         index lets an op correlate its partition with a paired structure (e.g.
         the probe side pairs partition ``i`` with build-side table ``i``, since
@@ -293,28 +291,14 @@ struct RadixPartitioner(Movable):
         var p = len(partitions)
         var slots = List[Optional[R]](length=p, fill=None)
 
-        # One slot per worker, like the result slots above: a single shared
-        # `Optional[Error]` would be written by every failing thread at once.
-        var worker_errs = List[Optional[Error]](length=p, fill=None)
+        def run(w: Int, i: Int) raises {mut slots, imm}:
+            slots[i] = op(
+                i,
+                partitions[i].row_indices.copy(),
+                partitions[i].hashes.copy(),
+            )
 
-        def worker(i: Int) {mut worker_errs, mut slots, imm}:
-            # `sync_parallelize`'s value form takes a non-raising worker. The
-            # body still unwinds at its first error; the other workers cannot be
-            # cancelled, so their errors are collected and raised after the join.
-            try:
-                slots[i] = op(
-                    i,
-                    partitions[i].row_indices.copy(),
-                    partitions[i].hashes.copy(),
-                )
-
-            except e:
-                worker_errs[i] = e
-
-        sync_parallelize(worker, p)
-        for err in worker_errs:
-            if err:
-                raise err.value()
+        fan_out(p, p, run)
 
         var out = List[R](capacity=p)
         for i in range(p):

@@ -7,11 +7,13 @@ pytest marker. The one case that must run either way lives in
 `test_io_dispatch.mojo`: a marrow without OpenDAL must still read a local file.
 """
 
-from std.os import getenv
-from std.os.path import exists
+from std.os import getenv, listdir, remove, rmdir
+from std.os.path import exists, join
+from std.tempfile import mkdtemp
 from std.testing import assert_equal, assert_true
 
-from ..opendal import OpenDalStore
+from ...execution import ExecContext
+from ..opendal import OpenDalSource, OpenDalStore
 
 
 def _available() -> Bool:
@@ -48,11 +50,82 @@ def test_opendal_library_is_present_when_required() raises:
 
 
 def _pattern(n: Int) -> List[UInt8]:
-    """`n` bytes with no repeated run, so a misaligned range cannot pass."""
+    """`n` pseudo-random bytes (xorshift32), so a range read from the wrong
+    offset matches the right one only by chance: 2^-8L for `L` bytes.
+
+    Not an arithmetic sequence: `(i * 7 + 3) % 251` repeats every 251 bytes, so
+    a read displaced by any multiple of 251 returned the expected bytes.
+    """
     var out = List[UInt8](capacity=n)
-    for i in range(n):
-        out.append(UInt8((i * 7 + 3) % 251))
+    var state = UInt32(0x9E3779B9)
+    for _ in range(n):
+        state ^= state << 13
+        state ^= state >> 17
+        state ^= state << 5
+        out.append(UInt8(state >> 24))
     return out^
+
+
+struct _Scratch:
+    """A fresh directory for one test, removed on the way out whether or not
+    the body raised -- so two concurrent runs never share a file, and a failed
+    assertion does not leave one behind for the next.
+
+    Not `std.tempfile.TemporaryDirectory`: its error-path `__exit__` answers
+    `True` once cleanup succeeds, which *suppresses* the error, so a failing
+    assertion inside it would report a pass. This one answers `False`.
+    """
+
+    var path: String
+
+    def __init__(out self) raises:
+        self.path = mkdtemp(prefix="marrow_opendal_")
+
+    def __enter__(self) -> String:
+        return self.path
+
+    def _remove(self) raises:
+        for name in listdir(self.path):
+            remove(join(self.path, name))
+        rmdir(self.path)
+
+    def __exit__(self) raises:
+        self._remove()
+
+    def __exit__(self, err: Error) -> Bool:
+        try:
+            self._remove()
+        except:
+            pass
+        return False
+
+
+def _fs_store(root: String) -> Optional[OpenDalStore]:
+    """An `fs` store rooted at `root`, or `None` when the library lacks the
+    service: `fs` is a cargo feature, and a stock libopendal_c has only
+    `memory`."""
+    try:
+        return OpenDalStore("fs", {"root": root})
+    except:
+        return None
+
+
+def _write(dir: String, name: String, data: List[UInt8]) raises:
+    with open(join(dir, name), "w") as f:
+        f.write_bytes(Span(data))
+
+
+def _scattered(count: Int) -> List[Tuple[Int, Int]]:
+    """`count` ranges over a 64 KiB object, scattered and with a length that
+    does not grow with the index, so neither position nor size can stand in
+    for the slot number. `37` is invertible mod `244`, so for `count <= 244`
+    every length differs -- and every length is at least 8 bytes, which is
+    what makes a displaced read a 2^-64 coincidence rather than a likely one.
+    """
+    var ranges = List[Tuple[Int, Int]](capacity=count)
+    for i in range(count):
+        ranges.append((i * 613 + 7, (i * 37) % 244 + 8))
+    return ranges^
 
 
 def _assert_eq(got: Span[UInt8, _], want: Span[UInt8, _]) raises:
@@ -229,26 +302,180 @@ def test_opendal_streaming_writer_commits_on_close() raises:
 def test_opendal_fs_reads_a_file_written_out_of_band() raises:
     """The `fs` service over bytes another writer produced -- proof the binding
     reads real files, not only ones it wrote itself."""
-    var store: OpenDalStore
-    try:
-        store = OpenDalStore("fs", {"root": "/tmp"})
-    except:
-        # `fs` is a cargo feature; a stock libopendal_c has only `memory`.
-        return
+    with _Scratch() as dir:
+        var found = _fs_store(dir)
+        if not found:
+            return
+        ref store = found.value()
+        var name = String("probe.bin")
+        var data = _pattern(4096)
+        _write(dir, name, data)
 
-    var path = String("/tmp/marrow_opendal_fs_probe.bin")
-    var data = _pattern(4096)
-    with open(path, "w") as f:
-        f.write_bytes(Span(data))
+        assert_equal(store.content_length(name), 4096)
+        _assert_eq(Span(store.read(name)), Span(data))
+        # The differential that catches an off-by-one no single assertion would.
+        for r in [(0, 4096), (1, 1), (100, 200), (4095, 1), (2048, 1024)]:
+            _assert_eq(
+                Span(store.read_range(name, r[0], r[1])),
+                Span(data)[r[0] : r[0] + r[1]],
+            )
+        store.delete(name)
+        assert_true(not exists(join(dir, name)))
+        _ = data^
 
-    assert_equal(store.content_length("marrow_opendal_fs_probe.bin"), 4096)
-    _assert_eq(Span(store.read("marrow_opendal_fs_probe.bin")), Span(data))
-    # The differential that catches an off-by-one no single assertion would.
-    for r in [(0, 4096), (1, 1), (100, 200), (4095, 1), (2048, 1024)]:
-        _assert_eq(
-            Span(store.read_range("marrow_opendal_fs_probe.bin", r[0], r[1])),
-            Span(data)[r[0] : r[0] + r[1]],
+
+def test_opendal_source_read_ranges_many_scattered() raises:
+    """`read_ranges` fans its fetches out across workers, so what has to be
+    pinned is that range `i` still lands in slot `i`.
+
+    More ranges than any plausible core count, so every worker wraps its stride
+    several times -- a bug that filled the slots in completion order rather
+    than by index would be invisible with four ranges and four cores.
+    """
+    with _Scratch() as dir:
+        var found = _fs_store(dir)
+        if not found:
+            return
+        var name = String("ranges.bin")
+        var data = _pattern(64 * 1024)
+        _write(dir, name, data)
+
+        var src = OpenDalSource(found.take(), name)
+        assert_equal(src.size(), 64 * 1024)
+
+        # `parallel(8)` forces a real fan-out on any machine; `serial()` is the
+        # one-thread path a plan run under that context takes.
+        var ranges = _scattered(97)
+        for ctx in [ExecContext.parallel(8), ExecContext.serial()]:
+            var got = src.read_ranges(ranges, ctx)
+            assert_equal(len(got), len(ranges))
+            for i in range(len(ranges)):
+                var off, length = ranges[i]
+                _assert_eq(got.span(i), Span(data)[off : off + length])
+        _ = data^
+
+
+def test_opendal_source_read_ranges_edge_counts() raises:
+    """No ranges, one range, and a zero-length range: the counts at which a
+    fan-out has nothing to split, and the length at which a fetch has nothing
+    to ask for."""
+    with _Scratch() as dir:
+        var found = _fs_store(dir)
+        if not found:
+            return
+        var name = String("edges.bin")
+        var data = _pattern(256)
+        _write(dir, name, data)
+        var src = OpenDalSource(found.take(), name)
+
+        assert_equal(
+            len(
+                src.read_ranges(
+                    List[Tuple[Int, Int]](), ExecContext.parallel(8)
+                )
+            ),
+            0,
         )
-    store.delete("marrow_opendal_fs_probe.bin")
-    assert_true(not exists(path))
-    _ = data^
+
+        var one = src.read_ranges([(17, 100)], ExecContext.parallel(8))
+        assert_equal(len(one), 1)
+        _assert_eq(one.span(0), Span(data)[17:117])
+
+        var mixed = src.read_ranges(
+            [(0, 0), (256, 0), (255, 1)], ExecContext.parallel(8)
+        )
+        assert_equal(len(mixed), 3)
+        assert_equal(len(mixed.span(0)), 0)
+        assert_equal(len(mixed.span(1)), 0)
+        _assert_eq(mixed.span(2), Span(data)[255:256])
+        _ = data^
+
+
+def test_opendal_source_read_ranges_rejects_a_bad_range() raises:
+    """One range past the end fails the whole batch, on the calling thread: the
+    bounds check runs before any worker starts, so a caller bug costs no
+    requests and the message is the one check's."""
+    with _Scratch() as dir:
+        var found = _fs_store(dir)
+        if not found:
+            return
+        var name = String("bad_range.bin")
+        var data = _pattern(256)
+        _write(dir, name, data)
+
+        var src = OpenDalSource(found.take(), name)
+        var msg = String()
+        try:
+            _ = src.read_ranges(
+                [(0, 16), (128, 16), (250, 16)], ExecContext.parallel(8)
+            )
+        except e:
+            msg = String(e)
+        assert_true(
+            msg.startswith("OpenDalSource.read_ranges: [250, 266)"),
+            String("unexpected message: ", msg),
+        )
+        _ = data^
+
+
+def test_opendal_source_read_ranges_raises_the_first_failed_fetch() raises:
+    """A fetch that fails *inside* a worker reaches the caller as an error, and
+    it is the error of the lowest failing range -- the one a serial loop would
+    have stopped at -- not whichever worker happened to report.
+
+    The bounds check cannot produce this: it runs before dispatch. So the
+    object shrinks after the source has recorded its size, and every range
+    past the new end passes the check and then comes back short. Ranges from
+    the first failing one onward are spread round-robin over every worker, so
+    several fail at once.
+    """
+    with _Scratch() as dir:
+        var found = _fs_store(dir)
+        if not found:
+            return
+        var name = String("shrinks.bin")
+        var data = _pattern(64 * 1024)
+        _write(dir, name, data)
+        var src = OpenDalSource(found.take(), name)
+
+        var half = 32 * 1024
+        var head = List[UInt8](capacity=half)
+        for i in range(half):
+            head.append(data[i])
+        _write(dir, name, head)
+
+        var ranges = _scattered(97)
+        var first = -1
+        var failing = 0
+        for i in range(len(ranges)):
+            if ranges[i][0] + ranges[i][1] > half:
+                failing += 1
+                if first < 0:
+                    first = i
+        # The case only discriminates if more than one range fails.
+        assert_true(failing > 1)
+
+        # What the first failing range raises on its own, with no fan-out.
+        var want = String()
+        try:
+            _ = src.read_ranges([ranges[first]], ExecContext.serial())
+        except e:
+            want = String(e)
+        assert_true(want.byte_length() > 0, "a short read must raise")
+        # And the case only discriminates if another range's message differs.
+        var last = String()
+        try:
+            _ = src.read_ranges([ranges[len(ranges) - 1]], ExecContext.serial())
+        except e:
+            last = String(e)
+        assert_true(last != want, String("indistinct messages: ", last))
+
+        for ctx in [ExecContext.parallel(8), ExecContext.serial()]:
+            var got = String()
+            try:
+                _ = src.read_ranges(ranges, ctx)
+            except e:
+                got = String(e)
+            assert_equal(got, want)
+        _ = data^
+        _ = head^

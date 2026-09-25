@@ -24,6 +24,7 @@ from std.math import ceildiv
 
 from .arrays import DynArray, ArrayData, DictionaryArray, NullArray, Int32Array
 from .buffers import Buffer, Bitmap
+from .execution import ExecContext
 from .io import (
     FOOTER_READ_SIZE,
     BufferSource,
@@ -1668,10 +1669,12 @@ def _read_message[
     var n = src.size()
     if pos + 4 > n:
         return False
+    # Every fetch below is one range, so there is nothing to fan out.
+    var one = ExecContext.serial()
 
     # The frame prefix is 4 bytes, or 8 when the continuation marker is
     # present. Ask for as much of it as the source has left.
-    var pre_fetched = src.read_ranges([(pos, min(8, n - pos))])
+    var pre_fetched = src.read_ranges([(pos, min(8, n - pos))], one)
     var pre = pre_fetched.span(0)
     var marker = LittleEndian.checked[DType.int32](pre, 0)
     var metadata_len: Int
@@ -1696,7 +1699,7 @@ def _read_message[
             n,
             "-byte source",
         )
-    var meta_fetched = src.read_ranges([(meta_start, metadata_len)])
+    var meta_fetched = src.read_ranges([(meta_start, metadata_len)], one)
     meta.extend(meta_fetched.span(0))
 
     var raw_end = meta_start + metadata_len
@@ -1712,7 +1715,7 @@ def _read_message[
             n,
             "-byte source",
         )
-    var body_fetched = src.read_ranges([(meta_end, body_len)])
+    var body_fetched = src.read_ranges([(meta_end, body_len)], one)
     body.extend(body_fetched.span(0))
 
     pos = meta_end + body_len

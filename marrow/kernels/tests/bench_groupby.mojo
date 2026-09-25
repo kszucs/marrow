@@ -13,7 +13,7 @@ only the *striped* phases — key hashing, the radix histogram and scatter, and
 the closing `take` — because `ExecContext.stripe` sets concurrency by choosing
 `resolved_num_threads()` work items. The dominant phase does not go through
 `stripe`: the 64 per-partition `SwissHashTable` inserts are dispatched as
-`sync_parallelize(worker, 64)` in `RadixPartitioner.map_partitions`, and the id
+`fan_out(64, 64, run)` in `RadixPartitioner.map_partitions`, and the id
 write-back as `sync_parallelize(finish_partition, 64)` below it. Both hand 64
 work items to the global runtime pool, which sizes itself and never sees `ctx`.
 

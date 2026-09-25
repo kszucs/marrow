@@ -10,7 +10,7 @@ reads past its scratch, and neither shows up as a compile error.
 
 from std.testing import assert_equal, assert_true, assert_false
 
-from ...execution import ExecContext
+from ...execution import ExecContext, fan_out
 from std.sys import CompilationTarget, has_accelerator
 
 
@@ -275,6 +275,104 @@ def test_stripe_zero_length_visits_nothing() raises:
 
     ExecContext.serial().stripe(0, count)
     assert_equal(total[0], 0)
+
+
+# ---------------------------------------------------------------------------
+# fan_out — the raising counterpart
+#
+# Every item writes only its own slot, so these too run race-free under real
+# parallelism.
+# ---------------------------------------------------------------------------
+
+
+def _fan_out_visits(count: Int, workers: Int) raises -> List[Int]:
+    """Run `fan_out` and return, per item, the `wid` that ran it (`-1` if
+    none did, `-2` if more than one did)."""
+    var by = List[Int](length=count, fill=-1)
+
+    def visit(wid: Int, i: Int) raises {mut by, imm}:
+        by[i] = wid if by[i] == -1 else -2
+
+    fan_out(count, workers, visit)
+    return by^
+
+
+def test_fan_out_runs_every_item_once_round_robin() raises:
+    """Each item runs exactly once, on worker `i % workers` — the dealing a
+    caller's per-worker scratch relies on."""
+    var by = _fan_out_visits(1001, 4)
+    for i in range(1001):
+        assert_equal(by[i], i % 4)
+
+
+def test_fan_out_clamps_workers_to_the_item_count() raises:
+    """More workers than items: every `wid` still indexes scratch sized by
+    `min(workers, count)`, the bound a caller allocates to."""
+    var by = _fan_out_visits(3, 16)
+    for i in range(3):
+        assert_equal(by[i], i)
+
+
+def test_fan_out_serial_for_one_worker_or_none() raises:
+    """One worker, or a nonsensical count of zero or fewer, runs every item on
+    worker 0 in order."""
+    for workers in [1, 0, -3]:
+        var by = _fan_out_visits(10, workers)
+        for i in range(10):
+            assert_equal(by[i], 0)
+
+
+def test_fan_out_zero_items_runs_nothing() raises:
+    var calls = List[Int](length=1, fill=0)
+
+    def visit(wid: Int, i: Int) raises {mut calls, imm}:
+        calls[0] += 1
+
+    fan_out(0, 4, visit)
+    assert_equal(calls[0], 0)
+
+
+def _fan_out_error(count: Int, workers: Int) raises -> String:
+    """Fail every item from 37 on, in steps of 5, and return what was raised
+    (empty if nothing was)."""
+
+    def visit(wid: Int, i: Int) raises {imm}:
+        if i >= 37 and (i - 37) % 5 == 0:
+            raise Error("item ", i)
+
+    try:
+        fan_out(count, workers, visit)
+    except e:
+        return String(e)
+    return String()
+
+
+def test_fan_out_raises_the_lowest_failing_item() raises:
+    """Several items fail on several workers; the one raised is the lowest,
+    whatever the worker count — the error a serial loop would have given, and
+    the same message on every machine."""
+    for workers in [1, 2, 3, 4, 7, 64]:
+        assert_equal(_fan_out_error(200, workers), "item 37")
+
+
+def test_fan_out_runs_every_item_below_the_first_failure() raises:
+    """Workers cannot be cancelled, and each stops at its own first error, so
+    everything below the lowest failure has run by the time it is raised."""
+    var ran = List[Int](length=100, fill=0)
+
+    def visit(wid: Int, i: Int) raises {mut ran, imm}:
+        ran[i] = 1
+        if i == 60 or i == 61 or i == 99:
+            raise Error("item ", i)
+
+    var msg = String()
+    try:
+        fan_out(100, 4, visit)
+    except e:
+        msg = String(e)
+    assert_equal(msg, "item 60")
+    for i in range(60):
+        assert_equal(ran[i], 1)
 
 
 def test_has_accelerator_support() raises:

@@ -10,6 +10,7 @@ nothing else, which is what makes a backend written once work for every format.
 """
 
 from ..buffers import Buffer
+from ..execution import ExecContext
 
 
 comptime FOOTER_READ_SIZE = 64 * 1024
@@ -120,8 +121,17 @@ trait ByteSource(Deinitable, Movable):
         503 needs somewhere to go other than `abort()`."""
         ...
 
-    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
         """Every `(offset, length)` at once, in one caller-owned batch.
+
+        `ctx` is the worker budget for a source that fetches: it may issue up
+        to `ctx.resolved_num_threads()` requests at once, so `serial()` means
+        one at a time. Required rather than defaulted, because a default is
+        how a scan run under `ExecContext.serial()` used to fetch on every
+        core anyway -- the context stopped at the operator and nobody noticed.
+        A source with nothing to fetch ignores it.
 
         Declared abstract rather than defaulted: a default would have to produce
         an owning `Buffer` out of `read_at`'s borrowed `Span`, which it cannot,

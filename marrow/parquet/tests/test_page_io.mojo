@@ -35,6 +35,7 @@ from ...parquet.reader import (
     read_page_index,
     scan_ranges,
 )
+from ...execution import ExecContext
 from ...io import ByteSource, Fetched, BufferSource
 
 
@@ -42,15 +43,27 @@ comptime Reads = ArcPointer[List[Tuple[Int, Int]]]
 """Every `(offset, length)` the reader asked for, in order."""
 
 
+comptime Budgets = ArcPointer[List[Int]]
+"""The `ctx.num_threads` of every `read_ranges` batch, in order."""
+
+
 struct _Recorder(ByteSource):
-    """A `BufferSource` that remembers what was read through it."""
+    """A `BufferSource` that remembers what was read through it, and under
+    which worker budget."""
 
     var _inner: BufferSource
     var _reads: Reads
+    var _budgets: Budgets
 
-    def __init__(out self, path: String, var reads: Reads) raises:
+    def __init__(
+        out self,
+        path: String,
+        var reads: Reads,
+        var budgets: Budgets = Budgets(List[Int]()),
+    ) raises:
         self._inner = BufferSource(path)
         self._reads = reads^
+        self._budgets = budgets^
 
     def size(self) -> Int:
         return self._inner.size()
@@ -63,13 +76,16 @@ struct _Recorder(ByteSource):
             self._inner.read_at(offset, length)
         )
 
-    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
         # Every range of a batch is recorded individually, so the byte-level
         # assertions below read the same whether the reader asked one range at a
         # time or asked for all of them at once.
         for ref r in ranges:
             self._reads[].append((r[0], r[1]))
-        return self._inner.read_ranges(ranges)
+        self._budgets[].append(ctx.num_threads)
+        return self._inner.read_ranges(ranges, ctx)
 
 
 def _write_paged(
@@ -495,6 +511,31 @@ def _chunk(start: Int, length: Int, dictionary: Bool = False) -> ColumnChunk:
     var cc = ColumnChunk()
     cc.meta_data = md^
     return cc^
+
+
+def test_read_hands_its_context_to_the_source() raises:
+    """`ParquetFile.read` fetches under the context it was given, so a caller
+    that asked for `serial()` gets a source that fetches one range at a time.
+
+    The context used to stop at the reader: `read_ranges` took none, and a
+    fetching source sized its fan-out by `num_physical_cores()` whatever the
+    plan asked for. `auto()` is the default and must stay so -- it is what a
+    plan or a Python caller that names no budget runs under.
+    """
+    var path = String("/tmp/marrow_pageio_budget.parquet")
+    _write_paged(path, rows=100, page_rows=10)
+    var budgets = Budgets(List[Int]())
+    var f = ParquetFile[_Recorder, LeafSet.all()](
+        _Recorder(path, Reads(List[Tuple[Int, Int]]()), budgets.copy())
+    )
+    _ = f.read()
+    _ = f.read(ctx=ExecContext.serial())
+    _ = f.read(ctx=ExecContext.parallel(3))
+    assert_equal(len(budgets[]), 3)
+    assert_equal(budgets[][0], ExecContext.auto().num_threads)
+    assert_equal(budgets[][1], 1)
+    assert_equal(budgets[][2], 3)
+    remove(path)
 
 
 def test_scan_ranges_plans_runs_and_merges_neighbours() raises:

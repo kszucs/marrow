@@ -14,6 +14,7 @@ from std.testing import assert_equal, assert_true
 
 from std.memory import ArcPointer
 
+from ...execution import ExecContext
 from ...io import ByteSource, Fetched, FileSink, BufferSource
 from ...parquet import ParquetFile, read_table, write_table
 from ...parquet.codecs import Compression
@@ -76,10 +77,12 @@ struct _Counting(ByteSource):
             self._inner.read_at(offset, length)
         )
 
-    def read_ranges(ref self, ranges: List[Tuple[Int, Int]]) raises -> Fetched:
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
         for ref r in ranges:
             self._read[] += r[1]
-        return self._inner.read_ranges(ranges)
+        return self._inner.read_ranges(ranges, ctx)
 
 
 def _sample() raises -> Table:

@@ -353,11 +353,10 @@ struct ExecContext(
         1 for such a body is a silent throughput loss, not a correctness bug,
         which is exactly why it is a parameter rather than an assumption.
 
-        **``body`` may not raise.** `sync_parallelize`'s value form — the one
-        used here — takes a non-raising worker. A caller whose body genuinely
-        raises should park the first error and re-raise after the join, which is
-        what `RadixPartitioner.map_partitions` and the Parquet row-group reader
-        do. Do **not** reach for
+        **``body`` may not raise.** `sync_parallelize` aborts the process on a
+        raising worker. A body that genuinely raises goes through ``fan_out``
+        instead, which parks each worker's error and re-raises after the join.
+        Do **not** reach for
         `sync_parallelize`'s parameter form instead: it accepts a raising worker
         but needs an implicitly-capturing closure whose captures are silently
         not made, and the body then reads garbage at run time. The tell is an
@@ -410,3 +409,67 @@ struct ExecContext(
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
+
+
+def fan_out[
+    Body: def(Int, Int) raises -> None
+](count: Int, workers: Int, body: Body) raises:
+    """Run ``body(wid, i)`` for every ``i`` in ``[0, count)``, across at most
+    ``workers`` threads, and raise what the lowest failing ``i`` raised.
+
+    This is ``stripe``'s counterpart for a body that **raises** — a fetch, a
+    decode, an operator over a partition — where an error has to reach the
+    caller rather than abort the process, which is what `sync_parallelize`
+    does with a raising worker. Every caller that needed that used to write
+    the same block by hand: result slots, one ``Optional[Error]`` per worker,
+    the dispatch, the raise after the join. There were three copies, and each
+    raised the lowest-numbered *worker's* error, which is a different item on
+    a machine with a different core count.
+
+    Items are dealt round-robin: worker ``wid`` runs ``wid``, ``wid +
+    workers``, ... in that order, and stops at its first error. ``wid`` is in
+    ``[0, min(workers, count))`` and indexes per-worker scratch the caller
+    allocated; a body writing a result slot indexes it by ``i``, so no two
+    workers ever touch the same memory.
+
+    **The error raised is deterministic.** Each worker records the item it
+    failed on, and the smallest wins. An item a worker never reached lies
+    after that worker's own failure, so the winner is the lowest failing
+    item overall — the one a serial loop would have stopped at — however many
+    cores the machine has and whichever thread finished first. Workers cannot
+    be cancelled, so the others run to their own first error or to the end.
+
+    With one effective worker the loop runs on the calling thread and the
+    error propagates directly, with no dispatch and no parking.
+
+    The body runs on the MAX CPU pool, the same one ``stripe`` uses. A body
+    that blocks — a remote fetch waiting on a socket — holds a pool thread for
+    as long as it waits; that is why ``workers`` is the caller's to choose.
+    """
+    var nt = max(1, min(workers, count))
+    if nt == 1:
+        for i in range(count):
+            body(0, i)
+    else:
+        var errs = List[Optional[Error]](length=nt, fill=None)
+        var failed_at = List[Int](length=nt, fill=-1)
+
+        def task(
+            wid: Int,
+        ) {mut errs, mut failed_at, imm body, imm count, imm nt}:
+            var i = wid
+            try:
+                while i < count:
+                    body(wid, i)
+                    i += nt
+            except e:
+                errs[wid] = e
+                failed_at[wid] = i
+
+        sync_parallelize(task, nt)
+        var first = -1
+        for w in range(nt):
+            if errs[w] and (first < 0 or failed_at[w] < failed_at[first]):
+                first = w
+        if first >= 0:
+            raise errs[first].value()

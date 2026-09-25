@@ -21,6 +21,7 @@ to this harness, so "assume and bail" is indistinguishable from a real pass.
 from std.os import getenv, remove, setenv
 from std.testing import assert_equal, assert_true
 
+from ...execution import ExecContext
 from ...io import BufferSource, DynSink, DynSource
 from ...io.opendal import OpenDalStore
 
@@ -64,7 +65,9 @@ def test_io_local_reads_work_without_opendal() raises:
 
     var mem = BufferSource(Span(data))
     assert_equal(mem.size(), 256)
-    assert_equal(len(mem.read_ranges([(0, 16), (240, 16)])), 2)
+    assert_equal(
+        len(mem.read_ranges([(0, 16), (240, 16)], ExecContext.serial())), 2
+    )
 
     remove(path)
     _ = data^

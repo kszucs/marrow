@@ -9,6 +9,7 @@ empty, overlapping, out-of-order, out-of-bounds — are the ones worth pinning:
 from std.testing import assert_equal, assert_true
 
 from ...buffers import Buffer
+from ...execution import ExecContext
 from ...io import Fetched, BufferSource
 
 
@@ -74,7 +75,7 @@ def test_io_source_memory_read_ranges() raises:
         (100, 0),
         (496, 16),
     ]
-    var got = src.read_ranges(ranges)
+    var got = src.read_ranges(ranges, ExecContext.serial())
     assert_equal(len(got), 6)
     for i in range(len(ranges)):
         _assert_span_is(
@@ -86,7 +87,7 @@ def test_io_source_memory_read_ranges() raises:
 def test_io_source_read_ranges_empty_batch() raises:
     var data = _pattern(32)
     var src = BufferSource(Span(data))
-    var got = src.read_ranges(List[Tuple[Int, Int]]())
+    var got = src.read_ranges(List[Tuple[Int, Int]](), ExecContext.serial())
     assert_equal(len(got), 0)
     _ = data^
 
@@ -96,7 +97,7 @@ def test_io_source_read_ranges_out_of_bounds_raises() raises:
     var src = BufferSource(Span(data))
     var raised = False
     try:
-        _ = src.read_ranges([(0, 8), (24, 16)])
+        _ = src.read_ranges([(0, 8), (24, 16)], ExecContext.serial())
     except:
         raised = True
     assert_true(raised)
@@ -106,7 +107,7 @@ def test_io_source_read_ranges_out_of_bounds_raises() raises:
 def test_io_source_fetched_span_index_out_of_range_raises() raises:
     var data = _pattern(32)
     var src = BufferSource(Span(data))
-    var got = src.read_ranges([(0, 8)])
+    var got = src.read_ranges([(0, 8)], ExecContext.serial())
     var raised = False
     try:
         _ = got.span(1)
@@ -124,7 +125,7 @@ def test_io_source_fetched_outlives_its_source() raises:
     var got: Fetched
 
     var src = BufferSource(Span(data))
-    got = src.read_ranges([(0, 64), (64, 64)])
+    got = src.read_ranges([(0, 64), (64, 64)], ExecContext.serial())
     _ = src^
 
     _assert_span_is(got.span(0), Span(data)[:64])
@@ -183,7 +184,7 @@ def test_io_source_mapped_file_read_ranges_matches_read_at() raises:
         (2048, 512),
         (7, 13),
     ]
-    var got = src.read_ranges(ranges)
+    var got = src.read_ranges(ranges, ExecContext.serial())
     assert_equal(len(got), len(ranges))
     for i in range(len(ranges)):
         _assert_span_is(got.span(i), src.read_at(ranges[i][0], ranges[i][1]))
@@ -203,7 +204,7 @@ def test_io_source_mapped_file_batch_shares_one_mapping() raises:
     var ranges = List[Tuple[Int, Int]](capacity=1024)
     for i in range(1024):
         ranges.append((i * 64, 64))
-    var got = src.read_ranges(ranges)
+    var got = src.read_ranges(ranges, ExecContext.serial())
     assert_equal(len(got), 1024)
     _assert_span_is(got.span(0), Span(data)[:64])
     _assert_span_is(got.span(1023), Span(data)[65472:])

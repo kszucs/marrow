@@ -1512,16 +1512,22 @@ struct ParquetScanOperator(Operator):
 
     var _next: Int
     var _pending: List[StructArray]
+    var _ctx: ExecContext
+    """The plan's worker budget, handed to every `read`: it bounds both the
+    decode fan-out and how many ranges a remote source fetches at once, so a
+    plan run under `ExecContext.serial()` scans on one thread."""
 
     def __init__(
         out self,
         var path: String,
         var schema: Schema,
+        var ctx: ExecContext,
         var pushed: List[DynValue] = List[DynValue](),
         var bindings: Bindings = Bindings(),
     ):
         self._path = path^
         self._schema = schema^
+        self._ctx = ctx^
         self._file = None
         self._pushed = pushed^
         self._bindings = bindings^
@@ -1592,6 +1598,7 @@ struct ParquetScanOperator(Operator):
                 columns=Optional(names^),
                 row_groups=Optional(groups^),
                 row_selections=picked^,
+                ctx=self._ctx,
             )
             # A row group can decode to several chunks; each becomes a morsel
             # rather than being concatenated back together.
