@@ -455,7 +455,8 @@ def test_chunker_dispatches_every_leaf_type() raises:
         _bools(b),
         _as(i64, dt.timestamp(dt.microsecond).to_dyn()),  # temporal
         _as(i64, dt.duration(dt.microsecond).to_dyn()),  # temporal
-        _as(i64, dt.decimal128(20, 4).to_dyn()),  # 16-byte decimal
+        # `_seq` spans the whole int64 range: 19 digits, plus 4 for the scale.
+        _as(i64, dt.decimal128(38, 4).to_dyn()),  # 16-byte decimal
         _as(i64, dt.decimal256(40, 4).to_dyn()),  # 32-byte decimal
         _binary_like(s, dt.large_string),
         _binary_like(s, dt.binary),
