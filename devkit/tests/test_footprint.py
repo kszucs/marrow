@@ -355,8 +355,6 @@ def test_marrow_compile_builds_a_query_the_way_the_gate_builds_one():
     expected[expected.index(".")] = "/marrow/checkout"
 
     assert (
-        catalog.build_command(
-            Path("q.mojo"), Path("q"), Path("/marrow/checkout")
-        )
+        catalog.build_command(Path("q.mojo"), Path("q"), Path("/marrow/checkout"))
         == expected
     )

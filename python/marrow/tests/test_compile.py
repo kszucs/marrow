@@ -179,9 +179,7 @@ def test_check_mojo_version_missing_raises_with_range(monkeypatch):
 
 
 @pytest.mark.parametrize("found", ["1.0.0", "1.1.0", "2.0.0"])
-def test_check_mojo_version_out_of_range_raises_with_found_version(
-    monkeypatch, found
-):
+def test_check_mojo_version_out_of_range_raises_with_found_version(monkeypatch, found):
     monkeypatch.setattr("marrow.compile.shutil.which", lambda name: "/usr/bin/mojo")
 
     def fake_run(cmd, capture_output, text, check):

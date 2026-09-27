@@ -93,9 +93,10 @@ class CustomBuildHook(BuildHookInterface):
         optional: a wheel without it still reads every local file.
         """
         catalog = compile_module(repo)
-        libs = catalog.stage_codec_libs(
-            catalog.codec_lib_dir(), required=required
-        ) + catalog.optional_lib_paths()
+        libs = (
+            catalog.stage_codec_libs(catalog.codec_lib_dir(), required=required)
+            + catalog.optional_lib_paths()
+        )
         staged = {}
         for lib in libs:
             if catalog.library_stem(lib.name) not in WHEEL_EXCLUDED:

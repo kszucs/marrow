@@ -88,7 +88,9 @@ def test_notice_names_every_text():
     """NOTICE.txt is where a reader learns which component a text belongs to;
     a text it does not name is attribution nobody can place."""
     notice = (REPO.root / "NOTICE.txt").read_text()
-    texts = [p.relative_to(REPO.root).as_posix() for p in REPO.licenses_dir.rglob("*.txt")]
+    texts = [
+        p.relative_to(REPO.root).as_posix() for p in REPO.licenses_dir.rglob("*.txt")
+    ]
     assert texts
     unnamed = [rel for rel in texts if rel not in notice]
     assert not unnamed, f"NOTICE.txt does not mention {unnamed}"
@@ -112,7 +114,9 @@ def test_every_opendal_licence_is_in_the_wheel_expression():
     overview = text.split("Licences used:", 1)[1].split("\n\n", 1)[0]
     used = set(re.findall(r"\(([A-Za-z0-9.+-]+)\): \d+ crates", overview))
     assert used, "no licence overview in opendal-third-party.txt"
-    expression = set(re.split(r"\s+(?:AND|OR|WITH)\s+", PYPROJECT["project"]["license"]))
+    expression = set(
+        re.split(r"\s+(?:AND|OR|WITH)\s+", PYPROJECT["project"]["license"])
+    )
     assert used <= expression, f"missing from License-Expression: {used - expression}"
 
 

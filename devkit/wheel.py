@@ -61,8 +61,11 @@ def check_wheel(path, catalog, require=()):
     with zipfile.ZipFile(path) as wheel:
         names = wheel.namelist()
         dist_info = next(
-            (top for top in (n.split("/", 1)[0] for n in names)
-             if top.endswith(".dist-info")),
+            (
+                top
+                for top in (n.split("/", 1)[0] for n in names)
+                if top.endswith(".dist-info")
+            ),
             None,
         )
         if dist_info is None:
@@ -112,7 +115,9 @@ def check_wheel(path, catalog, require=()):
         # found under the name its dependent asks for, so the loader takes the
         # grafted one -- once the build image's older brotli.
         if _grafted(name) and stem in staged:
-            problems.append(f"{name} was grafted beside marrow's own copy of the same library")
+            problems.append(
+                f"{name} was grafted beside marrow's own copy of the same library"
+            )
         files = catalog.LIBRARY_LICENSES.get(stem)
         if files is None:
             problems.append(f"{name} has no LIBRARY_LICENSES entry")
