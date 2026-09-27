@@ -44,8 +44,9 @@ jobs:
       # here swing by 50x on an unchanged tree -- `bench_string` has taken 34 s
       # and then over 1800 s on the same source -- and the files that swing are
       # the ones built on masked gather/compress lowerings, which `filter` and
-      # `take` are already known to be delicate about. `mojo run` JITs for the
-      # host, so a different instruction set is a different code generator.
+      # `take` are already known to be delicate about. A benchmark is built for
+      # the host CPU, so a different instruction set is a different code
+      # generator.
       # None of the logs recorded this, which is why the swing was never
       # attributable to anything.
       - name: Record the runner's CPU
@@ -54,6 +55,15 @@ jobs:
           grep -m1 ^flags /proc/cpuinfo | tr ' ' '\n' \
             | grep -E '^(avx|sse4|bmi|f16c)' | sort | tr '\n' ' '
           echo
+
+      # A unit that blows its deadline gets every thread's stack taken before
+      # it is killed (`ProcessRunner._stacks`). The attaching `gdb` is the
+      # hung process's sibling, not its parent, which Yama's default scope
+      # of 1 refuses.
+      - name: Let gdb attach to a hung unit
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gdb
+          sudo sysctl -w kernel.yama.ptrace_scope=0
 
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:

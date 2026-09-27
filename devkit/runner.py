@@ -622,18 +622,24 @@ class SuiteRunner:
         driver = self._driver.write(selection)
         label = self._label(selection)
 
-        if self._options.asan:
+        if self._options.asan or self._driver.kind == "bench":
             # ASAN goes through `mojo build` because the sanitizer runtime has
             # to be linked into a real binary -- and a binary is what gives
-            # symbolicated crash traces.  The content-addressed stem is shared
-            # with the driver, so parallel sessions never link over each other.
+            # symbolicated crash traces.  Benchmarks do too, so a unit that
+            # blows its deadline says whether compiling or running it hung:
+            # under `mojo run` both are one process and one "compiling" line.
+            # The content-addressed stem is shared with the driver, so parallel
+            # sessions never link over each other.
             binary = driver.with_suffix("")
+            suffix = " (asan)" if self._options.asan else ""
             built = self._toolchain.build(
-                driver, binary, self._options, f"{label} (asan)"
+                driver, binary, self._options, f"{label}{suffix}"
             )
             if not built.ok:
                 return None, f"mojo build failed for {driver}:\n{built.stderr}"
-            result = self._toolchain.execute(binary, ("--json",), f"running {label}")
+            result = self._toolchain.execute(
+                binary, ("--json",), f"running {self._noun(selection)}"
+            )
         else:
             # `mojo run` compiles and executes in one step without leaving an
             # artifact behind; compilation is what takes the minutes.
@@ -648,5 +654,8 @@ class SuiteRunner:
             return None, result.output or f"exit code {result.returncode}"
 
     def _label(self, selection):
+        return f"compiling {self._noun(selection)}"
+
+    def _noun(self, selection):
         noun = "benchmarks" if self._driver.kind == "bench" else "tests"
-        return f"compiling {len(selection)} {noun} from {selection.file_count} files"
+        return f"{len(selection)} {noun} from {selection.file_count} files"

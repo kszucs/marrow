@@ -25,6 +25,7 @@ the shared-library recipe instead of keeping a second copy.
 import contextlib
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -343,6 +344,9 @@ class ProcessRunner:
     BLOCKED_BELOW = 0.05
     COMPUTING_ABOVE = 0.5
 
+    #: How long `gdb` may take to attach and walk every thread.
+    STACKS_TIMEOUT = 120
+
     def __init__(self, cwd, progress=None, timeout=0, suspend=None):
         self._cwd = Path(cwd)
         self._progress = progress if progress is not None else SilentProgress()
@@ -394,9 +398,14 @@ class ProcessRunner:
             # into an ordinary failure.
             timed_out = True
             usage = self._progress.snapshot()
+            stacks = self._stacks(process.pid)
             self._terminate(process)
             out, err = process.communicate()
-            err = (err or "") + self._timeout_note(usage, time.monotonic() - started)
+            err = (
+                (err or "")
+                + self._timeout_note(usage, time.monotonic() - started)
+                + stacks
+            )
         return CommandResult(
             argv=tuple(argv),
             returncode=124 if timed_out else process.returncode,
@@ -427,6 +436,28 @@ class ProcessRunner:
             rss=rss / 1e9,
             verdict=verdict,
         )
+
+    @classmethod
+    def _stacks(cls, pid):
+        """Every thread's backtrace at the deadline, or "" with no `gdb`.
+
+        The usage reading says *whether* a unit was computing; only a stack
+        says *where*, and after `_terminate` there is nothing left to ask.
+        Attaching needs ptrace rights over a process `gdb` did not start --
+        `kernel.yama.ptrace_scope=0` on Linux -- and a refusal is reported
+        rather than swallowed, since it is the reason the stacks are missing.
+        """
+        gdb = shutil.which("gdb")
+        if gdb is None:
+            return ""
+        argv = [gdb, "-p", str(pid), "-batch", "-nx", "-ex", "thread apply all bt"]
+        try:
+            done = subprocess.run(
+                argv, capture_output=True, text=True, timeout=cls.STACKS_TIMEOUT
+            )
+        except (subprocess.TimeoutExpired, OSError) as error:
+            return f"\nNo stacks: {error}\n"
+        return f"\nStacks at the deadline:\n{done.stdout.strip() or done.stderr}\n"
 
     @staticmethod
     def _terminate(process):

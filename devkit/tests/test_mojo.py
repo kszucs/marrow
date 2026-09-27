@@ -239,6 +239,20 @@ def test_process_runner_reads_usage_before_killing_the_process(tmp_path):
     assert "0.2 GB resident" in result.stderr
 
 
+def test_process_runner_takes_stacks_before_killing_the_process(tmp_path, monkeypatch):
+    """`gdb` has to attach while the hung process is still alive."""
+    gdb = tmp_path / "gdb"
+    gdb.write_text('#!/bin/sh\nkill -0 "$2" && echo "alive: $*"\n')
+    gdb.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    runner = ProcessRunner(tmp_path, SilentProgress(), timeout=DEADLINE)
+    result = runner.run(
+        [sys.executable, "-c", "import time; time.sleep(30)"], "hanging"
+    )
+    assert "Stacks at the deadline:\nalive: -p " in result.stderr
+    assert "thread apply all bt" in result.stderr
+
+
 def test_process_runner_uses_the_injected_suspender(tmp_path):
     """The harness lifts pytest's capture around a compile; nothing else does."""
     import contextlib

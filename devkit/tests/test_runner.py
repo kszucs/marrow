@@ -651,6 +651,19 @@ def test_a_failed_asan_build_never_reaches_the_binary(repo):
     assert "link failed" in results["test_one"].error
 
 
+def test_benchmarks_build_a_binary_and_then_run_it(repo):
+    """Two processes, so a unit that hangs says whether compiling or running it did."""
+    toolchain = FakeToolchain(
+        lambda _: result('[{"name": "bench_one", "median": 1.0}]')
+    )
+    runner = SuiteRunner(
+        toolchain, DriverGenerator(repo, "bench"), BuildOptions.for_benches()
+    )
+    results = runner.run(selection(repo, marrow__tests__bench_x=["bench_one"]))
+    assert toolchain.steps == ["build", "execute"]
+    assert results["bench_one"].status == "PASS"
+
+
 def test_the_non_asan_path_compiles_and_runs_in_one_step(repo):
     """`mojo run` leaves no artifact behind; compilation is what takes the minutes."""
     cases = selection(repo, marrow__tests__test_x=["test_one"])
