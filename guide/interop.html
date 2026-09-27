@@ -109,6 +109,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
@@ -535,6 +540,12 @@ document.addEventListener("DOMContentLoaded", function () {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="../reference/comptime.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Comptime vs runtime lane</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="../reference/status.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Status &amp; limitations</span></a>
   </div>
@@ -585,6 +596,10 @@ document.addEventListener("DOMContentLoaded", function () {
 </header>
 
 
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
 <p>Marrow and <a href="https://arrow.apache.org/docs/python/">PyArrow</a> implement the same Apache Arrow columnar format. This page covers how they relate and how to exchange data between them — in Python and in Mojo — over the <a href="https://arrow.apache.org/docs/format/CDataInterface.html">Arrow C Data Interface</a>.</p>
 <section id="same-data-model" class="level2">
 <h2 class="anchored" data-anchor-id="same-data-model">Same data model</h2>
@@ -604,6 +619,10 @@ document.addEventListener("DOMContentLoaded", function () {
 </section>
 <section id="performance" class="level2">
 <h2 class="anchored" data-anchor-id="performance">Performance</h2>
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -616,11 +635,8 @@ document.addEventListener("DOMContentLoaded", function () {
 <div class="callout-body-container callout-body">
 <p>The comparison harnesses are in the tree (<code>python/marrow/tests/bench_*.py</code>, covering marrow vs PyArrow vs Polars vs DuckDB) but <strong>no results are recorded yet</strong>, so no speed claim is published here rather than an unverified one.</p>
 <p>Reproduce them yourself:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> bench pytest <span class="at">--benchmark</span> <span class="at">--no-mojo</span> <span class="dt">\</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  python/marrow/tests/bench_compute.py <span class="at">--competition</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> bench pytest <span class="at">--benchmark</span> <span class="at">--no-mojo</span> <span class="dt">\</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  python/marrow/tests/bench_join.py <span class="at">--competition</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>The one performance number that <em>is</em> measured and CI-gated is binary size — see <a href="../reference/architecture.html#why-the-compiled-binary-is-small">Architecture</a>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> bench bench-engines</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Two performance numbers <em>are</em> measured and CI-gated: binary size — see <a href="../reference/architecture.html#why-the-compiled-binary-is-small">Architecture</a> — and the comptime lane’s speed against the runtime lane — see <a href="../reference/comptime.html">Comptime vs runtime lane</a>.</p>
 </div>
 </div>
 </section>
@@ -629,7 +645,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <p>Marrow arrays implement the Arrow C Data Interface protocol (<code>__arrow_c_array__</code> / <code>__arrow_c_schema__</code>), so they exchange data with PyArrow with <strong>zero copies</strong> at both the Python and Mojo level.</p>
 <section id="python-level" class="level3">
 <h3 class="anchored" data-anchor-id="python-level">Python level</h3>
-<div id="746102ec" class="cell" data-execution_count="1">
+<div id="0031820f" class="cell" data-execution_count="1">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>sys.path.insert(<span class="dv">0</span>, <span class="st">"../../python"</span>)   <span class="co"># the built extension</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>

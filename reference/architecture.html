@@ -32,7 +32,7 @@ ul.task-list li input[type="checkbox"] {
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/status.html" rel="next">
+<link href="../reference/comptime.html" rel="next">
 <link href="../examples/datafusion.html" rel="prev">
 <link href="../assets/favicon.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
@@ -74,6 +74,11 @@ ul.task-list li input[type="checkbox"] {
     "search-label": "Search"
   }
 }</script>
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
@@ -500,6 +505,12 @@ document.addEventListener("DOMContentLoaded", function () {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="../reference/comptime.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Comptime vs runtime lane</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="../reference/status.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Status &amp; limitations</span></a>
   </div>
@@ -549,6 +560,10 @@ document.addEventListener("DOMContentLoaded", function () {
 </header>
 
 
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
 <p>Mojo has no dynamic dispatch. That single constraint shapes everything below — and it turns out to be an advantage, because what replaces dispatch is a <strong>closed world the compiler can delete from</strong>.</p>
 <section id="type-erasure-without-virtual-calls" class="level2">
 <h2 class="anchored" data-anchor-id="type-erasure-without-virtual-calls">Type erasure without virtual calls</h2>
@@ -1105,8 +1120,8 @@ Note
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/status.html" class="pagination-link" aria-label="Status &amp; limitations">
-        <span class="nav-page-text">Status &amp; limitations</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="../reference/comptime.html" class="pagination-link" aria-label="Comptime vs runtime lane">
+        <span class="nav-page-text">Comptime vs runtime lane</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

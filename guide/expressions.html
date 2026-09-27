@@ -109,6 +109,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
@@ -535,6 +540,12 @@ document.addEventListener("DOMContentLoaded", function () {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="../reference/comptime.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Comptime vs runtime lane</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="../reference/status.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Status &amp; limitations</span></a>
   </div>
@@ -585,6 +596,10 @@ document.addEventListener("DOMContentLoaded", function () {
 </header>
 
 
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
 <p>The Python frontends on the previous pages are drivers for an engine written in Mojo. This page is that engine’s own API — and the thing that makes it unusual: <strong>one relational plan IR with two expression lanes underneath it.</strong></p>
 <table class="caption-top table">
 <colgroup>
@@ -627,7 +642,7 @@ document.addEventListener("DOMContentLoaded", function () {
 </tr>
 </tbody>
 </table>
-<p>Both erase into the same box — <code>DynValue</code> — so every relational operator is compiled exactly once, and a plan can mix lanes <strong>at the box, never inside a node</strong>. Picking a lane is the only decision; the verbs are identical.</p>
+<p>Both erase into the same box — <code>DynValue</code> — so every relational operator is compiled exactly once, and a plan can mix lanes <strong>at the box, never inside a node</strong>. Picking a lane is the only decision; the verbs are identical. What the comptime lane buys in speed is <a href="../reference/comptime.html">measured query by query</a>.</p>
 <section id="the-verbs" class="level2">
 <h2 class="anchored" data-anchor-id="the-verbs">The verbs</h2>
 <p>A plan is a sentence, read left to right:</p>

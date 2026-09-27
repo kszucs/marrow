@@ -109,6 +109,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Urbanist:wght@600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
@@ -535,6 +540,12 @@ document.addEventListener("DOMContentLoaded", function () {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="../reference/comptime.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Comptime vs runtime lane</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="../reference/status.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Status &amp; limitations</span></a>
   </div>
@@ -588,6 +599,10 @@ document.addEventListener("DOMContentLoaded", function () {
 </header>
 
 
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
 <p>Write a query once, in Mojo, and mark the values that change between runs with <code>param()</code>. <code>marrow compile</code> turns it into a native executable in which every parameter is a command-line flag, so one binary answers the same question for any file and any threshold, with no Python and no interpreter behind it.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
