@@ -27,7 +27,7 @@ all of them.
 
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
-| 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
+| 1 | **CSV reader** | A first user arrives with a CSV, not a Parquet file. NDJSON reads (`marrow.json`, §1.2); CSV does not | **M** | — |
 | 2 | **Error taxonomy** — 373 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 373 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14 | **M** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
 | 4 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
@@ -446,15 +446,74 @@ A user rejects the library outright without these.
 
 #### 1.2 CSV and JSON readers
 
-**What exists.** No reader. The only CSV code under `marrow/` is `QueryCli`'s
-output writer (`render_csv`, `marrow/expr/cli.mojo`).
+**What exists.** NDJSON: `marrow/json/` — `read_json`, the streaming
+`JsonReader`/`open_json` and `scan_json` (an `ExternalScan`), with Python's
+`marrow.json` and lazy `marrow.read_json` over them, checked value for value
+against `pyarrow.json`. It tokenizes with EmberJson (`docs/csv-json-dependency-review.md`
+for why, CLAUDE.md for the fork and why nothing else imports it).
+No CSV reader: the only CSV code under `marrow/` is `QueryCli`'s output writer
+(`render_csv`, `marrow/expr/cli.mojo`).
 
-**What it would take.** marrow already has the hard parts: `Buffer`,
-`BufferView`, every builder, and `LittleEndian.fixed` as the byte-order
-primitive. What is new is a tokenizer, a sampling inference pass, and a
-type-widening lattice. NDJSON is the same shape with a different tokenizer.
-**This is the highest ratio of user value to engineering novelty on the whole
-page.**
+**CSV — what it would take.** Write it; no Mojo package or `dlopen`able C
+library fits. marrow already has the value side: every builder,
+`DynBuilder(dtype)` as the inference-to-builder seam, `parse_iso8601` in
+`utils/datetime.mojo`, and `StringToNumKernel` / `StringToBoolKernel` in
+`kernels/cast.mojo`, which null an unparseable value under `safe=False`. What
+is new is a tokenizer (most of the work), a sampling inference pass and a
+type-widening order; `marrow.json`'s two-pass shape (infer, then parse into
+builders of the settled schema) carries over. **This is the highest ratio of
+user value to engineering novelty on the whole page.**
+
+**JSON — what is known missing or different from pyarrow.**
+
+- *Speed: 2.2-2.7x slower than single-threaded pyarrow.* `bench_json.py` on
+  2026-09-27, 1M rows, min of 5: flat 488 ms against pyarrow's 225 ms with
+  `use_threads=False` (22 ms threaded, polars 21 ms); nested 1,230 ms against
+  452 ms (52 ms threaded, polars 128 ms). Down from 714 and 1,715 ms once pass
+  1 parsed each number once, key stamps replaced a per-object list and paths
+  stopped being built per value. Not yet profiled. Left: a read that infers
+  tokenizes the input twice; every key and string value is a `String` from
+  `expect_string`, where `Parser.scan_string` could hand a borrowed slice for
+  the unescaped majority (an EmberJson internal, hence not taken yet); key
+  lookup is a linear scan per object; every value goes through a `DynBuilder`
+  variant check; builders start empty in every block. And it is
+  single-threaded, though blocks are independent once the schema is settled.
+- *Remote sources fetch twice.* `block_end` reads a block to find its last
+  newline, and the parse reads it again: free on a memory map, a second round
+  trip on OpenDAL.
+- *EmberJson is not published*, and everything precompiled needs it: a
+  precompiled package needs every package any of its modules imports, so
+  `package/marrow.mojoc` and the conda package are unusable without
+  `emberjson.mojoc` and `emberserde.mojoc` built by the same nightly. The
+  conda package cannot declare the run-dependency until the forks are
+  published to a channel — consumers resolve by name and cannot build a git
+  source — and `mojo-community` already has an unrelated `emberjson`, so the
+  name needs settling first. The wheel ships `marrow/json` as source, so
+  `marrow compile` still builds any program that reads no JSON, but not one
+  that does. `libmarrow.so` includes it.
+- *Explicit types* limited to null, bool, integers, float32/64, string,
+  large_string, timestamp, list and struct. `date32` is left out on purpose —
+  pyarrow reads it from a number, not a date string.
+- *A file of empty objects reads as zero rows*, where pyarrow keeps the row
+  count: `Table` counts rows off its columns and has none to count.
+- *`NaN`/`Infinity` literals are rejected*; pyarrow accepts them.
+- *`newlines_in_values`* is unsupported; a row longer than `block_size` grows
+  the read rather than failing as pyarrow does.
+- *No size gate of its own.* What `ExternalScan` costs binaries that never scan
+  JSON, against the `ba98cae5` baseline: `__text` +2,304 on `query_cli`, +752
+  `query_streaming_agg_fused`, +704 `query_streaming_agg`, +644 `query_join`,
+  +640 `query_dynvalue`, +580 `query_streaming` and `query_expr2_streaming`,
+  +432 `query_expr2_agg_fused` — at most +0.08%. Its first shape, three
+  function pointers and an erased reader of its own, cost up to +6,136
+  (+0.42%); building a `ReaderOperator[R]` behind the existing `DynOperator`
+  is what took it down. A binary that reads JSON pays EmberJson's tokenizer on
+  top, about +50 KB in a standalone prototype.
+
+**The conda package build is probably broken on 1.2, JSON or not.** `mojo
+package -o x.mojopkg` now fails with `output path must have a '.mojoc'
+extension` (measured 2026-09-25), and `pixi-build-mojo 0.1.*`, which
+`pixi.toml` pins, writes `lib/mojo/marrow.mojopkg`. 0.2.x emits `.mojoc`. Not
+yet confirmed with `pixi build` itself.
 
 #### 1.3 Datasets: multi-file, partitioned, remote
 
