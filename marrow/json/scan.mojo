@@ -4,7 +4,7 @@
 """NDJSON as a plan source — `scan_json`, the JSON twin of `marrow.expr.scan`.
 
 `marrow.expr` does not import this module (see `marrow/json/__init__.mojo`),
-so the scan is an `ExternalScan` built from `JsonScanReader`: the plan carries
+so the scan is an `ExternalScan` built from `JsonScan`: the plan carries
 one function pointer into this module and `marrow.expr` never names it.
 """
 
@@ -19,9 +19,13 @@ from .options import ParseOptions, ReadOptions, UnexpectedFieldBehavior
 from .reader import JsonReader, open_json
 
 
-struct JsonScanReader(BatchReader):
-    """What an `ExternalScan` over NDJSON reads with: a `JsonReader` whose
-    schema is the scan's, one batch per block.
+struct JsonScan(BatchReader):
+    """The JSON scan: what an `ExternalScan` over NDJSON reads with, a
+    `JsonReader` whose schema is the scan's, one batch per block.
+
+    A `BatchReader` rather than a `DynRelation` member, so `marrow.expr` never
+    imports it: a variant member of the plan IR is compiled into every program
+    that plans a query, and this one would bring EmberJson with it.
 
     Keys outside the schema are skipped, not errors, so a scan narrowed by
     `ColumnPruning` reads only the columns the plan needs out of rows that
@@ -57,7 +61,7 @@ def scan_json(var path: String, var schema: Schema) raises -> DynRelation:
     The schema is required, as it is for `scan`: a plan is a description, and
     building it must not open the file.
     """
-    return ExternalScan.of[JsonScanReader](ScanPath(path^), schema^)
+    return ExternalScan.of[JsonScan](ScanPath(path^), schema^)
 
 
 def scan_json(
@@ -65,4 +69,4 @@ def scan_json(
 ) raises -> DynRelation:
     """A newline-delimited JSON file named at run time, as a plan; `QueryCli`
     offers the parameter as an option."""
-    return ExternalScan.of[JsonScanReader](ScanPath(path^), schema^)
+    return ExternalScan.of[JsonScan](ScanPath(path^), schema^)

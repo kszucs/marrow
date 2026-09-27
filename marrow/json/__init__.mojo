@@ -15,5 +15,5 @@ Explicit re-exports, never `import *`.
 
 from .options import ParseOptions, ReadOptions, UnexpectedFieldBehavior
 from .reader import JsonReader, open_json, read_json
-from .scan import JsonScanReader, scan_json
+from .scan import JsonScan, scan_json
 from .writer import JsonWriter, render_json, write_json
