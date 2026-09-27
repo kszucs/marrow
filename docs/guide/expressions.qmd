@@ -19,7 +19,9 @@ Mojo. This page is that engine's own API — and the thing that makes it unusual
 
 Both erase into the same box — `DynValue` — so every relational operator is
 compiled exactly once, and a plan can mix lanes **at the box, never inside a
-node**. Picking a lane is the only decision; the verbs are identical.
+node**. Picking a lane is the only decision; the verbs are identical. What the
+comptime lane buys in speed is
+[measured query by query](../reference/comptime.qmd).
 
 ## The verbs
 

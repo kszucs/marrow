@@ -1173,6 +1173,29 @@ struct RuntimeValue(Evaluable, Movable, Value):
     def __neg__(self) -> RuntimeValue:
         return neg(self.copy())
 
+    # --- Comparison and boolean operators ---
+    #
+    # Same reason: `(col("a") > lit(x)) & (col("b") < lit(y))` is the filter
+    # the comptime lane spells with operators, so the runtime lane does too.
+
+    def __lt__(self, other: RuntimeValue) -> RuntimeValue:
+        return lt(self.copy(), other.copy())
+
+    def __le__(self, other: RuntimeValue) -> RuntimeValue:
+        return le(self.copy(), other.copy())
+
+    def __gt__(self, other: RuntimeValue) -> RuntimeValue:
+        return gt(self.copy(), other.copy())
+
+    def __ge__(self, other: RuntimeValue) -> RuntimeValue:
+        return ge(self.copy(), other.copy())
+
+    def __and__(self, other: RuntimeValue) -> RuntimeValue:
+        return and_(self.copy(), other.copy())
+
+    def __or__(self, other: RuntimeValue) -> RuntimeValue:
+        return or_(self.copy(), other.copy())
+
     def write_to[W: Writer](self, mut writer: W):
         var named = self.name()
         if named != "":

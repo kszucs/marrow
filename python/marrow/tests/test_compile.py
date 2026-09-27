@@ -3,7 +3,7 @@
 A single `mojo build` takes 1-2 minutes, so these tests never shell out to
 `mojo`: `check_mojo_version`'s subprocess/PATH lookups are monkeypatched. The
 tests that need a real binary use the size gate's, built by
-`pixi run binary_size`, and skip when it is not there.
+`pixi run bench-size`, and skip when it is not there.
 """
 
 import os
@@ -204,7 +204,7 @@ def test_check_mojo_version_in_range_returns_version_string(monkeypatch):
 #
 # These exercise `otool`/`install_name_tool` against an *already-built* gate
 # binary (`benchmarks/binary_size/query_scan_typed`, built by
-# `pixi run binary_size`) rather than invoking `mojo build` — a build takes
+# `pixi run bench-size`) rather than invoking `mojo build` — a build takes
 # 1-2 minutes and these tests only need a Mach-O to introspect. Both skip if
 # that binary is not present locally. macOS-only: `dylib_closure`/`bundle`
 # also have a Linux path (`ldd`/`patchelf`), but that is unverified here —
@@ -448,7 +448,7 @@ def test_configure_does_not_override_a_users_choice(monkeypatch):
 # --- the compiled query program ----------------------------------------------
 #
 # `benchmarks/binary_size/query_cli` is the example the compile guide shows,
-# built by `pixi run binary_size`. These run it the way a user does. Like the
+# built by `pixi run bench-size`. These run it the way a user does. Like the
 # bundle tests above they need the gate binary, and they skip when it is
 # missing or older than any source it was built from -- a stale binary would
 # test yesterday's command line.
@@ -459,7 +459,7 @@ _QUERY_CLI = _REPO / "benchmarks" / "binary_size" / "query_cli"
 
 def _query_cli_or_skip() -> Path:
     if not _QUERY_CLI.exists():
-        pytest.skip("gate binary not built: pixi run binary_size query_cli")
+        pytest.skip("gate binary not built: pixi run bench-size query_cli")
     built = _QUERY_CLI.stat().st_mtime
     sources = [_REPO / "benchmarks" / "binary_size" / "query_cli.mojo"]
     sources += list((_REPO / "marrow").rglob("*.mojo"))

@@ -1,8 +1,9 @@
 """Single-shot profiling driver for `sum(qty * price) GROUP BY g`, per lane.
 
-The query `marrow/expr/comptime/tests/bench_aggregates.mojo` times as
-`bench_agg_fused_sum_of_product` / `bench_agg_runtime_sum_of_product`, run in a
-loop with no benchmark harness so a sampling profiler sees only the query.
+The query `marrow/expr/tests/bench_comptime.mojo` times as
+`bench_comptime_aggregate_sum_grouped_100` /
+`bench_runtime_aggregate_sum_grouped_100`, run in a loop with no benchmark
+harness so a sampling profiler sees only the query.
 
     MARROW_PROFILE_LANE=fused   pixi run profile benchmarks/profiles/profile_grouped_sum.mojo --sample --no-open
     MARROW_PROFILE_LANE=runtime pixi run profile benchmarks/profiles/profile_grouped_sum.mojo --sample --no-open

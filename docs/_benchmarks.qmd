@@ -8,12 +8,11 @@ yet**, so no speed claim is published here rather than an unverified one.
 Reproduce them yourself:
 
 ```bash
-pixi run -e bench pytest --benchmark --no-mojo \
-  python/marrow/tests/bench_compute.py --competition
-pixi run -e bench pytest --benchmark --no-mojo \
-  python/marrow/tests/bench_join.py --competition
+pixi run -e bench bench-engines
 ```
 
-The one performance number that *is* measured and CI-gated is binary size —
-see [Architecture](../reference/architecture.qmd#why-the-compiled-binary-is-small).
+Two performance numbers *are* measured and CI-gated: binary size — see
+[Architecture](../reference/architecture.qmd#why-the-compiled-binary-is-small) —
+and the comptime lane's speed against the runtime lane — see
+[Comptime vs runtime lane](../reference/comptime.qmd).
 :::

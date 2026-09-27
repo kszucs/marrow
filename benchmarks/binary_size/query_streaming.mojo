@@ -8,7 +8,7 @@ runtime lane (`marrow/expr/runtime/`) and its per-dtype kernel fanout are
 dead-code-eliminated — this should land far below `query_runtime` and
 `query_dynvalue`, and that delta is the erasure boundary's DCE proof.
 
-    pixi run binary_size
+    pixi run bench-size
 
 **Ported from the old expression package on 2026-08-29; the recorded
 baseline predates the port and is stale.** Two things changed with the

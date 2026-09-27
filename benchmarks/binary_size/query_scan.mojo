@@ -15,7 +15,7 @@ Parquet surface had never been measured.
 The file is never opened: `compare.py` builds and strips these programs, it does
 not run them.
 
-    pixi run binary_size query_scan
+    pixi run bench-size query_scan
 
 **Ported from the old expression package on 2026-08-29; the recorded baseline
 predates the port and is stale.**

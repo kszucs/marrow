@@ -232,6 +232,19 @@ def test_runtime_boolean_connectives_are_three_valued() raises:
     assert_equal(_bits(not_(n.copy())), "tt?f")
 
 
+def test_runtime_comparison_and_boolean_operators() raises:
+    """The operators reach the verbs above: same bits, operator spelling."""
+    var a = build_col("a")  # [1, 2, null, 4]
+    assert_equal(_bits(a < _lit(2)), "tf?f")
+    assert_equal(_bits(a <= _lit(2)), "tt?f")
+    assert_equal(_bits(a > _lit(2)), "ff?t")
+    assert_equal(_bits(a >= _lit(2)), "ft?t")
+    var t = build_col("b") > _lit(0)  # tttt
+    var n = a > _lit(2)  # ff?t
+    assert_equal(_bits(t & n), "ff?t")
+    assert_equal(_bits(t | n), "tttt")
+
+
 def test_runtime_comparison_promotes_mixed_widths() raises:
     """An int64 column against an int32 literal compares rather than raising."""
     var lit32 = literal(DynScalar(Int32Scalar(Int32(2))))

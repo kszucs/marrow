@@ -9,7 +9,7 @@ fanout are dead-code-eliminated.
 is now its whole reason to exist. It was written when this directory measured
 `marrow/expr2/` — the package that has since replaced the old one and taken
 the name `marrow/expr/` — as the first gate that built anything from that
-lane at all, back when `pixi run binary_size` reported ~0.00% no matter what
+lane at all, back when `pixi run bench-size` reported ~0.00% no matter what
 the expression rewrite did. `query_streaming.mojo` was ported onto the same
 package on 2026-08-29, so the two now differ only in that one projects
 `col("name", string)` where this projects `col("b", int64)`.
@@ -27,7 +27,7 @@ keeping either way — the delta against `query_streaming` is what a fused
 column reads, which would link the very lane this gate exists to prove absent.
 `project` takes fused values, so the projection stays in the comptime lane.
 
-    pixi run binary_size
+    pixi run bench-size
 """
 
 from marrow.builders import array

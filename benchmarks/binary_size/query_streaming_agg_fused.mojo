@@ -13,7 +13,7 @@ runtime-named variant must keep alive is dead code in this binary, and the
 `__text` delta between the two is the cost of resolving an aggregate at run
 time.
 
-    pixi run binary_size
+    pixi run bench-size
 
 **Ported from the old expression package on 2026-08-29; the recorded baseline
 predates the port and is stale.** The aggregates are now spelled fluently

@@ -88,7 +88,7 @@ jobs:
       - name: Run benchmarks (PR)
         if: github.ref != 'refs/heads/main'
         run: |
-          for f in $(find marrow -name 'bench_*.mojo' | sort); do
+          for f in $(find marrow -name 'bench_*.mojo' ! -name bench_comptime.mojo | sort); do
             pixi run -e bench pytest --benchmark -v --no-gpu --mojo-timeout 1800 "$f"
           done
           pixi run -e bench pytest --benchmark -v --no-gpu python/marrow/tests/bench_*.py
@@ -101,7 +101,7 @@ jobs:
               --save-benchmarks results \
               --benchmark-history gh-pages-out/benchmarks/data.json "$@"
           }
-          for f in $(find marrow -name 'bench_*.mojo' | sort); do
+          for f in $(find marrow -name 'bench_*.mojo' ! -name bench_comptime.mojo | sort); do
             save "$f"
           done
           save python/marrow/tests/bench_*.py
@@ -120,3 +120,11 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./gh-pages-out
           keep_files: true
+
+      # Left out of the loops above: the comptime lane must beat the runtime
+      # lane on every query, and this step is last so a loss does not hold
+      # back the dashboard.
+      - name: Comptime lane beats runtime lane
+        run: |
+          pixi run -e bench pytest --no-gpu --mojo-timeout 1800 \
+            marrow/expr/tests/bench_comptime.mojo --competition-winner comptime

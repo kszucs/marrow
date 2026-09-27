@@ -12,7 +12,7 @@ but it does catch a regression in any of them — and until this landed, none wa
 linked by *any* gate. If one family later needs its own attribution, split it
 out then.
 
-    pixi run binary_size query_exprs
+    pixi run bench-size query_exprs
 
 **Ported from the old expression package on 2026-08-29, and it covers less
 than it did.** The recorded baseline predates the port and is stale — and it

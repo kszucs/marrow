@@ -2,7 +2,11 @@
 
 import dataclasses
 import json
+import types
 from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
 
 from devkit.benches import (
     THROUGHPUT_KEY,
@@ -11,6 +15,9 @@ from devkit.benches import (
     BenchmarkHistory,
     BenchmarkInjector,
     CompetitionReport,
+    HistorySweep,
+    contenders,
+    judge_competition,
 )
 
 
@@ -266,6 +273,40 @@ def test_injection_attaches_throughput_when_the_runner_counted():
     assert fixture.extra_info["elements (GElems/s)"] == 1.0
 
 
+def test_injection_carries_a_mojo_benchmarks_extra_info():
+    """`Benchmark.extra_info(key, value)` lands where a Python benchmark's
+    `extra_info.update` would, with `n` the throughput it declared."""
+    fixture = BenchmarkInjector(FakeBenchmarkSession()).inject(
+        "bench_comptime_sum",
+        "f.mojo::bench_comptime_sum",
+        {
+            "runs": [10],
+            "unit": "ns",
+            "throughput_count": 1_000,
+            "throughput_metric": "throughput",
+            "throughput_unit": "GElems/s",
+            "extra_info": {"lib": "comptime"},
+        },
+    )
+    assert fixture.extra_info["lib"] == "comptime"
+    assert fixture.extra_info["n"] == 1_000
+
+
+def test_injection_takes_n_from_elements_only():
+    """A byte count is not a row count."""
+    fixture = BenchmarkInjector(FakeBenchmarkSession()).inject(
+        "bench_hash",
+        "f.mojo::bench_hash",
+        {
+            "runs": [10],
+            "throughput_count": 64,
+            "throughput_metric": "DataMovement",
+            "throughput_unit": "GB/s",
+        },
+    )
+    assert "n" not in fixture.extra_info
+
+
 def test_injection_is_a_no_op_when_benchmarking_is_disabled():
     session = FakeBenchmarkSession(disabled=True)
     assert (
@@ -355,6 +396,17 @@ def test_competition_keeps_a_mark_suffix():
     assert operation == "filter[inner]"
 
 
+def test_competition_strips_a_mojo_lib_prefix():
+    lib, operation, count = CompetitionReport._parse(
+        FakeBenchmark(
+            "bench_comptime_sum_grouped_4",
+            1.0,
+            extra_info={"lib": "comptime", "n": 1_000},
+        )
+    )
+    assert (lib, operation, count) == ("comptime", "sum_grouped_4", 1_000)
+
+
 def test_competition_ignores_a_benchmark_without_lib_metadata():
     assert CompetitionReport._parse(FakeBenchmark("bench_x", 1.0)) == (None, None, None)
 
@@ -411,6 +463,198 @@ def test_competition_renders_a_table():
     assert "filter" in body and "sort" in body
     assert "1 wins" in body  # one each
     assert "10,000" in body
+
+
+def test_competition_winner_must_win_every_operation_outright():
+    """Strict: a tie, which the table calls noise, is still not a win."""
+    report = CompetitionReport(
+        competitors(
+            ("comptime", "project", 10, 1.0),
+            ("runtime", "project", 10, 3.0),
+            ("comptime", "filter", 10, 2.0),
+            ("runtime", "filter", 10, 1.0),
+            ("comptime", "sum", 10, 1.0),
+            ("runtime", "sum", 10, 1.0),
+        )
+    )
+    assert report.failure("comptime") == (
+        "comptime was not the fastest on: filter, sum"
+    )
+
+
+def test_competition_winner_counts_a_missing_twin_as_a_loss():
+    report = CompetitionReport(
+        competitors(
+            ("comptime", "project", 10, 1.0),
+            ("runtime", "project", 10, 3.0),
+            ("comptime", "alone", 10, 1.0),
+        )
+    )
+    assert report.failure("comptime") == "comptime was not the fastest on: alone"
+
+
+def test_competition_winner_fails_when_nothing_competed():
+    assert CompetitionReport([]).failure("comptime") == (
+        "no benchmarks carried lib metadata"
+    )
+    report = CompetitionReport(
+        competitors(("comptime", "a", 10, 1.0), ("runtime", "a", 10, 2.0))
+    )
+    assert report.failure("comptime") is None
+
+
+def judge(tmp_path, benchmarks, winner="", record=""):
+    return judge_competition(
+        CompetitionReport(benchmarks),
+        winner,
+        record and tmp_path / record,
+        lambda: {"commit": "abc", "machine": {"mojo": "Mojo 0.0"}},
+    )
+
+
+def test_judging_does_nothing_unless_asked(tmp_path):
+    report = competitors(("comptime", "a", 10, 1.0), ("runtime", "a", 10, 2.0))
+    assert judge(tmp_path, report) == ([], False)
+
+
+def test_judging_writes_the_record_with_its_provenance(tmp_path):
+    lines, failed = judge(
+        tmp_path,
+        competitors(("comptime", "sum", 10, 1e-6), ("runtime", "sum", 10, 3e-6)),
+        record="nested/record.json",
+    )
+    assert not failed
+    record = json.loads((tmp_path / "nested" / "record.json").read_text())
+    assert record["commit"] == "abc"
+    assert record["machine"]["mojo"] == "Mojo 0.0"
+    [operation] = record["operations"]
+    assert (operation["operation"], operation["n"]) == ("sum", 10)
+    assert operation["timings_ns"] == pytest.approx(
+        {"comptime": 1_000.0, "runtime": 3_000.0}
+    )
+
+
+def test_judging_never_writes_an_empty_record(tmp_path):
+    """A failed build must not erase the last record."""
+    lines, failed = judge(tmp_path, [], record="record.json")
+    assert not (tmp_path / "record.json").exists()
+    assert (lines, failed) == ([], False)
+
+
+def test_judging_fails_a_run_the_winner_did_not_win(tmp_path):
+    lines, failed = judge(
+        tmp_path,
+        competitors(("comptime", "sum", 10, 3e-6), ("runtime", "sum", 10, 1e-6)),
+        winner="comptime",
+    )
+    assert failed
+    assert lines == ["--competition-winner: comptime was not the fastest on: sum"]
+
+
+# ---------------------------------------------------------------------------
+# Runs as contenders
+# ---------------------------------------------------------------------------
+
+
+def snapshot(*results):
+    return {
+        "commit": "abc123def456",
+        "results": [
+            {"name": name, "mean_ns": mean_ns, "extra_info": {"n": 10}}
+            for name, mean_ns in results
+        ],
+    }
+
+
+def test_each_snapshot_is_one_contender_per_benchmark():
+    report = CompetitionReport(
+        contenders(
+            [
+                ("old", snapshot(("bench_filter", 3_000), ("bench_sort", 1_000))),
+                ("new", snapshot(("bench_filter", 1_000), ("bench_sort", 2_000))),
+            ]
+        )
+    )
+    rows = {row.operation: row.winner for row in report.rows()}
+    assert rows == {"bench_filter": "new", "bench_sort": "old"}
+    assert report.failure("new") == "new was not the fastest on: bench_sort"
+
+
+def test_repeats_of_one_contender_keep_the_fastest():
+    [row] = CompetitionReport(
+        contenders(
+            [
+                ("a", snapshot(("bench_x", 5_000))),
+                ("a", snapshot(("bench_x", 2_000))),
+                ("b", snapshot(("bench_x", 3_000))),
+            ]
+        )
+    ).rows()
+    assert row.timings["a"] == pytest.approx(2e-6)
+
+
+class RecordingRunner:
+    """Records every command, and saves a snapshot for each pytest run."""
+
+    def __init__(self, saves=True):
+        self.commands = []
+        self.saves = saves
+
+    def run(self, argv, label):
+        self.commands.append([str(a) for a in argv])
+        if self.saves and "--save-benchmarks" in argv:
+            out = Path(argv[argv.index("--save-benchmarks") + 1])
+            out.mkdir(parents=True)
+            (out / "latest.json").write_text(json.dumps(snapshot(("bench_x", 1))))
+
+
+def sweep_repo(tmp_path):
+    shas = {"HEAD~1": "aaaaaaa", "HEAD": "bbbbbbb"}
+    vcs = types.SimpleNamespace(resolve=lambda ref: shas.get(ref, ""))
+    return types.SimpleNamespace(root=tmp_path, vcs=vcs)
+
+
+def sweep(tmp_path, runner, refs=("HEAD~1", "HEAD"), repeats=1):
+    return HistorySweep(sweep_repo(tmp_path), runner).run(
+        list(refs), ["bench_x.mojo"], "x", repeats, tmp_path
+    )
+
+
+def test_history_interleaves_repeats_across_refs():
+    """All of one ref's repeats, then the next's, pins the drift on the last."""
+    assert HistorySweep.order(["a", "b"], 2) == [(0, "a"), (0, "b"), (1, "a"), (1, "b")]
+
+
+def test_history_measures_each_ref_in_a_scratch_worktree(tmp_path):
+    runner = RecordingRunner()
+    snapshots, skipped = sweep(tmp_path, runner)
+    assert [sha for sha, _ in snapshots] == ["aaaaaaa", "bbbbbbb"]
+    assert skipped == []
+    tree = str(tmp_path / "tree")
+    checkouts = [argv[-1] for argv in runner.commands if "checkout" in argv]
+    assert checkouts == ["aaaaaaa", "bbbbbbb"]
+    # Every checkout moves the scratch tree, never this one, and it is removed.
+    assert all(argv[2] == tree for argv in runner.commands if "checkout" in argv)
+    assert runner.commands[-1][-3:] == ["remove", "--force", tree]
+    [first, *_] = [argv for argv in runner.commands if "--save-benchmarks" in argv]
+    assert first[first.index("-k") + 1] == "bench_ and (x)"
+    history = first[first.index("--benchmark-history") + 1]
+    assert history.startswith(str(tmp_path))
+
+
+def test_history_resolves_refs_before_checking_anything_out(tmp_path):
+    """`HEAD~1 HEAD` must not both resolve against the first checkout."""
+    runner = RecordingRunner()
+    snapshots, _ = sweep(tmp_path, runner)
+    assert len({sha for sha, _ in snapshots}) == 2
+
+
+def test_history_reports_what_measured_nothing(tmp_path):
+    snapshots, skipped = sweep(
+        tmp_path, RecordingRunner(saves=False), refs=("HEAD", "nope")
+    )
+    assert snapshots == []
+    assert skipped == ["nope", "bbbbbbb"]
 
 
 def test_competition_formats_each_magnitude():

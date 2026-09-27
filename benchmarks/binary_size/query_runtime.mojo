@@ -13,7 +13,7 @@ kernel fanout the fused gates dead-code-eliminate, including the whole
 The delta against `query_streaming.mojo` — the same query, fused — is the cost
 of not knowing the dtypes at compile time.
 
-    pixi run binary_size
+    pixi run bench-size
 
 **Ported from the old expression package on 2026-08-29.** One spelling
 change: the runtime lane has no operator sugar, so the predicate is

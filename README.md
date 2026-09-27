@@ -134,7 +134,7 @@ pixi run -e dev pytest marrow/kernels/tests/test_join.mojo   # one file
 pixi run -e dev precompile             # fast compile check, no test run
 pixi run -e dev fmt                    # mojo format + ruff
 pixi run -e docs docs                  # build the documentation site
-pixi run binary_size                   # the AOT binary-size gate
+pixi run bench-size                    # the AOT binary-size gate
 ```
 
 Contributions welcome. `CLAUDE.md` carries the architecture, the coding rules

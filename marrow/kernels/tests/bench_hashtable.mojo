@@ -1,7 +1,7 @@
 """Benchmarks for SwissHashTable: build, insert, probe.
 
 Run with:
-    pixi run bench_mojo -k bench_hash_table
+    pixi run bench-mojo -k bench_hash_table
     pixi run pytest marrow/kernels/tests/bench_hash_table.mojo --benchmark
 """
 

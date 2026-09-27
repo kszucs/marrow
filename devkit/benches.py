@@ -9,6 +9,7 @@ downstream -- the throughput column, the competition table, the rolling history
 
 import json
 import re
+import sys
 from itertools import chain
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from pathlib import Path
 from rich import box
 from rich.console import Console
 from rich.table import Table
+
+from .mojo import machine, write_if_changed
 
 #: The extra_info key the terminal report reads a throughput off.  Spelled with
 #: its unit because pytest-benchmark prints the key verbatim as a column header.
@@ -93,6 +96,13 @@ class BenchmarkInjector:
             lambda: None, rounds=len(durations), iterations=1, warmup_rounds=0
         )
         self._attach_throughput(fixture, entry)
+        # `Benchmark.extra_info(key, value)`, and `n` from the declared
+        # throughput: what a Python benchmark sets with `extra_info.update`.
+        fixture.extra_info.update(entry.get("extra_info", {}))
+        # `BenchMetric.elements` reports as metric "throughput": its unit is
+        # what says the count is rows, not bytes.
+        if entry.get("throughput_unit") == "GElems/s":
+            fixture.extra_info.setdefault("n", entry["throughput_count"])
         return fixture
 
     @staticmethod
@@ -190,6 +200,17 @@ class Comparison:
     def tied(self):
         return self.spread < self.tie_ratio
 
+    def won_by(self, lib):
+        """Whether *lib* is strictly faster than every other lib here.
+
+        Stricter than `tied`, which is the table's reading of noise: a gate
+        asked for a winner answers the question it was asked. Nothing to beat
+        is no win.
+        """
+        mine = self.timings.get(lib)
+        others = [seconds for name, seconds in self.timings.items() if name != lib]
+        return mine is not None and bool(others) and all(mine < s for s in others)
+
     @property
     def group(self):
         """The operation without its parametrization, for sectioning."""
@@ -238,8 +259,8 @@ class CompetitionReport:
         if not (lib and count is not None):
             return None, None, None
         name = bench["name"]
-        prefix = f"test_{lib}_"
-        operation = name[len(prefix) :] if name.startswith(prefix) else name
+        # `test_<lib>_<op>` in Python, `bench_<lib>_<op>` in Mojo.
+        operation = name.removeprefix(f"test_{lib}_").removeprefix(f"bench_{lib}_")
         # "[n=10000]"       -> ""        (fixture only)
         # "[n=10000-inner]" -> "[inner]" (fixture plus a mark suffix)
         operation = cls.N_PREFIX.sub(
@@ -270,12 +291,42 @@ class CompetitionReport:
     def meta_keys(self):
         return self._distinct(self._meta.values())
 
-    def rows(self):
-        """Only operations at least two libraries measured."""
+    def _comparisons(self):
         return [
             Comparison(operation, count, timings)
             for (operation, count), timings in sorted(self._timings.items())
-            if len(timings) >= 2
+        ]
+
+    def rows(self):
+        """Only operations at least two libraries measured."""
+        return [row for row in self._comparisons() if len(row.timings) >= 2]
+
+    def failure(self, lib):
+        """Why *lib* did not win every operation outright, or None if it did.
+
+        An operation *lib* was not compared on -- measured alone, or not
+        measured -- counts against it, and so does a run with nothing to
+        compare: a verdict that quietly covers fewer operations than were
+        written is the one failure it could not otherwise report.
+        """
+        if not self._timings:
+            return "no benchmarks carried lib metadata"
+        lost = [row.operation for row in self._comparisons() if not row.won_by(lib)]
+        if lost:
+            return f"{lib} was not the fastest on: {', '.join(lost)}"
+        return None
+
+    def to_dict(self):
+        """The compared operations and each lib's time, for a record."""
+        return [
+            {
+                "operation": row.operation,
+                "n": row.count,
+                "timings_ns": {
+                    lib: seconds * 1e9 for lib, seconds in row.timings.items()
+                },
+            }
+            for row in self.rows()
         ]
 
     def tally(self):
@@ -366,6 +417,137 @@ class CompetitionReport:
 # ---------------------------------------------------------------------------
 
 
+def utc_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def judge_competition(report, winner, record, provenance):
+    """`--competition-winner` and `--competition-json`, for a pytest session
+    and for `devkit bench compare` alike.
+
+    *record* is an absolute path or empty; *provenance* returns what the
+    caller knows about where the numbers came from, and is called only when a
+    record is written. Returns the lines to print and whether the run failed.
+    The record is never written over an empty report: a failed build would
+    erase the last one.
+    """
+    lines = []
+    if record and report.rows():
+        payload = {
+            "timestamp": utc_now(),
+            **provenance(),
+            "operations": report.to_dict(),
+        }
+        write_if_changed(Path(record), json.dumps(payload, indent=2) + "\n")
+        lines.append(f"--competition-json: written to {record}")
+    failure = winner and report.failure(winner)
+    if failure:
+        lines.append(f"--competition-winner: {failure}")
+    return lines, bool(failure)
+
+
+def session_provenance(repo, toolchain):
+    """The commit and machine a pytest session measured on."""
+    return {"commit": repo.vcs.commit, "machine": machine(toolchain)}
+
+
+def contenders(snapshots):
+    """`[(name, snapshot)]` as `CompetitionReport` input, one contender per
+    `--save-benchmarks` snapshot.
+
+    The operation is the whole benchmark name and the run is what varies, so a
+    commit, a machine or a build is compared exactly as a library is. Repeats
+    of one contender keep their fastest mean: noise only ever adds time.
+    """
+    best = {}
+    for name, snapshot in snapshots:
+        for result in snapshot["results"]:
+            key = (name, result["name"])
+            if key not in best or result["mean_ns"] < best[key]["mean_ns"]:
+                best[key] = result
+    return [
+        {
+            "name": benchmark,
+            "mean": result["mean_ns"] / 1e9,
+            "extra_info": {"lib": name, "n": result.get("extra_info", {}).get("n", 0)},
+        }
+        for (name, benchmark), result in best.items()
+    ]
+
+
+class HistorySweep:
+    """The same benchmarks at each of a series of commits, each a contender.
+
+    Every ref is measured with its own sources, in one scratch worktree that is
+    re-pointed per ref, so the checkout you are working in is never moved and
+    the artifact cache carries over between refs. Each run leaves a
+    `--save-benchmarks` snapshot, with `--benchmark-history` kept in scratch so
+    old commits never reach the dashboard's series.
+
+    **Repeats are interleaved across refs, not nested per ref.** A machine that
+    slows down over half an hour of compilation otherwise makes whichever ref
+    ran last look worst: a confident 20% "regression" came from exactly that.
+    """
+
+    def __init__(self, repo, runner):
+        self._repo = repo
+        self._runner = runner
+
+    @staticmethod
+    def order(refs, repeats):
+        """`(run, ref)` pairs, every ref once per pass."""
+        return [(run, ref) for run in range(repeats) for ref in refs]
+
+    def run(self, refs, files, select, repeats, scratch):
+        """Measure every ref; returns `([(sha, snapshot)], [unmeasured ref])`.
+
+        Refs are resolved before anything is checked out, so `HEAD~1 HEAD`
+        means what it says.
+        """
+        shas = {ref: self._repo.vcs.resolve(ref) for ref in refs}
+        skipped = [ref for ref, sha in shas.items() if not sha]
+        tree = Path(scratch) / "tree"
+        git = ["git", "-C", str(self._repo.root)]
+        snapshots = []
+        self._runner.run([*git, "worktree", "add", "--detach", str(tree)], "worktree")
+        try:
+            for run, ref in self.order([ref for ref in refs if shas[ref]], repeats):
+                sha = shas[ref]
+                self._runner.run(
+                    ["git", "-C", str(tree), "checkout", "-q", "--detach", sha],
+                    f"checkout {sha}",
+                )
+                out = Path(scratch) / f"{sha}-{run}"
+                self._runner.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pytest",
+                        "--benchmark",
+                        "--rootdir",
+                        str(tree),
+                        *(str(tree / f) for f in files),
+                        "-k",
+                        f"bench_ and ({select})",
+                        "--save-benchmarks",
+                        str(out),
+                        "--benchmark-history",
+                        str(out / "data.json"),
+                    ],
+                    f"benchmarking {sha} (pass {run + 1})",
+                )
+                latest = out / "latest.json"
+                if latest.exists():
+                    snapshots.append((sha, json.loads(latest.read_text())))
+                elif sha not in skipped:
+                    skipped.append(sha)
+        finally:
+            self._runner.run(
+                [*git, "worktree", "remove", "--force", str(tree)], "worktree"
+            )
+        return snapshots, skipped
+
+
 @dataclass(frozen=True)
 class BenchmarkEnvelope:
     """One run's results: what was measured, and which commit measured it."""
@@ -390,7 +572,7 @@ class BenchmarkEnvelope:
     def from_benchmarks(cls, vcs, benchmarks):
         return cls(
             commit=vcs.commit,
-            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            timestamp=utc_now(),
             ref=vcs.ref,
             results=[cls._result(bench) for bench in benchmarks],
         )

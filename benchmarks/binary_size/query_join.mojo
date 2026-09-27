@@ -9,7 +9,7 @@ That is the largest single block of kernel code an AOT query can pull in, and
 before this gate nothing linked it — a plan that never joins should not pay for
 any of it, and this is what proves it still doesn't.
 
-    pixi run binary_size query_join
+    pixi run bench-size query_join
 
 **Ported from the old expression package on 2026-08-29.** The join carries
 over whole: same kernel, same key indices, same `JOIN_INNER` from

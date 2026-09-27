@@ -1,7 +1,7 @@
 """Benchmarks for the column hashing kernel.
 
 Run with:
-    pixi run bench_mojo -k bench_hashing
+    pixi run bench-mojo -k bench_hashing
     pixi run pytest marrow/kernels/tests/bench_hashing.mojo --benchmark
 """
 

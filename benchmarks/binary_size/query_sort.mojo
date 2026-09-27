@@ -5,7 +5,7 @@
 `SortIndices` kernel's comparison and radix paths, its key encoding, and the
 `take` that applies the permutation.
 
-    pixi run binary_size query_sort
+    pixi run bench-size query_sort
 
 **Ported from the old expression package on 2026-08-29, and it lost the top-K
 path.** The old `Sort` node carried the `limit` itself — the plan builder

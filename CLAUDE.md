@@ -47,17 +47,21 @@ Dependencies (pinned in `pixi.toml`):
 | `wheel`       | Local macOS wheel build | `pixi run -e wheel wheel` |
 
 ```bash
-pixi run -e dev test         # everything (pytest -v)
-pixi run -e dev fmt          # mojo format + ruff format
-pixi run package             # package/marrow.mojoc
-pixi run binary_size         # AOT/hybrid/runtime binary-size gate
-pixi run binary_size_check   # the same gate against its recorded baseline
-pixi run -e dev selftest     # the devkit suite, ~1 s, no Mojo compilation
+pixi run -e dev test                # everything (pytest -v)
+pixi run -e dev fmt                 # mojo format + ruff format
+pixi run package                    # package/marrow.mojoc
+pixi run -e dev selftest            # the devkit suite, ~1 s, no Mojo compilation
+pixi run -e bench bench             # every benchmark (bench-mojo, bench-python: halves)
+pixi run -e bench bench-engines     # marrow against pyarrow, polars, duckdb, numpy
+pixi run -e dev bench-comptime      # comptime lane must beat runtime lane
+pixi run -e dev bench-history A B   # the same benchmarks at each commit
+pixi run bench-size                 # AOT/hybrid/runtime binary-size gate
+pixi run bench-size-check           # the same gate against its recorded baseline
 ```
 
 Every one of those is a thin wrapper over **`devkit`**, the developer tooling
 package: `pixi run -e dev python -m devkit --help` is the same surface with more
-of it exposed (`build`, `size`, `profile`, `golden`, `integration`). It is where
+of it exposed (`build`, `bench`, `profile`, `golden`, `integration`). It is where
 the compiler flags, the driver generation, the benchmark history and the golden
 case format all live; `conftest.py` is nothing but pytest hooks over it. See
 "Developer tooling" below.
@@ -120,7 +124,9 @@ Options: `--mojo` / `--python` / `--cpu` / `--gpu` and their `--no-*` inverses
 select suites (GPU needs a Metal/CUDA device); `--benchmark` includes
 `bench_*.mojo` and enables `-O3`; `--asan` runs under AddressSanitizer (needs the
 `asan` environment); `--competition` prints a side-by-side comparison table after
-benchmarks; `--save-benchmarks DIR` / `--benchmark-history FILE` persist results;
+benchmarks, `--competition-winner LIB` fails the run unless LIB wins every
+compared operation and `--competition-json FILE` records them;
+`--save-benchmarks DIR` / `--benchmark-history FILE` persist results;
 `--define NAME=VALUE` (repeatable) passes `-D` to the Mojo test and bench builds,
 for comptime knobs such as `MARROW_GROUPBY_RADIX_MIN_ROWS`, and is refused with
 `--save-benchmarks` so a forced build never lands in the history.
@@ -251,6 +257,18 @@ def bench_kernel_10k(mut b: Benchmark) raises: _bench_kernel(b, 10_000)
 def bench_kernel_100k(mut b: Benchmark) raises: _bench_kernel(b, 100_000)
 def bench_kernel_1m(mut b: Benchmark) raises: _bench_kernel(b, 1_000_000)
 ```
+
+**Every comparison is contenders over operations, through one
+`CompetitionReport`.** A contender is named in one of two ways:
+
+- **per benchmark** — `extra_info["lib"]` on a case named `test_<lib>_<op>`
+  (Python) or `bench_<lib>_<op>` with `b.extra_info("lib", ...)` (Mojo), with
+  `n` from the declared throughput. Libraries (`bench-engines`) and the two
+  expression lanes (`bench-comptime`) compare this way, and `--competition`,
+  `--competition-winner` and `--competition-json` read it.
+- **per run** — each `--save-benchmarks` snapshot is one contender to
+  `devkit bench compare [NAME=]SNAPSHOT...`, which takes the same `--winner`
+  and `--json`. `bench-history` is that over commits, each checked out whole.
 
 ### Developer tooling — `devkit/`
 
@@ -661,12 +679,12 @@ are blocked by the join's positional output schema rather than by the optimizer.
 
 Tests live in `expr/tests/`, `expr/comptime/tests/` and `expr/runtime/tests/`.
 
-Two standing constraints:
+Three standing constraints:
 
 - **Keep `marrow.expr` small-binary — for the *comptime* lane.** Preserve the
   closed-erasure/DCE property (no open dispatchers, fused-only value boxes,
   closed per-dtype kernels) and gate changes on `benchmarks/binary_size/`
-  (`pixi run binary_size`).
+  (`pixi run bench-size`).
 
   **The constraint is about the AOT lane, not the runtime one.** A program built
   from `col("a", int64)` and the fused nodes is a size-critical AOT binary and
@@ -685,6 +703,11 @@ Two standing constraints:
   reason. The comptime nodes bind on `ComptimeValue`, so a runtime operand
   inside one would discard the fusion the lane exists for: **a plan mixes lanes
   at the box, never inside a node.**
+- **The comptime lane is faster than the runtime lane on every query in
+  `marrow/expr/tests/bench_comptime.mojo`** — `pixi run -e dev bench-comptime`
+  fails when it is not, and rewrites `docs/data/comptime.json` for
+  `docs/reference/comptime.qmd`; commit it when the numbers move, from a quiet
+  machine.
 
 ### Interop and tabular
 
@@ -953,10 +976,8 @@ In addition:
   `.mean()`, `.min()`, `.max()`, `.count()`, named with `.alias("total")`, and no
   key list at all for a no-`GROUP BY` aggregate (`rel.aggregate(aggs=[...])`).
   Never spell the comptime `Aggregate[Fold[SumKernel, Int64Type], ...]` node by
-  hand — that form is for the kernel layer and for the benches that deliberately
-  measure comptime versus runtime resolution
-  (`marrow/expr/comptime/tests/bench_aggregates.mojo`,
-  `benchmarks/binary_size/`), not for tests.
+  hand — that form is for the kernel layer and for the binary-size gates in
+  `benchmarks/binary_size/`, not for tests.
 - Use standard pytest assertions and fixtures (`tmp_path`) on the Python side.
 
 ### Process

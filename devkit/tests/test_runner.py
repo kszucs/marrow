@@ -68,6 +68,19 @@ def test_saving_benchmarks_implies_running_them():
     assert options.save_benchmarks == "results"
 
 
+@pytest.mark.parametrize(
+    "option", [{"competition_winner": "comptime"}, {"competition_json": "out.json"}]
+)
+def test_a_competition_verdict_or_record_implies_the_table_and_the_run(option):
+    options = RunnerOptions.from_config(FakeConfig(**option))
+    assert options.competition and options.benchmark
+
+
+def test_the_competition_table_alone_runs_nothing_extra():
+    options = RunnerOptions.from_config(FakeConfig(competition=True))
+    assert options.competition and not options.benchmark
+
+
 def test_defines_are_read_as_a_tuple():
     options = RunnerOptions.from_config(
         FakeConfig(define=["MARROW_GROUPBY_RADIX_MIN_ROWS=0", "X=1"])
@@ -81,6 +94,8 @@ def test_defines_are_refused_with_saved_benchmarks():
     in the history under the tree's names."""
     with pytest.raises(ValueError, match="--save-benchmarks"):
         RunnerOptions.from_config(FakeConfig(define=["X=1"], save_benchmarks="out"))
+    with pytest.raises(ValueError, match="--competition-json"):
+        RunnerOptions.from_config(FakeConfig(define=["X=1"], competition_json="o"))
 
 
 @pytest.mark.parametrize("text", ["X", "=1", "1X=2", "A-B=1"])

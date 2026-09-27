@@ -50,10 +50,10 @@ publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://pre
 # Builds the same SELECT/WHERE query via the comptime (AOT), hybrid, and
 # runtime (type-erased) relational layers, strips each, and compares sizes +
 # symbol counts -- see benchmarks/binary_size/README.md.
-binary_size = { cmd = "python -m devkit size compare" }
+bench-size = { cmd = "python -m devkit bench size compare" }
 # The CI gate: build the recorded gates and fail if any grew past its
 # baseline `__text` size. `--update` re-records after an intentional change.
-binary_size_check = { cmd = "python -m devkit size check" }
+bench-size-check = { cmd = "python -m devkit bench size check" }
 
 # Compiles every Mojo snippet the docs include, so the guides cannot rot.
 # Quarto executes the docs' Python cells at render time, which keeps that half
@@ -114,6 +114,11 @@ precompile = { cmd = "python -m devkit build precompile" }
 # The devkit suite — flag handling, driver generation, result mapping, the
 # golden case format, the size gate.  No Mojo compilation; about a second.
 selftest = { cmd = "pytest devkit/tests -q" }
+# The comptime lane against the runtime lane: see docs/reference/comptime.qmd.
+bench-comptime = { cmd = "pytest marrow/expr/tests/bench_comptime.mojo --competition-winner comptime --competition-json docs/data/comptime.json" }
+# The same benchmarks across commits, each commit a contender:
+# `pixi run -e dev bench-history HEAD~5 HEAD`.
+bench-history = { cmd = "python -m devkit bench history" }
 # How much of the golden corpus the SQL front end answers, and what the
 # declined cases trip over -- the list to work down when widening the grammar.
 golden_sql = { cmd = "python -m devkit golden sql", depends-on = ["build_python"] }
@@ -215,9 +220,11 @@ duckdb = ">=1.5.1,<2"
 [feature.bench.tasks]
 # Recompute every golden expectation from DuckDB, which only this feature has.
 golden_regenerate = { cmd = "python -m devkit golden regenerate" }
-bench_mojo = { cmd = "pytest --benchmark --mojo -v" }
-bench_python = { cmd = "pytest --benchmark --python -v" }
 bench = { cmd = "pytest --benchmark -v" }
+bench-mojo = { cmd = "pytest --benchmark --mojo -v" }
+bench-python = { cmd = "pytest --benchmark --python -v" }
+# marrow against pyarrow, polars, duckdb and numpy, side by side.
+bench-engines = { cmd = "pytest --benchmark --python --competition -v" }
 
 # Format — code formatting and linting.
 [feature.format.dependencies]

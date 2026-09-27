@@ -4,8 +4,8 @@ Everything that spawns a process lives here.  `MojoToolchain` is the only place
 in the repository that invokes `mojo`, so the opt-level policy, the include path
 and the sanitizer wiring each have exactly one definition to read and one to
 change.  `ProcessRunner` is how anything long-running is run, because it owns
-the progress display and the timeout; `Vcs` and `AsanRuntime.locate` call
-`subprocess` directly instead, since both are sub-second probes that want no
+the progress display and the timeout; `Vcs`, `machine` and `AsanRuntime.locate`
+call `subprocess` directly instead, since all are sub-second probes that want no
 display and no deadline.
 
 Nothing in this module imports pytest, and nothing in it imports a third-party
@@ -21,6 +21,7 @@ the shared-library recipe instead of keeping a second copy.
 
 import contextlib
 import os
+import platform
 import signal
 import subprocess
 import sys
@@ -59,15 +60,7 @@ class Vcs:
         self._root = Path(root)
 
     def read(self, *args):
-        try:
-            completed = subprocess.run(
-                ["git", "-C", str(self._root), *args],
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            return "unknown"
-        return completed.stdout.strip() or "unknown"
+        return probe(["git", "-C", str(self._root), *args]) or "unknown"
 
     @property
     def commit(self):
@@ -76,6 +69,49 @@ class Vcs:
     @property
     def ref(self):
         return self.read("rev-parse", "--abbrev-ref", "HEAD")
+
+    def resolve(self, ref):
+        """*ref* as a short commit sha, or "" if it names no commit."""
+        return probe(
+            [
+                "git",
+                "-C",
+                str(self._root),
+                "rev-parse",
+                "--short",
+                "--verify",
+                "--quiet",
+                f"{ref}^{{commit}}",
+            ]
+        )
+
+
+def probe(argv):
+    """A sub-second command's stdout, or "" if it could not run."""
+    try:
+        completed = subprocess.run(argv, capture_output=True, text=True)
+    except OSError:
+        return ""
+    return completed.stdout.strip()
+
+
+def machine(toolchain):
+    """What a measurement ran on -- a timing means nothing without it."""
+    cpu = platform.processor()
+    cpuinfo = Path("/proc/cpuinfo")
+    if platform.system() == "Darwin":
+        cpu = probe(["sysctl", "-n", "machdep.cpu.brand_string"])
+    elif cpuinfo.exists():
+        for line in cpuinfo.read_text().splitlines():
+            if line.startswith("model name"):
+                cpu = line.split(":", 1)[1].strip()
+                break
+    return {
+        "os": f"{platform.system()} {platform.release()}",
+        "arch": platform.machine(),
+        "cpu": cpu,
+        "mojo": toolchain.version(),
+    }
 
 
 class Repo:
@@ -579,6 +615,10 @@ class MojoToolchain:
         self._runner = runner
         self._asan = asan_runtime
         self._exe = executable
+
+    def version(self):
+        """`mojo --version`, or "" if it cannot say."""
+        return probe([self._exe, "--version"])
 
     def build(self, source, out, options, label):
         return self._runner.run(

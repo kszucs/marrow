@@ -1,7 +1,7 @@
 """Benchmarks for filter kernel.
 
 Run with:
-    pixi run bench_mojo -k bench_filter
+    pixi run bench-mojo -k bench_filter
     pixi run pytest marrow/kernels/tests/bench_filter.mojo --benchmark
 """
 

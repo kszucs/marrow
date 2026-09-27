@@ -346,6 +346,14 @@ def test_toolchain_resolves_the_compiler_from_path(tmp_path):
     assert "/" not in recorded[-1][0]
 
 
+def test_toolchain_version_is_best_effort():
+    """A probe, not a build: no runner, and no raise when there is no compiler."""
+    from devkit.mojo import MojoToolchain
+
+    assert MojoToolchain(None, executable="echo").version() == "--version"
+    assert MojoToolchain(None, executable="no-such-mojo").version() == ""
+
+
 def test_asan_runtime_flags_link_the_library(tmp_path):
     runtime = AsanRuntime(tmp_path / "lib" / "libclang_rt.asan.dylib")
     flags = runtime.flags()

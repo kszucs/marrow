@@ -17,7 +17,7 @@ Its near-twin is `query_runtime.mojo`, which builds the *same* erased values
 through the fluent verbs and `select`. The two are deliberately close: what
 separates them is how the projection is spelled, not what it computes.
 
-    pixi run binary_size
+    pixi run bench-size
 
 **Ported from the old expression package on 2026-08-29.** Two spelling
 changes, neither of which alters what is measured: the runtime lane has no

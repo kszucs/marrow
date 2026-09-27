@@ -12,6 +12,7 @@ the rest be tested with plain objects instead of a fake config.
 """
 
 import contextlib
+import functools
 import sys
 from pathlib import Path
 
@@ -25,6 +26,8 @@ from devkit.benches import (  # noqa: E402 - must follow the path insertion
     BenchmarkHistory,
     BenchmarkInjector,
     CompetitionReport,
+    judge_competition,
+    session_provenance,
 )
 from devkit.mojo import (  # noqa: E402
     AsanRuntime,
@@ -428,19 +431,28 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    config = session.config
-    if not harness(config).options.save_benchmarks:
-        return
-    if hasattr(config, "workerinput"):
+    if hasattr(session.config, "workerinput"):
         return  # only the controller writes results
-    benchmark_session = harness(config).benchmark_session
-    if benchmark_session is None or not benchmark_session.benchmarks:
-        return
+    h = harness(session.config)
+    benchmarks = h.benchmark_session.benchmarks if h.benchmark_session else []
 
-    history = harness(config).history()
-    envelope = BenchmarkEnvelope.from_benchmarks(
-        harness(config).repo.vcs, benchmark_session.benchmarks
+    options = h.options
+    record = options.competition_json and h.repo.root / options.competition_json
+    lines, failed = judge_competition(
+        CompetitionReport(benchmarks),
+        options.competition_winner,
+        record,
+        functools.partial(session_provenance, h.repo, h.toolchain),
     )
+    for line in lines:
+        print(f"\n{line}")
+    if failed:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    if not h.options.save_benchmarks or not benchmarks:
+        return
+    history = h.history()
+    envelope = BenchmarkEnvelope.from_benchmarks(h.repo.vcs, benchmarks)
     written, count, runs = history.save(envelope)
     print(f"\n--save-benchmarks: {count} entries written to {written}")
     print(f"--save-benchmarks: {runs} run(s) in {history.history_file}")

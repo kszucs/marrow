@@ -11,7 +11,7 @@ travels in, and `marrow.utils.argparse` — the parser, the `--help` renderer an
 the string-to-scalar conversion at the boundary. The delta against
 `query_scan` is what "this value arrives at run time" costs an AOT query.
 
-    pixi run binary_size query_param query_scan
+    pixi run bench-size query_param query_scan
 
 **Ported from the old expression package on 2026-08-29, and it measures
 materially less than it did. The recorded baseline is stale and not

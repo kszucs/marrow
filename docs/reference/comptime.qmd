@@ -1,0 +1,100 @@
+---
+title: "Comptime vs runtime lane"
+subtitle: "The same query in both lanes, measured"
+execute:
+  freeze: false
+  cache: false
+---
+
+[Queries in Mojo](../guide/expressions.qmd) describes two expression lanes
+under one plan IR: `col("a", int64)` resolves the operand's dtype at compile
+time and fuses a subtree into one SIMD loop, while `col("a")` resolves it at run
+time and materialises every intermediate column. This page measures what that
+difference is worth, query by query.
+
+```{python}
+#| echo: false
+#| output: asis
+import json
+from pathlib import Path
+
+record = json.loads(Path("../data/comptime.json").read_text())
+operations = record["operations"]
+machine = record["machine"]
+
+
+def ms(ns):
+    return f"{ns / 1e6:.2f} ms"
+
+
+def speedup(op):
+    return op["timings_ns"]["runtime"] / op["timings_ns"]["comptime"]
+
+
+wins = sum(speedup(op) > 1 for op in operations)
+speedups = sorted(speedup(op) for op in operations)
+print(
+    f"The comptime lane is faster on **{wins} of {len(operations)}** queries; "
+    f"speedups range from {speedups[0]:.2f}× to {speedups[-1]:.2f}×.\n"
+)
+print("| Query | Comptime | Runtime | Speedup |")
+print("|---|--:|--:|--:|")
+for op in operations:
+    t = op["timings_ns"]
+    print(
+        f"| `{op['operation']}` | {ms(t['comptime'])} | {ms(t['runtime'])} "
+        f"| **{speedup(op):.2f}×** |"
+    )
+commit = record["commit"]
+print(
+    f"\n: Mean over each case's rounds, {operations[0]['n']:,} rows. Measured on "
+    f"{machine['cpu']} ({machine['os']}, {machine['arch']}) with "
+    f"{machine['mojo']}, at commit "
+    f"[`{commit[:8]}`](https://github.com/kszucs/marrow/commit/{commit}) "
+    f"on {record['timestamp'][:10]}."
+)
+```
+
+## What is compared
+
+Every row is a pair of benchmarks in
+[`marrow/expr/tests/bench_comptime.mojo`](https://github.com/kszucs/marrow/blob/main/marrow/expr/tests/bench_comptime.mojo):
+`bench_comptime_<query>` and `bench_runtime_<query>` build the same plan over
+the same batch and return the same answer — two contenders, compared the way
+`--competition` compares libraries. The only thing that differs is how
+the leaves are spelled:
+
+```{.mojo .fragment}
+table(batch).filter((col("a", int64) > lit(200, int64)) & (col("a", int64) < lit(800, int64)))
+table(batch).filter((col("a") > lit(Int64Scalar(200))) & (col("a") < lit(Int64Scalar(800))))
+```
+
+The time covers the whole plan — building it, lowering it to operators and
+draining it — so it is what a caller of `.execute()` pays.
+
+Every query is one the comptime lane can **fuse**: it runs the expression as
+one loop over the input, where the runtime lane evaluates `a * b` into a
+column, then the comparison into another, and so on. An aggregate neither lane
+can fuse, such as `count(DISTINCT a)`, is left out on purpose: both lanes call
+the same kernel and the times tie.
+
+The grouped rows win by less, and that is the grouping rather than the fusion.
+Fusion saves about the same absolute time there as in the whole-table `sum`,
+but every row's key is hashed and probed whatever the number of groups, and
+both lanes pay that alike. A single group is no cheaper: every row then updates
+the same slot, one after another.
+
+## Reproducing it
+
+```bash
+pixi run -e dev bench-comptime
+```
+
+That runs the pairs with `--competition-winner comptime`, which **fails the run
+unless the comptime lane is faster on every query** — a tie, or a query only one
+lane ran, counts as a loss — and `--competition-json docs/data/comptime.json`,
+which is what this page renders. The Benchmarks workflow runs the same check on
+every pull request.
+
+Timings on a shared machine are noisy, and the numbers above are only as good
+as the machine they were recorded on.

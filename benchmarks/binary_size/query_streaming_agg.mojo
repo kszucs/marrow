@@ -15,7 +15,7 @@ aggregate query in the gate that regression would go unnoticed.
 Its pair is `query_streaming_agg_fused.mojo`, which expresses the same query
 with comptime aggregates.
 
-    pixi run binary_size
+    pixi run bench-size
 
 **Ported from the old expression package on 2026-08-29, and the pair now
 measures more than it did.** The old package could hand a *fused* operand to a

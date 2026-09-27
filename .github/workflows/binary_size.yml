@@ -36,7 +36,7 @@ jobs:
     # numbers recorded on a developer's machine -- the same source builds
     # 0.5-1.6% larger here, which trips a 0.5% threshold on its own and reported
     # six REGRESSIONs against a baseline re-recorded the same day.  See
-    # `devkit size check --help`.
+    # `devkit bench size check --help`.
     - name: Resolve the commit to measure against
       id: base
       run: |
@@ -59,7 +59,7 @@ jobs:
       if: steps.base-cache.outputs.cache-hit != 'true'
       run: |
         git worktree add ../base "${{ steps.base.outputs.sha }}"
-        pixi run -e dev python -m devkit size check \
+        pixi run -e dev python -m devkit bench size check \
           --repo ../base --out base-size.json --measure-only
 
     - name: Cache the base measurement
@@ -71,7 +71,7 @@ jobs:
 
     - name: Check binary-size gate
       run: |
-        pixi run -e dev python -m devkit size check \
+        pixi run -e dev python -m devkit bench size check \
           --baseline base-size.json --out head-size.json
 
     # Saved so the next commit on this branch finds its own base already

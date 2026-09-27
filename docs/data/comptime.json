@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-09-27T11:22:56Z",
+  "commit": "35db696a7a2cf3f766db1b419d75ab2e0cf036ab",
+  "machine": {
+    "os": "Darwin 24.6.0",
+    "arch": "arm64",
+    "cpu": "Apple M4 Max",
+    "mojo": "Mojo 1.2.0.dev2026092105 (e9569894)"
+  },
+  "operations": [
+    {
+      "operation": "aggregate_sum",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 1073785.798816568,
+        "runtime": 1882544.5783132531
+      }
+    },
+    {
+      "operation": "aggregate_sum_grouped_1",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 8761100.0,
+        "runtime": 9929293.333333334
+      }
+    },
+    {
+      "operation": "aggregate_sum_grouped_100",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 7900040.000000001,
+        "runtime": 8267099.999999999
+      }
+    },
+    {
+      "operation": "aggregate_sum_grouped_4",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 7232428.571428571,
+        "runtime": 9441600.0
+      }
+    },
+    {
+      "operation": "filter_computed",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 3804338.888888889,
+        "runtime": 15574780.0
+      }
+    },
+    {
+      "operation": "filter_range",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 4045641.176470588,
+        "runtime": 12244333.333333334
+      }
+    },
+    {
+      "operation": "project_float_arithmetic",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 717719.2488262911,
+        "runtime": 6618133.333333333
+      }
+    },
+    {
+      "operation": "project_int_arithmetic",
+      "n": 1000000,
+      "timings_ns": {
+        "comptime": 907601.550387597,
+        "runtime": 2211182.02247191
+      }
+    }
+  ]
+}

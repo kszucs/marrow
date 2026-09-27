@@ -39,7 +39,7 @@ def test_every_command_has_help(path):
 def test_the_group_lists_every_area():
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    for area in ("build", "size", "profile", "golden", "integration"):
+    for area in ("build", "bench", "profile", "golden", "integration"):
         assert area in result.output
 
 
@@ -143,10 +143,10 @@ def test_size_check_runs_its_body(tmp_path):
 
     `--help` never enters a command body, so a broken call into `devkit` -- an
     unpacked return value, a renamed attribute -- is invisible to every other
-    test here and shows up only when someone runs `pixi run binary_size_check`.
+    test here and shows up only when someone runs `pixi run bench-size-check`.
     """
     result = CliRunner().invoke(
-        cli, ["size", "check"], obj=StubContext(size_repo(tmp_path))
+        cli, ["bench", "size", "check"], obj=StubContext(size_repo(tmp_path))
     )
     assert not isinstance(result.exception, TypeError), result.exception
     assert "did not build" in result.output
@@ -155,11 +155,42 @@ def test_size_check_runs_its_body(tmp_path):
 def test_size_compare_runs_its_body(tmp_path):
     result = CliRunner().invoke(
         cli,
-        ["size", "compare", "query_streaming"],
+        ["bench", "size", "compare", "query_streaming"],
         obj=StubContext(size_repo(tmp_path)),
     )
     assert not isinstance(result.exception, TypeError), result.exception
     assert "did not build" in result.output
+
+
+def test_bench_compare_judges_snapshots_as_contenders(tmp_path):
+    def snapshot(name, mean_ns):
+        path = tmp_path / f"{name}.json"
+        results = [{"name": "bench_x", "mean_ns": mean_ns, "extra_info": {"n": 1}}]
+        path.write_text(json.dumps({"commit": "abc", "results": results}))
+        return f"{name}={path}"
+
+    result = CliRunner().invoke(
+        cli,
+        ["bench", "compare", snapshot("old", 1_000), snapshot("new", 3_000)],
+        obj=StubContext(tmp_path),
+    )
+    assert result.exit_code == 0, result.output
+    assert "Competition" in result.output
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "bench",
+            "compare",
+            snapshot("old", 1_000),
+            snapshot("new", 3_000),
+            "--winner",
+            "new",
+        ],
+        obj=StubContext(tmp_path),
+    )
+    assert result.exit_code == 1
+    assert "new was not the fastest on: bench_x" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ number CI checks for it. The pair earns its keep as a pair: the delta against
 `query_streaming_agg_fused` is what grouping by a string costs over grouping by
 an `int64`, with everything else equal.
 
-    pixi run binary_size
+    pixi run bench-size
 """
 
 from marrow.builders import array

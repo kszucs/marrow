@@ -123,14 +123,7 @@ struct TestSuite:
                     status = "FAIL"
                 else:
                     status = "SKIP"
-                var error_str = String("")
-                if r.error:
-                    var raw = String(r.error.value())
-                    error_str = (
-                        raw.replace("\\", "\\\\")
-                        .replace('"', '\\"')
-                        .replace("\n", "\\n")
-                    )
+                var error = String(r.error.value()) if r.error else String("")
                 var comma = "," if i < len(report.reports) - 1 else ""
                 print(
                     '  {"name": "'
@@ -139,9 +132,9 @@ struct TestSuite:
                     + status
                     + '", "duration_ns": '
                     + String(r.duration_ns)
-                    + ', "error": "'
-                    + error_str
-                    + '"}'
+                    + ', "error": '
+                    + _json_string(error)
+                    + "}"
                     + comma
                 )
             print("]")
@@ -166,10 +159,12 @@ struct Benchmark:
 
     var _bencher: Bencher
     var _throughput: Optional[_ThroughputMeasure]
+    var _extra_info: String
 
     def __init__(out self, num_iters: Int):
         self._bencher = Bencher(num_iters)
         self._throughput = None
+        self._extra_info = String()
 
     def throughput(mut self, metric: BenchMetric, count: Int):
         """Declare throughput for this benchmark.
@@ -179,6 +174,17 @@ struct Benchmark:
             count: Elements/bytes/flops processed **per iteration**.
         """
         self._throughput = _ThroughputMeasure(metric.name, metric.unit, count)
+
+    def extra_info(mut self, key: String, value: String):
+        """Attach `key: value` to this benchmark's pytest-benchmark
+        ``extra_info``, as a Python benchmark's ``extra_info.update`` does.
+
+        ``b.extra_info("lib", "comptime")`` enters it in `--competition`,
+        compared per operation at the size `throughput` declared.
+        """
+        if self._extra_info:
+            self._extra_info += ", "
+        self._extra_info += _json_string(key) + ": " + _json_string(value)
 
     # ── Forward all Bencher methods ────────────────────────────────────
 
@@ -460,10 +466,10 @@ struct BenchSuite(Movable):
                     runs_str += ", "
                 runs_str += String(r.runs_ns[j])
             runs_str += "]"
-            var tp_str = String("")
+            var extra = String("")
             if r.throughput:
                 var tp = r.throughput.value().copy()
-                tp_str = (
+                extra = (
                     ', "throughput_metric": "'
                     + tp.metric_name
                     + '", "throughput_unit": "'
@@ -471,6 +477,8 @@ struct BenchSuite(Movable):
                     + '", "throughput_count": '
                     + String(tp.count)
                 )
+            if r.extra_info:
+                extra += ', "extra_info": {' + r.extra_info + "}"
             print(
                 '  {"name": "'
                 + r.name
@@ -478,7 +486,7 @@ struct BenchSuite(Movable):
                 + String(r.iters)
                 + ', "runs": '
                 + runs_str
-                + tp_str
+                + extra
                 + "}"
                 + comma
             )
@@ -497,6 +505,7 @@ struct BenchSuite(Movable):
         var tp: Optional[_ThroughputMeasure] = None
         if warmup_bm._throughput:
             tp = warmup_bm._throughput.value().copy()
+        var extra_info = warmup_bm._extra_info.copy()
 
         for _ in range(self.config.num_warmup_iters):
             var bm = Benchmark(1)
@@ -527,7 +536,9 @@ struct BenchSuite(Movable):
             b.bench_fn(bm)
             runs_ns.append(Float64(bm.get_elapsed()) / Float64(num_iters))
 
-        return _BenchResult(String(b.name), num_iters, runs_ns^, tp^)
+        return _BenchResult(
+            String(b.name), num_iters, runs_ns^, tp^, extra_info^
+        )
 
 
 @fieldwise_init
@@ -536,6 +547,8 @@ struct _BenchResult(Copyable, Movable):
     var iters: Int
     var runs_ns: List[Float64]
     var throughput: Optional[_ThroughputMeasure]
+    var extra_info: String
+    """`"key": "value"` pairs, already JSON."""
 
     def mean_ns(self) -> Float64:
         if len(self.runs_ns) == 0:
@@ -544,6 +557,15 @@ struct _BenchResult(Copyable, Movable):
         for i in range(len(self.runs_ns)):
             total += self.runs_ns[i]
         return total / Float64(len(self.runs_ns))
+
+
+def _json_string(s: String) -> String:
+    """`s` as a JSON string literal."""
+    return (
+        '"'
+        + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        + '"'
+    )
 
 
 def _format_ns(ns: Float64) -> String:

@@ -98,6 +98,8 @@ website:
         contents:
           - text: "Architecture"
             href: reference/architecture.qmd
+          - text: "Comptime vs runtime lane"
+            href: reference/comptime.qmd
           - text: "Status & limitations"
             href: reference/status.qmd
 

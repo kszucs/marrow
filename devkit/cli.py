@@ -32,18 +32,18 @@ class Context:
 
     @property
     def toolchain(self):
-        return MojoToolchain(self._runner(ConsoleProgress()))
+        return MojoToolchain(self.runner(ConsoleProgress()))
 
     @property
     def asan_toolchain(self):
-        return MojoToolchain(self._runner(ConsoleProgress()), AsanRuntime.locate())
+        return MojoToolchain(self.runner(ConsoleProgress()), AsanRuntime.locate())
 
     def timed_toolchain(self, timeout):
         """A toolchain with a deadline, for a command that compiles many
         programs in a row and would otherwise hang a CI job on one of them."""
-        return MojoToolchain(self._runner(ConsoleProgress(), timeout))
+        return MojoToolchain(self.runner(ConsoleProgress(), timeout))
 
-    def _runner(self, progress, timeout=0):
+    def runner(self, progress, timeout=0):
         return ProcessRunner(
             self.repo.root,
             SilentProgress() if self.quiet else progress,
@@ -126,11 +126,103 @@ def _precompile(ctx, out):
 
 
 # ---------------------------------------------------------------------------
-# size
+# bench
 # ---------------------------------------------------------------------------
 
 
 @cli.group()
+def bench():
+    """Benchmarks: comparisons between contenders, and the binary-size gate."""
+
+
+def _report(runs, winner, record):
+    """Render `[(name, snapshot)]` as a competition, then judge it as the
+    pytest session does, crediting each contender's own commit."""
+    from .benches import CompetitionReport, contenders, judge_competition
+
+    report = CompetitionReport(contenders(runs))
+    for line in report.render():
+        click.echo(line)
+    lines, failed = judge_competition(
+        report,
+        winner,
+        record and Path(record).resolve(),
+        lambda: {"contenders": {name: snapshot["commit"] for name, snapshot in runs}},
+    )
+    for line in lines:
+        click.echo(line)
+    if failed:
+        sys.exit(1)
+
+
+_winner = click.option(
+    "--winner",
+    default="",
+    metavar="NAME",
+    help="Fail unless NAME wins every operation.",
+)
+_record = click.option(
+    "--json", "record", default="", metavar="FILE", help="Write the comparison to FILE."
+)
+
+
+@bench.command("compare")
+@click.argument("snapshots", nargs=-1, required=True, metavar="[NAME=]SNAPSHOT...")
+@_winner
+@_record
+def bench_compare(snapshots, winner, record):
+    """Compare `--save-benchmarks` snapshots, each one a contender.
+
+    NAME defaults to the snapshot's short commit, so two machines or two builds
+    of one commit need a name each.
+    """
+    runs = []
+    for argument in snapshots:
+        name, _, path = argument.rpartition("=")
+        snapshot = json.loads(Path(path).read_text())
+        runs.append((name or snapshot["commit"][:7], snapshot))
+    _report(runs, winner, record)
+
+
+@bench.command("history")
+@click.argument("refs", nargs=-1, required=True)
+@click.option(
+    "--file",
+    "files",
+    multiple=True,
+    default=("marrow/kernels/tests",),
+    show_default=True,
+    help="Benchmark file or directory, relative to the root; repeatable.",
+)
+@click.option(
+    "-k",
+    "select",
+    default="take or filter or groupby or sort",
+    show_default=True,
+    help="pytest -k expression, narrowed to bench_* cases.",
+)
+@click.option("--repeats", default=2, show_default=True, help="Passes over the refs.")
+@_winner
+@_record
+@pass_context
+def bench_history(ctx, refs, files, select, repeats, winner, record):
+    """Benchmark each REF with its own sources, each commit a contender.
+
+    Measures in a scratch worktree, so this checkout is never moved.
+    """
+    import tempfile
+
+    from .benches import HistorySweep
+
+    sweep = HistorySweep(ctx.repo, ctx.runner(ConsoleProgress()))
+    with tempfile.TemporaryDirectory() as scratch:
+        snapshots, skipped = sweep.run(refs, files, select, repeats, scratch)
+    for ref in skipped:
+        click.echo(f"SKIP {ref}: nothing was measured", err=True)
+    _report(snapshots, winner, record)
+
+
+@bench.group()
 def size():
     """Measure the AOT lane's binary size."""
 
@@ -212,8 +304,8 @@ def size_check(ctx, update, repo_path, baseline_path, out_path, measure_only):
     against a baseline re-recorded the same day. It measures both ends on one
     machine instead --
 
-        devkit size check --repo ../base --out base.json --measure-only
-        devkit size check --baseline base.json
+        devkit bench size check --repo ../base --out base.json --measure-only
+        devkit bench size check --baseline base.json
 
     -- so what is compared is the change, not the machine.
     """

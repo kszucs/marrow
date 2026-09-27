@@ -54,6 +54,8 @@ class RunnerOptions:
     asan: bool = False
     mojo_timeout: int = 1800
     competition: bool = False
+    competition_winner: str = ""
+    competition_json: str = ""
     save_benchmarks: str = ""
     benchmark_history: str = ""
     num_threads: int = 0
@@ -132,6 +134,20 @@ class RunnerOptions:
             "all measured libs.",
         )
         add(
+            "--competition-winner",
+            metavar="LIB",
+            default="",
+            help="Fail the session unless LIB is the fastest on every compared "
+            "operation (implies --competition).",
+        )
+        add(
+            "--competition-json",
+            metavar="FILE",
+            default="",
+            help="Write the compared operations and their timings to FILE "
+            "(implies --competition).",
+        )
+        add(
             "--save-benchmarks",
             metavar="DIR",
             default="",
@@ -173,19 +189,26 @@ class RunnerOptions:
             for name, spec in cls.__dataclass_fields__.items()
         }
         # argparse hands back None for an unset string option.
-        for name in ("save_benchmarks", "benchmark_history"):
-            values[name] = values[name] or ""
+        for name, spec in cls.__dataclass_fields__.items():
+            if spec.type is str:
+                values[name] = values[name] or ""
         # argparse hands back a list for an appending option.
         values["define"] = tuple(values["define"] or ())
         # Saving results is pointless without producing them, so the one
         # implies the other rather than failing on the combination.
-        values["benchmark"] = bool(values["benchmark"] or values["save_benchmarks"])
+        judged = values["competition_winner"] or values["competition_json"]
+        values["competition"] = bool(values["competition"] or judged)
+        values["benchmark"] = bool(
+            values["benchmark"] or values["save_benchmarks"] or judged
+        )
         # A define exists to build something other than the tree -- a forced
         # code path, a moved threshold -- so its numbers would land in the
         # rolling history under the same names as the real ones.
-        if values["define"] and values["save_benchmarks"]:
+        recorded = values["save_benchmarks"] or values["competition_json"]
+        if values["define"] and recorded:
             raise ValueError(
-                "--define cannot be combined with --save-benchmarks: results "
+                "--define cannot be combined with --save-benchmarks or "
+                "--competition-json: results "
                 "built with " + ", ".join(values["define"]) + " would be "
                 "recorded as the tree's own"
             )

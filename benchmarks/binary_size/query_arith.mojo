@@ -11,7 +11,7 @@ true, and worthless: neither of them contains a single arithmetic expression.
 A change to the fused numeric algebra could regress arbitrarily without any gate
 noticing.
 
-    pixi run binary_size query_arith
+    pixi run bench-size query_arith
 
 **Ported from the old expression package on 2026-08-29** — the arithmetic
 itself carries over unchanged (`marrow/expr/comptime/numeric.mojo` keeps
