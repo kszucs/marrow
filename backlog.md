@@ -505,8 +505,10 @@ user value to engineering novelty on the whole page.**
   +432 `query_expr2_agg_fused` — at most +0.08%. Its first shape, three
   function pointers and an erased reader of its own, cost up to +6,136
   (+0.42%); building a `ReaderOperator[R]` behind the existing `DynOperator`
-  is what took it down. A binary that reads JSON pays EmberJson's tokenizer on
-  top, about +50 KB in a standalone prototype.
+  is what took it down. `IpcScan` then added +348 to +1,216 (`query_cli`),
+  measured against the run just before it on the same base. A binary that
+  reads JSON pays EmberJson's tokenizer on top, about +50 KB in a standalone
+  prototype.
 
 **The conda package build is probably broken on 1.2, JSON or not.** `mojo
 package -o x.mojopkg` now fails with `output path must have a '.mojoc'
