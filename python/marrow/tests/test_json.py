@@ -257,3 +257,48 @@ def test_lazy_read_json_filters_and_projects(tmp_path):
     got = marrow.read_json(path).filter(marrow.col("a") > 1).select("b").collect()
     assert got.column_names == ["b"]
     assert got.column(0).to_pylist() == ["y", None]
+
+
+# ---------------------------------------------------------------------------
+# the writer, read back by pyarrow
+# ---------------------------------------------------------------------------
+
+
+def test_write_json_reads_back_in_pyarrow(tmp_path):
+    table = pa.table(
+        {
+            "i": [1, None, 3],
+            "f": [0.1, None, -2.5],
+            "s": ["a", 'q"u\\o é', None],
+            "b": [True, False, None],
+            "l": [[1, 2], [], None],
+            "st": [{"x": 1, "y": "p"}, None, {"x": 3, "y": None}],
+            "t": pa.array([0, None, 1_600_000_000], pa.timestamp("s")),
+        }
+    )
+    path = tmp_path / "out.jsonl"
+    mj.write_json(table, path)
+    _assert_equiv(pj.read_json(path), table)
+    _assert_equiv(_to_pa(mj.read_json(path)), table)
+
+
+def test_write_json_non_finite_is_null(tmp_path):
+    table = pa.table({"f": [float("nan"), float("inf"), 1.5]})
+    path = tmp_path / "out.jsonl"
+    mj.write_json(table, path)
+    assert pj.read_json(path).column("f").to_pylist() == [None, None, 1.5]
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_write_json_random_round_trip(tmp_path, seed):
+    rng = random.Random(seed)
+    kinds = {"i": "int", "f": "float", "s": "str", "b": "bool", "l": "list", "o": "obj"}
+    lines = []
+    for _ in range(rng.randint(1, 60)):
+        row = {k: _value(rng, t) for k, t in kinds.items() if rng.random() < 0.8}
+        lines.append(json.dumps(row))
+    source = _write(tmp_path, "\n".join(lines) + "\n", name="in.jsonl")
+    table = pj.read_json(source)
+    out = tmp_path / "out.jsonl"
+    mj.write_json(table, out)
+    _assert_equiv(pj.read_json(out), table)

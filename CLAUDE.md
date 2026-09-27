@@ -765,7 +765,8 @@ work".
 
 **JSON** (`marrow/json/`): newline-delimited JSON — `read_json`, the
 streaming `JsonReader`/`open_json`, and `scan_json`, matching `pyarrow.json`
-down to its error messages. It is the only code needing EmberJson, so **no
+down to its error messages, and `write_json`/`JsonWriter`, whose output reads
+back to the same values and inferable types. It is the only code needing EmberJson, so **no
 other module under `marrow/` imports `marrow.json` or `emberjson`**:
 `marrow.expr` reaches the reader only through `ExternalScan`, and a program
 built from source needs EmberJson only if it reads JSON. A *precompiled*
@@ -840,7 +841,8 @@ marrow/
 │   │   └── tests/
 │   └── tests/
 ├── json/                 # NDJSON: options, infer (pass 1), reader (pass 2),
-│   └── tests/            #   scan (ExternalScan); the only EmberJson importer
+│   └── tests/            #   scan (ExternalScan), writer; the only EmberJson
+│                         #   importer
 ├── parquet/              # reader, writer, schema, format, codecs, bloom,
 │   └── tests/            # statistics
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules

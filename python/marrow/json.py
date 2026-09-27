@@ -11,6 +11,7 @@
     )
     for batch in mj.open_json("rows.jsonl"):
         ...
+    mj.write_json(table, "out.jsonl")
 
 Types are inferred as Arrow C++ infers them — ``int64`` widening to
 ``double``, ISO-8601 strings to ``timestamp[s]``, objects to structs, arrays to
@@ -29,7 +30,7 @@ from ._wrapper import _Wrapper, unwrap
 from .tabular import RecordBatch, Table
 from .types import Schema
 
-__all__ = ["ReadOptions", "ParseOptions", "read_json", "open_json"]
+__all__ = ["ReadOptions", "ParseOptions", "read_json", "open_json", "write_json"]
 
 _BEHAVIORS = ("ignore", "error", "infer")
 
@@ -144,3 +145,15 @@ def open_json(input_file, read_options=None, parse_options=None):
     return JSONStreamingReader.wrap(
         _ma.json_open(*_args(input_file, read_options, parse_options))
     )
+
+
+def write_json(table, where):
+    """Write a table as newline-delimited JSON: one object per row, keys in
+    schema order, nulls written as ``null``.
+
+    ``table`` is a :class:`marrow.Table` or any Arrow C stream compatible
+    object (e.g. a PyArrow table); ``where`` a path or a URL, opened as
+    :func:`marrow.parquet.write_table` opens one. Timestamps and dates are
+    ISO-8601 strings, and a NaN or an infinity is written as ``null``.
+    """
+    _ma.json_write_table(unwrap(table), str(where))

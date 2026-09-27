@@ -449,7 +449,9 @@ A user rejects the library outright without these.
 **What exists.** NDJSON: `marrow/json/` — `read_json`, the streaming
 `JsonReader`/`open_json` and `scan_json` (an `ExternalScan`), with Python's
 `marrow.json` and lazy `marrow.read_json` over them, checked value for value
-against `pyarrow.json`. It tokenizes with EmberJson (CLAUDE.md has the fork
+against `pyarrow.json`; and `write_json`, whose output pyarrow reads back to
+the table it came from. `QueryCli` has no `--format json`: `marrow.expr` does
+not import `marrow.json`. It tokenizes with EmberJson (CLAUDE.md has the fork
 and why nothing else imports it).
 No CSV reader: the only CSV code under `marrow/` is `QueryCli`'s output writer
 (`render_csv`, `marrow/expr/cli.mojo`).

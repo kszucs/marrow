@@ -20,7 +20,9 @@ from marrow.json import (
     UnexpectedFieldBehavior,
     open_json,
     read_json as _read_json,
+    write_json as _write_json,
 )
+from marrow.tabular import Table
 
 
 def _options(
@@ -95,10 +97,19 @@ def _stream_read_next_batch(py_self: PythonObject) raises -> PythonObject:
     return batch.take().to_python_object()
 
 
+def json_write_table(
+    table: PythonObject, path: PythonObject
+) raises -> PythonObject:
+    _write_json(Table(py=table), String(py=path))
+    return Python.evaluate("None")
+
+
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
-    """Register the NDJSON reader: one eager read, one streaming reader."""
+    """Register the NDJSON reader — one eager read, one streaming reader — and
+    the writer."""
     mb.def_function[json_read_table]("json_read_table")
     mb.def_function[json_open]("json_open")
+    mb.def_function[json_write_table]("json_write_table")
     ref stream_py = mb.add_type[JsonStreamReader]("JsonStreamReader")
     _ = stream_py.def_method[_stream_schema]("schema").def_method[
         _stream_read_next_batch
