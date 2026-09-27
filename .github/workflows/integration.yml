@@ -25,6 +25,16 @@ jobs:
       - name: Checkout marrow
         uses: actions/checkout@v7
 
+      # Building libmarrow.so can use the whole 16 GB runner. Without swap
+      # the runner is killed ("received a shutdown signal").
+      - name: More swap
+        run: |
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - name: Set up pixi
         uses: prefix-dev/setup-pixi@v0.10.2
         with:

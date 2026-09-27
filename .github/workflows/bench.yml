@@ -94,7 +94,11 @@ jobs:
           for f in $(find marrow -name 'bench_*.mojo' ! -name bench_comptime.mojo | sort); do
             pixi run -e bench pytest --benchmark -v --no-gpu --mojo-timeout 1800 "$f"
           done
-          pixi run -e bench pytest --benchmark -v --no-gpu python/marrow/tests/bench_*.py
+          # One session per file: Polars sizes its pool at import, so a file
+          # pinning POLARS_MAX_THREADS=1 loses to any file imported before it.
+          for f in python/marrow/tests/bench_*.py; do
+            pixi run -e bench pytest --benchmark -v --no-gpu "$f"
+          done
 
       - name: Run benchmarks
         if: github.ref == 'refs/heads/main'
@@ -107,7 +111,9 @@ jobs:
           for f in $(find marrow -name 'bench_*.mojo' ! -name bench_comptime.mojo | sort); do
             save "$f"
           done
-          save python/marrow/tests/bench_*.py
+          for f in python/marrow/tests/bench_*.py; do
+            save "$f"
+          done
 
       - name: Prepare dashboard
         if: github.ref == 'refs/heads/main'
