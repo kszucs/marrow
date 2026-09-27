@@ -16,6 +16,7 @@ in the file that performs it.
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import DynArray
+from marrow.errors import InvalidError
 from marrow.dtypes import DynType, bool_, int32
 import marrow.kernels as mk
 
@@ -194,7 +195,7 @@ def _divide(
             nonzero, IsNullKernel.dispatch(left, ctx), ctx
         )
         if not mk.AllKernel.dispatch(ok, ctx):
-            raise mk.DivKernel.error("divide by zero")
+            raise mk.DivKernel.error[InvalidError]("divide by zero")
     return out^
 
 

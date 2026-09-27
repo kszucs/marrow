@@ -43,6 +43,14 @@ from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.utils import Variant
 
+from .errors import (
+    IndexError,
+    InternalError,
+    InvalidError,
+    KeyError,
+    NotImplementedError,
+    TypeError,
+)
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from std.builtin.rebind import downcast
@@ -185,10 +193,12 @@ trait Array(
         return DynArray(self^)
 
     def to_device(self, ctx: DeviceContext) raises -> Self:
-        raise Error("to_device: not supported for this array type")
+        raise NotImplementedError(
+            "to_device: not supported for this array type"
+        )
 
     def to_cpu(self, ctx: DeviceContext) raises -> Self:
-        raise Error("to_cpu: not supported for this array type")
+        raise NotImplementedError("to_cpu: not supported for this array type")
 
     def to_data(self) raises -> ArrayData:
         ...
@@ -357,13 +367,9 @@ struct ArrayData(Copyable, Equatable, Movable):
         """
         var want = self.dtype.num_buffers()
         if len(self.buffers) != want:
-            raise Error(
-                "ArrayData: ",
-                self.dtype,
-                " owns ",
-                want,
-                " data buffer(s), got ",
-                len(self.buffers),
+            raise InvalidError(
+                t"ArrayData: {self.dtype} owns {want} data buffer(s), got "
+                t"{len(self.buffers)}"
             )
 
     # Explicit (empty) destructor so this self-referential struct
@@ -494,7 +500,7 @@ struct BoolArray(Array):
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
-            raise Error("BoolArray requires exactly one buffer")
+            raise InvalidError("BoolArray requires exactly one buffer")
         self = Self(
             length=data.length,
             nulls=data.nulls,
@@ -721,7 +727,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
-            raise Error("PrimitiveArray requires exactly one buffer")
+            raise InvalidError("PrimitiveArray requires exactly one buffer")
         self = Self(
             dtype=data.dtype.as_type[Self.T]().copy(),
             length=data.length,
@@ -834,7 +840,9 @@ struct PrimitiveArray[T: PrimitiveType](Array):
 
     def __getitem__(self, index: Int) raises -> PrimitiveScalar[Self.T]:
         if index < 0 or index >= self.length:
-            raise Error(t"index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                t"index {index} out of bounds for length {self.length}"
+            )
         if not self.is_valid(index):
             return PrimitiveScalar[Self.T](None, self.dtype)
         return PrimitiveScalar[Self.T](self.unsafe_get(index), self.dtype)
@@ -989,7 +997,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 2:
-            raise Error("BinaryArray requires exactly two buffers")
+            raise InvalidError("BinaryArray requires exactly two buffers")
         self = Self(
             length=data.length,
             nulls=data.nulls,
@@ -1094,7 +1102,9 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
             If the index is out of bounds.
         """
         if index < 0 or index >= self.length:
-            raise Error(t"index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                t"index {index} out of bounds for length {self.length}"
+            )
         if not self.is_valid(index):
             return BinaryLikeScalar[Self.T].null()
         return BinaryLikeScalar[Self.T](String(self.unsafe_get(UInt(index))))
@@ -1205,9 +1215,9 @@ struct ListLikeArray[T: ListLikeType](Array):
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
-            raise Error("ListArray requires exactly one buffer")
+            raise InvalidError("ListArray requires exactly one buffer")
         if len(data.children) != 1:
-            raise Error("ListArray requires exactly one child array")
+            raise InvalidError("ListArray requires exactly one child array")
         self = Self(
             dtype=data.dtype.copy(),
             length=data.length,
@@ -1297,7 +1307,9 @@ struct ListLikeArray[T: ListLikeType](Array):
 
     def __getitem__(self, index: Int) raises -> ListScalar:
         if index < 0 or index >= self.length:
-            raise Error(t"index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                t"index {index} out of bounds for length {self.length}"
+            )
         return ListScalar(
             dtype=self.dtype,
             value=self.unsafe_get(index),
@@ -1550,7 +1562,9 @@ struct FixedSizeListArray(Array):
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.children) != 1:
-            raise Error("FixedSizeListArray requires exactly one child array")
+            raise InvalidError(
+                "FixedSizeListArray requires exactly one child array"
+            )
         self = Self(
             dtype=data.dtype.copy(),
             length=data.length,
@@ -1609,7 +1623,9 @@ struct FixedSizeListArray(Array):
 
     def __getitem__(self, index: Int) raises -> ListScalar:
         if index < 0 or index >= self.length:
-            raise Error(t"index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                t"index {index} out of bounds for length {self.length}"
+            )
         return ListScalar(
             dtype=self.dtype,
             value=self.unsafe_get(index),
@@ -1776,9 +1792,13 @@ struct FixedSizeBinaryArray(Array):
 
     def __init__(out self, data: ArrayData) raises:
         if not data.dtype.is_fixed_size_binary():
-            raise Error("FixedSizeBinaryArray requires fixed_size_binary dtype")
+            raise TypeError(
+                "FixedSizeBinaryArray requires fixed_size_binary dtype"
+            )
         if len(data.buffers) != 1:
-            raise Error("FixedSizeBinaryArray requires exactly one buffer")
+            raise InvalidError(
+                "FixedSizeBinaryArray requires exactly one buffer"
+            )
         self = Self(
             length=data.length,
             nulls=data.nulls,
@@ -1839,7 +1859,9 @@ struct FixedSizeBinaryArray(Array):
 
     def __getitem__(self, index: Int) raises -> FixedSizeBinaryScalar:
         if index < 0 or index >= self.length:
-            raise Error(t"index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                t"index {index} out of bounds for length {self.length}"
+            )
         if not self.is_valid(index):
             return FixedSizeBinaryScalar.null(self.byte_width)
         var bytes = List[UInt8](capacity=self.byte_width)
@@ -1993,7 +2015,7 @@ struct StructArray(Array):
             if field.name == name:
                 return idx
 
-        raise Error(t"Field {name} does not exist in this StructArray.")
+        raise KeyError(t"Field {name} does not exist in this StructArray.")
 
     def unsafe_get(
         self, name: StringSlice
@@ -2028,9 +2050,9 @@ struct StructArray(Array):
         (offset 0, full length) it is a no-op, so nothing pays for the fix.
         """
         if index < 0 or index >= len(self.children):
-            raise Error(
-                t"field index {index} out of bounds for"
-                t" {len(self.children)} fields"
+            raise IndexError(
+                t"field index {index} out of bounds for {len(self.children)} "
+                t"fields"
             )
         return self.children[index].slice(self.offset, self.length)
 
@@ -2046,7 +2068,9 @@ struct StructArray(Array):
 
     def __getitem__(self, index: Int) raises -> StructScalar:
         if index < 0 or index >= self.length:
-            raise Error(t"index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                t"index {index} out of bounds for length {self.length}"
+            )
         if not self.is_valid(index):
             return StructScalar.null(self.dtype.copy())
         # Pre-allocate to avoid reallocation: when List[DynScalar] grows it
@@ -2265,9 +2289,9 @@ struct DictionaryArray(Array):
         Matches PyArrow's ``DictionaryArray.from_arrays(indices, dictionary)`` API.
         """
         if not indices.dtype().is_integer():
-            raise Error(
-                "DictionaryArray: indices must have an integer dtype, got: ",
-                indices.dtype(),
+            raise TypeError(
+                t"DictionaryArray: indices must have an integer dtype, got: "
+                t"{indices.dtype()}"
             )
         var n = indices.length()
         return Self(
@@ -2330,11 +2354,13 @@ struct DictionaryArray(Array):
         elif index_type.is_uint64():
             return Int(idx_scalar.as_uint64().value())
         else:
-            raise Error("DictionaryArray: unexpected index type: ", index_type)
+            raise TypeError(
+                t"DictionaryArray: unexpected index type: {index_type}"
+            )
 
     def __getitem__(self, index: Int) raises -> DictionaryScalar:
         if index < 0 or index >= self._length:
-            raise Error(
+            raise IndexError(
                 t"index {index} out of bounds for length {self._length}"
             )
         if not self._indices[].is_valid(self._offset + index):
@@ -2650,7 +2676,7 @@ struct DynArray(
             comptime if conforms_to(T, Array):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, Array]](self._v[T]))
-        raise Error("DynArray._dispatch: no arm matched")
+        raise InternalError("DynArray._dispatch: no arm matched")
 
     # --- construction ---
 
@@ -2683,9 +2709,9 @@ struct DynArray(
             var c_array = CArrowArray.from_pycapsule(caps[1])
             self = c_array^.to_array(c_schema.to_dtype())
         except:
-            raise Error(
-                "cannot convert Python object of type",
-                t" '{py.__class__.__name__}' to DynArray",
+            raise TypeError(
+                t"cannot convert Python object of type '"
+                t"{py.__class__.__name__}' to DynArray"
             )
 
     # --- dispatch-based methods ---
@@ -2811,7 +2837,7 @@ struct DynArray(
     def __getitem__(self, index: Int) raises -> DynScalar:
         """Return the element at index as a type-erased DynScalar."""
         if index < 0 or index >= self.length():
-            raise Error(
+            raise IndexError(
                 t"index {index} out of bounds for length {self.length()}"
             )
 
@@ -3080,7 +3106,7 @@ struct DynArray(
         elif dt.is_dictionary():
             return DictionaryArray(data)
         else:
-            raise Error("from_data: unsupported dtype")
+            raise NotImplementedError("from_data: unsupported dtype")
 
 
 def dispatch_array[
@@ -3136,4 +3162,4 @@ def dispatch_array[
 
         return in_dtype.dispatch_primitive(primitive)
     else:
-        raise Error("no array type for ", in_dtype, " columns")
+        raise TypeError(t"no array type for {in_dtype} columns")

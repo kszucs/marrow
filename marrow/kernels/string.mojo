@@ -49,6 +49,7 @@ from ..dtypes import (
 from .core import Kernel
 from ..views import apply
 from ..execution import ExecContext
+from ..errors import InternalError, TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ struct LengthKernel(Kernel):
         # `_dispatch`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
         if not dt.is_string_like():
-            raise Self.error(t"expected a string array, got {dt}")
+            raise Self.error[TypeError](t"expected a string array, got {dt}")
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
@@ -163,7 +164,7 @@ trait StringMapKernel(Kernel):
         # `_dispatch`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
         if not dt.is_string_like():
-            raise Self.error(t"expected a string array, got {dt}")
+            raise Self.error[TypeError](t"expected a string array, got {dt}")
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
@@ -271,7 +272,7 @@ struct ConcatKernel(Kernel):
         concatenation, so the choice is made on the runtime dtype."""
         var dt = left.dtype()
         if not dt.is_string_like():
-            raise Self.error(t"expected a string array, got {dt}")
+            raise Self.error[TypeError](t"expected a string array, got {dt}")
         Self.expect_same_dtype(dt, right.dtype())
         Self.expect_same_length(len(left), len(right))
 
@@ -386,7 +387,7 @@ trait StringPredicateKernel(Kernel):
         Self.expect_same_dtype(left.dtype(), right.dtype())
         var dt = left.dtype()
         if not dt.is_string_like():
-            raise Self.error(t"expected string arrays, got {dt}")
+            raise Self.error[TypeError](t"expected string arrays, got {dt}")
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(
@@ -908,7 +909,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         var compiled = Self(pattern)
         var dt = array.dtype()
         if not dt.is_string_like():
-            raise Error(t"{name}: expected a string array, got {dt}")
+            raise TypeError(t"{name}: expected a string array, got {dt}")
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return compiled.match_array(array.as_binary_like[T]()).to_dyn()
@@ -1244,7 +1245,7 @@ trait StringArgKernel(Kernel):
     ](array: DynArray, ops: StringOperands[OT, OA, OS, OC]) raises -> DynArray:
         var dt = array.dtype()
         if not dt.is_string_like():
-            raise Self.error(t"expected a string array, got {dt}")
+            raise Self.error[TypeError](t"expected a string array, got {dt}")
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T](), ops).to_dyn()
@@ -1273,7 +1274,7 @@ def _map_int[
     array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
 ) raises -> BinaryLikeArray[T]:
     if not ops.count:
-        raise Error("missing operand: count")
+        raise InternalError("missing operand: count")
     ref counts = ops.count.value()
     var n = len(array)
     var builder = BinaryLikeBuilder[T](capacity=n)
@@ -1336,9 +1337,9 @@ struct SubstrKernel(StringArgKernel):
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> BinaryLikeArray[T]:
         if not ops.start:
-            raise Error("missing operand: start")
+            raise InternalError("missing operand: start")
         if not ops.count:
-            raise Error("missing operand: count")
+            raise InternalError("missing operand: count")
         ref starts = ops.start.value()
         ref counts = ops.count.value()
         var n = len(array)
@@ -1541,9 +1542,9 @@ struct Pad[left: Bool](StringArgKernel):
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> BinaryLikeArray[T]:
         if not ops.count:
-            raise Error("missing operand: count")
+            raise InternalError("missing operand: count")
         if not ops.text:
-            raise Error("missing operand: text")
+            raise InternalError("missing operand: text")
         ref widths = ops.count.value()
         ref fills = ops.text.value()
         var n = len(array)
@@ -1612,9 +1613,9 @@ struct ReplaceKernel(StringArgKernel):
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> BinaryLikeArray[T]:
         if not ops.text:
-            raise Error("missing operand: text")
+            raise InternalError("missing operand: text")
         if not ops.alt:
-            raise Error("missing operand: alt")
+            raise InternalError("missing operand: alt")
         ref needles = ops.text.value()
         ref repls = ops.alt.value()
         var n = len(array)
@@ -1683,9 +1684,9 @@ struct SplitPartKernel(StringArgKernel):
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> BinaryLikeArray[T]:
         if not ops.text:
-            raise Error("missing operand: text")
+            raise InternalError("missing operand: text")
         if not ops.count:
-            raise Error("missing operand: count")
+            raise InternalError("missing operand: count")
         ref seps = ops.text.value()
         ref indices = ops.count.value()
         var n = len(array)
@@ -1746,7 +1747,7 @@ struct TrimCharsKernel(StringArgKernel):
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> BinaryLikeArray[T]:
         if not ops.text:
-            raise Error("missing operand: text")
+            raise InternalError("missing operand: text")
         ref text = ops.text.value()
         var n = len(array)
         var builder = BinaryLikeBuilder[T](capacity=n)
@@ -1817,7 +1818,7 @@ trait StringMeasureKernel(Kernel):
     ](array: DynArray, ops: StringOperands[OT, OA, OS, OC]) raises -> DynArray:
         var dt = array.dtype()
         if not dt.is_string_like():
-            raise Self.error(t"expected a string array, got {dt}")
+            raise Self.error[TypeError](t"expected a string array, got {dt}")
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T](), ops).to_dyn()
@@ -1993,7 +1994,7 @@ struct PositionKernel(StringMeasureKernel):
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> Int64Array:
         if not ops.text:
-            raise Error("missing operand: text")
+            raise InternalError("missing operand: text")
         ref needles = ops.text.value()
         var n = len(array)
         var out = Buffer.alloc_uninit[DType.int64](n)

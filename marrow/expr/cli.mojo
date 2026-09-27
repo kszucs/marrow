@@ -31,6 +31,7 @@ can pull in. And no optimizer runs here: a plan prunes because its author wrote
 
 from std.sys import argv, exit, stderr
 
+from ..errors import DynError, InvalidError, NotImplementedError
 from ..execution import ExecContext
 from ..ipc import RecordBatchFileWriter
 from ..parquet.writer import write_table
@@ -230,15 +231,9 @@ struct QueryCli(Movable):
         )
         for ref p in params:
             if not p.parse and not p.default:
-                raise Error(
-                    "QueryCli: parameter '",
-                    p.name,
-                    "' is ",
-                    p.dtype,
-                    (
-                        ", which cannot be read from the command line; give it"
-                        " a default"
-                    ),
+                raise InvalidError(
+                    t"QueryCli: parameter '{p.name}' is {p.dtype}, which "
+                    t"cannot be read from the command line; give it a default"
                 )
             parser.option(
                 p.name.copy(),
@@ -296,17 +291,15 @@ struct QueryCli(Movable):
         for ref p in self._params:
             if args.supplied(p.name):
                 if not p.parse:
-                    raise Error(
-                        "--",
-                        p.name,
-                        ": a ",
-                        p.dtype,
-                        " parameter cannot be set from the command line",
+                    raise InvalidError(
+                        t"--{p.name}: a {p.dtype} parameter cannot be set from "
+                        t"the command line"
                     )
                 try:
                     out[p.name.copy()] = p.parse.value()(args.get(p.name))
                 except e:
-                    raise Error("--", p.name, ": ", e)
+                    var err = DynError(e)
+                    raise DynError(err.kind, t"--{p.name}: {err.message}")
         return out^
 
     def run[
@@ -337,7 +330,7 @@ struct QueryCli(Movable):
                 + "\n"
                 + self._parser.prog
                 + ": error: "
-                + _unprefixed(String(e)),
+                + _unprefixed(e),
                 2,
             )
             return
@@ -350,9 +343,7 @@ struct QueryCli(Movable):
             try:
                 self._execute[parquet, ipc](args, values, ctx)
             except e:
-                _exit_with(
-                    self._parser.prog + ": error: " + _unprefixed(String(e)), 1
-                )
+                _exit_with(self._parser.prog + ": error: " + _unprefixed(e), 1)
 
     def _execute[
         parquet: Bool, ipc: Bool
@@ -378,18 +369,18 @@ struct QueryCli(Movable):
             comptime if parquet:
                 _write_parquet(_require_path(path, fmt), batch)
             else:
-                raise Error(
-                    "--format parquet: this binary was built without the"
-                    " Parquet writer; build it with"
-                    " `QueryCli(plan).run[parquet=True]()`"
+                raise NotImplementedError(
+                    "--format parquet: this binary was built without the "
+                    "Parquet writer; build it with "
+                    "`QueryCli(plan).run[parquet=True]()`"
                 )
         else:
             comptime if ipc:
                 _write_ipc(_require_path(path, fmt), batch)
             else:
-                raise Error(
-                    "--format ipc: this binary was built without the Arrow IPC"
-                    " writer; build it with `QueryCli(plan).run[ipc=True]()`"
+                raise NotImplementedError(
+                    "--format ipc: this binary was built without the Arrow IPC "
+                    "writer; build it with `QueryCli(plan).run[ipc=True]()`"
                 )
 
 
@@ -406,10 +397,9 @@ def _resolve_format(args: ParsedArgs, path: String) raises -> String:
         ):
             return explicit^
         else:
-            raise Error(
-                "--format: expected table, csv, parquet or ipc, got '",
-                explicit,
-                "'",
+            raise InvalidError(
+                t"--format: expected table, csv, parquet or ipc, got '"
+                t"{explicit}'"
             )
     elif not path:
         return String("table")
@@ -430,13 +420,15 @@ def _exit_with(message: String, status: Int):
     exit(status)
 
 
-def _unprefixed(var message: String) -> String:
-    """`message` without a leading `argparse: `.
+def _unprefixed(e: Error) -> String:
+    """`e`'s message without its kind tag or a leading `argparse: `.
 
     `ArgumentParser` names itself so its errors read well when a caller prints
     them raw. Here the program has already named itself — `orders: error: ...`
-    — and `orders: error: argparse: unrecognized option` names a module the
-    user has never heard of."""
+    — and `orders: error: InvalidError: argparse: unrecognized option` names a
+    taxonomy and a module the user has never heard of; the exit status already
+    says which kind of failure it was."""
+    var message = DynError(e).message
     if message.startswith("argparse: "):
         return String(message.removeprefix("argparse: "))
     else:
@@ -447,13 +439,9 @@ def _require_path(path: String, fmt: String) raises -> String:
     if path:
         return path.copy()
     else:
-        raise Error(
-            "--format ",
-            fmt,
-            (
-                " needs an output file: pass -o PATH (a binary format cannot go"
-                " to stdout)"
-            ),
+        raise InvalidError(
+            t"--format {fmt} needs an output file: pass -o PATH (a binary "
+            t"format cannot go to stdout)"
         )
 
 

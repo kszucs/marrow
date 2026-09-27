@@ -8,6 +8,7 @@
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.reflection import reflect
+from .errors import KeyError
 from .dtypes import DataType, DynType, Field
 
 
@@ -154,7 +155,7 @@ struct Schema(
         for field in self.fields:
             if field.name == name:
                 return field
-        raise Error(t"Field with name `{name}` not found.")
+        raise KeyError(t"Field with name `{name}` not found.")
 
     def get_field_index(self, name: String) -> Int:
         """Returns the index of the field with the given name, or -1 if not found.

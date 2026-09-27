@@ -16,6 +16,7 @@ from ..arrays import DynArray, PrimitiveArray
 from ..builders import DynBuilder, PrimitiveBuilder
 from ..dtypes import PrimitiveType
 from ..execution import ExecContext
+from ..errors import InvalidError
 
 
 def concat[
@@ -41,7 +42,7 @@ def concat[
         If arrays is empty.
     """
     if len(arrays) == 0:
-        raise Error("concat: cannot concatenate an empty list of arrays")
+        raise InvalidError("concat: cannot concatenate an empty list of arrays")
     var total_length = 0
     for ref arr in arrays:
         total_length += len(arr)
@@ -69,7 +70,7 @@ def concat(
         If arrays is empty or the dtype is unsupported.
     """
     if len(arrays) == 0:
-        raise Error("concat: cannot concatenate an empty list of arrays")
+        raise InvalidError("concat: cannot concatenate an empty list of arrays")
     var total_length = 0
     for arr in arrays:
         total_length += arr.length()

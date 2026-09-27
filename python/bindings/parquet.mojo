@@ -11,6 +11,7 @@ Python; these entry points stay strict.
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
+from marrow.errors import InvalidError
 from marrow.parquet import (
     read_table as _read_table,
     write_table as _write_table,
@@ -30,7 +31,7 @@ def _codec(name: String) raises -> Compression:
     elif name == "lz4":
         return Compression.LZ4_RAW
     else:
-        raise Error("parquet: unsupported compression '" + name + "'")
+        raise InvalidError(t"parquet: unsupported compression '{name}'")
 
 
 def parquet_read_table(

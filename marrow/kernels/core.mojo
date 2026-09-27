@@ -14,6 +14,7 @@ inherits it by conforming rather than by copying the message.
 """
 
 from ..dtypes import DynType
+from ..errors import ArrowError, InvalidError, TypeError
 
 
 trait Kernel:
@@ -23,15 +24,16 @@ trait Kernel:
     """This kernel's identity — for display and diagnostics, never dispatch."""
 
     @staticmethod
-    def error[M: Writable](message: M) -> Error:
-        """This kernel's failure, attributed to it: `"<name>: <message>"`."""
-        return Error(Self.name, ": ", message)
+    def error[E: ArrowError, M: Writable](message: M) -> E:
+        """This kernel's failure, attributed to it: `Self.error[TypeError](...)`
+        reads `"TypeError: <name>: <message>"`."""
+        return E(t"{Self.name}: {message}")
 
     @staticmethod
     def expect_same_length(left: Int, right: Int) raises:
         """Raise unless both operands hold the same number of elements."""
         if left != right:
-            raise Self.error(
+            raise Self.error[InvalidError](
                 t"arrays must have the same length, got {left} and {right}"
             )
 
@@ -39,7 +41,7 @@ trait Kernel:
     def expect_same_dtype(left: DynType, right: DynType) raises:
         """Raise unless both operands carry the same dtype."""
         if left != right:
-            raise Self.error(t"dtype mismatch: {left} vs {right}")
+            raise Self.error[TypeError](t"dtype mismatch: {left} vs {right}")
 
 
 # TODO: have vectorwise and elementwise kernels conform to a common trait

@@ -46,6 +46,7 @@ program built from `col("a", int64)` reaches `AggKernel` conformers
 directly and never this ladder.
 """
 
+from ...errors import KeyError, TypeError
 from ...arrays import Array, dispatch_array
 from ...dtypes import (
     DynType,
@@ -133,12 +134,9 @@ def _fold_agg[
 
     comptime if conforms_to(K, ArithmeticAgg):
         if not in_dtype.is_numeric():
-            raise Error(
-                "aggregate '",
-                K.name,
-                "' needs arithmetic, so it is not defined for ",
-                in_dtype,
-                " columns",
+            raise TypeError(
+                t"aggregate '{K.name}' needs arithmetic, so it is not defined "
+                t"for {in_dtype} columns"
             )
         return in_dtype.dispatch_numeric(numeric)
     else:
@@ -147,12 +145,8 @@ def _fold_agg[
         elif in_dtype.is_temporal():
             return in_dtype.dispatch_temporal(temporal)
         else:
-            raise Error(
-                "aggregate '",
-                K.name,
-                "' is not defined for ",
-                in_dtype,
-                " columns",
+            raise TypeError(
+                t"aggregate '{K.name}' is not defined for {in_dtype} columns"
             )
 
 
@@ -205,12 +199,9 @@ def resolve_aggregate[
                 return func[Dispersion[0, True, V]]()
 
         if not in_dtype.is_numeric():
-            raise Error(
-                "aggregate '",
-                name,
-                "' needs arithmetic, so it is not defined for ",
-                in_dtype,
-                " columns",
+            raise TypeError(
+                t"aggregate '{name}' needs arithmetic, so it is not defined "
+                t"for {in_dtype} columns"
             )
         return in_dtype.dispatch_numeric(dispersed)
     elif name == MIN or name == MAX:
@@ -237,7 +228,7 @@ def resolve_aggregate[
     elif name == MEAN:
         return _fold_agg[K=MeanFold](in_dtype, func)
     else:
-        raise Error("unknown aggregate '", name, "'")
+        raise KeyError(t"unknown aggregate '{name}'")
 
 
 @no_inline
@@ -387,7 +378,7 @@ struct RuntimeAggregate(Value):
         for ref known in materialize[Self.VOCABULARY]():
             if name == known:
                 return name^
-        raise Error("unknown aggregate '", name, "'")
+        raise KeyError(t"unknown aggregate '{name}'")
 
     def name(self) -> String:
         return self._alias.copy()

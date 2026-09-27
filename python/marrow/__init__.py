@@ -20,6 +20,19 @@ from ._dylibs import configure as _configure_dylibs
 _configure_dylibs()
 
 from . import libmarrow  # noqa: E402 - must follow _configure_dylibs()
+
+# Must precede every wrapper module: importing it wraps the bindings.
+from .errors import (  # noqa: E402
+    ArrowCorruptError,
+    ArrowException,
+    ArrowIOError,
+    ArrowIndexError,
+    ArrowInternalError,
+    ArrowInvalid,
+    ArrowKeyError,
+    ArrowNotImplementedError,
+    ArrowTypeError,
+)
 from .types import (
     DataType,
     Field,
@@ -118,6 +131,15 @@ JOIN_ALL = "all"
 __all__ = [
     "Aggregate",
     "Array",
+    "ArrowCorruptError",
+    "ArrowException",
+    "ArrowIOError",
+    "ArrowIndexError",
+    "ArrowInternalError",
+    "ArrowInvalid",
+    "ArrowKeyError",
+    "ArrowNotImplementedError",
+    "ArrowTypeError",
     "ChunkedArray",
     "Column",
     "DataType",

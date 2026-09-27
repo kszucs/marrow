@@ -200,7 +200,7 @@ def test_div_by_zero_on_integers_raises():
     an error rather than the dividend the kernel substitutes its way to."""
     a = ma.array([10, -10, 0])
     b = ma.array([0, 0, 0])
-    with pytest.raises(Exception, match="divide by zero"):
+    with pytest.raises(ma.ArrowInvalid, match="divide by zero"):
         ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
 
 

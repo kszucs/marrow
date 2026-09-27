@@ -3,10 +3,10 @@
 
 """Command-line argument parsing: `argv` in, named values out, `--help` for free.
 
-A **leaf module** — it imports nothing, from marrow or from `std` — which is
-the property every other file under `utils/` has and the reason this one is
-usable from a Parquet CLI, a benchmark driver or a compiled query program
-without any of them depending on each other.
+A **leaf module** — it imports nothing from `std`, and from marrow only
+`marrow.errors`, itself a leaf — which is why it is usable from a Parquet CLI,
+a benchmark driver or a compiled query program without any of them depending
+on each other.
 
 This was extracted from the previous expression layer's parameter module,
 where the generic half of argv handling (`parse_params`, `render_usage`,
@@ -86,13 +86,15 @@ measurable, and it keeps declaration order — which is what `usage()` and
 `help_text()` render, and what positionals are matched in.
 """
 
+from ..errors import DynError, InternalError, InvalidError
+
 
 # ---------------------------------------------------------------------------
 # Token conversions
 # ---------------------------------------------------------------------------
 
 
-def parse_bool(text: String) raises -> Bool:
+def parse_bool(text: String) raises DynError -> Bool:
     """`true`/`false`/`1`/`0`, case-insensitively.
 
     The exact spelling set the old `_parse_scalar` accepted for a `bool`
@@ -107,8 +109,8 @@ def parse_bool(text: String) raises -> Bool:
     elif lower == "false" or lower == "0":
         return False
     else:
-        raise Error(
-            "expected a bool ('true'/'false'/'1'/'0'), got '" + text + "'"
+        raise InvalidError(
+            t"expected a bool ('true'/'false'/'1'/'0'), got '{text}'"
         )
 
 
@@ -243,7 +245,7 @@ struct ParsedArgs(Copyable, Movable):
         self._trailing = trailing^
         self.help_requested = help_requested
 
-    def get(self, name: String) raises -> String:
+    def get(self, name: String) raises DynError -> String:
         """The value of an option or positional, raising if it has none.
 
         A name with no value is either undeclared, a flag, or a non-required
@@ -254,11 +256,11 @@ struct ParsedArgs(Copyable, Movable):
         if found:
             return found.value().copy()
         elif self._flags.get(name):
-            raise Error(
-                "argparse: '" + name + "' is a flag; read it with flag()"
+            raise InternalError(
+                t"argparse: '{name}' is a flag; read it with flag()"
             )
         else:
-            raise Error("argparse: no value for argument '" + name + "'")
+            raise InternalError(t"argparse: no value for argument '{name}'")
 
     def get_or(self, name: String, var fallback: String) -> String:
         """The value of an option or positional, or `fallback` if it has
@@ -278,7 +280,7 @@ struct ParsedArgs(Copyable, Movable):
         else:
             return None
 
-    def get_int(self, name: String) raises -> Int:
+    def get_int(self, name: String) raises DynError -> Int:
         """`get(name)` as an integer, naming the argument on a bad token.
 
         `atol` raises on its own, but its message names neither the argument
@@ -288,43 +290,40 @@ struct ParsedArgs(Copyable, Movable):
         try:
             return atol(raw)
         except:
-            raise Error(
-                "argparse: '" + name + "' expects an integer, got '" + raw + "'"
+            raise InvalidError(
+                t"argparse: '{name}' expects an integer, got '{raw}'"
             )
 
-    def get_float(self, name: String) raises -> Float64:
+    def get_float(self, name: String) raises DynError -> Float64:
         """`get(name)` as a float, naming the argument on a bad token."""
         var raw = self.get(name)
         try:
             return atof(raw)
         except:
-            raise Error(
-                "argparse: '" + name + "' expects a number, got '" + raw + "'"
+            raise InvalidError(
+                t"argparse: '{name}' expects a number, got '{raw}'"
             )
 
-    def get_bool(self, name: String) raises -> Bool:
+    def get_bool(self, name: String) raises DynError -> Bool:
         """`get(name)` as a bool — see `parse_bool` for the accepted
         spellings. For an argument declared with `flag()`, use `flag()`."""
         var raw = self.get(name)
         try:
             return parse_bool(raw)
         except:
-            raise Error(
-                "argparse: '"
-                + name
-                + "' expects a bool ('true'/'false'/'1'/'0'), got '"
-                + raw
-                + "'"
+            raise InvalidError(
+                t"argparse: '{name}' expects a bool ('true'/'false'/'1'/'0'), "
+                t"got '{raw}'"
             )
 
-    def flag(self, name: String) raises -> Bool:
+    def flag(self, name: String) raises DynError -> Bool:
         """Whether a declared flag appeared. Raises for a name that was not
         declared as one, so a misspelled flag cannot read as "absent"."""
         var found = self._flags.get(name)
         if found:
             return found.value()
         else:
-            raise Error("argparse: '" + name + "' is not a declared flag")
+            raise InternalError(t"argparse: '{name}' is not a declared flag")
 
     def supplied(self, name: String) -> Bool:
         """Whether argv mentioned this argument, as opposed to it taking its
@@ -388,7 +387,7 @@ struct ArgumentParser(Copyable, Movable):
 
     # -- registration -------------------------------------------------------
 
-    def _declare(mut self, var spec: ArgSpec) raises:
+    def _declare(mut self, var spec: ArgSpec) raises DynError:
         """Append `spec`, rejecting a name or short alias already taken and a
         second trailing argument.
 
@@ -398,23 +397,21 @@ struct ArgumentParser(Copyable, Movable):
         because the first one consumes everything."""
         for ref existing in self._specs:
             if existing.name == spec.name:
-                raise Error("argparse: '" + spec.name + "' is already declared")
+                raise InternalError(
+                    t"argparse: '{spec.name}' is already declared"
+                )
             if spec.short.byte_length() > 0 and existing.short == spec.short:
-                raise Error(
-                    "argparse: short option '-"
-                    + spec.short
-                    + "' is already taken by '--"
-                    + existing.name
-                    + "'"
+                raise InternalError(
+                    t"argparse: short option '-{spec.short}' is already taken "
+                    t"by '--{existing.name}'"
                 )
             if (
                 spec.kind == ArgSpec.TRAILING
                 and existing.kind == ArgSpec.TRAILING
             ):
-                raise Error(
-                    "argparse: '"
-                    + existing.name
-                    + "' already collects the trailing arguments"
+                raise InternalError(
+                    t"argparse: '{existing.name}' already collects the "
+                    t"trailing arguments"
                 )
         self._specs.append(spec^)
 
@@ -427,7 +424,7 @@ struct ArgumentParser(Copyable, Movable):
         var default: Optional[String] = None,
         var metavar: String = String(),
         required: Bool = True,
-    ) raises:
+    ) raises DynError:
         """Declare `--name VALUE`. Required unless given a `default` or
         `required=False` — see the module docstring for why that is the
         opposite of Python's `argparse`."""
@@ -450,7 +447,7 @@ struct ArgumentParser(Copyable, Movable):
         var short: String = String(),
         var help: String = String(),
         short_circuit: Bool = False,
-    ) raises:
+    ) raises DynError:
         """Declare `--name` as a valueless boolean, absent-by-default.
 
         `short_circuit=True` marks it as meaning "do not run the program"
@@ -473,7 +470,7 @@ struct ArgumentParser(Copyable, Movable):
         var help: String = String(),
         var default: Optional[String] = None,
         required: Bool = True,
-    ) raises:
+    ) raises DynError:
         """Declare an argument matched by position among the non-option
         tokens, in declaration order."""
         self._declare(
@@ -488,7 +485,7 @@ struct ArgumentParser(Copyable, Movable):
 
     def trailing(
         mut self, var name: String, *, var help: String = String()
-    ) raises:
+    ) raises DynError:
         """Declare a sink for every positional token past the last declared
         positional, read back with `ParsedArgs.trailing()`.
 
@@ -548,7 +545,7 @@ struct ArgumentParser(Copyable, Movable):
 
     # -- parsing ------------------------------------------------------------
 
-    def parse(self, args: List[String]) raises -> ParsedArgs:
+    def parse(self, args: List[String]) raises DynError -> ParsedArgs:
         """Run this grammar over `args`, which is `argv` **without** the
         program name.
 
@@ -593,17 +590,16 @@ struct ArgumentParser(Copyable, Movable):
                         short_circuited = True
                         i += 1
                     else:
-                        raise Error(
-                            "argparse: unrecognized option '" + head + "'"
+                        raise InvalidError(
+                            t"argparse: unrecognized option '{head}'"
                         )
                 else:
                     ref spec = self._specs[idx]
                     if spec.kind == ArgSpec.FLAG:
                         if inline:
-                            raise Error(
-                                "argparse: '--"
-                                + spec.name
-                                + "' is a flag and takes no value"
+                            raise InvalidError(
+                                t"argparse: '--{spec.name}' is a flag and "
+                                t"takes no value"
                             )
                         flags[spec.name.copy()] = True
                         supplied[spec.name.copy()] = True
@@ -618,10 +614,8 @@ struct ArgumentParser(Copyable, Movable):
                             values[spec.name.copy()] = args[i + 1].copy()
                             i += 2
                         else:
-                            raise Error(
-                                "argparse: '--"
-                                + spec.name
-                                + "' requires a value"
+                            raise InvalidError(
+                                t"argparse: '--{spec.name}' requires a value"
                             )
                         supplied[spec.name.copy()] = True
             else:
@@ -639,10 +633,9 @@ struct ArgumentParser(Copyable, Movable):
             elif has_trailing:
                 trailing.append(positionals[k].copy())
             else:
-                raise Error(
-                    "argparse: unexpected positional argument '"
-                    + positionals[k]
-                    + "'"
+                raise InvalidError(
+                    t"argparse: unexpected positional argument '"
+                    t"{positionals[k]}'"
                 )
 
         for ref spec in self._specs:
@@ -653,10 +646,9 @@ struct ArgumentParser(Copyable, Movable):
                 if spec.default:
                     values[spec.name.copy()] = spec.default.value().copy()
                 elif spec.is_required() and not short_circuited:
-                    raise Error(
-                        "argparse: missing required argument '"
-                        + spec.spelling()
-                        + "'"
+                    raise InvalidError(
+                        t"argparse: missing required argument '"
+                        t"{spec.spelling()}'"
                     )
 
         return ParsedArgs(values^, flags^, supplied^, trailing^, help_requested)

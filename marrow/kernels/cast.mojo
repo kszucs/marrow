@@ -69,6 +69,7 @@ from ..dtypes import (
 from .core import Kernel
 from .temporal import ticks_per_second
 from ..execution import ExecContext, GPU_ENABLED
+from ..errors import InternalError, InvalidError, NotImplementedError, TypeError
 from .filter import take
 
 
@@ -303,7 +304,9 @@ def _decimal_scale(dt: DynType) raises -> Int:
     elif dt.is_decimal256():
         return dt.as_decimal256().scale
     else:
-        raise Error("decimal_cast: no scale known for decimal type ", dt)
+        raise InternalError(
+            t"decimal_cast: no scale known for decimal type {dt}"
+        )
 
 
 def _decimal_precision(dt: DynType) raises -> Int:
@@ -408,12 +411,14 @@ def _rescale_up[
             # Checking only the second would miss a value that never fit the
             # target's backing integer in the first place.
             if v.cast[FromN]() != x:
-                raise Error("decimal_cast: value does not fit ", to)
+                raise InvalidError(t"decimal_cast: value does not fit {to}")
             if v > hi or v < lo:
-                raise Error("decimal_cast: rescaling overflows ", to)
+                raise InvalidError(t"decimal_cast: rescaling overflows {to}")
             var out = v * f
             if digits != 0 and (out >= digits or out <= -digits):
-                raise Error("decimal_cast: value needs more digits than ", to)
+                raise InvalidError(
+                    t"decimal_cast: value needs more digits than {to}"
+                )
             return out
         return v * f
 
@@ -437,16 +442,17 @@ def _rescale_down[
             q += 1
         if safe:
             if r != 0:
-                raise Error(
-                    "decimal_cast: rescaling to ",
-                    to,
-                    " would discard a nonzero remainder",
+                raise InvalidError(
+                    t"decimal_cast: rescaling to {to} would discard a nonzero "
+                    t"remainder"
                 )
             if q.cast[ToN]().cast[FromN]() != q:
-                raise Error("decimal_cast: value does not fit ", to)
+                raise InvalidError(t"decimal_cast: value does not fit {to}")
             var out = q.cast[ToN]()
             if digits != 0 and (out >= digits or out <= -digits):
-                raise Error("decimal_cast: value needs more digits than ", to)
+                raise InvalidError(
+                    t"decimal_cast: value needs more digits than {to}"
+                )
             return out
         return q.cast[ToN]()
 
@@ -569,7 +575,9 @@ struct FloatToDecimalKernel(CastKernel):
                     var scaled = round(x.cast[DType.float64]() * f)
                     # NaN fails both comparisons, which is the intent.
                     if safe and not (scaled >= lo and scaled <= hi):
-                        raise Error("decimal_cast: value out of range for ", to)
+                        raise InvalidError(
+                            t"decimal_cast: value out of range for {to}"
+                        )
                     return scaled.cast[ToN]()
 
                 return _map_decimal[FromN, ToN](data, to, to_dec)
@@ -642,7 +650,9 @@ struct DecimalCastKernel(CastKernel):
         elif src.is_integer() and to.is_decimal():
             return IntToDecimalKernel.dispatch(array, to, safe, ctx)
         else:
-            raise Self.error(t"unsupported decimal cast {src} -> {to}")
+            raise Self.error[NotImplementedError](
+                t"unsupported decimal cast {src} -> {to}",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -678,7 +688,7 @@ struct NumToBoolKernel(CastKernel):
         could verify. `safe` is inert — `x != 0` is total.
         """
         if not to.is_bool():
-            raise Self.error(t"target must be bool, got {to}")
+            raise Self.error[TypeError](t"target must be bool, got {to}")
 
         def from_num[From: NumericType](s: From) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[From](), ctx).to_dyn()
@@ -789,7 +799,7 @@ struct TemporalCastKernel(CastKernel):
         # temporal ↔ integer, or same-resolution temporal ↔ temporal: reinterpret.
         if src.is_integer() or to.is_integer():
             if not same_width:
-                raise Error(
+                raise NotImplementedError(
                     t"cast: cannot reinterpret {src} as {to} (width mismatch)"
                 )
             return Self._reinterpret(data, to)
@@ -807,9 +817,9 @@ struct TemporalCastKernel(CastKernel):
         var sw = src.byte_width()
         var tw = to.byte_width()
         if (sw != 4 and sw != 8) or (tw != 4 and tw != 8):
-            raise Error(
-                t"cast: cannot scale {src} ({sw}B) to {to} ({tw}B): ",
-                "temporal storage must be 4 or 8 bytes",
+            raise InternalError(
+                t"cast: cannot scale {src} ({sw}B) to {to} ({tw}B): temporal "
+                t"storage must be 4 or 8 bytes"
             )
         if src.byte_width() == 4:
             if to.byte_width() == 4:
@@ -849,7 +859,7 @@ struct TemporalCastKernel(CastKernel):
         if dt.is_date32():
             return 86_400_000_000_000  # days
         if not dt.is_temporal():
-            raise Error(t"cast: {dt} is not a temporal type")
+            raise TypeError(t"cast: {dt} is not a temporal type")
         return 1_000_000_000 // Int64(ticks_per_second(dt))
 
     @staticmethod
@@ -884,23 +894,30 @@ struct TemporalCastKernel(CastKernel):
             var scaled: Int64
             if up:
                 if x > Int64.MAX // factor or x < Int64.MIN // factor:
-                    raise Self.error(
-                        t"scaling {data.dtype} would overflow: tick {x} times"
-                        t" {factor} is out of range for the target unit"
+                    raise Self.error[InvalidError](
+                        (
+                            t"scaling {data.dtype} would overflow: tick"
+                            t" {x} times {factor} is out of range for the"
+                            t" target unit"
+                        ),
                     )
                 scaled = x * factor
             else:
                 if x % factor != 0:
-                    raise Self.error(
-                        t"scaling {data.dtype} would lose data: tick {x} is"
-                        t" not a whole multiple of {factor}"
+                    raise Self.error[InvalidError](
+                        (
+                            t"scaling {data.dtype} would lose data: tick {x} is"
+                            t" not a whole multiple of {factor}"
+                        ),
                     )
                 scaled = x // factor
             var out = scaled.cast[DstN]()
             if out.cast[DType.int64]() != scaled:
-                raise Self.error(
-                    t"scaling {data.dtype} would overflow: {scaled} does not"
-                    t" fit the target's storage width"
+                raise Self.error[InvalidError](
+                    (
+                        t"scaling {data.dtype} would overflow: {scaled} does"
+                        t" not fit the target's storage width"
+                    ),
                 )
             dst.store[1](i, out)
 
@@ -1023,7 +1040,9 @@ struct StringToNumKernel(CastKernel):
                 b.append(Self._parse[To.native](s))
             except:
                 comptime if safe:
-                    raise Error(t"cast: cannot parse '{s}' as {DynType(To())}")
+                    raise InvalidError(
+                        t"cast: cannot parse '{s}' as {DynType(To())}"
+                    )
                 else:
                     b.append_null()
         return b.finish()
@@ -1047,7 +1066,7 @@ struct StringToBoolKernel(CastKernel):
         `to` is checked rather than assumed — see `NumToBoolKernel.dispatch`.
         """
         if not to.is_bool():
-            raise Self.error(t"target must be bool, got {to}")
+            raise Self.error[TypeError](t"target must be bool, got {to}")
 
         def on_str[From: StringLikeType](s: From) raises {imm} -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
@@ -1073,7 +1092,7 @@ struct StringToBoolKernel(CastKernel):
                 b.append(False)
             else:
                 comptime if safe:
-                    raise Error(t"cast: cannot parse '{s}' as bool")
+                    raise InvalidError(t"cast: cannot parse '{s}' as bool")
                 else:
                     b.append_null()
         return b.finish()
@@ -1364,7 +1383,9 @@ struct BinaryLikeCastKernel(CastKernel):
             if array.is_valid(i) and not _is_valid_utf8(
                 array.unsafe_get(UInt(i)).as_bytes()
             ):
-                raise Error("cast: invalid UTF-8 in binary → string cast")
+                raise InvalidError(
+                    "cast: invalid UTF-8 in binary → string cast"
+                )
 
     @staticmethod
     def _starts_on_boundaries[
@@ -1438,7 +1459,9 @@ struct FixedSizeBinaryCastKernel(CastKernel):
         var total = array.offset + n  # offsets cover the whole physical prefix
         comptime if To.offset == DType.int32:
             if total * w > Int(Int32.MAX):
-                raise Error("cast: byte span too large for 32-bit offsets")
+                raise InvalidError(
+                    "cast: byte span too large for 32-bit offsets"
+                )
         var out = Buffer.alloc_uninit[To.offset](total + 1)
         var dst = out.view[To.offset]()
         for j in range(total + 1):
@@ -1562,7 +1585,7 @@ struct StructCastKernel(CastKernel):
         var data = array.to_data()
         ref fields = to.as_struct().fields
         if len(fields) != len(data.children):
-            raise Error(
+            raise TypeError(
                 t"cast: struct field count mismatch {array.dtype()} -> {to}"
             )
         var children = List[ArrayData]()
@@ -1640,13 +1663,13 @@ def cast(
             return StringToBoolKernel.dispatch(array, to, safe, ctx)
         elif to.is_numeric():
             return StringToNumKernel.dispatch(array, to, safe, ctx)
-        raise Error(t"cast: unsupported cast {src} -> {to}")
+        raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")
     elif to.is_string() or to.is_large_string():  # numeric/bool → string-like
         if src.is_bool():
             return BoolToStringKernel.dispatch(array, to, safe, ctx)
         elif src.is_numeric():
             return NumToStringKernel.dispatch(array, to, safe, ctx)
-        raise Error(t"cast: unsupported cast {src} -> {to}")
+        raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")
     elif src.is_decimal() or to.is_decimal():
         return DecimalCastKernel.dispatch(array, to, safe, ctx)
     elif src.is_numeric() and to.is_numeric():
@@ -1665,4 +1688,4 @@ def cast(
         return ListCastKernel.dispatch(array, to, safe, ctx)
     elif src.is_struct() and to.is_struct():
         return StructCastKernel.dispatch(array, to, safe, ctx)
-    raise Error(t"cast: unsupported cast {src} -> {to}")
+    raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")

@@ -23,6 +23,7 @@ from std.os import getenv
 from std.os.path import dirname
 from std.pathlib import Path
 from std.sys import argv
+from ..errors import IOError, InvalidError
 
 
 def _exe_dir() -> String:
@@ -165,7 +166,7 @@ struct Dylib(Movable):
         dangle.
         """
         if not self._handle:
-            raise Error(self._error)
+            raise IOError(self._error)
         return self._handle.value().borrow()
 
 
@@ -313,13 +314,9 @@ struct CString(Movable):
         var b = s.as_bytes()
         for i in range(len(b)):
             if b[i] == 0:
-                raise Error(
-                    (
-                        "ffi: string contains a NUL byte, which C would treat"
-                        " as its end: '"
-                    ),
-                    s,
-                    "'",
+                raise InvalidError(
+                    t"ffi: string contains a NUL byte, which C would treat as "
+                    t"its end: '{s}'"
                 )
         self._buf = List[UInt8](b)
         self._buf.append(0)

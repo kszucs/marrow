@@ -30,6 +30,7 @@ Example
 from std.memory import ArcPointer
 from std.utils import Variant
 
+from .errors import InternalError, InvalidError, NotImplementedError, TypeError
 from .buffers import Buffer, Bitmap
 
 from std.builtin.rebind import downcast
@@ -313,7 +314,7 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
                 idx_builder^, array(dt.value_type()), dt.ordered
             )
         else:
-            raise Error("unsupported type: ", dtype)
+            raise NotImplementedError(t"unsupported type: {dtype}")
 
     def _dispatch[
         R: Movable, //, Func: def[T: Builder](T) -> R
@@ -347,7 +348,7 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
             comptime if conforms_to(T, Builder):
                 if self._ptr[].isa[T]():
                     return func(rebind[downcast[T, Builder]](self._ptr[][T]))
-        raise Error("DynBuilder._dispatch: no arm matched")
+        raise InternalError("DynBuilder._dispatch: no arm matched")
 
     def length(self) -> Int:
         def f[T: Builder](b: T) {imm} -> Int:
@@ -837,8 +838,8 @@ struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
         elif dt.is_large_binary():
             self.extend(arr.as_large_binary())
         else:
-            raise Error(
-                "BinaryLikeBuilder.extend: expected a binary-like, got ", dt
+            raise TypeError(
+                t"BinaryLikeBuilder.extend: expected a binary-like, got {dt}"
             )
 
     def extend[U: BinaryLikeType](mut self, arr: BinaryLikeArray[U]) raises:
@@ -1064,8 +1065,8 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
         elif dt.is_map():
             self.extend(arr.as_map())
         else:
-            raise Error(
-                "ListLikeBuilder.extend: expected a list-like, got ", dt
+            raise TypeError(
+                t"ListLikeBuilder.extend: expected a list-like, got {dt}"
             )
 
     def extend[U: ListLikeType](mut self, arr: ListLikeArray[U]) raises:
@@ -1542,16 +1543,15 @@ struct DictionaryBuilder(Builder):
         elif index_type.is_uint64():
             self._indices.as_uint64().append(UInt64(index))
         else:
-            raise Error(
-                "DictionaryBuilder.append: unexpected index type: ",
-                index_type,
+            raise TypeError(
+                t"DictionaryBuilder.append: unexpected index type: {index_type}"
             )
 
     def extend(mut self, arr: DynArray) raises:
         if not arr.dtype().is_dictionary():
-            raise Error(
-                "DictionaryBuilder.extend: expected DictionaryArray, got: ",
-                arr.dtype(),
+            raise TypeError(
+                t"DictionaryBuilder.extend: expected DictionaryArray, got: "
+                t"{arr.dtype()}"
             )
         self._indices.extend(arr.as_dictionary().indices())
 
@@ -1607,7 +1607,7 @@ struct NullBuilder(Builder):
 
     def extend(mut self, arr: DynArray) raises:
         if not arr.dtype().is_null():
-            raise Error("NullBuilder.extend: expected a null array")
+            raise TypeError("NullBuilder.extend: expected a null array")
         self._length += len(arr)
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> NullArray:
@@ -1658,11 +1658,9 @@ struct FixedSizeBinaryBuilder(Builder):
 
     def append(mut self, bytes: Span[UInt8, _]) raises:
         if len(bytes) != self._byte_width:
-            raise Error(
-                "FixedSizeBinaryBuilder.append: expected ",
-                self._byte_width,
-                " bytes, got ",
-                len(bytes),
+            raise InvalidError(
+                t"FixedSizeBinaryBuilder.append: expected {self._byte_width} "
+                t"bytes, got {len(bytes)}"
             )
         self.reserve(1)
         var index = self._length
@@ -1685,19 +1683,17 @@ struct FixedSizeBinaryBuilder(Builder):
 
     def extend(mut self, arr: DynArray) raises:
         if not arr.dtype().is_fixed_size_binary():
-            raise Error(
-                "FixedSizeBinaryBuilder.extend: expected fixed_size_binary"
-                " array"
+            raise TypeError(
+                "FixedSizeBinaryBuilder.extend: expected fixed_size_binary "
+                "array"
             )
         self.extend(arr.as_fixed_size_binary())
 
     def extend(mut self, b: FixedSizeBinaryArray) raises:
         if b.byte_width != self._byte_width:
-            raise Error(
-                "FixedSizeBinaryBuilder.extend: byte_width mismatch ",
-                b.byte_width,
-                " vs ",
-                self._byte_width,
+            raise TypeError(
+                t"FixedSizeBinaryBuilder.extend: byte_width mismatch "
+                t"{b.byte_width} vs {self._byte_width}"
             )
         self.reserve(b.length)
         var dst_start = self._length * self._byte_width

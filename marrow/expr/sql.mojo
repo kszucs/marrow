@@ -51,6 +51,7 @@ the sugar has exactly SQL\'s semantics and the node would not:
   column.
 """
 
+from ..errors import IndexError, InvalidError, KeyError, NotImplementedError
 from ..dtypes import (
     DynType,
     bool_,
@@ -431,7 +432,7 @@ struct Join(Copyable, Movable):
             return JOIN_RIGHT
         if self.kind == "full":
             return JOIN_FULL
-        raise Error("sql: unsupported join kind")
+        raise NotImplementedError("sql: unsupported join kind")
 
 
 @fieldwise_init
@@ -1413,7 +1414,7 @@ struct Catalog(Copyable, Movable):
         for ref source in self.sources:
             if Ascii.upper(source.name) == wanted:
                 return source.batch.copy()
-        raise Error("sql: unknown table '", name, "'")
+        raise KeyError(t"sql: unknown table '{name}'")
 
 
 @fieldwise_init
@@ -1486,17 +1487,14 @@ struct Scope(Copyable, Movable):
         var fold = self.count_matching(qualifier, name, fold=False) == 0
         var matches = self.count_matching(qualifier, name, fold)
         if matches == 0:
-            raise Error(
-                "sql: unknown column '",
-                name if qualifier == "" else qualifier + "." + name,
-                "'",
-            )
+            var column = name if not qualifier else String(qualifier, ".", name)
+            raise KeyError(t"sql: unknown column '{column}'")
         if matches > 1:
-            raise Error("sql: ambiguous column '", name, "'")
+            raise InvalidError(t"sql: ambiguous column '{name}'")
         for ref binding in self.bindings:
             if binding.matches(qualifier, name, fold):
                 return binding.output.copy()
-        raise Error("sql: unknown column '", name, "'")
+        raise KeyError(t"sql: unknown column '{name}'")
 
     def duplicated(self, i: Int) -> Bool:
         """Whether another binding carries the same column name — the test
@@ -1601,7 +1599,7 @@ struct Planner(Copyable, Movable):
         vtable — the naming is what keeps it readable.
         """
         if index == NONE:
-            raise Error("sql: missing expression")
+            raise InvalidError("sql: missing expression")
         if self.grouped:
             if self.is_aggregate_call(index):
                 return column(self.collect_aggregate(index))
@@ -1641,7 +1639,7 @@ struct Planner(Copyable, Movable):
         if node.kind == "cast":
             return cast(self.translate(node.a), Planner.dtype_for(node.text))
         if node.kind == "star":
-            raise Error("sql: '*' is only allowed in the SELECT list")
+            raise InvalidError("sql: '*' is only allowed in the SELECT list")
         if node.kind == "case":
             return self.visit_case(node)
         if node.kind == "func":
@@ -1717,7 +1715,7 @@ struct Planner(Copyable, Movable):
             return DynType(date32())
         if name == "TIMESTAMP":
             return DynType(timestamp(microsecond))
-        raise Error("sql: unsupported type '", name, "'")
+        raise NotImplementedError(t"sql: unsupported type '{name}'")
 
     def integer_literal(self, value: Int) raises -> DynScalar:
         """An integer constant, typed by magnitude the way DuckDB types one.
@@ -1756,7 +1754,7 @@ struct Planner(Copyable, Movable):
     def visit_like(mut self, node: Node) raises -> RuntimeValue:
         var pattern = self.ast.nodes[node.b].copy()
         if pattern.kind != "string":
-            raise Error("sql: LIKE needs a literal pattern")
+            raise NotImplementedError("sql: LIKE needs a literal pattern")
         var value = self.translate(node.a)
         var matched = ilike(value^, pattern.text.copy()) if node.kind.endswith(
             "ilike"
@@ -1774,7 +1772,7 @@ struct Planner(Copyable, Movable):
             NOT IN                  -> FALSE where it matches, else NULL
         """
         if node.kids_len == 0:
-            raise Error("sql: IN needs at least one value")
+            raise InvalidError("sql: IN needs at least one value")
         var any_match = Optional[RuntimeValue](None)
         var has_null = False
         for i in range(node.kids_len):
@@ -1825,7 +1823,9 @@ struct Planner(Copyable, Movable):
             # column, so it never becomes a child.
             var unit = self.ast.nodes[self.ast.kid(node, 0)].copy()
             if unit.kind != "string":
-                raise Error("sql: DATE_TRUNC needs a literal unit")
+                raise NotImplementedError(
+                    "sql: DATE_TRUNC needs a literal unit"
+                )
             return date_trunc(
                 self.translate(self.ast.kid(node, 1)), unit.text.copy()
             )
@@ -1848,7 +1848,7 @@ struct Planner(Copyable, Movable):
             return coalesce(args^)
         if name == "GREATEST" or name == "LEAST":
             if len(args) != 2:
-                raise Error("sql: ", name, " takes two arguments")
+                raise InvalidError(t"sql: {name} takes two arguments")
             # SQL's extrema **skip** nulls — a row with one null operand
             # answers with the other — while `maximum`/`minimum` propagate
             # them. `coalesce` over the pair recovers exactly SQL's rule.
@@ -1862,7 +1862,7 @@ struct Planner(Copyable, Movable):
             return coalesce(fallbacks^)
         if name == "ISODOW":
             if len(args) != 1:
-                raise Error("sql: ISODOW takes one argument")
+                raise InvalidError("sql: ISODOW takes one argument")
             # marrow counts from Monday=0, ISO 8601 from Monday=1. DuckDB's
             # `dayofweek` is a third convention (Sunday=0) and stays unmapped
             # rather than guessed at.
@@ -1872,12 +1872,8 @@ struct Planner(Copyable, Movable):
             )
         var tag = Planner.tag_for(name, len(args))
         if tag == "":
-            raise Error(
-                "sql: unsupported function '",
-                name,
-                "' of ",
-                String(len(args)),
-                " argument(s)",
+            raise NotImplementedError(
+                t"sql: unsupported function '{name}' of {len(args)} argument(s)"
             )
         return RuntimeValue(tag^, args^)
 
@@ -1976,7 +1972,7 @@ struct Planner(Copyable, Movable):
         mut self, node: Node, var output: String
     ) raises -> RuntimeAggregate:
         if node.kids_len != 1:
-            raise Error("sql: ", node.text, " takes exactly one argument")
+            raise InvalidError(t"sql: {node.text} takes exactly one argument")
         var name = node.text
         var arg_kind = self.ast.nodes[self.ast.kid(node, 0)].kind.copy()
         var input: RuntimeValue
@@ -1984,7 +1980,7 @@ struct Planner(Copyable, Movable):
             # `COUNT(*)` counts rows; `count` counts non-null values, so the
             # input is a constant that is never null.
             if name != "COUNT":
-                raise Error("sql: '*' is only an argument to COUNT")
+                raise InvalidError("sql: '*' is only an argument to COUNT")
             input = literal(Int64Scalar(Int64(1)).to_dyn())
         else:
             input = self.translate(self.ast.kid(node, 0))
@@ -2012,7 +2008,7 @@ struct Planner(Copyable, Movable):
             return input^.variance().alias(output^)
         if name == "VAR_SAMP":
             return input^.var_samp().alias(output^)
-        raise Error("sql: unsupported aggregate '", name, "'")
+        raise NotImplementedError(t"sql: unsupported aggregate '{name}'")
 
     def same_expr(self, a: Int, b: Int) -> Bool:
         """Whether two AST nodes spell the same expression.
@@ -2080,14 +2076,14 @@ struct Planner(Copyable, Movable):
             "+:add -:sub *:mul /:truediv %:mod <:lt <=:le >:gt >=:ge", op
         )
         if tag == "":
-            raise Error("sql: unsupported operator '", op, "'")
+            raise NotImplementedError(t"sql: unsupported operator '{op}'")
         return RuntimeValue(tag^, lhs, rhs)
 
     def source(mut self) raises -> DynRelation:
         """`FROM` and its joins, with the scope they establish."""
         ref select = self.ast.select
         if select.table == "":
-            raise Error("sql: FROM is required")
+            raise NotImplementedError("sql: FROM is required")
         var batch = self.catalog.get(select.table)
         var relation = table(batch^)
         var qualifier = (
@@ -2155,7 +2151,7 @@ struct Planner(Copyable, Movable):
                 )
             for i in range(len(left_keys)):
                 if left_keys[i] < 0 or right_keys[i] < 0:
-                    raise Error("sql: join key not found in either table")
+                    raise KeyError("sql: join key not found in either table")
             relation = relation.join(
                 right^, left_keys^, right_keys^, join.to_kind()
             )
@@ -2276,7 +2272,7 @@ struct Planner(Copyable, Movable):
             if node.kind == "int":
                 var position = node.value - 1
                 if position < 0 or position >= len(select.items):
-                    raise Error("sql: GROUP BY ordinal out of range")
+                    raise IndexError("sql: GROUP BY ordinal out of range")
                 index = select.items[position].node
             var key = self.translate(index)
             var name = key.name()
@@ -2299,7 +2295,7 @@ struct Planner(Copyable, Movable):
 
         if select.predicate != NONE:
             if self.contains_aggregate(select.predicate):
-                raise Error("sql: WHERE cannot contain an aggregate")
+                raise InvalidError("sql: WHERE cannot contain an aggregate")
             relation = relation.filter(self.translate(select.predicate))
 
         var projected: Tuple[List[String], List[DynValue]]
@@ -2323,7 +2319,7 @@ struct Planner(Copyable, Movable):
                 relation = relation.filter(having.value().copy())
         else:
             if select.having != NONE:
-                raise Error("sql: HAVING needs GROUP BY or an aggregate")
+                raise InvalidError("sql: HAVING needs GROUP BY or an aggregate")
             projected = self.collect_projection()
             self.collect_order_keys(projected[0])
 
@@ -2336,9 +2332,9 @@ struct Planner(Copyable, Movable):
 
         if select.distinct:
             if len(self.order_extras) > 0:
-                raise Error(
-                    "sql: SELECT DISTINCT with an ORDER BY key that is not a"
-                    " selected column is not supported"
+                raise NotImplementedError(
+                    "sql: SELECT DISTINCT with an ORDER BY key that is not a "
+                    "selected column is not supported"
                 )
             relation = relation.distinct()
 
@@ -2433,7 +2429,7 @@ struct Planner(Copyable, Movable):
             if node.kind == "int":
                 var position = node.value - 1
                 if position < 0 or position >= len(output_names):
-                    raise Error("sql: ORDER BY ordinal out of range")
+                    raise IndexError("sql: ORDER BY ordinal out of range")
                 self.order_keys.append(output_names[position].copy())
                 continue
             if (
@@ -2443,7 +2439,7 @@ struct Planner(Copyable, Movable):
                 self.order_keys.append(node.text.copy())
                 continue
             if refuse_hidden != "":
-                raise Error(refuse_hidden)
+                raise InvalidError(refuse_hidden)
             var extra = "__ord" + String(len(self.order_extras))
             var value = self.translate(index)
             self.order_extras.append(extra.copy())
@@ -2467,9 +2463,9 @@ struct Planner(Copyable, Movable):
         for ref key in select.order:
             var conflicting = key.nulls_first != nulls_first
             if conflicting and key.nulls_explicit:
-                raise Error(
-                    "sql: per-key NULLS FIRST/LAST is not supported; Sort"
-                    " carries one flag for all keys"
+                raise NotImplementedError(
+                    "sql: per-key NULLS FIRST/LAST is not supported; Sort "
+                    "carries one flag for all keys"
                 )
         return relation.sort_by(keys^, ascending^, nulls_first)
 
@@ -2491,8 +2487,6 @@ def sql(var query: String, var catalog: Catalog) raises -> DynRelation:
     """
     var ast = Parser.parse(query^)
     if not ast.ok():
-        raise Error(
-            "sql: ", ast.error, " (at offset ", String(ast.error_pos), ")"
-        )
+        raise InvalidError(t"sql: {ast.error} (at offset {ast.error_pos})")
     var planner = Planner(ast^, catalog^)
     return planner.build()

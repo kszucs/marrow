@@ -13,6 +13,7 @@ References:
 
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
+from .errors import InvalidError, KeyError, TypeError
 from .arrays import DynArray, ChunkedArray, StructArray
 from .builders import array
 from .schema import Schema
@@ -65,7 +66,7 @@ struct RecordBatch(
             try:
                 caps = py.__arrow_c_array__(Python.none())
             except:
-                raise Error("cannot convert Python object to RecordBatch")
+                raise TypeError("cannot convert Python object to RecordBatch")
         var schema = CArrowSchema.from_pycapsule(caps[0]).to_schema()
         var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(
             struct_(schema.fields.copy())
@@ -104,7 +105,7 @@ struct RecordBatch(
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:
-            raise Error("Column '{}' not found.".format(name))
+            raise KeyError(t"Column '{name}' not found.")
         return self.columns[idx]
 
     def column_names(self) -> List[String]:
@@ -155,7 +156,7 @@ struct RecordBatch(
         for name in names:
             var idx = self.schema.get_field_index(name)
             if idx == -1:
-                raise Error("Column '{}' not found.".format(name))
+                raise KeyError(t"Column '{name}' not found.")
             new_cols.append(self.columns[idx].copy())
             new_fields.append(self.schema.fields[idx].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
@@ -163,10 +164,9 @@ struct RecordBatch(
     def rename_columns(self, names: List[String]) raises -> RecordBatch:
         """Returns a new RecordBatch with columns renamed to `names`."""
         if len(names) != len(self.columns):
-            raise Error(
-                "rename_columns: expected {} names, got {}.".format(
-                    len(self.columns), len(names)
-                )
+            raise InvalidError(
+                t"rename_columns: expected {len(self.columns)} names, got"
+                t" {len(names)}."
             )
         var new_fields = List[Field]()
         for i in range(len(names)):
@@ -228,7 +228,7 @@ struct RecordBatch(
         for ref n in names:
             var i = self.schema.get_field_index(n)
             if i == -1:
-                raise Error(side, " key column '", n, "' not found")
+                raise KeyError(t"{side} key column '{n}' not found")
             out.append(i)
         return out^
 
@@ -311,18 +311,15 @@ struct RecordBatch(
         # raises rather than dropping it. `Filter`'s struct arm does compute
         # such a bitmap, so this is reachable rather than theoretical.
         if array.nulls != 0 or array.bitmap:
-            raise Error(
-                "from_struct_array: a struct array with struct-level validity"
-                " has no RecordBatch representation"
+            raise InvalidError(
+                "from_struct_array: a struct array with struct-level validity "
+                "has no RecordBatch representation"
             )
         var nfields = len(array.dtype.as_struct().fields)
         if nfields != len(array.children):
-            raise Error(
-                "from_struct_array: dtype names ",
-                nfields,
-                " fields but the array has ",
-                len(array.children),
-                " children",
+            raise InvalidError(
+                t"from_struct_array: dtype names {nfields} fields but the "
+                t"array has {len(array.children)} children"
             )
         # The children carry the *parent's* offset/length: a struct array is
         # sliced by moving its own window, not by rewriting its children, so
@@ -373,12 +370,9 @@ def record_batch(
     Raises if len(columns) != len(names).
     """
     if len(columns) != len(names):
-        raise Error(
-            "record_batch: len(columns) ("
-            + String(len(columns))
-            + ") != len(names) ("
-            + String(len(names))
-            + ")"
+        raise InvalidError(
+            t"record_batch: len(columns) ({len(columns)}) != "
+            t"len(names) ({len(names)})"
         )
     var fields = List[Field]()
     for i in range(len(columns)):
@@ -422,7 +416,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         try:
             capsule = py.__arrow_c_stream__(Python.none())
         except:
-            raise Error("cannot convert Python object to Table")
+            raise TypeError("cannot convert Python object to Table")
         self = CArrowArrayStream.from_pycapsule(capsule).to_table()
 
     def to_python_object(var self) raises -> PythonObject:
@@ -450,7 +444,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:
-            raise Error("Column '{}' not found.".format(name))
+            raise KeyError(t"Column '{name}' not found.")
         return self.columns[idx]
 
     def combine_chunks(self) raises -> RecordBatch:

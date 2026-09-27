@@ -20,6 +20,7 @@ the boundaries against Arrow C++'s own, through pyarrow.
 from std.bit import bit_width
 from std.sys import size_of
 
+from ..errors import InvalidError
 from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
 from .. import dtypes as dt
 from .gearhash import gearhash_table, NUM_GEARHASH_TABLES
@@ -64,11 +65,13 @@ struct ContentDefinedChunking(Copyable, Movable):
         consecutive matches, so the per-match target is divided by that too.
         """
         if min_chunk_size < 0:
-            raise Error("parquet: cdc min_chunk_size must be non-negative")
+            raise InvalidError(
+                "parquet: cdc min_chunk_size must be non-negative"
+            )
         if max_chunk_size <= min_chunk_size:
-            raise Error(
-                "parquet: cdc max_chunk_size must be greater than"
-                " min_chunk_size"
+            raise InvalidError(
+                "parquet: cdc max_chunk_size must be greater than "
+                "min_chunk_size"
             )
         self.min_chunk_size = min_chunk_size
         self.max_chunk_size = max_chunk_size
@@ -79,9 +82,8 @@ struct ContentDefinedChunking(Copyable, Movable):
         var mask_bits = 0 if tb == 0 else Int(tb) - 1
         var eff = mask_bits - norm_level
         if eff < 1 or eff > 63:
-            raise Error(
-                "parquet: cdc mask must be between 1 and 63 bits, got "
-                + String(eff)
+            raise InvalidError(
+                t"parquet: cdc mask must be between 1 and 63 bits, got {eff}"
             )
         self.mask = UInt64.MAX << UInt64(64 - eff)
 

@@ -5,6 +5,7 @@
 
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
+from marrow.errors import InvalidError
 from marrow.ipc import (
     read_ipc_file as _ipc_read_file,
     read_ipc_stream as _ipc_read_stream,
@@ -42,7 +43,7 @@ def write_ipc_file(
     elif len(rb_list) > 0:
         _ipc_write_file(path_str, rb_list)
     else:
-        raise Error(
+        raise InvalidError(
             "write_ipc_file requires 'batches' or 'schema' keyword argument"
         )
     return Python.evaluate("None")
@@ -74,7 +75,7 @@ def write_ipc_stream(
     elif len(rb_list) > 0:
         _ipc_write_stream(path_str, rb_list)
     else:
-        raise Error(
+        raise InvalidError(
             "write_ipc_stream requires 'batches' or 'schema' keyword argument"
         )
     return Python.evaluate("None")

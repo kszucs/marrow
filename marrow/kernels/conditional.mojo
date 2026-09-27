@@ -34,6 +34,7 @@ from ..builders import Int32Builder
 from ..dtypes import PrimitiveType
 from .core import Kernel
 from ..execution import ExecContext
+from ..errors import InvalidError, TypeError
 from .concat import concat
 from .filter import take
 from .numeric import equal
@@ -74,25 +75,21 @@ struct Selection:
     ) raises:
         """Validate that every candidate shares one length and one dtype."""
         if len(candidates) == 0:
-            raise Error(name, ": at least one candidate array is required")
+            raise InvalidError(
+                t"{name}: at least one candidate array is required"
+            )
         var length = candidates[0].length()
         var dtype = candidates[0].dtype()
         for k in range(1, len(candidates)):
             if candidates[k].length() != length:
-                raise Error(
-                    name,
-                    (
-                        t": candidate length mismatch:"
-                        t" {candidates[k].length()} != {length}"
-                    ),
+                raise InvalidError(
+                    t"{name}: candidate length mismatch: "
+                    t"{candidates[k].length()} != {length}"
                 )
             if candidates[k].dtype() != dtype:
-                raise Error(
-                    name,
-                    (
-                        t": candidate dtype mismatch:"
-                        t" {candidates[k].dtype()} != {dtype}"
-                    ),
+                raise TypeError(
+                    t"{name}: candidate dtype mismatch: "
+                    t"{candidates[k].dtype()} != {dtype}"
                 )
         self._name = name
         self._candidates = candidates^
@@ -160,10 +157,10 @@ struct CaseWhenKernel(Kernel):
     ) raises -> DynArray:
         var m = len(conditions)
         if m == 0:
-            raise Self.error("at least one condition is required")
+            raise Self.error[InvalidError]("at least one condition is required")
         if len(values) != m:
-            raise Self.error(
-                t"got {m} conditions but {len(values)} value arrays"
+            raise Self.error[InvalidError](
+                t"got {m} conditions but {len(values)} value arrays",
             )
 
         var candidates = List[DynArray](capacity=m + 1)

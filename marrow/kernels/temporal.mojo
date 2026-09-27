@@ -58,6 +58,7 @@ from ..arrays import (
 from ..buffers import Buffer, Bitmap
 from ..builders import StringBuilder
 from ..dtypes import Date32Type, DynType, DType, TemporalType, TimeUnit
+from ..errors import InternalError, InvalidError, TypeError
 from .core import Kernel
 from ..utils import CivilDate, floor_div
 
@@ -97,7 +98,7 @@ def ticks_per_second(dt: DynType) raises -> Int:
         return _unit_tps(dt.as_time64().unit)
     elif dt.is_duration():
         return _unit_tps(dt.as_duration().unit)
-    raise Error(t"temporal: {dt} has no sub-second tick resolution")
+    raise TypeError(t"temporal: {dt} has no sub-second tick resolution")
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +117,9 @@ def _extract[
     var is_ts = dt.is_timestamp()
     var is_time = dt.is_time32() or dt.is_time64()
     if calendar and not (is_date or is_ts):
-        raise Error(t"{name}: requires a date or timestamp array, got {dt}")
+        raise TypeError(t"{name}: requires a date or timestamp array, got {dt}")
     if not calendar and not (is_ts or is_time):
-        raise Error(t"{name}: requires a timestamp or time array, got {dt}")
+        raise TypeError(t"{name}: requires a timestamp or time array, got {dt}")
 
     # Normalisation: total seconds = raw * mul / div.
     var mul = 86400 if dt.is_date32() else 1
@@ -186,7 +187,7 @@ trait TemporalExtractKernel(Kernel):
         """
         var dt = array.dtype()
         if not dt.is_temporal():
-            raise Self.error(t"expected a temporal array, got {dt}")
+            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T]()).to_dyn()
@@ -327,9 +328,9 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
             return Self(5)
         elif unit == "year":
             return Self(6)
-        raise Error(
-            t"date_trunc: unsupported unit '{unit}' (expected"
-            t" second/minute/hour/day/month/quarter/year)"
+        raise InvalidError(
+            t"date_trunc: unsupported unit '{unit}' (expected "
+            t"second/minute/hour/day/month/quarter/year)"
         )
 
     def is_calendar(self) -> Bool:
@@ -490,7 +491,7 @@ struct DateTruncKernel(Kernel):
             # guard used to do for every unit.
             return array.copy()
         if not dt.is_temporal():
-            raise Self.error(t"unsupported type {dt}")
+            raise Self.error[TypeError](t"unsupported type {dt}")
 
         var data = array.to_data()
         var n = data.length
@@ -510,7 +511,9 @@ struct DateTruncKernel(Kernel):
                     data, dt, ticks_per_day, unit, n
                 )
             else:
-                raise Self.error(t"{dt} is {width} bytes wide; expected 4 or 8")
+                raise Self.error[InternalError](
+                    t"{dt} is {width} bytes wide; expected 4 or 8",
+                )
 
         var ticks_per_unit = ticks_per_second(dt) * unit.seconds()
         if width == 4:  # time32
@@ -522,7 +525,9 @@ struct DateTruncKernel(Kernel):
             # this is unreachable today. It is spelled out rather than folded
             # into the int64 branch because a wider temporal type would
             # otherwise be read through the wrong lane width, silently.
-            raise Self.error(t"{dt} is {width} bytes wide; expected 4 or 8")
+            raise Self.error[InternalError](
+                t"{dt} is {width} bytes wide; expected 4 or 8",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -552,9 +557,9 @@ def _extract64[
     var is_ts = dt.is_timestamp()
     var is_time = dt.is_time32() or dt.is_time64()
     if calendar and not (is_date or is_ts):
-        raise Error(t"{name}: requires a date or timestamp array, got {dt}")
+        raise TypeError(t"{name}: requires a date or timestamp array, got {dt}")
     if not calendar and not (is_ts or is_time):
-        raise Error(t"{name}: requires a timestamp or time array, got {dt}")
+        raise TypeError(t"{name}: requires a timestamp or time array, got {dt}")
 
     var mul = 86400 if dt.is_date32() else 1
     var div = 1 if dt.is_date32() else ticks_per_second(dt)
@@ -602,7 +607,7 @@ trait TemporalExtract64Kernel(Kernel):
     def dispatch(array: DynArray) raises -> DynArray:
         var dt = array.dtype()
         if not dt.is_temporal():
-            raise Self.error(t"expected a temporal array, got {dt}")
+            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T]()).to_dyn()
@@ -734,7 +739,7 @@ struct LastDayKernel(Kernel):
     def dispatch(array: DynArray) raises -> DynArray:
         var dt = array.dtype()
         if not dt.is_temporal():
-            raise Self.error(t"expected a temporal array, got {dt}")
+            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T]()).to_dyn()
@@ -813,7 +818,7 @@ def _extract_name[
     null rather than writing a placeholder."""
     var dt = array.type()
     if not (dt.is_date32() or dt.is_date64() or dt.is_timestamp()):
-        raise Error(t"{name}: requires a date or timestamp array, got {dt}")
+        raise TypeError(t"{name}: requires a date or timestamp array, got {dt}")
 
     var mul = 86400 if dt.is_date32() else 1
     var div = 1 if dt.is_date32() else ticks_per_second(dt)
@@ -845,7 +850,7 @@ trait TemporalNameKernel(Kernel):
     def dispatch(array: DynArray) raises -> DynArray:
         var dt = array.dtype()
         if not dt.is_temporal():
-            raise Self.error(t"expected a temporal array, got {dt}")
+            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T]()).to_dyn()

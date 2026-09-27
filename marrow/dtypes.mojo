@@ -50,6 +50,7 @@ from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 
 from std.builtin.rebind import downcast
 from std.os import abort
+from .errors import InternalError, TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -733,9 +734,9 @@ struct DictionaryType(DataType):
         ordered: Bool = False,
     ) raises:
         if not index_type.is_integer():
-            raise Error(
-                "DictionaryType: index_type must be an integer type, got: ",
-                index_type,
+            raise TypeError(
+                t"DictionaryType: index_type must be an integer type, got: "
+                t"{index_type}"
             )
         self._index_type = OwnedPointer(index_type^)
         self._value_type = OwnedPointer(value_type^)
@@ -882,7 +883,7 @@ struct DynType(
             comptime if conforms_to(T, DataType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, DataType]](self._v[T]))
-        raise Error("DynType._dispatch: no arm matched")
+        raise InternalError("DynType._dispatch: no arm matched")
 
     # --- per-dtype-family dispatch adapters ---
     #
@@ -910,7 +911,7 @@ struct DynType(
             comptime if conforms_to(T, PrimitiveType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, PrimitiveType]](self._v[T]))
-        raise Error("dispatch_primitive: dtype is not primitive")
+        raise TypeError("dispatch_primitive: dtype is not primitive")
 
     def dispatch_numeric[
         R: Movable, //, Func: def[T: NumericType](T) raises -> R
@@ -922,7 +923,7 @@ struct DynType(
             comptime if conforms_to(T, NumericType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, NumericType]](self._v[T]))
-        raise Error("dispatch_numeric: dtype is not numeric")
+        raise TypeError("dispatch_numeric: dtype is not numeric")
 
     def dispatch_integer[
         R: Movable, //, Func: def[T: IntegerType](T) raises -> R
@@ -934,7 +935,7 @@ struct DynType(
             comptime if conforms_to(T, IntegerType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, IntegerType]](self._v[T]))
-        raise Error("dispatch_integer: dtype is not integer")
+        raise TypeError("dispatch_integer: dtype is not integer")
 
     def dispatch_floating[
         R: Movable, //, Func: def[T: FloatingType](T) raises -> R
@@ -946,7 +947,7 @@ struct DynType(
             comptime if conforms_to(T, FloatingType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, FloatingType]](self._v[T]))
-        raise Error("dispatch_floating: dtype is not floating")
+        raise TypeError("dispatch_floating: dtype is not floating")
 
     def dispatch_temporal[
         R: Movable, //, Func: def[T: TemporalType](T) raises -> R
@@ -958,7 +959,7 @@ struct DynType(
             comptime if conforms_to(T, TemporalType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, TemporalType]](self._v[T]))
-        raise Error("dispatch_temporal: dtype is not temporal")
+        raise TypeError("dispatch_temporal: dtype is not temporal")
 
     def dispatch_decimal[
         R: Movable, //, Func: def[T: DecimalType](T) raises -> R
@@ -970,7 +971,7 @@ struct DynType(
             comptime if conforms_to(T, DecimalType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, DecimalType]](self._v[T]))
-        raise Error("dispatch_decimal: dtype is not decimal")
+        raise TypeError("dispatch_decimal: dtype is not decimal")
 
     def dispatch_stringlike[
         R: Movable, //, Func: def[T: StringLikeType](T) raises -> R
@@ -982,7 +983,7 @@ struct DynType(
             comptime if conforms_to(T, StringLikeType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, StringLikeType]](self._v[T]))
-        raise Error("dispatch_stringlike: dtype is not stringlike")
+        raise TypeError("dispatch_stringlike: dtype is not stringlike")
 
     def dispatch_binarylike[
         R: Movable, //, Func: def[T: BinaryLikeType](T) raises -> R
@@ -994,7 +995,7 @@ struct DynType(
             comptime if conforms_to(T, BinaryLikeType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, BinaryLikeType]](self._v[T]))
-        raise Error("dispatch_binarylike: dtype is not binarylike")
+        raise TypeError("dispatch_binarylike: dtype is not binarylike")
 
     def dispatch_listlike[
         R: Movable, //, Func: def[T: ListLikeType](T) raises -> R
@@ -1006,7 +1007,7 @@ struct DynType(
             comptime if conforms_to(T, ListLikeType):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, ListLikeType]](self._v[T]))
-        raise Error("dispatch_listlike: dtype is not listlike")
+        raise TypeError("dispatch_listlike: dtype is not listlike")
 
     def __init__(out self):
         """An erased dtype that has not been told what it holds: Arrow `null`.
@@ -1034,7 +1035,7 @@ struct DynType(
         try:
             capsule = py.__arrow_c_schema__()
         except:
-            raise Error("cannot convert Python object to DynType")
+            raise TypeError("cannot convert Python object to DynType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
 
     def to_python_object(var self) raises -> PythonObject:

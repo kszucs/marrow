@@ -20,6 +20,7 @@ from std.ffi import c_int, external_call, get_errno
 from std.io.file import FileHandle
 from std.os import remove
 
+from ..errors import IOError, InvalidError
 from ..buffers import Buffer
 from ..execution import ExecContext
 from .core import ByteSink, ByteSource, Fetched, require_range
@@ -40,7 +41,7 @@ def _rename(var src: String, var dst: String) raises:
         src.as_c_string_span(), dst.as_c_string_span()
     )
     if err != 0:
-        raise Error("rename '", src, "' -> '", dst, "': ", String(get_errno()))
+        raise IOError(t"rename '{src}' -> '{dst}': {get_errno()}")
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +157,10 @@ struct FileSink(ByteSink):
         # A sibling of the destination, so the rename stays within one
         # filesystem — across devices it is not atomic and not even a rename.
         self._tmp = String(path, ".marrow-tmp-", _getpid())
-        self._file = open(self._tmp, "w")
+        try:
+            self._file = open(self._tmp, "w")
+        except e:
+            raise IOError(e)
 
     def __deinit__(deinit self):
         # An abandoned sink leaves no output, but it must not leave litter
@@ -172,7 +176,7 @@ struct FileSink(ByteSink):
 
     def write[o: Origin[mut=False]](mut self, data: Span[UInt8, o]) raises:
         if not self._file:
-            raise Error("FileSink.write: '", self._path, "' is closed")
+            raise InvalidError(t"FileSink.write: '{self._path}' is closed")
         if len(data) > 0:
             self._file.value().write_bytes(data)
 
@@ -207,7 +211,7 @@ struct MemorySink(ByteSink):
 
     def write[o: Origin[mut=False]](mut self, data: Span[UInt8, o]) raises:
         if self._closed:
-            raise Error("MemorySink.write: closed")
+            raise InvalidError("MemorySink.write: closed")
         self._out.extend(data)
 
     def close(mut self) raises:

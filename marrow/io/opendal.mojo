@@ -60,6 +60,7 @@ from std.ffi import _DLHandle
 from std.memory import ArcPointer, unsafe_memcpy
 from std.sys import size_of
 
+from ..errors import IOError, InvalidError
 from ..buffers import Buffer
 from ..execution import ExecContext, fan_out
 from ..utils.dylib import (
@@ -132,7 +133,7 @@ struct CError(RegisterPassable):
 
     @staticmethod
     def raise_if(lib: _DLHandle, err: ErrorPtr) raises:
-        """Raise a C error as a Mojo `Error`, freeing it first.
+        """Raise a C error as an `IO` `ArrowError`, freeing it first.
 
         The message is a non-NUL-terminated `opendal_bytes` living inside the error
         struct, so it is copied *by length* before `opendal_error_free` reclaims
@@ -148,7 +149,7 @@ struct CError(RegisterPassable):
             msg = c_string(data.value(), Int(e[].message.len))
         var name = Self._name(e[].code)
         lib.call["opendal_error_free"](e)
-        raise Error("opendal: ", name, ": ", msg)
+        raise IOError(t"opendal: {name}: {msg}")
 
 
 @fieldwise_init
@@ -448,14 +449,9 @@ struct OpenDalStore(Movable):
             # Truncating would hand back the object's *first* `len(dst)` bytes
             # under the name of some interior range, which decodes to
             # plausible nonsense. Only a short read is legitimate.
-            raise Error(
-                "opendal: reading '",
-                path,
-                "' at ",
-                offset,
-                " returned more than the ",
-                len(dst),
-                " bytes requested; the service ignored the range",
+            raise IOError(
+                t"opendal: reading '{path}' at {offset} returned more than the "
+                t"{len(dst)} bytes requested; the service ignored the range"
             )
         return n
 
@@ -546,7 +542,7 @@ struct OpenDalWriter(ByteSink):
 
     def write[o: Origin[mut=False]](mut self, data: Span[UInt8, o]) raises:
         if self._closed:
-            raise Error("opendal: writer is closed")
+            raise InvalidError("opendal: writer is closed")
         if len(data) == 0:
             return
         var lib = OpenDal.handle()
@@ -647,15 +643,9 @@ struct OpenDalSource(ByteSource):
                 buf.view[DType.uint8](0, length).as_span(),
             )
             if got != length:
-                raise Error(
-                    "OpenDalSource.read: asked '",
-                    self._path,
-                    "' for ",
-                    length,
-                    " bytes at ",
-                    offset,
-                    ", got ",
-                    got,
+                raise IOError(
+                    t"OpenDalSource.read: asked '{self._path}' for {length} "
+                    t"bytes at {offset}, got {got}"
                 )
         return buf^.to_immutable()
 

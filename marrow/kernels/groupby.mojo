@@ -70,6 +70,7 @@ from ..buffers import Buffer
 from ..builders import DynBuilder, Int32Builder, UInt64Builder
 from ..dtypes import DynType, Field, int32
 from ..execution import ExecContext
+from ..errors import InternalError, InvalidError
 from .hashtable import SwissHashTable
 from .hashing import RapidHashKernel
 from .filter import TakeKernel
@@ -554,7 +555,7 @@ struct HashGrouping(Movable):
             # value, so every id already handed out would be re-issued to a
             # different key — and `_table` is empty by then, so there would be
             # nothing to migrate and no failure either.
-            raise Error("_migrate_to_radix: already on the radix path")
+            raise InternalError("_migrate_to_radix: already on the radix path")
 
         var p = 1 << _GROUPBY_RADIX_BITS
         var parts = List[SwissHashTable[RapidHash64]](capacity=p)
@@ -638,17 +639,11 @@ struct HashGrouping(Movable):
         for i in range(p):
             var keys_here = self._parts[i].num_keys()
             if len(self._local_to_global[i]) != keys_here:
-                raise Error(
-                    "group-by placement is inconsistent: partition ",
-                    i,
-                    " holds ",
-                    keys_here,
-                    " keys against ",
-                    len(self._local_to_global[i]),
-                    (
-                        " ids. A previous batch failed partway through and this"
-                        " grouper cannot be reused."
-                    ),
+                raise InternalError(
+                    t"group-by placement is inconsistent: partition {i} holds "
+                    t"{keys_here} keys against {len(self._local_to_global[i])} "
+                    t"ids. A previous batch failed partway through and this "
+                    t"grouper cannot be reused."
                 )
             prev_key_counts.append(keys_here)
 
@@ -726,10 +721,8 @@ struct HashGrouping(Movable):
         # correctly, so the slots would be sized right and indexed wrong: a
         # negative write, not a detectable mismatch.
         if running > Int(Int32.MAX):
-            raise Error(
-                "group-by: ",
-                running,
-                " groups exceeds the Int32 id space",
+            raise InvalidError(
+                t"group-by: {running} groups exceeds the Int32 id space"
             )
         self._num_groups = running
 

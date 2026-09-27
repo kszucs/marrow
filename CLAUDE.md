@@ -762,6 +762,7 @@ marrow/
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── execution.mojo        # ExecContext — threads, device, `stripe`, GPU_ENABLED
+├── errors.mojo           # ArrowError + ErrorKind — the error taxonomy
 ├── io/                   # core (ByteSource/ByteSink), local, opendal, dispatch
 ├── utils/                # byteorder, checksum, hashing, compression, datetime,
 │                         #   dylib, uri
@@ -962,6 +963,26 @@ vectors at dim >= 384.
   allocations (`.to_dyn()`, `.to_python_object()`, `.to_device()`, `.to_cpu()`).
 - Avoid `ImplicitlyCopyable` on array and scalar types: copies stay explicit
   (`.copy()`) so ownership is visible at the call site.
+
+### Errors
+
+- **Every library failure is an `ArrowError`**: raise one of the kinds in
+  `marrow/errors.mojo` with a t-string —
+  `raise KeyError(t"drop: column '{name}' not found")`. Never a plain `Error`;
+  `devkit/tests/test_errors.py` refuses one. Tests, `utils/testing.mojo` and
+  `benchmarks/` are exempt. A kernel writes `Self.error[TypeError](t"...")`,
+  which attributes the failure to the kernel.
+- **Declare what a function raises.** One failure mode: that type
+  (`raises CorruptError`). Several: `raises DynError`, the erased box — every
+  kind converts into it, and `e.isa[KeyError]()` tells them apart. Generic
+  over a callee's error: `raises E` with `E: ArrowError`. A plain `Error` from
+  the stdlib or Python is wrapped where it enters: `raise CorruptError(e)`.
+- **Bare `raises` keeps only text**, and most of the tree still declares it.
+  Each kind writes its name first (`"KeyError: ..."`), so `DynError(e)`
+  recovers it and `python/marrow/errors.py` maps it to the PyArrow-named class.
+  Never match on message text to learn a kind.
+- **Re-raising with context keeps the kind**: `var err = DynError(e)`, then
+  `raise DynError(err.kind, t"context: {err.message}")`.
 
 ### Python API
 

@@ -13,6 +13,7 @@ Paths are relative to the repository root, the working directory the generated
 driver runs from.
 """
 
+from marrow.errors import InvalidError
 from marrow.arrays import DynArray
 from marrow.expr.builders import table as _in_memory_table
 from marrow.expr.logical import DynRelation
@@ -26,7 +27,9 @@ def read_one(var path: String) raises -> RecordBatch:
     """The single batch in an IPC file, moved out rather than copied."""
     var batches = read_ipc_file(path)
     if len(batches) != 1:
-        raise Error(String(path, ": expected 1 batch, got ", len(batches)))
+        raise InvalidError(
+            String(path, ": expected 1 batch, got ", len(batches))
+        )
     return batches.pop()
 
 
@@ -82,7 +85,7 @@ def check(var name: String, plan: DynRelation) raises:
     var actual = plan.execute()
 
     if actual.schema != expected.schema:
-        raise Error(
+        raise InvalidError(
             String(
                 name,
                 ": schema mismatch\n  expected ",
@@ -92,7 +95,7 @@ def check(var name: String, plan: DynRelation) raises:
             )
         )
     if actual.num_rows() != expected.num_rows():
-        raise Error(
+        raise InvalidError(
             String(
                 name,
                 ": row count ",
@@ -111,7 +114,7 @@ def check(var name: String, plan: DynRelation) raises:
         # other case in the unit. marrow currently returns an empty result as
         # a batch whose schema names its fields but whose column list is
         # empty, which is exactly that shape.
-        raise Error(
+        raise InvalidError(
             String(
                 name,
                 ": column count ",
@@ -125,7 +128,7 @@ def check(var name: String, plan: DynRelation) raises:
         )
     for i in range(len(expected.columns)):
         if not values_equal(actual.columns[i], expected.columns[i]):
-            raise Error(
+            raise InvalidError(
                 String(
                     name,
                     ": column '",

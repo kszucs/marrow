@@ -46,6 +46,7 @@ is still supplied as the comptime `S` -- which is how
 from std.os import abort
 from std.utils import Variant
 
+from ..errors import InternalError
 from .opendal import OpenDalStore, OpenDalWriter, OpenDalSource
 from .core import ByteSink, ByteSource, Fetched
 from .local import BufferSource, FileSink, MemorySink
@@ -90,7 +91,7 @@ struct DynSource(ByteSource):
                     return rebind[Span[UInt8, origin_of(self)]](
                         self._v[T].read_at(offset, length)
                     )
-        raise Error("DynSource.read_at: no arm matched")
+        raise InternalError("DynSource.read_at: no arm matched")
 
     def read_ranges(
         ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
@@ -100,7 +101,7 @@ struct DynSource(ByteSource):
             comptime if conforms_to(T, ByteSource):
                 if self._v.isa[T]():
                     return self._v[T].read_ranges(ranges, ctx)
-        raise Error("DynSource.read_ranges: no arm matched")
+        raise InternalError("DynSource.read_ranges: no arm matched")
 
     @staticmethod
     def open(
@@ -145,7 +146,7 @@ struct DynSink(ByteSink):
                 if self._v.isa[T]():
                     self._v[T].write(data)
                     return
-        raise Error("DynSink.write: no arm matched")
+        raise InternalError("DynSink.write: no arm matched")
 
     def close(mut self) raises:
         comptime for i in range(len(Self.VariantType.Ts)):
@@ -154,7 +155,7 @@ struct DynSink(ByteSink):
                 if self._v.isa[T]():
                     self._v[T].close()
                     return
-        raise Error("DynSink.close: no arm matched")
+        raise InternalError("DynSink.close: no arm matched")
 
     @staticmethod
     def open(

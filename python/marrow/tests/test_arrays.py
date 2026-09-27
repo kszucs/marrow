@@ -88,7 +88,7 @@ def test_infer_struct_nested():
 
 
 def test_infer_mixed_types_error():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowTypeError):
         ma.infer_type([1, "foo"])
 
 
@@ -169,17 +169,17 @@ def test_array_bool_int_coercion():
 
 
 def test_array_empty_raises():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([])
 
 
 def test_array_all_none_raises():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([None, None])
 
 
 def test_array_mixed_types_error():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowTypeError):
         ma.array([1, "foo"])
 
 
@@ -288,7 +288,7 @@ def test_index_list():
 
 def test_array_int_overflow():
     # int8 can only hold -128..127; 200 overflows
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([200], type=ma.int8())
 
 
@@ -382,52 +382,52 @@ def test_array_uint64_valid():
 
 
 def test_array_int8_high_overflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([128], type=ma.int8())
 
 
 def test_array_int8_low_overflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([-129], type=ma.int8())
 
 
 def test_array_int16_overflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([32768], type=ma.int16())
 
 
 def test_array_int32_overflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([2147483648], type=ma.int32())
 
 
 def test_array_uint8_overflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([256], type=ma.uint8())
 
 
 def test_array_uint8_underflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([-1], type=ma.uint8())
 
 
 def test_array_uint16_overflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([65536], type=ma.uint16())
 
 
 def test_array_uint16_underflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([-1], type=ma.uint16())
 
 
 def test_array_uint32_underflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([-1], type=ma.uint32())
 
 
 def test_array_uint64_underflow():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         ma.array([-1], type=ma.uint64())
 
 

@@ -69,6 +69,7 @@ from ..views import reduce
 from .core import Kernel
 from .groupby import Groups
 from ..execution import ExecContext
+from ..errors import TypeError
 from .distinct import (
     HLL_P_GROUPED,
     hll_estimate,
@@ -1104,8 +1105,8 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
         which under `ASSERT=all` fails every case in the file.
         """
         if not in_dtype.holds[Self.V]():
-            raise Self.error(
-                t"was resolved for a different column type than {in_dtype}"
+            raise Self.error[TypeError](
+                t"was resolved for a different column type than {in_dtype}",
             )
         return in_dtype.copy()
 

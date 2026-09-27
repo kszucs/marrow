@@ -7,6 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import marrow as ma
 import marrow.parquet as mpq
 
 
@@ -78,7 +79,7 @@ def test_unsupported_compression(tmp_path):
     src = tmp_path / "src.parquet"
     pq.write_table(_sample(), src)
     mt = mpq.read_table(src)
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         mpq.write_table(mt, tmp_path / "o.parquet", compression="brotli")
 
 
@@ -136,7 +137,7 @@ def test_content_defined_chunking_rejects_bad_sizes(tmp_path):
     src = tmp_path / "src.parquet"
     pq.write_table(_sample(), src)
     mt = mpq.read_table(src)
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         mpq.write_table(
             mt,
             tmp_path / "bad.parquet",

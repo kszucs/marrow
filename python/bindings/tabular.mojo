@@ -13,6 +13,7 @@ References:
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
+from marrow.errors import InvalidError, KeyError, NotImplementedError, TypeError
 from marrow.tabular import RecordBatch, Table
 from marrow.execution import ExecContext
 from marrow.schema import Schema
@@ -126,7 +127,7 @@ def _record_batch_column(
         var name = String(py=key)
         var idx = ptr[].schema.get_field_index(name)
         if idx == -1:
-            raise Error("Column '{}' not found.".format(name))
+            raise KeyError(t"Column '{name}' not found.")
         return ptr[].columns[idx].copy().to_python_object()
 
 
@@ -210,9 +211,9 @@ def record_batch(
     if not names.__is__(builtins.None):
         return _build_from_arrays(data, names).to_python_object()
 
-    raise Error(
-        "record_batch: expected a dict, or a list of arrays with names= or"
-        " schema= kwarg, or an object with __arrow_c_record_batch__"
+    raise TypeError(
+        "record_batch: expected a dict, or a list of arrays with names= or "
+        "schema= kwarg, or an object with __arrow_c_record_batch__"
     )
 
 
@@ -265,7 +266,7 @@ def _table_column(
     var name = String(py=key)
     var idx = ptr[].schema.get_field_index(name)
     if idx == -1:
-        raise Error("Column '", name, "' not found.")
+        raise KeyError(t"Column '{name}' not found.")
     return PythonObject(alloc=ptr[].column(idx).copy())
 
 
@@ -319,9 +320,9 @@ def table(data: PythonObject, names: PythonObject) raises -> PythonObject:
     elif not names.__is__(builtins.None):
         rb = _build_from_arrays(data, names)
     else:
-        raise Error(
-            "table: expected a dict, or a list of arrays with names= kwarg,"
-            " or an object with __arrow_c_stream__"
+        raise TypeError(
+            "table: expected a dict, or a list of arrays with names= kwarg, or "
+            "an object with __arrow_c_stream__"
         )
     var schema = rb.schema
     var batch_list = List[RecordBatch]()
@@ -338,7 +339,7 @@ def table_from_batches(batches: PythonObject) raises -> PythonObject:
     `RecordBatch`."""
     var n = Int(py=batches.__len__())
     if n == 0:
-        raise Error("from_batches: needs at least one batch")
+        raise InvalidError("from_batches: needs at least one batch")
     var out = List[RecordBatch](capacity=n)
     for i in range(n):
         out.append(RecordBatch(py=batches[i]))

@@ -36,6 +36,7 @@ from std.utils.index import IndexList
 from std.utils.coord import Coord
 from max.gpu.host import get_gpu_target
 
+from .errors import InvalidError, NotImplementedError
 from .buffers import Buffer, Bitmap
 from .execution import ExecContext
 
@@ -1641,7 +1642,7 @@ def _apply_dispatch[
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             _gpu_launch[gpu_width=gpu_width](length, lane, ctx)
         else:
-            raise Error("apply: no GPU accelerator available")
+            raise NotImplementedError("apply: no GPU accelerator available")
         return
 
     _cpu_striped[Out](length, lane, ctx)
@@ -1677,7 +1678,7 @@ def _apply_packed_dispatch[
                 ctx,
             )
         else:
-            raise Error("apply: no GPU accelerator available")
+            raise NotImplementedError("apply: no GPU accelerator available")
         return
 
     _cpu_serial[In](length, lane)
@@ -1704,7 +1705,9 @@ def apply[
         dst.store[W](i, op[W](i))
 
     if ctx.is_gpu():
-        raise Error("apply: a producer lane closes over host state")
+        raise NotImplementedError(
+            "apply: a producer lane closes over host state"
+        )
     _cpu_striped[Out](length, lane, ctx)
 
 
@@ -1730,7 +1733,9 @@ def apply[
         dst.store[W](i, op[W](i))
 
     if ctx.is_gpu():
-        raise Error("apply: a producer lane closes over host state")
+        raise NotImplementedError(
+            "apply: a producer lane closes over host state"
+        )
     _cpu_serial[In](length, lane)
 
 
@@ -2009,7 +2014,7 @@ def apply[
     GPU support is not yet implemented; ctx is reserved for future use.
     """
     if len(lhs) != len(rhs):
-        raise Error("BitmapView lengths must match")
+        raise InvalidError("BitmapView lengths must match")
 
     # TODO: GPU bitmap op
     var byte_start_a = lhs.offset() >> 3
@@ -2200,7 +2205,7 @@ def _reduce_dispatch[
                 .load[1](0)
             )
         else:
-            raise Error("reduce: no GPU accelerator available")
+            raise NotImplementedError("reduce: no GPU accelerator available")
 
     comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
 
@@ -2407,7 +2412,7 @@ def _checked_block[
     if bad.reduce_or():
         comptime for k in range(W):
             if bad[k]:
-                raise Error(
-                    t"value {SIMD[In, 1](v[k])} is not representable in the"
-                    t" target type"
+                raise InvalidError(
+                    t"value {SIMD[In, 1](v[k])} is not representable in the "
+                    t"target type"
                 )

@@ -14,6 +14,7 @@ touches OpenDAL, which is what lets marrow work with no `libopendal_c` present.
 
 from std.collections.string import Codepoint
 from std.os import getenv
+from ..errors import DynError, InvalidError, NotImplementedError
 
 
 struct Uri(Copyable, Movable, Writable):
@@ -54,7 +55,7 @@ struct Uri(Copyable, Movable, Writable):
         self.query = copy.query.copy()
 
     @staticmethod
-    def parse(uri: String) raises -> Self:
+    def parse(uri: String) raises DynError -> Self:
         """Split `uri` into its parts.
 
         A scheme is recognised only before `://`, never a bare `:`. That is
@@ -63,7 +64,7 @@ struct Uri(Copyable, Movable, Writable):
         opaque URIs -- no storage backend uses one.
         """
         if uri == "":
-            raise Error("uri: empty location")
+            raise InvalidError("uri: empty location")
 
         var rest = uri
         var scheme = String()
@@ -123,7 +124,7 @@ struct Uri(Copyable, Movable, Writable):
             return self.path
         return String("/", self.path)
 
-    def object_key(self) raises -> String:
+    def object_key(self) raises DynError -> String:
         """The path to hand the storage service, which is not always `path`.
 
         For most schemes the two are the same: `s3://bucket/a/b.parquet` has
@@ -135,7 +136,7 @@ struct Uri(Copyable, Movable, Writable):
             return _hf_split(self).path
         return self.path
 
-    def service(self) raises -> String:
+    def service(self) raises DynError -> String:
         """The OpenDAL service name for this scheme.
 
         Aliases collapse here -- `gs` and `gcs` are one service, `az`/`abfs`/
@@ -163,18 +164,13 @@ struct Uri(Copyable, Movable, Writable):
         elif self.is_local():
             # Reachable only by asking a local URI for a remote service, which
             # is a caller bug rather than an unknown scheme -- say which.
-            raise Error(
-                "uri: '",
-                self,
-                (
-                    "' is local; it is read through a memory map, not a storage"
-                    " service"
-                ),
+            raise InvalidError(
+                t"uri: '{self}' is local; it is read through a memory map, not "
+                t"a storage service"
             )
-        raise Error(
-            "uri: no storage backend for scheme '",
-            s,
-            "://' (known: file, fs, s3, gs, gcs, az, abfs, azblob, hf, https)",
+        raise NotImplementedError(
+            t"uri: no storage backend for scheme '{s}://' (known: file, fs, "
+            t"s3, gs, gcs, az, abfs, azblob, hf, https)"
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -183,7 +179,7 @@ struct Uri(Copyable, Movable, Writable):
         writer.write(self.path)
 
 
-def _percent_decode(s: StringSlice) raises -> String:
+def _percent_decode(s: StringSlice) raises DynError -> String:
     """Undo the percent-encoding of a URI path component.
 
     **OpenDAL percent-encodes the path itself**, so what it takes is the
@@ -240,7 +236,7 @@ struct _HfParts(Movable):
     var path: String
 
 
-def _hf_split(uri: Uri) raises -> _HfParts:
+def _hf_split(uri: Uri) raises DynError -> _HfParts:
     """Split a Hugging Face URI into repo type, repo id, revision and key.
 
     The spelling is `huggingface_hub`'s `HfFileSystem`, which is what users
@@ -269,21 +265,17 @@ def _hf_split(uri: Uri) raises -> _HfParts:
     var rest = uri.path
     var owner = uri.authority
     if owner == "":
-        raise Error(
-            (
-                "uri: hf:// needs a repo, as hf://datasets/owner/name/path or"
-                " hf://owner/name/path, got '"
-            ),
-            uri,
-            "'",
+        raise InvalidError(
+            t"uri: hf:// needs a repo, as hf://datasets/owner/name/path or "
+            t"hf://owner/name/path, got '{uri}'"
         )
     var repo_type = String("model")
     if owner == "datasets" or owner == "spaces":
         repo_type = "dataset" if owner == "datasets" else "space"
         var cut = rest.find("/")
         if cut < 0:
-            raise Error(
-                "uri: hf://", owner, "/ needs owner/name, got '", uri, "'"
+            raise InvalidError(
+                t"uri: hf://{owner}/ needs owner/name, got '{uri}'"
             )
         owner = String(rest[byte=:cut])
         var after_owner = String(rest[byte = cut + 1 :])
@@ -291,8 +283,8 @@ def _hf_split(uri: Uri) raises -> _HfParts:
 
     var cut = rest.find("/")
     if cut < 0:
-        raise Error(
-            "uri: hf:// needs owner/name and a file path, got '", uri, "'"
+        raise InvalidError(
+            t"uri: hf:// needs owner/name and a file path, got '{uri}'"
         )
     var name = String(rest[byte=:cut])
     var after_name = String(rest[byte = cut + 1 :])
@@ -313,8 +305,8 @@ def _hf_split(uri: Uri) raises -> _HfParts:
         name = bare^
 
     if rest == "":
-        raise Error(
-            "uri: hf:// needs a file path after the repo, got '", uri, "'"
+        raise InvalidError(
+            t"uri: hf:// needs a file path after the repo, got '{uri}'"
         )
 
     return _HfParts(repo_type, String(owner, "/", name), revision^, rest^)
@@ -405,7 +397,7 @@ struct StorageOptions(Copyable, Movable):
     def __init__(out self, *, copy: Self):
         self._kv = copy._kv.copy()
 
-    def resolve(self, uri: Uri) raises -> Dict[String, String]:
+    def resolve(self, uri: Uri) raises DynError -> Dict[String, String]:
         """The full option map for `uri`: the caller's keys, then the query
         string, then the environment, then whatever the scheme itself implies.
 
@@ -430,13 +422,10 @@ struct StorageOptions(Copyable, Movable):
                 # ignoring it would silently read `/x`, a different file.
                 # The spelling that means what it looks like is the
                 # three-slash one.
-                raise Error(
-                    "fs:// takes no host, and '",
-                    uri.authority,
-                    "' would be dropped rather than treated as a directory;",
-                    " write fs:///",
-                    uri.authority,
-                    "/... instead",
+                raise InvalidError(
+                    t"fs:// takes no host, and '{uri.authority}' would be "
+                    t"dropped rather than treated as a directory; write fs:///"
+                    t"{uri.authority}/... instead"
                 )
             _default(out, "root", "/")
         elif service == "s3" or service == "gcs":

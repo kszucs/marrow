@@ -12,6 +12,7 @@ and the CSV/JSON readers that come later address bytes through these and
 nothing else, which is what makes a backend written once work for every format.
 """
 
+from ..errors import CorruptError, IndexError
 from ..buffers import Buffer
 from ..execution import ExecContext
 
@@ -35,15 +36,9 @@ def require_range(offset: Int, length: Int, size: Int, what: String) raises:
     so it is asked in one place. `what` names the caller for the message.
     """
     if offset < 0 or length < 0 or offset + length > size:
-        raise Error(
-            what,
-            ": [",
-            offset,
-            ", ",
-            offset + length,
-            ") outside an object of ",
-            size,
-            " bytes",
+        raise CorruptError(
+            t"{what}: [{offset}, {offset + length}) outside an object of "
+            t"{size} bytes"
         )
 
 
@@ -87,7 +82,7 @@ struct Fetched(Movable, Sized):
         widening its origin to the batch's is sound, and it is what every
         caller relies on."""
         if i < 0 or i >= len(self._bufs):
-            raise Error("Fetched.span: index ", i, " out of range")
+            raise IndexError(t"Fetched.span: index {i} out of range")
         return rebind[Span[UInt8, origin_of(self)]](
             self._bufs[i].view[DType.uint8](self._at[i], self._len[i]).as_span()
         )

@@ -38,6 +38,7 @@ from ..arrays import (
 from ..builders import Float64Builder, Int32Builder, Int64Builder
 from ..dtypes import DynType, float64, int64
 from ..execution import ExecContext
+from ..errors import InvalidError
 from .core import Kernel
 from .filter import TakeKernel
 from .numeric import equal
@@ -498,7 +499,9 @@ struct NTile(WindowFunction):
         ctx: ExecContext,
     ) raises -> DynArray:
         if offset < 1:
-            raise Error("ntile: bucket count must be positive, got ", offset)
+            raise InvalidError(
+                t"ntile: bucket count must be positive, got {offset}"
+            )
         var out = Int64Builder(len(extents))
         for j in range(len(extents)):
             var lo = extents.partition_start[j]
@@ -543,7 +546,7 @@ struct NthValue(WindowFunction):
         ctx: ExecContext,
     ) raises -> DynArray:
         if offset < 1:
-            raise Error("nth_value: n must be positive, got ", offset)
+            raise InvalidError(t"nth_value: n must be positive, got {offset}")
         var idx = Int32Builder(len(extents))
         for j in range(len(extents)):
             var lo, hi = extents.frame(j, is_rows, preceding, following)

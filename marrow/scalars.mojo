@@ -34,6 +34,7 @@ from std.python.conversions import ConvertibleToPython
 from std.builtin.rebind import downcast
 from std.memory import OwnedPointer
 
+from .errors import InternalError, InvalidError, NotImplementedError
 from .arrays import (
     ArrayData,
     BinaryLikeArray,
@@ -568,13 +569,10 @@ struct ListScalar(ArrowScalar):
         ref values = self._value[]
         var fixed = self._dtype.is_fixed_size_list()
         if fixed and len(values) != self._dtype.as_fixed_size_list().size:
-            raise Error(
-                "ListScalar.repeat: ",
-                self._dtype,
-                " needs ",
-                self._dtype.as_fixed_size_list().size,
-                " elements per row, the scalar holds ",
-                len(values),
+            raise InvalidError(
+                t"ListScalar.repeat: {self._dtype} needs "
+                t"{self._dtype.as_fixed_size_list().size} elements per row, "
+                t"the scalar holds {len(values)}"
             )
         var tiled = fixed or self._is_valid
         var step = len(values) if tiled else 0
@@ -904,7 +902,7 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
             comptime if conforms_to(T, ArrowScalar):
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, ArrowScalar]](self._v[T]))
-        raise Error("DynScalar._dispatch: no arm matched")
+        raise InternalError("DynScalar._dispatch: no arm matched")
 
     # --- construction ---
 
@@ -1157,7 +1155,7 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
                 d[dt.as_struct().fields[i].name] = st.field(i).as_py()
             return d
         else:
-            raise Error(t"as_py: unsupported dtype {dt}")
+            raise NotImplementedError(t"as_py: unsupported dtype {dt}")
 
 
 # ---------------------------------------------------------------------------

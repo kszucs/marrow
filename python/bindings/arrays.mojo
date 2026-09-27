@@ -22,6 +22,13 @@ from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
 from std.builtin.rebind import downcast
+from marrow.errors import (
+    IndexError,
+    InternalError,
+    InvalidError,
+    NotImplementedError,
+    TypeError,
+)
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.execution import ExecContext
 from marrow.arrays import (
@@ -185,10 +192,10 @@ struct PyHelpers(Copyable, Movable):
             # roundtrip check below is insufficient for negatives; catch them explicitly.
             comptime if dtype == DType.uint64:
                 if val < 0:
-                    raise Error("integer value out of range for type")
+                    raise InvalidError("integer value out of range for type")
             var converted = Scalar[dtype](val)
             if Int(converted.cast[DType.int64]()) != val:
-                raise Error("integer value out of range for type")
+                raise InvalidError("integer value out of range for type")
             return converted
 
     @always_inline
@@ -275,7 +282,7 @@ def _any_array_getitem(
 ) raises -> PythonObject:
     var n = array.length()
     if index < 0 or index >= n:
-        raise Error(t"index {index} out of bounds for length {n}")
+        raise IndexError(t"index {index} out of bounds for length {n}")
     return array[index].to_python_object()
 
 
@@ -374,9 +381,9 @@ struct PyInferrer(Copyable, Movable):
             self._visit_tuple(ptr)
             return False  # list cannot widen further
         else:
-            raise Error(
-                "cannot include value of type: ",
-                PythonObject(from_borrowed=ptr).__class__.__name__,
+            raise TypeError(
+                t"cannot include value of type: "
+                t"{PythonObject(from_borrowed=ptr).__class__.__name__}"
             )
 
     def _visit_list(mut self, ptr: PyObjectPtr) raises:
@@ -442,17 +449,17 @@ struct PyInferrer(Copyable, Movable):
     def _get_type(self) raises -> dt.DynType:
         if self.bytes_count > 0:
             if self.bytes_count + self.none_count != self._total_count():
-                raise Error("cannot mix bytes and non-bytes values")
+                raise TypeError("cannot mix bytes and non-bytes values")
             return dt.binary
         if self.list_count > 0:
             if self.list_count + self.none_count != self._total_count():
-                raise Error("cannot mix list and non-list values")
+                raise TypeError("cannot mix list and non-list values")
             if len(self._list_child) == 0:
-                raise Error("cannot infer type: all-null list")
+                raise InvalidError("cannot infer type: all-null list")
             return dt.list_(self._list_child[0]._get_type())
         if self.struct_count > 0:
             if self.struct_count + self.none_count != self._total_count():
-                raise Error("cannot mix dict and non-dict values")
+                raise TypeError("cannot mix dict and non-dict values")
             var fields: List[dt.Field] = []
             for i in range(len(self._field_order)):
                 fields.append(
@@ -467,7 +474,7 @@ struct PyInferrer(Copyable, Movable):
             self.unicode_count > 0
             and (self.bool_count + self.int_count + self.float_count) > 0
         ):
-            raise Error("cannot mix string and numeric types")
+            raise TypeError("cannot mix string and numeric types")
         if self.float_count > 0:
             return dt.float64
         if self.int_count > 0:
@@ -607,7 +614,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         elif dtype.is_struct():
             self = Self(PyStructConverter(builder))
         else:
-            raise Error("unsupported type: ", dtype)
+            raise NotImplementedError(t"unsupported type: {dtype}")
 
     # The `isa` ladder is written out here rather than delegated to a shared
     # helper, matching `DynArray._dispatch` and for the same measured reason:
@@ -624,7 +631,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
                 if self._v[].isa[T]():
                     ref c = rebind[downcast[T, PyConverter]](self._v[][T])
                     return c.append(value)
-        raise Error("PyConverter dispatch: no arm matched")
+        raise InternalError("PyConverter dispatch: no arm matched")
 
     def extend(mut self, values: PyObjectPtr) raises:
         comptime for i in range(len(Self.VariantType.Ts)):
@@ -633,7 +640,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
                 if self._v[].isa[T]():
                     ref c = rebind[downcast[T, PyConverter]](self._v[][T])
                     return c.extend(values)
-        raise Error("PyConverter dispatch: no arm matched")
+        raise InternalError("PyConverter dispatch: no arm matched")
 
 
 # ---------------------------------------------------------------------------
@@ -1077,9 +1084,9 @@ def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
     if dtype.is_null():
         if type_given:
             return NullArray(length=len(obj)).to_dyn().to_python_object()
-        raise Error(
-            "cannot build array: sequence is empty or all-None"
-            " (provide type= explicitly)"
+        raise InvalidError(
+            "cannot build array: sequence is empty or all-None (provide type= "
+            "explicitly)"
         )
 
     var builder = DynBuilder(dtype, len(obj))

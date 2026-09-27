@@ -22,6 +22,7 @@ take another `AND` as an operand — the fusing families and this one share only
 the base, and only the part of it that matters (`Type`).
 """
 
+from ...errors import TypeError
 from ...arrays import StructArray, BoolArray, DynArray
 from ...dtypes import BoolType, DynType
 from ...kernels.boolean import (
@@ -74,9 +75,8 @@ def _as_bool(d: Datum, n: Int) raises -> BoolArray:
     """
     var arr = d.to_array(n)
     if arr.dtype() != DynType(BoolType()):
-        raise Error(
-            String("boolean operator: expected bool operand, got ")
-            + String(arr.dtype())
+        raise TypeError(
+            t"boolean operator: expected bool operand, got {arr.dtype()}"
         )
     return arr.as_bool().copy()
 

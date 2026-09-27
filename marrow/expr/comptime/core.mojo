@@ -28,6 +28,7 @@ a fixed-width type, so each family refines the base with its own. `NumericValue`
 is the first such family; string, bool, temporal and list follow the same shape.
 """
 
+from ...errors import NotImplementedError
 from ...buffers import Bitmap
 from ...dtypes import (
     BinaryLikeType,
@@ -210,9 +211,9 @@ def _reject_checked_cast(safe: Bool) raises:
     Refused rather than ignored: a caller who asked for a checked conversion
     and got a wrapping one has a wrong answer, not a slow one."""
     if safe:
-        raise Error(
-            "cast: the comptime lane has no checked cast; pass safe=False for"
-            " the wrapping conversion, or build the expression at run time"
+        raise NotImplementedError(
+            "cast: the comptime lane has no checked cast; pass safe=False for "
+            "the wrapping conversion, or build the expression at run time"
         )
 
 
