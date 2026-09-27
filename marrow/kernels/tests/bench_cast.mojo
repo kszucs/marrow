@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for cast kernels.
 
 Run with: pixi run -e dev pytest marrow/kernels/tests/bench_cast.mojo --benchmark

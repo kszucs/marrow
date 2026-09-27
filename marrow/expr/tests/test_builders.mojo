@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`col` and `lit` — one surface, two lanes.
 
 The claim under test is that the overloads are not two APIs: given the same

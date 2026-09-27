@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """URI parsing and option resolution.
 
 A parse table rather than prose: this is the one place that decides

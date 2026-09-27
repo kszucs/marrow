@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for `BufferView`\'s value-level scans.
 
 `__contains__` is the one every caller shares — `RuntimeValue._null_zeros` and

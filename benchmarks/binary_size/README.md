@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Binary size: what each relational/expression feature costs an AOT binary
 
 `query_streaming.mojo` is the floor: `SELECT a, name FROM orders WHERE a > b`

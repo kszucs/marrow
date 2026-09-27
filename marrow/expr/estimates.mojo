@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What a plan node expects to produce, and what producing it should cost.
 
 `index.mojo` describes what a source knows before it is read; this describes

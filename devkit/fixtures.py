@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The corpus's input tables, and the files they live in.
 
 Fixtures are **files**, not construction code: all three consumers -- the AOT

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Single-shot profiling driver for the partition-parallel hash join.
 
 Builds a 10M × 10M INNER join and runs ``hash_join()`` in a loop so

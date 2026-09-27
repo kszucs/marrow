@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Bloom filter tests: the XXH64 value hash, the split-block filter membership,
 and the write -> read round-trip through `write_bloom_filter=True`.
 

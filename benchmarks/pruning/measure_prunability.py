@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """How much of a Parquet file each index kind could prune, per query predicate.
 
 Produces the prunability table, and exists because it corrects an earlier
@@ -122,7 +125,7 @@ def main(path):
 
     print(
         "\nThe 'real' column is the only one a reader can act on today.\n"
-        "Simulated columns require rewriting the file; see writer.mojo:63,396."
+        "Simulated columns require rewriting the file; see writer.mojo:66,399."
     )
 
 

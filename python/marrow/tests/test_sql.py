@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """``marrow.sql`` — the SQL front end through the Python bindings.
 
 Two things are checked, and they are different:

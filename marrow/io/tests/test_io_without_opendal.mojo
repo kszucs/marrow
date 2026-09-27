@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Marrow must work with no OpenDAL library present.
 
 `libopendal_c` is `publish = false` upstream with no conda build, so it can

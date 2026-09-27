@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Free-standing compute functions exposed to Python.
 
 All GPU-capable functions accept an ``ExecContext`` as their last positional

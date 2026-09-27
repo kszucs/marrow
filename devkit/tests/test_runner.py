@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Options, lanes, selections, drivers and the suite runner."""
 
 import argparse

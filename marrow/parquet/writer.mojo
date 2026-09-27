@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Native Arrow → Parquet writer.
 
 `FileWriter` orchestrates the file: header magic, one `RowGroup` per slice of the

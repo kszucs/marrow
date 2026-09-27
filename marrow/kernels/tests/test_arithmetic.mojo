@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 from std.math import isinf, isnan
 from std.testing import (
     assert_equal,

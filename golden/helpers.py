@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The vocabulary a golden case body may use, on the Python side.
 
 `helpers.mojo` is the same list for the Mojo lane, and the generated module

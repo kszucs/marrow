@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Python bindings for Arrow IPC file and stream reader/writer."""
 
 from std.python import Python, PythonObject

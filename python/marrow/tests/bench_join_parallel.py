@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Multi-threaded hash join competition: marrow vs DuckDB vs Polars vs PyArrow.
 
 Unlike ``bench_join.py`` (which forces thread=1 for a serial baseline), this

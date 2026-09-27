@@ -1,3 +1,11 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# The table is the one in Apache Arrow C++
+# (`cpp/src/parquet/chunker_internal_generated.h`) and Apache Arrow Rust
+# (`parquet/src/column/chunker/cdc_generated.rs`), Copyright The Apache Software
+# Foundation, Apache License 2.0; see NOTICE.txt.
+
 """The gear hash tables for content-defined chunking -- GENERATED, do not edit.
 
 Eight tables of 256 64-bit values, laid out as eight consecutive runs of 256,

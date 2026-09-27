@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 [workspace]
 authors = ["Krisztian Szucs <szucs.krisztian@gmail.com>"]
 channels = [
@@ -233,7 +236,10 @@ ruff = ">=0.14.14,<0.15"
 [feature.format.tasks]
 fmt_mojo = { cmd = "mojo format marrow python benchmarks golden/cases golden/helpers.mojo" }
 fmt_python = { cmd = "ruff format devkit python conftest.py benchmarks golden" }
-fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
+# Adds the Apache-2.0 header wherever it is missing, so `fmt_check` -- the lint
+# job -- fails on a file committed without one.
+fmt_license = { cmd = "python -m devkit license fix" }
+fmt = { depends-on = ["fmt_license", "fmt_mojo", "fmt_python"] }
 fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 
 # Docs — documentation generation.

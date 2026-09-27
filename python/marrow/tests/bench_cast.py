@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for marrow cast kernels vs PyArrow and Polars.
 
 Each cast case is benchmarked three ways — ``marrow.compute.cast``,

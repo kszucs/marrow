@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Proleptic-Gregorian calendar arithmetic.
 
 A **leaf module**: it imports nothing from `marrow`, which is the property every

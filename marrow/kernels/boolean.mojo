@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Boolean and bitwise kernels.
 
 Three tiers per kernel (same scheme as ``numeric.mojo``):

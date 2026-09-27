@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Format-agnostic primitives shared across marrow.
 
 Each submodule is a self-contained block that depends on nothing in marrow — no

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Storage: where bytes come from and go, decoupled from what they mean.
 
 `ByteSource` and `ByteSink` are the two seams every format reads and writes

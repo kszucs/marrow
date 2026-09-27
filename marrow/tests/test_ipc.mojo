@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for Arrow IPC file and stream I/O.
 
 All tests use only the public top-level functions and reader/writer classes.

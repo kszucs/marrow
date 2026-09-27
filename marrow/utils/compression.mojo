@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """System-library loading for the block compression codecs.
 
 The codecs are not reimplemented; the standard C libraries (`libzstd`,

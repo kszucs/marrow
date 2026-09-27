@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: an equi-**join**, which nothing else measures.
 
 `SELECT ... FROM l JOIN r ON l.k = r.k` over two small in-memory batches. The

@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 ---
 title: "Status & limitations"
 subtitle: "What works, what doesn't, and what is known to be wrong"

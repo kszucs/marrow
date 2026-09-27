@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What a distinct count is worth, measured as the plan it changes.
 
 `JoinReassociation` turns `(A ⋈ B) ⋈ C` into `A ⋈ (B ⋈ C)` when that is

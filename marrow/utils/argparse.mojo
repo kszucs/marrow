@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Command-line argument parsing: `argv` in, named values out, `--help` for free.
 
 A **leaf module** — it imports nothing, from marrow or from `std` — which is

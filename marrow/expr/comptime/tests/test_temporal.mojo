@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The temporal family: comparison, field extraction, truncation.
 
 `TemporalValue` was a marker with two aggregates on it. `TemporalCompare` and

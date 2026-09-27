@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The test and benchmark harness `pytest` drives.
 
 `TestSuite` and `BenchSuite` are drop-in replacements for their `std.testing` /

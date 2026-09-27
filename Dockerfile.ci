@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # Reproduces the GitHub Actions ubuntu-latest CI environment.
 # Build: docker build -f Dockerfile.ci -t marrow-ci .
 # Run:   docker run --rm -it marrow-ci

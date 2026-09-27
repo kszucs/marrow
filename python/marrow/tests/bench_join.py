@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for hash join: marrow vs PyArrow vs Polars.
 
 All benchmarks run single-threaded for fair comparison with marrow.

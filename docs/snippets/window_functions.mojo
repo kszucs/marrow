@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Window functions — ranking and a partitioned running total.
 
 Compiled by `pixi run docs_check`; included by docs/guide/expressions.qmd.

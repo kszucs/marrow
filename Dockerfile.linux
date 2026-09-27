@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # Linux dev container for running the suites locally, on either architecture.
 #
 #   pixi run -e docker test_arm64      # native on Apple Silicon

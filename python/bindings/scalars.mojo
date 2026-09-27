@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Python bindings for Arrow scalars.
 
 Exposes DynScalar as a Python type ``Scalar`` with rich comparison,

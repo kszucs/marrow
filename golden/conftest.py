@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Pytest wiring for the golden corpus.
 
 The machinery lives in `devkit.golden`; this file exists only because pytest

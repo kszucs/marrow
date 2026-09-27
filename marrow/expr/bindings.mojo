@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Parameters: what a plan declares, and the values one execution binds.
 
 `ParamSpec` is the declaration side -- what a parameter is called, what it

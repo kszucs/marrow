@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 project:
   type: website
   output-dir: _site
@@ -125,6 +128,8 @@ format:
     css: theme/marrow.css
     include-in-header:
       - theme/head.html
+    filters:
+      - theme/listings.lua
     syntax-definitions:
       - theme/mojo.xml
     syntax-highlighting:

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # Clone and build Apache OpenDAL's C binding -- the `libopendal_c` that
 # `marrow/io/opendal.mojo` dlopens.
 #

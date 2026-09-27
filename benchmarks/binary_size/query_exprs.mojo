@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: the fused **expression families** outside numeric.
 
 One projection touching string (`Like`), conditional (`Coalesce`), cast

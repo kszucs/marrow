@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 ---
 title: "GPU execution"
 subtitle: "Experimental device dispatch, from the same kernel source as the CPU"

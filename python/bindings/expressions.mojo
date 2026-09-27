@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Python bindings for the runtime expression lane.
 
 Exposes `marrow.expr.runtime.values.RuntimeValue` as the Python type ``Expr``

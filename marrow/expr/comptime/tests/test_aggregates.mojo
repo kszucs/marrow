@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The comptime lane's aggregates.
 
 Two nodes, on one axis — what the aggregate consumes:

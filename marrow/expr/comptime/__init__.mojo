@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The comptime lane: nodes whose structure lives in their type.
 
 Relative imports *inside* this package need no backtick escaping, since the

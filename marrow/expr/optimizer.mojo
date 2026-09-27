@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The optimizer: rules that rewrite a plan into a simpler plan.
 
 `plan.optimize[Rules]()` returns a **new `DynRelation`**. It is an ordinary

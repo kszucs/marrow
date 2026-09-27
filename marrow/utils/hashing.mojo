@@ -1,3 +1,10 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0 AND MIT AND BSD-2-Clause
+
+# `RapidHash64` is ported from rapidhash V3, Copyright (C) 2025 Nicolas De Carli
+# (MIT), and `XxHash64` from xxHash, Copyright (c) 2012-2021 Yann Collet (BSD
+# 2-Clause); both licences are reproduced in NOTICE.txt.
+
 """The two hash functions marrow implements.
 
 Neither is in the Mojo standard library, and neither is substitutable:

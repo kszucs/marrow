@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: a Parquet scan with its **leaf set pinned at comptime**.
 
 ⚠️ **This gate is currently degenerate: it is byte-for-byte the same program as

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The runtime lane: expressions whose structure lives in fields.
 
 One struct — a tag, its children behind `ArcPointer`, and an optional payload.
@@ -1382,7 +1385,7 @@ def case_when(
     # already-stored payloads come back as the variant's *first* member. Five
     # appends into an unreserved list read back as `int64,null,int64,null,
     # int64`. Same reason `StructArray.__getitem__` pre-allocates
-    # (`arrays.mojo:1930`), and it is necessary but *not* sufficient here --
+    # (`arrays.mojo:1933`), and it is necessary but *not* sufficient here --
     # a separate temporary-lifetime miscompile corrupts this function's
     # arguments before it ever runs.
     var kids = List[RuntimeValue](

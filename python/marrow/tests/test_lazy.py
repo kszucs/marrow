@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The lazy relational frontend — ``LazyTable`` over the bound ``Plan``.
 
 Two things are being checked, and they are different:

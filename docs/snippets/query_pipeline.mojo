@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """A whole query as one sentence — filter, group, having, order, limit.
 
 Compiled by `pixi run -e dev docs_check`; included by docs/guide/expressions.qmd.

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The golden corpus, runtime lane.
 
 A shim, and — unlike `test_cases.mojo` — **not** generated, because there is

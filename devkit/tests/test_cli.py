@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The click CLI, and the profiler's command construction.
 
 `--help` on every command is not a formality: each command imports its heavy

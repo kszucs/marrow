@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Profiling driver for the sort kernel.
 
 Calls the production sort_indices() and take() kernels directly so that the

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Little-endian byte, bit and varint primitives.
 
 The low-level serialization helpers shared by the Arrow IPC (FlatBuffers) and

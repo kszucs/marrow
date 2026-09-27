@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The Mojo compiler and the subprocess layer underneath it.
 
 Everything that spawns a process lives here.  `MojoToolchain` is the only place

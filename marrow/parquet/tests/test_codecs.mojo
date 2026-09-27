@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Value/level encodings: the RLE/bit-packed hybrid primitives plus the read
 paths for the non-dictionary encodings (DELTA_BINARY_PACKED, BYTE_STREAM_SPLIT,
 DELTA_BYTE_ARRAY / DELTA_LENGTH_BYTE_ARRAY) against PyArrow-written files. Also

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """marrow's developer tooling.
 
 One package for everything that builds, tests, benchmarks, profiles and measures
@@ -12,6 +15,7 @@ where one side must stay free of something the other needs:
 * `golden`      -- the cross-lane query corpus; reaches duckdb when regenerating.
 * `docs`        -- the site's Mojo listings, compiled so the guides cannot rot.
 * `integration` -- the Arrow archery suite; reaches archery.
+* `license`     -- the Apache-2.0 header every file carries.
 * `footprint`   -- the AOT size gate: nm, size -m, strip.
 * `profiling`   -- Instruments and macOS `sample`.
 * `cli`         -- the only module that imports click.

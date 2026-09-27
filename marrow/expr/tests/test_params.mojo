@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Late-bound parameters.
 
 A parameter is a literal whose value arrives later, so these cases check the

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Arrow scalar types — single-value containers.
 
 Following Arrow C++'s design: scalars hold native values directly, not

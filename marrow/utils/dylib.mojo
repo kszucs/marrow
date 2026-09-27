@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Talking to a C library: finding it, opening it, and marshalling across.
 
 Shared by every module in the tree that binds one -- the Parquet page codecs,

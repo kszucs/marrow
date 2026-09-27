@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Aggregate kernels — scalar reductions and grouped aggregation.
 
 Two levels, and they answer different questions.

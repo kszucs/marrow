@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The API a caller actually writes.
 
 Every other test file in this package builds plan nodes directly —

@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 ---
 title: "Build a data pipeline"
 subtitle: "Filter, sort and join two datasets end to end"

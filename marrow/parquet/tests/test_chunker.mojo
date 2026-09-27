@@ -1,3 +1,11 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# Test vectors carried over from Apache Arrow C++
+# (`cpp/src/parquet/chunker_internal_test.cc`, `chunker_internal_generated.h`)
+# and Apache Arrow Rust (`parquet/src/column/chunker/cdc.rs`), Copyright The
+# Apache Software Foundation, Apache License 2.0; see NOTICE.txt.
+
 """Unit tests for content-defined chunking -- see `marrow/parquet/chunker.mojo`'s
 module docstring."""
 

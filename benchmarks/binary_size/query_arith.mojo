@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: fused **arithmetic**, which nothing else measures.
 
 `SELECT (a + b) * a - b FROM t WHERE a > b` — the same relational shape as

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: a fused query over a **Parquet scan**.
 
 `SELECT a FROM file.parquet WHERE a > b` — the same shape as

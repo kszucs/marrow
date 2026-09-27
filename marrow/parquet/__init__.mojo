@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Native Parquet I/O for Marrow.
 
 A from-scratch Parquet reader/writer that speaks Arrow only — no PyArrow at

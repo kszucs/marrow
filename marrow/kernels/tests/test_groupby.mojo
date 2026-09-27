@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for `HashGrouping` — and specifically for its two placement paths.
 
 The radix path only engages at `_RADIX_MIN_ROWS` (50k) rows and

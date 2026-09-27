@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: runtime values through an explicitly built plan.
 
 Same query as the other variants (`SELECT a, name FROM orders WHERE a > b`) and

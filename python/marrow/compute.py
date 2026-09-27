@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Compute functions for marrow arrays.
 
 This module follows the same naming and signature conventions as

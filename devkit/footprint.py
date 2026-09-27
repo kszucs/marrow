@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What the AOT lane costs in machine code.
 
 `marrow.expr`'s comptime lane exists to produce small binaries, and the only way

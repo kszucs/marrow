@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for BitmapView.filter — compacting a bitmap by a selection.
 
 Sizes 1k–100M bits, throughput in elements/second.

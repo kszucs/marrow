@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Three-valued logic, against the full truth table.
 
 `AND` and `OR` are the two operators whose nulls are **not** null-in-null-out,

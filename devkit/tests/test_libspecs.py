@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The soname tables exist twice, in two languages, and must not drift.
 
 `marrow/**/*.mojo` declares each `dlopen`ed library as a `LibSpec`; the Mojo

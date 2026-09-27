@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The `Kernel` base trait: what every compute kernel shares.
 
 Every kernel family in `marrow.kernels` — element-wise arithmetic, comparison,

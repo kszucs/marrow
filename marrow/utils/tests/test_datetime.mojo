@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`CivilDate`, `Epoch` and `floor_div` — the calendar primitives the temporal
 kernels and the Parquet INT96 decoder both build on.
 

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`references` — the one walk over what an expression reads.
 
 A composite node's walk is derived from its fields by reflection, so these

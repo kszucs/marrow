@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The Arrow-JSON bridge, and that the archery module is importable at all.
 
 `archery` is only installed in the `integration` environment, and it in turn

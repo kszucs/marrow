@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Test the schema.mojo file."""
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject

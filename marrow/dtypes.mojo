@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Arrow data type system — Variant-based implementation.
 
 `DataType` is the trait that all concrete Arrow type structs implement.

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The local provider: bytes already on this machine.
 
 A memory map, bytes the caller already holds, a file on disk, a buffer in

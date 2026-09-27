@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Driver for the cost of a `RowSelection` inside `ParquetFile.read`.
 
     pixi run profile benchmarks/profiles/profile_page_skip.mojo --sample --no-open

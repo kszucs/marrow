@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The OpenDAL C ABI binding, exercised against services that need no
 credentials: `memory` and `fs`.
 

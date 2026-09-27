@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Parquet and IPC over an object store.
 
 The point of the whole `marrow/io` seam, exercised end to end: the format code

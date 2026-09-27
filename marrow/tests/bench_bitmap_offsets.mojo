@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What alignment and offset cost the Bitmap SIMD operators.
 
 The same `invert` and `and` loops as `bench_bitmap_logic.mojo`, measured where

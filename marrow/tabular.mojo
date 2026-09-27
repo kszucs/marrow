@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tabular data structures: RecordBatch and Table.
 
 RecordBatch holds a schema and a matching list of single-chunk Arrays.

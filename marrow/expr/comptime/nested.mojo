@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The comptime lane's list-consuming nodes.
 
 `ListLength` and `ArrayContains` share an operand bound and nothing else:

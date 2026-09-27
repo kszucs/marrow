@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Compute kernels for marrow.
 
 Re-exports the compute surface from the submodules so callers can

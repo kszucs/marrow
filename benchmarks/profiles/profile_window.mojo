@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Single-shot profiling driver for the shapes in `bench_window.mojo`.
 
     pixi run profile benchmarks/profiles/profile_window.mojo --sample --no-open

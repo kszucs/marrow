@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Type-level rules: what a composite node's type and shape follow from.
 
 These are neither traits nor nodes — they are the arithmetic *on* types that a

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for BufferView.filter — compacting int64 values by a selection.
 
 Sizes 1k–10M elements, throughput in elements/second.

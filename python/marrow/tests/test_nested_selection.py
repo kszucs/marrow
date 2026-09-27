@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """filter / take / drop_null over nested & complex array types, verified against
 PyArrow as the conformance oracle (round-tripped through the Arrow C-Data
 interface)."""

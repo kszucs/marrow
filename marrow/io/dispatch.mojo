@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Choosing a backend at run time, from a URI.
 
 The one file in `marrow/io` that names every provider, which is why it is

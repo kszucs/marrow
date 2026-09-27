@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # CLAUDE.md
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
@@ -48,7 +53,7 @@ Dependencies (pinned in `pixi.toml`):
 
 ```bash
 pixi run -e dev test                # everything (pytest -v)
-pixi run -e dev fmt                 # mojo format + ruff format
+pixi run -e dev fmt                 # licence headers + mojo format + ruff format
 pixi run package                    # package/marrow.mojoc
 pixi run -e dev selftest            # the devkit suite, ~1 s, no Mojo compilation
 pixi run -e bench bench             # every benchmark (bench-mojo, bench-python: halves)
@@ -61,7 +66,7 @@ pixi run bench-size-check           # the same gate against its recorded baselin
 
 Every one of those is a thin wrapper over **`devkit`**, the developer tooling
 package: `pixi run -e dev python -m devkit --help` is the same surface with more
-of it exposed (`build`, `bench`, `profile`, `golden`, `integration`). It is where
+of it exposed (`build`, `bench`, `profile`, `golden`, `integration`, `license`). It is where
 the compiler flags, the driver generation, the benchmark history and the golden
 case format all live; `conftest.py` is nothing but pytest hooks over it. See
 "Developer tooling" below.
@@ -805,6 +810,7 @@ devkit/                   # the developer tooling; `python -m devkit --help`
 ├── benches.py            # injection, competition table, rolling history
 ├── golden.py             # the corpus: case format, codegen, transpile
 ├── docs.py               # compiles the site's Mojo listings
+├── license.py            # the Apache-2.0 header on every file
 ├── integration.py        # the archery suite
 ├── footprint.py          # the AOT size gate
 ├── profiling.py          # Instruments and macOS `sample`
@@ -989,6 +995,12 @@ In addition:
   https://github.com/apache/arrow-rs) usually has the cleaner API shape and
   naming. This matters most for validity/null handling, offset semantics, and
   coverage.
+- **Every file carries the Apache-2.0 header**, and `pixi run fmt` adds it
+  (`python -m devkit license check` lists what lacks it). **Code, tables or
+  test vectors ported from another project** also name the upstream project,
+  its files and licence in a comment below the header, and get an entry in
+  `NOTICE.txt` — see `marrow/parquet/chunker.mojo`. Consulting a reference
+  implementation is not porting; carrying its code over is.
 - **Conventional commits** (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`,
   `test:`), optional scope in parens: `feat(kernels): add concat`.
 - **There is no changelog.** The commit message is where a change is

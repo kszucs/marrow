@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`LittleEndian` — the byte, bit and LEB128-varint primitives.
 
 Byte order is asserted against explicit byte sequences rather than round-trips,

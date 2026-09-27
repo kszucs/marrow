@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Three-valued logic: `AND`, `OR`, `XOR`, `NOT`.
 
 **These do not fuse, and that is a measured decision rather than an omission.**

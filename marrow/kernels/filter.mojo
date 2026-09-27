@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Filter, take, and selection kernels.
 
 ``filter``     — select elements where a boolean mask is True.

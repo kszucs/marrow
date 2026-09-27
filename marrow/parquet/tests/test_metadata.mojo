@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Reading file metadata. Column statistics: `read_metadata` (raw footer) and
 `ParquetFile.statistics()` (decoded typed min/max) — marrow reads the bounds PyArrow
 writes, and round-trips its own (the write side is covered against PyArrow in

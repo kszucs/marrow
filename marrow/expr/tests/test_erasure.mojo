@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The erased boxes destroy what they hold.
 
 `DynValue` and `DynOperator` each erase a typed value by `rebind`ing an

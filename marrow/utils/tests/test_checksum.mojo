@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`Crc32` against zlib's own output.
 
 Every expected value here came from CPython's `zlib.crc32`, which is the same

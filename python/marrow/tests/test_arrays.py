@@ -1,3 +1,10 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# Ported from Apache Arrow's `python/pyarrow/tests/test_convert_builtin.py`,
+# Copyright The Apache Software Foundation, Apache License 2.0, and modified;
+# see NOTICE.txt.
+
 """Test array() and infer_type() with Python built-in types.
 
 Ported from PyArrow's test_convert_builtin.py, excluding pandas/numpy,

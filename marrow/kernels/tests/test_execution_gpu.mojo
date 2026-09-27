@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The half of `ExecContext`'s contract that needs a real device.
 
 Everything here is about one defect: a context that carries a GPU device being

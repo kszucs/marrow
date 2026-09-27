@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for RecordBatch and Table Python bindings.
 
 Mirrors PyArrow's test patterns where applicable.

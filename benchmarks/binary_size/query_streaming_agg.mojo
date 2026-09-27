@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate for aggregation with a **runtime-named** aggregate.
 
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name` — a fused comptime key

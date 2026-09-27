@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The expression and relational layer: build a plan, run it.
 
 Two lanes that share no node types, meeting at `DynValue`:

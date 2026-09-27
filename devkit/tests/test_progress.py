@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What a command was spending while it said nothing.
 
 The display is cosmetic; the readings under it are not.  A timeout is reported

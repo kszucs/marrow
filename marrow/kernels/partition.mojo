@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Radix partitioning layer for partition-parallel kernels.
 
 Splits rows into independent partitions by the top bits of a precomputed hash,

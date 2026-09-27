@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 from std.testing import assert_equal, assert_true, assert_false
 from .. import dtypes as dt
 from ..dtypes import *
@@ -149,7 +152,7 @@ def test_bool_byte_width_is_zero_not_an_abort() raises:
 
     This used to abort the process: `is_primitive()` answered True, so
     `byte_width()` fell through to the `PrimitiveType` ladder, which
-    `BoolType` cannot enter. `c_data.mojo:1001` is one branch-ordering mistake
+    `BoolType` cannot enter. `c_data.mojo:1004` is one branch-ordering mistake
     away from reaching it on the C Data import path.
     """
     assert_equal(DynType(dt.bool_).byte_width(), 0)

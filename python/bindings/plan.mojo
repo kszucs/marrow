@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Python bindings for the relational plan layer.
 
 Exposes `DynRelation` as the Python type ``Plan``: an immutable, inspectable

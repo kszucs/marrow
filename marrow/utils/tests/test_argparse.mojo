@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`ArgumentParser` — the generic argv handling lifted out of the previous
 expression layer's parameter module, before that layer was deleted.
 

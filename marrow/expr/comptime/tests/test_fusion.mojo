@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Fusion, and the validity it must not lose.
 
 A fused subtree compiles to one loop with no dispatch inside it, which is the

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Mapping between the Parquet schema (a flat `SchemaElement` list) and Marrow's
 Arrow type tree.
 

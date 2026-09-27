@@ -1,3 +1,10 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# Ported from Apache Arrow C++ (`cpp/src/parquet/chunker_internal.{h,cc}`) and
+# Apache Arrow Rust (`parquet/src/column/chunker/cdc.rs`), Copyright The Apache
+# Software Foundation, Apache License 2.0, and modified; see NOTICE.txt.
+
 """Content-defined chunking for the Parquet writer.
 
 Data page boundaries derived from a rolling gear hash over the column's

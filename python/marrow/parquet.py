@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Native Parquet I/O — mirrors the ``pyarrow.parquet`` API.
 
     import marrow.parquet as pq

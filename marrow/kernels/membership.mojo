@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Set-membership kernel — ``is_in``.
 
 ``is_in(values, value_set) -> BoolArray`` marks each element of ``values`` with

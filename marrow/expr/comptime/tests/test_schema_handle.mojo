@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The compiler contracts the `t.amount` surface is built on.
 
 These are **not** tests of marrow code. They pin four behaviours of the Mojo

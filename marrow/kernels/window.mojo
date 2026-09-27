@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Window-function kernels — partition extents, ranking, and frame gathers.
 
 A window function is evaluated over a *sorted* input: `PARTITION BY k ORDER BY

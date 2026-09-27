@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The docs snippet check: what gets collected, and what gets wrapped."""
 
 from devkit.docs import SnippetCheck, as_program

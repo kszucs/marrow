@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for the string kernels neighbouring LIKE, over the same data.
 
 `contains`, `length` and `upper` at 100k-1M rows.

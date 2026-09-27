@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Arrow protocol conformance, via apache/arrow's archery.
 
 Registers marrow as a participant in the integration suite and runs it against

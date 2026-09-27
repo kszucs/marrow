@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Nested reconstruction: structs, single-level lists, and arbitrarily nested
 lists/structs (any depth, struct-level nulls, encodings inside lists).
 

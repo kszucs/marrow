@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """How work is dispatched: thread count, optional device, striping.
 
 This is a *core* module, not a kernel one. It imports nothing from marrow — it

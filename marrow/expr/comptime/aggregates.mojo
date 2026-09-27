@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Fused aggregates — `sum`, `min`, `max`, `mean`, `product`.
 
 `sum(a * 2 + b)` folds **without materialising `a * 2 + b`**. The input is a

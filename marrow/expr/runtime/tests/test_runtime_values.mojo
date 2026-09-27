@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The runtime lane on its own terms.
 
 `RuntimeValue` is one struct holding children, a payload and a function

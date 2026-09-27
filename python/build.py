@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The hatchling build hook: compile `libmarrow.so` and lay out the wheel.
 
 The shared library is built by `devkit`, not by a recipe of its own -- the flags

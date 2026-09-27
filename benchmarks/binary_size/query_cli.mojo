@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The compile guide's example, and the `query_cli` binary-size gate."""
 
 from marrow.dtypes import field, int64, string

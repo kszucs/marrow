@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What a plan expects to produce, and what it says when it does not know.
 
 Three kinds of case, and the second is the one that matters.

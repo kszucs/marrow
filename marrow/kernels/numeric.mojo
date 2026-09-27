@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Element-wise kernels over numeric arrays — arithmetic and comparison.
 
 One module because they are one kind of thing: both are numeric-only, both are

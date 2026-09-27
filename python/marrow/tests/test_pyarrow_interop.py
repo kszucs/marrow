@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Test PyArrow ↔ marrow interoperability via Arrow C Data/Stream Interface.
 
 Covers: DataType, Schema, Array, RecordBatch, and Table roundtrips,

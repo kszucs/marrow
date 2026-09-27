@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`import marrow` must work, and the wheel must contain every module it reaches.
 
 Two sibling failures, both invisible to a suite that only ever runs one way.

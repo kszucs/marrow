@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmark results: injecting them, comparing them, and keeping them.
 
 The only module in `devkit` that talks to pytest-benchmark.  A Mojo benchmark is

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What a storage backend has to provide.
 
 Two traits, and the pieces both sides of them need. The backends live one file

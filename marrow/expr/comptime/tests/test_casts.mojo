@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Casts: the three that fuse and the two that break.
 
 The node constructors are exercised directly here. The *spelling* a caller

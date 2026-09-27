@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 ---
 pagetitle: "marrow — Apache Arrow in Mojo"
 image: assets/social.png

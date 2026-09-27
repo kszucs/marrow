@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for packing bools into a Bitmap.
 
 Exercises `BitmapView.store` at widths 8, 32 and 64, over 1k–100M bits, with

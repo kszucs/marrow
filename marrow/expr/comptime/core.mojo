@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The comptime lane: expressions whose structure is their type.
 
 `And[Gt[NumericColumn[Int64Type], NumericLiteral[Int64Type]], …]` is a type, not data. A whole

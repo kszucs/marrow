@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """DataFusion + Marrow example.
 
 Demonstrates registering Mojo compute functions as DataFusion UDFs and

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """``Scalar``, ``Array`` and ``ChunkedArray``.
 
 Property-shaped where PyArrow is property-shaped — `arr.type`, `arr.null_count`

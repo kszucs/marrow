@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for `ExecContext` — the CPU/GPU dispatch policy kernels share.
 
 `stripe` is the contract every striped kernel now depends on, so its invariants

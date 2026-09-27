@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """String compute kernels.
 
 Three shapes, each following the tier scheme used by the numeric kernels

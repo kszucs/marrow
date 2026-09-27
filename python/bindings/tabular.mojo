@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Python bindings for RecordBatch and Table.
 
 Exposes RecordBatch and Table to Python with APIs matching PyArrow.

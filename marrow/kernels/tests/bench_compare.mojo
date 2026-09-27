@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for comparison kernels.
 
 Run with: pixi run pytest marrow/kernels/tests/bench_compare.mojo --benchmark

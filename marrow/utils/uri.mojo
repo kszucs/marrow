@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Naming a location, and configuring the service that holds it.
 
 `Uri` is the one place that knows `s3://bucket/key` means "the `s3` service,

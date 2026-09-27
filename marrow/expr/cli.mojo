@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`QueryCli` — a plan, run as a command-line program.
 
 Write the plan with `param()` placeholders and hand it over:

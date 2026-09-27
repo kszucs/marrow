@@ -1,11 +1,11 @@
 Marrow
-Copyright 2026 Krisztian Szucs
+Copyright 2024 Szűcs Krisztián
 
 This product is licensed under the Apache License, Version 2.0; see LICENSE.txt.
 
 It includes code derived from the third-party projects below. Each notice is
 reproduced because that project's licence requires it to travel with the source.
-Both licences are compatible with Apache-2.0.
+Every licence below is compatible with Apache-2.0.
 
 Attribution is owed here for code marrow *redistributes* -- copied or ported,
 since a port is a derivative work. It is not owed for dependencies marrow merely
@@ -82,3 +82,42 @@ xxHash -- BSD 2-Clause
     ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
+
+Apache Arrow -- Apache-2.0
+    marrow/parquet/chunker.mojo, marrow/parquet/gearhash.mojo and
+    marrow/parquet/tests/test_chunker.mojo: content-defined chunking, ported
+    from Arrow C++ `cpp/src/parquet/chunker_internal.{h,cc}` and
+    `chunker_internal_generated.h`, and from Arrow Rust
+    `parquet/src/column/chunker/cdc.rs`, with test vectors from
+    `chunker_internal_test.cc`.
+    marrow/parquet/tests/test_page_skip.mojo: one case ported from Arrow Rust
+    `parquet/src/arrow/arrow_reader/selection/ranges.rs`.
+    python/marrow/tests/test_arrays.py: ported from PyArrow's
+    `python/pyarrow/tests/test_convert_builtin.py`.
+    https://github.com/apache/arrow, https://github.com/apache/arrow-rs
+
+    The part of both repositories' NOTICE that pertains to this code,
+    reproduced as section 4(d) of the Apache License requires:
+
+        Apache Arrow
+        Copyright 2016-2026 The Apache Software Foundation
+
+        This product includes software developed at
+        The Apache Software Foundation (http://www.apache.org/).
+
+--------------------------------------------------------------------------------
+
+Apache OpenDAL -- Apache-2.0
+    marrow/io/opendal.mojo: the C ABI declarations, transcribed from
+    `bindings/c/include/opendal.h` at v0.59.0.
+    https://github.com/apache/opendal
+
+    Its NOTICE, reproduced as section 4(d) of the Apache License requires:
+
+        Apache OpenDAL
+        Copyright 2023-2026 The Apache Software Foundation
+
+        This product includes software developed at
+        The Apache Software Foundation (http://www.apache.org/).

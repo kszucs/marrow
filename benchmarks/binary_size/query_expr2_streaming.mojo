@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: filter + projection over two `int64` columns.
 
 `SELECT a, b FROM orders WHERE a > b`, built through `marrow.expr`'s

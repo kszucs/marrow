@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The vocabulary a golden case body may use, on the Mojo side.
 
 `helpers.py` is the same list for the runtime lane. Not named `test_*`, so the

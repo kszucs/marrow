@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # marrow — open work
 
 The epics and tasks worth doing, in priority order. **Nothing here describes
@@ -147,14 +152,14 @@ blocked, four separate times.
 
 **The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
 NULL by first asking "is there a zero in this column", and
-`BufferView.__contains__` (`views.mojo:199`) is that question: SIMD, early
+`BufferView.__contains__` (`views.mojo:202`) is that question: SIMD, early
 exit, per-chunk reduction — the variant measured fastest on 2026-09-04, where
 the scalar form cost **+45%** on `bench_floordiv_int32_*`.
 `marrow/tests/bench_views.mojo` exists to keep the scalar form from coming
 back and says `RuntimeValue._null_zeros` and `DivisionBinary` both call it.
 
 Neither does, and `grep -rn __contains__ marrow/` finds no production caller
-at all. `DivisionBinary.bind` (`expr/comptime/numeric.mojo:214`) walks the
+at all. `DivisionBinary.bind` (`expr/comptime/numeric.mojo:217`) walks the
 divisor a row at a time into a `Bitmap.alloc_zeroed(length)`, which is the
 shape the +45% measured; `RuntimeValue._null_zeros` pays a `nullif` against a
 broadcast zeros array instead. So the benchmark guards a helper nothing uses
@@ -454,7 +459,7 @@ page.**
 #### 1.3 Datasets: multi-file, partitioned, remote
 
 **What exists.** `scan(path: String, schema: Schema)`
-(`marrow/expr/builders.mojo:727`) — one file, and the caller supplies the schema
+(`marrow/expr/builders.mojo:730`) — one file, and the caller supplies the schema
 because "a `Relation` is a description and must not touch the filesystem to
 exist".
 
@@ -539,7 +544,7 @@ split_part, and `ConcatKernel` behind `||` in both lanes) and 15 temporal
 extractors plus `date_trunc`.
 
 Adding one is cheap and reaches every caller: `UNARY_VERBS`/`BINARY_VERBS`/
-`TERNARY_VERBS` (`marrow/expr/runtime/values.mojo:1896`) is the single
+`TERNARY_VERBS` (`marrow/expr/runtime/values.mojo:1922`) is the single
 vocabulary, and a verb added there is callable from Python without touching the
 bindings or `python/marrow/expr.py`.
 
@@ -548,8 +553,8 @@ arguments where `||` propagates them, `concat_ws`, and the whole regex family.
 
 **Still absent — temporal:** `date_diff`, interval arithmetic,
 `strftime`/`strptime`, `make_date`, `age`, and timezone attachment. Timezones
-are carried on the type (`dtypes.mojo:401`) and **ignored by every kernel** —
-`marrow/kernels/temporal.mojo:8` states a non-UTC timestamp is decomposed in
+are carried on the type (`dtypes.mojo:404`) and **ignored by every kernel** —
+`marrow/kernels/temporal.mojo:11` states a non-UTC timestamp is decomposed in
 UTC.
 
 ibis's `strings.py` is the engine-level expectation: case, trim/pad,
@@ -635,7 +640,7 @@ sweeps" in `bench_groupby.mojo`:
 **What exists.** Nothing. No spill, no memory pool, no accounting, no limit —
 `grep -in 'spill\|memory_pool\|memory_limit'` over `marrow/` returns only
 unrelated bitmap-test strings. `execute()` drains the entire plan into one
-`RecordBatch` (`marrow/expr/logical.mojo:1408`), so even a streaming plan
+`RecordBatch` (`marrow/expr/logical.mojo:1411`), so even a streaming plan
 materializes its full result, and **there is no batch-iterator result API** even
 though `drain()` is exactly that shape internally.
 
@@ -661,7 +666,7 @@ canonical list; marrow has 8 of it.
 
 **What exists.** Hash equi-join in eight *implemented* kinds — inner, left,
 right, full, left semi, left anti, right semi, right anti — over a Swiss table
-with a CSR probe index (`marrow/kernels/join.mojo`, `hashtable.mojo:76-87`),
+with a CSR probe index (`marrow/kernels/join.mojo`, `hashtable.mojo:79-90`),
 with radix partitioning and parallel probing, and either input may be the build
 side. Multi-column keys work because keys go through `StructArray`. `mark`,
 `single` and `cross` have constants and no kernel; `is_supported()` says so and
@@ -768,7 +773,7 @@ differentiator hiding inside a table-stakes item.
 
 #### 2.9 Interop and format gaps
 
-- **Compressed Arrow IPC bodies are unsupported.** `marrow/ipc.mojo:1417`
+- **Compressed Arrow IPC bodies are unsupported.** `marrow/ipc.mojo:1420`
   raises on LZ4_FRAME/ZSTD bodies. Marked *unverified* as to how much it would
   buy on marrow's reader. - **No `__dataframe__` protocol**, though
   the PyCapsule/C Stream path marrow already has is the better-supported
@@ -785,7 +790,7 @@ differentiator hiding inside a table-stakes item.
   Python frontend cannot map them to distinct exception classes. That is cheap
   to copy and should land with the frontend, not after it. - **Per-key null
   placement is missing on sort:** `Sort` carries one `nulls_first: Bool` for
-  all keys (`logical.mojo:1871`); ibis's `SortKey` carries it per key.
+  all keys (`logical.mojo:1874`); ibis's `SortKey` carries it per key.
 
 ---
 
@@ -983,7 +988,7 @@ and copying into it.
 
 ### Why marrow would want it
 
-`Buffer.to_device` (`marrow/buffers.mojo:910`) is `enqueue_create_buffer` plus
+`Buffer.to_device` (`marrow/buffers.mojo:913`) is `enqueue_create_buffer` plus
 `enqueue_copy` — every upload allocates a device buffer and copies the whole
 range into it, and `Bitmap.to_device` and `Array.to_device` all funnel through
 it. CLAUDE.md's measured guidance is that transfer cost dominates and that
@@ -993,7 +998,7 @@ that removes the copy rather than amortising it.
 ### Why it does not work on this machine
 
 **Metal requires a page-aligned base and a page-multiple length.** Marrow
-allocates at `alignment=64` (`marrow/buffers.mojo:501`) because that is Arrow's
+allocates at `alignment=64` (`marrow/buffers.mojo:504`) because that is Arrow's
 rule — `PoolBuffer::RoundCapacity` is `RoundUpToMultipleOf64` — and the page on
 Apple Silicon is 16 KiB. So Metal rejects every buffer marrow owns, and the
 development machine is Metal. It works on CUDA and HIP, where the wrap also

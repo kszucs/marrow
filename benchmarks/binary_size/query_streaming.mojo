@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size floor: fused values through the plan/operator layers.
 
 `SELECT a, name FROM orders WHERE a > b`, built from `marrow.expr`'s logical

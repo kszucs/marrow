@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Nested (list/struct) compute kernels.
 
 `ArrayLengthKernel` — element count per list → `Int32Array`, the list analogue of

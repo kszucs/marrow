@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 from std.testing import assert_equal, assert_false, assert_true
 from max.gpu.host import DeviceContext
 from std.sys.info import CompilationTarget

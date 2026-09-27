@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """CRC-32, the ISO-3309 / zlib / gzip checksum."""
 
 

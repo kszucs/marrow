@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 import std.math as math
 
 from std.bit import count_trailing_zeros, pop_count

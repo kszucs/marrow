@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Array builders for constructing Arrow arrays incrementally.
 
 `Builder` is the trait that all typed builders implement.  `DynBuilder` is

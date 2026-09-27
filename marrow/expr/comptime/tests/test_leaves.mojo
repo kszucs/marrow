@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Every family's leaves — a column, a literal and a parameter.
 
 Each case runs a plan, so a leaf is checked where it is used: a column must

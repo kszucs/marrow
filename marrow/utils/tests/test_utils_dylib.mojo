@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`LibSpec`, `Dylib.open_spec` and `LibSet` -- declaring optional C libraries.
 
 Exercised against the real `Codecs` set from `compression.mojo` rather than a

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Arithmetic beyond `+ - *`: the unary family, the float-returning family,
 and the two value predicates.
 

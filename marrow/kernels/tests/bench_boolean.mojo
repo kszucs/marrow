@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for the boolean kernels.
 
 Run with: pixi run pytest marrow/kernels/tests/bench_boolean.mojo --benchmark

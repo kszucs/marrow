@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Reading PyArrow-written files: flat columns (nulls, codecs), the value types
 marrow maps (narrow ints, temporal, binary), column projection, and multi-page
 chunks. Also covers value/boundary edge cases modelled on the pyarrow parquet

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Window functions, by input shape — where the cost of a frame actually is.
 
 Run with:

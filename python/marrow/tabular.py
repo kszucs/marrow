@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """``RecordBatch`` and ``Table``.
 
 A `RecordBatch` is one contiguous batch; a `Table` is a schema plus one

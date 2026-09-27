@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Every rule, twice: that it fires, and that firing changes no answer.
 
 **The second half is the one that matters.** A rule that fires and is wrong

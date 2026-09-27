@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: **Sort + Limit**, which nothing else measures.
 
 `SELECT a, name FROM t ORDER BY a LIMIT 3` over the same batch as

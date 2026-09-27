@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for the hash join kernel."""
 
 from std.testing import assert_equal, assert_true, assert_false

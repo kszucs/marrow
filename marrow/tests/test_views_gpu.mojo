@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """GPU tests: BufferView and BitmapView as DevicePassable in GPU kernels.
 
 Each helper kernel captures a view as a *function parameter* (not a closure

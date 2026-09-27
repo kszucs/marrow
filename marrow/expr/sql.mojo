@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """A SQL front end: a query string in, a `DynRelation` out.
 
 One file, because the three stages are one pipeline and each is only useful to

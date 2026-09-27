@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The Parquet file-format layer: the Thrift Compact Protocol codec plus the
 metadata structures it serializes.
 

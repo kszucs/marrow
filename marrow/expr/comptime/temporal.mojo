@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Temporal operators: extraction and truncation over a temporal operand.
 
 Both nodes here are **breakers** — `bind` runs a whole-column kernel and `lane`

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The composition base every Python wrapper shares.
 
 Wrappers hold a binding object rather than inheriting from it. The Mojo side

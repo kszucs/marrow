@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`DynValue`, `Shape` and `Datum` — the erasure boundary itself.
 
 What is tested here is the boundary, not either lane: that both lanes box into

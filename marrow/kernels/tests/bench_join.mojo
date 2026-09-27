@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for the hash join kernel.
 
 Covers three phases across sizes 10k–10M (and a gated 100M tier):

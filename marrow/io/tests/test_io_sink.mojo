@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`ByteSink` and the buffering adapter the format writers use.
 
 Two properties carry most of the weight here, because both are things the old

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`Variant`'s `size_of` disagrees with its real allocation stride when the
 largest member is not the most-aligned member.
 

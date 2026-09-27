@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Parity test: marrow's content-defined page boundaries must be
 byte-identical to Arrow C++'s, for the same data and the same chunking
 options.

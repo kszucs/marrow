@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Parquet codecs — one small type per coding scheme.
 
 Each encoding is its own stateless codec (`encode`/`decode` static methods);

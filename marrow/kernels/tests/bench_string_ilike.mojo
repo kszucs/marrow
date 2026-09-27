@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for ILIKE, and for the general backtracking LIKE matcher.
 
 ILIKE case-folds per row; the general matcher is what a wildcard in the middle

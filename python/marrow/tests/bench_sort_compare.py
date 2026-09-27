@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Sort comparison: marrow vs pyarrow vs polars, single- AND multi-threaded.
 
 Threading mode is chosen by env so the same file covers both — run it twice:

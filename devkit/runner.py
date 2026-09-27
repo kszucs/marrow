@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Turning a selection of Mojo cases into a compiled driver and a set of results.
 
 This is the harness proper: which lanes a session runs, which cases a driver has

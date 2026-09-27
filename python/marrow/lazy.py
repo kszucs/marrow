@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The lazy relational frontend — an ibis-flavoured ``LazyTable`` over ``Plan``.
 
 Nothing here executes until :meth:`LazyTable.collect`. Every verb returns a new

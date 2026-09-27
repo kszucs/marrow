@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Point marrow's `dlopen` search at the libraries shipped inside the package.
 
 marrow opens its optional C libraries -- the Parquet page codecs and

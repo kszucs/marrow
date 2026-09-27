@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Edge cases for the SQL string function surface (`StringOperands` kernels).
 
 The golden corpus asks these functions against its `text` fixture, six rows

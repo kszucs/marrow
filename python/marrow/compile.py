@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """``marrow compile`` — compile a ``.mojo`` query file into a standalone binary.
 
 A user writes a ``.mojo`` file that builds a plan with ``param()`` placeholders

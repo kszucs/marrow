@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The string columns the string benchmarks measure over.
 
 Shared rather than repeated because those benchmarks are spread across four

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The developer CLI: `python -m devkit --help`.
 
 The only module that imports click, and the only one that assembles the objects
@@ -458,6 +461,49 @@ def docs_check(ctx):
 
     check = SnippetCheck(ctx.repo, ctx.timed_toolchain(SnippetCheck.TIMEOUT))
     if not check.run(Report()):
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# license
+# ---------------------------------------------------------------------------
+
+
+@cli.group("license")
+def license_():
+    """The Apache-2.0 header on every source file."""
+
+
+def _report_unknown(unknown):
+    for path in unknown:
+        click.echo(f"{path}: no header rule for this format -- see devkit/license.py")
+
+
+@license_.command("check")
+@pass_context
+def license_check(ctx):
+    """List the files missing the header; exit 1 if any is."""
+    from .license import LicenseHeaders
+
+    missing, unknown = LicenseHeaders(ctx.repo.root).scan()
+    for path in missing:
+        click.echo(f"{path}: no license header")
+    _report_unknown(unknown)
+    if missing or unknown:
+        sys.exit(1)
+
+
+@license_.command("fix")
+@pass_context
+def license_fix(ctx):
+    """Add the header to every file missing it."""
+    from .license import LicenseHeaders
+
+    fixed, unknown = LicenseHeaders(ctx.repo.root).fix()
+    for path in fixed:
+        click.echo(f"{path}: header added")
+    _report_unknown(unknown)
+    if unknown:
         sys.exit(1)
 
 

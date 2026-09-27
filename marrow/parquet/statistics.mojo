@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Column statistics — the min/max bounds shared by the reader and writer.
 
 `Statistics.min_max` computes a column chunk's PLAIN-encoded min/max bytes from

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The cross-lane golden query corpus: fixtures, case format, codegen, transpile.
 
 One case is one file, `golden/cases/<name>.mojo`, and it is Mojo source.  The

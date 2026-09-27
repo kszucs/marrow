@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for sort: marrow vs PyArrow vs Polars vs DuckDB vs NumPy.
 
 Single-threaded throughout for a fair comparison with marrow's serial Phase 1.

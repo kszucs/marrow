@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for SwissHashTable: insert, build, probe, num_keys."""
 
 from std.testing import assert_equal, assert_true

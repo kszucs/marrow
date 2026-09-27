@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Distinct-count kernels — exact and approximate (HyperLogLog).
 
 ``count_distinct`` is exact to the same 64-bit-hash basis the group-by hash

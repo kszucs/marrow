@@ -1,3 +1,8 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Golden corpus coverage
 
 What the corpus asks, what it deliberately records as *unsupported*, and what

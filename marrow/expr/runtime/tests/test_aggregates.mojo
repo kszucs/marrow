@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The runtime lane's aggregates — a name and an erased operand.
 
 `Aggregate` covers the case where the aggregate is written in Mojo and

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The golden corpus, driven through the SQL front end.
 
 Every case in `golden/cases/` already carries the query **as SQL** in its

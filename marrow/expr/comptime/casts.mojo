@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Fused casts: nodes that change a subtree's output type.
 
 Two shapes live here, and the split is the same one `ColumnBound` names.

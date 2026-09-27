@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The type system — ``DataType``, ``Field``, ``Schema``, and the factories.
 
 These three are wrapped rather than re-exported raw, and that is the whole

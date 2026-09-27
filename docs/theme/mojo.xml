@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <!DOCTYPE language>
 <!--
   Mojo, for the docs' code listings. Pandoc ships no Mojo grammar, so without
@@ -6,7 +11,7 @@
   use -- keywords, argument conventions, builtin types, decorators, strings,
   docstrings, comments and numbers -- not the whole language.
 -->
-<language name="Mojo" version="1" kateversion="5.0" section="Sources" extensions="*.mojo" mimetype="text/x-mojo" license="MIT">
+<language name="Mojo" version="1" kateversion="5.0" section="Sources" extensions="*.mojo" mimetype="text/x-mojo" license="Apache-2.0">
   <highlighting>
     <list name="keywords">
       <item>alias</item>

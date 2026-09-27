@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: a fully **fused** aggregation over an `int64` key.
 
 `SELECT g, sum(a), min(b) FROM orders GROUP BY g`. Keys and aggregate inputs

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Single-shot profiling driver for `sum(qty * price) GROUP BY g`, per lane.
 
 The query `marrow/expr/tests/bench_comptime.mojo` times as

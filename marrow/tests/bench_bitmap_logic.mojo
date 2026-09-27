@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for the Bitmap SIMD boolean operators, on the aligned path.
 
 Exercises:

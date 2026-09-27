@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: the type-erased runtime lane, end to end.
 
     SELECT a, name FROM orders WHERE a > b

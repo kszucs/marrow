@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 from std.ffi import c_char, CStringSpan
 from std.memory import ArcPointer, unsafe_memcpy
 from std.memory.alloc import unsafe_alloc

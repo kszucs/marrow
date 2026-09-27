@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """An index: what a source knows about its data before reading it.
 
 Given a filter's predicates and an index over a source, a plan can read less:

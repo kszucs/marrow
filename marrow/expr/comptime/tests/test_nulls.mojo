@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The nodes whose validity is data-dependent.
 
 Every other comptime node is null-in-null-out: it intersects its operands'

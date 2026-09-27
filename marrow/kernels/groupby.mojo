@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Hash grouping — keys-only, and the assignment it produces.
 
 `Groups` is the value type: which slot each row of a morsel contributes to.

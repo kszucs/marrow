@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate for a fully **fused** aggregation.
 
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name` — the same query as

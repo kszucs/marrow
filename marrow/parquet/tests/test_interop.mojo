@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Cross-compatibility tests: Marrow and PyArrow must read each other's Parquet.
 
 Three shapes, run over a range of types and codecs:

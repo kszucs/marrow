@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for LIKE with a per-row pattern — the array x array overload.
 
 The pattern is recompiled once per row here, against once per call in

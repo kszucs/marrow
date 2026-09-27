@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The string family — the one that cannot vectorise.
 
 `NumericValue.lane[W]` and `BoolValue.lane[W]` answer `W` elements because

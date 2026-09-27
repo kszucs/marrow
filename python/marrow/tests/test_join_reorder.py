@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """What the two cost-based rules actually do to a multi-join plan.
 
 `golden/cases/join_three_way_*.mojo` and `join_four_way_chain.mojo` assert that

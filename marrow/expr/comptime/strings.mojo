@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Fused string operators.
 
 The family that cannot vectorise, kept honest about it. A `StringValue`'s
@@ -15,7 +18,7 @@ comparison or one transform, so a `Bound` of operand bounds and a looping
 whole batch in `bind` and read the answer back in `lane`, the `CaseWhen` shape.
 For `StringLength` that is because `LengthKernel` is a column fold. For
 `StringPredicate` it is `LIKE`: `LikeKernel` and `ILikeKernel` override
-`apply_scalar` to compile their pattern **once** (`kernels/string.mojo:340`),
+`apply_scalar` to compile their pattern **once** (`kernels/string.mojo:343`),
 and a fused `lane` would recompile it per row. `StartsWith` and `EndsWith` ride
 along on the same node because sharing it costs them only a bitmap they would
 otherwise have bit-packed themselves.
@@ -239,7 +242,7 @@ struct StringPredicate[
     **The scalar-pattern branch is the point.** When the right operand is
     `Shape.scalar` this calls `apply_scalar`, which `LikeKernel` and
     `ILikeKernel` override to compile the pattern once
-    (`kernels/string.mojo:340`) rather than per row. Going through `apply`
+    (`kernels/string.mojo:343`) rather than per row. Going through `apply`
     instead would first broadcast the constant into `n` copies of the same
     string and then recompile it against every one of them.
 

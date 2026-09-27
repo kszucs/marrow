@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The bitmaps the bitmap benchmarks measure over.
 
 Shared rather than repeated because those benchmarks are spread across four

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # Two services, one Dockerfile: the image is platform-neutral and the platform
 # is set here. See Dockerfile.linux for which one runs where.
 services:

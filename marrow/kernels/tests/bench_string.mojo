@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for LIKE with a scalar pattern — the pattern compiled once.
 
 Covers `URL LIKE '%google%'` over 10k-1M rows, and the ClickBench q21 shape at

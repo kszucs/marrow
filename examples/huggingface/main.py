@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Query a Parquet file on the Hugging Face Hub, without downloading it.
 
 Nothing here is Hugging Face-specific. The Hub serves Parquet over plain HTTPS

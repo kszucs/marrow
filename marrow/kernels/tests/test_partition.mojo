@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for `RadixPartitioner` — the radix split behind group-by and joins.
 
 It had no direct coverage: its correctness was only ever implied by whichever

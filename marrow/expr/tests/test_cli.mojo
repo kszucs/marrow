@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`marrow.expr.cli` — the renderers, and the command line a plan derives.
 
 `QueryCli.run()` reads the process's real `argv` and can `exit()`, so it is not

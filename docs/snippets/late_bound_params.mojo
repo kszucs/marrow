@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """A late-bound parameter, supplied per execution through `Bindings`.
 
 Compiled by `pixi run docs_check`; included by docs/guide/expressions.qmd.

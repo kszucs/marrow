@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for the string compute kernels (marrow.kernels.string)."""
 
 from std.testing import (

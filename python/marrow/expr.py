@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The Python expression surface — ``Column`` and ``Aggregate``.
 
 ``marrow.libmarrow`` exposes two binding types from the runtime expression

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The vocabulary a golden case may use — the one import a case file needs.
 
 `helpers.NAMESPACE` in `helpers.py` is this same list for the Python lane.

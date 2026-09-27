@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The Python expression surface — ``col``, ``lit`` and everything on them.
 
 Every case evaluates the expression against a batch rather than checking how it

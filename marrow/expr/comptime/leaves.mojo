@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The leaves of the comptime lane: a column reference and a constant.
 
 A leaf is where a fused subtree touches the batch, and therefore where `bind`

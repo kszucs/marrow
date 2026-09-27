@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmarks for arithmetic kernel variants.
 
 CPU: AddKernel with no nulls and with 10% nulls, across sizes 1k-1M for int32

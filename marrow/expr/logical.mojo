@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The logical layer: an immutable description of a query.
 
 Paired with `physical.mojo`, which holds what these become when they run, and

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Reproducer: `List` growth silently drops every other `DynScalar`.
 
 Run with:  pixi run -e dev mojo run -I . docs/repros/dynscalar_list_growth.mojo
@@ -6,7 +9,7 @@ Expected `int64 int64 int64 int64 int64`; actual `int64 null int64 null int64`.
 Elements at odd indices come back as the variant's **first** member
 (`NullScalar`), i.e. their discriminant reads as 0. Reserving capacity up front
 avoids it, which is what `StructArray.__getitem__` already does
-(`arrays.mojo:1930`).
+(`arrays.mojo:1933`).
 
 **This is not memory corruption.** Under AddressSanitizer the same run produces
 the same wrong values and **no ASAN diagnostic at all** -- no overflow, no

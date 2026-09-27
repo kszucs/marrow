@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Turning a scan's pruners into a read plan over a real Parquet file.
 
 Written against files produced by **pyarrow**, not by marrow's own writer.

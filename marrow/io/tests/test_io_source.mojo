@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`ByteSource` and its resident backends.
 
 The batch entry point is what the decode fan-out reads through, so its edges —

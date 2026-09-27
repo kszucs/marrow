@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Lexing and parsing cases for `expr/sql.mojo`.
 
 Everything here stops at `Parser.parse`: no schema, no catalogue, no plan. The

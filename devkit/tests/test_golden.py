@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The corpus: case format, transpile rules, and the SQL lane's verdicts."""
 
 import pyarrow as pa

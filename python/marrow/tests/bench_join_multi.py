@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Multi-table joins: marrow vs PyArrow vs Polars vs DuckDB.
 
 ``bench_join.py`` asks how fast one hash join is. This file asks a different

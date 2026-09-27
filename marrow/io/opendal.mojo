@@ -1,3 +1,10 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# The C ABI declarations are transcribed from Apache OpenDAL
+# (`bindings/c/include/opendal.h`, v0.59.0), Copyright The Apache Software
+# Foundation, Apache License 2.0; see NOTICE.txt.
+
 """Object stores, through OpenDAL.
 
 Everything OpenDAL-shaped lives here: the vendored C ABI, the `OpenDalStore`

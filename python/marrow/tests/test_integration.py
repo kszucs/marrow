@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Arrow integration tests for Marrow.
 
 Validates Marrow's C Data Interface implementation against Arrow's official

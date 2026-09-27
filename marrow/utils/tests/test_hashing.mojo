@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`RapidHash64` and `XxHash64` against independent reference values.
 
 The XXH64 vectors were produced by a from-scratch Python implementation of the

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`col` and `lit` — the one surface that spans both lanes.
 
 Every other module in this package belongs to exactly one lane. This one cannot, and

@@ -1,3 +1,10 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# `test_selection_across_every_page_boundary_case` is ported from Apache Arrow
+# Rust (`parquet/src/arrow/arrow_reader/selection/ranges.rs`), Copyright The
+# Apache Software Foundation, Apache License 2.0, and modified; see NOTICE.txt.
+
 """RowSelection: the unit-level per-row keep/skip within a row group (built from
 per-page keep flags and combined with intersect) plus the decode path — reading a
 file with a RowSelection must yield exactly the selected rows, and must match a

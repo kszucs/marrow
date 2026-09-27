@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Plan nodes and the operators they become.
 
 `logical.mojo` and `physical.mojo` are covered together because neither is

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The pytest boundary.
 
 Every decision this file makes lives in `devkit/`; what stays here is the part

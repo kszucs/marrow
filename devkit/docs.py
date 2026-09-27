@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Compile every Mojo listing in the docs, so the guides cannot rot.
 
 Quarto executes the Python cells at render time, which keeps that half honest.

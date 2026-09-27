@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The physical layer: operators that transform batches as they are pushed.
 
 A `Relation` describes a query and is immutable, shareable and rewritable. This

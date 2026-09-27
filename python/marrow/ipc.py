@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Arrow IPC — the file and stream formats, by path.
 
 Path-based only: the Mojo reader and writer take a filename, so there is no

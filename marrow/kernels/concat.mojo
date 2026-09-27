@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Array concatenation kernel.
 
 Combines a list of arrays into a single array by concatenating their contents.

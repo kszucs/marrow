@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`AggKernel` — the aggregates that consume columns, at both slot counts.
 
 Every case here exists because of one hazard: the one-slot assignment carries

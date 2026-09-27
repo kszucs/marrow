@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for array builders (BoolBuilder, PrimitiveBuilder, StringBuilder,
 ListBuilder, FixedSizeListBuilder, StructBuilder) and factory functions."""
 

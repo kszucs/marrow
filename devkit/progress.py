@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """A live display for a command that runs for minutes and says nothing.
 
 Separate from `devkit.mojo` so that module needs nothing but the standard

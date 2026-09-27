@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Native Parquet deserialization → Arrow: the full read path.
 
 `read_table` memory-maps the file, reads the footer metadata, and decodes each

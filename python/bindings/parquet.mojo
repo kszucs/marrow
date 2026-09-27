@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Python bindings for the native Parquet reader/writer.
 
 Thin marshaling over `marrow.parquet.read_table` / `write_table`: the friendly

@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Single-shot profiling driver for the radix-partitioned parallel group-by.
 
 Groups a 10M-row int32 column over 5M distinct keys in a loop, so a sampling

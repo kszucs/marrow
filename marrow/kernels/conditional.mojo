@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Conditional / null-handling compute kernels.
 
 Four SQL-style value-selection kernels that pick, per row, one element from a

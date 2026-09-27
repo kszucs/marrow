@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The comptime lane against the runtime lane: each query as two contenders,
 `bench_comptime_<op>` and `bench_runtime_<op>`, over the same batch.
 

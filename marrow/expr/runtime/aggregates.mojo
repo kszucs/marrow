@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Aggregates named at run time — the runtime lane's half of aggregation.
 
 Its counterpart is `comptime/aggregates.mojo`, which holds the same aggregates

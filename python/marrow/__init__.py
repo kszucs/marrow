@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """marrow — Apache Arrow in Mojo, with a Python face.
 
 Two surfaces, told apart by the entry point:

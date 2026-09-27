@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Window functions — the shapes the golden corpus cannot reach.
 
 `golden/cases/window_*.mojo` checks the seven semantics differentially against

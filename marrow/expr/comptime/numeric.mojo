@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Fused numeric operators: nodes built from other numeric nodes.
 
 Each is generic over its operands' *types*, so the whole subtree is one type

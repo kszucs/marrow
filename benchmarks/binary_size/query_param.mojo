@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary-size gate: what a late-bound query parameter costs.
 
 Nearly `query_scan.mojo`'s query and plan — same fused predicate, same

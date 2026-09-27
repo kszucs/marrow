@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The physical contract — `Operator`, `Morsel`, `Pipeline`.
 
 These are the tests the plan-building API deliberately *cannot* express.
