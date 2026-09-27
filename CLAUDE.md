@@ -65,7 +65,7 @@ pixi run bench-size-check           # the same gate against its recorded baselin
 ```
 
 Every one of those is a thin wrapper over **`devkit`**, the developer tooling
-package: `pixi run -e dev python -m devkit --help` is the same surface with more
+package: `pixi run devkit --help` is the same surface with more
 of it exposed (`build`, `bench`, `profile`, `golden`, `integration`, `license`). It is where
 the compiler flags, the driver generation, the benchmark history and the golden
 case format all live; `conftest.py` is nothing but pytest hooks over it. See
@@ -278,7 +278,7 @@ def bench_kernel_1m(mut b: Benchmark) raises: _bench_kernel(b, 1_000_000)
 ### Developer tooling — `devkit/`
 
 Everything that builds, tests, benchmarks, profiles or measures the tree lives
-in one package, behind one CLI: `pixi run -e dev python -m devkit --help`. Every
+in one package, behind one CLI: `pixi run devkit --help`. Every
 pixi task is a thin wrapper over it, so a task and the CLI cannot drift.
 
 **`conftest.py` is the entire pytest boundary.** It holds the eleven hooks, the
@@ -996,7 +996,7 @@ In addition:
   naming. This matters most for validity/null handling, offset semantics, and
   coverage.
 - **Every file carries the Apache-2.0 header**, and `pixi run fmt` adds it
-  (`python -m devkit license check` lists what lacks it). **Code, tables or
+  (`pixi run devkit license check` lists what lacks it). **Code, tables or
   test vectors ported from another project** also name the upstream project,
   its files and licence in a comment below the header, and get an entry in
   `NOTICE.txt` — see `marrow/parquet/chunker.mojo`. Consulting a reference
