@@ -104,8 +104,11 @@ from .logical import (
     Join,
     Limit,
     ParquetScan,
+    Difference,
+    Intersection,
     Project,
     Sort,
+    Union,
 )
 
 
@@ -318,6 +321,12 @@ struct PropagateEmpty(Rule):
     only the cases that are provably empty are taken, and the rest are left
     alone.
 
+    **The set relations collapse when their answer is provably empty**: a
+    `Union` with both sides empty, a `Difference` with an empty left, an
+    `Intersection` with either. A `Union` with one side empty is *not*
+    replaced by the other side, because the output takes the left side's
+    names.
+
     `Aggregate` is deliberately **not** included: an ungrouped aggregate over
     zero rows produces one row (`count(*) = 0`, `sum = NULL`), not zero rows.
     Collapsing it would turn a valid answer into no answer at all.
@@ -325,31 +334,34 @@ struct PropagateEmpty(Rule):
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
+        var empty = False
         if node.isa[Filter]():
-            if node.get[Filter]().input[].copy().isa[EmptyRelation]():
-                var out: DynRelation = EmptyRelation(
-                    RecordBatch.empty(node.schema())
-                )
-                return out^
-        if node.isa[Sort]():
-            if node.get[Sort]().input[].copy().isa[EmptyRelation]():
-                var out: DynRelation = EmptyRelation(
-                    RecordBatch.empty(node.schema())
-                )
-                return out^
-        if node.isa[Limit]():
-            if node.get[Limit]().input[].copy().isa[EmptyRelation]():
-                var out: DynRelation = EmptyRelation(
-                    RecordBatch.empty(node.schema())
-                )
-                return out^
-        if node.isa[Project]():
-            if node.get[Project]().input[].copy().isa[EmptyRelation]():
-                var out: DynRelation = EmptyRelation(
-                    RecordBatch.empty(node.schema())
-                )
-                return out^
-        return node.copy()
+            empty = node.get[Filter]().input[].isa[EmptyRelation]()
+        elif node.isa[Sort]():
+            empty = node.get[Sort]().input[].isa[EmptyRelation]()
+        elif node.isa[Limit]():
+            empty = node.get[Limit]().input[].isa[EmptyRelation]()
+        elif node.isa[Project]():
+            empty = node.get[Project]().input[].isa[EmptyRelation]()
+        elif node.isa[Union]():
+            ref u = node.get[Union]()
+            empty = (
+                u.left[].isa[EmptyRelation]() and u.right[].isa[EmptyRelation]()
+            )
+        elif node.isa[Intersection]():
+            ref i = node.get[Intersection]()
+            empty = (
+                i.left[].isa[EmptyRelation]() or i.right[].isa[EmptyRelation]()
+            )
+        elif node.isa[Difference]():
+            empty = node.get[Difference]().left[].isa[EmptyRelation]()
+        if empty:
+            var out: DynRelation = EmptyRelation(
+                RecordBatch.empty(node.schema())
+            )
+            return out^
+        else:
+            return node.copy()
 
 
 struct MergeProjects(Rule):
@@ -1005,6 +1017,8 @@ struct ColumnPruning(Copyable, Movable):
     - `Limit` passes it through untouched.
     - `Join` widens it with both key sets, because a key is read even when it
       is not emitted.
+    - `Union`, `Intersection` and `Difference` **replace** it with every column
+      of each side: they match rows by position, so every column counts.
     - the sources **consume** it: a `ParquetScan` narrows its schema, an
       `InMemoryTable` selects its columns.
 
@@ -1047,6 +1061,11 @@ struct ColumnPruning(Copyable, Movable):
         if len(out) == 0 and len(schema.fields) > 0:
             out.append(schema.fields[0].name.copy())
         return out^
+
+    @staticmethod
+    def _whole(node: DynRelation) raises -> DynRelation:
+        """`node` pruned beneath, but keeping every column it produces."""
+        return Self.apply(node, node.schema().names())
 
     @staticmethod
     def apply(node: DynRelation, needed: List[String]) raises -> DynRelation:
@@ -1136,6 +1155,30 @@ struct ColumnPruning(Copyable, Movable):
                 kind=j.kind,
                 strictness=j.strictness,
                 build_side=j.build_side,
+            )
+            return out^
+
+        # The set relations are positional and match whole rows, so each side
+        # keeps all of its own columns. Descending anyway still prunes beneath
+        # them.
+        if node.isa[Union]():
+            ref u = node.get[Union]()
+            var out: DynRelation = Union(
+                Self._whole(u.left[]), Self._whole(u.right[])
+            )
+            return out^
+
+        if node.isa[Intersection]():
+            ref i = node.get[Intersection]()
+            var out: DynRelation = Intersection(
+                Self._whole(i.left[]), Self._whole(i.right[]), i.all
+            )
+            return out^
+
+        if node.isa[Difference]():
+            ref d = node.get[Difference]()
+            var out: DynRelation = Difference(
+                Self._whole(d.left[]), Self._whole(d.right[]), d.all
             )
             return out^
 

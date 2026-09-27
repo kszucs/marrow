@@ -18,7 +18,7 @@ comes from, so it can be checked rather than taken on trust.
 
 Two independent checks, neither of which grades marrow against itself:
 
-- **The golden corpus** — `golden/`, **278 query cases**. Each records a SQL
+- **The golden corpus** — `golden/`, **285 query cases**. Each records a SQL
   query, the answer **generated from DuckDB**, and the marrow spelling. The
   expectations are *never* regenerated from marrow. The corpus currently
   carries **zero `xfail`s**: every case that compiles, passes.
@@ -44,18 +44,17 @@ narrowing a source to zero columns.
 
 ## What the corpus measures as missing
 
-63 of the 278 cases carry `-- skip mojo`: marrow has no API for them, so the
+58 of the 285 cases carry `-- skip mojo`: marrow has no API for them, so the
 SQL and the DuckDB answer are recorded and the marrow body is a *proposal*
 rather than a verified spelling.
 
 | cases | area |
 |---:|---|
-| 13 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness, `bool_and`/`bool_or` |
+| 12 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness, `bool_and`/`bool_or` |
 | 10 | temporal — date_diff, age, strftime/strptime, make_date, epoch seconds, month intervals, time zones, timestamp literals |
 | 8 | nested — struct field, map lookup, list element/slice, unnest |
 | 7 | math — greatest/least, rounding to digits, bitwise operators, gcd/lcm, signbit, trigonometry |
 | 5 | string — regexp, concat_ws |
-| 4 | set operations — UNION / EXCEPT / INTERSECT |
 | 4 | joins — cross, non-equi, asof |
 | 3 | GROUPING SETS / ROLLUP / CUBE |
 | 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |

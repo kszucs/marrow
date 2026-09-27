@@ -2080,12 +2080,18 @@ struct StructArray(Array):
             children=children^,
         )
 
-    def flatten(self) -> List[DynArray]:
-        """Return one DynArray per field.
+    def flatten(self) raises -> List[DynArray]:
+        """One `DynArray` per field, each narrowed to this array's window.
 
-        Matches PyArrow's StructArray.flatten() API.
+        Matches PyArrow's `StructArray.flatten()`, which applies the parent's
+        offset — the raw `children` of a sliced struct (a morsel a `Limit`
+        cut) start at its parent's first row, not its own. Like `field`, the
+        parent's validity is not merged in.
         """
-        return self.children.copy()
+        var out = List[DynArray](capacity=len(self.children))
+        for i in range(len(self.children)):
+            out.append(self.field(i))
+        return out^
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array."""

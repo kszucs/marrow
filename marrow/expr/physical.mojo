@@ -60,7 +60,7 @@ from ..io import ByteSource, DynSource
 from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
 from ..utils import RapidHash64
 from .bindings import Bindings
-from .logical import DynValue, WindowExpr
+from .logical import DynValue, Multiplicity, WindowExpr
 from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
 from ..kernels.window import WindowExtents, mark_changes
@@ -1424,6 +1424,127 @@ struct JoinOperator(Operator):
             self._buffered, self._probe_schema.copy(), self._ctx
         )
         return Datum(self._probe(whole).to_dyn())
+
+
+def _relabelled(schema: Schema, batch: StructArray) raises -> StructArray:
+    """`batch`'s columns under `schema`'s names — how a set operation hands
+    on a right-side row, which matches the output by position, not by name.
+    `flatten` applies the batch's own offset, which a `Limit`-sliced morsel
+    needs."""
+    return _struct_of(schema, batch.flatten(), len(batch))
+
+
+struct UnionOperator(Operator):
+    """`UNION ALL` — the left side's morsels, then the right side's.
+
+    Streaming on both sides: `push` passes a left morsel straight through, and
+    `drain` pulls the right side's pipeline one batch per call, the resumable
+    shape `Pipeline.drain` expects. Deduplication, for a bare `UNION`, is a
+    keys-only `GroupByOperator` stacked above this one, not a mode of it.
+    """
+
+    var _other: DynOperator
+    """The right side's whole pipeline, held as `JoinOperator` holds its
+    build side."""
+    var _schema: Schema
+
+    def __init__(out self, var other: DynOperator, var schema: Schema):
+        self._other = other^
+        self._schema = schema^
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        return Datum(_relabelled(self._schema, morsel.batch).to_dyn())
+
+    def drain(mut self) raises -> Optional[Datum]:
+        var b = self._other.drain()
+        if b:
+            return Datum(
+                _relabelled(self._schema, b.value().struct_array()).to_dyn()
+            )
+        else:
+            return None
+
+
+struct MultisetOperator[M: Multiplicity](Operator):
+    """`Intersection` and `Difference`, with or without `ALL`.
+
+    Blocking on both sides: whether a row survives depends on how often it
+    occurs on each, and neither count is final until its side is exhausted.
+    One `HashGrouping` numbers the distinct rows of both sides — the left
+    side's first, as they are pushed, then the right side's at `drain` — and
+    `M.copies` turns each group's two counts into the copies it keeps.
+
+    The grouping is what makes NULL equal to itself, which set relations
+    require and a join key never allows.
+    """
+
+    var _other: DynOperator
+    var _all: Bool
+    var _schema: Schema
+    var _grouping: HashGrouping
+    var _left: List[Int]
+    """How many rows of the left side fell into each group."""
+    var _right: List[Int]
+    var _ctx: ExecContext
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var other: DynOperator,
+        all: Bool,
+        var schema: Schema,
+        var ctx: ExecContext,
+    ):
+        self._other = other^
+        self._all = all
+        self._schema = schema^
+        self._grouping = HashGrouping(ctx.copy())
+        self._left = List[Int]()
+        self._right = List[Int]()
+        self._ctx = ctx^
+        self._emitted = False
+
+    def _count(mut self, batch: StructArray, left: Bool) raises:
+        """Assign `batch`'s rows to groups and count them for one side."""
+        var n = len(batch)
+        var groups = self._grouping.assign(batch.flatten(), n)
+        self._left.resize(groups.num_groups, 0)
+        self._right.resize(groups.num_groups, 0)
+        var ids = groups.ids.values()
+        for i in range(n):
+            var g = Int(ids[i])
+            if left:
+                self._left[g] += 1
+            else:
+                self._right[g] += 1
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        self._count(morsel.batch, True)
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        while True:
+            var b = self._other.drain()
+            if b:
+                self._count(b.value().struct_array(), False)
+            else:
+                break
+        var which = Int32Builder(capacity=len(self._left))
+        for g in range(len(self._left)):
+            for _ in range(
+                Self.M.copies(self._left[g], self._right[g], self._all)
+            ):
+                which.append(Int32(g))
+        var indices = which.finish()
+        if len(indices) > 0:
+            var keys = self._grouping.key_columns(self._schema.fields)
+            var distinct = _struct_of(self._schema, keys^, len(self._left))
+            return Datum(take(distinct^.to_dyn(), indices, self._ctx))
+        else:
+            return None
 
 
 def _struct_of(

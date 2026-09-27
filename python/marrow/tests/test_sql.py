@@ -160,6 +160,55 @@ def test_distinct_groups_by_every_output_column(basic):
     assert len(out) == 4  # three keys and the null
 
 
+def test_union_all_and_union(emp, dept):
+    query = "SELECT did FROM emp {} SELECT did FROM dept ORDER BY did"
+    assert [r["did"] for r in rows(query.format("UNION ALL"), emp=emp, dept=dept)] == [
+        1,
+        1,
+        1,
+        2,
+        2,
+        3,
+    ]
+    assert [r["did"] for r in rows(query.format("UNION"), emp=emp, dept=dept)] == [
+        1,
+        2,
+        3,
+    ]
+
+
+def test_except_and_intersect(emp, dept):
+    out = rows("SELECT did FROM dept EXCEPT SELECT did FROM emp", emp=emp, dept=dept)
+    assert out == [{"did": 3}]
+    out = rows(
+        "SELECT did FROM emp INTERSECT ALL SELECT did FROM dept ORDER BY 1",
+        emp=emp,
+        dept=dept,
+    )
+    assert [r["did"] for r in out] == [1, 2]
+
+
+def test_intersect_binds_tighter_than_union(emp, dept):
+    """`a UNION b INTERSECT c` is `a UNION (b INTERSECT c)`: read left to
+    right it would be `{1, 2, 3} INTERSECT {3}`, just `3`."""
+    out = rows(
+        "SELECT did FROM emp UNION SELECT did FROM dept"
+        " INTERSECT SELECT did FROM dept WHERE did = 3 ORDER BY did",
+        emp=emp,
+        dept=dept,
+    )
+    assert [r["did"] for r in out] == [1, 2, 3]
+
+
+def test_a_compound_order_by_must_name_an_output_column(emp, dept):
+    with pytest.raises(Exception, match="sql: ORDER BY over a set operation"):
+        rows(
+            "SELECT did FROM emp UNION SELECT did FROM dept ORDER BY did + 1",
+            emp=emp,
+            dept=dept,
+        )
+
+
 # ── aggregates ─────────────────────────────────────────────────────────────
 
 

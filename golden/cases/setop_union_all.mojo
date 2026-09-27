@@ -12,11 +12,6 @@ def plan() raises -> DynRelation:
     from `regions`, so the answer has three of it. That is what separates it
     from `UNION`, and it is the cheaper of the two because no dedup is needed.
 
-    There is no set-operation node in `marrow/expr/logical.mojo`.
-
-    -- skip mojo
-    -- skip python
-
     -- expected
     region:string
     NULL

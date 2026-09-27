@@ -12,11 +12,6 @@ def plan() raises -> DynRelation:
     NULL region survives because `regions` has none, and `north` disappears
     although `sales` has two of it.
 
-    There is no set-operation node in `marrow/expr/logical.mojo`.
-
-    -- skip mojo
-    -- skip python
-
     -- expected
     region:string
     NULL

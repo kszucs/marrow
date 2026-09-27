@@ -327,6 +327,48 @@ def test_join_rejects_mismatched_key_counts(table, regions):
         table.join(regions, left_on=["region", "qty"], right_on=["region"])
 
 
+# ── distinct and set operations ─────────────────────────────────────────────
+
+
+def _regions(*names):
+    return ma.memtable(ma.record_batch({"r": ma.array(list(names))}))
+
+
+def _sorted_r(lazy_table):
+    return sorted(
+        (row["r"] for row in rows(lazy_table)), key=lambda v: (v is not None, v)
+    )
+
+
+def test_distinct_treats_null_as_equal_to_itself():
+    t = _regions("a", None, "a", None, "b")
+    assert _sorted_r(t.distinct()) == [None, "a", "b"]
+
+
+def test_union_all_and_union():
+    left, right = _regions("a", "a", None), _regions("a", None, "c")
+    assert _sorted_r(left.union_all(right)) == [None, None, "a", "a", "a", "c"]
+    assert _sorted_r(left.union(right)) == [None, "a", "c"]
+
+
+def test_except_and_intersect_with_and_without_all():
+    left, right = _regions("a", "a", "b", None), _regions("a", None)
+    assert _sorted_r(left.except_(right)) == ["b"]
+    assert _sorted_r(left.except_all(right)) == ["a", "b"]
+    assert _sorted_r(left.intersect(right)) == [None, "a"]
+    assert _sorted_r(left.intersect_all(_regions("a", "a", "a"))) == ["a", "a"]
+
+
+def test_a_set_operation_takes_the_left_names(table):
+    right = ma.memtable(ma.record_batch({"other": ma.array(["x"])}))
+    assert table.select("region").union_all(right).column_names == ["region"]
+
+
+def test_a_set_operation_rejects_different_widths(table):
+    with pytest.raises(Exception, match="columns"):
+        table.union_all(_regions("a"))
+
+
 # ── execution ───────────────────────────────────────────────────────────────
 
 

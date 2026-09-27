@@ -363,6 +363,34 @@ def _plan_join(
     )
 
 
+def _plan_distinct(py_self: PythonObject) raises -> PythonObject:
+    return _wrap(_plan(py_self).distinct())
+
+
+def _plan_union_all(
+    py_self: PythonObject, other: PythonObject
+) raises -> PythonObject:
+    return _wrap(_plan(py_self).union_all(_plan(other)))
+
+
+def _plan_intersect(
+    py_self: PythonObject, other: PythonObject, all: PythonObject
+) raises -> PythonObject:
+    if Bool(py=all):
+        return _wrap(_plan(py_self).intersect_all(_plan(other)))
+    else:
+        return _wrap(_plan(py_self).intersect(_plan(other)))
+
+
+def _plan_except(
+    py_self: PythonObject, other: PythonObject, all: PythonObject
+) raises -> PythonObject:
+    if Bool(py=all):
+        return _wrap(_plan(py_self).except_all(_plan(other)))
+    else:
+        return _wrap(_plan(py_self).except_(_plan(other)))
+
+
 def _plan_optimize(py_self: PythonObject) raises -> PythonObject:
     """The plan the rewriter would run — fifteen rules plus column pruning.
 
@@ -483,6 +511,10 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_sort]("sort")
         .def_method[_plan_limit]("limit")
         .def_method[_plan_join]("join")
+        .def_method[_plan_distinct]("distinct")
+        .def_method[_plan_union_all]("union_all")
+        .def_method[_plan_intersect]("intersect")
+        .def_method[_plan_except]("except_")
         .def_method[_plan_optimize]("optimize")
         .def_method[_plan_batches]("batches")
         .def_method[_plan_str]("__str__")

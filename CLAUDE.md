@@ -104,7 +104,7 @@ name, and the break surfaced only when `pytest golden` failed to build
 `libmarrow.so` and bailed out of the session before running a case — reported
 as `exit code 0`, which reads like a pass. After any change to a public name
 under `marrow/`, run `pixi run build_python`, `pixi run -e dev pytest golden`
-(279 cases, 216 compiled — the rest carry `-- skip mojo`; see
+(285 cases, 227 compiled — the rest carry `-- skip mojo`; see
 `golden/COVERAGE.md`), and grep `benchmarks/binary_size/` for the name.
 
 A single test file **cannot** be compiled on its own: with no `main()` there is
@@ -519,9 +519,13 @@ share no node types**:
   a `Variant` for inspection, so `isa[R]()` is a discriminant compare and the
   optimizer's rules read a real typed node, plus a trampoline for lowering. The
   nodes are `EmptyRelation`, `InMemoryTable`, `ParquetScan`, `Filter`,
-  `Project`, `Aggregate`, `Limit`, `Sort`, `Window` and `Join`, chained by
-  `.filter()` / `.select()` / `.project()` / `.aggregate()` / `.sort_by()` /
-  `.limit()` / `.join()` and run by `.execute()`; a window is attached with
+  `Project`, `Aggregate`, `Limit`, `Sort`, `Window`, `Join`, `Union`,
+  `Intersection` and `Difference`, chained by `.filter()` / `.select()` /
+  `.project()` / `.aggregate()` / `.sort_by()` / `.limit()` / `.join()` /
+  `.union()` / `.except_()` / `.intersect()` and run by `.execute()`.
+  `.distinct()` is an `Aggregate` keyed by every column, and the last two are
+  one `Multiset[M]` over a `Multiplicity` rule (`Intersect`, `Except`). A
+  window is attached with
   `.over(...)` on the aggregate. It also holds `Value` — the five-member trait
   every expression implements in either lane — and `DynValue`, the box the two
   lanes meet in.
@@ -538,7 +542,8 @@ share no node types**:
   operator per plan node
   — `FilterOperator`, `ProjectOperator`, `GroupByOperator`,
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
-  `LimitOperator`, `ParquetScanOperator`, `BatchSourceOperator` — plus
+  `UnionOperator`, `MultisetOperator[M]`, `LimitOperator`,
+  `ParquetScanOperator`, `BatchSourceOperator` — plus
   `Pipeline` and `EvalOperator`.
 - **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
   `boolean.mojo`, `strings.mojo`, `temporal.mojo`, `nested.mojo`, `casts.mojo`,

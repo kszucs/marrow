@@ -198,16 +198,11 @@ surface is Mojo-only.
 
 ## Recorded as unsupported
 
-62 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+58 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
-**Set operations** (4) — `setop_union_all`, `setop_union_distinct`,
-`setop_except`, `setop_intersect`. There is no set-operation node in
-`logical.mojo`. `UNION`/`EXCEPT`/`INTERSECT` also treat NULL as equal to
-itself, which no other part of the corpus does.
-
-**DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `SELECT DISTINCT` is an
-`aggregate` with keys and no aggregates; `DISTINCT ON` keeps whole rows and
-cannot be.
+**DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `distinct()` and
+`SELECT DISTINCT` are an `aggregate` with keys and no aggregates; `DISTINCT ON`
+keeps whole rows and cannot be.
 
 **GROUPING SETS / ROLLUP / CUBE** (3) — `grouping_rollup`, `grouping_cube`,
 `grouping_sets_explicit`. `Aggregate` carries one key list. `grouping_rollup`

@@ -433,6 +433,32 @@ class LazyTable(_Wrapper):
             )
         )
 
+    def distinct(self):
+        """One row per distinct row, NULL equal to itself (``SELECT DISTINCT``)."""
+        return LazyTable.wrap(self._binding.distinct())
+
+    def union(self, other):
+        """Distinct rows of both tables, matched by position (``UNION``)."""
+        return self.union_all(other).distinct()
+
+    def union_all(self, other):
+        """Every row of both tables, matched by position (``UNION ALL``)."""
+        return LazyTable.wrap(self._binding.union_all(other.unwrap()))
+
+    def except_(self, other):
+        """Distinct rows of this table that ``other`` lacks (``EXCEPT``)."""
+        return LazyTable.wrap(self._binding.except_(other.unwrap(), False))
+
+    def except_all(self, other):
+        return LazyTable.wrap(self._binding.except_(other.unwrap(), True))
+
+    def intersect(self, other):
+        """Distinct rows present in both tables (``INTERSECT``)."""
+        return LazyTable.wrap(self._binding.intersect(other.unwrap(), False))
+
+    def intersect_all(self, other):
+        return LazyTable.wrap(self._binding.intersect(other.unwrap(), True))
+
     # -- execution --------------------------------------------------------
 
     def collect(self, num_threads=0):

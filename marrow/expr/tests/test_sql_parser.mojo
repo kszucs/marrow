@@ -291,6 +291,37 @@ def test_distinct_is_recorded() raises:
     assert_true(ast.select.distinct)
 
 
+def test_a_compound_statement_records_each_branch() raises:
+    var ast = Parser.parse(
+        "SELECT a FROM t UNION ALL SELECT b FROM u EXCEPT SELECT c FROM v"
+    )
+    assert_true(ast.ok(), ast.error)
+    assert_equal(len(ast.branches), 3)
+    assert_equal(ast.branches[1].table, "u")
+    assert_equal(len(ast.compounds), 2)
+    assert_equal(ast.compounds[0].word, "UNION")
+    assert_true(ast.compounds[0].all)
+    assert_equal(ast.compounds[1].word, "EXCEPT")
+    assert_false(ast.compounds[1].all)
+
+
+def test_a_compound_order_by_belongs_to_the_whole_result() raises:
+    """`ORDER BY` and `LIMIT` after the last branch are the compound's."""
+    var ast = Parser.parse(
+        "SELECT a FROM t INTERSECT DISTINCT SELECT a FROM u ORDER BY a LIMIT 2"
+    )
+    assert_true(ast.ok(), ast.error)
+    assert_equal(len(ast.branches), 2)
+    assert_equal(len(ast.branches[1].order), 0)
+    assert_equal(ast.branches[1].limit, -1)
+    assert_equal(len(ast.select.order), 1)
+    assert_equal(ast.select.limit, 2)
+
+
+def test_a_set_operation_needs_a_select_after_it() raises:
+    assert_false(Parser.parse("SELECT a FROM t UNION FROM u").ok())
+
+
 def test_group_by_having_order_limit_offset() raises:
     var ast = Parser.parse(
         "SELECT k, SUM(v) t FROM b GROUP BY k HAVING SUM(v) > 1"

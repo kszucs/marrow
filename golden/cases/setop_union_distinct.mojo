@@ -12,11 +12,6 @@ def plan() raises -> DynRelation:
     itself** — the opposite of `=` and of a join key. `sales` holds one NULL
     region and the result holds one, not zero.
 
-    There is no set-operation node in `marrow/expr/logical.mojo`.
-
-    -- skip mojo
-    -- skip python
-
     -- expected
     region:string
     NULL

@@ -12,11 +12,6 @@ def plan() raises -> DynRelation:
     the left, so the answer is the two names both sides carry — once each,
     however many times `sales` repeats them.
 
-    There is no set-operation node in `marrow/expr/logical.mojo`.
-
-    -- skip mojo
-    -- skip python
-
     -- expected
     region:string
     'north'

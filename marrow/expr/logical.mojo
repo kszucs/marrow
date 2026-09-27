@@ -11,14 +11,14 @@ freely copyable, shareable, inspectable and rewritable. `to_operator(ctx)` turns
 it into the physical operator that owns the running state.
 
 **A variant for inspection, a trampoline for lowering.** `DynRelation` erases
-the ten node types behind a `Variant`, so `isa[R]()`/`get[R]()` let an
+the thirteen node types behind a `Variant`, so `isa[R]()`/`get[R]()` let an
 optimizer rule read a real typed node and construct one — the capability the
 previous trampoline-only box lacked, which left its "rules" as four comptime
 flags and eight scattered calls inside `to_operator` with no file to read.
 
 Lowering is the exception, and the reason is measured. `_dispatch` resolves the
 active member with a `comptime for` over every member, so anything routed
-through it is instantiated ten times; for `to_operator` that makes
+through it is instantiated thirteen times; for `to_operator` that makes
 `Sort.to_operator` reach `kernels::sort` and `ParquetScan.to_operator` reach the
 Parquet reader and `kernels::cast`, in plans containing neither. It cost
 **+348%** of `__text` on `query_streaming`, with `kernels::cast` going from 0 to
@@ -86,7 +86,9 @@ from .physical import (
     JoinOperator,
     ParquetScanOperator,
     ProjectOperator,
+    MultisetOperator,
     SortOperator,
+    UnionOperator,
     WindowOperator,
 )
 
@@ -1162,7 +1164,7 @@ struct DynRelation(Copyable, Movable, Writable):
     binary links only the operators its plans actually use.
 
     `schema` and `write_to` stay on the variant ladder deliberately: also
-    instantiated ten times, but one returns a stored field and the other
+    instantiated thirteen times, but one returns a stored field and the other
     formats a string. Neither reaches a kernel.
 
     Children sit behind `ArcPointer`: a variant containing a node containing
@@ -1182,6 +1184,9 @@ struct DynRelation(Copyable, Movable, Writable):
         Sort,
         Window,
         Join,
+        Union,
+        Intersection,
+        Difference,
         ParquetScan,
     ]
 
@@ -1633,6 +1638,43 @@ struct DynRelation(Copyable, Movable, Writable):
             kind,
             build_side=build_side,
         )
+
+    def distinct(self) raises -> DynRelation:
+        """`SELECT DISTINCT *` — one row per distinct row, NULL equal to
+        itself.
+
+        An aggregate keyed by every column with no aggregates, the plan SQL's
+        `SELECT DISTINCT` has always built; there is no `Distinct` node
+        because it would lower to exactly that `GroupByOperator`.
+        """
+        var keys = List[DynValue]()
+        for ref name in self.schema().names():
+            keys.append(DynValue(column(name.copy())))
+        return self.aggregate(List[DynValue](), keys^)
+
+    def union_all(self, var right: DynRelation) raises -> DynRelation:
+        """Every row of both sides, matched by position; see `Union`."""
+        return Union(self.copy(), right^)
+
+    def union(self, var right: DynRelation) raises -> DynRelation:
+        """The distinct rows of both sides: `distinct()` over `union_all`, so
+        the dedup is the `Aggregate` it is."""
+        return self.union_all(right^).distinct()
+
+    def except_(self, var right: DynRelation) raises -> DynRelation:
+        """Distinct rows of `self` that `right` lacks; see `Difference`.
+        Trailing underscore because `except` is a keyword."""
+        return Difference(self.copy(), right^, False)
+
+    def except_all(self, var right: DynRelation) raises -> DynRelation:
+        return Difference(self.copy(), right^, True)
+
+    def intersect(self, var right: DynRelation) raises -> DynRelation:
+        """Distinct rows present on both sides; see `Intersection`."""
+        return Intersection(self.copy(), right^, False)
+
+    def intersect_all(self, var right: DynRelation) raises -> DynRelation:
+        return Intersection(self.copy(), right^, True)
 
     def optimize[R: RuleSet](self) raises -> DynRelation:
         """This plan, rewritten by `R` until nothing changes.
@@ -2544,11 +2586,11 @@ struct Window(Relation, Writable):
 struct Join(Relation, Writable):
     """An equijoin over two sub-plans.
 
-    The **only** node with two inputs, and the reason `Pipeline` had to be an
-    `Operator`: the build side is a whole plan, and it is handed to the
-    operator as an ordinary boxed stage. Before that, a chain of stages was a
-    different kind of thing from a stage, and there was nowhere to put a second
-    one.
+    The first node with two inputs (the set relations are the others), and
+    the reason `Pipeline` had to be an `Operator`: the build side is a whole
+    plan, and it is handed to the operator as an ordinary boxed stage. Before
+    that, a chain of stages was a different kind of thing from a stage, and
+    there was nowhere to put a second one.
 
     `left` and `right` say what the answer is and `build_side` what it costs:
     the output is the left side's columns then the right side's, whichever
@@ -2707,7 +2749,7 @@ struct Join(Relation, Writable):
         F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         """Both sides, which is why this takes a function rather than a single
-        child: a join is the one node with two inputs."""
+        child: a join has two inputs."""
         return Join(
             f(self.left[]),
             f(self.right[]),
@@ -2846,6 +2888,222 @@ struct Join(Relation, Writable):
             # predates the field.
             writer.write(", ", self.build_side)
         writer.write(")")
+
+
+def _positional_schema(
+    verb: StringSlice, left: Schema, right: Schema
+) raises -> Schema:
+    """The output of a set relation over `left` and `right`.
+
+    **Positional, like SQL.** The inputs must have the same number of columns
+    with the same dtypes; the output takes the left side's names, and a field
+    is nullable wherever either side's is, since a `UNION ALL` of a required
+    column and a nullable one can hold a NULL.
+    """
+    if len(left.fields) != len(right.fields):
+        raise Error(
+            verb,
+            ": the left side has ",
+            len(left.fields),
+            " columns but the right side has ",
+            len(right.fields),
+        )
+    if len(left.fields) == 0:
+        raise Error(verb, ": needs at least one column")
+    var fields = List[Field](capacity=len(left.fields))
+    for i in range(len(left.fields)):
+        if left.fields[i].dtype != right.fields[i].dtype:
+            raise Error(
+                verb,
+                ": column ",
+                i,
+                " is ",
+                left.fields[i].dtype,
+                " on the left but ",
+                right.fields[i].dtype,
+                " on the right",
+            )
+        var f = left.fields[i].copy()
+        f.nullable = f.nullable or right.fields[i].nullable
+        fields.append(f^)
+    return schema(fields^)
+
+
+struct Union(Relation, Writable):
+    """`left UNION ALL right` — every row of both inputs, matched by position
+    (see `_positional_schema`).
+
+    Always a bag: the deduplicating `UNION` is `distinct()` over this node,
+    which is what `DynRelation.union` builds, so the dedup is an ordinary
+    `Aggregate` to the optimizer. Streaming on both sides, so unlike
+    `Intersection` and `Difference` it holds nothing.
+    """
+
+    var left: ArcPointer[DynRelation]
+    var right: ArcPointer[DynRelation]
+    var _schema: Schema
+
+    def __init__(
+        out self, var left: DynRelation, var right: DynRelation
+    ) raises:
+        self._schema = _positional_schema(
+            "union", left.schema(), right.schema()
+        )
+        self.left = ArcPointer(left^)
+        self.right = ArcPointer(right^)
+
+    def traverse[
+        F: def(DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Union(f(self.left[]), f(self.right[]))
+
+    def references(self, mut into: References):
+        self.left[].references(into)
+        self.right[].references(into)
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+    ) raises -> Pipeline:
+        """The left side is the pipeline and the right side a stage in it,
+        the arrangement `Join` uses for its build side."""
+        var pipe = self.left[].to_operator(ctx, bindings)
+        pipe.append(
+            UnionOperator(
+                self.right[].to_operator(ctx, bindings), self._schema.copy()
+            )
+        )
+        return pipe^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Union(", self.left[], ", ", self.right[], ")")
+
+
+trait Multiplicity:
+    """How many copies of a row a `Multiset` relation keeps, from how often it
+    occurs on each side. The whole difference between `INTERSECT` and
+    `EXCEPT`, so it is the one thing `Multiset` is parameterised on."""
+
+    @staticmethod
+    def name() -> String:
+        """The relation's name, as a plan prints it."""
+        ...
+
+    @staticmethod
+    def copies(left: Int, right: Int, all: Bool) -> Int:
+        """Copies of a row seen `left` times on the left and `right` times on
+        the right; `all` is SQL's `ALL`, keeping multiplicity."""
+        ...
+
+
+struct Intersect(Multiplicity):
+    """`INTERSECT [ALL]`: rows on both sides — `min(l, r)` copies with `ALL`,
+    one without."""
+
+    @staticmethod
+    def name() -> String:
+        return "Intersection"
+
+    @staticmethod
+    def copies(left: Int, right: Int, all: Bool) -> Int:
+        if all:
+            return min(left, right)
+        else:
+            return 1 if left > 0 and right > 0 else 0
+
+
+struct Except(Multiplicity):
+    """`EXCEPT [ALL]`: left rows the right side lacks — `max(l - r, 0)` copies
+    with `ALL`; without it, one copy of a row the right side has *not at
+    all*, which is not `max(l - r, 0)` capped at one."""
+
+    @staticmethod
+    def name() -> String:
+        return "Difference"
+
+    @staticmethod
+    def copies(left: Int, right: Int, all: Bool) -> Int:
+        if all:
+            return max(left - right, 0)
+        else:
+            return 1 if left > 0 and right == 0 else 0
+
+
+struct Multiset[M: Multiplicity](Relation, Writable):
+    """A relation keeping each distinct row of two inputs as many times as
+    `M` says — `Intersection` or `Difference`.
+
+    **NULL is equal to itself here**, the opposite of `=` and of a join key:
+    `EXCEPT` removes a NULL row the right side also has. That is why this is
+    hash grouping, whose keys compare NULLs equal, rather than a semi or anti
+    join, whose keys never match a NULL. Grouping compares key *hashes*, so
+    it inherits their collision caveat (`kernels/groupby.mojo`), as
+    `distinct()` does.
+
+    Blocking on both sides: a row's count on either is final only when that
+    side is exhausted.
+    """
+
+    var left: ArcPointer[DynRelation]
+    var right: ArcPointer[DynRelation]
+    var all: Bool
+    """SQL's `ALL`: keep multiplicity rather than deduplicating."""
+    var _schema: Schema
+
+    def __init__(
+        out self, var left: DynRelation, var right: DynRelation, all: Bool
+    ) raises:
+        self._schema = _positional_schema(
+            Self.M.name(), left.schema(), right.schema()
+        )
+        self.left = ArcPointer(left^)
+        self.right = ArcPointer(right^)
+        self.all = all
+
+    def traverse[
+        F: def(DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Multiset[Self.M](f(self.left[]), f(self.right[]), self.all)
+
+    def references(self, mut into: References):
+        self.left[].references(into)
+        self.right[].references(into)
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+    ) raises -> Pipeline:
+        var pipe = self.left[].to_operator(ctx, bindings)
+        pipe.append(
+            MultisetOperator[Self.M](
+                self.right[].to_operator(ctx, bindings),
+                self.all,
+                self._schema.copy(),
+                ctx.copy(),
+            )
+        )
+        return pipe^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.M.name(), "(", self.left[], ", ", self.right[])
+        if self.all:
+            writer.write(", all")
+        writer.write(")")
+
+
+comptime Intersection = Multiset[Intersect]
+"""`left INTERSECT [ALL] right`."""
+
+comptime Difference = Multiset[Except]
+"""`left EXCEPT [ALL] right`."""
 
 
 struct ScanPath(Copyable, Movable, Writable):

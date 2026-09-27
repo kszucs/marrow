@@ -30,13 +30,12 @@ all of them.
 | 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
 | 2 | **Error taxonomy** — 373 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 373 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14 | **M** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
-| 4 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 5 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
-| 6 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
-| 7 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 8 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 9 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
-| 10 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
+| 4 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
+| 5 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
+| 6 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 7 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 8 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
+| 9 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
 
@@ -93,20 +92,19 @@ sit in the same shape.
 
 ### 1.4 Engine capability the golden corpus measures as missing
 
-`golden/COVERAGE.md` is authoritative and machine-checked: 279 cases, of which
-**63 carry `-- skip mojo`** because marrow has no API for them. Their bodies
+`golden/COVERAGE.md` is authoritative: 285 cases, of which **58 carry
+`-- skip mojo`** because marrow has no API for them. Their bodies
 are never compiled, so they are proposals rather than verified spellings.
 
-Counted 2026-09-03 and unchanged on 2026-09-14, by prefix:
+Recounted 2026-09-27, by prefix:
 
 | skipped | area |
 |---|---|
-| 13 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness |
+| 12 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness |
 | 10 | temporal — date_diff, age, strftime/strptime, make_date, interval arithmetic, timezone attach |
 | 8 | nested — struct field, map lookup, list element/slice, unnest |
 | 7 | math — atan2 and the rest of the trigonometric family |
 | 5 | string — regexp, concat_ws, null-skipping `concat` |
-| 4 | set operations — UNION / EXCEPT / INTERSECT |
 | 4 | joins — cross, non-equi, asof |
 | 3 | GROUPING SETS / ROLLUP / CUBE |
 | 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |
@@ -650,12 +648,11 @@ take includes spilling variants of group-by and sort.
 #### 2.3 Relational operations that have no node
 
 Each is a missing `Relation`, not a missing kernel. ibis's `relations.py` is the
-canonical list; marrow has 8 of it.
+canonical list.
 
 | Missing | Golden cases | Note |
 |---|---|---|
-| `UNION ALL` / `UNION` / `EXCEPT` / `INTERSECT` | 4 | ibis models these as one `Set(left, right, distinct: bool)`. They also treat NULL as equal to itself, which nothing else in marrow does |
-| `Distinct` / `.unique()` | 1 (`DISTINCT ON`) | Expressible today as `aggregate(keys=[...], aggs=[])`, which is exactly what the SQL front end desugars `SELECT DISTINCT` into — so the semantics are reachable through `Sql.plan` and there is still no verb and no `unique` kernel |
+| `DISTINCT ON` | 1 | `distinct()` is an aggregate keyed by every column, so it cannot keep a whole row per key; `DISTINCT ON` needs a first-row-per-key node or a `row_number() = 1` rewrite |
 | `GROUPING SETS` / `ROLLUP` / `CUBE` | 3 | `Aggregate` carries one key list; `ROLLUP` also needs `GROUPING()`. Implementable as a rewrite into an aggregation cascade |
 | `explode` / `unnest` | 1 | Row-multiplying, so a new operator shape. ibis has a dedicated `TableUnnest` with `offset` and `keep_empty` |
 | `Sample`, `DropNull(how)`, `FillNull` as relations | — | ibis has all three as nodes |

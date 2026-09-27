@@ -35,7 +35,7 @@ which is allowed to raise and does.
 Clause order is SQL\'s evaluation order, not the written one:
 
     FROM -> JOIN -> WHERE -> GROUP BY/aggregates -> HAVING -> SELECT
-      -> DISTINCT -> ORDER BY -> LIMIT
+      -> DISTINCT -> UNION/EXCEPT/INTERSECT -> ORDER BY -> LIMIT
 
 Three constructs are desugared rather than given nodes of their own, because
 the sugar has exactly SQL\'s semantics and the node would not:
@@ -47,8 +47,8 @@ the sugar has exactly SQL\'s semantics and the node would not:
   NULL for every row.
 - `GREATEST`/`LEAST` become `coalesce(extremum, a, b)`, because SQL\'s extrema
   **skip** nulls while `maximum`/`minimum` propagate them.
-- `SELECT DISTINCT` becomes an aggregate keyed by every output column, marrow
-  having no `Distinct` node (`backlog.md` item 6).
+- `SELECT DISTINCT` becomes `distinct()`, an aggregate keyed by every output
+  column.
 """
 
 from ..dtypes import (
@@ -497,6 +497,29 @@ struct Select(Copyable, Movable):
         self.offset = 0
 
 
+@fieldwise_init
+struct Compound(Copyable, Movable):
+    """What joins two branches of a compound statement: the keyword —
+    `"UNION"`, `"EXCEPT"` or `"INTERSECT"`, a tag like every other in this
+    file — and whether `ALL` was written."""
+
+    var word: String
+    var all: Bool
+
+    def apply(
+        self, var left: DynRelation, var right: DynRelation
+    ) raises -> DynRelation:
+        """`left <word> [ALL] right`, through the relation's own verb."""
+        if self.word == "UNION":
+            return left.union_all(right^) if self.all else left.union(right^)
+        elif self.word == "EXCEPT":
+            return left.except_all(right^) if self.all else left.except_(right^)
+        else:
+            return left.intersect_all(right^) if self.all else left.intersect(
+                right^
+            )
+
+
 struct Ast(Copyable, Movable):
     """Every node of one parsed statement, plus the first error if there was
     one.
@@ -508,6 +531,13 @@ struct Ast(Copyable, Movable):
     var nodes: List[Node]
     var kids: List[Int]
     var select: Select
+    """The statement — or, for a compound one, only its trailing `ORDER BY`,
+    `LIMIT` and `OFFSET`, which apply to the combined result."""
+    var branches: List[Select]
+    """Every `SELECT` of a compound statement (`UNION`, `EXCEPT`,
+    `INTERSECT`), in written order; empty for a simple one."""
+    var compounds: List[Compound]
+    """What joins `branches[i]` to `branches[i + 1]`."""
     var error: String
     var error_pos: Int
 
@@ -515,6 +545,8 @@ struct Ast(Copyable, Movable):
         self.nodes = List[Node]()
         self.kids = List[Int]()
         self.select = Select()
+        self.branches = List[Select]()
+        self.compounds = List[Compound]()
         self.error = String("")
         self.error_pos = 0
 
@@ -1153,19 +1185,32 @@ struct Parser(Copyable, Movable):
         return parser.ast.copy()
 
     def statement(mut self):
+        """One `SELECT`, or several joined by `UNION`, `EXCEPT` and
+        `INTERSECT`, then the clauses that order and cut the whole result.
+
+        A compound statement moves each finished `SELECT` into
+        `ast.branches` and leaves `ast.select` holding only the trailing
+        `ORDER BY`/`LIMIT`/`OFFSET`: in SQL those belong to the combined
+        result, never to the last branch.
+        """
         if not self.expect_word("SELECT"):
             return
-        self.ast.select.distinct = self.take_word("DISTINCT")
-        self.select_list()
-        if self.ast.ok() and self.take_word("FROM"):
-            self.from_clause()
-        if self.ast.ok() and self.take_word("WHERE"):
-            self.ast.select.predicate = self.expression()
-        if self.ast.ok() and self.take_word("GROUP"):
-            if self.expect_word("BY"):
-                self.ast.select.group_by = self.comma_list("")
-        if self.ast.ok() and self.take_word("HAVING"):
-            self.ast.select.having = self.expression()
+        self.select_core()
+        while self.ast.ok() and self.peek().is_any_of("UNION EXCEPT INTERSECT"):
+            self.ast.branches.append(self.ast.select.copy())
+            var word = self.peek().upper.copy()
+            self.advance()
+            var all = self.take_word("ALL")
+            if not all:
+                _ = self.take_word("DISTINCT")
+            self.ast.compounds.append(Compound(word^, all))
+            self.ast.select = Select()
+            if not self.expect_word("SELECT"):
+                return
+            self.select_core()
+        if len(self.ast.compounds) > 0:
+            self.ast.branches.append(self.ast.select.copy())
+            self.ast.select = Select()
         if self.ast.ok() and self.take_word("ORDER"):
             if self.expect_word("BY"):
                 self.order_by()
@@ -1179,6 +1224,22 @@ struct Parser(Copyable, Movable):
             self.fail(self.peek().text.copy())
         elif self.peek().kind != "eof":
             self.fail("unexpected trailing '" + self.peek().text + "'")
+
+    def select_core(mut self):
+        """`[DISTINCT] <items> [FROM ...] [WHERE] [GROUP BY] [HAVING]`, the
+        part of a `SELECT` that a set operation combines. The keyword itself
+        is already consumed."""
+        self.ast.select.distinct = self.take_word("DISTINCT")
+        self.select_list()
+        if self.ast.ok() and self.take_word("FROM"):
+            self.from_clause()
+        if self.ast.ok() and self.take_word("WHERE"):
+            self.ast.select.predicate = self.expression()
+        if self.ast.ok() and self.take_word("GROUP"):
+            if self.expect_word("BY"):
+                self.ast.select.group_by = self.comma_list("")
+        if self.ast.ok() and self.take_word("HAVING"):
+            self.ast.select.having = self.expression()
 
     def whole_number(mut self, clause: StringSlice) -> Int:
         if self.peek().kind != "number" or self.peek().is_float:
@@ -2225,6 +2286,13 @@ struct Planner(Copyable, Movable):
         return keys^
 
     def build(mut self) raises -> DynRelation:
+        if len(self.ast.branches) > 0:
+            return self.build_compound()
+        else:
+            return self.build_select()
+
+    def build_select(mut self) raises -> DynRelation:
+        """One `SELECT`, in SQL's evaluation order."""
         var relation = self.source()
         self.schema = relation.schema()
         ref select = self.ast.select
@@ -2272,12 +2340,7 @@ struct Planner(Copyable, Movable):
                     "sql: SELECT DISTINCT with an ORDER BY key that is not a"
                     " selected column is not supported"
                 )
-            # No `Distinct` node exists; grouping by every output column is
-            # the same relation.
-            var keys = List[DynValue]()
-            for ref name in relation.schema().names():
-                keys.append(DynValue(column(name.copy())))
-            relation = relation.aggregate(List[DynValue](), keys^)
+            relation = relation.distinct()
 
         if len(select.order) > 0:
             relation = self.apply_order(relation^)
@@ -2285,12 +2348,64 @@ struct Planner(Copyable, Movable):
             # The extras existed only to be sorted on.
             relation = relation.select(projected[0].copy())
 
+        return self.apply_limit(relation^)
+
+    def apply_limit(self, var relation: DynRelation) raises -> DynRelation:
+        """`LIMIT`/`OFFSET`, if the statement has either."""
+        ref select = self.ast.select
         if select.limit >= 0 or select.offset > 0:
             var length = select.limit if select.limit >= 0 else _UNLIMITED
-            relation = relation.limit(length, select.offset)
-        return relation^
+            return relation.limit(length, select.offset)
+        else:
+            return relation^
 
-    def collect_order_keys(mut self, output_names: List[String]) raises:
+    def build_compound(mut self) raises -> DynRelation:
+        """`UNION`/`EXCEPT`/`INTERSECT` over separately planned `SELECT`s.
+
+        Each branch gets a planner of its own, because scope, aggregates and
+        generated names are per-`SELECT` state. `INTERSECT` binds tighter than
+        `UNION` and `EXCEPT`, which associate left to right — the standard's
+        precedence, and DuckDB's.
+
+        The trailing `ORDER BY` sorts the combined result, so a key must name
+        one of its columns or an ordinal: no branch's expressions exist any
+        more to add a hidden sort column from.
+        """
+        # Moved out so each branch's copy of the arena does not carry them.
+        var branches = self.ast.branches.copy()
+        self.ast.branches = List[Select]()
+        var relations = List[DynRelation](capacity=len(branches))
+        for ref branch in branches:
+            var ast = self.ast.copy()
+            ast.select = branch.copy()
+            var planner = Planner(ast^, self.catalog.copy())
+            relations.append(planner.build_select())
+        var compounds = self.ast.compounds.copy()
+        var i = 0
+        while i < len(compounds):
+            if compounds[i].word == "INTERSECT":
+                var compound = compounds.pop(i)
+                var right = relations.pop(i + 1)
+                relations[i] = compound.apply(relations[i].copy(), right^)
+            else:
+                i += 1
+        var relation = relations[0].copy()
+        for j in range(len(compounds)):
+            relation = compounds[j].apply(relation^, relations[j + 1].copy())
+        if len(self.ast.select.order) > 0:
+            self.collect_order_keys(
+                relation.schema().names(),
+                refuse_hidden=(
+                    "sql: ORDER BY over a set operation must name an output"
+                    " column or an ordinal"
+                ),
+            )
+            relation = self.apply_order(relation^)
+        return self.apply_limit(relation^)
+
+    def collect_order_keys(
+        mut self, output_names: List[String], refuse_hidden: String = ""
+    ) raises:
         """Decide which column each `ORDER BY` key sorts on.
 
         `Sort` runs after the projection, so a key must name one of its
@@ -2303,6 +2418,10 @@ struct Planner(Copyable, Movable):
           it is *added* to the projection under a generated name and dropped
           again after the sort. That is what makes `ORDER BY SUM(v)` work
           without `SUM(v)` being selected.
+
+        A non-empty `refuse_hidden` forbids the third case and is raised in
+        its place — for a caller with no expressions left to add a column
+        from.
 
         Called before the `Aggregate` node is built, because the third case
         registers aggregates.
@@ -2323,6 +2442,8 @@ struct Planner(Copyable, Movable):
             ):
                 self.order_keys.append(node.text.copy())
                 continue
+            if refuse_hidden != "":
+                raise Error(refuse_hidden)
             var extra = "__ord" + String(len(self.order_extras))
             var value = self.translate(index)
             self.order_extras.append(extra.copy())

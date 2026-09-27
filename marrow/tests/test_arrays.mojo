@@ -1273,6 +1273,11 @@ def test_struct_array_flatten() raises:
     assert_equal(flat[0].length(), 2)
     assert_equal(flat[1].length(), 2)
 
+    # A slice's fields start at the slice, not at its parent's first row.
+    var tail = sa.slice(1, 1).flatten()
+    assert_equal(tail[0].length(), 1)
+    assert_equal(tail[0].as_int32()[0].value(), 2)
+
 
 # ---------------------------------------------------------------------------
 # StructArray.select tests
