@@ -260,7 +260,7 @@ struct _Iso8601[mut: Bool, //, origin: Origin[mut=mut]]:
         `[+-]hh:mm` — in seconds to add for UTC, with `end` moved in front of
         it. No offset is 0; one that does not parse is `None`. Peeled off
         before the clock is read, exactly as Arrow does."""
-        var offset: Optional[Int] = 0
+        var offset: Optional[Int]
         if self._at(end - 1, "Z"):
             end -= 1
             return 0
@@ -347,3 +347,54 @@ def parse_iso8601[fraction_digits: Int](text: Span[Byte, _]) -> Optional[Int]:
         or fraction_digits == 9
     ), "fraction_digits must be 0, 3, 6 or 9"
     return _Iso8601(text).ticks[fraction_digits]()
+
+
+@always_inline
+def _write_padded(mut writer: Some[Writer], value: Int, width: Int):
+    """`value` in decimal, left-padded with zeros to `width` digits."""
+    var digits = 1
+    var bound = 10
+    while value >= bound:
+        digits += 1
+        bound *= 10
+    for _ in range(width - digits):
+        writer.write("0")
+    writer.write(value)
+
+
+def write_iso8601[fraction_digits: Int](ticks: Int, mut writer: Some[Writer]):
+    """Write `ticks` since the epoch, `10**fraction_digits` per second, as
+    `YYYY-MM-DD hh:mm:ss` with the fraction when it is not zero.
+
+    The inverse of `parse_iso8601`, so whatever this writes that function reads
+    back to the same value; a second-unit value is exactly the text Arrow C++
+    infers as `timestamp[s]`. A year outside 0-9999 has no four-digit form and
+    is written as its plain number, which `parse_iso8601` rejects.
+
+    Parameters:
+        fraction_digits: Sub-second digits the unit holds: 0, 3, 6 or 9.
+    """
+    comptime per_second = 10**fraction_digits
+    var seconds = floor_div(ticks, per_second)
+    var fraction = ticks - seconds * per_second
+    var days = floor_div(seconds, Epoch.SECONDS_PER_DAY)
+    var clock = seconds - days * Epoch.SECONDS_PER_DAY
+    var date = CivilDate.from_days(days)
+    if date.year >= 0 and date.year <= 9999:
+        _write_padded(writer, date.year, 4)
+    else:
+        writer.write(date.year)
+    writer.write("-")
+    _write_padded(writer, date.month, 2)
+    writer.write("-")
+    _write_padded(writer, date.day, 2)
+    writer.write(" ")
+    _write_padded(writer, clock // 3600, 2)
+    writer.write(":")
+    _write_padded(writer, (clock // 60) % 60, 2)
+    writer.write(":")
+    _write_padded(writer, clock % 60, 2)
+    comptime if fraction_digits > 0:
+        if fraction != 0:
+            writer.write(".")
+            _write_padded(writer, fraction, fraction_digits)

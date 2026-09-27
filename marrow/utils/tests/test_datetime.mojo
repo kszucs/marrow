@@ -16,7 +16,13 @@ against the proleptic Gregorian calendar Arrow C++ and arrow-rs assume.
 
 from std.testing import assert_equal, assert_false, assert_true
 
-from ..datetime import CivilDate, Epoch, floor_div, parse_iso8601
+from ..datetime import (
+    CivilDate,
+    Epoch,
+    floor_div,
+    parse_iso8601,
+    write_iso8601,
+)
 
 
 def test_civil_date_epoch_is_day_zero() raises:
@@ -243,3 +249,28 @@ def test_parse_iso8601_out_of_range_for_the_unit() raises:
     assert_equal(_iso[0]("3989-07-14").value(), 63730281600)
     assert_false(Bool(_iso[9]("3989-07-14")))
     assert_false(Bool(_iso[9]("1600-01-01")))
+
+
+def _written[digits: Int](ticks: Int) -> String:
+    var out = String()
+    write_iso8601[digits](ticks, out)
+    return out^
+
+
+def test_write_iso8601_is_the_inverse_of_parse() raises:
+    """Before and after the epoch, with and without a fraction: what is
+    written parses back to the same ticks."""
+    assert_equal(_written[0](0), "1970-01-01 00:00:00")
+    assert_equal(_written[0](-2203932304), "1900-02-28 12:34:56")
+    assert_equal(_written[3](1542129070777), "2018-11-13 17:11:10.777")
+    assert_equal(_written[3](1542129070000), "2018-11-13 17:11:10")
+    assert_equal(_written[9](-1), "1969-12-31 23:59:59.999999999")
+    for ticks in [0, -1, 1, 1542129070777, -2203932304000, 63730322553000]:
+        var text = _written[3](ticks)
+        assert_equal(_iso[3](text).value(), ticks, text)
+
+
+def test_write_iso8601_pads_small_years() raises:
+    var ticks = CivilDate(33, 1, 2).to_days() * Epoch.SECONDS_PER_DAY
+    assert_equal(_written[0](ticks), "0033-01-02 00:00:00")
+    assert_equal(_iso[0](_written[0](ticks)).value(), ticks)
