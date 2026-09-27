@@ -66,9 +66,12 @@ from .`comptime`.leaves import (
     TemporalLiteral,
     TemporalParam,
 )
+from ..json.scan import JsonBatchReader
 from .logical import (
     DynRelation,
     InMemoryTable,
+    ExternalScan,
+    IpcScan,
     ParquetScan,
     ScanPath,
     WindowExpr,
@@ -746,6 +749,43 @@ def scan(
     offers it as `--src`.
     """
     return DynRelation(ParquetScan(ScanPath(path^), schema^))
+
+
+def scan_json(var path: String, var schema: Schema) raises -> DynRelation:
+    """A newline-delimited JSON file, as a plan; see `marrow.json`.
+
+    The schema is required, as it is for `scan`: a plan is a description, and
+    building it must not open the file. Keys outside it are skipped.
+
+    **An `ExternalScan`, not a `DynRelation` member of its own.** A `JsonScan`
+    node was written — as a `FileScan` instance, and as a concrete node with
+    its own operator like `ParquetScan`'s — and every form deadlocked the
+    compiler building `libmarrow.so` (parked in `semaphore_wait_trap`, no
+    diagnostic), while the test drivers using it built and passed. Reading
+    through `ExternalScan` builds. `IpcScan` is a variant member and does not
+    deadlock. Measured 2026-09-28 on `1.2.0.dev2026092105`.
+    """
+    return ExternalScan.of[JsonBatchReader](ScanPath(path^), schema^)
+
+
+def scan_json(
+    var path: StringParam[StringType], var schema: Schema
+) raises -> DynRelation:
+    """A newline-delimited JSON file named at run time, as a plan."""
+    return ExternalScan.of[JsonBatchReader](ScanPath(path^), schema^)
+
+
+def scan_ipc(var path: String, var schema: Schema) raises -> DynRelation:
+    """An Arrow IPC file, as a plan: one record batch at a time, the schema
+    selecting the columns."""
+    return DynRelation(IpcScan(ScanPath(path^), schema^))
+
+
+def scan_ipc(
+    var path: StringParam[StringType], var schema: Schema
+) raises -> DynRelation:
+    """An Arrow IPC file named at run time, as a plan."""
+    return DynRelation(IpcScan(ScanPath(path^), schema^))
 
 
 def count_star() -> (

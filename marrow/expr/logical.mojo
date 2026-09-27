@@ -84,6 +84,7 @@ from .physical import (
     Pipeline,
     FilterOperator,
     JoinOperator,
+    IpcBatchReader,
     ParquetScanOperator,
     ReaderOperator,
     ProjectOperator,
@@ -1184,6 +1185,7 @@ struct DynRelation(Copyable, Movable, Writable):
         Window,
         Join,
         ParquetScan,
+        IpcScan,
         ExternalScan,
     ]
 
@@ -3023,14 +3025,12 @@ struct ParquetScan(Relation, Writable):
 
 
 trait BatchReader(Deinitable, Movable):
-    """A file format read one batch at a time, by a module `marrow.expr` does
-    not import.
+    """A file format read one batch at a time.
 
-    What an `ExternalScan` is built from. The format's module implements it and
-    hands the type to `ExternalScan.of`, so `marrow.expr` can run a scan it
-    never imports. That matters for a format with a dependency of its own —
-    `marrow.json` and EmberJson: built from source, a program that plans
-    queries but reads no JSON then does not need EmberJson.
+    What a file scan reads through. `FileScan[R]` gives a format a plan node
+    of its own — `IpcScan`; `ExternalScan.of[R]` runs one without a node,
+    which is how `scan_json` reads JSON and how a format from outside
+    `marrow` plugs in.
     """
 
     @staticmethod
@@ -3049,10 +3049,69 @@ trait BatchReader(Deinitable, Movable):
         ...
 
 
-struct ExternalScan(Relation, Writable):
-    """A file read by a `BatchReader` that `marrow.expr` does not import.
+struct FileScan[R: BatchReader, name: StaticString](Relation, Writable):
+    """A file of one format `marrow` ships, read by `R` one batch at a time.
 
-    The source a format module plugs in without `marrow.expr` naming it — see
+    One implementation for every such scan; each instantiation is its own plan
+    node, which the optimizer tells apart with `isa`. JSON is not one: see
+    `scan_json`.
+    Like `ParquetScan`, the schema is supplied rather than read, so building
+    the plan does no I/O, and narrowing it is how `ColumnPruning` pushes a
+    projection in. It has no statistics and prunes no rows.
+    """
+
+    var path: ScanPath
+    var _schema: Schema
+
+    def __init__(out self, var path: ScanPath, var schema: Schema):
+        self.path = path^
+        self._schema = schema^
+
+    def references(self, mut into: References):
+        self.path.references(into)
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def with_schema(self, var schema: Schema) -> Self:
+        """This scan over a narrower schema."""
+        return Self(self.path.copy(), schema^)
+
+    def estimate(self) raises -> Estimate:
+        """Unknown, and column-shaped for the reason `ParquetScan`'s is."""
+        return Estimate.unknown(self._schema)
+
+    def cost(self) raises -> Cost:
+        var estimate = self.estimate()
+        return Cost.source(estimate.rows, estimate.row_width())
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+    ) raises -> Pipeline:
+        return Pipeline(
+            ReaderOperator[Self.R](
+                self.path.resolve(bindings), self._schema.copy()
+            )
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.name, "(", self.path, ")")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+comptime IpcScan = FileScan[IpcBatchReader, "IpcScan"]
+"""An Arrow IPC file as a source, one record batch at a time."""
+
+
+struct ExternalScan(Relation, Writable):
+    """A file read by a `BatchReader` that `marrow.expr` does not name.
+
+    The source a format from outside `marrow` plugs in without `marrow.expr`
+    naming it — see
     `BatchReader` for why that has to be possible. It keeps one function
     pointer instead of the reader type, wired where the scan is built, so this
     one variant member serves every such format: the pointer builds a

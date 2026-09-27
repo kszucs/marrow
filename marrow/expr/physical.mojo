@@ -57,6 +57,7 @@ from ..kernels.groupby import HashGrouping
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..io import ByteSource, DynSource
+from ..ipc import RecordBatchFileReader
 from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
 from ..utils import RapidHash64
 from .bindings import Bindings
@@ -1614,8 +1615,8 @@ struct ParquetScanOperator(Operator):
 
 
 struct ReaderOperator[R: BatchReader](Operator):
-    """Runs an `ExternalScan`: a `BatchReader` that `marrow.expr` does not
-    import, one batch per `drain`.
+    """Runs a file scan — `IpcScan`, or an `ExternalScan` — through
+    its `BatchReader`, one batch per `drain`.
 
     Typed on the reader, so it holds it as an ordinary field and destroys it at
     its true type; `DynOperator` erases the operator, as it does every other.
@@ -1643,6 +1644,49 @@ struct ReaderOperator[R: BatchReader](Operator):
         if not batch:
             return None
         return Datum(batch.value().to_struct_array().to_dyn())
+
+
+struct IpcBatchReader(BatchReader):
+    """An Arrow IPC file for `IpcScan`, one record batch per read.
+
+    The file's batches carry every column; the scan's schema selects from
+    them by name, so a scan narrowed by `ColumnPruning` hands on only the
+    columns the plan needs. IPC stores whole columns per batch, so the others
+    are still read.
+    """
+
+    var _reader: RecordBatchFileReader[DynSource]
+    var _names: List[String]
+    var _next: Int
+
+    def __init__(
+        out self,
+        var reader: RecordBatchFileReader[DynSource],
+        var names: List[String],
+    ):
+        self._reader = reader^
+        self._names = names^
+        self._next = 0
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self:
+        var names = List[String](capacity=len(schema.fields))
+        for ref f in schema.fields:
+            names.append(f.name.copy())
+        return Self(
+            RecordBatchFileReader[DynSource](DynSource.open(path)), names^
+        )
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        if self._next >= self._reader.num_record_batches():
+            return None
+        var batch = self._reader.read_batch(self._next)
+        self._next += 1
+        return batch.select(self._names)
+
+    @staticmethod
+    def format_name() -> String:
+        return "ipc"
 
 
 def admitted_bits(mask: DynArray) raises -> Bitmap[mut=False]:

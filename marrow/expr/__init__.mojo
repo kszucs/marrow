@@ -42,6 +42,8 @@ from .builders import (
     rank,
     row_number,
     scan,
+    scan_ipc,
+    scan_json,
     table,
 )
 from .logical import (
@@ -50,8 +52,10 @@ from .logical import (
     DynRelation,
     DynValue,
     ExternalScan,
+    FileScan,
     Filter,
     InMemoryTable,
+    IpcScan,
     Join,
     Limit,
     ParquetScan,
@@ -66,7 +70,15 @@ from .logical import (
     WindowExpr,
     WindowFrame,
 )
-from .physical import Datum, DynOperator, Morsel, Operator, Pipeline
+from .physical import (
+    Datum,
+    DynOperator,
+    IpcBatchReader,
+    Morsel,
+    Operator,
+    Pipeline,
+    ReaderOperator,
+)
 from .index import ColumnZones, Index, ZoneMaps, keep_every
 from .estimates import (
     Approx,

@@ -102,6 +102,7 @@ from .logical import (
     ExternalScan,
     Filter,
     InMemoryTable,
+    IpcScan,
     Join,
     Limit,
     ParquetScan,
@@ -1068,6 +1069,14 @@ struct ColumnPruning(Copyable, Movable):
         """`node`, with its sources narrowed to `needed`."""
         if node.isa[ParquetScan]():
             ref scan = node.get[ParquetScan]()
+            var narrow = Self._narrowed_schema(scan.schema(), needed)
+            if not narrow:
+                return node.copy()
+            var out: DynRelation = scan.with_schema(narrow.take())
+            return out^
+
+        if node.isa[IpcScan]():
+            ref scan = node.get[IpcScan]()
             var narrow = Self._narrowed_schema(scan.schema(), needed)
             if not narrow:
                 return node.copy()

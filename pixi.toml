@@ -29,10 +29,9 @@ backend = { name = "pixi-build-mojo", version = "0.1.*" }
 [package.build-dependencies]
 mojo-compiler = "==1.2.0.dev2026092105"
 mojo = "==1.2.0.dev2026092105"
-# `marrow.json` imports it, and a precompiled package needs every package any
-# of its modules imports. Pinned to the same fork rev as `[dependencies]`. A
-# run-dependency needs EmberJson published to a channel first: consumers
-# resolve by name, and cannot build a git source.
+# `marrow.json` imports it, and JSON is mandatory. Pinned to the same fork rev
+# as `[dependencies]`. There is no matching run-dependency: a consumer
+# resolves one by name from a channel and cannot build a git source.
 emberjson = { git = "https://github.com/kszucs/EmberJson.git", rev = "9e1567e469ea4f6d3947912d96dead97d201815f" }
 
 [package.run-dependencies]

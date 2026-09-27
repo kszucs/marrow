@@ -57,7 +57,8 @@ from marrow.expr.logical import WindowExpr
 from marrow.kernels.join import JoinKind
 from marrow.io import DynSource
 from marrow.parquet import ParquetFile
-from marrow.json import open_json, scan_json as _scan_json
+from marrow.expr.builders import scan_json as _scan_json
+from marrow.json import open_json
 from marrow.schema import Schema
 from marrow.expr.sql import Catalog, sql as _sql
 from marrow.tabular import RecordBatch

@@ -447,11 +447,10 @@ A user rejects the library outright without these.
 #### 1.2 CSV and JSON readers
 
 **What exists.** NDJSON: `marrow/json/` — `read_json`, the streaming
-`JsonReader`/`open_json` and `scan_json` (an `ExternalScan`), with Python's
+`JsonReader`/`open_json`, and `scan_json` (`marrow.expr`'s `JsonScan`), with Python's
 `marrow.json` and lazy `marrow.read_json` over them, checked value for value
 against `pyarrow.json`; and `write_json`, whose output pyarrow reads back to
-the table it came from. `QueryCli` has no `--format json`: `marrow.expr` does
-not import `marrow.json`. It tokenizes with EmberJson (CLAUDE.md has the fork
+the table it came from. `QueryCli` has no `--format json` yet. It tokenizes with EmberJson (CLAUDE.md has the fork
 and why nothing else imports it).
 No CSV reader: the only CSV code under `marrow/` is `QueryCli`'s output writer
 (`render_csv`, `marrow/expr/cli.mojo`).
@@ -483,16 +482,14 @@ user value to engineering novelty on the whole page.**
 - *Remote sources fetch twice.* `block_end` reads a block to find its last
   newline, and the parse reads it again: free on a memory map, a second round
   trip on OpenDAL.
-- *EmberJson is not published*, and everything precompiled needs it: a
-  precompiled package needs every package any of its modules imports, so
-  `package/marrow.mojoc` and the conda package are unusable without
-  `emberjson.mojoc` and `emberserde.mojoc` built by the same nightly. The
-  conda package cannot declare the run-dependency until the forks are
-  published to a channel — consumers resolve by name and cannot build a git
-  source — and `mojo-community` already has an unrelated `emberjson`, so the
-  name needs settling first. The wheel ships `marrow/json` as source, so
-  `marrow compile` still builds any program that reads no JSON, but not one
-  that does. `libmarrow.so` includes it.
+- *EmberJson is not published*, and every marrow build needs it: JSON is
+  mandatory and `marrow.expr` imports `marrow.json`, so `package/marrow.mojoc`,
+  the conda package and `marrow compile` from the wheel's bundled source are
+  unusable without `emberjson`/`emberserde` built by the same nightly. The
+  conda package cannot declare the run-dependency — consumers resolve by name
+  and cannot build a git source — and the forks are not going to a channel,
+  so how a consumer gets EmberJson is open. Repository builds get it from the
+  git pin; `libmarrow.so` includes it.
 - *Explicit types* limited to null, bool, integers, float32/64, string,
   large_string, timestamp, list and struct. `date32` is left out on purpose —
   pyarrow reads it from a number, not a date string.
