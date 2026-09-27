@@ -123,6 +123,21 @@ def test_epoch_julian_day_matches_the_civil_epoch() raises:
     assert_equal(CivilDate.from_days(0).to_days() + Epoch.JULIAN_DAY, 2440588)
 
 
+def test_civil_date_days_in_month_and_validity() raises:
+    """Leap years by all three rules, and the month and day bounds."""
+    assert_equal(CivilDate(2000, 2, 1).days_in_month(), 29)
+    assert_equal(CivilDate(1900, 2, 1).days_in_month(), 28)
+    assert_equal(CivilDate(2024, 2, 1).days_in_month(), 29)
+    assert_equal(CivilDate(2023, 4, 1).days_in_month(), 30)
+    assert_equal(CivilDate(2023, 12, 1).days_in_month(), 31)
+    assert_true(CivilDate(2024, 2, 29).is_valid())
+    assert_false(CivilDate(2023, 2, 29).is_valid())
+    assert_false(CivilDate(2023, 0, 1).is_valid())
+    assert_false(CivilDate(2023, 13, 1).is_valid())
+    assert_false(CivilDate(2023, 4, 31).is_valid())
+    assert_false(CivilDate(2023, 1, 0).is_valid())
+
+
 def _iso[digits: Int](text: String) -> Optional[Int]:
     return parse_iso8601[digits](text.as_bytes())
 

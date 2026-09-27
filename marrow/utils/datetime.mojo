@@ -132,6 +132,25 @@ struct CivilDate(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
         return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
 
     @always_inline
+    def days_in_month(self) -> Int:
+        """28-31."""
+        if self.month == 2:
+            return 29 if self.is_leap() else 28
+        var m = self.month
+        return 30 if m == 4 or m == 6 or m == 9 or m == 11 else 31
+
+    @always_inline
+    def is_valid(self) -> Bool:
+        """Whether this names a real day: a month of 1-12, and a day that
+        month has."""
+        return (
+            self.month >= 1
+            and self.month <= 12
+            and self.day >= 1
+            and self.day <= self.days_in_month()
+        )
+
+    @always_inline
     def start_of_year(self) -> Self:
         return Self(self.year, 1, 1)
 
@@ -164,56 +183,146 @@ struct CivilDate(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
         writer.write(self.day)
 
 
-@always_inline
-def _digits(s: Span[Byte, _], start: Int, count: Int) -> Int:
-    """The value of `count` ASCII digits at `start`, or -1 if any is not one."""
-    var value = 0
-    for i in range(start, start + count):
-        var d = Int(s[i]) - ord("0")
-        if d < 0 or d > 9:
-            return -1
-        value = value * 10 + d
-    return value
+struct _Iso8601[mut: Bool, //, origin: Origin[mut=mut]]:
+    """ISO-8601 timestamp text, read the way Arrow C++'s
+    `ParseTimestampISO8601` reads it: every part sits at a fixed offset, so
+    each method reads one and answers `None` when it is malformed or out of
+    range, and `ticks` composes them.
+    """
+
+    var text: Span[Byte, Self.origin]
+
+    def __init__(out self, text: Span[Byte, Self.origin]):
+        self.text = text
+
+    @always_inline
+    def _at(self, index: Int, char: StaticString) -> Bool:
+        return self.text[index] == char.as_bytes()[0]
+
+    @always_inline
+    def number(self, start: Int, count: Int) -> Optional[Int]:
+        """`count` ASCII digits at `start`, as a number."""
+        var value = 0
+        for i in range(start, start + count):
+            var d = Int(self.text[i]) - ord("0")
+            if d < 0 or d > 9:
+                return None
+            value = value * 10 + d
+        return value
+
+    def date(self) -> Optional[CivilDate]:
+        """The `YYYY-MM-DD` the text opens with, if it names a real day."""
+        if len(self.text) < 10 or not self._at(4, "-") or not self._at(7, "-"):
+            return None
+        var year = self.number(0, 4)
+        var month = self.number(5, 2)
+        var day = self.number(8, 2)
+        if not (year and month and day):
+            return None
+        var date = CivilDate(year.value(), month.value(), day.value())
+        if not date.is_valid():
+            return None
+        return date
+
+    def clock(
+        self, start: Int, fields: Int, colon: Bool = True
+    ) -> Optional[Int]:
+        """`hh`, `hh:mm` or `hh:mm:ss` (`fields` = 1, 2, 3) at `start`, in
+        seconds. `colon=False` reads `hhmm`, the zone-offset spelling without
+        one."""
+        var hours = self.number(start, 2)
+        if not hours or hours.value() >= 24:
+            return None
+        var seconds = hours.value() * 3600
+        if fields == 1:
+            return seconds
+        var minutes: Optional[Int]
+        if not colon:
+            minutes = self.number(start + 2, 2)
+        elif self._at(start + 2, ":"):
+            minutes = self.number(start + 3, 2)
+        else:
+            return None
+        if not minutes or minutes.value() >= 60:
+            return None
+        seconds += minutes.value() * 60
+        if fields == 2:
+            return seconds
+        if not self._at(start + 5, ":"):
+            return None
+        var secs = self.number(start + 6, 2)
+        if not secs or secs.value() >= 60:
+            return None
+        return seconds + secs.value()
+
+    def zone(self, mut end: Int) -> Optional[Int]:
+        """The trailing zone offset — `Z`, `[+-]hh`, `[+-]hhmm` or
+        `[+-]hh:mm` — in seconds to add for UTC, with `end` moved in front of
+        it. No offset is 0; one that does not parse is `None`. Peeled off
+        before the clock is read, exactly as Arrow does."""
+        var offset: Optional[Int] = 0
+        if self._at(end - 1, "Z"):
+            end -= 1
+            return 0
+        elif self._at(end - 3, "+") or self._at(end - 3, "-"):
+            end -= 3
+            offset = self.clock(end + 1, 1)
+        elif self._at(end - 5, "+") or self._at(end - 5, "-"):
+            end -= 5
+            offset = self.clock(end + 1, 2, colon=False)
+        elif (self._at(end - 6, "+") or self._at(end - 6, "-")) and self._at(
+            end - 3, ":"
+        ):
+            end -= 6
+            offset = self.clock(end + 1, 2)
+        else:
+            return 0
+        if not offset:
+            return None
+        # `+01` means an hour ahead of UTC, so UTC is an hour earlier.
+        return -offset.value() if self._at(end, "+") else offset.value()
+
+    def ticks[fraction_digits: Int](self) -> Optional[Int]:
+        """Ticks since the epoch, `10**fraction_digits` per second."""
+        var date = self.date()
+        if not date:
+            return None
+        var seconds = date.value().to_days() * Epoch.SECONDS_PER_DAY
+        var subseconds = 0
+        var end = len(self.text)
+        if end > 10:
+            if not (self._at(10, " ") or self._at(10, "T")):
+                return None
+            var offset = self.zone(end)
+            if not offset:
+                return None
+            var clock: Optional[Int]
+            if end == 13:
+                clock = self.clock(11, 1)
+            elif end == 16:
+                clock = self.clock(11, 2)
+            elif end == 19 or (end >= 21 and end <= 29):
+                clock = self.clock(11, 3)
+            else:
+                return None
+            if not clock:
+                return None
+            seconds += clock.value() + offset.value()
+            if end > 19:
+                var given = end - 20
+                if not self._at(19, ".") or given > fraction_digits:
+                    return None
+                var fraction = self.number(20, given)
+                if not fraction:
+                    return None
+                subseconds = fraction.value() * 10 ** (fraction_digits - given)
+        comptime limit = Int(Int64.MAX) // 10**fraction_digits
+        if seconds > limit or seconds < -limit:
+            return None
+        return seconds * 10**fraction_digits + subseconds
 
 
-@always_inline
-def _days_in_month(year: Int, month: Int) -> Int:
-    if month == 2:
-        return 29 if CivilDate(year, 2, 1).is_leap() else 28
-    return 30 if month == 4 or month == 6 or month == 9 or month == 11 else 31
-
-
-def _clock_seconds(
-    s: Span[Byte, _], start: Int, fields: Int, colon: Bool = True
-) -> Int:
-    """`hh`, `hh:mm` or `hh:mm:ss` (`fields` = 1, 2, 3) at `start`, in seconds;
-    -1 if malformed or out of range. `colon=False` reads `hhmm`, the zone-offset
-    spelling without one."""
-    var hours = _digits(s, start, 2)
-    if hours < 0 or hours >= 24:
-        return -1
-    if fields == 1:
-        return hours * 3600
-    var minutes: Int
-    if not colon:
-        minutes = _digits(s, start + 2, 2)
-    elif s[start + 2] != Byte(ord(":")):
-        return -1
-    else:
-        minutes = _digits(s, start + 3, 2)
-    if minutes < 0 or minutes >= 60:
-        return -1
-    if fields != 3:
-        return hours * 3600 + minutes * 60
-    if s[start + 5] != Byte(ord(":")):
-        return -1
-    var seconds = _digits(s, start + 6, 2)
-    if seconds < 0 or seconds >= 60:
-        return -1
-    return hours * 3600 + minutes * 60 + seconds
-
-
-def parse_iso8601[fraction_digits: Int](s: Span[Byte, _]) -> Optional[Int]:
+def parse_iso8601[fraction_digits: Int](text: Span[Byte, _]) -> Optional[Int]:
     """An ISO-8601 timestamp as ticks since the epoch, `10**fraction_digits`
     ticks per second, or `None` if it does not parse.
 
@@ -229,7 +338,7 @@ def parse_iso8601[fraction_digits: Int](s: Span[Byte, _]) -> Optional[Int]:
         fraction_digits: Sub-second digits the unit holds.
 
     Args:
-        s: The candidate text, without quotes.
+        text: The candidate text, without quotes.
     """
     comptime assert (
         fraction_digits == 0
@@ -237,66 +346,4 @@ def parse_iso8601[fraction_digits: Int](s: Span[Byte, _]) -> Optional[Int]:
         or fraction_digits == 6
         or fraction_digits == 9
     ), "fraction_digits must be 0, 3, 6 or 9"
-    comptime ticks_per_second = 10**fraction_digits
-    var length = len(s)
-    if length < 10 or s[4] != Byte(ord("-")) or s[7] != Byte(ord("-")):
-        return None
-    var year = _digits(s, 0, 4)
-    var month = _digits(s, 5, 2)
-    var day = _digits(s, 8, 2)
-    if year < 0 or month < 1 or month > 12 or day < 1:
-        return None
-    if day > _days_in_month(year, month):
-        return None
-    var seconds = CivilDate.days_from(year, month, day) * Epoch.SECONDS_PER_DAY
-    var subseconds = 0
-    if length > 10:
-        if s[10] != Byte(ord(" ")) and s[10] != Byte(ord("T")):
-            return None
-        # The zone offset is peeled off the end first, exactly as Arrow does.
-        var offset = 0
-        var plus = Byte(ord("+"))
-        var minus = Byte(ord("-"))
-        if s[length - 1] == Byte(ord("Z")):
-            length -= 1
-        elif s[length - 3] == plus or s[length - 3] == minus:
-            length -= 3
-            offset = _clock_seconds(s, length + 1, 1)
-        elif s[length - 5] == plus or s[length - 5] == minus:
-            length -= 5
-            offset = _clock_seconds(s, length + 1, 2, colon=False)
-        elif (s[length - 6] == plus or s[length - 6] == minus) and s[
-            length - 3
-        ] == Byte(ord(":")):
-            length -= 6
-            offset = _clock_seconds(s, length + 1, 2)
-        if offset < 0:
-            return None
-        if length != len(s) and s[length] == plus:
-            offset = -offset
-        var clock: Int
-        if length == 13:
-            clock = _clock_seconds(s, 11, 1)
-        elif length == 16:
-            clock = _clock_seconds(s, 11, 2)
-        elif length == 19 or (length >= 21 and length <= 29):
-            clock = _clock_seconds(s, 11, 3)
-        else:
-            return None
-        if clock < 0:
-            return None
-        seconds += clock + offset
-        if length > 19:
-            var given = length - 20
-            if s[19] != Byte(ord(".")) or given > fraction_digits:
-                return None
-            var fraction = _digits(s, 20, given)
-            if fraction < 0:
-                return None
-            for _ in range(fraction_digits - given):
-                fraction *= 10
-            subseconds = fraction
-    comptime limit = Int(Int64.MAX) // ticks_per_second
-    if seconds > limit or seconds < -limit:
-        return None
-    return seconds * ticks_per_second + subseconds
+    return _Iso8601(text).ticks[fraction_digits]()
