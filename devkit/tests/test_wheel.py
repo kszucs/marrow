@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """`devkit wheel check`, against wheels written by hand.
 
 A real wheel takes a `libmarrow` build and a `delocate` pass; what the check

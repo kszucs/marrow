@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # Test a marrow wheel the way a user gets it: installed into a fresh virtual
 # environment, with the Python suite run against that install rather than the
 # checkout. The one definition of that test: `pixi run -e wheel wheel` runs it

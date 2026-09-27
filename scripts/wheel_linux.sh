@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # The Linux wheel leg on a laptop: compose.yaml's `wheel` service runs
 # scripts/wheel_ci.sh -- what .github/workflows/wheels.yml runs -- for the Docker
 # host's own architecture. That is aarch64 on Apple Silicon, where x86_64 Mojo

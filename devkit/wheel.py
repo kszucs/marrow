@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """The wheel: what it ships, and whether it says so.
 
 `python/marrow/compile.py` owns the tables of libraries marrow stages into a

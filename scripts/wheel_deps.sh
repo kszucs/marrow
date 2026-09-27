@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # The native libraries a wheel bundles beside `libmarrow` -- the Parquet page
 # codecs and `libopendal_c` -- into PREFIX/lib, for cibuildwheel's `before-all`.
 # The wheel build finds them through `MARROW_CODEC_LIB_DIR` (see

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # The wheel leg, one definition: cibuildwheel with python/pyproject.toml's
 # configuration, `devkit wheel check`, and the installed-wheel tests.
 # .github/workflows/wheels.yml runs it on each runner; compose.yaml's `wheel`

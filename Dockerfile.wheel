@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # The runner for compose.yaml's `wheel` service: Python and a Docker client, so
 # scripts/wheel_ci.sh can drive cibuildwheel's manylinux container through the
 # host's Docker socket, as it does on a CI runner.

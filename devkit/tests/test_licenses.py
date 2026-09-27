@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Every library marrow ships carries its licence, and the texts stay true.
 
 `python/marrow/compile.py` owns `LIBRARY_LICENSES`; the wheel build and `marrow

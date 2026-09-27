@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 """Pins with one home in `pixi.toml`, and the copies that must agree with it.
 
 A wheel is built by cibuildwheel, which never reads `pixi.toml`: its

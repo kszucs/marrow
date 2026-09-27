@@ -1,3 +1,6 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
 # cargo-about configuration for `scripts/build_opendal_c.sh licenses`.
 #
 # `accepted` is ordered by preference: where a crate offers a choice
