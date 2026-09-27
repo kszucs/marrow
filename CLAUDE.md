@@ -43,7 +43,7 @@ Dependencies (pinned in `pixi.toml`):
 | Environment | Purpose | Key command |
 |-------------|---------|-------------|
 | `dev`         | Tests + formatting (the default) | `pixi run -e dev test` |
-| `asan`        | AddressSanitizer test runs | `pixi run -e asan test_asan_core` |
+| `asan`        | AddressSanitizer test runs | `pixi run -e asan pytest --asan marrow/tests` |
 | `bench`       | Benchmarks (polars, duckdb for comparison) | `pixi run -e bench bench` |
 | `format`      | Formatting only (no test deps) | `pixi run -e format fmt` |
 | `docs`        | Quarto documentation | `pixi run -e docs docs` |
