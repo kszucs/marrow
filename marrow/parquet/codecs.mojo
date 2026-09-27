@@ -40,22 +40,6 @@ from .. import dtypes as dt
 from ..utils import CompressionLibs, LittleEndian
 
 
-@always_inline
-def load_word_le[
-    mut: Bool, //, o: Origin[mut=mut]
-](data: Span[UInt8, o], byte_idx: Int) -> UInt64:
-    """Unaligned little-endian 64-bit load from a byte span.
-
-    Lives here rather than in `views.mojo` because bit-unpacking is its only
-    caller and this file is already inside the Parquet codec layer, where
-    CLAUDE.md permits raw pointers (it `dlopen`s the C codecs and hands them
-    pointers directly). The caller guarantees 8 readable bytes at `byte_idx`
-    (mmap has trailing bytes; the decompression scratch is padded)."""
-    return (data.unsafe_ptr().unsafe_offset(byte_idx)).unsafe_bitcast[UInt64]()[
-        unsafe_offset=0
-    ]
-
-
 struct Zigzag:
     """Signed <-> unsigned mapping so small-magnitude signed integers stay small
     as varints — shared by the delta codecs and the Thrift Compact Protocol.
@@ -112,7 +96,11 @@ struct Rle:
 
         Requires `width <= 32` so the top read bit (`7 + width`) stays inside the
         64-bit word and a single load per lane covers every value — always true
-        for dictionary indices (`bit_width(dict_size)`) and levels."""
+        for dictionary indices (`bit_width(dict_size)`) and levels.
+
+        A span is not padded — a page can end on the last packed byte — so the
+        group whose last word would run past the end reads through the bounded
+        `LittleEndian.partial` instead."""
         debug_assert(
             width <= 32,
             "Rle._unpack8 requires width <= 32 (one 64-bit load per lane)",
@@ -120,9 +108,17 @@ struct Rle:
         var words = SIMD[DType.uint64, 8](0)
         var shifts = SIMD[DType.uint64, 8](0)
         comptime for j in range(8):
-            var ab = base_bit + j * width
-            words[j] = load_word_le(data, byte_base + (ab >> 3))
-            shifts[j] = UInt64(ab & 7)
+            shifts[j] = UInt64((base_bit + j * width) & 7)
+        if byte_base + ((base_bit + 7 * width) >> 3) + 8 <= len(data):
+            comptime for j in range(8):
+                words[j] = LittleEndian.fixed[DType.uint64](
+                    data, byte_base + ((base_bit + j * width) >> 3)
+                )
+        else:
+            comptime for j in range(8):
+                words[j] = LittleEndian.partial[DType.uint64](
+                    data, byte_base + ((base_bit + j * width) >> 3)
+                )
         return (words >> shifts) & maskv
 
     @staticmethod
@@ -1094,11 +1090,8 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
         out_size: Int,
         mut scratch: List[UInt8],
     ) raises:
-        """Decompress `src` into `scratch` (resized, reused across pages).
-
-        8 trailing bytes of slack let the bit-unpackers do unaligned 64-bit
-        loads past the last value without overrunning the buffer."""
-        scratch.resize(unsafe_uninit_length=out_size + 8)
+        """Decompress `src` into `scratch` (resized, reused across pages)."""
+        scratch.resize(unsafe_uninit_length=out_size)
         var ptr = scratch.unsafe_ptr()
         if self == Self.UNCOMPRESSED:
             unsafe_memcpy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
@@ -1155,7 +1148,6 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
         """Decompress `src` into a fresh `out_size`-byte list."""
         var dst = List[UInt8]()
         self.decompress_into(libs, src, out_size, dst)
-        dst.resize(unsafe_uninit_length=out_size)  # drop the scratch slack
         return dst^
 
     def compress(

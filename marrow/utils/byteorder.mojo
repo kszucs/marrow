@@ -52,6 +52,16 @@ struct LittleEndian:
             return v
 
     @staticmethod
+    def partial[T: DType](data: Span[UInt8, _], pos: Int) -> Scalar[T]:
+        """`fixed`, but the bytes past the end of `data` read as zero -- for a
+        wide load at the tail of a span that carries no padding."""
+        comptime assert T.is_integral(), "LittleEndian.partial needs an integer"
+        var v = Scalar[T](0)
+        for b in range(min(size_of[Scalar[T]](), len(data) - pos)):
+            v |= Scalar[T](data[pos + b]) << Scalar[T](8 * b)
+        return v
+
+    @staticmethod
     def checked[
         T: DType
     ](data: Span[UInt8, _], pos: Int) raises CorruptError -> Scalar[T]:
