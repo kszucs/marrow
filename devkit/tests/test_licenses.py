@@ -9,18 +9,13 @@ files only -- no wheel is built -- so they run in the one-second selftest.
 import json
 import re
 import sys
-import tomllib
 from glob import glob
 from pathlib import Path
 
 import pytest
 
-from devkit.mojo import Repo
-from devkit.wheel import compile_module
+from devkit.tests import CATALOG, PYPROJECT, REPO
 
-REPO = Repo.locate()
-CATALOG = compile_module(REPO)
-PYPROJECT = tomllib.loads(REPO.pyproject.read_text())
 #: Every text `LIBRARY_LICENSES` names, `python/`-relative.
 MAPPED = {rel for files in CATALOG.LIBRARY_LICENSES.values() for rel in files}
 

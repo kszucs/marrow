@@ -145,17 +145,7 @@ def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
     are resolved directly against `loader`'s directory. An absolute path
     is returned as-is.
 
-    Deliberately **not** `.resolve()`d: a conda-forge library typically
-    installs as a chain of version symlinks (`libbrotlicommon.dylib` ->
-    `libbrotlicommon.1.dylib` -> `libbrotlicommon.1.2.0.dylib`), and the
-    dependency string names the *symlink* (`@rpath/libbrotlicommon.1.dylib`)
-    — collapsing that to the real file's name broke the copy `bundle()`
-    made: a Mach-O looks up its dependency by the exact name it recorded, so
-    shipping the file under the resolved `.1.2.0` name left the referenced
-    `.1.dylib` name missing at runtime. Returning the un-resolved candidate
-    keeps `.name` equal to what the dependent actually asks for; the caller
-    still dereferences the symlink when it copies the bytes
-    (`shutil.copy2`'s default `follow_symlinks=True`).
+    Deliberately **not** `.resolve()`d -- see `dylib_closure`.
     """
     if dep.startswith("@rpath/"):
         name = dep.removeprefix("@rpath/")
@@ -178,12 +168,13 @@ def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
     return None
 
 
-def _macos_deps(path: Path) -> list[Path | None]:
-    return [
+def _macos_deps(path: Path) -> list[Path]:
+    resolved = (
         _resolve_macos_dep(dep, path)
         for dep in _otool_deps(path)
         if not _is_system_dep(dep)
-    ]
+    )
+    return [dep for dep in resolved if dep is not None]
 
 
 def _ldd_deps(path: Path) -> list[str]:
@@ -232,7 +223,7 @@ def dylib_closure(binary: Path) -> list[Path]:
     frontier = [binary]
     while frontier:
         for dep in deps_of(frontier.pop()):
-            if dep is None or dep in seen or not dep.exists() or dep.resolve() == binary:
+            if dep in seen or not dep.exists() or dep.resolve() == binary:
                 continue
             seen[dep] = None
             frontier.append(dep)
@@ -307,7 +298,7 @@ LIBRARY_LICENSES: dict[str, tuple[str, ...]] = {
     "libbrotlidec": ("licenses/brotli.txt",),
     "libbrotlicommon": ("licenses/brotli.txt",),
     # The C++ runtime conda-forge's snappy links. On Linux only a `--bundle`
-    # directory carries it (see WHEEL_EXCLUDED).
+    # directory carries it; a wheel never does (`WHEEL_EXCLUDED`, devkit/wheel.py).
     "libc++": ("licenses/libcxx.txt",),
     "libstdc++": ("licenses/bundle-only/gcc-runtime.txt",),
     "libgcc_s": ("licenses/bundle-only/gcc-runtime.txt",),
@@ -319,11 +310,6 @@ LIBRARY_LICENSES: dict[str, tuple[str, ...]] = {
         "licenses/opendal-third-party.txt",
     ),
 }
-
-# What a wheel never carries: manylinux guarantees these two, and a conda copy
-# would hide from auditwheel whether the codecs fit the policy's GLIBCXX.
-# `python/build.py` skips them, and `devkit wheel check` refuses them.
-WHEEL_EXCLUDED = frozenset({"libstdc++", "libgcc_s"})
 
 # `auditwheel repair` renames a grafted library `libfoo-0a1b2c3d.so.1`.
 _AUDITWHEEL_HASH = re.compile(r"-[0-9a-f]{8}$")
@@ -425,8 +411,13 @@ def optional_lib_paths() -> list[Path]:
         found = _find_codec_lib(lib_dir, _OPTIONAL_LIB_CANDIDATES["opendal"])
         if found is not None:
             out.append(found)
+    return _with_closure(out)
+
+
+def _with_closure(libs: list[Path]) -> list[Path]:
+    """`libs` and each one's dependency closure, one path per file name."""
     staged: dict[str, Path] = {}
-    for lib in out:
+    for lib in libs:
         staged.setdefault(lib.name, lib)
         for dep in dylib_closure(lib):
             staged.setdefault(dep.name, dep)
@@ -466,7 +457,7 @@ def codec_lib_dir() -> Path | None:
 def _find_codec_lib(lib_dir: Path, names: list[str]) -> Path | None:
     """The first of `names` that exists in `lib_dir`, unresolved (a
     version-symlink chain is dereferenced only when its bytes are copied,
-    not when picking the destination filename — see `_resolve_macos_dep`).
+    not when picking the destination filename — see `dylib_closure`).
     """
     for name in names:
         candidate = lib_dir / name
@@ -500,7 +491,7 @@ def stage_codec_libs(lib_dir: Path | None, required: bool = False) -> list[Path]
             "../lib); --bundle will ship with no zstd/snappy/lz4/zlib/brotli support"
         )
         return []
-    staged: dict[str, Path] = {}
+    found = []
     for codec, names in _CODEC_LIB_CANDIDATES.items():
         lib = _find_codec_lib(lib_dir, names)
         if lib is None:
@@ -509,10 +500,8 @@ def stage_codec_libs(lib_dir: Path | None, required: bool = False) -> list[Path]
                 "skipping (--bundle will not support that codec)"
             )
             continue
-        staged.setdefault(lib.name, lib)
-        for dep in dylib_closure(lib):
-            staged.setdefault(dep.name, dep)
-    return list(staged.values())
+        found.append(lib)
+    return _with_closure(found)
 
 
 def _copy_deduped(staged: dict[str, Path], dest: Path) -> None:

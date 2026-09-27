@@ -4,13 +4,11 @@
 """Parquet reader/writer bindings, verified against PyArrow as the oracle."""
 
 import os
-from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import marrow
 import marrow.parquet as mpq
 
 
@@ -52,23 +50,22 @@ def test_marrow_reads_pyarrow(tmp_path, compression):
     _assert_equiv(_to_pa(mpq.read_table(p)), want)
 
 
-def _opendal_present():
-    """Whether marrow will find `libopendal_c`: named by an override, or staged
-    beside the extension, as a wheel that bundles it has it."""
-    overrides = (os.environ.get(v) for v in ("MARROW_OPENDAL_LIBRARY", "OPENDAL_C_LIBRARY"))
-    return any(p and Path(p).exists() for p in overrides) or any(
-        Path(marrow.__file__).parent.glob("libopendal_c.*")
-    )
-
-
-@pytest.mark.skipif(not _opendal_present(), reason="no libopendal_c to read through")
 def test_marrow_reads_through_opendal(tmp_path):
-    """`fs://` goes through `libopendal_c`: where it is present, the read must
-    succeed."""
+    """`fs://` goes through `libopendal_c`. Only the loader's own "not found"
+    skips, and not under `MARROW_REQUIRE_OPENDAL` -- the Mojo suites' rule --
+    so a wheel that bundles the library must read through it."""
     p = tmp_path / "t.parquet"
     want = _sample()
     pq.write_table(want, p)
-    _assert_equiv(_to_pa(mpq.read_table(f"fs://{p}")), want)
+    try:
+        got = mpq.read_table(f"fs://{p}")
+    except Exception as e:
+        if "failed to open opendal_c" in str(e) and not os.environ.get(
+            "MARROW_REQUIRE_OPENDAL"
+        ):
+            pytest.skip("no libopendal_c to read through")
+        raise
+    _assert_equiv(_to_pa(got), want)
 
 
 @pytest.mark.parametrize("compression", ["none", "snappy", "zstd", "lz4"])

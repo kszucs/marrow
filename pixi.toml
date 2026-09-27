@@ -288,7 +288,7 @@ build_x86 = { cmd = "docker compose build x86" }
 build_arm64 = { cmd = "docker compose build arm64" }
 test_x86 = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build_x86"] }
 test_arm64 = { cmd = "docker compose run --rm arm64 pixi run -e dev pytest", depends-on = ["build_arm64"] }
-# The Linux leg of wheels.yml -- cibuildwheel, then `devkit wheel check` -- for
+# The Linux leg of wheels.yml -- scripts/wheel_ci.sh: build, check, test -- for
 # the Docker host's architecture; wheels land in .wheel-linux/wheelhouse/. See
 # scripts/wheel_linux.sh and Dockerfile.wheel.
 build_wheel = { cmd = "docker compose build wheel" }
@@ -296,7 +296,7 @@ wheel_linux = { cmd = "scripts/wheel_linux.sh", depends-on = ["build_wheel"] }
 
 # Wheel — local wheel building for macOS development.
 [feature.wheel.dependencies]
-hatchling = ">=1.25,<2"
+hatchling = ">=1.27,<2"   # PEP 639 `license-files`; wheel_build runs it without isolation
 delocate = ">=0.11,<1"
 pytest = ">=9.0.2,<10"
 pip = "*"
@@ -311,7 +311,7 @@ numpy = ">=2.4.4,<3"
 wheel_build = { cmd = "rm -rf python/dist dist/repaired && strip -x python/marrow/libmarrow.so && (cd python && python -m hatchling build --target wheel) && delocate-wheel -w dist/repaired/ -v python/dist/marrow-*.whl", depends-on = ["build_python"] }
 wheel_check = { cmd = "python -m devkit wheel check dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
 # Installs the wheel into a fresh venv and tests that install -- the same script
-# cibuildwheel and the Linux runs use.
+# scripts/wheel_ci.sh runs in CI.
 wheel_test = { cmd = "bash scripts/wheel_test.sh dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
 wheel = { depends-on = ["wheel_check", "wheel_test"] }
 

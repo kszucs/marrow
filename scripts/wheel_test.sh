@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Test a marrow wheel the way a user gets it: installed into a fresh virtual
 # environment, with the Python suite run against that install rather than the
-# checkout. The one definition of that test: `pixi run -e wheel wheel` runs it,
-# cibuildwheel runs it for macOS, and scripts/wheel_ci.sh for Linux (see
-# [tool.cibuildwheel.linux] in pyproject.toml for why).
+# checkout. The one definition of that test: `pixi run -e wheel wheel` runs it
+# locally, scripts/wheel_ci.sh in CI.
 #
 #     bash scripts/wheel_test.sh dist/repaired/marrow-*.whl
 set -euo pipefail

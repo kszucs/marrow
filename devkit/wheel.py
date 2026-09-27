@@ -2,10 +2,7 @@
 
 `python/marrow/compile.py` owns the tables of libraries marrow stages into a
 wheel or a `marrow compile --bundle` directory, and `LIBRARY_LICENSES`, the
-texts each one needs. It ships inside the wheel and imports only the standard
-library, so devkit reaches it by path rather than by `import marrow.compile` --
-that import would run the package `__init__` and load `libmarrow.so`, which
-nothing under `devkit/` may do at import time.
+texts each one needs; `compile_module` is the one way to reach it from here.
 
 `check_wheel` is the last line: it reads a *repaired* wheel -- after `delocate`
 or `auditwheel` grafted the libraries the extension links -- and reports every
@@ -17,9 +14,13 @@ import posixpath
 import zipfile
 from email.parser import Parser
 
+#: What `python/build.py` never stages into a wheel, though a Linux `--bundle`
+#: directory carries both: manylinux guarantees them, and a conda copy would
+#: hide from auditwheel whether the codecs fit the policy's GLIBCXX.
+WHEEL_EXCLUDED = frozenset({"libstdc++", "libgcc_s"})
+
 #: MAX's GPU runtime and engine: a CPU wheel links neither, so one appearing
-#: means the build picked up a GPU flag. With `compile.py`'s `WHEEL_EXCLUDED`,
-#: what a wheel must never carry.
+#: means the build picked up a GPU flag.
 _NEVER_LINKED = frozenset({"libMGPRT", "libmax"})
 
 
@@ -30,7 +31,14 @@ def _grafted(name):
 
 
 def compile_module(repo):
-    """`python/marrow/compile.py`, loaded by path from `repo`."""
+    """`python/marrow/compile.py`, loaded by path from `repo`.
+
+    Not `import marrow.compile`: that runs the package `__init__`, which loads
+    `libmarrow.so` -- something nothing under `devkit/` may do at import time,
+    and which the build hook cannot rely on, since under cross-compilation the
+    building interpreter cannot load the extension it just built. `compile.py`
+    imports only the standard library, so loading it alone is well defined.
+    """
     spec = importlib.util.spec_from_file_location("_marrow_compile", repo.compile_py)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -81,6 +89,7 @@ def check_wheel(path, catalog, require=()):
         for name in names
         if catalog.is_shared_library(name)
     }
+    stems = set(libraries.values())
     expected = dict(catalog._CODEC_LIB_CANDIDATES)
     for key in require:
         if key in catalog._OPTIONAL_LIB_CANDIDATES:
@@ -88,13 +97,12 @@ def check_wheel(path, catalog, require=()):
         else:
             problems.append(f"cannot require {key!r}: not an optional library")
     for key, candidates in expected.items():
-        if not set(libraries.values()) & {catalog.library_stem(c) for c in candidates}:
+        if not stems & {catalog.library_stem(c) for c in candidates}:
             problems.append(f"no {key} library in the wheel")
 
-    forbidden = catalog.WHEEL_EXCLUDED | _NEVER_LINKED
     staged = {stem for name, stem in libraries.items() if not _grafted(name)}
     for name, stem in libraries.items():
-        if stem in forbidden:
+        if stem in WHEEL_EXCLUDED | _NEVER_LINKED:
             problems.append(f"{name} must not ship in a wheel")
             continue
         # Grafted although marrow staged its own copy: the staged one was not

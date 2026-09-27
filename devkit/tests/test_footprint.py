@@ -343,13 +343,10 @@ def test_marrow_compile_builds_a_query_the_way_the_gate_builds_one():
     makes: a user's compiled query is measured on the same terms as the gate
     programs, so the numbers in `benchmarks/binary_size/` describe their binary
     too.  A change to `for_size_gate` alone silently ends that.
-
-    Loaded by path rather than imported: `marrow/__init__.py` pulls in the
-    compiled extension, and this suite must run without `libmarrow.so`.
     """
-    from devkit.wheel import compile_module as load_compile_py
+    from devkit.wheel import compile_module
 
-    compile_module = load_compile_py(Repo.locate())
+    catalog = compile_module(Repo.locate())
 
     gate = BuildOptions.for_size_gate()
     expected = ["mojo", "build", *gate.flags(), "q.mojo", "-o", "q"]
@@ -358,7 +355,7 @@ def test_marrow_compile_builds_a_query_the_way_the_gate_builds_one():
     expected[expected.index(".")] = "/marrow/checkout"
 
     assert (
-        compile_module.build_command(
+        catalog.build_command(
             Path("q.mojo"), Path("q"), Path("/marrow/checkout")
         )
         == expected

@@ -63,7 +63,8 @@ environment = { MARROW_CODEC_LIB_DIR = "/tmp/marrow-deps/lib", LD_LIBRARY_PATH =
 # `max-core` matching `[dependencies] max` -- and `devkit/tests/test_pins.py`
 # fails if they drift. `max-core` is needed because marrow imports `max.*`.
 before-build = "pip install --pre 'mojo-compiler==1.2.0.dev2026092105' 'max-core==26.7.0.dev2026092105' --extra-index-url https://whl.modular.com/nightly/simple/"
-test-command = "bash {project}/scripts/wheel_test.sh {wheel}"
+# No `test-command`: scripts/wheel_ci.sh tests every wheel once cibuildwheel is
+# done, since a Linux one cannot be installed where it was built.
 
 [tool.cibuildwheel.linux]
 # Modular's Linux wheels are tagged manylinux_2_34, so the build container is
@@ -72,9 +73,7 @@ test-command = "bash {project}/scripts/wheel_test.sh {wheel}"
 # requirement in what the wheel bundles -- not in the codecs, which stay at GCC
 # 11's symbols. So the build borrows conda-forge's libstdc++ through
 # `LD_LIBRARY_PATH` (scripts/wheel_deps.sh), and manylinux_2_35 is the lowest
-# honest tag. pip in this container rightly refuses that wheel, so
-# scripts/wheel_ci.sh tests it after the build instead.
+# honest tag -- one pip in this container rightly refuses.
 manylinux-x86_64-image = "manylinux_2_34"
 manylinux-aarch64-image = "manylinux_2_34"
 repair-wheel-command = "auditwheel repair --plat manylinux_2_35_$(uname -m) -w {dest_dir} {wheel}"
-test-command = ""

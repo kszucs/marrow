@@ -12,21 +12,19 @@ import pytest
 from click.testing import CliRunner
 
 from devkit.cli import Context, cli
-from devkit.mojo import Repo
-from devkit.wheel import check_wheel, compile_module
+from devkit.tests import CATALOG, REPO
+from devkit.wheel import check_wheel
 
-CATALOG = compile_module(Repo.locate())
 _DIST_INFO = "marrow-0.1.0.dist-info"
-_ZSTD = f"marrow/{CATALOG._CODEC_LIB_CANDIDATES['zstd'][0]}"
 
 
-def _wheel(directory, *extra, drop=(), expression=True, codecs=0):
-    """A macOS-shaped wheel -- the extension, one file per codec (candidate
-    `codecs` of each), the Mojo runtime delocate grafts in, and `extra` -- with
-    exactly the texts those need, less any library or text in `drop`."""
+def _wheel(directory, *extra, drop=(), expression=True):
+    """A macOS-shaped wheel -- the extension, one file per codec, the Mojo
+    runtime delocate grafts in, and `extra` -- with exactly the texts those
+    need, less any library or text in `drop`."""
     libraries = [
         "marrow/libmarrow.cpython-314-darwin.so",
-        *(f"marrow/{names[codecs]}" for names in CATALOG._CODEC_LIB_CANDIDATES.values()),
+        *(f"marrow/{names[0]}" for names in CATALOG._CODEC_LIB_CANDIDATES.values()),
         "marrow/.dylibs/libKGENCompilerRTShared.dylib",
         *extra,
     ]
@@ -66,9 +64,10 @@ def test_an_unrecorded_library_fails(tmp_path):
 
 
 def test_a_missing_text_names_the_library_that_needs_it(tmp_path):
+    zstd = f"marrow/{CATALOG._CODEC_LIB_CANDIDATES['zstd'][0]}"
     wheel = _wheel(tmp_path, drop={"licenses/zstd.txt"})
     assert check_wheel(wheel, CATALOG) == [
-        f"{_ZSTD} needs licenses/zstd.txt, which is not under {_DIST_INFO}/licenses/"
+        f"{zstd} needs licenses/zstd.txt, which is not under {_DIST_INFO}/licenses/"
     ]
 
 
@@ -113,11 +112,7 @@ def test_a_library_both_staged_and_grafted_fails(tmp_path):
 
 
 def test_auditwheel_renamed_libraries_resolve(tmp_path):
-    wheel = _wheel(
-        tmp_path,
-        "marrow.libs/libMSupportGlobals-0a1b2c3d.so",
-        codecs=-1,  # the `.so.1` spelling of each codec
-    )
+    wheel = _wheel(tmp_path, "marrow.libs/libMSupportGlobals-0a1b2c3d.so")
     assert check_wheel(wheel, CATALOG) == []
 
 
@@ -125,7 +120,7 @@ def test_the_command_fails_listing_every_problem(tmp_path):
     good = _wheel(tmp_path / "good")
     bad = _wheel(tmp_path / "bad", expression=False)
     result = CliRunner().invoke(
-        cli, ["wheel", "check", str(good), str(bad)], obj=Context(Repo.locate())
+        cli, ["wheel", "check", str(good), str(bad)], obj=Context(REPO)
     )
     assert result.exit_code == 1
     assert f"{good.name}: ok" in result.output
