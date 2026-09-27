@@ -95,7 +95,7 @@ from .expr import (
     rank,
     row_number,
 )
-from .lazy import LazyTable, memtable, read_parquet, sql
+from .lazy import LazyTable, memtable, read_json, read_parquet, sql
 from . import compute, expr, lazy
 
 ExecContext = libmarrow.ExecContext
@@ -184,6 +184,7 @@ __all__ = [
     "read_ipc_stream",
     "read_ipc_stream_schema",
     "rank",
+    "read_json",
     "read_parquet",
     "record_batch",
     "row_number",
