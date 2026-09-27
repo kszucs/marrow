@@ -16,7 +16,13 @@ against the proleptic Gregorian calendar Arrow C++ and arrow-rs assume.
 
 from std.testing import assert_equal, assert_false, assert_true
 
-from ..datetime import CivilDate, Epoch, floor_div
+from ..datetime import (
+    CivilDate,
+    Epoch,
+    floor_div,
+    parse_iso8601,
+    write_iso8601,
+)
 
 
 def test_civil_date_epoch_is_day_zero() raises:
@@ -121,3 +127,150 @@ def test_epoch_julian_day_matches_the_civil_epoch() raises:
     subtracting this constant, so it has to agree with day zero."""
     assert_equal(Epoch.JULIAN_DAY, 2440588)
     assert_equal(CivilDate.from_days(0).to_days() + Epoch.JULIAN_DAY, 2440588)
+
+
+def test_civil_date_days_in_month_and_validity() raises:
+    """Leap years by all three rules, and the month and day bounds."""
+    assert_equal(CivilDate(2000, 2, 1).days_in_month(), 29)
+    assert_equal(CivilDate(1900, 2, 1).days_in_month(), 28)
+    assert_equal(CivilDate(2024, 2, 1).days_in_month(), 29)
+    assert_equal(CivilDate(2023, 4, 1).days_in_month(), 30)
+    assert_equal(CivilDate(2023, 12, 1).days_in_month(), 31)
+    assert_true(CivilDate(2024, 2, 29).is_valid())
+    assert_false(CivilDate(2023, 2, 29).is_valid())
+    assert_false(CivilDate(2023, 0, 1).is_valid())
+    assert_false(CivilDate(2023, 13, 1).is_valid())
+    assert_false(CivilDate(2023, 4, 31).is_valid())
+    assert_false(CivilDate(2023, 1, 0).is_valid())
+
+
+def _iso[digits: Int](text: String) -> Optional[Int]:
+    return parse_iso8601[digits](text.as_bytes())
+
+
+def test_parse_iso8601_dates() raises:
+    """Arrow C++'s `ToTimestampDate_ISO8601` cases, second unit."""
+    for c in [
+        ("1970-01-01", 0),
+        ("1989-07-14", 616377600),
+        ("2000-02-29", 951782400),
+        ("3989-07-14", 63730281600),
+        ("1900-02-28", -2203977600),
+    ]:
+        assert_equal(_iso[0](c[0]).value(), c[1])
+    for text in [
+        "",
+        "1970",
+        "19700101",
+        "1970/01/01",
+        "1970-01-01 ",
+        "1970-01-01Z",
+        "1970-00-01",
+        "1970-13-01",
+        "1970-01-32",
+        "1970-02-29",
+        "2100-02-29",
+    ]:
+        assert_false(Bool(_iso[0](text)), text)
+
+
+def test_parse_iso8601_datetimes() raises:
+    """Arrow C++'s `ToTimestampDateTime_ISO8601` cases, second unit: every
+    clock precision crossed with every zone-offset spelling."""
+    for c in [
+        ("1970-01-01 00:00:00", 0),
+        ("2018-11-13 17", 1542128400),
+        ("2018-11-13 17+00", 1542128400),
+        ("2018-11-13 17+0000", 1542128400),
+        ("2018-11-13 17+00:00", 1542128400),
+        ("2018-11-13 17+01", 1542124800),
+        ("2018-11-13 17+0117", 1542123780),
+        ("2018-11-13 17+01:17", 1542123780),
+        ("2018-11-13 17-01", 1542132000),
+        ("2018-11-13 17-0117", 1542133020),
+        ("2018-11-13 17-01:17", 1542133020),
+        ("2018-11-13T17", 1542128400),
+        ("2018-11-13 17Z", 1542128400),
+        ("2018-11-13T17:11", 1542129060),
+        ("2018-11-13 17:11Z", 1542129060),
+        ("2018-11-13 17:11+01:17", 1542124440),
+        ("2018-11-13 17:11-0117", 1542133680),
+        ("2018-11-13T17:11:10", 1542129070),
+        ("2018-11-13T17:11:10Z", 1542129070),
+        ("2018-11-13T17:11:10+01", 1542125470),
+        ("2018-11-13T17:11:10-01:17", 1542133690),
+        ("1900-02-28 12:34:56", -2203932304),
+    ]:
+        assert_equal(_iso[0](c[0]).value(), c[1], c[0])
+    for text in [
+        "1900-02-28 12:34:56.001",
+        "1970-02-29 00:00:00",
+        "1970-01-01 24",
+        "1970-01-01 00:60",
+        "1970-01-01 00,00",
+        "1970-01-01 24:00:00",
+        "1970-01-01 00:00:60",
+        "1970-01-01 00:00,00",
+        "1970-01-01 00:00+0",
+        "1970-01-01 00:00+000",
+        "1970-01-01 00:00+00000",
+        "1970-01-01 00:00+2400",
+        "1970-01-01 00:00+0060",
+        "1970-01-01 00-0",
+        "1970-01-01 00+00000",
+        "1970-01-01 00:00:00-000",
+        "1970-01-01 00:00:00+00:99",
+    ]:
+        assert_false(Bool(_iso[0](text)), text)
+
+
+def test_parse_iso8601_subseconds() raises:
+    """Fractional seconds pad to the unit and are rejected past it."""
+    assert_equal(_iso[3]("2018-11-13T17:11:10.777Z").value(), 1542129070777)
+    assert_equal(_iso[3]("1900-02-28 12:34:56.1").value(), -2203932304000 + 100)
+    assert_equal(
+        _iso[3]("2018-11-13 17:11:10.123+01:17").value(),
+        1542129070123 - 4620000,
+    )
+    assert_false(Bool(_iso[3]("1900-02-28 12:34:56.1234")))
+    assert_equal(
+        _iso[6]("3989-07-14T11:22:33.000777Z").value(), 63730322553000777
+    )
+    assert_equal(
+        _iso[9]("1900-02-28 12:34:56.123456789").value(),
+        -2203932304000000000 + 123456789,
+    )
+    assert_false(Bool(_iso[9]("1900-02-28 12:34:56.1234567890")))
+
+
+def test_parse_iso8601_out_of_range_for_the_unit() raises:
+    """Nanoseconds since the epoch cover only ~1677-2262; a date outside that
+    range is `None` rather than a wrapped value."""
+    assert_equal(_iso[0]("3989-07-14").value(), 63730281600)
+    assert_false(Bool(_iso[9]("3989-07-14")))
+    assert_false(Bool(_iso[9]("1600-01-01")))
+
+
+def _written[digits: Int](ticks: Int) -> String:
+    var out = String()
+    write_iso8601[digits](ticks, out)
+    return out^
+
+
+def test_write_iso8601_is_the_inverse_of_parse() raises:
+    """Before and after the epoch, with and without a fraction: what is
+    written parses back to the same ticks."""
+    assert_equal(_written[0](0), "1970-01-01 00:00:00")
+    assert_equal(_written[0](-2203932304), "1900-02-28 12:34:56")
+    assert_equal(_written[3](1542129070777), "2018-11-13 17:11:10.777")
+    assert_equal(_written[3](1542129070000), "2018-11-13 17:11:10")
+    assert_equal(_written[9](-1), "1969-12-31 23:59:59.999999999")
+    for ticks in [0, -1, 1, 1542129070777, -2203932304000, 63730322553000]:
+        var text = _written[3](ticks)
+        assert_equal(_iso[3](text).value(), ticks, text)
+
+
+def test_write_iso8601_pads_small_years() raises:
+    var ticks = CivilDate(33, 1, 2).to_days() * Epoch.SECONDS_PER_DAY
+    assert_equal(_written[0](ticks), "0033-01-02 00:00:00")
+    assert_equal(_iso[0](_written[0](ticks)).value(), ticks)

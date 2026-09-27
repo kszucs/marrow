@@ -35,6 +35,17 @@ Dependencies (pinned in `pixi.toml`):
   the comment in `pixi.toml` for why.
 - `zstd` / `snappy` / `lz4-c` / `brotli` — Parquet page codecs, opened at runtime
   via `dlopen` (no link-time dependency).
+- `emberjson` — the JSON tokenizer under `marrow.json`, a **git** dependency on
+  `kszucs/EmberJson` (branch `marrow-nightly`), which depends on
+  `kszucs/EmberSerde` the same way. pixi builds both from source into the
+  environment's `lib/mojo/`, so no `-I` is needed. Both forks exist only to pin
+  **our exact nightly**: a `.mojoc` loads only under the compiler that built
+  it, and upstream pins a release. **A `mojo` bump is therefore three bumps**:
+  in each fork set the `mojo`/`mojo-compiler` pins (EmberSerde three, EmberJson
+  four), run its `pixi run test`, push; then move EmberJson's `emberserde` rev,
+  and marrow's `emberjson` revs (`[dependencies]` and
+  `[package.build-dependencies]`), and `pixi lock`. The published package
+  cannot carry it yet — see "JSON" below.
 
 ## Build, Test, Benchmark
 
@@ -518,8 +529,9 @@ share no node types**:
   descriptions (`schema` / `to_operator` / `write`), erased by `DynRelation`:
   a `Variant` for inspection, so `isa[R]()` is a discriminant compare and the
   optimizer's rules read a real typed node, plus a trampoline for lowering. The
-  nodes are `EmptyRelation`, `InMemoryTable`, `ParquetScan`, `Filter`,
-  `Project`, `Aggregate`, `Limit`, `Sort`, `Window` and `Join`, chained by
+  nodes are `EmptyRelation`, `InMemoryTable`, `ParquetScan`, `ExternalScan`,
+  `Filter`, `Project`, `Aggregate`, `Limit`, `Sort`, `Window` and `Join`,
+  chained by
   `.filter()` / `.select()` / `.project()` / `.aggregate()` / `.sort_by()` /
   `.limit()` / `.join()` and run by `.execute()`; a window is attached with
   `.over(...)` on the aggregate. It also holds `Value` — the five-member trait
@@ -538,8 +550,21 @@ share no node types**:
   operator per plan node
   — `FilterOperator`, `ProjectOperator`, `GroupByOperator`,
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
-  `LimitOperator`, `ParquetScanOperator`, `BatchSourceOperator` — plus
-  `Pipeline` and `EvalOperator`.
+  `LimitOperator`, `ParquetScanOperator`, `ReaderOperator[R]`,
+  `BatchSourceOperator` — plus `Pipeline` and `EvalOperator`.
+- **`ExternalScan` is how a format `marrow.expr` does not import becomes a
+  plan source.** The format's module implements `BatchReader` (`open(path, schema)`,
+  `read_next_batch()`, `format_name()`) and builds the node with
+  `ExternalScan.of[R](path, schema)`; the node keeps one thin function
+  pointer that builds a `ReaderOperator[R]` and hands it back as a
+  `DynOperator`, and never the reader's type, so `marrow.expr` runs a scan it
+  does not import. That is the whole point: built from source, only the
+  modules a program imports are parsed, so a program that plans queries but
+  reads no JSON never needs EmberJson (see Gotchas). The reader is an ordinary
+  typed field of `ReaderOperator[R]`, so `DynOperator`'s existing drop
+  trampoline releases it; `test_erasure.mojo` counts it. The schema is the
+  projection, `ColumnPruning` narrows it like `ParquetScan`'s, and nothing
+  prunes rows. `marrow.json.scan_json` is the one user today.
 - **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
   `boolean.mojo`, `strings.mojo`, `temporal.mojo`, `nested.mojo`, `casts.mojo`,
   `aggregates.mojo`, `rules.mojo`) — every node's operands are bound on a family
@@ -738,6 +763,22 @@ added to the wheel staging in `python/marrow/compile.py`; nothing links it, so
 `ByteSource` — the only way to tell "returned the right rows" from "did less
 work".
 
+**JSON** (`marrow/json/`): newline-delimited JSON — `read_json`, the
+streaming `JsonReader`/`open_json`, and `scan_json`, matching `pyarrow.json`
+down to its error messages, and `write_json`/`JsonWriter`, whose output reads
+back to the same values and inferable types. It is the only code needing EmberJson, so **no
+other module under `marrow/` imports `marrow.json` or `emberjson`**:
+`marrow.expr` reaches the reader only through `ExternalScan`, and a program
+built from source needs EmberJson only if it reads JSON. A *precompiled*
+marrow is different — it needs every package any of its modules imports — so
+`package/marrow.mojoc` and the conda package need EmberJson beside them, and
+the conda package cannot declare that until EmberJson is published to a
+channel (see `backlog.md` §1.2). A read is two passes over blocks cut at
+newlines: `infer.mojo` settles a schema by Arrow C++'s promotion rules without
+building anything, and `reader.mojo` then parses each block with EmberJson's
+`Parser` straight into marrow builders of that schema, so no column is ever
+promoted half-built.
+
 **Tabular** (`marrow/tabular.mojo`): `RecordBatch` (schema + column arrays) and
 `Table` (schema + chunked columns). `marrow/schema.mojo` holds `Schema`, `Field`
 and metadata. `marrow/ipc.mojo` is the Arrow IPC file/stream reader and writer.
@@ -799,6 +840,9 @@ marrow/
 │   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
 │   │   └── tests/
 │   └── tests/
+├── json/                 # NDJSON: options, infer (pass 1), reader (pass 2),
+│   └── tests/            #   scan (ExternalScan), writer; the only EmberJson
+│                         #   importer
 ├── parquet/              # reader, writer, schema, format, codecs, bloom,
 │   └── tests/            # statistics
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
@@ -1066,6 +1110,24 @@ looks obvious. Terse on purpose — the reproductions are in git history.
   cosmetic: `repr(list_(int64))` never shows the element type. Revisit only if a
   genuine hang appears.
 
+- **A `Writable` struct with function-pointer fields must spell out
+  `write_repr_to`.** The reflection default walks every field, and on thin
+  `def(...)` fields it neither finishes nor diagnoses: `precompile` spun at
+  full CPU for 13 minutes on `ExternalScan` until a one-line `write_repr_to`
+  was added. (`python/bindings/plan.mojo`'s `Plan` records the same default
+  *failing* loudly on `DynRelation`'s trampolines — which of the two you get
+  is not predictable.)
+
+- **Imports are resolved while parsing, before any `comptime if`.** A
+  `from x import y` inside a `comptime if False:` branch still fails with
+  `unable to locate module 'x'` when `x` is absent, so a `-D` switch cannot
+  make a dependency optional. **And a precompiled package is all or nothing**:
+  a consumer importing `pkg.a` from `pkg.mojoc` fails with `failed to resolve
+  parent package body` when a *sibling* module `pkg.b` imports a package the
+  consumer lacks, although from source only the imported modules matter. Both
+  measured 2026-09-25 on `1.2.0.dev2026092105`; they are why nothing but
+  `marrow/json/` imports EmberJson, and why a precompiled marrow needs it.
+
 - **An `__eq__` that compares *elements* of an erased container deadlocks the
   compiler.** Comparing a nested array element-wise materialises a `DynArray`
   per element, so `DynArray.__eq__` and the nested arrays' `__eq__` become
@@ -1310,8 +1372,10 @@ release with both artifacts attached.
 
 ## Known Limitations
 
-1. **Testing**: conformance testing leans on PyArrow until Mojo has a JSON
-   library.
+1. **Testing**: conformance testing leans on PyArrow — `devkit/integration.py`
+   reads the Arrow JSON integration format into pyarrow arrays and validates
+   against pyarrow. The harness is Python either way, so a Mojo JSON library
+   would not remove that.
 2. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary,
    decimal (32/64/128/256) and temporal (date/time/timestamp/duration/interval)

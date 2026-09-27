@@ -99,6 +99,7 @@ from .logical import (
     DynRelation,
     DynValue,
     EmptyRelation,
+    ExternalScan,
     Filter,
     InMemoryTable,
     Join,
@@ -1049,17 +1050,36 @@ struct ColumnPruning(Copyable, Movable):
         return out^
 
     @staticmethod
+    def _narrowed_schema(
+        source: Schema, needed: List[String]
+    ) raises -> Optional[Schema]:
+        """What a source that reads its own schema should read instead, or
+        `None` when that is already everything `needed` leaves it."""
+        var keep = Self._narrowed(source, needed)
+        if len(keep) == len(source.fields):
+            return None
+        var fields = List[Field](capacity=len(keep))
+        for ref name in keep:
+            fields.append(source.field(name=name).copy())
+        return schema(fields^)
+
+    @staticmethod
     def apply(node: DynRelation, needed: List[String]) raises -> DynRelation:
         """`node`, with its sources narrowed to `needed`."""
         if node.isa[ParquetScan]():
             ref scan = node.get[ParquetScan]()
-            var keep = Self._narrowed(scan.schema(), needed)
-            if len(keep) == len(scan.schema().fields):
+            var narrow = Self._narrowed_schema(scan.schema(), needed)
+            if not narrow:
                 return node.copy()
-            var fields = List[Field](capacity=len(keep))
-            for ref name in keep:
-                fields.append(scan.schema().field(name=name).copy())
-            var out: DynRelation = scan.with_schema(schema(fields^))
+            var out: DynRelation = scan.with_schema(narrow.take())
+            return out^
+
+        if node.isa[ExternalScan]():
+            ref scan = node.get[ExternalScan]()
+            var narrow = Self._narrowed_schema(scan.schema(), needed)
+            if not narrow:
+                return node.copy()
+            var out: DynRelation = scan.with_schema(narrow.take())
             return out^
 
         if node.isa[InMemoryTable]():

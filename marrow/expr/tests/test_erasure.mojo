@@ -17,7 +17,9 @@ deterministically rather than statistically.
 **One test per box, and the set must stay complete.** `rebind[ArcPointer[
 NoneType]]` appears in exactly two places in the package — `DynValue.__init__`
 and `DynOperator.__init__` — and each needs a `_drop` field, a `_drop_tramp`,
-and a `__deinit__` that calls it. The virtual methods plus a pointer look
+and a `__deinit__` that calls it. An `ExternalScan`'s reader rides the second:
+`ReaderOperator[R]` holds it typed and `DynOperator` erases the operator, and a
+case below counts that too. The virtual methods plus a pointer look
 complete and are not, so a box added without the drop trampoline leaks
 silently — add its case here in the same commit. `DynRelation` is the third box
 and is *not* on that list: it is variant-backed, so it destroys its member at
@@ -26,19 +28,24 @@ looking like an oversight.
 """
 
 from std.memory import ArcPointer
+from std.os.path import join
 from std.testing import assert_equal, assert_false
-from ...dtypes import DynType, int64
+from ...dtypes import DynType, field, int64
 from ...execution import ExecContext
 from ...kernels.groupby import Groups
 from ...schema import Schema
 from ...builders import array
-from ...tabular import record_batch
+from ...tabular import RecordBatch, record_batch
+from ...utils.testing import ScratchDir
 from ..logical import (
+    BatchReader,
     DynRelation,
     DynValue,
+    ExternalScan,
     InMemoryTable,
     References,
     Relation,
+    ScanPath,
     Shape,
     Value,
 )
@@ -118,6 +125,36 @@ struct _ValueProbe(Copyable, Movable, Value, Writable):
 
     def write_to(self, mut writer: Some[Writer]):
         writer.write("probe")
+
+
+struct _ReaderProbe(BatchReader):
+    """A reader that records its destruction as a byte appended to the file it
+    was opened on. `BatchReader.open` is static, so the reader cannot be handed
+    a shared tally the way the other probes are; its path is what reaches it.
+    """
+
+    var _marker: String
+
+    def __init__(out self, var marker: String):
+        self._marker = marker^
+
+    def __deinit__(deinit self):
+        try:
+            with open(self._marker, "a") as f:
+                f.write("1")
+        except:
+            pass
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self:
+        return Self(path)
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        return None
+
+    @staticmethod
+    def format_name() -> String:
+        return "probe"
 
 
 # ---------------------------------------------------------------------------
@@ -208,3 +245,22 @@ def test_erased_copies_share_one_destruction() raises:
     assert_equal(len(deaths[]), 1, "released twice, but a copy is still alive")
     _ = third^
     assert_equal(len(deaths[]), 2, "the last release destroys, exactly once")
+
+
+def test_external_scan_operator_destroys_its_reader() raises:
+    """The reader an `ExternalScan` opens is released at its true type, once
+    per execution: `ReaderOperator[R]` holds it typed, behind `DynOperator`'s
+    drop trampoline."""
+    with ScratchDir() as dir:
+        var marker = join(dir, "reader_probe")
+        var plan: DynRelation = ExternalScan.of[_ReaderProbe](
+            ScanPath(marker), Schema(fields=[field("a", int64)])
+        )
+        _ = plan.execute()
+        with open(marker, "r") as f:
+            assert_equal(f.read(), "1", "erasure must not drop the destructor")
+        _ = plan.execute()
+        with open(marker, "r") as f:
+            assert_equal(
+                f.read(), "11", "one reader per execution, each released"
+            )
