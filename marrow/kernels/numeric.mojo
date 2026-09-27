@@ -61,6 +61,7 @@ from ..dtypes import (
 from .core import Kernel
 from .boolean import AndKernel, NotKernel, XorKernel
 from ..execution import ExecContext, GPU_ENABLED
+from ..errors import InvalidError
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +758,9 @@ def _bytes_equal[
     yields null out, and the data bit at a null position is left clear.
     """
     if len(left) != len(right):
-        raise Error("equal: length mismatch, ", len(left), " vs ", len(right))
+        raise InvalidError(
+            t"equal: length mismatch, {len(left)} vs {len(right)}"
+        )
     var n = len(left)
     var bm = Bitmap.intersect_views(left.validity(), right.validity())
     var data = Bitmap.alloc_zeroed(n)

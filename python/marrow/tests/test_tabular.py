@@ -103,7 +103,7 @@ def test_column_by_name():
 
 
 def test_column_by_name_not_found():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowKeyError):
         make_batch().column("missing")
 
 
@@ -190,7 +190,7 @@ def test_rename_columns():
 
 
 def test_rename_columns_wrong_count():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         make_batch().rename_columns(["only_one"])
 
 
@@ -345,7 +345,7 @@ def test_table_column_by_name():
 
 
 def test_table_column_by_name_not_found():
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowKeyError):
         make_table().column("missing")
 
 

@@ -13,6 +13,7 @@ pointer in the runtime lane: routing on a name would put every arithmetic
 kernel in every binary that builds any expression.
 """
 
+from ...errors import NotImplementedError
 from ...dtypes import DataType, DynType, Float64Type, NumericType
 from ...kernels.boolean import AndKernel
 from ...kernels.numeric import (
@@ -721,12 +722,11 @@ struct TemporalCompare[
         if self.l.dtype(Schema.from_dtype(batch.dtype)) != self.r.dtype(
             Schema.from_dtype(batch.dtype)
         ):
-            raise Error(
-                "temporal comparison between ",
-                String(self.l.dtype(Schema.from_dtype(batch.dtype))),
-                " and ",
-                String(self.r.dtype(Schema.from_dtype(batch.dtype))),
-                ": units must match, coercion is not implemented",
+            raise NotImplementedError(
+                t"temporal comparison between "
+                t"{self.l.dtype(Schema.from_dtype(batch.dtype))} and "
+                t"{self.r.dtype(Schema.from_dtype(batch.dtype))}: "
+                t"units must match, coercion is not implemented"
             )
         return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 

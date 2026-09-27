@@ -21,6 +21,7 @@ The other consumer is Arrow IPC, which currently *refuses* compressed bodies
 supported"). These bindings are what that needs.
 """
 
+from ..errors import CorruptError, InternalError
 from .dylib import LibSet, LibSpec, c_bytes
 from std.memory import unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
@@ -107,7 +108,7 @@ struct CompressionLibs(Movable):
             dst, out_size, src.unsafe_ptr(), len(src)
         )
         if n != out_size:
-            raise Error("zstd: decompressed size mismatch")
+            raise CorruptError("zstd: decompressed size mismatch")
 
     def snappy_decompress(
         mut self,
@@ -120,7 +121,7 @@ struct CompressionLibs(Movable):
             src.unsafe_ptr(), len(src), dst, self._sz.unsafe_ptr()
         )
         if status != 0 or Int(self._sz[0]) != out_size:
-            raise Error("snappy: decompress failed")
+            raise CorruptError("snappy: decompress failed")
 
     def lz4_raw_decompress(
         mut self,
@@ -132,7 +133,7 @@ struct CompressionLibs(Movable):
             src.unsafe_ptr(), dst, Int32(len(src)), Int32(out_size)
         )
         if Int(n) != out_size:
-            raise Error("lz4: decompressed size mismatch")
+            raise CorruptError("lz4: decompressed size mismatch")
 
     def gzip_decompress(
         mut self,
@@ -164,15 +165,15 @@ struct CompressionLibs(Movable):
         )
         if Int(rc) != 0:
             strm.unsafe_free()
-            raise Error("gzip: inflateInit2 failed")
+            raise InternalError("gzip: inflateInit2 failed")
         var st = z.call["inflate", Int32](sp, Int32(4))  # Z_FINISH
         var produced = Int(strm[unsafe_offset=5])  # total_out
         _ = z.call["inflateEnd", Int32](sp)
         strm.unsafe_free()
         if Int(st) != 1:  # Z_STREAM_END
-            raise Error("gzip: inflate failed")
+            raise CorruptError("gzip: inflate failed")
         if produced != out_size:
-            raise Error("gzip: decompressed size mismatch")
+            raise CorruptError("gzip: decompressed size mismatch")
 
     def brotli_decompress(
         mut self,
@@ -191,7 +192,7 @@ struct CompressionLibs(Movable):
         var produced = Int(sz[unsafe_offset=0])
         sz.unsafe_free()
         if Int(rc) != 1 or produced != out_size:
-            raise Error("brotli: decompress failed")
+            raise CorruptError("brotli: decompress failed")
 
     # --- compress: return the codec's output bytes ---
 
@@ -235,7 +236,7 @@ struct CompressionLibs(Movable):
         )
         if n == 0:
             dst.unsafe_free()
-            raise Error("lz4: compression failed")
+            raise InternalError("lz4: compression failed")
         return Self._take(dst, Int(n))
 
     def gzip_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
@@ -279,14 +280,14 @@ struct CompressionLibs(Movable):
         if Int(rc) != 0:
             strm.unsafe_free()
             dst.unsafe_free()
-            raise Error("gzip: deflateInit2 failed")
+            raise InternalError("gzip: deflateInit2 failed")
         var st = z.call["deflate", Int32](sp, Int32(4))  # Z_FINISH
         var produced = Int(strm[unsafe_offset=5])  # total_out @40
         _ = z.call["deflateEnd", Int32](sp)
         strm.unsafe_free()
         if Int(st) != 1:  # Z_STREAM_END
             dst.unsafe_free()
-            raise Error("gzip: deflate failed")
+            raise InternalError("gzip: deflate failed")
         return Self._take(dst, produced)
 
     def brotli_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
@@ -316,5 +317,5 @@ struct CompressionLibs(Movable):
         sz.unsafe_free()
         if Int(rc) != 1:
             dst.unsafe_free()
-            raise Error("brotli: compression failed")
+            raise InternalError("brotli: compression failed")
         return Self._take(dst, produced)

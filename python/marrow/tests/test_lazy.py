@@ -94,7 +94,7 @@ def test_drop_keeps_input_order(table):
 
 def test_drop_rejects_an_unknown_column(table):
     """A typo is otherwise silent — the column it meant to remove survives."""
-    with pytest.raises(Exception, match="nope"):
+    with pytest.raises(ma.ArrowKeyError, match="nope"):
         table.drop("nope")
 
 

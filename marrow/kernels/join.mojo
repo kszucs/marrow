@@ -57,6 +57,7 @@ from ..dtypes import (
     null,
 )
 from ..execution import ExecContext
+from ..errors import InvalidError, NotImplementedError
 from .filter import TakeKernel, filter, take
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
@@ -176,7 +177,7 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
         elif self == JOIN_RIGHT_ANTI:
             return JOIN_ANTI
         else:
-            raise Error("join: join kind '", self, "' cannot be mirrored")
+            raise InvalidError(t"join: join kind '{self}' cannot be mirrored")
 
     def is_supported(self) -> Bool:
         """Whether a kernel actually implements this kind.
@@ -253,7 +254,7 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
         elif how == "right anti":
             return JOIN_RIGHT_ANTI
         else:
-            raise Error("join: unknown join type '", how, "'")
+            raise InvalidError(t"join: unknown join type '{how}'")
 
 
 comptime JOIN_INNER = JoinKind(0)
@@ -1097,15 +1098,13 @@ def hash_join(
         * RIGHT_SEMI/RIGHT_ANTI: right columns only.
     """
     if len(left_on) != len(right_on):
-        raise Error("hash_join: len(left_on) != len(right_on)")
+        raise InvalidError("hash_join: len(left_on) != len(right_on)")
     if not kind.is_supported():
         # CROSS, MARK and SINGLE have constants but no implementation. They used
         # to fall through to the outer-join arm, and MARK additionally built a
         # result whose declared schema had more fields than it had columns.
-        raise Error(
-            "hash_join: join kind '",
-            kind,
-            "' is not implemented",
+        raise NotImplementedError(
+            t"hash_join: join kind '{kind}' is not implemented"
         )
 
     var join = HashJoin(ctx.copy())

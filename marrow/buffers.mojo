@@ -121,6 +121,7 @@ from std.sys.info import simd_byte_width
 from std.sys import size_of
 import std.math as math
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
+from .errors import IOError, InvalidError, NotImplementedError
 from .views import (
     BufferView,
     BitmapView,
@@ -252,7 +253,9 @@ struct Allocation(Movable):
     def host_context(self) raises -> DeviceContext:
         """The context this allocation was pinned with (HOST kind only)."""
         if not self._host:
-            raise Error("Allocation.host_context: not a pinned host allocation")
+            raise InvalidError(
+                "Allocation.host_context: not a pinned host allocation"
+            )
         return self._host.value().context()
 
     def mapped_size(self) raises -> Int:
@@ -262,7 +265,9 @@ struct Allocation(Movable):
         Arrow's 64 bytes. A caller addressing *file* offsets — the Parquet
         footer does — wants this one."""
         if not self._mapped_size:
-            raise Error("Allocation.mapped_size: not a mapped allocation")
+            raise InvalidError(
+                "Allocation.mapped_size: not a mapped allocation"
+            )
         return self._mapped_size.value()
 
     @staticmethod
@@ -325,7 +330,9 @@ struct Allocation(Movable):
             elif api == "hip":
                 return DeviceType.ROCM_HOST
             else:
-                raise Error("device_type: unsupported host API: ", api)
+                raise NotImplementedError(
+                    t"device_type: unsupported host API: {api}"
+                )
         elif self._device:
             var api = self._device.value().context().api()
             if api == "cuda":
@@ -335,7 +342,9 @@ struct Allocation(Movable):
             elif api == "metal":
                 return DeviceType.METAL
             else:
-                raise Error("device_type: unsupported device API: ", api)
+                raise NotImplementedError(
+                    t"device_type: unsupported device API: {api}"
+                )
         else:
             return DeviceType.CPU
 
@@ -601,19 +610,23 @@ struct Buffer[*, mut: Bool = False](
         rounds the mapping up to a whole page and bytes past EOF within it read
         as zero, so the padding is always addressable.
         """
-        var f = FileHandle(path, "r")
+        var f: FileHandle
+        try:
+            f = FileHandle(path, "r")
+        except e:
+            raise IOError(e)
         var size = Int(
             external_call["lseek", Int64](f.handle, Int64(0), Int(2))
         )  # SEEK_END
         if size <= 0:
-            raise Error("Buffer.mmap_file: empty or unreadable file ", path)
+            raise IOError(t"Buffer.mmap_file: empty or unreadable file {path}")
         # PROT_READ=1, MAP_PRIVATE=2; the mapping outlives the fd.
         var ptr = external_call["mmap", Pointer[UInt8, MutUntrackedOrigin]](
             UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0)
         )
         _ = f^  # close the fd; the mapping stays valid
         if Int(ptr) == 0 or Int(ptr) == -1:
-            raise Error("Buffer.mmap_file: mmap failed for ", path)
+            raise IOError(t"Buffer.mmap_file: mmap failed for {path}")
         return Buffer[mut=False](
             size=math.align_up(size, 64),
             ptr=ptr,
@@ -784,9 +797,9 @@ struct Buffer[*, mut: Bool = False](
         if self._owner[].is_device():
             # The copy below reads through `_ptr`, which a DEVICE allocation
             # does not have — growing one has to go through the device API.
-            raise Error(
-                "Buffer.resize: device memory cannot be resized; download with"
-                " to_host(ctx), resize, and upload again"
+            raise InvalidError(
+                "Buffer.resize: device memory cannot be resized; download with "
+                "to_host(ctx), resize, and upload again"
             )
         var new: Buffer[mut=True]
         if self._owner[].is_host():
@@ -924,7 +937,7 @@ struct Buffer[*, mut: Bool = False](
             A new Buffer with kind=DEVICE containing the uploaded data.
         """
         if self.is_device():
-            raise Error("to_device: buffer is already on device")
+            raise InvalidError("to_device: buffer is already on device")
         var dev = ctx.enqueue_create_buffer[DType.uint8](self._size)
         ctx.enqueue_copy(
             dev, rebind[Pointer[UInt8, ImmUntrackedOrigin]](self._ptr)
@@ -945,7 +958,7 @@ struct Buffer[*, mut: Bool = False](
             A new Buffer with kind=CPU containing the downloaded data.
         """
         if not self.is_device():
-            raise Error("to_cpu: buffer is not on device")
+            raise InvalidError("to_cpu: buffer is not on device")
         var builder = Buffer.alloc_zeroed(self._size)
         ctx.enqueue_copy(
             rebind[Pointer[UInt8, MutUntrackedOrigin]](builder._ptr),

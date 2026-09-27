@@ -42,6 +42,13 @@ from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant
 
+from ..errors import (
+    IndexError,
+    InternalError,
+    InvalidError,
+    KeyError,
+    TypeError,
+)
 from ..arrays import BoolArray, DynArray, StructArray
 from ..execution import ExecContext
 from ..kernels.join import JoinKind, JOIN_INNER, JoinBuildSide, BUILD_LEFT
@@ -641,12 +648,9 @@ def reject_aggregate(
     int64).sum()], [True])` aborted.
     """
     if value.aggregates():
-        raise Error(
-            node,
-            ": '",
-            name,
-            "' is an aggregate, which has no value per row; ",
-            remedy,
+        raise InvalidError(
+            t"{node}: '{name}' is an aggregate, which has no value per row; "
+            t"{remedy}"
         )
 
 
@@ -657,9 +661,9 @@ def reject_non_boolean_filter(dtype: DynType) raises:
     than raise.
     """
     if not dtype.is_bool():
-        raise Error(
-            "filter: an aggregate's FILTER predicate must be boolean, got ",
-            dtype,
+        raise TypeError(
+            t"filter: an aggregate's FILTER predicate must be boolean, got "
+            t"{dtype}"
         )
 
 
@@ -697,15 +701,15 @@ struct Nothing(Absent):
         return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
-        raise Error("an empty operand slot has no type")
+        raise InternalError("an empty operand slot has no type")
 
     def to_operator(
         self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
-        raise Error("an empty operand slot cannot run")
+        raise InternalError("an empty operand slot cannot run")
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        raise Error("an empty operand slot has no value")
+        raise InternalError("an empty operand slot has no value")
 
     def write_to[W: Writer](self, mut writer: W):
         pass
@@ -883,9 +887,9 @@ struct WindowExpr(Copyable, Movable, Writable):
         """
         # `fixed_dtype` doubles as "takes no argument" — see the trait.
         if F.fixed_dtype() and argument:
-            raise Error("window: '", F.name(), "' takes no argument")
+            raise InvalidError(t"window: '{F.name()}' takes no argument")
         if not F.fixed_dtype() and not argument:
-            raise Error("window: '", F.name(), "' needs an argument")
+            raise InvalidError(t"window: '{F.name()}' needs an argument")
         return Self(
             Self._tramp[F],
             F.name(),
@@ -903,10 +907,9 @@ struct WindowExpr(Copyable, Movable, Writable):
         none. Only the three ranking functions reach the `None` case.
         """
         if not argument.aggregates():
-            raise Error(
-                "window: '",
-                argument.name(),
-                "' is not an aggregate; only an aggregate takes a frame",
+            raise InvalidError(
+                t"window: '{argument.name()}' is not an aggregate; only an "
+                t"aggregate takes a frame"
             )
         var boxed: Optional[DynValue] = argument^
         return Self(None, String("agg"), None, boxed^, 0)
@@ -977,12 +980,8 @@ struct WindowExpr(Copyable, Movable, Writable):
             for _ in range(len(order_by)):
                 dirs.append(True)
         if len(dirs) != len(order_by):
-            raise Error(
-                "over: ",
-                len(order_by),
-                " order keys but ",
-                len(dirs),
-                " directions",
+            raise InvalidError(
+                t"over: {len(order_by)} order keys but {len(dirs)} directions"
             )
         for ref k in partition_by:
             reject_aggregate(
@@ -1417,12 +1416,8 @@ struct DynRelation(Copyable, Movable, Writable):
         method parametric over every column in the input.
         """
         if len(names) != len(values):
-            raise Error(
-                "with_columns: ",
-                len(names),
-                " names but ",
-                len(values),
-                " values",
+            raise InvalidError(
+                t"with_columns: {len(names)} names but {len(values)} values"
             )
         # **A name may not appear twice in one call**, the same rule the
         # window overload enforces. Replacing in place is this overload's
@@ -1433,7 +1428,9 @@ struct DynRelation(Copyable, Movable, Writable):
         for i in range(len(names)):
             for j in range(i):
                 if names[j] == names[i]:
-                    raise Error("with_columns: '", names[i], "' is named twice")
+                    raise InvalidError(
+                        t"with_columns: '{names[i]}' is named twice"
+                    )
         var input_schema = self.schema()
         var out_names = List[String]()
         var out_values = List[DynValue]()
@@ -1477,21 +1474,17 @@ struct DynRelation(Copyable, Movable, Writable):
         is a worse outcome than a diagnostic.
         """
         if len(names) != len(exprs):
-            raise Error(
-                "with_columns: ",
-                len(names),
-                " names but ",
-                len(exprs),
-                " window expressions",
+            raise InvalidError(
+                t"with_columns: {len(names)} names but {len(exprs)} window "
+                t"expressions"
             )
         var input_schema = self.schema()
         for i in range(len(names)):
             ref n = names[i]
             if input_schema.get_field_index(n) != -1:
-                raise Error(
-                    "with_columns: '",
-                    n,
-                    "' already exists; a window column cannot replace one",
+                raise InvalidError(
+                    t"with_columns: '{n}' already exists; a window column "
+                    t"cannot replace one"
                 )
             # **And against each other**, which the schema check cannot see.
             # Two expressions with different specs become two stacked `Window`
@@ -1503,7 +1496,7 @@ struct DynRelation(Copyable, Movable, Writable):
             # duplication this overload raises to avoid.
             for j in range(i):
                 if names[j] == n:
-                    raise Error("with_columns: '", n, "' is named twice")
+                    raise InvalidError(t"with_columns: '{n}' is named twice")
         var current = self.copy()
         var placed = List[Bool](length=len(exprs), fill=False)
         for i in range(len(exprs)):
@@ -1534,7 +1527,7 @@ struct DynRelation(Copyable, Movable, Writable):
         var input_schema = self.schema()
         for ref n in names:
             if input_schema.get_field_index(n) == -1:
-                raise Error("drop: column '", n, "' not found in schema")
+                raise KeyError(t"drop: column '{n}' not found in schema")
         var out_names = List[String]()
         var out_values = List[DynValue]()
         for ref f in input_schema.fields:
@@ -1563,17 +1556,13 @@ struct DynRelation(Copyable, Movable, Writable):
         exists to fix.
         """
         if len(names) != len(new_names):
-            raise Error(
-                "rename: ",
-                len(names),
-                " names but ",
-                len(new_names),
-                " new names",
+            raise InvalidError(
+                t"rename: {len(names)} names but {len(new_names)} new names"
             )
         var input_schema = self.schema()
         for ref n in names:
             if input_schema.get_field_index(n) == -1:
-                raise Error("rename: column '", n, "' not found in schema")
+                raise KeyError(t"rename: column '{n}' not found in schema")
         var out_names = List[String]()
         var out_values = List[DynValue]()
         for ref f in input_schema.fields:
@@ -1955,8 +1944,8 @@ struct Project(Relation, Writable):
         var values: List[DynValue],
     ) raises:
         if len(names) != len(values):
-            raise Error(
-                "project: ", len(names), " names but ", len(values), " values"
+            raise InvalidError(
+                t"project: {len(names)} names but {len(values)} values"
             )
         for i in range(len(values)):
             reject_aggregate(
@@ -2341,15 +2330,11 @@ struct Sort(Relation, Writable):
         limit: Optional[Int] = None,
     ) raises:
         if len(keys) != len(ascending):
-            raise Error(
-                "sort: ",
-                len(keys),
-                " keys but ",
-                len(ascending),
-                " directions",
+            raise InvalidError(
+                t"sort: {len(keys)} keys but {len(ascending)} directions"
             )
         if len(keys) == 0:
-            raise Error("sort: needs at least one key")
+            raise InvalidError("sort: needs at least one key")
         for ref k in keys:
             reject_aggregate(
                 k,
@@ -2473,23 +2458,16 @@ struct Window(Relation, Writable):
         var exprs: List[WindowExpr],
     ) raises:
         if len(names) != len(exprs):
-            raise Error(
-                "window: ",
-                len(names),
-                " names but ",
-                len(exprs),
-                " expressions",
+            raise InvalidError(
+                t"window: {len(names)} names but {len(exprs)} expressions"
             )
         if len(exprs) == 0:
-            raise Error("window: needs at least one expression")
+            raise InvalidError("window: needs at least one expression")
         for ref e in exprs:
             if e.spec() != exprs[0].spec():
-                raise Error(
-                    "window: '",
-                    e,
-                    "' and '",
-                    exprs[0],
-                    "' do not share a window; build one node per window",
+                raise InvalidError(
+                    t"window: '{e}' and '{exprs[0]}' do not share a window; "
+                    t"build one node per window"
                 )
         self._schema = Self._output_schema(input.schema(), names, exprs)
         self.input = ArcPointer(input^)
@@ -2632,15 +2610,12 @@ struct Join(Relation, Writable):
         build_side: JoinBuildSide = BUILD_LEFT,
     ) raises:
         if len(left_keys) != len(right_keys):
-            raise Error(
-                "join: ",
-                len(left_keys),
-                " left keys but ",
-                len(right_keys),
-                " right keys",
+            raise InvalidError(
+                t"join: {len(left_keys)} left keys but {len(right_keys)} right "
+                t"keys"
             )
         if len(left_keys) == 0:
-            raise Error("join: needs at least one key pair")
+            raise InvalidError("join: needs at least one key pair")
         self._schema = Self._output_schema(left.schema(), right.schema(), kind)
         self.left = ArcPointer(left^)
         self.right = ArcPointer(right^)
@@ -2696,14 +2671,9 @@ struct Join(Relation, Writable):
         var out = List[String](capacity=len(indices))
         for idx in indices:
             if idx < 0 or idx >= len(schema.fields):
-                raise Error(
-                    "join: ",
-                    side,
-                    " key index ",
-                    idx,
-                    " out of range for ",
-                    len(schema.fields),
-                    " columns",
+                raise IndexError(
+                    t"join: {side} key index {idx} out of range for "
+                    t"{len(schema.fields)} columns"
                 )
             out.append(schema.fields[idx].name.copy())
         return out^
@@ -2721,9 +2691,7 @@ struct Join(Relation, Writable):
         for ref n in names:
             var at = schema.get_field_index(n)
             if at < 0:
-                raise Error(
-                    "join: ", side, " key '", n, "' is not in the input"
-                )
+                raise KeyError(t"join: {side} key '{n}' is not in the input")
             out.append(at)
         return out^
 
@@ -2901,27 +2869,18 @@ def _positional_schema(
     column and a nullable one can hold a NULL.
     """
     if len(left.fields) != len(right.fields):
-        raise Error(
-            verb,
-            ": the left side has ",
-            len(left.fields),
-            " columns but the right side has ",
-            len(right.fields),
+        raise InvalidError(
+            t"{verb}: the left side has {len(left.fields)} columns but the "
+            t"right side has {len(right.fields)}"
         )
     if len(left.fields) == 0:
-        raise Error(verb, ": needs at least one column")
+        raise InvalidError(t"{verb}: needs at least one column")
     var fields = List[Field](capacity=len(left.fields))
     for i in range(len(left.fields)):
         if left.fields[i].dtype != right.fields[i].dtype:
-            raise Error(
-                verb,
-                ": column ",
-                i,
-                " is ",
-                left.fields[i].dtype,
-                " on the left but ",
-                right.fields[i].dtype,
-                " on the right",
+            raise TypeError(
+                t"{verb}: column {i} is {left.fields[i].dtype} on the left but "
+                t"{right.fields[i].dtype} on the right"
             )
         var f = left.fields[i].copy()
         f.nullable = f.nullable or right.fields[i].nullable

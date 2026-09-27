@@ -16,6 +16,7 @@ writer mirrors the reader's structure.
 """
 
 
+from ..errors import InternalError, NotImplementedError
 from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
 from ..io import (
     BufferedSink,
@@ -135,7 +136,7 @@ struct ColumnWriter(Movable):
 
             vt.dispatch_primitive(encode_fixed)
         else:
-            raise Error("parquet: cannot write column type " + String(vt))
+            raise NotImplementedError(t"parquet: cannot write column type {vt}")
 
     # -----------------------------------------------------------------------
     # Dictionary encoding — build the distinct-value dictionary (PLAIN page) and
@@ -327,7 +328,9 @@ struct ColumnWriter(Movable):
                 col.as_float64(), out
             )
         else:
-            raise Error("parquet: cannot BYTE_STREAM_SPLIT type " + String(vt))
+            raise NotImplementedError(
+                t"parquet: cannot BYTE_STREAM_SPLIT type {vt}"
+            )
 
     def _encode_bytes_delta[
         BT: dt.BinaryLikeType
@@ -353,8 +356,8 @@ struct ColumnWriter(Movable):
             elif vt == dt.int16:
                 Self._ints(col.as_int16(), ints)
             else:
-                raise Error(
-                    "parquet: cannot DELTA_BINARY_PACKED type " + String(vt)
+                raise InternalError(
+                    t"parquet: cannot DELTA_BINARY_PACKED type {vt}"
                 )
             out.extend(Span(DeltaBinaryPacked.encode(ints)))
         elif vt.is_string():

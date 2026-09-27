@@ -46,6 +46,7 @@ from ...scalars import (
     PrimitiveScalar,
     StructScalar,
 )
+from ...errors import InvalidError, KeyError, TypeError
 from ...schema import Schema
 from ..logical import References, Shape
 from ..bindings import (
@@ -888,36 +889,27 @@ def _bound[
     var got = bindings.get(name)
     if got:
         if not got.value().isa[S]():
-            raise Error(
-                "parameter '",
-                name,
-                "' is ",
-                dtype,
-                " but was bound to a scalar of another kind",
+            raise TypeError(
+                t"parameter '{name}' is {dtype} but was bound to a scalar of "
+                t"another kind"
             )
         ref typed = got.value().as_type[S]()
         var actual = typed.type()
         if actual != dtype:
-            raise Error(
-                "parameter '",
-                name,
-                "' is ",
-                dtype,
-                " but was bound to ",
-                actual,
+            raise TypeError(
+                t"parameter '{name}' is {dtype} but was bound to {actual}"
             )
         if typed.is_null() and not dtype.is_null():
-            raise Error("parameter '", name, "' was bound to null")
+            raise InvalidError(t"parameter '{name}' was bound to null")
         return typed.copy()
     else:
         return None
 
 
-def _unbound(name: String, help: String) -> Error:
+def _unbound(name: String, help: String) -> KeyError:
     """The diagnostic for a parameter with no binding and no default."""
-    return Error(
-        "parameter '", name, "' is not bound", (": " + help) if help else ""
-    )
+    var hint = String(": ", help) if help else String()
+    return KeyError(t"parameter '{name}' is not bound{hint}")
 
 
 def _param[

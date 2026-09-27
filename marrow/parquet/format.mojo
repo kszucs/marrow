@@ -17,6 +17,7 @@ types (`PhysicalType`, `Encoding`, …) rather than bare integer constants.
 
 from std.memory import bitcast
 
+from ..errors import CorruptError
 from .codecs import Encoding, Zigzag
 from ..utils import LittleEndian
 
@@ -80,50 +81,53 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
         self.pos = pos
 
     @always_inline
-    def _u8(mut self) raises -> UInt8:
+    def _u8(mut self) raises CorruptError -> UInt8:
         if self.pos >= len(self.data):
-            raise Error("thrift: unexpected end of input")
+            raise CorruptError("thrift: unexpected end of input")
         var b = self.data[self.pos]
         self.pos += 1
         return b
 
-    def read_varint(mut self) raises -> UInt64:
+    def read_varint(mut self) raises CorruptError -> UInt64:
         """Read an unsigned LEB128 varint, advancing `pos`."""
         var value: UInt64
         value, self.pos = LittleEndian.varint(self.data, self.pos)
         return value
 
-    def read_i16(mut self) raises -> Int16:
+    def read_i16(mut self) raises CorruptError -> Int16:
         return Int16(Zigzag.decode(self.read_varint()))
 
-    def read_i32(mut self) raises -> Int32:
+    def read_i32(mut self) raises CorruptError -> Int32:
         return Int32(Zigzag.decode(self.read_varint()))
 
-    def read_i64(mut self) raises -> Int64:
+    def read_i64(mut self) raises CorruptError -> Int64:
         return Zigzag.decode(self.read_varint())
 
-    def read_byte(mut self) raises -> Int8:
+    def read_byte(mut self) raises CorruptError -> Int8:
         return Int8(self._u8())
 
-    def read_double(mut self) raises -> Float64:
+    def read_double(mut self) raises CorruptError -> Float64:
         var bits: UInt64 = 0
         for i in range(8):
             var sh = UInt64(i * 8)
             bits |= UInt64(self._u8()) << sh
         return bitcast[DType.float64](bits)
 
-    def read_bytes(mut self) raises -> Span[UInt8, Self.o]:
+    def read_bytes(mut self) raises CorruptError -> Span[UInt8, Self.o]:
         """Read a length-prefixed byte string as a zero-copy sub-span."""
         var n = Int(self.read_varint())
         if self.pos + n > len(self.data):
-            raise Error("thrift: byte string exceeds input")
+            raise CorruptError("thrift: byte string exceeds input")
         var start = self.pos
         self.pos += n
         return self.data[start : start + n]
 
-    def read_string(mut self) raises -> String:
+    def read_string(mut self) raises CorruptError -> String:
         var raw = self.read_bytes()
-        return String(from_utf8=raw)
+        try:
+            return String(from_utf8=raw)
+        except e:
+            raise CorruptError(t"thrift: {e}")
 
     def read_bool(mut self, field_type: UInt8) -> Bool:
         """Booleans carry their value in the field-type nibble (1=true)."""
@@ -131,7 +135,7 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
 
     def read_field_header(
         mut self, last_field_id: Int
-    ) raises -> Tuple[UInt8, Int]:
+    ) raises CorruptError -> Tuple[UInt8, Int]:
         """Read a field header, returning `(field_type, field_id)`.
 
         A zero type nibble is STOP. Otherwise the high nibble is a delta from
@@ -149,7 +153,9 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
             field_id = last_field_id + delta
         return (field_type, field_id)
 
-    def next_field(mut self, mut field: FieldHeader) raises -> Bool:
+    def next_field(
+        mut self, mut field: FieldHeader
+    ) raises CorruptError -> Bool:
         """Advance to the next field of the current struct, driving the
         `while r.next_field(f):` loop that every `read` body shares.
 
@@ -166,7 +172,7 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
         field.type = ftype
         return True
 
-    def read_list_header(mut self) raises -> Tuple[UInt8, Int]:
+    def read_list_header(mut self) raises CorruptError -> Tuple[UInt8, Int]:
         """Read a list/set header, returning `(element_type, size)`."""
         var b = self._u8()
         var elem_type = b & 0x0F
@@ -175,7 +181,7 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
             size = Int(self.read_varint())
         return (elem_type, size)
 
-    def skip(mut self, field_type: UInt8) raises:
+    def skip(mut self, field_type: UInt8) raises CorruptError:
         """Recursively skip a value of the given type (forward compat)."""
         if field_type == TC_BOOL_TRUE or field_type == TC_BOOL_FALSE:
             pass
@@ -209,7 +215,7 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
             while self.next_field(f):
                 self.skip(f.type)
         else:
-            raise Error("thrift: unknown field type " + String(field_type))
+            raise CorruptError(t"thrift: unknown field type {field_type}")
 
 
 struct ThriftCompactWriter(Movable):
@@ -435,7 +441,7 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -463,7 +469,7 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
 
     def _read_logical_type[
         o: Origin[mut=False]
-    ](mut self, mut r: ThriftCompactReader[o]) raises:
+    ](mut self, mut r: ThriftCompactReader[o]) raises CorruptError:
         """Parse the `LogicalType` union into `logical_type`, and for TIMESTAMP /
         TIME also the nested `TimeUnit` (`logical_unit`) and `isAdjustedToUTC`.
         """
@@ -567,7 +573,7 @@ struct DataPageHeader(Copyable, Movable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -617,7 +623,7 @@ struct DataPageHeaderV2(Copyable, Movable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -668,7 +674,7 @@ struct DictionaryPageHeader(Copyable, Movable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -710,7 +716,7 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -758,7 +764,7 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read_at[
         o: Origin[mut=False]
-    ](data: Span[UInt8, o], pos: Int) raises -> Tuple[Self, Int]:
+    ](data: Span[UInt8, o], pos: Int) raises CorruptError -> Tuple[Self, Int]:
         """The page header at `pos`, and **its own byte length**.
 
         The length is returned rather than folded into a mutated `pos`, which
@@ -889,7 +895,7 @@ struct ColumnMetaData(Copyable, Movable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -923,7 +929,7 @@ struct ColumnMetaData(Copyable, Movable):
 
     def _read_statistics[
         o: Origin[mut=False]
-    ](mut self, mut r: ThriftCompactReader[o]) raises:
+    ](mut self, mut r: ThriftCompactReader[o]) raises CorruptError:
         """Parse the nested Statistics struct, keeping null_count and the modern
         min_value/max_value (fields 6/5). The deprecated min/max (fields 2/1) are
         skipped — modern writers populate min_value/max_value."""
@@ -1043,7 +1049,7 @@ struct PageLocation(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1130,7 +1136,7 @@ struct OffsetIndex(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1169,7 +1175,7 @@ struct ColumnIndex(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1249,7 +1255,7 @@ struct ColumnChunk(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1302,7 +1308,7 @@ struct RowGroup(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1340,7 +1346,7 @@ struct KeyValue(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1386,7 +1392,7 @@ struct FileMetaData(Copyable, Movable):
     @staticmethod
     def read[
         o: Origin[mut=False]
-    ](mut r: ThriftCompactReader[o]) raises -> Self:
+    ](mut r: ThriftCompactReader[o]) raises CorruptError -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1463,7 +1469,9 @@ struct FileMetaData(Copyable, Movable):
 
     @staticmethod
     @staticmethod
-    def footer_length[o: Origin[mut=False]](tail: Span[UInt8, o]) raises -> Int:
+    def footer_length[
+        o: Origin[mut=False]
+    ](tail: Span[UInt8, o]) raises CorruptError -> Int:
         """The thrift blob's length, from the 8 bytes that close the file.
 
         Takes any span **ending at the end of the file** — the whole file, or
@@ -1472,14 +1480,14 @@ struct FileMetaData(Copyable, Movable):
         """
         var n = len(tail)
         if n < 8:
-            raise Error("parquet: file too small")
+            raise CorruptError("parquet: file too small")
         if not (
             tail[n - 4] == 0x50
             and tail[n - 3] == 0x41
             and tail[n - 2] == 0x52
             and tail[n - 1] == 0x31
         ):
-            raise Error("parquet: missing PAR1 footer magic")
+            raise CorruptError("parquet: missing PAR1 footer magic")
         return (
             Int(tail[n - 8])
             | (Int(tail[n - 7]) << 8)
@@ -1488,7 +1496,9 @@ struct FileMetaData(Copyable, Movable):
         )
 
     @staticmethod
-    def read_footer[o: Origin[mut=False]](data: Span[UInt8, o]) raises -> Self:
+    def read_footer[
+        o: Origin[mut=False]
+    ](data: Span[UInt8, o]) raises CorruptError -> Self:
         """Parse the file footer: the trailing 8 bytes are a 4-byte LE metadata
         length then the `PAR1` magic; the thrift blob precedes them.
 
@@ -1499,15 +1509,15 @@ struct FileMetaData(Copyable, Movable):
         """
         var n = len(data)
         if n < 12:
-            raise Error("parquet: file too small")
+            raise CorruptError("parquet: file too small")
         var meta_len = Self.footer_length(data)
         var start = n - 8 - meta_len
         if start < 0:
-            raise Error("parquet: corrupt footer length")
+            raise CorruptError("parquet: corrupt footer length")
         var r = ThriftCompactReader(data, start)
         return Self.read(r)
 
-    def write_footer(self, mut out: List[UInt8]) raises:
+    def write_footer(self, mut out: List[UInt8]) raises CorruptError:
         """Serialize the thrift blob, then the 4-byte LE length and `PAR1` magic
         that close the file."""
         var w = ThriftCompactWriter()

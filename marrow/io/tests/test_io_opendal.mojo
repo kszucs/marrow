@@ -14,6 +14,7 @@ from std.os import getenv
 from std.os.path import exists, join
 from std.testing import assert_equal, assert_true
 
+from ...errors import DynError, IOError
 from ...execution import ExecContext
 from ...utils.testing import ScratchDir
 from ..opendal import OpenDalSource, OpenDalStore
@@ -193,14 +194,15 @@ def test_opendal_missing_path_raises_not_found() raises:
     if not _available():
         return
     var store = OpenDalStore("memory")
-    var msg = String()
+    var err = DynError("", "store.read did not raise")
     try:
         _ = store.read("/nope.bin")
     except e:
-        msg = String(e)
+        err = DynError(e)
+    assert_true(err.isa[IOError](), String("unexpected error: ", err))
     assert_true(
-        msg.startswith("opendal: NotFound: "),
-        String("unexpected message: ", msg),
+        err.message.startswith("opendal: NotFound: "),
+        String("unexpected error: ", err),
     )
 
 
@@ -373,16 +375,16 @@ def test_opendal_source_read_ranges_rejects_a_bad_range() raises:
         _write(dir, name, data)
 
         var src = OpenDalSource(found.take(), name)
-        var msg = String()
+        var err = DynError("", "read_ranges did not raise")
         try:
             _ = src.read_ranges(
                 [(0, 16), (128, 16), (250, 16)], ExecContext.parallel(8)
             )
         except e:
-            msg = String(e)
+            err = DynError(e)
         assert_true(
-            msg.startswith("OpenDalSource.read_ranges: [250, 266)"),
-            String("unexpected message: ", msg),
+            err.message.startswith("OpenDalSource.read_ranges: [250, 266)"),
+            String("unexpected error: ", err),
         )
         _ = data^
 

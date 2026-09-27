@@ -28,6 +28,7 @@ from ..dtypes import (
 from ..views import apply
 from .core import Kernel
 from ..execution import ExecContext, GPU_ENABLED
+from ..errors import InvalidError, TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ trait BoolBinaryKernel(Kernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         if left.dtype() != bool_dt or right.dtype() != bool_dt:
-            raise Self.error("inputs must be bool arrays")
+            raise Self.error[TypeError]("inputs must be bool arrays")
         return Self.apply(
             left.as_bool().copy(), right.as_bool().copy(), ctx
         ).to_dyn()
@@ -93,7 +94,7 @@ trait BoolUnaryKernel(Kernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         if arr.dtype() != bool_dt:
-            raise Self.error("input must be a bool array")
+            raise Self.error[TypeError]("input must be a bool array")
         return Self.apply(arr.as_bool().copy(), ctx).to_dyn()
 
 
@@ -155,7 +156,7 @@ def _kleene[
     """
     var n = len(left)
     if len(right) != n:
-        raise Error(t"{name}: input arrays must have equal length")
+        raise InvalidError(t"{name}: input arrays must have equal length")
     var a_data = left.values()
     var b_data = right.values()
     var data: Bitmap[mut=False]
@@ -281,7 +282,7 @@ struct XorKernel(BoolBinaryKernel):
     ) raises -> BoolArray:
         var n = len(left)
         if len(right) != n:
-            raise Error("xor: input arrays must have equal length")
+            raise InvalidError("xor: input arrays must have equal length")
         var data = (left.values() ^ right.values()).to_immutable()
         # XOR is fully determined only when both operands are valid.
         if not left.bitmap and not right.bitmap:

@@ -13,6 +13,7 @@ bytes numerically, so no host byteswap is needed.
 from std.bit import byte_swap
 from std.sys import size_of
 from std.sys.info import is_big_endian
+from ..errors import CorruptError
 
 
 struct LittleEndian:
@@ -51,7 +52,9 @@ struct LittleEndian:
             return v
 
     @staticmethod
-    def checked[T: DType](data: Span[UInt8, _], pos: Int) raises -> Scalar[T]:
+    def checked[
+        T: DType
+    ](data: Span[UInt8, _], pos: Int) raises CorruptError -> Scalar[T]:
         """`fixed`, but raising when the read would run past the end.
 
         The bounds-checked form belongs here rather than being re-derived by
@@ -62,14 +65,9 @@ struct LittleEndian:
         source impossible.
         """
         if pos < 0 or pos + size_of[Scalar[T]]() > len(data):
-            raise Error(
-                "LittleEndian.checked: ",
-                size_of[Scalar[T]](),
-                "-byte read at ",
-                pos,
-                " is out of bounds for ",
-                len(data),
-                " bytes",
+            raise CorruptError(
+                t"LittleEndian.checked: {size_of[Scalar[T]]()}-byte read at "
+                t"{pos} is out of bounds for {len(data)} bytes"
             )
         return Self.fixed[T](data, pos)
 
@@ -101,7 +99,9 @@ struct LittleEndian:
             out.append(UInt8((bits >> UInt64(i * 8)) & 0xFF))
 
     @staticmethod
-    def varint(data: Span[UInt8, _], pos: Int) raises -> Tuple[UInt64, Int]:
+    def varint(
+        data: Span[UInt8, _], pos: Int
+    ) raises CorruptError -> Tuple[UInt64, Int]:
         """Read an unsigned LEB128 varint at `pos`; return `(value, next_pos)`.
         """
         var result: UInt64 = 0
@@ -109,7 +109,7 @@ struct LittleEndian:
         var p = pos
         while True:
             if p >= len(data):
-                raise Error("varint out of bounds")
+                raise CorruptError("varint out of bounds")
             var b = data[p]
             p += 1
             result |= UInt64(b & 0x7F) << UInt64(shift)
@@ -117,7 +117,7 @@ struct LittleEndian:
                 break
             shift += 7
             if shift >= 64:
-                raise Error("varint too long")
+                raise CorruptError("varint too long")
         return (result, p)
 
     @staticmethod

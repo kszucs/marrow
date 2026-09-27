@@ -15,6 +15,7 @@ geometry (`non_null_def`, `child_def`) computed once during the parse walk so
 
 from std.sys import bit_width_of
 
+from ..errors import CorruptError, InternalError, KeyError, NotImplementedError
 from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -198,7 +199,7 @@ struct SchemaNode(Copyable, Movable):
             )
             return out^
         else:
-            raise Error("parquet: unsupported schema node kind")
+            raise InternalError("parquet: unsupported schema node kind")
 
     def _fold_list_offsets(
         self,
@@ -306,7 +307,7 @@ struct SchemaNode(Copyable, Movable):
                 col.as_map().child_slice(), leaf_arrays
             )
         else:
-            raise Error("parquet: unsupported schema node kind")
+            raise InternalError("parquet: unsupported schema node kind")
 
     def contains_repeated(self) -> Bool:
         """True if this subtree contains a list or map (a repeated group), so its
@@ -711,7 +712,9 @@ struct SchemaMapping(Movable):
                 and row.logical == LogicalType.NONE
             ):
                 return row.arrow.copy()
-        raise Error("parquet: unsupported physical type " + String(pt.code))
+        raise NotImplementedError(
+            t"parquet: unsupported physical type {pt.code}"
+        )
 
     @staticmethod
     def _group_element(
@@ -880,11 +883,9 @@ struct SchemaMapping(Movable):
             # the repeated key_value group and parse key + value at d+1 / r+1.
             var kv = self.elements[idx].copy()
             if kv.num_children != 2:
-                raise Error(
-                    "parquet: map 'key_value' group must have exactly a key and"
-                    " a value (column '"
-                    + el.name
-                    + "')"
+                raise CorruptError(
+                    t"parquet: map 'key_value' group must have exactly a key "
+                    t"and a value (column '{el.name}')"
                 )
             idx += 1
             var key_node = self._parse_node(
@@ -973,7 +974,7 @@ struct SchemaMapping(Movable):
         for ref row in Self._leaf_type_rows():
             if row.arrow == dtype:
                 return (row.physical, row.converted, row.logical)
-        raise Error("parquet: cannot write Arrow type " + String(dtype))
+        raise NotImplementedError(t"parquet: cannot write Arrow type {dtype}")
 
     @staticmethod
     def _set_leaf_physical(dtype: dt.DynType, mut el: SchemaElement) raises:
@@ -1251,7 +1252,7 @@ struct SchemaMapping(Movable):
                     found = ni
                     break
             if found == -1:
-                raise Error("parquet: column not found: " + columns[ci])
+                raise KeyError(t"parquet: column not found: {columns[ci]}")
             ref node = self.nodes[found]
             var node_leaves = List[Int]()
             node.collect_leaf_indices(node_leaves)

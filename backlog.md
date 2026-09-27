@@ -28,13 +28,13 @@ all of them.
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
 | 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
-| 2 | **Error taxonomy** — 373 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 373 sites. Already a retrofit, and growing steadily: 269 on 2026-09-04, 337 on 2026-09-08, 366 on 2026-09-12, 373 on 2026-09-14 | **M** | — |
+| 2 | **Declared error types** — every raise site raises an `ArrowError` kind, but ~1,800 signatures still declare bare `raises` | A bare frame keeps only an error's text, so a caller recovers the kind by parsing it (`DynError(e)`) instead of catching a type, and Python gets it through the same parse. Migrate bottom-up: a function declares its kind (`raises CorruptError`) or `DynError` once nothing it calls raises a bare `Error`; dispatch ladders forward `raises E`. It also pays back a size cost: a kind raised in a bare frame is converted to `Error` inline at the site, which put +21 KB (+1.5%) on `query_streaming_agg_fused` and `query_expr2_agg_fused`, mostly in the `dispatch_*` and `DynBuilder._dispatch_mut` ladders | **L** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
 | 4 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
 | 5 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
 | 6 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
 | 7 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 8 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 2 |
+| 8 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | — |
 | 9 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
@@ -780,13 +780,7 @@ differentiator hiding inside a table-stakes item.
 
 - **No `EXPLAIN ANALYZE`, no per-operator metrics, no profiling hook, no
   progress, no cancellation.** An operator cannot be interrupted mid-`drain`.
- - **No
-  error taxonomy.** 373 `raise Error(...)` sites across `marrow/` produce
-  plain strings with no type. The messages themselves are good — they name the
-  verb and the column (`"drop: column 'x' not found in schema"`) — but a
-  Python frontend cannot map them to distinct exception classes. That is cheap
-  to copy and should land with the frontend, not after it. - **Per-key null
-  placement is missing on sort:** `Sort` carries one `nulls_first: Bool` for
+- **Per-key null placement is missing on sort:** `Sort` carries one `nulls_first: Bool` for
   all keys (`logical.mojo:1874`); ibis's `SortKey` carries it per key.
 
 ---

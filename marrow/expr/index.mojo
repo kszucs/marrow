@@ -91,6 +91,7 @@ decision has to be reachable without executing a query — every case in
 `test_scan_pruning.mojo` builds an index and asks for a read plan directly.
 """
 
+from ..errors import InvalidError
 from ..arrays import BoolArray, PrimitiveArray
 from ..builders import BoolBuilder, PrimitiveBuilder
 from ..dtypes import DynType, NullType, PrimitiveType
@@ -161,21 +162,11 @@ struct ColumnZones(Copyable, Movable):
             or len(mins) != len(null_counts)
             or not distinct_ok
         ):
-            raise Error(
-                "ColumnZones '",
-                name,
-                "': ",
-                len(mins),
-                " mins, ",
-                len(maxes),
-                " maxes, ",
-                len(null_counts),
-                " null counts and ",
-                len(distinct_counts),
-                (
-                    " distinct counts -- one of each per chunk (distinct counts"
-                    " may also be absent entirely)"
-                ),
+            raise InvalidError(
+                t"ColumnZones '{name}': {len(mins)} mins, {len(maxes)} maxes, "
+                t"{len(null_counts)} null counts and {len(distinct_counts)} "
+                t"distinct counts -- one of each per chunk (distinct counts "
+                t"may also be absent entirely)"
             )
         self.name = name^
         self.mins = mins^

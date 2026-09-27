@@ -12,6 +12,7 @@ Both are leaves of the expression package: neither imports anything from
 
 from std.collections import Dict
 
+from ..errors import InvalidError
 from ..dtypes import DynType, NumericType, StringLikeType
 from ..scalars import BinaryLikeScalar, BoolScalar, DynScalar, PrimitiveScalar
 from ..utils.argparse import parse_bool
@@ -80,21 +81,21 @@ def numeric_from_text[T: NumericType](text: String) raises -> DynScalar:
         try:
             value = atof(text)
         except:
-            raise Error("expected ", T(), ", got '", text, "'")
+            raise InvalidError(t"expected {T()}, got '{text}'")
         return PrimitiveScalar[T](Scalar[T.native](value)).to_dyn()
     else:
         var wide: Int
         try:
             wide = atol(text)
         except:
-            raise Error("expected ", T(), ", got '", text, "'")
+            raise InvalidError(t"expected {T()}, got '{text}'")
         var narrow = Scalar[T.native](wide)
         comptime if T.native.is_unsigned():
             if wide < 0 or Int(narrow) != wide:
-                raise Error("'", text, "' is out of range for ", T())
+                raise InvalidError(t"'{text}' is out of range for {T()}")
         else:
             if Int(narrow) != wide:
-                raise Error("'", text, "' is out of range for ", T())
+                raise InvalidError(t"'{text}' is out of range for {T()}")
         return PrimitiveScalar[T](narrow).to_dyn()
 
 

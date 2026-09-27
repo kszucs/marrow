@@ -50,6 +50,7 @@ from .filter import take
 from .core import Kernel
 from ..utils import AHash64, Hasher, RapidHash64, XxHash64
 from ..execution import ExecContext, GPU_ENABLED
+from ..errors import InvalidError, TypeError
 from ..dtypes import (
     BinaryLikeType,
     IntegerType,
@@ -308,7 +309,7 @@ struct HashKernel[H: Hasher](Kernel):
 
             return dt.dispatch_primitive(primitive)
         else:
-            raise Self.error(String("unsupported dtype ", dt))
+            raise Self.error[TypeError](String("unsupported dtype ", dt))
 
     @staticmethod
     def apply(
@@ -479,7 +480,7 @@ struct HashKernel[H: Hasher](Kernel):
         var n = len(keys)
         var num_fields = len(keys.children)
         if num_fields == 0:
-            raise Self.error("empty struct array")
+            raise Self.error[InvalidError]("empty struct array")
         var cols = List[DynArray](capacity=num_fields)
         for k in range(num_fields):
             cols.append(keys.children[k].slice(keys.offset, n))
@@ -508,7 +509,7 @@ struct HashKernel[H: Hasher](Kernel):
         var n = num_rows
         var num_fields = len(columns)
         if num_fields == 0:
-            raise Self.error("empty struct array")
+            raise Self.error[InvalidError]("empty struct array")
         for k in range(num_fields):
             Self.expect_same_length(len(columns[k]), n)
 

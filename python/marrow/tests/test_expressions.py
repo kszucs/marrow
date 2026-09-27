@@ -239,7 +239,7 @@ def test_date_trunc_keeps_the_input_type(dates):
 def test_date_trunc_rejects_a_bad_unit_when_the_expression_is_built():
     """Not on the first row that evaluates it — the unit is parsed at
     construction."""
-    with pytest.raises(Exception, match="fortnight"):
+    with pytest.raises(ma.ArrowInvalid, match="fortnight"):
         col("d").date_trunc("fortnight")
 
 
@@ -274,7 +274,7 @@ def test_conditionals_unify_a_mixed_numeric_pair(batch):
 
 def test_coalesce_of_incompatible_types_raises(batch):
     """No common type, so the guess is not made — the kernel names both."""
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowTypeError):
         run(ma.coalesce(col("s"), col("b")), batch)
 
 
@@ -359,7 +359,7 @@ def test_aggregate_by_name_matches_the_dedicated_verb():
 
 
 def test_an_unknown_aggregate_raises():
-    with pytest.raises(Exception, match="frobnicate"):
+    with pytest.raises(ma.ArrowKeyError, match="frobnicate"):
         col("a").aggregate("frobnicate")
 
 

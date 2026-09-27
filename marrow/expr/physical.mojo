@@ -42,6 +42,7 @@ appends one stage.
 
 from std.memory import ArcPointer
 
+from ..errors import InternalError
 from ..arrays import BoolArray, DynArray, Int32Array, StructArray
 from ..buffers import Bitmap
 from ..scalars import ArrowScalar, DynScalar, NullScalar
@@ -136,7 +137,7 @@ struct Datum(Copyable, Movable):
         shape worth handling.
         """
         if self.is_scalar():
-            raise Error("struct_array: expected a batch, got a scalar")
+            raise InternalError("struct_array: expected a batch, got a scalar")
         return self._v[DynArray].as_struct().copy()
 
     def to_array(self, n: Int) raises -> DynArray:
@@ -160,11 +161,8 @@ struct Datum(Copyable, Movable):
             return self._to_array(self._v[DynScalar], n)
         ref arr = self._v[DynArray]
         if len(arr) != n:
-            raise Error(
-                "to_array: expected a column of ",
-                n,
-                " rows, got ",
-                len(arr),
+            raise InternalError(
+                t"to_array: expected a column of {n} rows, got {len(arr)}"
             )
         return arr.copy()
 
@@ -1395,12 +1393,9 @@ struct JoinOperator(Operator):
                     matches = False
                     break
         if not matches:
-            raise Error(
-                "join: the kernel produced ",
-                result.dtype,
-                " for a plan that declared ",
-                len(want),
-                " columns in a different shape",
+            raise InternalError(
+                t"join: the kernel produced {result.dtype} for a plan that "
+                t"declared {len(want)} columns in a different shape"
             )
         return _struct_of(self._schema, result.children.copy(), len(result))
 

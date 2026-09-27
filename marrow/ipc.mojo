@@ -25,6 +25,13 @@ list, fixed_size_list, struct, dictionary.
 
 from std.math import ceildiv
 
+from .errors import (
+    CorruptError,
+    IndexError,
+    InternalError,
+    InvalidError,
+    NotImplementedError,
+)
 from .arrays import DynArray, ArrayData, DictionaryArray, NullArray, Int32Array
 from .buffers import Buffer, Bitmap
 from .execution import ExecContext
@@ -292,7 +299,7 @@ struct _FlatbufWriter(Movable):
     def _grow(mut self) raises:
         var old_size = len(self._buf)
         if old_size > 0x3FFF_FFFF_FFFF_FFFF:
-            raise Error("flatbuffers: buffer too large to grow")
+            raise InvalidError("flatbuffers: buffer too large to grow")
         var new_size = old_size * 2
         var written = old_size - self._head
         var new_buf = List[UInt8](capacity=new_size)
@@ -403,16 +410,14 @@ struct _FlatbufWriter(Movable):
         struct_align: Int,
     ) raises -> UInt32:
         if count < 0:
-            raise Error("flatbuffers: create_vector_structs: negative count")
+            raise InternalError(
+                "flatbuffers: create_vector_structs: negative count"
+            )
         if len(data) != count * struct_size:
-            raise Error(
-                "flatbuffers: create_vector_structs: data length "
-                + String(len(data))
-                + " != count("
-                + String(count)
-                + ") * struct_size("
-                + String(struct_size)
-                + ")"
+            raise InternalError(
+                t"flatbuffers: create_vector_structs: data length "
+                t"{len(data)} != count({count}) * struct_size("
+                t"{struct_size})"
             )
         var n_bytes = count * struct_size
         self._prep(struct_align, n_bytes)
@@ -499,8 +504,8 @@ struct _FlatbufReader(Movable):
         var soffset_raw = LittleEndian.checked[DType.uint32](self._buf, tp)
         var vt = Int(table_pos - soffset_raw)
         if vt < 0 or vt >= len(self._buf):
-            raise Error(
-                "flatbuffers: vtable position out of bounds: " + String(vt)
+            raise CorruptError(
+                t"flatbuffers: vtable position out of bounds: {vt}"
             )
         var vt_size = Int(LittleEndian.checked[DType.uint16](self._buf, vt))
         var slot_byte = 4 + slot * 2
@@ -566,7 +571,7 @@ struct _FlatbufReader(Movable):
         )
         var length = Int(LittleEndian.checked[DType.uint32](self._buf, str_pos))
         if str_pos + 4 + length > len(self._buf):
-            raise Error("flatbuffers: string extends beyond buffer")
+            raise CorruptError("flatbuffers: string extends beyond buffer")
         var bytes = List[UInt8](capacity=length)
         for i in range(length):
             bytes.append(self._buf[str_pos + 4 + i])
@@ -575,8 +580,8 @@ struct _FlatbufReader(Movable):
     def read_vector(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
-            raise Error(
-                "flatbuffers: absent offset field at slot " + String(slot)
+            raise CorruptError(
+                t"flatbuffers: absent offset field at slot {slot}"
             )
         var ref_pos = Int(tp) + Int(voff)
         return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](
@@ -594,8 +599,8 @@ struct _FlatbufReader(Movable):
     def read_table(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
-            raise Error(
-                "flatbuffers: absent offset field at slot " + String(slot)
+            raise CorruptError(
+                t"flatbuffers: absent offset field at slot {slot}"
             )
         var ref_pos = Int(tp) + Int(voff)
         return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](
@@ -608,12 +613,7 @@ struct _FlatbufReader(Movable):
     def vec_offset(self, vec_pos: UInt32, i: UInt32) raises -> UInt32:
         var vlen = self.vector_len(vec_pos)
         if i >= vlen:
-            raise Error(
-                "flatbuffers: vec index "
-                + String(i)
-                + " >= len "
-                + String(vlen)
-            )
+            raise CorruptError(t"flatbuffers: vec index {i} >= len {vlen}")
         var elem_pos = Int(vec_pos) + 4 + Int(i) * 4
         return UInt32(elem_pos) + LittleEndian.checked[DType.uint32](
             self._buf, elem_pos
@@ -624,16 +624,15 @@ struct _FlatbufReader(Movable):
     ) raises -> List[UInt8]:
         var vlen = self.vector_len(vec_pos)
         if i >= vlen:
-            raise Error(
-                "flatbuffers: vec_struct_bytes index "
-                + String(i)
-                + " >= len "
-                + String(vlen)
+            raise CorruptError(
+                t"flatbuffers: vec_struct_bytes index {i} >= len {vlen}"
             )
         var start = Int(vec_pos) + 4 + Int(i) * struct_size
         var end = start + struct_size
         if end > len(self._buf):
-            raise Error("flatbuffers: vec_struct_bytes extends beyond buffer")
+            raise CorruptError(
+                "flatbuffers: vec_struct_bytes extends beyond buffer"
+            )
         var result = List[UInt8](capacity=struct_size)
         for j in range(struct_size):
             result.append(self._buf[start + j])
@@ -856,7 +855,9 @@ struct _IpcEncoder(Movable):
             # Schema encodes the value type; DictionaryEncoding carries index type.
             return self._type_code(dtype.as_dictionary().value_type())
         else:
-            raise Error("_IpcEncoder: unsupported dtype: " + String(dtype))
+            raise NotImplementedError(
+                t"_IpcEncoder: unsupported dtype: {dtype}"
+            )
 
     def _write_type_table(mut self, dtype: dt.DynType) raises -> UInt32:
         if (
@@ -1040,9 +1041,8 @@ struct _IpcEncoder(Movable):
         elif dtype.is_dictionary():
             return self._write_type_table(dtype.as_dictionary().value_type())
         else:
-            raise Error(
-                "_IpcEncoder: unsupported dtype for type table: "
-                + String(dtype)
+            raise NotImplementedError(
+                t"_IpcEncoder: unsupported dtype for type table: {dtype}"
             )
 
     def _write_dictionary_encoding_table(
@@ -1339,9 +1339,9 @@ struct _IpcDecoder(Movable):
         var msg_tp = self._r.root()
         var hdr_type = self._r.read_u8(msg_tp, 1, 0)
         if Int(hdr_type) != Int(_HEADER_RECORD_BATCH):
-            raise Error(
-                "_IpcDecoder: expected record-batch header, got "
-                + String(Int(hdr_type))
+            raise CorruptError(
+                t"_IpcDecoder: expected record-batch header, got "
+                t"{Int(hdr_type)}"
             )
         var rb_pos = self._r.read_table(msg_tp, 2)
         var nodes = List[_FieldNode]()
@@ -1418,9 +1418,9 @@ struct _IpcDecoder(Movable):
         # a compressed body into garbage with no error. Refuse until the codecs
         # are wired through (they are already available for Parquet).
         if self._r.has_field(rb_pos, 3):
-            raise Error(
-                "ipc: record batch body is compressed; reading compressed IPC"
-                " bodies (LZ4_FRAME / ZSTD) is not supported"
+            raise NotImplementedError(
+                "ipc: record batch body is compressed; reading compressed IPC "
+                "bodies (LZ4_FRAME / ZSTD) is not supported"
             )
 
         var nodes_vec = self._r.read_vector(rb_pos, 1)
@@ -1532,23 +1532,25 @@ struct _IpcDecoder(Movable):
             var tp = self._r.read_table(fp, 3)
             var keys_sorted = self._r.read_bool(tp, 0, False)
             if len(children) == 0:
-                raise Error("map Field must have 1 child, got 0")
+                raise CorruptError("map Field must have 1 child, got 0")
             dtype = dt.MapType(children[0].copy(), keys_sorted).to_dyn()
         elif type_type == _TYPE_LIST:
             if len(children) == 0:
-                raise Error("list Field must have 1 child, got 0")
+                raise CorruptError("list Field must have 1 child, got 0")
             # Preserve the child Field as-is (its name may not be the default
             # "item" — e.g. arrow-rs uses "inner_list" for nested lists).
             dtype = dt.ListType(children[0].copy()).to_dyn()
         elif type_type == _TYPE_LARGE_LIST:
             if len(children) == 0:
-                raise Error("large_list Field must have 1 child, got 0")
+                raise CorruptError("large_list Field must have 1 child, got 0")
             dtype = dt.LargeListType(children[0].copy()).to_dyn()
         elif type_type == _TYPE_FIXED_SIZE_LIST:
             var tp = self._r.read_table(fp, 3)
             var list_size = Int(self._r.read_i32(tp, 0, 0))
             if len(children) == 0:
-                raise Error("fixed_size_list Field must have 1 child, got 0")
+                raise CorruptError(
+                    "fixed_size_list Field must have 1 child, got 0"
+                )
             dtype = dt.FixedSizeListType(children[0].copy(), list_size).to_dyn()
         elif type_type == _TYPE_FIXED_SIZE_BINARY:
             var tp = self._r.read_table(fp, 3)
@@ -1593,8 +1595,8 @@ struct _IpcDecoder(Movable):
         elif type_type == _TYPE_STRUCT:
             dtype = dt.struct_(children^)
         else:
-            raise Error(
-                "_IpcDecoder: unsupported type_type: " + String(Int(type_type))
+            raise NotImplementedError(
+                t"_IpcDecoder: unsupported type_type: {Int(type_type)}"
             )
 
         # Check for DictionaryEncoding at slot 4 — wraps the value type in DictionaryType.
@@ -1695,12 +1697,9 @@ def _read_message[
         pos = meta_start
         return False
     if metadata_len < 0 or meta_start + metadata_len > n:
-        raise Error(
-            "IPC: message metadata at ",
-            meta_start,
-            " runs past the end of a ",
-            n,
-            "-byte source",
+        raise CorruptError(
+            t"IPC: message metadata at {meta_start} runs past the end of a "
+            t"{n}-byte source"
         )
     var meta_fetched = src.read_ranges([(meta_start, metadata_len)], one)
     meta.extend(meta_fetched.span(0))
@@ -1711,12 +1710,9 @@ def _read_message[
     var dec = _IpcDecoder(meta.copy())
     var body_len = Int(dec.body_length())
     if body_len < 0 or meta_end + body_len > n:
-        raise Error(
-            "IPC: message body at ",
-            meta_end,
-            " runs past the end of a ",
-            n,
-            "-byte source",
+        raise CorruptError(
+            t"IPC: message body at {meta_end} runs past the end of a {n}-byte "
+            t"source"
         )
     var body_fetched = src.read_ranges([(meta_end, body_len)], one)
     body.extend(body_fetched.span(0))
@@ -1963,8 +1959,8 @@ struct _BatchDecoder(Movable):
             ref d = dtype.as_dictionary()
             var dict_id = ipc_info.dict_id
             if dict_id < 0 or dict_id >= len(self.dict_values):
-                raise Error(
-                    "_BatchDecoder: no values for dict_id " + String(dict_id)
+                raise CorruptError(
+                    t"_BatchDecoder: no values for dict_id {dict_id}"
                 )
             var indices = self._consume_primitive_array(
                 d.index_type().copy(), length, null_count, bitmap^
@@ -2136,7 +2132,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
 
     def write_batch(mut self, batch: RecordBatch) raises:
         if self._closed:
-            raise Error("RecordBatchFileWriter: writer is closed")
+            raise InvalidError("RecordBatchFileWriter: writer is closed")
         # Collect all (dict_id, values) pairs in DFS inner-first order.
         # In FILE format each dict_id is written exactly once.
         var pairs = List[_DictPair]()
@@ -2219,7 +2215,7 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](Movable):
 
     def write_batch(mut self, batch: RecordBatch) raises:
         if self._closed:
-            raise Error("RecordBatchStreamWriter: writer is closed")
+            raise InvalidError("RecordBatchStreamWriter: writer is closed")
         # Stream format sends all dicts before each record batch.
         var pairs = List[_DictPair]()
         var next_id = 0
@@ -2273,13 +2269,13 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
     def __init__(out self, var source: Self.S) raises:
         var n = source.size()
         if n < 14:
-            raise Error("IPC file too short")
+            raise CorruptError("IPC file too short")
         var magic = _magic()
 
         var head = source.read_at(0, 8)
         for i in range(8):
             if head[i] != magic[i]:
-                raise Error("IPC file: bad magic bytes")
+                raise CorruptError("IPC file: bad magic bytes")
 
         # One tail read serves the trailing magic, the footer length and, all
         # but always, the footer itself.
@@ -2287,13 +2283,13 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
         var tail = source.read_at(n - want, want)
         for i in range(6):
             if tail[want - 6 + i] != magic[i]:
-                raise Error("IPC file: bad trailing magic")
+                raise CorruptError("IPC file: bad trailing magic")
 
         var footer_size = Int(
             LittleEndian.checked[DType.int32](tail, want - 10)
         )
         if footer_size < 0 or footer_size + 10 > n:
-            raise Error("IPC file: bad footer length ", footer_size)
+            raise CorruptError(t"IPC file: bad footer length {footer_size}")
 
         var footer_bytes: List[UInt8]
         if footer_size + 10 <= want:
@@ -2347,7 +2343,7 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
         random-access -- the footer's `_Block` table holds every offset -- so the
         cursor is a local, and several readers of one file do not contend."""
         if i < 0 or i >= len(self._blocks):
-            raise Error("RecordBatchFileReader: batch index out of range")
+            raise IndexError("RecordBatchFileReader: batch index out of range")
         var pos = Int(self._blocks[i].offset)
         var meta = List[UInt8]()
         var body = List[UInt8]()
@@ -2392,7 +2388,9 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
         var meta = List[UInt8]()
         var body = List[UInt8]()
         if not _read_message(self._src, self._pos, meta, body):
-            raise Error("RecordBatchStreamReader: missing schema message")
+            raise CorruptError(
+                "RecordBatchStreamReader: missing schema message"
+            )
         var ipc_infos = List[_FieldIpcInfo]()
         var dec = _IpcDecoder(meta^)
         self.schema = dec.decode_schema(ipc_infos)
@@ -2468,9 +2466,9 @@ def write_ipc_file(
 ) raises:
     """Write RecordBatches to an Arrow IPC file."""
     if len(batches) == 0:
-        raise Error(
-            "write_ipc_file: no batches; use write_ipc_file(path, schema,"
-            " batches) for schema-only files"
+        raise InvalidError(
+            "write_ipc_file: no batches; use write_ipc_file(path, schema, "
+            "batches) for schema-only files"
         )
     write_ipc_file(uri, batches[0].schema, batches, options)
 
@@ -2495,9 +2493,9 @@ def write_ipc_stream(
 ) raises:
     """Write RecordBatches to an Arrow IPC stream."""
     if len(batches) == 0:
-        raise Error(
-            "write_ipc_stream: no batches; use write_ipc_stream(path, schema,"
-            " batches) for schema-only streams"
+        raise InvalidError(
+            "write_ipc_stream: no batches; use write_ipc_stream(path, schema, "
+            "batches) for schema-only streams"
         )
     write_ipc_stream(uri, batches[0].schema, batches, options)
 

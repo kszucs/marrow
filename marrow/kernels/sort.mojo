@@ -57,6 +57,7 @@ from ..dtypes import (
 from .cast import NumericCastKernel
 from .core import Kernel
 from ..execution import ExecContext
+from ..errors import InvalidError, TypeError
 from .filter import TakeKernel
 from .partition import radix_histogram
 
@@ -500,7 +501,7 @@ struct SortIndices(Kernel):
 
             result = dt.dispatch_primitive(primitive)
         else:
-            raise Self.error(t"unsupported dtype {dt}")
+            raise Self.error[TypeError](t"unsupported dtype {dt}")
 
         if limit:
             var k = min(limit.value(), len(result))
@@ -542,10 +543,10 @@ struct SortIndices(Kernel):
             ctx: Execution context.
         """
         if len(key_indices) == 0:
-            raise Self.error("key_indices must not be empty")
+            raise Self.error[InvalidError]("key_indices must not be empty")
         if len(key_indices) != len(ascending):
-            raise Self.error(
-                "key_indices and ascending must have the same length"
+            raise Self.error[InvalidError](
+                "key_indices and ascending must have the same length",
             )
 
         if len(key_indices) == 1:

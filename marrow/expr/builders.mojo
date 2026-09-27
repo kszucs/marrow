@@ -20,6 +20,7 @@ shadow rather than overload — and which one a call site got would depend on it
 imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
+from ..errors import InvalidError, TypeError
 from .`comptime`.aggregates import Aggregate
 from .`comptime`.boolean import IsIn
 from .`comptime`.numeric import CaseWhen, Maximum, Minimum
@@ -386,14 +387,16 @@ def lit(var value: NullScalar) -> NullLiteral:
 
 def _check_valid(valid: Bool) raises:
     if not valid:
-        raise Error("lit: a null scalar has no value for a fixed-width literal")
+        raise InvalidError(
+            "lit: a null scalar has no value for a fixed-width literal"
+        )
 
 
 def _check_literal(actual: DynType, expected: DynType) raises:
     """A `lit` scalar or a `param` default must be of the dtype it is declared
     with; checked where the node is built, so the leaf can trust it."""
     if actual != expected:
-        raise Error("the scalar is ", actual, ", not ", expected)
+        raise TypeError(t"the scalar is {actual}, not {expected}")
 
 
 # ---------------------------------------------------------------------------

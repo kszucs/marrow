@@ -39,6 +39,7 @@ present tense, long after it was gone.
 from std.memory import ArcPointer
 from std.utils import Variant
 
+from ...errors import InternalError, InvalidError, KeyError, TypeError
 from ...arrays import (
     BoolArray,
     DynArray,
@@ -209,7 +210,7 @@ def promote_dyn(l: DynType, r: DynType) raises -> DynType:
     if l == r:
         return l.copy()
     if not l.is_numeric() or not r.is_numeric():
-        raise Error("promote: no common numeric type for ", l, " and ", r)
+        raise TypeError(t"promote: no common numeric type for {l} and {r}")
     var l_float = l.is_floating_point()
     if l_float != r.is_floating_point():
         return l.copy() if l_float else r.copy()
@@ -517,8 +518,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "column" and self._payload.isa[String]():
             var i = schema.get_field_index(self._payload[String])
             if i == -1:
-                raise Error(
-                    "column '", self._payload[String], "' not found in schema"
+                raise KeyError(
+                    t"column '{self._payload[String]}' not found in schema"
                 )
             return schema.fields[i].dtype.copy()
         if self._tag == "literal" and self._payload.isa[DynScalar]():
@@ -563,7 +564,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
                 return Datum(batch.field(self._payload[String]).copy())
             if self._tag == "literal":
                 return Datum(self._payload[DynScalar].to_array(len(batch)))
-            raise Error("evaluate: unknown runtime leaf '", self._tag, "'")
+            raise InternalError(t"evaluate: unknown runtime leaf '{self._tag}'")
 
         var kids = List[DynArray](capacity=len(self._kids))
         for ref kid in self._kids:
@@ -656,7 +657,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             for i in range(n):
                 vals.append(branches[i].copy())
             return Datum(case_when_kernel(conds, vals, otherwise^))
-        raise Error("evaluate: unknown runtime node '", self._tag, "'")
+        raise InternalError(t"evaluate: unknown runtime node '{self._tag}'")
 
     @staticmethod
     def _compare[
@@ -671,8 +672,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
         """
         if l.dtype().is_string_like() or r.dtype().is_string_like():
             if not (l.dtype().is_string_like() and r.dtype().is_string_like()):
-                raise Error(
-                    "compare: cannot compare ", l.dtype(), " with ", r.dtype()
+                raise TypeError(
+                    t"compare: cannot compare {l.dtype()} with {r.dtype()}"
                 )
             return S.dispatch(l^, r^)
         if l.dtype() == r.dtype():
@@ -731,11 +732,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
         cast in each direction is what keeps it from silently narrowing.
         """
         if not l.dtype().is_numeric() or not r.dtype().is_numeric():
-            raise Error(
-                "arithmetic is not defined for ",
-                l.dtype(),
-                " and ",
-                r.dtype(),
+            raise TypeError(
+                t"arithmetic is not defined for {l.dtype()} and {r.dtype()}"
             )
         var to = promote_dyn(l.dtype(), r.dtype())
         return K.dispatch(cast_array(l^, to), cast_array(r^, to))
@@ -1347,7 +1345,7 @@ def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
     node had no way to hold N children.
     """
     if len(values) == 0:
-        raise Error("coalesce: needs at least one value")
+        raise InvalidError("coalesce: needs at least one value")
 
     return RuntimeValue("coalesce", values^)
 
@@ -1369,15 +1367,11 @@ def case_when(
     a `thin` pointer and cannot capture a flag.
     """
     if len(conditions) != len(values):
-        raise Error(
-            "case_when: ",
-            len(conditions),
-            " conditions but ",
-            len(values),
-            " values",
+        raise InvalidError(
+            t"case_when: {len(conditions)} conditions but {len(values)} values"
         )
     if len(conditions) == 0:
-        raise Error("case_when: needs at least one condition")
+        raise InvalidError("case_when: needs at least one condition")
 
     # Capacity reserved up front, and that is load-bearing rather than tidy:
     # a `RuntimeValue` carries a `Payload`, and when a `List` holding one grows
@@ -2104,16 +2098,9 @@ def call(var tag: String, var args: List[RuntimeValue]) raises -> RuntimeValue:
     """
     var arity = _arity_of(tag)
     if arity == -1:
-        raise Error("unknown expression verb '", tag, "'")
+        raise KeyError(t"unknown expression verb '{tag}'")
     if arity != len(args):
-        raise Error(
-            "'",
-            tag,
-            "' takes ",
-            arity,
-            " operand(s), got ",
-            len(args),
-        )
+        raise InvalidError(t"'{tag}' takes {arity} operand(s), got {len(args)}")
     # One constructor for all three arities: the fixed-arity ones build the
     # same `_kids` and the same empty `Payload` this does, and going through
     # them would copy each operand a second time.

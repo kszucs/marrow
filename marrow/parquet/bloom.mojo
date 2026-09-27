@@ -19,6 +19,7 @@ reference implementations in arrow-rs (`bloom_filter.rs`) and Arrow C++:
 
 from std.math import log
 
+from ..errors import CorruptError
 from ..utils import LittleEndian, XxHash64
 from .format import (
     ThriftCompactWriter,
@@ -100,7 +101,9 @@ struct SplitBlockBloomFilter(Movable):
         32); each block's eight words are little-endian `UInt32`s."""
         var nbytes = len(data)
         if nbytes % _BYTES_PER_BLOCK != 0:
-            raise Error("parquet: bloom filter size not a block multiple")
+            raise CorruptError(
+                "parquet: bloom filter size not a block multiple"
+            )
         var nb = nbytes // _BYTES_PER_BLOCK
         var out = Self(nb)
         for w in range(nb * _WORDS_PER_BLOCK):

@@ -321,7 +321,7 @@ def test_avg_is_mean(basic):
 
 
 def test_where_rejects_an_aggregate(basic):
-    with pytest.raises(Exception, match="WHERE cannot contain an aggregate"):
+    with pytest.raises(ma.ArrowInvalid, match="WHERE cannot contain an aggregate"):
         ma.sql("SELECT k FROM basic WHERE SUM(v) > 1", basic=basic)
 
 
@@ -377,7 +377,7 @@ def test_float_is_32_bit_like_duckdb(basic):
 
 
 def test_limit_rejects_a_float(basic):
-    with pytest.raises(Exception, match="whole number"):
+    with pytest.raises(ma.ArrowInvalid, match="whole number"):
         ma.sql("SELECT k FROM basic LIMIT 1.5", basic=basic)
 
 
@@ -434,22 +434,22 @@ def test_join_key_order_may_be_written_either_way(emp, dept):
 
 
 def test_syntax_error_names_the_offset(basic):
-    with pytest.raises(Exception, match="offset"):
+    with pytest.raises(ma.ArrowInvalid, match="offset"):
         ma.sql("SELECT a # b FROM basic", basic=basic)
 
 
 def test_unknown_column_is_named(basic):
-    with pytest.raises(Exception, match="nope"):
+    with pytest.raises(ma.ArrowKeyError, match="nope"):
         ma.sql("SELECT nope FROM basic", basic=basic)
 
 
 def test_unknown_table_is_named(basic):
-    with pytest.raises(Exception, match="missing"):
+    with pytest.raises(ma.ArrowKeyError, match="missing"):
         ma.sql("SELECT k FROM missing", basic=basic)
 
 
 def test_non_equi_join_is_refused(emp, dept):
-    with pytest.raises(Exception, match="equality"):
+    with pytest.raises(ma.ArrowInvalid, match="equality"):
         ma.sql(
             "SELECT e.name FROM emp e JOIN dept d ON e.did > d.did",
             emp=emp,

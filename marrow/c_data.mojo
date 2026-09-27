@@ -7,6 +7,7 @@ from std.memory.alloc import unsafe_alloc
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr
 from std.sys import size_of
+from .errors import IOError, InvalidError, NotImplementedError, TypeError
 from .utils.dylib import CStr, alloc_c_string
 from .buffers import (
     Allocation,
@@ -511,12 +512,9 @@ struct CArrowSchema(Copyable, Movable):
             elif idx == uint64:
                 fmt = "L"
             else:
-                raise Error(
-                    (
-                        "CArrowSchema.from_dtype: unsupported dictionary index"
-                        " type: "
-                    ),
-                    idx,
+                raise TypeError(
+                    t"CArrowSchema.from_dtype: unsupported dictionary index "
+                    t"type: {idx}"
                 )
             var dict_schema = CArrowSchema.from_dtype(dt.value_type())
             var dict_schema_ptr = unsafe_alloc[CArrowSchema](1)
@@ -525,8 +523,8 @@ struct CArrowSchema(Copyable, Movable):
             if dt.ordered:
                 flags = ARROW_FLAG_DICT_ORDERED
         else:
-            raise Error(
-                "CArrowSchema.from_dtype: unsupported dtype: {}".format(dtype)
+            raise NotImplementedError(
+                t"CArrowSchema.from_dtype: unsupported dtype: {dtype}"
             )
 
         return CArrowSchema(
@@ -673,9 +671,9 @@ struct CArrowSchema(Copyable, Movable):
             elif fmt == "L":
                 index_type = uint64
             else:
-                raise Error(
-                    "CArrowSchema.to_dtype: unknown dictionary index format: ",
-                    fmt,
+                raise NotImplementedError(
+                    t"CArrowSchema.to_dtype: unknown dictionary index format: "
+                    t"{fmt}"
                 )
             var value_type = self.dictionary[].to_dtype()
             var ordered = Bool(self.flags & ARROW_FLAG_DICT_ORDERED)
@@ -804,7 +802,7 @@ struct CArrowSchema(Copyable, Movable):
             else:
                 return decimal128(precision, scale)
         else:
-            raise Error("Unknown format: ", fmt)
+            raise NotImplementedError(t"Unknown format: {fmt}")
 
     def to_field(self) raises -> Field:
         var name = StringSlice(
@@ -957,13 +955,9 @@ struct CArrowArray(Copyable, Movable):
     def _need_buffers(self, n: Int, dtype: DynType) raises:
         """Check the producer declared at least `n` buffers before indexing."""
         if Int(self.n_buffers) < n:
-            raise Error(
-                "c_data: producer declared ",
-                Int(self.n_buffers),
-                " buffers for ",
-                String(dtype),
-                "; this layout needs ",
-                n,
+            raise InvalidError(
+                t"c_data: producer declared {Int(self.n_buffers)} buffers for "
+                t"{dtype}; this layout needs {n}"
             )
 
     def to_data(
@@ -1122,7 +1116,7 @@ struct CArrowArray(Copyable, Movable):
             )
             children.append(self.dictionary[].to_data(dt.value_type(), owner))
         else:
-            raise Error("to_data: unsupported dtype: ", dtype)
+            raise NotImplementedError(t"to_data: unsupported dtype: {dtype}")
 
         # The C Data Interface allows -1 for "not computed", and PyArrow emits
         # it. Passing it through makes `null_count()` answer -1; derive it from
@@ -1420,10 +1414,10 @@ struct CArrowDeviceArray(Movable):
         # DeviceBuffer construction needs an AsyncRT handle that is not provided
         # by the C Device Data Interface.  Once Mojo exposes an API to adopt a
         # raw device pointer into a DeviceBuffer, this can be completed.
-        raise Error(
-            "to_array: zero-copy device array import is not yet implemented;"
-            " Mojo does not yet expose a way to wrap raw device pointers in"
-            " DeviceBuffer without an AsyncRT handle"
+        raise NotImplementedError(
+            "to_array: zero-copy device array import is not yet implemented; "
+            "Mojo does not yet expose a way to wrap raw device pointers in "
+            "DeviceBuffer without an AsyncRT handle"
         )
 
 
@@ -1636,7 +1630,9 @@ struct CArrowArrayStream(Movable):
         if err != 0:
             heap[].release(heap)
             heap.unsafe_free()
-            raise Error("CArrowArrayStream: get_schema failed with code ", err)
+            raise IOError(
+                t"CArrowArrayStream: get_schema failed with code {err}"
+            )
         var schema = c_schema.unsafe_take_pointee().to_schema()
 
         # Iterate batches.
@@ -1647,8 +1643,8 @@ struct CArrowArrayStream(Movable):
             if err != 0:
                 heap[].release(heap)
                 heap.unsafe_free()
-                raise Error(
-                    "CArrowArrayStream: get_next failed with code ", err
+                raise IOError(
+                    t"CArrowArrayStream: get_next failed with code {err}"
                 )
             # End-of-stream: release field is null.
             if c_array[].is_released():

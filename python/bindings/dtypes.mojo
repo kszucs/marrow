@@ -7,6 +7,7 @@ from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from std.memory import ArcPointer
 import marrow.dtypes as dt
+from marrow.errors import InvalidError
 
 
 def _field_name(py_self: PythonObject) raises -> PythonObject:
@@ -206,7 +207,7 @@ def _parse_time_unit(unit: PythonObject) raises -> dt.TimeUnit:
     elif s == "ns":
         return dt.nanosecond
     else:
-        raise Error("Unknown time unit: " + s)
+        raise InvalidError(t"Unknown time unit: {s}")
 
 
 def field(

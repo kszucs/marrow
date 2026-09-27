@@ -18,6 +18,7 @@ from std.builtin.rebind import downcast
 from std.sys import size_of
 from std.memory import unsafe_memcpy
 
+from ..errors import CorruptError, IndexError, InvalidError, NotImplementedError
 from ..arrays import DynArray, ArrayData
 from ..buffers import Buffer, Bitmap
 from ..execution import ExecContext, fan_out
@@ -414,7 +415,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
         # exactly the on-disk body (v1's compressed blob; v2's uncompressed
         # levels + compressed values), which is `comp`.
         if ph.crc >= 0 and Int(Crc32.compute(comp)) != ph.crc:
-            raise Error("parquet: page CRC-32 mismatch (corrupt data)")
+            raise CorruptError("parquet: page CRC-32 mismatch (corrupt data)")
 
         if ph.type == PageType.DICTIONARY:
             return Page[
@@ -496,7 +497,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
                 def_levels=defs^,
             )
         else:
-            raise Error("parquet: unexpected page type")
+            raise NotImplementedError("parquet: unexpected page type")
 
     def peek(self) raises -> Tuple[Bool, Int]:
         """Inspect the next page without consuming it: `(is_dictionary,
@@ -518,7 +519,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
         elif ph.type == PageType.DATA_V2:
             return (False, ph.data_page_header_v2.value().num_values)
         else:
-            raise Error("parquet: unexpected page type")
+            raise NotImplementedError("parquet: unexpected page type")
 
     def skip_next(mut self) raises -> Int:
         """Advance past the next data page without decompressing or decoding it
@@ -546,7 +547,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
         elif ph.type == PageType.DATA_V2:
             nv = ph.data_page_header_v2.value().num_values
         else:
-            raise Error("parquet: skip_next on a non-data page")
+            raise NotImplementedError("parquet: skip_next on a non-data page")
         self.produced += nv
         return nv
 
@@ -1038,7 +1039,7 @@ struct Int96LeafBuilder(LeafBuilder):
         if is_dict:
             idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
         elif not page.is_plain():
-            raise Error("parquet: unsupported INT96 encoding")
+            raise NotImplementedError("parquet: unsupported INT96 encoding")
 
         def place(
             present_here: Bool, selected: Bool, vi: Int
@@ -1198,7 +1199,9 @@ struct BoolLeafBuilder(LeafBuilder):
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
-            raise Error("parquet: dictionary-encoded bool not supported")
+            raise NotImplementedError(
+                "parquet: dictionary-encoded bool not supported"
+            )
         if page.is_plain():
             self._place(page, page.values())
         else:
@@ -1475,7 +1478,9 @@ struct _BoolSink(LeveledSink, Movable):
     var builder: BoolBuilder
 
     def handle_dict(mut self, pg: Page) raises:
-        raise Error("parquet: dictionary-encoded bool not supported")
+        raise NotImplementedError(
+            "parquet: dictionary-encoded bool not supported"
+        )
 
     def decode_present(mut self, pg: Page) raises:
         self.present.clear()
@@ -1600,7 +1605,7 @@ struct _Int96Sink(LeveledSink, Movable):
             for i in range(pg.num_present):
                 self.present.append(_int96_nanos(vspan, i * 12))
         else:
-            raise Error("parquet: unsupported INT96 encoding")
+            raise NotImplementedError("parquet: unsupported INT96 encoding")
 
     def place_present(mut self, vi: Int) raises:
         self.builder.append(self.present[vi])
@@ -2052,9 +2057,9 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
             comptime if Self.leaves.has(LEAF_INT96):
                 return self._emit_int96[leveled](codecs, f, md)
             else:
-                raise Error(
-                    "parquet: this reader was not compiled to decode INT96 --"
-                    " add LEAF_INT96 to its LeafSet"
+                raise NotImplementedError(
+                    "parquet: this reader was not compiled to decode INT96 -- "
+                    "add LEAF_INT96 to its LeafSet"
                 )
 
         comptime if Self.leaves.has(LEAF_INT32):
@@ -2187,10 +2192,9 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
             if vt.is_fixed_size_binary():
                 return self._emit_fsb[leveled](codecs, f, md)
 
-        raise Error(
-            "parquet: this reader was not compiled to decode ",
-            String(vt),
-            " -- widen the LeafSet parameter, or use the default LeafSet.all()",
+        raise NotImplementedError(
+            t"parquet: this reader was not compiled to decode {vt} -- "
+            t"widen the LeafSet parameter, or use the default LeafSet.all()"
         )
 
 
@@ -2222,7 +2226,7 @@ def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
     """
     var size = source.size()
     if size < 12:
-        raise Error("parquet: file too small")
+        raise CorruptError("parquet: file too small")
 
     var tail = FOOTER_READ_SIZE if FOOTER_READ_SIZE < size else size
     var head = source.read_at(size - tail, tail)
@@ -2234,7 +2238,7 @@ def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
 
     var want = meta_len + 8
     if want > size:
-        raise Error("parquet: corrupt footer length")
+        raise CorruptError("parquet: corrupt footer length")
     return FileMetaData.read_footer(source.read_at(size - want, want))
 
 
@@ -2585,14 +2589,14 @@ struct ParquetFile[
         if row_groups:
             for rg in row_groups.value():
                 if rg < 0 or rg >= len(self._meta.row_groups):
-                    raise Error("parquet: row group index out of range")
+                    raise IndexError("parquet: row group index out of range")
                 groups.append(rg)
         else:
             for rg in range(len(self._meta.row_groups)):
                 groups.append(rg)
 
         if row_selections and len(row_selections.value()) != len(groups):
-            raise Error(
+            raise InvalidError(
                 "parquet: row_selections must match the selected row groups"
             )
         # **A selection this reader cannot apply is refused, not ignored.**
@@ -2606,13 +2610,11 @@ struct ParquetFile[
         if row_selections:
             for orig in projection.decode_order:
                 if self._mapping.leaves[orig].max_rep >= 1:
-                    raise Error(
-                        (
-                            "parquet: row_selections cannot be applied to a"
-                            " repeated column ('"
-                        ),
-                        self._mapping.leaves[orig].name,
-                        "'); read it without a selection",
+                    raise NotImplementedError(
+                        t"parquet: row_selections cannot be applied to a "
+                        t"repeated column ('"
+                        t"{self._mapping.leaves[orig].name}'); read it without "
+                        t"a selection"
                     )
 
         var plan = ReadPlan(projection^, groups^)
@@ -3024,7 +3026,7 @@ struct RowSelection(Copyable, Movable):
         per predicate column per row group, which is where that matters.
         """
         if self._total != other._total:
-            raise Error("parquet: RowSelection size mismatch")
+            raise InvalidError("parquet: RowSelection size mismatch")
         var runs = List[Tuple[Int, Int]](
             capacity=len(self._runs) + len(other._runs)
         )

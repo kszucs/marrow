@@ -28,6 +28,7 @@ from std.bit import byte_swap
 from std.sys import size_of
 from std.memory import unsafe_memcpy
 
+from ..errors import NotImplementedError
 from ..arrays import (
     DynArray,
     PrimitiveArray,
@@ -728,8 +729,8 @@ struct Dictionary:
         elif dtype.is_large_binary():
             return Self._encode_bytes(col.as_large_binary(), dict_body, indices)
         else:
-            raise Error(
-                "parquet: cannot dictionary-encode column type " + String(dtype)
+            raise NotImplementedError(
+                t"parquet: cannot dictionary-encode column type {dtype}"
             )
 
     # --- decode ---
@@ -994,8 +995,8 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
                 values, num_present, out
             )
         else:
-            raise Error(
-                "parquet: unsupported data page encoding " + String(self.code)
+            raise NotImplementedError(
+                t"parquet: unsupported data page encoding {self.code}"
             )
 
     def decode_bytes(
@@ -1018,8 +1019,8 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         elif self == Self.DELTA_BYTE_ARRAY:
             return DeltaByteArray.decode_bytes(values, num_present)
         else:
-            raise Error(
-                "parquet: unsupported byte-array encoding " + String(self.code)
+            raise NotImplementedError(
+                t"parquet: unsupported byte-array encoding {self.code}"
             )
 
     def decode_flba(
@@ -1039,9 +1040,9 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         elif self == Self.BYTE_STREAM_SPLIT:
             return ByteStreamSplit.decode_flba(values, num_present, width)
         else:
-            raise Error(
-                "parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding "
-                + String(self.code)
+            raise NotImplementedError(
+                t"parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding "
+                t"{self.code}"
             )
 
     def decode_bool(
@@ -1061,7 +1062,9 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
                 out.append(Int(decoded[i]) == 1)
             return out^
         else:
-            raise Error("parquet: non-plain bool encoding not supported")
+            raise NotImplementedError(
+                "parquet: non-plain bool encoding not supported"
+            )
 
 
 @fieldwise_init
@@ -1117,8 +1120,8 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
         elif self == Self.BROTLI:
             libs.brotli_decompress(src, ptr, out_size)
         else:
-            raise Error(
-                "parquet: unsupported compression codec " + String(self.code)
+            raise NotImplementedError(
+                t"parquet: unsupported compression codec {self.code}"
             )
 
     @staticmethod
@@ -1177,6 +1180,6 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
         elif self == Self.BROTLI:
             return libs.brotli_compress(src)
         else:
-            raise Error(
-                "parquet: unsupported compression codec " + String(self.code)
+            raise NotImplementedError(
+                t"parquet: unsupported compression codec {self.code}"
             )

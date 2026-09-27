@@ -32,7 +32,7 @@ def test_cast_float_to_int_unsafe_truncates():
 
 def test_cast_safe_overflow_raises():
     a = ma.array([300], type=ma.int32())
-    with pytest.raises(Exception):
+    with pytest.raises(ma.ArrowInvalid):
         pc.cast(a, ma.int8(), safe=True)
 
 

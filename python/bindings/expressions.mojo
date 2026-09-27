@@ -54,6 +54,7 @@ References:
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
+from marrow.errors import InvalidError
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType
 from marrow.scalars import DynScalar, Int64Scalar
@@ -236,7 +237,7 @@ def _rows(obj: PythonObject) raises -> Optional[Tuple[Int, Int]]:
     if obj.__is__(builtins.None):
         return None
     if Int(py=obj.__len__()) != 2:
-        raise Error("over: rows= expects a (preceding, following) pair")
+        raise InvalidError("over: rows= expects a (preceding, following) pair")
     return Tuple(Int(py=obj[0]), Int(py=obj[1]))
 
 
@@ -305,7 +306,9 @@ def expr_literal(value: PythonObject) raises -> PythonObject:
     explicit-dtype override included. ``marrow.lit()`` builds the array."""
     var arr = DynArray(py=value)
     if len(arr) != 1:
-        raise Error("literal: expected a length-1 array, got length ", len(arr))
+        raise InvalidError(
+            t"literal: expected a length-1 array, got length {len(arr)}"
+        )
     return wrap_expr(_literal(arr[0]))
 
 
