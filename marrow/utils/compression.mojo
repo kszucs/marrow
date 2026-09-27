@@ -12,9 +12,9 @@ plus the per-call scratch they need; the handles themselves live in the
 
 **Nothing here is Parquet-specific**, which is why it lives in `marrow.utils`
 rather than in `marrow.parquet` where it started (as a second module named
-`utils`). The format-specific half — the Parquet `CompressionCodec` codes, the
-legacy Hadoop LZ4 frame tolerance, the scratch slack the bit-unpackers need — is
-`Compression` in `marrow.parquet.codecs`, which dispatches onto this.
+`utils`). The format-specific half — the Parquet `CompressionCodec` codes and
+the legacy Hadoop LZ4 frame tolerance — is `Compression` in
+`marrow.parquet.codecs`, which dispatches onto this.
 
 The other consumer is Arrow IPC, which currently *refuses* compressed bodies
 (`ipc.mojo`, "reading compressed IPC bodies (LZ4_FRAME / ZSTD) is not
