@@ -17,11 +17,6 @@ import posixpath
 import zipfile
 from email.parser import Parser
 
-#: What `python/build.py` never stages into a wheel, though a Linux `--bundle`
-#: directory carries both: manylinux guarantees them, and a conda copy would
-#: hide from auditwheel whether the codecs fit the policy's GLIBCXX.
-WHEEL_EXCLUDED = frozenset({"libstdc++", "libgcc_s"})
-
 #: MAX's GPU runtime and engine: a CPU wheel links neither, so one appearing
 #: means the build picked up a GPU flag.
 _NEVER_LINKED = frozenset({"libMGPRT", "libmax"})
@@ -108,7 +103,7 @@ def check_wheel(path, catalog, require=()):
 
     staged = {stem for name, stem in libraries.items() if not _grafted(name)}
     for name, stem in libraries.items():
-        if stem in WHEEL_EXCLUDED | _NEVER_LINKED:
+        if stem in catalog.SYSTEM_LIBRARIES | _NEVER_LINKED:
             problems.append(f"{name} must not ship in a wheel")
             continue
         # Grafted although marrow staged its own copy: the staged one was not

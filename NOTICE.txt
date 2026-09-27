@@ -176,15 +176,9 @@ libc++ -- The LLVM Project
     links it.
     licenses/libcxx.txt
 
-GCC runtime -- Free Software Foundation, Inc.
-    libstdc++ and libgcc_s, GPL-3.0 with the GCC Runtime Library Exception 3.1.
-    Only in a Linux `--bundle` directory built from a conda environment; a wheel
-    never carries them, since manylinux guarantees both.
-    licenses/bundle-only/gcc-runtime.txt
-
 Apache OpenDAL -- libopendal_c, Apache-2.0 (see LICENSE.txt)
     Its NOTICE is the one reproduced above. libopendal_c statically links
     about two hundred Rust crates; licenses/opendal-third-party.txt names every
     one and reproduces its licence. Where a crate offers a choice, marrow takes
     Apache-2.0 or MIT.
-    licenses/opendal-NOTICE.txt, licenses/opendal-third-party.txt
+    licenses/opendal-third-party.txt

@@ -253,6 +253,25 @@ def test_linux_closure_keeps_the_name_the_dependent_asks_for(tmp_path, monkeypat
     assert [p.name for p in dylib_closure(dec)] == ["libbrotlicommon.so.1"]
 
 
+def test_linux_closure_leaves_the_gcc_runtime_to_the_system(tmp_path, monkeypatch):
+    """A conda environment's libstdc++ is outside every system directory, yet
+    marrow ships no GPL code: neither a wheel nor a bundle copies it."""
+    for name in ("libstdc++.so.6", "libgcc_s.so.1", "libsnappy.so.1"):
+        (tmp_path / name).write_bytes(b"lib")
+    snappy = tmp_path / "libsnappy.so.1"
+    ldd = {
+        snappy.resolve(): [
+            f"\tlibstdc++.so.6 => {tmp_path}/libstdc++.so.6 (0x0)",
+            f"\tlibgcc_s.so.1 => {tmp_path}/libgcc_s.so.1 (0x0)",
+        ]
+    }
+    monkeypatch.setattr(
+        "marrow.compile._inspect", lambda cmd, path: ldd.get(Path(path).resolve(), [])
+    )
+    monkeypatch.setattr("marrow.compile.sys.platform", "linux")
+    assert dylib_closure(snappy) == []
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: install_name_tool")
 def test_bundle_copies_closure_and_rewrites_rpath_to_loader_path(tmp_path):
     if not _GATE_BINARY.exists():

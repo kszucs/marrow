@@ -70,18 +70,16 @@ def test_every_mapped_text_exists_and_is_not_empty():
     assert not empty, f"empty licence texts: {empty}"
 
 
-def test_the_wheel_carries_every_text_but_the_bundle_only_ones():
-    """`license-files` must cover every mapped text a wheel can hold, and none
-    of `licenses/bundle-only/` -- those belong to libraries a wheel refuses."""
+def test_the_wheel_carries_every_text():
+    """`license-files` must cover every mapped text: a wheel can hold any
+    library `LIBRARY_LICENSES` names."""
     covered = {
         Path(path).relative_to(REPO.python_dir).as_posix()
         for pattern in PYPROJECT["project"]["license-files"]
         for path in glob(str(REPO.python_dir / pattern))
         if Path(path).is_file()
     }
-    bundle_only = {rel for rel in MAPPED if rel.startswith("licenses/bundle-only/")}
-    assert MAPPED - bundle_only <= covered
-    assert not bundle_only & covered
+    assert MAPPED <= covered
 
 
 def test_notice_names_every_text():

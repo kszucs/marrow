@@ -31,7 +31,7 @@ from devkit.mojo import (  # noqa: E402 - must follow the path insertion
     ProcessRunner,
     Repo,
 )
-from devkit.wheel import WHEEL_EXCLUDED, compile_module  # noqa: E402
+from devkit.wheel import compile_module  # noqa: E402
 
 try:
     from devkit.progress import ConsoleProgress as Progress  # noqa: E402
@@ -87,7 +87,7 @@ class CustomBuildHook(BuildHookInterface):
     @staticmethod
     def _dlopen_libs(repo, required):
         """Every C library marrow may `dlopen`, with its own dependency
-        closure, resolved from the build environment -- less `WHEEL_EXCLUDED`.
+        closure, resolved from the build environment.
 
         A wheel build (`required`) fails on a missing codec. OpenDAL stays
         optional: a wheel without it still reads every local file.
@@ -99,8 +99,7 @@ class CustomBuildHook(BuildHookInterface):
         )
         staged = {}
         for lib in libs:
-            if catalog.library_stem(lib.name) not in WHEEL_EXCLUDED:
-                staged.setdefault(lib.name, lib)
+            staged.setdefault(lib.name, lib)
         return list(staged.values())
 
     @staticmethod

@@ -190,8 +190,20 @@ def _ldd_deps(path: Path) -> list[str]:
     return deps
 
 
+#: The GCC runtime every Linux binary links. marrow never copies it -- not into
+#: a wheel, where the manylinux policies make it the system's, and not into a
+#: `--bundle` directory -- so it ships no GPL code. A bundle's target therefore
+#: needs a libstdc++ as new as the Mojo runtime's: GCC 12's, `GLIBCXX_3.4.30`.
+SYSTEM_LIBRARIES = frozenset({"libstdc++", "libgcc_s"})
+
+
 def _linux_deps(path: Path) -> list[Path]:
-    return [Path(dep) for dep in _ldd_deps(path) if not _is_system_dep(dep)]
+    return [
+        Path(dep)
+        for dep in _ldd_deps(path)
+        if not _is_system_dep(dep)
+        and library_stem(Path(dep).name) not in SYSTEM_LIBRARIES
+    ]
 
 
 def dylib_closure(binary: Path) -> list[Path]:
@@ -297,18 +309,13 @@ LIBRARY_LICENSES: dict[str, tuple[str, ...]] = {
     "libbrotlienc": ("licenses/brotli.txt",),
     "libbrotlidec": ("licenses/brotli.txt",),
     "libbrotlicommon": ("licenses/brotli.txt",),
-    # The C++ runtime conda-forge's snappy links. On Linux only a `--bundle`
-    # directory carries it; a wheel never does (`WHEEL_EXCLUDED`, devkit/wheel.py).
+    # The C++ runtime conda-forge's snappy links on macOS. Linux's is the
+    # system's (`SYSTEM_LIBRARIES`).
     "libc++": ("licenses/libcxx.txt",),
-    "libstdc++": ("licenses/bundle-only/gcc-runtime.txt",),
-    "libgcc_s": ("licenses/bundle-only/gcc-runtime.txt",),
-    # Remote storage (`_OPTIONAL_LIB_CANDIDATES`): Apache-2.0 itself, plus the
-    # ASF NOTICE and every Rust crate statically linked into it.
-    "libopendal_c": (
-        "LICENSE.txt",
-        "licenses/opendal-NOTICE.txt",
-        "licenses/opendal-third-party.txt",
-    ),
+    # Remote storage (`_OPTIONAL_LIB_CANDIDATES`): Apache-2.0 itself, its ASF
+    # NOTICE -- reproduced in marrow's -- and every Rust crate statically
+    # linked into it.
+    "libopendal_c": (*_MARROW_LICENSES, "licenses/opendal-third-party.txt"),
 }
 
 # `auditwheel repair` renames a grafted library `libfoo-0a1b2c3d.so.1`.
