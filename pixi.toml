@@ -203,19 +203,9 @@ libcompiler-rt = ">=17,<23"
 # The whole suite under ASAN, as one compilation unit.  Local deep runs only:
 # measured 2026-08-13 it exceeds the 1800s `--mojo-timeout` and peaks at 36.4 GB,
 # because `--asan` links a real binary (`mojo build`, not `mojo run`) and one
-# selection is one unit.
+# selection is one unit.  CI runs the same cases split into the `test` job's
+# selections -- the `asan` job in `test.yml`.
 test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
-
-# What CI runs: the types that own memory — allocation, offsets, foreign buffers
-# and release callbacks.  Everything else computes over views these produce, so
-# this is where a lifetime or bounds bug originates.  393 cases, 86s, 4.6 GB peak
-# (measured 2026-08-13), against a 30-minute job timeout.
-#
-# Scoped rather than parallelised.  `-n auto --dist=loadfile` was tried and is
-# worse, not better: one selection is one compilation unit, so xdist gives each
-# worker a full ASAN build of marrow — 60 of them.  The job could not pass either
-# way, and scope is the axis that actually moves the cost.
-test_asan_core = { cmd = "pytest --mojo --asan -v marrow/tests/test_buffers.mojo marrow/tests/test_views.mojo marrow/tests/test_arrays.mojo marrow/tests/test_builders.mojo marrow/tests/test_c_data.mojo" }
 
 # Bench — benchmark dependencies and tasks (polars/duckdb for comparison benches).
 [feature.bench.dependencies]

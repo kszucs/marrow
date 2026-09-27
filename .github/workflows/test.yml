@@ -74,9 +74,7 @@ jobs:
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
           frozen: true
-          environments: >-
-            dev
-            ${{ runner.os == 'macOS' && 'asan' || '' }}
+          environments: dev
 
       # Every selection runs even after one fails, and the job reports which
       # ones did at the end. One job per platform would otherwise mean one
@@ -97,6 +95,7 @@ jobs:
             fi
           }
 
+          # The `asan` job below runs the same Mojo selections; keep them in step.
           run marrow/tests
           run marrow/parquet/tests marrow/utils/tests
           run marrow/expr/comptime/tests
@@ -118,19 +117,43 @@ jobs:
           fi
           echo "all selections passed"
 
-      # Scoped to the types that own memory -- allocation, offsets, foreign
-      # buffers and release callbacks. Everything else computes over views these
-      # produce, so this is where a lifetime or bounds bug originates. See the
-      # `test_asan_core` comment in pixi.toml for why it is scoped rather than
-      # parallelised.
-      #
-      # **macOS only, and that is a measurement rather than a preference.** The
-      # same selection takes 5m15s on a macOS runner and had not finished after
-      # 60 minutes on a Linux one (2026-09-07, twice) -- which is presumably why
-      # the Linux job carried a bare `if: false` before this, though it said so
-      # nowhere. The cases are identical on both, so the coverage is not lost,
-      # only the second platform's view of it. docs/backlog.md tracks getting it
-      # back.
+  # **The Mojo selections of `test`, again under AddressSanitizer**, one runner
+  # each and longest first, so the slowest unit is never the one queued for a
+  # free macOS runner. Keep the two lists in step. Python is left out:
+  # `libmarrow.so` is loaded into an interpreter without the ASAN runtime.
+  #
+  # `runtime` peaks at 29 GB under ASAN and fits only because a macOS runner
+  # grows its swap. macOS only: the old five-file ASAN selection had not
+  # finished after 60 minutes on a Linux runner (2026-09-07, twice).
+  asan:
+    name: asan (${{ matrix.name }})
+    runs-on: macos-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: runtime
+            paths: marrow/expr/runtime/tests
+          - name: expr
+            paths: marrow/expr/tests --ignore marrow/expr/tests/test_optimizer.mojo
+          - name: optimizer
+            paths: marrow/expr/tests/test_optimizer.mojo
+          - name: comptime
+            paths: marrow/expr/comptime/tests
+          - name: kernels
+            paths: marrow/kernels/tests
+          - name: core
+            paths: marrow/tests marrow/parquet/tests marrow/utils/tests
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: asan
+
       - name: asan tests
-        if: runner.os == 'macOS'
-        run: pixi run -e asan test_asan_core --no-gpu --no-python
+        run: pixi run -e asan pytest -v --mojo --asan --mojo-timeout 7200 ${{ matrix.paths }}
