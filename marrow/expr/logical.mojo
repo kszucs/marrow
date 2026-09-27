@@ -85,6 +85,7 @@ from .physical import (
     FilterOperator,
     JoinOperator,
     ParquetScanOperator,
+    ReaderOperator,
     ProjectOperator,
     SortOperator,
     WindowOperator,
@@ -1183,6 +1184,7 @@ struct DynRelation(Copyable, Movable, Writable):
         Window,
         Join,
         ParquetScan,
+        ExternalScan,
     ]
 
     var _v: Self.VariantType
@@ -3018,3 +3020,114 @@ struct ParquetScan(Relation, Writable):
         writer.write("ParquetScan(", self.path, ")")
         if len(self.pruners):
             writer.write(" pruned by ", len(self.pruners))
+
+
+trait BatchReader(Deinitable, Movable):
+    """A file format read one batch at a time, by a module `marrow.expr` does
+    not import.
+
+    What an `ExternalScan` is built from. The format's module implements it and
+    hands the type to `ExternalScan.of`, so `marrow.expr` can run a scan it
+    never imports. That matters for a format with a dependency of its own —
+    `marrow.json` and EmberJson: built from source, a program that plans
+    queries but reads no JSON then does not need EmberJson.
+    """
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self:
+        """A reader of `path` producing exactly `schema`'s columns, in its
+        order: the schema is the projection, as it is for `ParquetScan`."""
+        ...
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        """The next batch, or `None` at the end of the input."""
+        ...
+
+    @staticmethod
+    def format_name() -> String:
+        """What a printed plan calls the format, e.g. `json`."""
+        ...
+
+
+struct ExternalScan(Relation, Writable):
+    """A file read by a `BatchReader` that `marrow.expr` does not import.
+
+    The source a format module plugs in without `marrow.expr` naming it — see
+    `BatchReader` for why that has to be possible. It keeps one function
+    pointer instead of the reader type, wired where the scan is built, so this
+    one variant member serves every such format: the pointer builds a
+    `ReaderOperator[R]` and hands it back erased as a `DynOperator`, the box
+    every operator already goes through. It stores nothing else beyond the
+    path, the schema and the format's name: a relation node's fields are
+    copied wherever a plan is, in every binary.
+
+    Like `ParquetScan`, the schema is supplied rather than read, so building
+    the plan does no I/O, and narrowing it is how `ColumnPruning` pushes a
+    projection in. It has no statistics and prunes nothing.
+    """
+
+    var path: ScanPath
+    var _schema: Schema
+    var format: String
+    var _operator: def(String, Schema) thin -> DynOperator
+
+    @staticmethod
+    def _operator_tramp[
+        R: BatchReader
+    ](path: String, schema: Schema) -> DynOperator:
+        return DynOperator(ReaderOperator[R](path, schema))
+
+    @staticmethod
+    def of[R: BatchReader](var path: ScanPath, var schema: Schema) -> Self:
+        """A scan of `path` read by `R`."""
+        return Self(path^, schema^, R.format_name(), Self._operator_tramp[R])
+
+    def __init__(
+        out self,
+        var path: ScanPath,
+        var schema: Schema,
+        var format: String,
+        operator: def(String, Schema) thin -> DynOperator,
+    ):
+        self.path = path^
+        self._schema = schema^
+        self.format = format^
+        self._operator = operator
+
+    def references(self, mut into: References):
+        self.path.references(into)
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def with_schema(self, var schema: Schema) -> ExternalScan:
+        """This scan over a narrower schema, read by the same reader."""
+        return ExternalScan(
+            self.path.copy(), schema^, self.format.copy(), self._operator
+        )
+
+    def estimate(self) raises -> Estimate:
+        """Unknown, and column-shaped for the reason `ParquetScan`'s is."""
+        return Estimate.unknown(self._schema)
+
+    def cost(self) raises -> Cost:
+        var estimate = self.estimate()
+        return Cost.source(estimate.rows, estimate.row_width())
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+    ) raises -> Pipeline:
+        return Pipeline(
+            self._operator(self.path.resolve(bindings), self._schema.copy())
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("ExternalScan[", self.format, "](", self.path, ")")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        # Spelled out: the reflection default walks every field, and walking
+        # the function pointer never returns -- `precompile` spun at full CPU
+        # for 13 minutes before this was added.
+        self.write_to(writer)

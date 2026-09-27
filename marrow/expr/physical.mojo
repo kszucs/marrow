@@ -60,7 +60,7 @@ from ..io import ByteSource, DynSource
 from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
 from ..utils import RapidHash64
 from .bindings import Bindings
-from .logical import DynValue, WindowExpr
+from .logical import BatchReader, DynValue, WindowExpr
 from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
 from ..kernels.window import WindowExtents, mark_changes
@@ -1611,6 +1611,38 @@ struct ParquetScanOperator(Operator):
             for ref b in table.to_batches():
                 self._pending.append(b.to_struct_array())
         return Datum(self._pending.pop(0).to_dyn())
+
+
+struct ReaderOperator[R: BatchReader](Operator):
+    """Runs an `ExternalScan`: a `BatchReader` that `marrow.expr` does not
+    import, one batch per `drain`.
+
+    Typed on the reader, so it holds it as an ordinary field and destroys it at
+    its true type; `DynOperator` erases the operator, as it does every other.
+    The reader is opened on the first `drain`, not here: a `Relation` must not
+    touch the filesystem to exist.
+    """
+
+    var _path: String
+    var _schema: Schema
+    var _reader: Optional[Self.R]
+
+    def __init__(out self, var path: String, var schema: Schema):
+        self._path = path^
+        self._schema = schema^
+        self._reader = None
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        # A source consumes nothing; the driver never calls this.
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if not self._reader:
+            self._reader = Self.R.open(self._path, self._schema)
+        var batch = self._reader.value().read_next_batch()
+        if not batch:
+            return None
+        return Datum(batch.value().to_struct_array().to_dyn())
 
 
 def admitted_bits(mask: DynArray) raises -> Bitmap[mut=False]:

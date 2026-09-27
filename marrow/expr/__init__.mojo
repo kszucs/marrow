@@ -46,8 +46,10 @@ from .builders import (
 )
 from .logical import (
     Aggregate,
+    BatchReader,
     DynRelation,
     DynValue,
+    ExternalScan,
     Filter,
     InMemoryTable,
     Join,
