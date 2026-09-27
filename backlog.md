@@ -449,8 +449,8 @@ A user rejects the library outright without these.
 **What exists.** NDJSON: `marrow/json/` — `read_json`, the streaming
 `JsonReader`/`open_json` and `scan_json` (an `ExternalScan`), with Python's
 `marrow.json` and lazy `marrow.read_json` over them, checked value for value
-against `pyarrow.json`. It tokenizes with EmberJson (`docs/csv-json-dependency-review.md`
-for why, CLAUDE.md for the fork and why nothing else imports it).
+against `pyarrow.json`. It tokenizes with EmberJson (CLAUDE.md has the fork
+and why nothing else imports it).
 No CSV reader: the only CSV code under `marrow/` is `QueryCli`'s output writer
 (`render_csv`, `marrow/expr/cli.mojo`).
 
