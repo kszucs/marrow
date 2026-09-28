@@ -1,0 +1,28 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# cargo-about configuration for `scripts/build_opendal_c.sh licenses`.
+#
+# `accepted` is ordered by preference: where a crate offers a choice
+# (`MIT OR Apache-2.0`), cargo-about picks the first accepted entry, so marrow
+# takes Apache-2.0 or MIT whenever it can. A crate whose licence is not listed
+# fails the generation rather than slipping into a wheel unreviewed -- so the
+# list is kept to licences the wheel's `License-Expression` already names
+# (`devkit/tests/test_licenses.py` checks the generated file against it).
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+]
+
+# The wheels marrow builds: macOS arm64, manylinux x86_64 (CI) and manylinux
+# aarch64 (a local `wheel_linux` build on Apple Silicon). Crates that only a
+# Windows or UEFI build would link (r-efi, windows-sys, ...) are not shipped.
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+
+# cbindgen (MPL-2.0) generates the C header at build time; nothing of it is
+# linked into `libopendal_c`.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

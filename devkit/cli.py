@@ -129,6 +129,48 @@ def _precompile(ctx, out):
 
 
 # ---------------------------------------------------------------------------
+# wheel
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def wheel():
+    """Check what a built wheel ships against what it declares."""
+
+
+@wheel.command("check")
+@click.argument(
+    "wheels",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--require",
+    multiple=True,
+    metavar="NAME",
+    help="Also require an optional library (e.g. `opendal`); every codec is "
+    "always required.",
+)
+@pass_context
+def wheel_check(ctx, wheels, require):
+    """Fail unless every shared library in each (repaired) wheel carries its
+    licence texts, METADATA declares them, every codec (and each --require'd
+    library) is present, and nothing forbidden ships."""
+    from .wheel import check_wheel, compile_module
+
+    catalog = compile_module(ctx.repo)
+    failures = []
+    for path in wheels:
+        problems = check_wheel(path, catalog, require)
+        failures.extend(f"{path.name}: {problem}" for problem in problems)
+        if not problems:
+            click.echo(f"{path.name}: ok")
+    if failures:
+        ctx.fail("\n".join(failures))
+
+
+# ---------------------------------------------------------------------------
 # bench
 # ---------------------------------------------------------------------------
 

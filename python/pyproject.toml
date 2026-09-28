@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["hatchling"]
+# 1.27 is the first hatchling with PEP 639 (`license` expression, `license-files`).
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -11,12 +12,19 @@ version = "0.1.0"
 description = "Apache Arrow implementation in Mojo"
 readme = "README.md"
 requires-python = ">=3.14"
+# marrow's own code is Apache-2.0; the rest is what a wheel bundles beside it.
+# `NOTICE.txt` says which component carries which licence, and
+# `licenses/` holds every text. `LicenseRef-Modular` stands for the Mojo
+# runtime libraries' terms until Modular confirms which ones apply.
+license = "Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND ISC AND Unicode-3.0 AND Zlib AND Apache-2.0 WITH LLVM-exception AND LicenseRef-Modular"
+# Symlinks to the repository root (PEP 639 forbids paths outside `python/`).
+license-files = ["LICENSE.txt", "NOTICE.txt", "licenses/*"]
 
 [project.scripts]
 marrow = "marrow.compile:main"
 
 [project.optional-dependencies]
-compile = ["mojo>=1.1,<2"]
+compile = ["mojo>=1.2,<2"]
 
 [tool.hatch.build.hooks.custom]
 path = "build.py"
@@ -31,46 +39,39 @@ only-include = []
 # finds python/marrow/__init__.py directly; the hook still builds libmarrow.so.
 packages = ["marrow"]
 
-[tool.pixi.workspace]
-channels = [
-  "https://prefix.dev/mojo-community",
-  "https://conda.modular.com/max-nightly/",
-  "conda-forge",
-]
-platforms = ["osx-arm64", "linux-64"]
-preview = ["pixi-build"]
-
-[tool.pixi.dependencies]
-mojo-compiler = "==1.1.0.dev2026090305"
-mojo = "==1.1.0.dev2026090305"
-python = ">=3.14,<3.15"
-
-[tool.pixi.pypi-dependencies]
-marrow = { path = ".", editable = true }
-
+# Run through scripts/wheel_ci.sh, in CI and locally.
 [tool.cibuildwheel]
 build = "cp314-*"
 skip = "*-musllinux*"
 enable = ["cpython-prerelease"]
-before-build = "pip install --pre 'mojo-compiler==1.1.0.dev2026090305' --extra-index-url https://whl.modular.com/nightly/simple/"
-
+# The machine's own architecture: arm64 on the macOS runner, x86_64 on the
+# Linux one, aarch64 under `pixi run -e docker wheel_linux` on Apple Silicon.
+archs = ["native"]
 # `build.py` embeds every `dlopen`-ed library it can resolve at build time --
-# the page codecs and `libopendal_c`. Neither `delocate` nor `auditwheel` can
-# find those for us: both walk load commands, and a `dlopen`-ed library has
-# none. `MARROW_OPENDAL_LIBRARY` is what `optional_lib_paths()` reads; the
-# codecs come from the environment `mojo` itself lives in. UNVERIFIED on CI --
-# see the header of `.github/workflows/wheels.yml`.
-[tool.cibuildwheel.macos]
-archs = ["arm64"]
-before-all = "pip install delocate && bash {project}/../scripts/build_opendal_c.sh"
-environment = { MARROW_OPENDAL_LIBRARY = "{project}/../vendor/opendal/bindings/c/target/release/libopendal_c.dylib" }
-repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+# the page codecs and `libopendal_c` -- because neither `delocate` nor
+# `auditwheel` can find them: both walk load commands, and a `dlopen`-ed library
+# has none. cibuildwheel builds from a bare Python, so `wheel_deps.sh` puts them
+# in one directory first (inside the container on Linux; `{project}` is the
+# repository root, since the config is read from `python/`), and
+# `codec_lib_dir()` finds it through `MARROW_CODEC_LIB_DIR`. `LD_LIBRARY_PATH`
+# is for Linux; see [tool.cibuildwheel.linux].
+before-all = "bash {project}/scripts/wheel_deps.sh /tmp/marrow-deps"
+environment = { MARROW_CODEC_LIB_DIR = "/tmp/marrow-deps/lib", LD_LIBRARY_PATH = "/tmp/marrow-deps/cxx" }
+# The pins are `pixi.toml`'s -- `mojo-compiler` from `[package.build-dependencies]`,
+# `max-core` matching `[dependencies] max` -- and `devkit/tests/test_pins.py`
+# fails if they drift. `max-core` is needed because marrow imports `max.*`.
+before-build = "pip install --pre 'mojo-compiler==1.2.0.dev2026092105' 'max-core==26.7.0.dev2026092105' --extra-index-url https://whl.modular.com/nightly/simple/"
+# No `test-command`: scripts/wheel_ci.sh tests every wheel once cibuildwheel is
+# done, since a Linux one cannot be installed where it was built.
 
 [tool.cibuildwheel.linux]
-archs = ["x86_64"]
+# Modular's Linux wheels are tagged manylinux_2_34, so the build container is
+# too. Yet they need GLIBCXX_3.4.30, which its libstdc++ (GCC 11) lacks: the
+# pip-installed `mojo` does not start without it, and auditwheel finds the same
+# requirement in what the wheel bundles -- not in the codecs, which stay at GCC
+# 11's symbols. So the build borrows conda-forge's libstdc++ through
+# `LD_LIBRARY_PATH` (scripts/wheel_deps.sh), and manylinux_2_35 is the lowest
+# honest tag -- one pip in this container rightly refuses.
 manylinux-x86_64-image = "manylinux_2_34"
-# The manylinux image has no rust; the wheel simply ships without OpenDAL if
-# this leg is left as is. `optional_lib_paths()` is silent about that on
-# purpose -- remote storage is opt-in and a wheel without it reads every local
-# file.
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+manylinux-aarch64-image = "manylinux_2_34"
+repair-wheel-command = "auditwheel repair --plat manylinux_2_35_$(uname -m) -w {dest_dir} {wheel}"

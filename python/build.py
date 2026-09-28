@@ -15,7 +15,6 @@ and builds `python/` inside it -- the same reason `mojo build -I <root>` can fin
 marrow's Mojo sources at all.
 """
 
-import importlib.util
 import shutil
 import sys
 import sysconfig
@@ -32,6 +31,7 @@ from devkit.mojo import (  # noqa: E402 - must follow the path insertion
     ProcessRunner,
     Repo,
 )
+from devkit.wheel import compile_module  # noqa: E402
 
 try:
     from devkit.progress import ConsoleProgress as Progress  # noqa: E402
@@ -65,7 +65,7 @@ class CustomBuildHook(BuildHookInterface):
         # `--bundle` directory. Without this a pip-installed marrow cannot read a
         # zstd-compressed Parquet file, let alone an `s3://` one.
         # `marrow/_dylibs.py` is the other half: it points the Mojo loader here.
-        for lib in self._dlopen_libs():
+        for lib in self._dlopen_libs(repo, required=version == "standard"):
             build_data["force_include"][str(lib)] = f"marrow/{lib.name}"
 
         # `marrow compile` needs marrow's own Mojo source to pass as `-I` to
@@ -85,33 +85,19 @@ class CustomBuildHook(BuildHookInterface):
             build_data["force_include"][str(source)] = f"marrow/_mojo/{rel}"
 
     @staticmethod
-    def _dlopen_libs():
-        """Every optional C library marrow may `dlopen`, with its own
-        dependency closure, resolved from the build environment.
+    def _dlopen_libs(repo, required):
+        """Every C library marrow may `dlopen`, with its own dependency
+        closure, resolved from the build environment.
 
-        `compile.py` is loaded from its path rather than imported as
-        `marrow.compile`, which would run the package `__init__` and with it
-        `from . import libmarrow`. The extension exists by now, but importing
-        it here would make laying out the wheel depend on the extension being
-        loadable by the *building* interpreter -- which under cross-compilation
-        it is not. `compile.py` imports nothing but the standard library, so
-        loading it alone is well defined.
-
-        A missing library is a warning inside those helpers, never a raise: a
-        wheel built without OpenDAL is a wheel that reads local files, which is
-        the supported configuration today.
+        A wheel build (`required`) fails on a missing codec. OpenDAL stays
+        optional: a wheel without it still reads every local file.
         """
-        spec = importlib.util.spec_from_file_location(
-            "_marrow_compile", ROOT / "python" / "marrow" / "compile.py"
-        )
-        compile_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(compile_mod)
-
-        staged = {}
+        catalog = compile_module(repo)
         libs = (
-            compile_mod.stage_codec_libs(compile_mod.codec_lib_dir())
-            + compile_mod.optional_lib_paths()
+            catalog.stage_codec_libs(catalog.codec_lib_dir(), required=required)
+            + catalog.optional_lib_paths()
         )
+        staged = {}
         for lib in libs:
             staged.setdefault(lib.name, lib)
         return list(staged.values())

@@ -230,7 +230,30 @@ the reason it has not been done yet rather than a reason never to.
 
 Order of work if picked up: link the codecs behind a `BuildOptions` flag,
 measure the size gate and the wheel, then delete the staging only once both
-platforms are green.
+platforms are green. Linked codecs still need their `LIBRARY_LICENSES` entries:
+`devkit wheel check` asks the same of a grafted library as of a staged one.
+
+### Wheels: built and checked, not published
+
+As of 2026-09-24 a wheel carries a licence for everything it bundles, and
+`devkit wheel check` enforces it; `pixi run -e wheel wheel` is verified on
+macOS. Two things stand between that and PyPI.
+
+- **Modular's written answer** on redistributing the Mojo/MAX runtime libraries
+  the wheel bundles (`libKGENCompilerRTShared`, `libAsyncRTRuntimeGlobals`,
+  `libMSupportGlobals`, `libAsyncRTMojoBindings`). The Community License allows
+  only components its "Documentation" lists, and no list is published; the same
+  question is open for others (modular/modular#6944, tamnd/firepanda#197).
+  Until then `MODULAR_REDISTRIBUTION_CONFIRMED` stays unset, no PyPI trusted
+  publisher exists, and `LicenseRef-Modular` in `python/pyproject.toml` and the
+  `licenses/modular-*` texts are placeholders to replace per the answer.
+- **Linux wheels are manylinux_2_35, not 2_34.** Modular tags `mojo-compiler`
+  and `max-core` manylinux_2_34, yet the pip-installed `mojo` needs
+  GLIBCXX_3.4.30 to start and auditwheel finds the same requirement in what the
+  wheel bundles (not in the codecs). So RHEL/Alma 9 users cannot install the
+  wheel, nor run a Linux `--bundle` directory, which ships no libstdc++ either;
+  the build borrows conda-forge's. If Modular's runtime moves back to GCC 11's
+  symbols, drop the `--plat` and the `cxx/` workaround.
 
 ### 1.9 The Parquet reader, after page-level pruning landed
 

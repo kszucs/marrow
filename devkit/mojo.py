@@ -202,6 +202,19 @@ class Repo:
         return self.python_dir / self.PACKAGE / "libmarrow.so"
 
     @property
+    def compile_py(self):
+        """`marrow compile`, and the tables of what a wheel ships."""
+        return self.python_dir / self.PACKAGE / "compile.py"
+
+    @property
+    def pyproject(self):
+        return self.python_dir / "pyproject.toml"
+
+    @property
+    def licenses_dir(self):
+        return self.root / "licenses"
+
+    @property
     def golden_dir(self):
         return self.root / self.GOLDEN
 

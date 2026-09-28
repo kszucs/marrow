@@ -28,18 +28,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-MIN_VERSION = "1.1.0"
+MIN_VERSION = "1.2.0"
 MAX_VERSION = "2"
 REQUIRED_RANGE = f">={MIN_VERSION},<{MAX_VERSION}"
 
-# marrow pins this nightly build exactly (see `pixi.toml`); kept as a
-# constant purely so it shows up in one place if the pin moves.
-PINNED_NIGHTLY = "1.1.0.dev2026081705"
+# The nightly `pixi.toml` pins; `devkit/tests/test_pins.py` fails if it drifts.
+PINNED_NIGHTLY = "1.2.0.dev2026092105"
 
 _NIGHTLY_HELP = (
     "marrow pins a Mojo *nightly* build (currently "
-    f"{PINNED_NIGHTLY}), while PyPI's stable `mojo` package tops out at "
-    "1.0.0. A wheel cannot force `--extra-index-url`, so `pip install "
+    f"{PINNED_NIGHTLY}), while PyPI carries only stable `mojo` releases. "
+    "A wheel cannot force `--extra-index-url`, so `pip install "
     "marrow[compile]` cannot resolve marrow's exact compiler today. "
     "Install the nightly explicitly with:\n"
     "  pip install --pre mojo-compiler --extra-index-url "
@@ -146,17 +145,7 @@ def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
     are resolved directly against `loader`'s directory. An absolute path
     is returned as-is.
 
-    Deliberately **not** `.resolve()`d: a conda-forge library typically
-    installs as a chain of version symlinks (`libbrotlicommon.dylib` ->
-    `libbrotlicommon.1.dylib` -> `libbrotlicommon.1.2.0.dylib`), and the
-    dependency string names the *symlink* (`@rpath/libbrotlicommon.1.dylib`)
-    — collapsing that to the real file's name broke the copy `bundle()`
-    made: a Mach-O looks up its dependency by the exact name it recorded, so
-    shipping the file under the resolved `.1.2.0` name left the referenced
-    `.1.dylib` name missing at runtime. Returning the un-resolved candidate
-    keeps `.name` equal to what the dependent actually asks for; the caller
-    still dereferences the symlink when it copies the bytes
-    (`shutil.copy2`'s default `follow_symlinks=True`).
+    Deliberately **not** `.resolve()`d -- see `dylib_closure`.
     """
     if dep.startswith("@rpath/"):
         name = dep.removeprefix("@rpath/")
@@ -179,21 +168,13 @@ def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
     return None
 
 
-def _dylib_closure_macos(binary: Path) -> list[Path]:
-    seen: dict[Path, None] = {}
-    frontier = [binary]
-    while frontier:
-        current = frontier.pop()
-        for dep in _otool_deps(current):
-            if _is_system_dep(dep):
-                continue
-            resolved = _resolve_macos_dep(dep, current)
-            if resolved is None or not resolved.exists() or resolved == binary:
-                continue
-            if resolved not in seen:
-                seen[resolved] = None
-                frontier.append(resolved)
-    return list(seen.keys())
+def _macos_deps(path: Path) -> list[Path]:
+    resolved = (
+        _resolve_macos_dep(dep, path)
+        for dep in _otool_deps(path)
+        if not _is_system_dep(dep)
+    )
+    return [dep for dep in resolved if dep is not None]
 
 
 def _ldd_deps(path: Path) -> list[str]:
@@ -209,21 +190,20 @@ def _ldd_deps(path: Path) -> list[str]:
     return deps
 
 
-def _dylib_closure_linux(binary: Path) -> list[Path]:
-    seen: dict[Path, None] = {}
-    frontier = [binary]
-    while frontier:
-        current = frontier.pop()
-        for dep in _ldd_deps(current):
-            if _is_system_dep(dep):
-                continue
-            resolved = Path(dep).resolve()
-            if not resolved.exists() or resolved == binary:
-                continue
-            if resolved not in seen:
-                seen[resolved] = None
-                frontier.append(resolved)
-    return list(seen.keys())
+#: The GCC runtime every Linux binary links. marrow never copies it -- not into
+#: a wheel, where the manylinux policies make it the system's, and not into a
+#: `--bundle` directory -- so it ships no GPL code. A bundle's target therefore
+#: needs a libstdc++ as new as the Mojo runtime's: GCC 12's, `GLIBCXX_3.4.30`.
+SYSTEM_LIBRARIES = frozenset({"libstdc++", "libgcc_s"})
+
+
+def _linux_deps(path: Path) -> list[Path]:
+    return [
+        Path(dep)
+        for dep in _ldd_deps(path)
+        if not _is_system_dep(dep)
+        and library_stem(Path(dep).name) not in SYSTEM_LIBRARIES
+    ]
 
 
 def dylib_closure(binary: Path) -> list[Path]:
@@ -241,11 +221,25 @@ def dylib_closure(binary: Path) -> list[Path]:
     transitively, and a `-D MARROW_GPU=true` build pulls in a 5th
     (`libMGPRT.dylib`). A fixed list silently ships a broken bundle the
     moment that closure changes.
+
+    Each dependency keeps the name its dependent asks for -- the path `otool`
+    or `ldd` reports, not the file it resolves to; only the copy dereferences
+    (`_copy_deduped`). A library installed as a version-symlink chain is asked
+    for as `libbrotlicommon.so.1`, and staging the real `.so.1.2.0` left that
+    name absent: auditwheel grafted the build image's older brotli instead, and
+    the wheel's decoder failed to load against it.
     """
     binary = binary.resolve()
-    if sys.platform == "darwin":
-        return _dylib_closure_macos(binary)
-    return _dylib_closure_linux(binary)
+    deps_of = _macos_deps if sys.platform == "darwin" else _linux_deps
+    seen: dict[Path, None] = {}
+    frontier = [binary]
+    while frontier:
+        for dep in deps_of(frontier.pop()):
+            if dep in seen or not dep.exists() or dep.resolve() == binary:
+                continue
+            seen[dep] = None
+            frontier.append(dep)
+    return list(seen)
 
 
 # --- Parquet compression codecs -------------------------------------------
@@ -285,6 +279,124 @@ _OPTIONAL_LIB_CANDIDATES: dict[str, list[str]] = {
 }
 
 
+# --- Licences ----------------------------------------------------------------
+#
+# Every library a wheel or a `--bundle` directory ships, by file-name stem, and
+# the texts that must travel with it. Paths are relative to `python/` -- the
+# same strings a wheel's `License-File` metadata carries -- and resolve through
+# its `licenses/` symlink to the repository root. `devkit/tests/test_licenses.py`
+# fails if a staged library is missing here or a text from `licenses/`, and
+# `devkit wheel check` fails a built wheel the same way.
+_MARROW_LICENSES = ("LICENSE.txt", "NOTICE.txt")
+_MODULAR_LICENSES = (
+    "licenses/modular-LICENSE.txt",
+    "licenses/modular-Third-Party-Notices.txt",
+)
+LIBRARY_LICENSES: dict[str, tuple[str, ...]] = {
+    "libmarrow": _MARROW_LICENSES,
+    # The Mojo runtime (`mojo-compiler`) and MAX (`max-core`), linked by every
+    # Mojo binary; `libMGPRT` only by a `-D MARROW_GPU=true` build.
+    "libKGENCompilerRTShared": _MODULAR_LICENSES,
+    "libAsyncRTRuntimeGlobals": _MODULAR_LICENSES,
+    "libMSupportGlobals": _MODULAR_LICENSES,
+    "libAsyncRTMojoBindings": _MODULAR_LICENSES,
+    "libMGPRT": _MODULAR_LICENSES,
+    # The page codecs (`_CODEC_LIB_CANDIDATES`) and their own dependencies.
+    "libzstd": ("licenses/zstd.txt",),
+    "libsnappy": ("licenses/snappy.txt",),
+    "liblz4": ("licenses/lz4.txt",),
+    "libz": ("licenses/zlib.txt",),
+    "libbrotlienc": ("licenses/brotli.txt",),
+    "libbrotlidec": ("licenses/brotli.txt",),
+    "libbrotlicommon": ("licenses/brotli.txt",),
+    # The C++ runtime conda-forge's snappy links on macOS. Linux's is the
+    # system's (`SYSTEM_LIBRARIES`).
+    "libc++": ("licenses/libcxx.txt",),
+    # Remote storage (`_OPTIONAL_LIB_CANDIDATES`): Apache-2.0 itself, its ASF
+    # NOTICE -- reproduced in marrow's -- and every Rust crate statically
+    # linked into it.
+    "libopendal_c": (*_MARROW_LICENSES, "licenses/opendal-third-party.txt"),
+}
+
+# `auditwheel repair` renames a grafted library `libfoo-0a1b2c3d.so.1`.
+_AUDITWHEEL_HASH = re.compile(r"-[0-9a-f]{8}$")
+_SHARED_LIBRARY = re.compile(r"\.(so|dylib)(\.\d+)*$")
+
+
+def is_shared_library(filename: str) -> bool:
+    return _SHARED_LIBRARY.search(filename) is not None
+
+
+def library_stem(filename: str) -> str:
+    """The name a shared library is known by, whatever its file is called:
+    `libzstd` for `libzstd.1.dylib`, `libzstd.so.1`, an auditwheel-renamed
+    `libzstd-0a1b2c3d.so.1`; `libmarrow` for `libmarrow.cpython-314-darwin.so`.
+    """
+    return _AUDITWHEEL_HASH.sub("", filename.split(".", 1)[0])
+
+
+def license_files(filename: str) -> tuple[str, ...] | None:
+    """The licence texts `filename` needs, or `None` if it is not recorded."""
+    return LIBRARY_LICENSES.get(library_stem(filename))
+
+
+def _license_text(rel: str) -> bytes:
+    """A licence text by its `python/`-relative path, as bytes -- copied, never
+    re-encoded (several are UTF-8, and a manylinux container's locale is not).
+
+    From the checkout this module lives in when there is one -- `build.py`
+    beside the package marks `python/` -- and otherwise from the installed
+    distribution, whose wheel carries every text under
+    `*.dist-info/licenses/<rel>`.
+    """
+    python_dir = Path(__file__).resolve().parent.parent
+    if (python_dir / "build.py").is_file() and (python_dir / rel).is_file():
+        return (python_dir / rel).read_bytes()
+    from importlib import metadata
+
+    try:
+        files = metadata.distribution("marrow").files or []
+    except metadata.PackageNotFoundError:
+        files = []
+    suffix = f".dist-info/licenses/{rel}"
+    for path in files:
+        if str(path).endswith(suffix):
+            return path.read_binary()
+    raise FileNotFoundError(
+        f"licence text {rel} is in neither a marrow checkout nor the "
+        "installed marrow distribution"
+    )
+
+
+def write_licenses(names: list[str], dest: Path) -> list[Path]:
+    """Write marrow's `LICENSE.txt` and `NOTICE.txt`, and the texts every file
+    in `names` needs, into `dest`, keeping their relative paths.
+
+    marrow's own texts always go in: every binary `marrow compile` builds
+    embeds marrow. A library with no recorded licence is written without one
+    and warned about, the same judgement `stage_codec_libs` makes about a
+    missing codec. Returns the files written.
+    """
+    wanted = dict.fromkeys(_MARROW_LICENSES)
+    for name in names:
+        files = license_files(name)
+        if files is None:
+            print(
+                f"marrow: warning: no licence recorded for {name}; "
+                "it is bundled without one",
+                file=sys.stderr,
+            )
+            continue
+        wanted.update(dict.fromkeys(files))
+    written = []
+    for rel in wanted:
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_license_text(rel))
+        written.append(target)
+    return written
+
+
 def optional_lib_paths() -> list[Path]:
     """The optional `dlopen`-ed libraries present on this machine.
 
@@ -306,8 +418,13 @@ def optional_lib_paths() -> list[Path]:
         found = _find_codec_lib(lib_dir, _OPTIONAL_LIB_CANDIDATES["opendal"])
         if found is not None:
             out.append(found)
+    return _with_closure(out)
+
+
+def _with_closure(libs: list[Path]) -> list[Path]:
+    """`libs` and each one's dependency closure, one path per file name."""
     staged: dict[str, Path] = {}
-    for lib in out:
+    for lib in libs:
         staged.setdefault(lib.name, lib)
         for dep in dylib_closure(lib):
             staged.setdefault(dep.name, dep)
@@ -318,13 +435,19 @@ def codec_lib_dir() -> Path | None:
     """The directory holding marrow's `dlopen`-ed codec libraries, resolved
     from the active environment rather than a hardcoded pixi path.
 
-    Tries `$CONDA_PREFIX/lib` first — set by `pixi run`/`pixi shell` for
-    whichever environment is active — then falls back to two directories up
-    from `mojo` on `PATH` (`.../bin/mojo` -> `.../lib`), the same layout any
-    conda/pixi environment uses. Returns `None` if neither resolves, so the
-    caller can skip codec staging with a warning instead of guessing a path
-    that may not exist on this machine.
+    Tries `$MARROW_CODEC_LIB_DIR` first -- a wheel build outside any conda
+    environment (cibuildwheel) names its codec directory with it, rather than
+    repointing `CONDA_PREFIX`, which the pip-installed compiler may read too.
+    Then `$CONDA_PREFIX/lib` — set by `pixi run`/`pixi shell` for whichever
+    environment is active — and then two directories up from `mojo` on `PATH`
+    (`.../bin/mojo` -> `.../lib`), the same layout any conda/pixi environment
+    uses. Returns `None` if none resolves, so the caller can skip codec staging
+    with a warning instead of guessing a path that may not exist on this
+    machine.
     """
+    explicit = os.environ.get("MARROW_CODEC_LIB_DIR")
+    if explicit and Path(explicit).is_dir():
+        return Path(explicit)
     conda_prefix = os.environ.get("CONDA_PREFIX")
     if conda_prefix:
         candidate = Path(conda_prefix) / "lib"
@@ -341,7 +464,7 @@ def codec_lib_dir() -> Path | None:
 def _find_codec_lib(lib_dir: Path, names: list[str]) -> Path | None:
     """The first of `names` that exists in `lib_dir`, unresolved (a
     version-symlink chain is dereferenced only when its bytes are copied,
-    not when picking the destination filename — see `_resolve_macos_dep`).
+    not when picking the destination filename — see `dylib_closure`).
     """
     for name in names:
         candidate = lib_dir / name
@@ -350,7 +473,7 @@ def _find_codec_lib(lib_dir: Path, names: list[str]) -> Path | None:
     return None
 
 
-def stage_codec_libs(lib_dir: Path | None) -> list[Path]:
+def stage_codec_libs(lib_dir: Path | None, required: bool = False) -> list[Path]:
     """The compression-codec libraries marrow's Parquet reader can `dlopen`,
     plus their own transitive dependency closure (`libbrotlienc.dylib` pulls
     in `libbrotlicommon.dylib`, for instance).
@@ -358,42 +481,45 @@ def stage_codec_libs(lib_dir: Path | None) -> list[Path]:
     A codec whose library is not installed in `lib_dir` — or `lib_dir`
     itself unresolved — is skipped with a warning rather than raising: a
     bundle missing one codec still reads every file compressed with the
-    others, and still reads uncompressed Parquet.
+    others, and still reads uncompressed Parquet. A wheel build passes
+    `required=True` and gets an error instead: a wheel is built once and
+    installed everywhere, and one without snappy reads few Parquet files.
     """
+
+    def skip(message: str) -> None:
+        if required:
+            raise RuntimeError(f"marrow: {message}")
+        print(f"marrow: warning: {message}", file=sys.stderr)
+
     if lib_dir is None:
-        print(
-            "marrow: warning: could not resolve the codec library directory "
-            "(checked $CONDA_PREFIX/lib and the mojo binary's ../lib); "
-            "--bundle will ship with no zstd/snappy/lz4/zlib/brotli support",
-            file=sys.stderr,
+        skip(
+            "could not resolve the codec library directory (checked "
+            "$MARROW_CODEC_LIB_DIR, $CONDA_PREFIX/lib and the mojo binary's "
+            "../lib); --bundle will ship with no zstd/snappy/lz4/zlib/brotli support"
         )
         return []
-    staged: dict[str, Path] = {}
+    found = []
     for codec, names in _CODEC_LIB_CANDIDATES.items():
         lib = _find_codec_lib(lib_dir, names)
         if lib is None:
-            print(
-                f"marrow: warning: {codec} library not found in {lib_dir}, "
-                "skipping (--bundle will not support that codec)",
-                file=sys.stderr,
+            skip(
+                f"{codec} library not found in {lib_dir}, "
+                "skipping (--bundle will not support that codec)"
             )
             continue
-        staged.setdefault(lib.name, lib)
-        for dep in dylib_closure(lib):
-            staged.setdefault(dep.name, dep)
-    return list(staged.values())
+        found.append(lib)
+    return _with_closure(found)
 
 
 def _copy_deduped(staged: dict[str, Path], dest: Path) -> None:
     """Copy `staged` (destination filename -> source path) into `dest`,
     writing each distinct file's bytes exactly once.
 
-    A conda-forge codec library's un-resolved candidate names
-    (`_resolve_macos_dep`'s self-id-as-dependency case: `libzstd.dylib` and
-    `libzstd.1.dylib` both naming the same real file) would otherwise be
-    copied twice under `shutil.copy2` — harmless for correctness but doubled
-    the codec footprint. Every name past the first real copy of a given file
-    becomes a symlink to it instead.
+    Two staged names for one real file -- a version-symlink chain asked for
+    under both of its names -- would otherwise be copied twice under
+    `shutil.copy2`, harmless for correctness but double the footprint. Every
+    name past the first real copy of a given file becomes a symlink to it
+    instead.
     """
     by_real: dict[Path, list[str]] = {}
     for name, src in staged.items():
@@ -417,8 +543,10 @@ def bundle(binary: Path, dest: Path) -> Path:
     codec libraries (zstd, snappy, lz4, zlib, brotli — see `stage_codec_libs`)
     are `dlopen`-ed rather than linked, so they need no rpath entry; they are
     found via the executable-relative candidate `compression.mojo` now tries
-    before the bare soname. Returns the path to the copied binary inside
-    `dest`.
+    before the bare soname. `dest` also gets `LICENSE.txt`, `NOTICE.txt` and
+    `licenses/` for exactly the libraries copied (`write_licenses`) -- whoever
+    redistributes the directory redistributes those libraries. Returns the path
+    to the copied binary inside `dest`.
     """
     binary = binary.resolve()
     dest = Path(dest)
@@ -433,6 +561,7 @@ def bundle(binary: Path, dest: Path) -> Path:
     out_binary = dest / binary.name
     shutil.copy2(binary, out_binary)
     _copy_deduped(staged, dest)
+    write_licenses(list(staged), dest)
 
     if sys.platform == "darwin":
         for rpath in _otool_rpaths(out_binary):
@@ -531,7 +660,7 @@ def resolve_marrow_path(explicit: str | None = None) -> Path:
 def check_mojo_version() -> str:
     """Verify `mojo` is on PATH and within marrow's required range.
 
-    Raises `RuntimeError` naming the required range (`>=1.1.0,<2`), plus —
+    Raises `RuntimeError` naming the required range (`REQUIRED_RANGE`), plus —
     since the most likely reason mojo is missing or too old is that only
     PyPI's stable wheel was installed — the nightly-vs-stable limitation and
     where to get the nightly instead of letting an opaque compiler error
@@ -558,8 +687,9 @@ def check_mojo_version() -> str:
         )
 
     version = match.group(0).removeprefix("Mojo ")
-    major, minor, _patch = (int(g) for g in match.groups())
-    if not (major == 1 and minor >= 1):
+    found = tuple(int(g) for g in match.groups())
+    lowest = tuple(int(p) for p in MIN_VERSION.split("."))
+    if not (lowest <= found and found[0] < int(MAX_VERSION)):
         raise RuntimeError(
             f"marrow requires mojo {REQUIRED_RANGE}, found {version}.\n{_NIGHTLY_HELP}"
         )
@@ -617,7 +747,8 @@ def _add_compile_subparser(
         help="copy the built binary and its dylib closure into DIR, with "
         "the rpath rewritten to @loader_path/$ORIGIN, so DIR is a "
         "self-contained, relocatable directory that runs without the "
-        "local pixi environment (default: emit a bare binary)",
+        "local pixi environment; the licences of everything copied are "
+        "written beside it (default: emit a bare binary)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="print the build command"

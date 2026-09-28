@@ -27,10 +27,13 @@ from marrow.compile import (
     check_mojo_version,
     codec_lib_dir,
     dylib_closure,
+    is_shared_library,
+    license_files,
     main,
     optional_lib_paths,
     resolve_marrow_path,
     stage_codec_libs,
+    write_licenses,
 )
 
 
@@ -171,24 +174,25 @@ def test_check_mojo_version_missing_raises_with_range(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         check_mojo_version()
     message = str(exc.value)
-    assert ">=1.1.0,<2" in message
+    assert ">=1.2.0,<2" in message
     assert "nightly" in message
 
 
-def test_check_mojo_version_too_old_raises_with_found_version(monkeypatch):
+@pytest.mark.parametrize("found", ["1.0.0", "1.1.0", "2.0.0"])
+def test_check_mojo_version_out_of_range_raises_with_found_version(monkeypatch, found):
     monkeypatch.setattr("marrow.compile.shutil.which", lambda name: "/usr/bin/mojo")
 
     def fake_run(cmd, capture_output, text, check):
         return subprocess.CompletedProcess(
-            cmd, 0, stdout="Mojo 1.0.0 (deadbeef)\n", stderr=""
+            cmd, 0, stdout=f"Mojo {found} (deadbeef)\n", stderr=""
         )
 
     monkeypatch.setattr("marrow.compile.subprocess.run", fake_run)
     with pytest.raises(RuntimeError) as exc:
         check_mojo_version()
     message = str(exc.value)
-    assert "1.0.0" in message
-    assert ">=1.1.0,<2" in message
+    assert found in message
+    assert ">=1.2.0,<2" in message
 
 
 def test_check_mojo_version_in_range_returns_version_string(monkeypatch):
@@ -196,11 +200,11 @@ def test_check_mojo_version_in_range_returns_version_string(monkeypatch):
 
     def fake_run(cmd, capture_output, text, check):
         return subprocess.CompletedProcess(
-            cmd, 0, stdout="Mojo 1.1.0.dev2026081705 (18b45e5c)\n", stderr=""
+            cmd, 0, stdout="Mojo 1.2.0.dev2026092105 (18b45e5c)\n", stderr=""
         )
 
     monkeypatch.setattr("marrow.compile.subprocess.run", fake_run)
-    assert check_mojo_version() == "1.1.0"
+    assert check_mojo_version() == "1.2.0"
 
 
 # --- dylib_closure / bundle --------------------------------------------------
@@ -226,6 +230,46 @@ def test_dylib_closure_is_transitive_and_excludes_system():
     assert "libAsyncRTRuntimeGlobals.dylib" in names  # transitive, not direct
     assert "libMSupportGlobals.dylib" in names  # transitive, not direct
     assert not any(n.startswith("libSystem") for n in names)
+
+
+def test_linux_closure_keeps_the_name_the_dependent_asks_for(tmp_path, monkeypatch):
+    """`libbrotlidec` asks for `libbrotlicommon.so.1`, a symlink; staging the
+    real `.so.1.2.0` instead left the wheel's decoder loading the build image's
+    older brotli. `ldd` is faked, so this runs on any platform."""
+    (tmp_path / "libbrotlicommon.so.1.2.0").write_bytes(b"common")
+    (tmp_path / "libbrotlicommon.so.1").symlink_to("libbrotlicommon.so.1.2.0")
+    dec = tmp_path / "libbrotlidec.so.1"
+    dec.write_bytes(b"dec")
+    ldd = {
+        dec.resolve(): [
+            f"\tlibbrotlicommon.so.1 => {tmp_path}/libbrotlicommon.so.1 (0x0)",
+            "\tlibc.so.6 => /lib64/libc.so.6 (0x0)",
+        ]
+    }
+    monkeypatch.setattr(
+        "marrow.compile._inspect", lambda cmd, path: ldd.get(Path(path).resolve(), [])
+    )
+    monkeypatch.setattr("marrow.compile.sys.platform", "linux")
+    assert [p.name for p in dylib_closure(dec)] == ["libbrotlicommon.so.1"]
+
+
+def test_linux_closure_leaves_the_gcc_runtime_to_the_system(tmp_path, monkeypatch):
+    """A conda environment's libstdc++ is outside every system directory, yet
+    marrow ships no GPL code: neither a wheel nor a bundle copies it."""
+    for name in ("libstdc++.so.6", "libgcc_s.so.1", "libsnappy.so.1"):
+        (tmp_path / name).write_bytes(b"lib")
+    snappy = tmp_path / "libsnappy.so.1"
+    ldd = {
+        snappy.resolve(): [
+            f"\tlibstdc++.so.6 => {tmp_path}/libstdc++.so.6 (0x0)",
+            f"\tlibgcc_s.so.1 => {tmp_path}/libgcc_s.so.1 (0x0)",
+        ]
+    }
+    monkeypatch.setattr(
+        "marrow.compile._inspect", lambda cmd, path: ldd.get(Path(path).resolve(), [])
+    )
+    monkeypatch.setattr("marrow.compile.sys.platform", "linux")
+    assert dylib_closure(snappy) == []
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: install_name_tool")
@@ -261,12 +305,29 @@ def test_bundle_copies_closure_and_rewrites_rpath_to_loader_path(tmp_path):
 # tries to `dlopen` — no `mojo build` involved either way.
 
 
+def test_codec_lib_dir_prefers_the_explicit_directory(tmp_path, monkeypatch):
+    """A wheel build names its codec directory; that beats any environment."""
+    (tmp_path / "codecs").mkdir()
+    (tmp_path / "lib").mkdir()
+    monkeypatch.setenv("MARROW_CODEC_LIB_DIR", str(tmp_path / "codecs"))
+    monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
+    assert codec_lib_dir() == tmp_path / "codecs"
+
+
+@pytest.fixture
+def no_codec_override(monkeypatch):
+    """A wheel build's `MARROW_CODEC_LIB_DIR` beats whatever a test sets up."""
+    monkeypatch.delenv("MARROW_CODEC_LIB_DIR", raising=False)
+
+
+@pytest.mark.usefixtures("no_codec_override")
 def test_codec_lib_dir_prefers_conda_prefix(tmp_path, monkeypatch):
     (tmp_path / "lib").mkdir()
     monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
     assert codec_lib_dir() == tmp_path / "lib"
 
 
+@pytest.mark.usefixtures("no_codec_override")
 def test_codec_lib_dir_falls_back_to_mojo_location(tmp_path, monkeypatch):
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
     (tmp_path / "lib").mkdir()
@@ -280,6 +341,7 @@ def test_codec_lib_dir_falls_back_to_mojo_location(tmp_path, monkeypatch):
     assert codec_lib_dir() == tmp_path / "lib"
 
 
+@pytest.mark.usefixtures("no_codec_override")
 def test_codec_lib_dir_returns_none_when_unresolved(monkeypatch):
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
     monkeypatch.setattr("marrow.compile.shutil.which", lambda name: None)
@@ -386,6 +448,43 @@ def test_bundle_includes_codec_libraries(tmp_path):
             f"{codec} missing from bundle: {names}"
         )
 
+    # Whoever ships the directory ships these libraries: each needs its text.
+    assert (dest / "LICENSE.txt").is_file() and (dest / "NOTICE.txt").is_file()
+    for name in names:
+        if is_shared_library(name):
+            files = license_files(name)
+            assert files is not None, f"{name} bundled without a recorded licence"
+            assert all((dest / rel).is_file() for rel in files), name
+
+
+# --- licences ------------------------------------------------------------------
+
+
+def test_write_licenses_writes_exactly_what_the_libraries_need(tmp_path):
+    written = write_licenses(
+        ["libzstd.1.dylib", "libzstd.dylib", "libKGENCompilerRTShared.so"], tmp_path
+    )
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in written) == [
+        "LICENSE.txt",
+        "NOTICE.txt",
+        "licenses/modular-LICENSE.txt",
+        "licenses/modular-Third-Party-Notices.txt",
+        "licenses/zstd.txt",
+    ]
+    assert b"Zstandard" in (tmp_path / "licenses" / "zstd.txt").read_bytes()
+
+
+def test_a_wheel_build_refuses_a_missing_codec(tmp_path):
+    """`--bundle` warns and ships what it found; a wheel must not."""
+    with pytest.raises(RuntimeError, match="library not found"):
+        stage_codec_libs(tmp_path, required=True)
+
+
+def test_write_licenses_warns_about_an_unrecorded_library(tmp_path, capsys):
+    written = write_licenses(["libmystery.so"], tmp_path)
+    assert {p.name for p in written} == {"LICENSE.txt", "NOTICE.txt"}
+    assert "libmystery.so" in capsys.readouterr().err
+
 
 # ---------------------------------------------------------------------------
 # The libraries shipped inside the wheel, and how marrow finds them
@@ -417,6 +516,7 @@ def test_optional_lib_paths_prefers_the_env_override(tmp_path, monkeypatch):
     assert lib in optional_lib_paths()
 
 
+@pytest.mark.usefixtures("no_codec_override")
 def test_optional_lib_paths_is_empty_and_quiet_when_absent(
     tmp_path, monkeypatch, capsys
 ):

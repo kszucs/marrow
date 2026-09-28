@@ -20,6 +20,8 @@ on:
     paths:
       - "marrow/io/**"
       - "scripts/build_opendal_c.sh"
+      - "scripts/opendal-*"
+      - "licenses/opendal-third-party.txt"
       - "marrow/utils/dylib.mojo"
       - "marrow/utils/uri.mojo"
       - "marrow/parquet/reader.mojo"
@@ -75,7 +77,7 @@ jobs:
             vendor/opendal/bindings/c/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: opendal-c-${{ runner.os }}-${{ steps.sha.outputs.opendal }}
+          key: opendal-c-${{ runner.os }}-${{ steps.sha.outputs.opendal }}-${{ hashFiles('scripts/opendal-Cargo.lock') }}
 
       # If this fails for reasons unrelated to marrow it is almost always
       # `aws-lc-rs`, which wants cmake and sometimes nasm. The escape hatch is
@@ -86,3 +88,16 @@ jobs:
 
       - name: Run the storage tests
         run: pixi run -e opendal test_opendal
+
+      # The release `pixi run -e opendal install_cargo_about` pins, prebuilt --
+      # compiling it would add minutes to every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+
+      # licenses/opendal-third-party.txt ships in every wheel, so regenerating it
+      # from the pinned lock, TAG and FEATURES must change nothing.
+      - name: The OpenDAL licences are current
+        run: |
+          pixi run -e opendal scripts/build_opendal_c.sh licenses
+          git diff --exit-code licenses/opendal-third-party.txt

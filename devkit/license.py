@@ -61,6 +61,10 @@ SLASHES = Comment(prefix="//")
 DASHES = Comment(prefix="--")
 HTML = Comment(opening="<!--", closing="-->")
 C = Comment(opening="/*", closing="*/")
+#: `~` drops the newline after the comment, so a template whose text follows
+#: on the next line renders exactly as it would without the header -- which
+#: is why scripts/opendal-about.hbs has no blank line below its header.
+HANDLEBARS = Comment(opening="{{!--", closing="--~}}")
 
 
 class Placement:
@@ -97,6 +101,7 @@ PLACEMENTS = {
     ".css": Placement(C),
     ".scss": Placement(SLASHES),
     ".lua": Placement(DASHES),
+    ".hbs": Placement(HANDLEBARS),
     ".qmd": Placement(HTML),
     # Dotfiles have no suffix, so these are matched on the whole name.
     ".dockerignore": SCRIPT,
