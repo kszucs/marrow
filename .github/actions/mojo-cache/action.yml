@@ -1,0 +1,89 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+# Carries the Mojo compile cache (`MODULAR_CACHE_DIR`, set by `pixi.toml`)
+# from one run of a job to the next. Its entries are keyed by the IR a
+# compilation unit loads, so a selection whose code a commit did not touch
+# rebuilds from the cache instead of from scratch.
+#
+# Call it twice: `mode: restore` before the first build, and `mode: save` with
+# `if: ${{ !cancelled() }}` after the last -- a red job still compiled its
+# units, and `main` must not lose its cache to one failing selection.
+#
+# Every run restores; only a push to `main` saves, the rule `setup-pixi`'s
+# `cache-write` follows here too. A pull request reads `main`'s cache, so it
+# starts from the latest `main` build without spending the repository's 10 GB
+# on caches of its own.
+#
+# Nothing in the cache evicts, so a carried cache would grow by every edit.
+# `restore` backdates every restored entry's access time, a hit marks its entry
+# read again, and `save` keeps only what this run read or wrote. The backdating
+# is what makes Linux's `relatime` record the read at all. `save` then deletes
+# the job's previous cache, so each job holds one entry, and needs
+# `actions: write` to do it.
+#
+# The target CPU is part of every entry's key, and mojo defaults to the host's.
+# GitHub's Linux runners come on several CPU models (EPYC 7763, EPYC 9V74, Xeon
+# 8573C), so `restore` pins `MARROW_TARGET_CPU=x86-64-v3` there, which
+# `BuildOptions` passes as `--target-cpu`; otherwise a run on another model
+# misses everything. Benchmarks on Linux therefore measure AVX2 code, not each
+# runner's best. The macOS runners are one model and stay native.
+name: Mojo compile cache
+description: Restore or save the Mojo compile cache for one job.
+inputs:
+  mode:
+    description: "`restore` or `save`."
+    required: true
+  name:
+    description: The job's identity in the cache key; unique per job and matrix leg.
+    required: true
+runs:
+  using: composite
+  steps:
+    - if: inputs.mode == 'restore'
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/marrow-mojo
+        key: mojo-${{ runner.os }}-${{ inputs.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: mojo-${{ runner.os }}-${{ inputs.name }}-
+
+    - if: inputs.mode == 'restore'
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = Linux ]; then
+          echo "MARROW_TARGET_CPU=x86-64-v3" >> "$GITHUB_ENV"
+        fi
+        mkdir -p ~/.cache/marrow-mojo
+        find ~/.cache/marrow-mojo -type f -exec touch -a -t 200001010000 {} +
+        touch "$RUNNER_TEMP/mojo-cache-stamp"
+        echo "restored $(find ~/.cache/marrow-mojo -type f | wc -l) entries, $(du -sh ~/.cache/marrow-mojo | cut -f1)"
+
+    - if: inputs.mode == 'save' && github.event_name == 'push' && github.ref_name == 'main'
+      shell: bash
+      run: |
+        mkdir -p ~/.cache/marrow-mojo
+        if [ -f "$RUNNER_TEMP/mojo-cache-stamp" ]; then
+          unused=$(find ~/.cache/marrow-mojo -type f ! -anewer "$RUNNER_TEMP/mojo-cache-stamp" -print -delete | wc -l)
+          echo "dropped $unused entries this run did not read"
+        fi
+        echo "saving $(find ~/.cache/marrow-mojo -type f | wc -l) entries, $(du -sh ~/.cache/marrow-mojo | cut -f1)"
+
+    - if: inputs.mode == 'save' && github.event_name == 'push' && github.ref_name == 'main'
+      uses: actions/cache/save@v6
+      continue-on-error: true
+      with:
+        path: ~/.cache/marrow-mojo
+        key: mojo-${{ runner.os }}-${{ inputs.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    # Best effort: an entry this fails to delete ages out after a week unused.
+    - if: inputs.mode == 'save' && github.event_name == 'push' && github.ref_name == 'main'
+      shell: bash
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PREFIX: mojo-${{ runner.os }}-${{ inputs.name }}-
+        CURRENT: mojo-${{ runner.os }}-${{ inputs.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$PREFIX" \
+          --limit 100 --json id,key --jq '.[] | select(.key != env.CURRENT) | .id' |
+          while read -r id; do gh cache delete --repo "$GITHUB_REPOSITORY" "$id"; done

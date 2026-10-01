@@ -9,8 +9,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# `actions: write` lets the Mojo compile cache replace its own previous entry.
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: bench-${{ github.ref }}
@@ -60,6 +62,11 @@ jobs:
           frozen: true
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+
+      - uses: ./.github/actions/mojo-cache
+        with:
+          mode: restore
+          name: bench
 
       - name: Checkout gh-pages
         if: github.ref == 'refs/heads/main'
@@ -137,3 +144,9 @@ jobs:
         run: |
           pixi run -e bench pytest --no-gpu --mojo-timeout 1800 \
             marrow/expr/tests/bench_comptime.mojo --competition-winner comptime
+
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/mojo-cache
+        with:
+          mode: save
+          name: bench

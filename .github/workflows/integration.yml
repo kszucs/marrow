@@ -13,6 +13,11 @@ concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# `actions: write` lets the Mojo compile cache replace its own previous entry.
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   archery:
     name: archery (linux, x86_64)
@@ -43,6 +48,11 @@ jobs:
           frozen: true
           environments: integration
 
+      - uses: ./.github/actions/mojo-cache
+        with:
+          mode: restore
+          name: integration
+
       # Arrow reference implementation builds are slow (~30 min); cache by the
       # HEAD SHAs of the three repos so rebuilds only happen on upstream changes.
       # The clone + SHA capture must happen before the cache restore so the key
@@ -72,3 +82,9 @@ jobs:
 
       - name: Run integration tests
         run: pixi run -e integration integration
+
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/mojo-cache
+        with:
+          mode: save
+          name: integration

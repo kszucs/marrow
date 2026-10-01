@@ -178,6 +178,14 @@ while `test_join.mojo` alone took 3 min 18 s / 19.6 GB.
   masked-gather intrinsic in `filter`/`take` fails to lower.
 - `pytest-xdist` does not help *within* a run. Several concurrent `pytest`
   invocations are safe — drivers are content-addressed.
+- **Rebuilding an unchanged unit is a cache hit** — ~2 s instead of ~10 s on
+  `marrow/utils/tests`. The compile cache is keyed by the IR a unit actually
+  loads, not by paths or comments, so an edit to code the unit never uses still
+  hits, and an edit to code it does use rebuilds it. `pixi.toml` points every
+  environment and worktree at one `~/.cache/marrow-mojo`; nothing evicts it, so
+  clear it with `mojo --clear-cache` when it grows. CI carries it from run to
+  run per job through `.github/actions/mojo-cache`, keeping only the entries the
+  run read.
 
 ### Writing Mojo tests
 

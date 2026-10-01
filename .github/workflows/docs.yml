@@ -9,8 +9,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# `actions: write` lets the Mojo compile cache replace its own previous entry.
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: docs-${{ github.ref }}
@@ -42,11 +44,23 @@ jobs:
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         environments: docs
+
+    - uses: ./.github/actions/mojo-cache
+      with:
+        mode: restore
+        name: docs
+
     - name: Check the Mojo snippets the docs include
       run: pixi run -e docs docs_check
 
     - name: Build docs
       run: pixi run -e docs docs
+
+    - if: ${{ !cancelled() }}
+      uses: ./.github/actions/mojo-cache
+      with:
+        mode: save
+        name: docs
 
     - uses: peaceiris/actions-gh-pages@v4
       if: github.ref == 'refs/heads/main'

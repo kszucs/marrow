@@ -14,6 +14,11 @@ concurrency:
   group: binary-size-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# `actions: write` lets the Mojo compile cache replace its own previous entry.
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   binary-size:
     name: binary size (macos, arm64)
@@ -34,6 +39,11 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: dev
+
+    - uses: ./.github/actions/mojo-cache
+      with:
+        mode: restore
+        name: binary-size
 
     # The gate compares two commits measured on *this* runner, never against
     # numbers recorded on a developer's machine -- the same source builds
@@ -76,6 +86,12 @@ jobs:
       run: |
         pixi run -e dev python -m devkit bench size check \
           --baseline base-size.json --out head-size.json
+
+    - if: ${{ !cancelled() }}
+      uses: ./.github/actions/mojo-cache
+      with:
+        mode: save
+        name: binary-size
 
     # Saved so the next commit on this branch finds its own base already
     # measured and only has to build once.
