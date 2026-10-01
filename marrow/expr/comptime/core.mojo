@@ -81,6 +81,8 @@ from ...kernels.aggregate import (
 from ..index import Index, keep_every
 from .aggregates import (
     ApproxCountDistinct,
+    DecimalMean,
+    DecimalSum,
     StringApproxCountDistinct,
     StringCountDistinct,
     Count,
@@ -136,6 +138,23 @@ from .numeric import (
     Trunc,
 )
 from .boolean import And, IsInf, IsNan, IsNull, Not, NotNull, Or, Xor
+from .decimal import (
+    DecimalAdd,
+    DecimalDiv,
+    DecimalEq,
+    DecimalGe,
+    DecimalGt,
+    DecimalLe,
+    DecimalLt,
+    DecimalMul,
+    DecimalNe,
+    DecimalRescale,
+    DecimalSub,
+    DecimalToNum,
+    DecimalToString,
+    NumToDecimal,
+    StringToDecimal,
+)
 from .casts import (
     BoolToNum,
     NumToBool,
@@ -373,6 +392,15 @@ trait PrimitiveValue(ComptimeValue):
     """
 
     comptime Type: PrimitiveType
+
+    def count(self) -> Count[Self]:
+        """`COUNT(self)` — the *non-null* values of `self`, not the row count.
+
+        Here rather than per family because it reads validity only, so every
+        fixed-width value has one. `COUNT(*)` is `count_star()` in
+        `builders.mojo`, which is this same aggregate over a literal.
+        """
+        return Count[Self](self.copy(), Nothing(), String(COUNT))
 
     def count_distinct(self) -> CountDistinct[Self]:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics).
@@ -949,6 +977,17 @@ trait StringValue(ComptimeValue):
         _reject_checked_cast(safe)
         return StringToNum[Target, Self](self.copy())
 
+    def cast[
+        Target: DecimalType
+    ](self, dtype: Target, safe: Bool = False) raises -> StringToDecimal[
+        Target, Self
+    ]:
+        """Parse to a decimal — `x.cast(decimal128(10, 2))`. Text that does
+        not parse, or needs more digits or scale than `dtype` declares,
+        answers null."""
+        _reject_checked_cast(safe)
+        return StringToDecimal[Target, Self](self.copy(), dtype)
+
     def min(self) -> StringMin[Self]:
         """`MIN(self)` — lexicographic (bytewise), matching Arrow's
         `hash_min`. Keeps the input's type."""
@@ -1090,14 +1129,6 @@ trait NumericValue(PrimitiveValue):
         """
         return StdDev[ddof, Self](self.copy(), Nothing(), String(STDDEV))
 
-    def count(self) -> Count[Self]:
-        """`COUNT(self)` — the *non-null* values of `self`, not the row count.
-
-        `COUNT(*)` is `count_star()` in `builders.mojo`, which is this same
-        aggregate over a literal.
-        """
-        return Count[Self](self.copy(), Nothing(), String(COUNT))
-
     # -- operators ----------------------------------------------------------
     # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`
     # rather than `Gt(...)` by hand. `Rhs`, not `R`, because a trait default's
@@ -1141,6 +1172,16 @@ trait NumericValue(PrimitiveValue):
         """Render to text — `x.cast(string)`."""
         _reject_checked_cast(safe)
         return NumToString[Target, Self](self.copy())
+
+    def cast[
+        Target: DecimalType
+    ](self, dtype: Target, safe: Bool = False) raises -> NumToDecimal[
+        Target, Self
+    ]:
+        """Convert to a decimal — `x.cast(decimal128(10, 2))`. An integer is
+        scaled up; a float is scaled and rounded."""
+        _reject_checked_cast(safe)
+        return NumToDecimal[Target, Self](self.copy(), dtype)
 
     def cast(
         self, dtype: BoolType, safe: Bool = False
@@ -1469,21 +1510,115 @@ trait TemporalValue(PrimitiveValue):
 
 
 trait DecimalValue(PrimitiveValue):
-    """Marker: a fixed-point decimal.
+    """A fixed-point decimal: exact arithmetic, comparison, casts, aggregates.
 
     Its own family rather than `NumericValue`, because decimal arithmetic is
     not the lane's `+`: the operands carry a scale, and `1.50 + 2.5` has to
     align them before it adds. Adding the unscaled integers, as `NumericBinary`
-    would, gives `150 + 25 = 175` where the answer is `400` at scale 2.
-    Reading, projecting, null tests and `count_distinct` work, because those
-    bind on `PrimitiveValue` or below.
+    would, gives `150 + 25 = 175` where the answer is `400` at scale 2. The
+    nodes in `comptime/decimal.mojo` align them, with Arrow C++'s result types.
 
     `Type` is not `Defaultable` — precision and scale live on the dtype
     *instance* — so every leaf carries or looks up its dtype, as the temporal
-    leaves do.
+    leaves do, and every node computes its own from its operands'.
+
+    The operators take another `DecimalValue` only. An integer operand is a
+    decimal of scale 0 in Arrow's rules, and in this lane it is spelled as one:
+    `col("price", decimal128(10, 2)) * lit(3, decimal128(1, 0))`.
     """
 
     comptime Type: DecimalType
+
+    # -- aggregates ---------------------------------------------------------
+    # `sum` and `mean` are exact: they accumulate at the column's scale in
+    # `decimal128(38, s)` (`decimal256(76, s)` for a decimal256), and `mean`
+    # rounds its quotient half away from zero. All five fuse.
+
+    def sum(self) -> DecimalSum[Self]:
+        """`SUM(self)` — exact, as `decimal128(38, scale)`."""
+        return DecimalSum[Self](self.copy(), Nothing(), String(SUM))
+
+    def mean(self) -> DecimalMean[Self]:
+        """`AVG(self)` — exact sum, quotient rounded half away from zero to the
+        column's scale."""
+        return DecimalMean[Self](self.copy(), Nothing(), String(MEAN))
+
+    def min(self) -> Min[Self]:
+        """`MIN(self)`. Keeps the input's dtype."""
+        return Min[Self](self.copy(), Nothing(), String(MIN))
+
+    def max(self) -> Max[Self]:
+        """`MAX(self)`. Keeps the input's dtype."""
+        return Max[Self](self.copy(), Nothing(), String(MAX))
+
+    # -- arithmetic ---------------------------------------------------------
+    # `Rhs`, not `R`: a trait default's parameter must not collide with a
+    # conformer's struct parameter, and the decimal nodes bind `L`/`R`.
+
+    def __add__[Rhs: DecimalValue](self, o: Rhs) -> DecimalAdd[Self, Rhs]:
+        return DecimalAdd(self.copy(), o.copy())
+
+    def __sub__[Rhs: DecimalValue](self, o: Rhs) -> DecimalSub[Self, Rhs]:
+        return DecimalSub(self.copy(), o.copy())
+
+    def __mul__[Rhs: DecimalValue](self, o: Rhs) -> DecimalMul[Self, Rhs]:
+        return DecimalMul(self.copy(), o.copy())
+
+    def __truediv__[Rhs: DecimalValue](self, o: Rhs) -> DecimalDiv[Self, Rhs]:
+        """Exact to `max(4, s1 + p2 - s2 + 1)` digits and truncated — Arrow
+        C++'s decimal division. NULL where `o` is zero."""
+        return DecimalDiv(self.copy(), o.copy())
+
+    # -- comparison ---------------------------------------------------------
+
+    def __eq__[Rhs: DecimalValue](self, o: Rhs) -> DecimalEq[Self, Rhs]:
+        return DecimalEq(self.copy(), o.copy())
+
+    def __ne__[Rhs: DecimalValue](self, o: Rhs) -> DecimalNe[Self, Rhs]:
+        return DecimalNe(self.copy(), o.copy())
+
+    def __lt__[Rhs: DecimalValue](self, o: Rhs) -> DecimalLt[Self, Rhs]:
+        return DecimalLt(self.copy(), o.copy())
+
+    def __le__[Rhs: DecimalValue](self, o: Rhs) -> DecimalLe[Self, Rhs]:
+        return DecimalLe(self.copy(), o.copy())
+
+    def __gt__[Rhs: DecimalValue](self, o: Rhs) -> DecimalGt[Self, Rhs]:
+        return DecimalGt(self.copy(), o.copy())
+
+    def __ge__[Rhs: DecimalValue](self, o: Rhs) -> DecimalGe[Self, Rhs]:
+        return DecimalGe(self.copy(), o.copy())
+
+    # -- casts --------------------------------------------------------------
+
+    def cast[
+        Target: DecimalType
+    ](self, dtype: Target, safe: Bool = False) raises -> DecimalRescale[
+        Target, Self
+    ]:
+        """Rescale — `x.cast(decimal128(12, 4))`. Truncates toward zero when
+        the scale shrinks, and wraps rather than raising: `safe=True` needs
+        the runtime lane."""
+        _reject_checked_cast(safe)
+        return DecimalRescale[Target, Self](self.copy(), dtype)
+
+    def cast[
+        Target: NumericType
+    ](self, dtype: Target, safe: Bool = False) raises -> DecimalToNum[
+        Target, Self
+    ]:
+        """To a float, or to an integer truncating toward zero."""
+        _reject_checked_cast(safe)
+        return DecimalToNum[Target, Self](self.copy())
+
+    def cast[
+        Target: StringLikeType
+    ](self, dtype: Target, safe: Bool = False) raises -> DecimalToString[
+        Target, Self
+    ]:
+        """Render to text, every digit the scale declares kept."""
+        _reject_checked_cast(safe)
+        return DecimalToString[Target, Self](self.copy())
 
 
 trait IntervalValue(PrimitiveValue):

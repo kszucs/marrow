@@ -1011,23 +1011,23 @@ struct _IpcEncoder(Movable):
             var bit_width: Int32
             if dtype.is_decimal32():
                 ref d = dtype.as_decimal32()
-                precision = Int32(d.precision)
-                scale = Int32(d.scale)
+                precision = Int32(d.precision())
+                scale = Int32(d.scale())
                 bit_width = 32
             elif dtype.is_decimal64():
                 ref d = dtype.as_decimal64()
-                precision = Int32(d.precision)
-                scale = Int32(d.scale)
+                precision = Int32(d.precision())
+                scale = Int32(d.scale())
                 bit_width = 64
             elif dtype.is_decimal128():
                 ref d = dtype.as_decimal128()
-                precision = Int32(d.precision)
-                scale = Int32(d.scale)
+                precision = Int32(d.precision())
+                scale = Int32(d.scale())
                 bit_width = 128
             else:
                 ref d = dtype.as_decimal256()
-                precision = Int32(d.precision)
-                scale = Int32(d.scale)
+                precision = Int32(d.precision())
+                scale = Int32(d.scale())
                 bit_width = 256
             var ts = self._fb.offset()
             var bw_at = self._fb.prepend_i32(bit_width)

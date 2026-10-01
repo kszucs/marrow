@@ -73,6 +73,14 @@ from ...kernels.boolean import (
     XorKernel,
 )
 from ...kernels.cast import cast as cast_array
+from ...kernels.decimal import (
+    DecimalAddKernel,
+    DecimalBinaryKernel,
+    DecimalDivKernel,
+    DecimalMulKernel,
+    DecimalPromotion,
+    DecimalSubKernel,
+)
 from ...kernels.conditional import case_when as case_when_kernel
 from ...kernels.conditional import coalesce as coalesce_kernel
 from ...kernels.conditional import fill_null as fill_null_kernel
@@ -171,6 +179,7 @@ from ...kernels.temporal import (
     YearKernel,
 )
 from ...dtypes import (
+    DecimalType,
     DynType,
     NumericType,
     PrimitiveType,
@@ -206,9 +215,15 @@ def promote_dyn(l: DynType, r: DynType) raises -> DynType:
     tried `int64 -> int32` first, succeeded structurally, and raised on the
     literal instead of comparing. Widening cannot narrow, so there is no
     ordering to get wrong.
+
+    With a decimal on either side the answer is `DecimalPromotion.common`,
+    Arrow's rule. That is the type both sides of a *comparison* take; decimal
+    arithmetic has a result type per operator and does not come through here.
     """
     if l == r:
         return l.copy()
+    if l.is_decimal() or r.is_decimal():
+        return DecimalPromotion.common(l, r)
     if not l.is_numeric() or not r.is_numeric():
         raise TypeError(t"promote: no common numeric type for {l} and {r}")
     var l_float = l.is_floating_point()
@@ -678,15 +693,27 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return S.dispatch(l^, r^)
         if l.dtype() == r.dtype():
             return K.dispatch(l^, r^)
-        if l.dtype().is_numeric() and r.dtype().is_numeric():
+        if (l.dtype().is_numeric() or l.dtype().is_decimal()) and (
+            r.dtype().is_numeric() or r.dtype().is_decimal()
+        ):
             var to = promote_dyn(l.dtype(), r.dtype())
             return K.dispatch(cast_array(l^, to), cast_array(r^, to))
         # Anything else -- two temporal columns at different resolutions, say
         # -- meets on the left operand's type. `promote_dyn` deliberately has
-        # no answer outside the numeric domain, and inventing one here would
-        # be a second promotion rule that could disagree with it.
+        # no answer outside the numeric and decimal domains, and inventing one
+        # here would be a second promotion rule that could disagree with it.
         var to = l.dtype()
         return K.dispatch(l^, cast_array(r^, to))
+
+    @staticmethod
+    def _decimal_arith[
+        K: BinaryKernel, D: DecimalBinaryKernel
+    ](var l: DynArray, var r: DynArray) raises -> DynArray:
+        """`+ - *`: decimal arithmetic when `DecimalPromotion.accepts`, `_arith`
+        otherwise — which is also where a decimal against a float goes."""
+        if DecimalPromotion.accepts(l.dtype(), r.dtype()):
+            return D.dispatch(l^, r^)
+        return Self._arith[K](l^, r^)
 
     @staticmethod
     def _null_zeros(var divisor: DynArray) raises -> DynArray:
@@ -704,20 +731,28 @@ struct RuntimeValue(Evaluable, Movable, Value):
         divisor got its nulls at the wrong rows. `nullif` already answers the
         question this needs — nulled where equal, `a`'s own nulls kept — and
         `DynScalar.to_array` is the same broadcast a literal operand takes.
+        The zeros are built in the divisor's own type, so there is no cast
+        pass; a decimal's zero is the unscaled 0 whatever its scale. Two
+        narrow dispatches rather than `dispatch_primitive`, which would build
+        zeros for every temporal and interval type too.
 
         `DivisionBinary` reaches the same result the other way, from the lane,
         because a fused node has no array to hand to a kernel.
         """
         var n = divisor.length()
 
-        def zeros[T: NumericType](d: T) raises {imm} -> DynArray:
-            return (
-                PrimitiveScalar[T](Optional(Scalar[T.native](0)), d.copy())
-                .repeat(n)
-                .to_dyn()
-            )
+        def numeric[T: NumericType](d: T) raises {imm} -> DynArray:
+            var zero = PrimitiveScalar[T](Optional(Scalar[T.native](0)), d)
+            return zero.repeat(n).to_dyn()
 
-        return nullif_kernel(divisor, divisor.dtype().dispatch_numeric(zeros))
+        def decimal[T: DecimalType](d: T) raises {imm} -> DynArray:
+            var zero = PrimitiveScalar[T](Optional(Scalar[T.native](0)), d)
+            return zero.repeat(n).to_dyn()
+
+        var dt = divisor.dtype()
+        if dt.is_decimal():
+            return nullif_kernel(divisor, dt.dispatch_decimal(decimal))
+        return nullif_kernel(divisor, dt.dispatch_numeric(numeric))
 
     @staticmethod
     def _arith[
@@ -731,12 +766,18 @@ struct RuntimeValue(Evaluable, Movable, Value):
         instead of failing, and doing it *by widening* rather than by trying a
         cast in each direction is what keeps it from silently narrowing.
         """
-        if not l.dtype().is_numeric() or not r.dtype().is_numeric():
-            raise TypeError(
-                t"arithmetic is not defined for {l.dtype()} and {r.dtype()}"
-            )
-        var to = promote_dyn(l.dtype(), r.dtype())
-        return K.dispatch(cast_array(l^, to), cast_array(r^, to))
+        if (l.dtype().is_numeric() or l.dtype().is_decimal()) and (
+            r.dtype().is_numeric() or r.dtype().is_decimal()
+        ):
+            # A decimal reaches a numeric type only against a float, which
+            # Arrow computes in `float64`; two decimals are decimal arithmetic
+            # (`DecimalBinaryKernel`), and `//` / `%` have none.
+            var to = promote_dyn(l.dtype(), r.dtype())
+            if to.is_numeric():
+                return K.dispatch(cast_array(l^, to), cast_array(r^, to))
+        raise TypeError(
+            t"arithmetic is not defined for {l.dtype()} and {r.dtype()}"
+        )
 
     @staticmethod
     def _float_binary[
@@ -913,11 +954,11 @@ struct RuntimeValue(Evaluable, Movable, Value):
             # which is the call `ConcatKernel.dispatch` exists for.
             if l.dtype().is_string_like():
                 return ConcatKernel.dispatch(l^, r^)
-            return Self._arith[AddKernel](l^, r^)
+            return Self._decimal_arith[AddKernel, DecimalAddKernel](l^, r^)
         if self._tag == "sub":
-            return Self._arith[SubKernel](l^, r^)
+            return Self._decimal_arith[SubKernel, DecimalSubKernel](l^, r^)
         if self._tag == "mul":
-            return Self._arith[MulKernel](l^, r^)
+            return Self._decimal_arith[MulKernel, DecimalMulKernel](l^, r^)
         # `//` and `%` are undefined on a zero divisor and SQL spells that
         # NULL. The kernels cannot: a SIMD lane can neither raise nor produce
         # a null, so it divides by a substituted 1. Nulling the *divisor*
@@ -928,6 +969,10 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "mod":
             return Self._arith[ModKernel](l^, Self._null_zeros(r^))
         if self._tag == "truediv":
+            # Decimal division stays decimal — exact to Arrow C++'s scale and
+            # truncated — and a zero divisor is NULL, as for `//`.
+            if DecimalPromotion.accepts(l.dtype(), r.dtype()):
+                return DecimalDivKernel.dispatch(l^, Self._null_zeros(r^))
             return Self._float_binary[DivKernel](l^, r^)
         if self._tag == "pow":
             return Self._float_binary[PowKernel](l^, r^)

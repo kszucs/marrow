@@ -520,7 +520,7 @@ struct BufferView[
         func: def[W: Int](SIMD[Self.T, W]) thin -> SIMD[Self.T, W]
     ](self) where Self.mut:
         """Apply a SIMD function in-place over all elements."""
-        comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
+        comptime width = cpu_lanes[Self.T]
         var i = 0
         while i + width <= self._length:
             var out = self._data.unsafe_mut_cast[True]()
@@ -537,7 +537,7 @@ struct BufferView[
         func: def[W: Int](SIMD[Self.T, W]) thin -> SIMD[DType.bool, W]
     ](self) -> Int:
         """Count elements matching a vectorized predicate."""
-        comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
+        comptime width = cpu_lanes[Self.T]
         var total = 0
         var i = 0
         while i + width <= self._length:
@@ -1521,6 +1521,17 @@ struct BitmapView[
 # ---------------------------------------------------------------------------
 
 
+comptime cpu_lanes[T: DType] = max(simd_byte_width() // size_of[Scalar[T]](), 1)
+"""How many `T` lanes one CPU SIMD register holds — the width every
+vectorised loop here strides by.
+
+Clamped to 1: an element wider than a register — `int256`, a decimal256 on a
+16-byte NEON register — would otherwise compute a width of 0, which is not a
+legal load or store width and which `vectorize` rejects at compile time. At 1
+the loop degenerates to a scalar one, which is what such types want anyway.
+"""
+
+
 comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](
     SIMD[In, W]
 ) thin -> SIMD[Out, W]
@@ -1548,7 +1559,7 @@ def _cpu_striped[
     workers. Thread count is owned by ``ctx`` — no Mojo-internal heuristic. No
     ``align``: ``vectorize`` handles its own tail within each stripe.
     """
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+    comptime cpu_width = cpu_lanes[Out]
 
     @always_inline
     def span(wid: Int, start: Int, end: Int) {imm}:
@@ -2207,7 +2218,7 @@ def _reduce_dispatch[
         else:
             raise NotImplementedError("reduce: no GPU accelerator available")
 
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
+    comptime cpu_width = cpu_lanes[T]
 
     # This stripes by hand, unlike `_apply_dispatch` above, and deliberately so.
     # Routing it through `ctx.stripe` works and removes the duplicated fold body,

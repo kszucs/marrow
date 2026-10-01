@@ -18,7 +18,9 @@ directly by the AOT expression layer):
 - ``NumToBoolKernel`` / ``BoolToNumKernel`` — bit-pack (``x != 0``) / bit-unpack (``True→1``).
 - ``TemporalCastKernel`` — relabel to the underlying integer, or unit-scale it.
 - ``StringToNumKernel`` / ``NumToStringKernel`` / ``StringToBoolKernel`` / ``BoolToStringKernel`` —
-  per-element ``atol``/``atof`` parse or format (variable-length, builder-based).
+  per-element ``atol``/``atof`` parse or format (variable-length, builder-based),
+  and ``StringToDecimalKernel`` / ``DecimalToStringKernel`` for decimals, which
+  keep every digit the scale declares.
 - ``NullCastKernel`` — an all-null array of the target type.
 
 Every kernel conforms to ``CastKernel`` and so exposes the **same**
@@ -63,6 +65,7 @@ from ..dtypes import (
     DecimalType,
     IntegerType,
     FloatingType,
+    WideDecimalType,
     StringLikeType,
     int32,
 )
@@ -284,49 +287,10 @@ def _rebased_validity(
     return bitmap.value().view(offset, length).to_owned()
 
 
-def _decimal_scale(dt: DynType) raises -> Int:
-    """The decimal scale, or 0 for a plain integer/numeric.
-
-    A `DynType` ladder rather than `dispatch_decimal` because it reads a
-    *field*, and traits cannot require fields. It is guarded by `is_decimal()`
-    so a decimal width the ladder does not know raises instead of silently
-    reporting scale 0 — an unscaled decimal would be off by a factor of
-    10^scale, with no error anywhere.
-    """
-    if not dt.is_decimal():
-        return 0
-    elif dt.is_decimal32():
-        return dt.as_decimal32().scale
-    elif dt.is_decimal64():
-        return dt.as_decimal64().scale
-    elif dt.is_decimal128():
-        return dt.as_decimal128().scale
-    elif dt.is_decimal256():
-        return dt.as_decimal256().scale
-    else:
-        raise InternalError(
-            t"decimal_cast: no scale known for decimal type {dt}"
-        )
-
-
-def _decimal_precision(dt: DynType) raises -> Int:
-    """The decimal precision — the digit count the type declares — or 0 for a
-    non-decimal target, which is how a caller spells "no digit bound"."""
-    if not dt.is_decimal():
-        return 0
-    elif dt.is_decimal32():
-        return dt.as_decimal32().precision
-    elif dt.is_decimal64():
-        return dt.as_decimal64().precision
-    elif dt.is_decimal128():
-        return dt.as_decimal128().precision
-    else:
-        return dt.as_decimal256().precision
-
-
-def _digit_bound[T: DType](dt: DynType) raises -> Scalar[T]:
-    """`10^precision` — the first unscaled magnitude `dt` cannot represent — or
-    0 when `dt` declares no digit bound, which is every non-decimal target.
+def _digit_bound[T: DType](precision: Int) -> Scalar[T]:
+    """`10^precision` — the first unscaled magnitude a decimal of `precision`
+    digits cannot represent — or 0 for `precision` 0, which is how a
+    non-decimal target spells "no digit bound".
 
     The storage-width checks either side of this one bound the *backing
     integer*; a decimal also bounds the *digits*, and the two are different
@@ -334,8 +298,7 @@ def _digit_bound[T: DType](dt: DynType) raises -> Scalar[T]:
     21-digit value labelled as five digits, where Arrow C++ raises through
     `Decimal128::FitsInPrecision`.
     """
-    var p = _decimal_precision(dt)
-    return pow(Scalar[T](10), p) if p > 0 else Scalar[T](0)
+    return pow(Scalar[T](10), precision) if precision > 0 else Scalar[T](0)
 
 
 def _map_decimal[
@@ -390,7 +353,9 @@ def _map_decimal[
 
 def _rescale_up[
     FromN: DType, ToN: DType
-](data: ArrayData, to: DynType, delta: Int, safe: Bool) raises -> DynArray:
+](
+    data: ArrayData, to: DynType, delta: Int, precision: Int, safe: Bool
+) raises -> DynArray:
     """Multiply by 10^delta, widening the scale. Shared by `DecimalRescaleKernel` and
     `IntToDecimalKernel`, which is the only real overlap left between the five.
     """
@@ -402,7 +367,7 @@ def _rescale_up[
     var lo = Scalar[ToN].MIN // f
     if Scalar[ToN].MIN % f != 0:
         lo += 1
-    var digits = _digit_bound[ToN](to)
+    var digits = _digit_bound[ToN](precision)
 
     def up(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
         var v = x.cast[ToN]()
@@ -427,11 +392,13 @@ def _rescale_up[
 
 def _rescale_down[
     FromN: DType, ToN: DType
-](data: ArrayData, to: DynType, delta: Int, safe: Bool) raises -> DynArray:
+](
+    data: ArrayData, to: DynType, delta: Int, precision: Int, safe: Bool
+) raises -> DynArray:
     """Integer-divide by 10^-delta, narrowing the scale. Shared by
     `DecimalRescaleKernel` and `DecimalToIntKernel`."""
     var f = pow(Scalar[FromN](10), -delta)
-    var digits = _digit_bound[ToN](to)
+    var digits = _digit_bound[ToN](precision)
 
     def down(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
         var r = x % f
@@ -475,15 +442,17 @@ struct DecimalRescaleKernel(CastKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var data = array.to_data()
-        var delta = _decimal_scale(to) - _decimal_scale(array.dtype())
 
         def on_from[F: DecimalType](s: F) raises {imm} -> DynArray:
             def on_to[T: DecimalType](d: T) raises {imm} -> DynArray:
+                var delta = d.scale() - s.scale()
                 if delta >= 0:
                     return _rescale_up[F.native, T.native](
-                        data, to, delta, safe
+                        data, to, delta, d.precision(), safe
                     )
-                return _rescale_down[F.native, T.native](data, to, delta, safe)
+                return _rescale_down[F.native, T.native](
+                    data, to, delta, d.precision(), safe
+                )
 
             return to.dispatch_decimal(on_to)
 
@@ -504,11 +473,12 @@ struct IntToDecimalKernel(CastKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var data = array.to_data()
-        var delta = _decimal_scale(to)
 
         def on_from[F: IntegerType](s: F) raises {imm} -> DynArray:
             def on_to[T: DecimalType](d: T) raises {imm} -> DynArray:
-                return _rescale_up[F.native, T.native](data, to, delta, safe)
+                return _rescale_up[F.native, T.native](
+                    data, to, d.scale(), d.precision(), safe
+                )
 
             return to.dispatch_decimal(on_to)
 
@@ -529,13 +499,15 @@ struct DecimalToIntKernel(CastKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var data = array.to_data()
-        var delta = -_decimal_scale(array.dtype())
 
         def on_from[F: DecimalType](s: F) raises {imm} -> DynArray:
             def on_to[T: IntegerType](d: T) raises {imm} -> DynArray:
-                if delta == 0:
-                    return _rescale_up[F.native, T.native](data, to, 0, safe)
-                return _rescale_down[F.native, T.native](data, to, delta, safe)
+                # An integer target is scale 0 and declares no digit bound.
+                if s.scale() == 0:
+                    return _rescale_up[F.native, T.native](data, to, 0, 0, safe)
+                return _rescale_down[F.native, T.native](
+                    data, to, -s.scale(), 0, safe
+                )
 
             return to.dispatch_integer(on_to)
 
@@ -558,13 +530,12 @@ struct FloatToDecimalKernel(CastKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var data = array.to_data()
-        var scale = _decimal_scale(to)
 
         def on_from[F: FloatingType](s: F) raises {imm} -> DynArray:
             def on_to[T: DecimalType](d: T) raises {imm} -> DynArray:
                 comptime FromN = F.native
                 comptime ToN = T.native
-                var f = pow(Float64(10), scale)
+                var f = pow(Float64(10), d.scale())
                 # int128/256 do not round-trip through float64 exactly, so this
                 # bound is approximate at the last few ULPs. It guards against a
                 # value being out by orders of magnitude, not a precision claim.
@@ -604,13 +575,12 @@ struct DecimalToFloatKernel(CastKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var data = array.to_data()
-        var scale = _decimal_scale(array.dtype())
 
         def on_from[F: DecimalType](s: F) raises {imm} -> DynArray:
             def on_to[T: FloatingType](d: T) raises {imm} -> DynArray:
                 comptime FromN = F.native
                 comptime ToN = T.native
-                var f = pow(Float64(10), scale)
+                var f = pow(Float64(10), s.scale())
 
                 def to_flt(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
                     return (x.cast[DType.float64]() / f).cast[ToN]()
@@ -1175,6 +1145,240 @@ struct BoolToStringKernel(CastKernel):
         return b.finish()
 
 
+struct DecimalToStringKernel(CastKernel):
+    """Format a decimal array to text, every declared fractional digit kept —
+    see `format`."""
+
+    comptime name = "decimal_to_string"
+
+    @staticmethod
+    def format[N: DType](value: Scalar[N], scale: Int) -> String:
+        """`value` read at `scale`, as Arrow C++'s `ToString` renders it.
+
+        Every fractional digit the scale declares is written, trailing zeros
+        included — `150` at scale 2 is `1.50`, never `1.5` — because the scale is
+        part of the value's type and a reader of the text should be able to see
+        it. A magnitude below one keeps its leading `0`, so `-5` at scale 2 is
+        `-0.05`.
+
+        Built from the integer's own text rather than by dividing by `10^scale`,
+        which is what keeps the most negative value right: its magnitude does not
+        fit the signed type, but its digits do.
+        """
+        var text = String(value)
+        var negative = value < 0
+        var digits = text[byte= 1 if negative else 0:]
+        var out = String("-") if negative else String()
+        var n = digits.byte_length()
+        if scale <= 0:
+            out += digits
+        elif n <= scale:
+            out += "0."
+            for _ in range(scale - n):
+                out += "0"
+            out += digits
+        else:
+            out += digits[byte = 0 : n - scale]
+            out += "."
+            out += digits[byte = n - scale :]
+        return out^
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """`safe` and `ctx` are inert — see `NumToStringKernel.dispatch`."""
+
+        def on_target[To: StringLikeType](d: To) raises {imm} -> DynArray:
+            def from_dec[From: DecimalType](s: From) raises {imm} -> DynArray:
+                return Self.apply[From, To](array.as_primitive[From]()).to_dyn()
+
+            return array.dtype().dispatch_decimal(from_dec)
+
+        return to.dispatch_stringlike(on_target)
+
+    @staticmethod
+    def apply[
+        From: DecimalType, To: StringLikeType
+    ](array: PrimitiveArray[From]) raises -> BinaryLikeArray[To]:
+        """Formats in `WideDecimalType`'s integer, so `format` is
+        instantiated for two widths rather than four."""
+        comptime Wide = WideDecimalType[From.native].native
+        var scale = array.dtype.scale()
+        var b = BinaryLikeBuilder[To](len(array))
+        for i in range(len(array)):
+            if array.is_valid(i):
+                b.append(Self.format(array.unsafe_get(i).cast[Wide](), scale))
+            else:
+                b.append_null()
+        return b.finish()
+
+
+struct StringToDecimalKernel(CastKernel):
+    """Parse text to a decimal — see `parse`. ``safe`` as
+    `StringToNumKernel`: raise on a value that does not parse or fit, or null
+    it."""
+
+    comptime name = "string_to_decimal"
+
+    @staticmethod
+    def parse[
+        N: DType
+    ](
+        text: StringSlice, digits: Int, bound: Scalar[N], scale: Int
+    ) raises InvalidError -> Scalar[N]:
+        """Parse `text` as a decimal of `scale`, unscaled, in `N`.
+
+        Arrow C++'s grammar: an optional sign, digits with at most one `.`, and an
+        optional exponent — `+1.5`, `.5`, `5.`, `1.5e-1` are all accepted, and
+        whitespace is not. The parsed value is rescaled to `scale` exactly: a
+        digit the scale cannot hold raises rather than rounding (`1.555` is not a
+        `decimal(10, 2)`), and so does a magnitude of `bound` (`10^precision`) or
+        more.
+
+        Overflow cannot happen silently. Leading zeros are not counted, and a
+        value with more than `digits` significant digits raises before the next
+        one is accumulated; `N` holds `digits` of them with a digit to spare, so
+        `10 * acc + d` always fits.
+        """
+        var b = text.as_bytes()
+        var n = len(b)
+        var negative, i = Self._sign(b, 0)
+        var acc = Scalar[N](0)
+        var significant = 0
+        var fraction = 0
+        var seen_dot = False
+        var seen_digit = False
+        while i < n:
+            var c = Int(b[i])
+            if c >= ord("0") and c <= ord("9"):
+                seen_digit = True
+                if acc != 0 or c != ord("0"):
+                    significant += 1
+                    if significant > digits:
+                        raise InvalidError(
+                            t"decimal: '{text}' has too many digits"
+                        )
+                acc = acc * 10 + Scalar[N](c - ord("0"))
+                if seen_dot:
+                    fraction += 1
+            elif c == ord(".") and not seen_dot:
+                seen_dot = True
+            elif c == ord("e") or c == ord("E"):
+                break
+            else:
+                raise InvalidError(t"decimal: '{text}' is not a decimal number")
+            i += 1
+        if not seen_digit:
+            raise InvalidError(t"decimal: '{text}' is not a decimal number")
+
+        var delta = scale - fraction
+        if i < n:
+            delta += Self._exponent(text, i + 1, digits)
+        if acc == 0:
+            return acc
+        elif delta >= 0:
+            if significant + delta > digits:
+                raise InvalidError(t"decimal: '{text}' is out of range")
+            acc *= pow(Scalar[N](10), delta)
+        elif -delta > digits:
+            raise InvalidError(
+                t"decimal: rescaling '{text}' would cause data loss"
+            )
+        else:
+            var f = pow(Scalar[N](10), -delta)
+            if acc % f != 0:
+                raise InvalidError(
+                    t"decimal: rescaling '{text}' would cause data loss"
+                )
+            acc //= f
+        if acc >= bound:
+            raise InvalidError(t"decimal: '{text}' does not fit its precision")
+        return -acc if negative else acc
+
+    @staticmethod
+    def _sign(b: Span[Byte, _], i: Int) -> Tuple[Bool, Int]:
+        """An optional `+` or `-` at `b[i]`: whether it negates, and the index
+        after it."""
+        if i < len(b) and Int(b[i]) == ord("-"):
+            return (True, i + 1)
+        elif i < len(b) and Int(b[i]) == ord("+"):
+            return (False, i + 1)
+        return (False, i)
+
+    @staticmethod
+    def _exponent(
+        text: StringSlice, start: Int, digits: Int
+    ) raises InvalidError -> Int:
+        """The signed exponent after an `e`, which begins at `start`. Bounded by
+        `2 * digits` so a runaway exponent is an error, not an overflowing `Int`.
+        """
+        var b = text.as_bytes()
+        var negative, i = Self._sign(b, start)
+        if i >= len(b):
+            raise InvalidError(t"decimal: '{text}' is not a decimal number")
+        var exponent = 0
+        while i < len(b):
+            var c = Int(b[i])
+            if c < ord("0") or c > ord("9"):
+                raise InvalidError(t"decimal: '{text}' is not a decimal number")
+            exponent = exponent * 10 + (c - ord("0"))
+            if exponent > 2 * digits:
+                raise InvalidError(t"decimal: '{text}' is out of range")
+            i += 1
+        return -exponent if negative else exponent
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        def on_str[From: StringLikeType](s: From) raises {imm} -> DynArray:
+            var a = BinaryLikeArray[From](array.to_data())
+
+            def to_dec[T: DecimalType](d: T) raises {imm} -> DynArray:
+                return Self.apply[From, T](a, d, safe).to_dyn()
+
+            return to.dispatch_decimal(to_dec)
+
+        return array.dtype().dispatch_stringlike(on_str)
+
+    @staticmethod
+    def apply[
+        From: StringLikeType, To: DecimalType
+    ](
+        array: BinaryLikeArray[From], to: To, safe: Bool
+    ) raises -> PrimitiveArray[To]:
+        """Parses in `WideDecimalType`'s integer and narrows, so
+        `parse` is instantiated for two widths rather than four; the
+        precision bound keeps every accepted value inside `To`."""
+        comptime Wide = WideDecimalType[To.native].native
+        var bound = _digit_bound[Wide](to.precision())
+        var scale = to.scale()
+        var b = PrimitiveBuilder[To](to, len(array))
+        for i in range(len(array)):
+            if not array.is_valid(i):
+                b.append_null()
+                continue
+            var v: Scalar[Wide]
+            try:
+                v = Self.parse[Wide](
+                    array.unsafe_get(UInt(i)), To.max_precision, bound, scale
+                )
+            except e:
+                if safe:
+                    raise e
+                b.append_null()
+                continue
+            b.append(v.cast[To.native]())
+        return b.finish()
+
+
 def _all_ascii(window: BufferView[DType.uint8, _]) -> Bool:
     """True when every byte in `window` is < 0x80.
 
@@ -1661,12 +1865,16 @@ def cast(
     elif src.is_string() or src.is_large_string():  # string-like → numeric/bool
         if to.is_bool():
             return StringToBoolKernel.dispatch(array, to, safe, ctx)
+        elif to.is_decimal():
+            return StringToDecimalKernel.dispatch(array, to, safe, ctx)
         elif to.is_numeric():
             return StringToNumKernel.dispatch(array, to, safe, ctx)
         raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")
     elif to.is_string() or to.is_large_string():  # numeric/bool → string-like
         if src.is_bool():
             return BoolToStringKernel.dispatch(array, to, safe, ctx)
+        elif src.is_decimal():
+            return DecimalToStringKernel.dispatch(array, to, safe, ctx)
         elif src.is_numeric():
             return NumToStringKernel.dispatch(array, to, safe, ctx)
         raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")

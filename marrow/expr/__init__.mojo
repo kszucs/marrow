@@ -102,6 +102,16 @@ from .`comptime`.casts import (
     NumericCast,
     StringToNum,
 )
+from .`comptime`.decimal import (
+    DecimalBinary,
+    DecimalCompare,
+    DecimalDiv,
+    DecimalRescale,
+    DecimalToNum,
+    DecimalToString,
+    NumToDecimal,
+    StringToDecimal,
+)
 from .`comptime`.core import (
     BinaryValue,
     BoolValue,

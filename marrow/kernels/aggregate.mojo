@@ -32,6 +32,7 @@ one onto ``Fold[SumFold, V]`` need the expression layer, not this one.
 """
 
 import std.math as math
+from std.builtin.rebind import downcast
 
 from ..arrays import (
     Array,
@@ -51,6 +52,7 @@ from ..builders import (
     BinaryLikeBuilder,
 )
 from ..dtypes import (
+    DecimalType,
     DynType,
     Float64Type,
     Int32Type,
@@ -61,6 +63,7 @@ from ..dtypes import (
     StringLikeType,
     TemporalType,
     UInt8Type,
+    WideDecimalType,
     float64,
     int64,
 )
@@ -68,6 +71,7 @@ from ..scalars import PrimitiveScalar, DynScalar
 from ..views import reduce
 from .core import Kernel
 from .groupby import Groups
+from .numeric import FloordivKernel
 from ..execution import ExecContext
 from ..errors import TypeError
 from .distinct import (
@@ -135,6 +139,10 @@ trait FoldKernel(Kernel):
                 "this aggregate needs arithmetic, so it is defined for numeric"
                 " columns only -- not temporal, interval or decimal"
             )
+        elif conforms_to(Self, DecimalAgg):
+            comptime assert conforms_to(
+                V, DecimalType
+            ), "this aggregate is defined for decimal columns only"
 
     comptime empty_is_null: Bool = True
     """Whether a group with no valid rows has no answer. It usually does not —
@@ -469,6 +477,67 @@ struct MeanFold(ArithmeticAgg):
     @staticmethod
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         return acc / Scalar[A](count)
+
+
+trait DecimalAgg(FoldKernel):
+    """Needs a decimal column: exact arithmetic at the column's scale.
+
+    The decimal counterpart of `ArithmeticAgg` — `DecimalFold` is the one
+    conformer. A decimal column never reaches an `ArithmeticAgg` kernel, and a
+    numeric one never reaches this, so each family's `sum` is its own kernel
+    and `product` over a decimal has nothing to resolve to.
+    """
+
+    pass
+
+
+struct DecimalFold[mean: Bool](DecimalAgg):
+    """`sum` (`DecimalSumFold`) and `mean` (`DecimalMeanFold`) over a decimal
+    column, exact at its scale in `WideDecimalType` — Arrow C++'s `sum`. `mean`
+    rounds half away from zero, as Arrow does, and is typed like the sum where
+    Arrow keeps the input's precision; the digits agree.
+    """
+
+    comptime name = MEAN if Self.mean else SUM
+    comptime AccType[V: PrimitiveType] = WideDecimalType[V.native]
+    comptime needs_count = Self.mean  # the divisor
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Scalar[T](0)
+
+    @staticmethod
+    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+        # `V` is bound on `PrimitiveType` by `FoldKernel`; `check_domain` has
+        # already refused anything but a decimal (`DecimalAgg`).
+        var scale = rebind[downcast[V, DecimalType]](dtype).scale()
+        return WideDecimalType[V.native](
+            WideDecimalType[V.native].max_precision, scale
+        )
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return a + b
+
+    @always_inline
+    @staticmethod
+    def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
+        comptime if not Self.mean:
+            return acc
+        else:
+            # The truncating quotient, then one step away from zero when the
+            # remainder is at least half the divisor.
+            var n = Scalar[A](count)
+            var q = FloordivKernel.core[A, 1](acc, n)
+            var r = acc - q * n
+            if 2 * abs(r) >= n:
+                return q + 1 if acc >= 0 else q - 1
+            return q
+
+
+comptime DecimalSumFold = DecimalFold[mean=False]
+comptime DecimalMeanFold = DecimalFold[mean=True]
 
 
 # ---------------------------------------------------------------------------

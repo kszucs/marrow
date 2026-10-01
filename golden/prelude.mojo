@@ -36,6 +36,7 @@ from golden.helpers import table
 from marrow.dtypes import (
     bool_,
     date32,
+    decimal128,
     float64,
     int32,
     int64,

@@ -164,13 +164,21 @@ trait IntervalType(Defaultable, PrimitiveType):
 trait DecimalType(PrimitiveType):
     """Fixed-point decimal types backed by int32, int64, int128, or int256.
 
-    Logical type carries precision and scale — runtime values in `array.dtype`.
-    Traits cannot require `var` fields, so reading `precision`/`scale` off an
-    erased dtype still needs a `DynType` ladder; `dispatch_decimal` covers the
-    cases that only need `T.native`.
+    Logical type carries precision and scale — runtime values on the dtype
+    instance, read through `precision()` and `scale()` because a trait cannot
+    require a field. An erased dtype reaches them with `dispatch_decimal`.
     """
 
-    pass
+    comptime max_precision: Int
+    """The most digits this width may declare — Arrow's 9, 18, 38 or 76."""
+
+    def precision(self) -> Int:
+        """How many decimal digits a value of this type holds."""
+        ...
+
+    def scale(self) -> Int:
+        """How many of those digits follow the decimal point."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -218,22 +226,31 @@ struct _FloatingType[T: DType](FloatingType):
 
 struct _DecimalType[T: DType](DecimalType):
     comptime native = Self.T
+    comptime max_precision = 9 if Self.T == DType.int32 else (
+        18 if Self.T == DType.int64 else (38 if Self.T == DType.int128 else 76)
+    )
 
-    var precision: Int
-    var scale: Int
+    var _precision: Int
+    var _scale: Int
 
     def __init__(out self, precision: Int, scale: Int = 0):
-        self.precision = precision
-        self.scale = scale
+        self._precision = precision
+        self._scale = scale
+
+    def precision(self) -> Int:
+        return self._precision
+
+    def scale(self) -> Int:
+        return self._scale
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "decimal",
             bit_width_of[Self.native](),
             "[",
-            self.precision,
+            self._precision,
             ", ",
-            self.scale,
+            self._scale,
             "]",
         )
 
@@ -255,6 +272,14 @@ comptime Decimal32Type = _DecimalType[DType.int32]
 comptime Decimal64Type = _DecimalType[DType.int64]
 comptime Decimal128Type = _DecimalType[DType.int128]
 comptime Decimal256Type = _DecimalType[DType.int256]
+
+comptime WideDecimalType[N: DType] = _DecimalType[
+    DType.int256 if N == DType.int256 else DType.int128
+]
+"""The decimal an `N`-backed decimal accumulates and computes in: decimal256
+for a decimal256, decimal128 for every narrower width — Arrow C++'s
+promotion, which has no decimal32 or decimal64 arithmetic of its own. The text
+casts also parse and format in it, to instantiate two widths instead of four."""
 
 
 struct BinaryType(BinaryLikeType):

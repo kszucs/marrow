@@ -13,7 +13,12 @@ def plan() raises -> DynRelation:
     information is lost, and where two engines that agree on `+`, `-` and `*`
     can still disagree.
 
-    -- skip mojo
+    marrow follows Arrow C++ instead: a decimal divided by an integer stays a
+    decimal, at scale `max(4, s1 + p2 - s2 + 1)` = 13 here, truncated —
+    `'0.5000000000000'`. DuckDB answers `DOUBLE`, and so do these
+    expectations.
+
+    -- xfail decimal division is Arrow C++'s exact decimal, DuckDB's is DOUBLE
     -- skip python
 
     -- expected
@@ -26,13 +31,8 @@ def plan() raises -> DynRelation:
     '-0.4166666666666667'
     """
     var t = table("sales")
-    var d = t.project(
-        ["a"], [NumericCast[Decimal128Type](col("price", float64))]
-    )
-    return d.project(
+    var dec = decimal128(10, 2)
+    return t.project(["a"], [col("price", float64).cast(dec)]).project(
         ["d"],
-        [
-            col("a", decimal128(10, 2))
-            / lit(3, decimal128(10, 2)).cast(string, safe=False)
-        ],
+        [(col("a", dec) / lit(3, decimal128(10, 0))).cast(string)],
     )

@@ -48,6 +48,8 @@ from ...kernels.aggregate import (
     Fold,
     Foldable,
     CountFold,
+    DecimalMeanFold,
+    DecimalSumFold,
     MaxFold,
     MaxOp,
     MeanFold,
@@ -346,6 +348,12 @@ comptime Product[A: PrimitiveValue] = Aggregate[Fold[ProductFold, A.Type], A]
 comptime Min[A: PrimitiveValue] = Aggregate[Fold[MinFold, A.Type], A]
 comptime Max[A: PrimitiveValue] = Aggregate[Fold[MaxFold, A.Type], A]
 comptime Mean[A: PrimitiveValue] = Aggregate[Fold[MeanFold, A.Type], A]
+comptime DecimalSum[A: PrimitiveValue] = Aggregate[
+    Fold[DecimalSumFold, A.Type], A
+]
+comptime DecimalMean[A: PrimitiveValue] = Aggregate[
+    Fold[DecimalMeanFold, A.Type], A
+]
 comptime Count[A: PrimitiveValue] = Aggregate[Fold[CountFold, A.Type], A]
 comptime Variance[ddof: Int, A: NumericValue] = Aggregate[
     Dispersion[ddof, False, A.Type], A

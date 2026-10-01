@@ -49,9 +49,9 @@ directly and never this ladder.
 from ...errors import KeyError, TypeError
 from ...arrays import Array, dispatch_array
 from ...dtypes import (
+    DecimalType,
     DynType,
     NumericType,
-    PrimitiveType,
     StringLikeType,
     TemporalType,
     int64,
@@ -70,6 +70,7 @@ from ...kernels.aggregate import (
     VARIANCE,
     VAR_SAMP,
     ArithmeticAgg,
+    DecimalAgg,
     MinMaxOp,
     FoldKernel,
     AggKernel,
@@ -77,6 +78,8 @@ from ...kernels.aggregate import (
     DistinctCount,
     MaxFold,
     MaxOp,
+    DecimalMeanFold,
+    DecimalSumFold,
     MeanFold,
     MinFold,
     MinOp,
@@ -120,10 +123,10 @@ def _fold_agg[
     and that is the expression layer's job — the same one it does for `filter`,
     `take` and `cast`.
 
-    Numeric and temporal are separate arms rather than one
-    `dispatch_primitive`, so a kernel whose domain excludes temporal columns is
-    never instantiated over one: `AggState`'s compile-time domain assertion
-    would fail the *build* rather than raise.
+    Numeric, temporal and decimal are separate arms rather than one
+    `dispatch_primitive`, so a kernel is never instantiated over a family its
+    domain marker (`ArithmeticAgg`, `DecimalAgg`) excludes: `AggState`'s
+    compile-time domain assertion would fail the *build* rather than raise.
     """
 
     def numeric[V: NumericType](d: V) raises {imm func} -> R:
@@ -132,7 +135,17 @@ def _fold_agg[
     def temporal[V: TemporalType](d: V) raises {imm func} -> R:
         return func[Fold[K, V]]()
 
-    comptime if conforms_to(K, ArithmeticAgg):
+    def decimal[V: DecimalType](d: V) raises {imm func} -> R:
+        return func[Fold[K, V]]()
+
+    comptime if conforms_to(K, DecimalAgg):
+        if not in_dtype.is_decimal():
+            raise TypeError(
+                t"aggregate '{K.name}' is the decimal kernel, so it is not"
+                t" defined for {in_dtype} columns"
+            )
+        return in_dtype.dispatch_decimal(decimal)
+    elif conforms_to(K, ArithmeticAgg):
         if not in_dtype.is_numeric():
             raise TypeError(
                 t"aggregate '{K.name}' needs arithmetic, so it is not defined "
@@ -144,6 +157,8 @@ def _fold_agg[
             return in_dtype.dispatch_numeric(numeric)
         elif in_dtype.is_temporal():
             return in_dtype.dispatch_temporal(temporal)
+        elif in_dtype.is_decimal():
+            return in_dtype.dispatch_decimal(decimal)
         else:
             raise TypeError(
                 t"aggregate '{K.name}' is not defined for {in_dtype} columns"
@@ -222,10 +237,16 @@ def resolve_aggregate[
         else:
             return _fold_agg[K=MaxFold](in_dtype, func)
     elif name == SUM:
+        # A decimal sums exactly at its scale, not widened to int64/float64 —
+        # a second kernel, picked here as `min` picks a string extremum.
+        if in_dtype.is_decimal():
+            return _fold_agg[K=DecimalSumFold](in_dtype, func)
         return _fold_agg[K=SumFold](in_dtype, func)
     elif name == PRODUCT:
         return _fold_agg[K=ProductFold](in_dtype, func)
     elif name == MEAN:
+        if in_dtype.is_decimal():
+            return _fold_agg[K=DecimalMeanFold](in_dtype, func)
         return _fold_agg[K=MeanFold](in_dtype, func)
     else:
         raise KeyError(t"unknown aggregate '{name}'")

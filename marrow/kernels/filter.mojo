@@ -11,8 +11,6 @@ All functions support arrays with non-zero offsets (sliced arrays).
 """
 
 from std.bit import count_trailing_zeros
-from std.sys import size_of
-from std.sys.info import simd_byte_width
 
 from ..arrays import (
     BoolArray,
@@ -44,7 +42,7 @@ from ..dtypes import (
     uint64,
 )
 
-from ..views import BitmapView
+from ..views import BitmapView, cpu_lanes
 from .core import Kernel
 from ..execution import ExecContext
 from ..errors import TypeError
@@ -697,11 +695,7 @@ struct TakeKernel(Kernel):
 
         # SIMD gather loop: load W indices, gather W values in parallel.
         # Null indices are masked out (get default value 0).
-        # Floored at 1: types wider than a SIMD register (decimal256 at 32
-        # bytes) would otherwise yield W == 0, which is not a legal store
-        # width. At W == 1 the "vector" gather degenerates to a scalar one,
-        # which is what those types want anyway.
-        comptime W = max(1, simd_byte_width() // size_of[Scalar[native]]())
+        comptime W = cpu_lanes[native]
         var i = 0
         var bitmap = Optional[Bitmap[]](None)
         var null_count = 0

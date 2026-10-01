@@ -13,11 +13,6 @@ def plan() raises -> DynRelation:
     so that the *scale* is asserted and not just the value: `7.00` and `7.0`
     are the same number and different answers.
 
-    marrow can read a decimal column into an expression, but `DecimalValue` has
-    no cast or `sum` node: both have to carry the scale, which the numeric
-    nodes do not.
-
-    -- skip mojo
     -- skip python
 
     -- expected
@@ -25,14 +20,9 @@ def plan() raises -> DynRelation:
     '7.00'
     """
     var t = table("sales")
-    var d = t.project(
-        ["d"], [NumericCast[Decimal128Type](col("price", float64))]
-    )
-    return d.aggregate(
-        aggs=[
-            col("d", decimal128(10, 2))
-            .sum()
-            .cast(string, safe=False)
-            .alias("total")
-        ]
+    var dec = decimal128(10, 2)
+    return (
+        t.project(["d"], [col("price", float64).cast(dec)])
+        .aggregate(aggs=[col("d", dec).sum().alias("total")])
+        .project(["total"], [col("total", decimal128(38, 2)).cast(string)])
     )

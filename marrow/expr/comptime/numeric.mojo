@@ -65,6 +65,7 @@ from ...kernels.conditional import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
+from ...views import apply
 from ..logical import Shape
 from ..bindings import Bindings
 from ..index import Index, keep_every
@@ -169,6 +170,8 @@ struct DivisionBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     """
 
     comptime Type = promote[Self.L.Type, Self.R.Type]
+    comptime DivisorType = Self.R.Type.native
+    """The divisor's lane type, which the zero scan reads in."""
 
     comptime shape = Shape.columnar
     """Columnar regardless of the operands, as `ConditionalBinary` is.
@@ -199,13 +202,9 @@ struct DivisionBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        """Bind both operands, and mark the rows whose divisor is non-zero.
-
-        One pass, and the bitmap is thrown away when nothing was zero — which
-        is the common case, and why the third slot is an `Optional` rather
-        than a bitmap that is all-ones most of the time. Scanning first to
-        find out whether to allocate would read the divisor twice to save a
-        bit per row.
+        """Bind both operands, and mark the rows whose divisor is non-zero:
+        the lane's own `!= 0`, bit-packed by `views.apply`, and `None` when no
+        divisor is zero — the common case — so validity has nothing to do.
 
         The divisor is read in its own type, before the promotion `lane`
         applies: promotion only ever widens, and no widening turns a zero into
@@ -214,17 +213,18 @@ struct DivisionBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
         var lb = self.l.bind(batch, bindings)
         var rb = self.r.bind(batch, bindings)
         var length = len(batch)
+        var mask = Bitmap.alloc_uninit(length)
 
-        var mask = Bitmap.alloc_zeroed(length)
-        var any_zero = False
-        for i in range(length):
-            if self.r.lane[1](rb, i)[0] == 0:
-                any_zero = True
-            else:
-                mask.unsafe_set(i)
-        if not any_zero:
-            return (lb^, rb^, None)
-        return (lb^, rb^, Optional(mask^.to_immutable()))
+        @always_inline
+        def nonzero[W: Int](i: Int) {imm} -> SIMD[DType.bool, W]:
+            return self.r.lane[W](rb, i).ne(0)
+
+        apply[Self.DivisorType](mask.view(), nonzero)
+        var bits = mask^.to_immutable()
+        var nonzero_rows = Optional[Bitmap[mut=False]](None)
+        if bits.unset_count() > 0:
+            nonzero_rows = Optional(bits^)
+        return (lb^, rb^, nonzero_rows^)
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Null where either operand is null **or** the divisor is zero."""

@@ -14,7 +14,6 @@ def plan() raises -> DynRelation:
     integer, and no other case in the corpus asks about a result type computed
     from the operands' *parameters* rather than their families.
 
-    -- skip mojo
     -- skip python
 
     -- expected
@@ -27,17 +26,8 @@ def plan() raises -> DynRelation:
     '-6.2500'
     """
     var t = table("sales")
-    var d = t.project(
+    var dec = decimal128(10, 2)
+    return t.project(
         ["a", "b"],
-        [
-            NumericCast[Decimal128Type](col("price", float64)),
-            NumericCast[Decimal128Type](col("qty", int32)),
-        ],
-    )
-    return d.project(
-        ["p"],
-        [
-            col("a", decimal128(10, 2))
-            * col("b", decimal128(10, 2)).cast(string, safe=False)
-        ],
-    )
+        [col("price", float64).cast(dec), col("qty", int32).cast(dec)],
+    ).project(["p"], [(col("a", dec) * col("b", dec)).cast(string)])

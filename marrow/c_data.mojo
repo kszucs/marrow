@@ -455,16 +455,16 @@ struct CArrowSchema(Copyable, Movable):
             fmt = "tin"
         elif dtype.is_decimal32():
             ref d = dtype.as_decimal32()
-            fmt = {"d:", d.precision, ",", d.scale, ",32"}
+            fmt = {"d:", d.precision(), ",", d.scale(), ",32"}
         elif dtype.is_decimal64():
             ref d = dtype.as_decimal64()
-            fmt = {"d:", d.precision, ",", d.scale, ",64"}
+            fmt = {"d:", d.precision(), ",", d.scale(), ",64"}
         elif dtype.is_decimal128():
             ref d = dtype.as_decimal128()
-            fmt = {"d:", d.precision, ",", d.scale}
+            fmt = {"d:", d.precision(), ",", d.scale()}
         elif dtype.is_decimal256():
             ref d = dtype.as_decimal256()
-            fmt = {"d:", d.precision, ",", d.scale, ",256"}
+            fmt = {"d:", d.precision(), ",", d.scale(), ",256"}
         elif dtype.is_struct():
             fmt = "+s"
             ref st = dtype.as_struct()

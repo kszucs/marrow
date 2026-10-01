@@ -108,7 +108,6 @@ Recounted 2026-09-27, by prefix:
 | 4 | joins — cross, non-equi, asof |
 | 3 | GROUPING SETS / ROLLUP / CUBE |
 | 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |
-| 3 | decimals |
 | 2 | subqueries |
 | 1 | `DISTINCT ON` |
 
@@ -344,8 +343,7 @@ work". What is left:
 - **The comptime lane prunes numerics only.** Temporal and decimal predicates
   prune through the runtime lane, which recovers the dtype from the index and
   dispatches. In the fused lane `TemporalCompare` inherits `Value.mask`'s
-  default and keeps every chunk, and a `DecimalValue` column has no comparison
-  node to prune with (§2.6). Temporal would need a dtype *instance* to
+  default and keeps every chunk. Temporal would need a dtype *instance* to
   prune with, since a temporal type carries a unit and `Stat()` does not exist
   where `NumericType(Defaultable, ...)` makes it free; that was judged not worth
   a required trait member for one dtype family.
@@ -721,11 +719,11 @@ a categorical improvement for a small amount of code.
     their fold is neither associative nor bounded, so `Foldable`'s
     `combine_at` contract does not describe them.
 
-#### 2.6 Nested-type and decimal operations
+#### 2.6 Nested-type operations
 
 **Storage is complete, and every type enters an expression** — each has a
 column, literal and parameter leaf — **but almost nothing computes on the
-nested ones or on decimal.**
+nested ones.**
 
 - **Nested:** eight golden cases — list element access, list slice, `unnest`,
   list sum, struct field access, map lookup, map cardinality. The nested verbs
@@ -735,12 +733,6 @@ nested ones or on decimal.**
   `MapValues`/`MapLength`, and `StructField` — and struct is genuinely thin
   there too (`structs.py` defines exactly two nodes), so `StructField` alone
   closes most of the struct gap.
-- **Decimal:** a decimal column, literal and parameter enter the comptime lane
-  as `DecimalValue` (`col("price", decimal128(10, 2))`), but **nothing computes
-  on one**: there is no decimal arithmetic, comparison, cast or aggregate node,
-  though all four decimal widths and every decimal cast kernel exist. Each
-  node has to align scales before it adds or compares. For a library aimed at
-  analytics, "cannot compute on a money column" is close to disqualifying.
 
 #### 2.7 No row format
 

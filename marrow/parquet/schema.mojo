@@ -1020,22 +1020,22 @@ struct SchemaMapping(Movable):
             el.logical_type = LogicalType.DECIMAL
             if dtype.is_decimal32():
                 el.type = PhysicalType.INT32
-                el.precision = dtype.as_decimal32().precision
-                el.scale = dtype.as_decimal32().scale
+                el.precision = dtype.as_decimal32().precision()
+                el.scale = dtype.as_decimal32().scale()
             elif dtype.is_decimal64():
                 el.type = PhysicalType.INT64
-                el.precision = dtype.as_decimal64().precision
-                el.scale = dtype.as_decimal64().scale
+                el.precision = dtype.as_decimal64().precision()
+                el.scale = dtype.as_decimal64().scale()
             elif dtype.is_decimal128():
                 el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
                 el.type_length = 16
-                el.precision = dtype.as_decimal128().precision
-                el.scale = dtype.as_decimal128().scale
+                el.precision = dtype.as_decimal128().precision()
+                el.scale = dtype.as_decimal128().scale()
             else:
                 el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
                 el.type_length = 32
-                el.precision = dtype.as_decimal256().precision
-                el.scale = dtype.as_decimal256().scale
+                el.precision = dtype.as_decimal256().precision()
+                el.scale = dtype.as_decimal256().scale()
         elif dtype.is_float16():
             # FLOAT16 is a FIXED_LEN_BYTE_ARRAY(2) holding the IEEE half bits.
             el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY

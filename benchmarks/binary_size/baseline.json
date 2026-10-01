@@ -1,14 +1,15 @@
 {
-  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-09-27, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for the error taxonomy: a typed error raised from a bare `raises` frame is converted to `Error` inline at the site, +21,172 (+1.46%) on query_streaming_agg_fused and +21,740 (+1.51%) on query_expr2_agg_fused, mostly in the dispatch ladders; query_cli -13,568 (-0.45%), every other gate within +/-0.1%. Deltas are against the parent commit measured on the same machine.",
+  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-10-01, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for decimal arithmetic: the runtime-lane gates link every decimal width's code path, query_streaming_agg +840,832 (+5.8%) and query_dynvalue +289,344 (+2.9%), accepted because a runtime-lane binary has already chosen the interpreter; every comptime-lane gate is unchanged. query_decimal_agg_fused is new: query_streaming_agg_fused over decimal128 columns, +5,248 (+0.36%) over its int64 twin. query_cli +14,656 (+0.49%) was already on main before this change.",
   "threshold_pct": 0.5,
   "gates": {
     "query_streaming": 1449528,
     "query_join": 1679668,
     "query_streaming_agg_fused": 1475676,
-    "query_streaming_agg": 14446308,
-    "query_dynvalue": 10098588,
+    "query_streaming_agg": 15287140,
+    "query_dynvalue": 10387932,
     "query_expr2_streaming": 1435960,
     "query_expr2_agg_fused": 1458084,
-    "query_cli": 2997228
+    "query_cli": 3011884,
+    "query_decimal_agg_fused": 1480924
   }
 }

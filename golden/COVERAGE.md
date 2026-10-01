@@ -112,6 +112,15 @@ declines and which build sides move — lives in
 `python/marrow/tests/test_join_reorder.py`, which builds these same plans over
 these same fixture bytes and reads `explain()`.
 
+### Decimals
+
+`decimal_sum_keeps_scale` and `decimal_multiply_widens_scale` assert a result
+type computed from the operands' *parameters*: a sum keeps its scale, and a
+product adds the two. Both render the answer as **text**, so the scale is
+asserted and not merely the value — `7.00` and `7.0` are the same number and
+different answers. `decimal_division_rounds` is the corpus's one `xfail`; see
+below.
+
 ### Predicates and three-valued logic
 
 Every comparison operator on int64, int32, float64, string and bool; `AND`,
@@ -198,7 +207,7 @@ surface is Mojo-only.
 
 ## Recorded as unsupported
 
-58 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+55 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `distinct()` and
 `SELECT DISTINCT` are an `aggregate` with keys and no aggregates; `DISTINCT ON`
@@ -269,13 +278,6 @@ derived column instead.
 a sum, an element, an unnested column — because the expectation block cannot
 render a list, struct or map.
 
-**Decimals** (3) — `decimal_sum_keeps_scale`, `decimal_multiply_widens_scale`,
-`decimal_division_rounds`. A decimal column, literal and parameter exist
-(`col("price", decimal128(10, 2))`), but `DecimalValue` has no arithmetic,
-cast or aggregate node, because each has to align scales first. All three
-render the result as **text** so that the scale is asserted and not merely the
-value: `7.00` and `7.0` are the same number and different answers.
-
 **Predicates and subqueries** (5) — `filter_in_literal_list`,
 `filter_not_in_list_with_null`, `filter_is_distinct_from`, `subquery_scalar`,
 `subquery_correlated_scalar`. `IN` is a node-over-existing-kernel gap
@@ -291,11 +293,21 @@ drops the row instead of widening it.
 
 ## Recorded as wrong — `xfail`
 
-**None.** The corpus carries no `xfail` today, and the marker's meaning is
-unchanged: a case that compiles, runs, and answers *wrongly*, strict so that
-fixing it turns the case red and forces the marker's removal.
+**One**, and it is a divergence chosen on purpose rather than a defect
+waiting for a fix. The marker's meaning is otherwise unchanged: a case that
+compiles, runs, and answers differently from DuckDB, strict so that a change
+in the answer turns the case red and forces the marker's removal.
 
-Four cases carried it until 2026-09-04, and what they had in common is worth
+`decimal_division_rounds` asks `CAST(price AS DECIMAL(10, 2)) / 3`. DuckDB
+answers `DOUBLE`; marrow follows Arrow C++, where a decimal divided by an
+integer stays an exact decimal at scale `max(4, s1 + p2 - s2 + 1)` — 13 here —
+truncated, so `0.50 / 3` is `0.1666666666666` where DuckDB prints
+`0.16666666666666666`. The other engines split the same way: arrow-rs and
+ClickHouse keep a decimal and truncate, Polars keeps a decimal and rounds
+(measured 2026-09-27). Its two siblings, `decimal_sum_keeps_scale` and
+`decimal_multiply_widens_scale`, agree with DuckDB and pass.
+
+Four other cases carried it until 2026-09-04, and what they had in common is worth
 keeping. Two root causes, four faces:
 
 | Case | was | is |
