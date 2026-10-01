@@ -40,6 +40,11 @@ from ...dtypes import (
     StringLikeType,
     StringType,
 )
+from ...kernels.regex import (
+    RegexpExtractKernel,
+    RegexpMatchesKernel,
+    RegexpReplaceKernel,
+)
 from ...kernels.string import (
     AsciiKernel,
     CapitalizeKernel,
@@ -309,6 +314,7 @@ comptime EndsWith = StringPredicate[EndsWithKernel, _, _]
 comptime StrContains = StringPredicate[ContainsKernel, _, _]
 comptime Like = StringPredicate[LikeKernel, _, _]
 comptime ILike = StringPredicate[ILikeKernel, _, _]
+comptime RegexpMatches = StringPredicate[RegexpMatchesKernel, _, _]
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +521,12 @@ comptime Replace = StringFunction[
 ]
 comptime SplitPart = StringFunction[
     SplitPartKernel, _, _, UnusedText, UnusedNumber, _
+]
+comptime RegexpExtract = StringFunction[
+    RegexpExtractKernel, _, _, UnusedText, UnusedNumber, _
+]
+comptime RegexpReplace = StringFunction[
+    RegexpReplaceKernel, _, _, _, UnusedNumber, UnusedNumber
 ]
 comptime TrimChars = StringFunction[
     TrimCharsKernel, _, _, UnusedText, UnusedNumber, UnusedNumber

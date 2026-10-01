@@ -1917,7 +1917,7 @@ struct Planner(Copyable, Movable):
                     " ENDSWITH:endswith ENDS_WITH:endswith CONTAINS:contains"
                     " POSITION:position STRPOS:position INSTR:position"
                     " LEFT:left RIGHT:right REPEAT:repeat TRIM:trim_chars"
-                    " BTRIM:trim_chars"
+                    " BTRIM:trim_chars REGEXP_MATCHES:regexp_matches"
                 ),
                 name,
             )
@@ -1926,6 +1926,8 @@ struct Planner(Copyable, Movable):
                 (
                     "SUBSTR:substr SUBSTRING:substr REPLACE:replace"
                     " SPLIT_PART:split_part LPAD:lpad RPAD:rpad"
+                    " REGEXP_EXTRACT:regexp_extract"
+                    " REGEXP_REPLACE:regexp_replace"
                 ),
                 name,
             )

@@ -12,11 +12,6 @@ def plan() raises -> DynRelation:
     string rather than null, which is the third "not found" convention in this
     family after `split_part`'s empty string and `position`'s zero.
 
-    `marrow/kernels/string.mojo` has no such kernel.
-
-    -- skip mojo
-    -- skip python
-
     -- expected
     s:string
     'a'

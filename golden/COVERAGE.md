@@ -207,7 +207,7 @@ surface is Mojo-only.
 
 ## Recorded as unsupported
 
-55 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+52 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `distinct()` and
 `SELECT DISTINCT` are an `aggregate` with keys and no aggregates; `DISTINCT ON`
@@ -229,17 +229,16 @@ missing *nodes* over kernels marrow already has (`bool_and`/`bool_or` over
 operand, so `arg_min`, `corr`, an ordered `first`, a `FILTER` clause and a
 `DISTINCT` modifier have nowhere to go.
 
-**String functions** (5) — `string_concat_function_skips_null`,
-`string_concat_ws`, `string_regexp_matches`, `string_regexp_replace`,
-`string_regexp_extract`. Regular expressions are the whole of what is left
-here besides `concat`: the three-way NULL split across `||`, `concat` and
+**String functions** (2) — `string_concat_function_skips_null`,
+`string_concat_ws`. The three-way NULL split across `||`, `concat` and
 `concat_ws` is deliberate — one operation with three answers — and `||` is the
 one of the three marrow implements.
 
 Eleven came off this list when the string surface landed:
 `||`'s null propagation, `substr`, `replace`, `split_part`, `lpad`,
 `position`, `repeat`, `left`/`right`, `trim` with characters, character
-`length` and `ascii`.
+`length` and `ascii`. The three `string_regexp_*` cases came off with the
+regex kernels.
 
 **Math functions** (7) — `math_greatest_and_least`, `math_round_to_digits`,
 `math_round_half_to_even`, `math_trigonometry`,

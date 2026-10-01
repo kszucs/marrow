@@ -85,6 +85,9 @@ from ..values import (
     left,
     or_,
     position,
+    regexp_extract,
+    regexp_matches,
+    regexp_replace,
     quarter,
     replace,
     right,
@@ -722,6 +725,39 @@ def test_runtime_sql_string_functions_are_reachable() raises:
     assert_true(pos.is_null(2))
 
 
+def test_runtime_regexp_verbs() raises:
+    """`regexp_matches`, `regexp_extract` and `regexp_replace` over the SQL
+    string fixture, the pattern a literal child like every string argument."""
+    var b = _text()
+
+    var m = (
+        _over(b, regexp_matches(column("s"), _str("^[a-z]+,"))).as_bool().copy()
+    )
+    assert_true(m[0].value())
+    assert_false(m[1].value())
+    assert_true(m.is_null(2))
+
+    var e = (
+        _over(
+            b, regexp_extract(column("s"), _str("([a-z]+),([a-z]+)"), _lit(2))
+        )
+        .as_string()
+        .copy()
+    )
+    assert_equal(e[0].value(), "beta")
+    assert_equal(e[1].value(), "")
+    assert_true(e.is_null(2))
+
+    var r = (
+        _over(b, regexp_replace(column("s"), _str("[aeiou]"), _str("_")))
+        .as_string()
+        .copy()
+    )
+    assert_equal(r[0].value(), "_lpha,beta")
+    assert_equal(r[1].value(), "g_mma")
+    assert_true(r.is_null(2))
+
+
 def test_runtime_sql_string_arguments_can_be_columns() raises:
     """`substr(s, 1, n)` with `n` a column — the expression the constants
     version had no way to build in either lane."""
@@ -960,8 +996,8 @@ def test_verb_vocabulary_is_constructible() raises:
         _ = rv.call(name.copy(), [a.copy(), a.copy(), a.copy()])
 
     assert_equal(len(rv.unary_verbs()), 46)
-    assert_equal(len(rv.binary_verbs()), 27)
-    assert_equal(len(rv.ternary_verbs()), 5)
+    assert_equal(len(rv.binary_verbs()), 28)
+    assert_equal(len(rv.ternary_verbs()), 7)
 
 
 def test_verb_vocabulary_excludes_the_constructors_that_do_work() raises:

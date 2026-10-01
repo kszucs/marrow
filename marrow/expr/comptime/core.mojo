@@ -175,6 +175,9 @@ from .strings import (
     Lower,
     Position,
     RPad,
+    RegexpExtract,
+    RegexpMatches,
+    RegexpReplace,
     Replace,
     Reverse,
     RStrip,
@@ -946,6 +949,68 @@ trait StringValue(ComptimeValue):
     def ilike[Rhs: StringValue](self, o: Rhs) -> ILike[Self, Rhs]:
         """SQL `ILIKE` — `like`, case-insensitively."""
         return ILike[Self, Rhs](self.copy(), o.copy())
+
+    def regexp_matches[
+        Rhs: StringValue
+    ](self, pattern: Rhs) -> RegexpMatches[Self, Rhs]:
+        """DuckDB `regexp_matches` — True where `pattern` matches **anywhere**;
+        anchor with `^`/`$` for a full match. A `Shape.scalar` pattern is
+        compiled once per batch."""
+        return RegexpMatches[Self, Rhs](self.copy(), pattern.copy())
+
+    def regexp_matches(
+        self, var pattern: String
+    ) -> RegexpMatches[Self, UnusedText]:
+        """`regexp_matches` with a constant pattern."""
+        return self.regexp_matches(UnusedText(pattern^))
+
+    def regexp_extract[
+        PatArg: StringValue, GroupArg: NumericValue
+    ](self, pattern: PatArg, group: GroupArg) -> RegexpExtract[
+        Self, PatArg, GroupArg
+    ]:
+        """DuckDB `regexp_extract(self, pattern, group)` — capture group
+        `group` of the first match, group 0 being the whole match. No match
+        answers the empty string, not null."""
+        return RegexpExtract[Self, PatArg, GroupArg](
+            self.copy(),
+            pattern.copy(),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            group.copy(),
+        )
+
+    def regexp_extract(
+        self, var pattern: String, group: Int
+    ) -> RegexpExtract[Self, UnusedText, UnusedNumber]:
+        """`regexp_extract` with a constant pattern and group."""
+        return self.regexp_extract(
+            UnusedText(pattern^), UnusedNumber(Int64(group))
+        )
+
+    def regexp_replace[
+        PatArg: StringValue, ReplArg: StringValue
+    ](self, pattern: PatArg, replacement: ReplArg) -> RegexpReplace[
+        Self, PatArg, ReplArg
+    ]:
+        """DuckDB `regexp_replace` — the **first** match only, where `replace`
+        replaces every occurrence. `\\1`..`\\9` in `replacement` insert a
+        capture group."""
+        return RegexpReplace[Self, PatArg, ReplArg](
+            self.copy(),
+            pattern.copy(),
+            replacement.copy(),
+            UnusedNumber(Int64(0)),
+            UnusedNumber(Int64(0)),
+        )
+
+    def regexp_replace(
+        self, var pattern: String, var replacement: String
+    ) -> RegexpReplace[Self, UnusedText, UnusedText]:
+        """`regexp_replace` with a constant pattern and replacement."""
+        return self.regexp_replace(
+            UnusedText(pattern^), UnusedText(replacement^)
+        )
 
     # -- aggregates ---------------------------------------------------------
     #

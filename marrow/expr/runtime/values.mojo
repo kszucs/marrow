@@ -123,6 +123,11 @@ from ...kernels.numeric import (
     LtKernel,
     NeKernel,
 )
+from ...kernels.regex import (
+    RegexpExtractKernel,
+    RegexpMatchesKernel,
+    RegexpReplaceKernel,
+)
 from ...kernels.string import (
     AsciiKernel,
     CapitalizeKernel,
@@ -991,6 +996,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return EndsWithKernel.dispatch(l^, r^)
         if self._tag == "contains":
             return ContainsKernel.dispatch(l^, r^)
+        if self._tag == "regexp_matches":
+            return RegexpMatchesKernel.dispatch(l^, r^)
 
         # Nested. A binary tag rather than a payload one, unlike `isin`: the
         # search value varies per row, so it is a column the batch supplies and
@@ -1073,6 +1080,16 @@ struct RuntimeValue(Evaluable, Movable, Value):
                 ops.text = Self._as_text(kids[1])
                 ops.count = Self._as_int64(kids[2])
                 return SplitPartKernel.dispatch(kids[0], ops)
+            if self._tag == "regexp_extract":
+                var ops = StringOperands()
+                ops.text = Self._as_text(kids[1])
+                ops.count = Self._as_int64(kids[2])
+                return RegexpExtractKernel.dispatch(kids[0], ops)
+            if self._tag == "regexp_replace":
+                var ops = StringOperands()
+                ops.text = Self._as_text(kids[1])
+                ops.alt = Self._as_text(kids[2])
+                return RegexpReplaceKernel.dispatch(kids[0], ops)
         return None
 
     @staticmethod
@@ -1805,6 +1822,33 @@ def position(var a: RuntimeValue, var needle: RuntimeValue) -> RuntimeValue:
     return RuntimeValue("position", a, needle)
 
 
+def regexp_matches(
+    var a: RuntimeValue, var pattern: RuntimeValue
+) -> RuntimeValue:
+    """DuckDB `regexp_matches(a, pattern)` — True where `pattern` matches
+    **anywhere** in `a`; anchor with `^`/`$` for a full match."""
+    return RuntimeValue("regexp_matches", a, pattern)
+
+
+def regexp_extract(
+    var a: RuntimeValue, var pattern: RuntimeValue, var group: RuntimeValue
+) -> RuntimeValue:
+    """DuckDB `regexp_extract(a, pattern, group)` — capture group `group` of
+    the first match, group 0 being the whole match. No match answers the
+    empty string, not null."""
+    return RuntimeValue("regexp_extract", [a^, pattern^, group^])
+
+
+def regexp_replace(
+    var a: RuntimeValue,
+    var pattern: RuntimeValue,
+    var replacement: RuntimeValue,
+) -> RuntimeValue:
+    """DuckDB `regexp_replace(a, pattern, replacement)` — the **first** match
+    only; `\\1`..`\\9` in `replacement` insert a capture group."""
+    return RuntimeValue("regexp_replace", [a^, pattern^, replacement^])
+
+
 # ---------------------------------------------------------------------------
 # Temporal
 # ---------------------------------------------------------------------------
@@ -2073,6 +2117,7 @@ comptime BINARY_VERBS = [
     StaticString("repeat"),
     StaticString("trim_chars"),
     StaticString("position"),
+    StaticString("regexp_matches"),
     # conditional
     StaticString("nullif"),
     StaticString("fill_null"),
@@ -2086,6 +2131,8 @@ comptime TERNARY_VERBS = [
     StaticString("rpad"),
     StaticString("replace"),
     StaticString("split_part"),
+    StaticString("regexp_extract"),
+    StaticString("regexp_replace"),
 ]
 
 

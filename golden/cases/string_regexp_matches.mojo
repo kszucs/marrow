@@ -12,12 +12,6 @@ def plan() raises -> DynRelation:
     match and `regexp_full_match` an anchored one — the distinction most
     engines do not draw, and the reason the pattern here anchors explicitly.
 
-    `marrow/kernels/string.mojo` has no such kernel. `LikeKernel` implements
-    SQL `LIKE`, which is a different language.
-
-    -- skip mojo
-    -- skip python
-
     -- expected
     b:bool
     True

@@ -44,7 +44,7 @@ narrowing a source to zero columns.
 
 ## What the corpus measures as missing
 
-58 of the 285 cases carry `-- skip mojo`: marrow has no API for them, so the
+52 of the 285 cases carry `-- skip mojo`: marrow has no API for them, so the
 SQL and the DuckDB answer are recorded and the marrow body is a *proposal*
 rather than a verified spelling.
 
@@ -54,11 +54,10 @@ rather than a verified spelling.
 | 10 | temporal — date_diff, age, strftime/strptime, make_date, epoch seconds, month intervals, time zones, timestamp literals |
 | 8 | nested — struct field, map lookup, list element/slice, unnest |
 | 7 | math — greatest/least, rounding to digits, bitwise operators, gcd/lcm, signbit, trigonometry |
-| 5 | string — regexp, concat_ws |
+| 2 | string — concat_ws, null-skipping `concat` |
 | 4 | joins — cross, non-equi, asof |
 | 3 | GROUPING SETS / ROLLUP / CUBE |
 | 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |
-| 3 | decimals in expressions |
 | 2 | subqueries |
 | 1 | `DISTINCT ON` |
 

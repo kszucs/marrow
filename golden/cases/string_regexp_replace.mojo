@@ -13,11 +13,6 @@ def plan() raises -> DynRelation:
     and the reason this is its own case rather than a variation of
     `string_replace`.
 
-    `marrow/kernels/string.mojo` has no such kernel.
-
-    -- skip mojo
-    -- skip python
-
     -- expected
     s:string
     '_,b,c'

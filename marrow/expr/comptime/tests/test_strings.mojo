@@ -10,7 +10,7 @@ composes exactly like the others: a string predicate bit-packs, feeds `And`,
 and drives a `Filter` unchanged.
 """
 
-from std.testing import assert_equal, assert_true
+from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import col, lit, table
 from ...bindings import Bindings
@@ -597,6 +597,39 @@ def test_string_function_constant_arguments_still_read_as_constants() raises:
     # Both ends: the leading "alpha" *and* the trailing "a" of "beta" are set
     # members, so `trim` eats them and leaves ",bet".
     assert_equal(_strings(col("s", string).strip("aplh"), b)[0].value(), ",bet")
+
+
+def test_regexp_functions() raises:
+    """The three regex verbs through the fluent surface: `regexp_matches` on
+    the scalar branch, `regexp_extract` and `regexp_replace` through the
+    operand carrier, and a column pattern read per row."""
+    var b = _sql_batch()
+    var m = (
+        col("s", string)
+        .regexp_matches("^[a-z]+,")
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .as_bool()
+        .copy()
+    )
+    assert_true(m[0].value())
+    assert_false(m[1].value())
+    assert_true(m.is_null(2))
+
+    var e = _strings(col("s", string).regexp_extract("([a-z]+),([a-z]+)", 2), b)
+    assert_equal(e[0].value(), "beta")
+    assert_equal(e[1].value(), "")
+    assert_true(e.is_null(2))
+
+    var r = _strings(col("s", string).regexp_replace("[aeiou]", "_"), b)
+    assert_equal(r[0].value(), "_lpha,beta")
+    assert_equal(r[1].value(), "g_mma")
+
+    var per_row = _strings(
+        col("s", string).regexp_replace(col("s", string), lit("<\\0>", string)),
+        b,
+    )
+    assert_equal(per_row[0].value(), "<alpha,beta>")
 
 
 def test_a_string_function_operand_is_itself_an_expression() raises:

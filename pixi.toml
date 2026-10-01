@@ -29,6 +29,7 @@ backend = { name = "pixi-build-mojo", version = "0.1.*" }
 [package.build-dependencies]
 mojo-compiler = "==1.2.0.dev2026092105"
 mojo = "==1.2.0.dev2026092105"
+mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marrow" }
 
 [package.run-dependencies]
 # Mojo builds are compiled against a specific CPython minor version; update the
@@ -44,6 +45,9 @@ snappy = ">=1.1.0"
 lz4-c = ">=1.9.0"
 brotli = ">=1.0.9"
 zlib = ">=1.3.1"
+# A git source resolves only for a source build; publish the fork to
+# mojo-community before a release -- see backlog.md.
+mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marrow" }
 
 # One Mojo compile cache for every environment and every worktree. Its entries
 # are keyed by the IR being compiled, not by path, so a checkout reuses what
@@ -369,6 +373,10 @@ mojo = ">=1.2.0.dev2026092105,<2"
 # the pin; (2) makes that moot — do not drop it.  MAX uses its own version
 # line; upstream pins the pair together (mojo 1.2.0.dev ↔ max 26.7.0.dev).
 max = "==26.7.0.dev2026092105"
+# The regex engine behind `marrow/kernels/regex.mojo`: a fork of
+# msaelices/mojo-regex whose `marrow` branch builds on the pinned nightly.
+# It installs `lib/mojo/regex.mojoc`, which mojo finds with no `-I`.
+mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marrow" }
 # Mojo builds are compiled against a specific CPython minor version; update the
 # minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"

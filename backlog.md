@@ -92,7 +92,7 @@ sit in the same shape.
 
 ### 1.4 Engine capability the golden corpus measures as missing
 
-`golden/COVERAGE.md` is authoritative: 285 cases, of which **58 carry
+`golden/COVERAGE.md` is authoritative: 285 cases, of which **52 carry
 `-- skip mojo`** because marrow has no API for them. Their bodies
 are never compiled, so they are proposals rather than verified spellings.
 
@@ -104,7 +104,7 @@ Recounted 2026-09-27, by prefix:
 | 10 | temporal — date_diff, age, strftime/strptime, make_date, interval arithmetic, timezone attach |
 | 8 | nested — struct field, map lookup, list element/slice, unnest |
 | 7 | math — atan2 and the rest of the trigonometric family |
-| 5 | string — regexp, concat_ws, null-skipping `concat` |
+| 2 | string — concat_ws, null-skipping `concat` |
 | 4 | joins — cross, non-equi, asof |
 | 3 | GROUPING SETS / ROLLUP / CUBE |
 | 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |
@@ -146,6 +146,12 @@ blocked, four separate times.
   `GroupByOperator`: every group-by case in `expr/tests`, `golden/` and
   `python/marrow/tests` is far under the 50,000-row gate, so the engine's
   wiring to the parallel path is untested end to end.
+- **`mojo-regex` resolves only from git.** `pixi.toml` takes it from the
+  `marrow` branch of `kszucs/mojo-regex`, a fork of `msaelices/mojo-regex`
+  that builds on the pinned nightly. A git source resolves for a source build
+  and not for a conda install from prefix.dev. So before the next `v*` tag,
+  publish the fork to `mojo-community`, or return to upstream once it is
+  published and builds on marrow's Mojo.
 
 **The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
 NULL by first asking "is there a zero in this column", and
@@ -536,8 +542,9 @@ unchanged.
 **What exists.** 31 string kernels (case, strip family, trim chars, reverse,
 capitalize, byte and character length, ascii, starts/ends/contains, position,
 six comparisons, `LIKE`/`ILIKE`, substr/left/right, repeat, pad, replace,
-split_part, and `ConcatKernel` behind `||` in both lanes) and 15 temporal
-extractors plus `date_trunc`.
+split_part, and `ConcatKernel` behind `||` in both lanes), three regex kernels
+(`regexp_matches`, `regexp_extract`, `regexp_replace`, in
+`marrow/kernels/regex.mojo`) and 15 temporal extractors plus `date_trunc`.
 
 Adding one is cheap and reaches every caller: `UNARY_VERBS`/`BINARY_VERBS`/
 `TERNARY_VERBS` (`marrow/expr/runtime/values.mojo:1922`) is the single
@@ -545,7 +552,9 @@ vocabulary, and a verb added there is callable from Python without touching the
 bindings or `python/marrow/expr.py`.
 
 **Still absent — strings:** the `concat` function, which skips null
-arguments where `||` propagates them, `concat_ws`, and the whole regex family.
+arguments where `||` propagates them, `concat_ws`, and the rest of the regex
+family: `regexp_full_match`, a global `regexp_replace` (DuckDB's `'g'` flag),
+`regexp_split_to_array`, and `regexp_extract` without a group argument.
 
 **Still absent — temporal:** `date_diff`, interval arithmetic,
 `strftime`/`strptime`, `make_date`, `age`, and timezone attachment. Timezones
@@ -557,12 +566,20 @@ ibis's `strings.py` is the engine-level expectation: case, trim/pad,
 substring/slice, find/predicate, pattern match, regex (extract/split/
 replace), replace/split/join, and URL parsing.
 
-**What it would take.** What remains is the hard half. Regex needs a real
-engine — `mojo-regex` was evaluated and rejected on *correctness*, not
-availability (it never enters an optional group, so `(?:www\.)?` is skipped) —
-and timezone conversion needs a tz database. `concat`/`concat_ws` is the one
-cheap item left: `||` already runs through `ConcatKernel` in both lanes, and
-what is missing is the null-skipping variant.
+**Known-wrong regex answers.** The engine is a fork of `mojo-regex` (see
+1.8), whose capture-group path never enters an optional group: `(?:foo)?(bar)`
+on `"foobar"` captures from offset 3, so `regexp_replace(s, '(?:foo)?(bar)',
+'[\1]')` answers `foo[bar]` where DuckDB answers `[bar]`. The same path finds no
+match for a pattern whose only match is empty (`x*`). Only `regexp_extract`
+with a group above 0 and `regexp_replace` with a `\N` reference reach it;
+`regexp_matches` and group 0 use the overall matcher, which gets both right.
+`marrow/kernels/tests/test_regex.mojo` pins the wrong answer so a fixed engine
+flips the test. Report both upstream with the reproductions from `ced18e32`.
+
+**What it would take.** Timezone conversion needs a tz database.
+`concat`/`concat_ws` is the one cheap item left: `||` already runs through
+`ConcatKernel` in both lanes, and what is missing is the null-skipping
+variant.
 
 #### 1.7 Known-wrong answers in core operations
 
