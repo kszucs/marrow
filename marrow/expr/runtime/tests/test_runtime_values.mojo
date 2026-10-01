@@ -27,7 +27,17 @@ from ...builders import maximum as build_maximum
 from ...builders import minimum as build_minimum
 from ...builders import is_in as build_is_in
 from ....builders import array
-from ....dtypes import Date32Type, DynType, date32, float64, int32, int64
+from ....dtypes import (
+    Date32Type,
+    DynType,
+    TimestampType,
+    date32,
+    float64,
+    int32,
+    int64,
+    second,
+    timestamp,
+)
 from ....scalars import DynScalar, Int32Scalar, Int64Scalar, StringScalar
 from ....tabular import RecordBatch, record_batch
 from ...logical import Shape
@@ -51,6 +61,8 @@ from ..values import (
     coalesce,
     column,
     cos,
+    assume_timezone,
+    convert_timezone,
     date_trunc,
     eq,
     exp2,
@@ -578,6 +590,45 @@ def test_runtime_temporal_verbs() raises:
     )
 
 
+def test_runtime_timezone_verbs() raises:
+    """2021-06-15 12:30:45 read as Budapest wall-clock time is 10:30:45 UTC;
+    attached as UTC it renders with `+00`."""
+    var tb = PrimitiveBuilder[TimestampType](timestamp(second), capacity=2)
+    tb.append(Int64(1_623_760_245))
+    tb.append_null()
+    var b = record_batch([tb.finish().to_dyn()], names=["ts"])
+
+    var zoned = assume_timezone(column("ts"), "Europe/Budapest")
+    assert_true(
+        _over(b, zoned.copy()).dtype()
+        == DynType(timestamp(second, "Europe/Budapest"))
+    )
+    var h = (
+        _over(b, rv.call("hour", [convert_timezone(zoned^, "UTC")]))
+        .as_int32()
+        .copy()
+    )
+    assert_equal(Int(h[0].value()), 10)
+    assert_true(h.is_null(1))
+
+    var s = (
+        _over(b, cast(assume_timezone(column("ts"), "UTC"), DynType(string)))
+        .as_string()
+        .copy()
+    )
+    assert_equal(s[0].value(), "2021-06-15 12:30:45+00")
+    assert_true(s.is_null(1))
+
+
+def test_runtime_timezone_rejects_an_unknown_zone_at_construction() raises:
+    var raised = False
+    try:
+        _ = assume_timezone(column("ts"), "Mars/Base")
+    except:
+        raised = True
+    assert_true(raised)
+
+
 def test_runtime_date_trunc_rejects_a_bad_unit_at_construction() raises:
     """The unit is parsed when the plan is built, not on the first row that
     evaluates it — which is why `CalendarUnit` is a type and not a `String`."""
@@ -1015,6 +1066,8 @@ def test_verb_vocabulary_excludes_the_constructors_that_do_work() raises:
         String("like"),
         String("ilike"),
         String("date_trunc"),
+        String("assume_timezone"),
+        String("convert_timezone"),
         String("isin"),
         String("cast"),
         String("cast_unsafe"),

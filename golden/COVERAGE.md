@@ -207,7 +207,7 @@ surface is Mojo-only.
 
 ## Recorded as unsupported
 
-52 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+51 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `distinct()` and
 `SELECT DISTINCT` are an `aggregate` with keys and no aggregates; `DISTINCT ON`
@@ -249,12 +249,18 @@ tell `-0.0` from `0.0`, which is why the `floats` fixture carries both.
 The left shift in `math_bitwise_operators` takes `abs(n)` because DuckDB
 refuses to shift a negative at all — that one operation is not comparable.
 
-**Temporal** (10) — `temporal_literal_comparison`, `temporal_date_diff`,
+**Temporal** (9) — `temporal_literal_comparison`, `temporal_date_diff`,
 `temporal_add_month_interval`, `temporal_interval_between_timestamps`,
 `temporal_epoch_seconds`, `temporal_strftime`, `temporal_strptime`,
-`temporal_make_date`, `temporal_age`, `temporal_timezone_attach`. `last_day`,
+`temporal_make_date`, `temporal_age`. `last_day`,
 `iso_week`/`iso_year` and the weekday and month names came off this list with
-the temporal surface.
+the temporal surface, and `temporal_timezone_attach` with the zone verbs.
+
+`temporal_timezone_attach` and `temporal_timezone_convert` render a zoned
+timestamp as text, and that text depends on DuckDB's session zone, so
+`devkit golden regenerate` pins it to UTC. Both are gaps in the SQL lane:
+the frontend has no `timezone()`, deliberately, since DuckDB reads a zoned
+value in the session zone and Arrow in its own.
 
 `temporal_epoch_seconds` is the one whose skip outlived its reason and still
 belongs: `EpochKernel` exists, and un-skipping it was tried and reverted on

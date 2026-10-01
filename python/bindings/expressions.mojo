@@ -23,8 +23,9 @@ and `marrow/expr/runtime/values.mojo` owns the one list of what may be called.
 The verbs whose construction does real work keep their own entry points, and
 they are the ones a table cannot express: `and`/`or`/`not` constant-fold, which
 `PropagateEmpty` depends on; `coalesce` and `case_when` are n-ary; `cast`,
-`isin`, `like`, `ilike` and `date_trunc` carry typed payloads, and `date_trunc`
-parses its unit at construction.
+`isin`, `like`, `ilike`, `date_trunc`, `assume_timezone` and `convert_timezone`
+carry typed payloads, and `date_trunc` and the zone verbs validate theirs at
+construction.
 
 **The two boxes.** `add_type[T]` installs a default `tp_repr` that calls
 `repr(value)`, i.e. `Writable.write_repr_to`, which has a **reflection-based
@@ -73,12 +74,14 @@ from marrow.expr.runtime.aggregates import RuntimeAggregate
 from marrow.expr.runtime.values import (
     RuntimeValue,
     and_ as _and,
+    assume_timezone as _assume_timezone,
     binary_verbs as _binary_verbs,
     call as _call,
     case_when as _case_when,
     cast as _cast,
     coalesce as _coalesce,
     column as _column,
+    convert_timezone as _convert_timezone,
     date_trunc as _date_trunc,
     if_else as _if_else,
     ilike as _ilike,
@@ -358,6 +361,20 @@ def expr_date_trunc(
     """The unit is parsed here, so a bad spelling fails when the plan is built
     rather than on the row that first evaluates it."""
     return wrap_expr(_date_trunc(unwrap(value), String(py=unit)))
+
+
+def expr_assume_timezone(
+    value: PythonObject, zone: PythonObject
+) raises -> PythonObject:
+    """The zone is loaded here, so an unknown one fails when the plan is
+    built."""
+    return wrap_expr(_assume_timezone(unwrap(value), String(py=zone)))
+
+
+def expr_convert_timezone(
+    value: PythonObject, zone: PythonObject
+) raises -> PythonObject:
+    return wrap_expr(_convert_timezone(unwrap(value), String(py=zone)))
 
 
 def expr_if_else(
@@ -661,6 +678,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[expr_like]("expr_like")
     mb.def_function[expr_ilike]("expr_ilike")
     mb.def_function[expr_date_trunc]("expr_date_trunc")
+    mb.def_function[expr_assume_timezone]("expr_assume_timezone")
+    mb.def_function[expr_convert_timezone]("expr_convert_timezone")
     mb.def_function[expr_if_else]("expr_if_else")
     mb.def_function[expr_coalesce]("expr_coalesce")
     mb.def_function[expr_case_when]("expr_case_when")

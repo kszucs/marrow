@@ -19,9 +19,11 @@ from ...arrays import (
     Time64Array,
     TimestampArray,
     PrimitiveArray,
+    StringArray,
 )
 from ...builders import PrimitiveBuilder, array
 from ...dtypes import (
+    DynType,
     DurationType,
     duration,
     int32,
@@ -34,6 +36,7 @@ from ...dtypes import (
     millisecond,
     microsecond,
     nanosecond,
+    string,
     Date32Type,
     Date64Type,
     Time32Type,
@@ -60,7 +63,10 @@ from ...kernels.temporal import (
     unit_minute,
     unit_hour,
     unit_day,
+    AssumeTimezoneKernel,
+    ConvertTimezoneKernel,
 )
+from ...kernels.cast import TimestampToStringKernel
 
 
 # --- helpers ---------------------------------------------------------------
@@ -448,3 +454,162 @@ def test_calendar_unit_parses_the_new_names() raises:
     assert_true(CalendarUnit.parse("quarter") == unit_quarter)
     assert_true(CalendarUnit.parse("year") == unit_year)
     assert_equal(String(unit_quarter), "quarter")
+
+
+# --- time zones ------------------------------------------------------------
+#
+# Instants from pyarrow (`assume_timezone`, `hour`, `floor_temporal` on zoned
+# arrays), which reads the same TZif files, except the skipped wall-clock time:
+# pyarrow's `nonexistent="earliest"` answers the last instant before the gap,
+# and marrow answers what ICU and DuckDB do, the earlier offset.
+
+
+def _tsd(values: List[Int], unit: TimestampType) raises -> DynArray:
+    return _ts(values, unit).to_dyn()
+
+
+def _naive_budapest_edges() raises -> DynArray:
+    """2021-01-01 00:00, 2021-06-15 12:30:45, the skipped 2021-03-28 02:30,
+    the repeated 2021-10-31 02:30 — as naive seconds — and a null."""
+    var b = PrimitiveBuilder[TimestampType](timestamp(second), capacity=5)
+    b.append(Int64(1_609_459_200))
+    b.append(Int64(1_623_760_245))
+    b.append(Int64(1_616_898_600))
+    b.append(Int64(1_635_647_400))
+    b.append_null()
+    return b.finish().to_dyn()
+
+
+def test_assume_timezone_reads_wall_clock_time() raises:
+    var got = AssumeTimezoneKernel.apply(
+        _naive_budapest_edges(), "Europe/Budapest"
+    )
+    assert_true(got.dtype() == timestamp(second, "Europe/Budapest").to_dyn())
+    ref ts = got.as_timestamp()
+    assert_equal(Int(ts[0].value()), 1_609_455_600)
+    assert_equal(Int(ts[1].value()), 1_623_753_045)
+    assert_equal(Int(ts[2].value()), 1_616_895_000)  # skipped: CET, 03:30 CEST
+    assert_equal(Int(ts[3].value()), 1_635_640_200)  # repeated: the earlier
+    assert_true(ts.is_null(4))
+
+
+def test_assume_timezone_refuses_a_zoned_timestamp() raises:
+    with assert_raises(contains="already has a time zone"):
+        _ = AssumeTimezoneKernel.apply(
+            _tsd([0], timestamp(second, "UTC")), "Europe/Budapest"
+        )
+    with assert_raises(contains="unknown time zone"):
+        _ = AssumeTimezoneKernel.apply(
+            _tsd([0], timestamp(second)), "Mars/Base"
+        )
+
+
+def test_extraction_reads_the_zone() raises:
+    var zoned = AssumeTimezoneKernel.apply(
+        _naive_budapest_edges(), "Europe/Budapest"
+    )
+    var hours = HourKernel.dispatch(zoned).as_int32().copy()
+    assert_equal(Int(hours[0].value()), 0)
+    assert_equal(Int(hours[1].value()), 12)
+    assert_equal(Int(hours[2].value()), 3)
+    assert_equal(Int(hours[3].value()), 2)
+    assert_true(hours.is_null(4))
+    # The same instants read in UTC.
+    var utc = ConvertTimezoneKernel.apply(zoned, "UTC")
+    assert_equal(Int(HourKernel.dispatch(utc).as_int32()[0].value()), 23)
+    assert_equal(Int(DayKernel.dispatch(utc).as_int32()[0].value()), 31)
+
+
+def test_convert_timezone_validates_the_zone() raises:
+    with assert_raises(contains="unknown time zone"):
+        _ = ConvertTimezoneKernel.apply(
+            _tsd([0], timestamp(second, "UTC")), "Mars/Base"
+        )
+
+
+def test_convert_timezone_keeps_the_instants() raises:
+    var a = _tsd([1_623_760_245], timestamp(second, "UTC"))
+    var got = ConvertTimezoneKernel.apply(a, "Asia/Kolkata")
+    assert_true(got.dtype() == timestamp(second, "Asia/Kolkata").to_dyn())
+    assert_equal(Int(got.as_timestamp()[0].value()), 1_623_760_245)
+
+
+def test_date_trunc_floors_wall_clock_time() raises:
+    var kolkata = _tsd([0, 1_623_760_245], timestamp(second, "Asia/Kolkata"))
+    var hour = DateTruncKernel.apply(kolkata, unit_hour).as_timestamp().copy()
+    assert_equal(Int(hour[0].value()), -1800)
+    assert_equal(Int(hour[1].value()), 1_623_760_200)
+    var bud = _tsd(
+        [1_623_760_245, 1_609_459_200 - 1800],
+        timestamp(second, "Europe/Budapest"),
+    )
+    var day = DateTruncKernel.apply(bud, unit_day).as_timestamp().copy()
+    assert_equal(Int(day[0].value()), 1_623_708_000)
+    assert_equal(Int(day[1].value()), 1_609_455_600)
+    var month = DateTruncKernel.apply(bud, unit_month).as_timestamp().copy()
+    assert_equal(Int(month[0].value()), 1_622_498_400)
+
+
+def _render(a: DynArray) raises -> StringArray:
+    return (
+        TimestampToStringKernel.dispatch(a, DynType(string)).as_string().copy()
+    )
+
+
+def test_timestamp_to_string() raises:
+    """DuckDB's spelling: a fraction only when non-zero, trimmed, and the
+    offset of a zoned timestamp."""
+    var naive = _tsd(
+        [1_609_459_200_000_000, 1_640_995_199_999_999, 1_583_020_799_120_000],
+        timestamp(microsecond),
+    )
+    assert_true(
+        _render(naive)
+        == array(
+            [
+                "2021-01-01 00:00:00",
+                "2021-12-31 23:59:59.999999",
+                "2020-02-29 23:59:59.12",
+            ]
+        )
+    )
+    var zoned = _tsd([1_609_459_200, 1_623_760_245], timestamp(second, "UTC"))
+    assert_true(
+        _render(zoned)
+        == array(["2021-01-01 00:00:00+00", "2021-06-15 12:30:45+00"])
+    )
+    var bud = ConvertTimezoneKernel.apply(zoned, "Europe/Budapest")
+    assert_true(
+        _render(bud)
+        == array(["2021-01-01 01:00:00+01", "2021-06-15 14:30:45+02"])
+    )
+    var kolkata = ConvertTimezoneKernel.apply(zoned, "Asia/Kolkata")
+    assert_equal(
+        _render(kolkata)[0].value(),
+        "2021-01-01 05:30:00+05:30",
+    )
+    var pre_epoch = _tsd([-1], timestamp(second))
+    assert_equal(
+        _render(pre_epoch)[0].value(),
+        "1969-12-31 23:59:59",
+    )
+
+
+def test_zones_cover_fixed_offsets_and_the_footer_rule() raises:
+    """`+HH:MM`/`-HHMM` are fixed offsets, and an instant past the last
+    transition a TZif file lists (2100) still follows its daylight rule."""
+    var zoned = _tsd([1_609_459_200, 4_118_083_200], timestamp(second, "UTC"))
+    assert_true(
+        _render(ConvertTimezoneKernel.apply(zoned, "+05:30"))
+        == array(["2021-01-01 05:30:00+05:30", "2100-07-01 05:30:00+05:30"])
+    )
+    assert_equal(
+        _render(ConvertTimezoneKernel.apply(zoned, "-0800"))[0].value(),
+        "2020-12-31 16:00:00-08",
+    )
+    assert_equal(
+        _render(ConvertTimezoneKernel.apply(zoned, "Europe/Budapest"))[
+            1
+        ].value(),
+        "2100-07-01 02:00:00+02",
+    )

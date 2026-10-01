@@ -165,7 +165,9 @@ from ...kernels.string import (
     StringNeKernel,
 )
 from ...kernels.temporal import (
+    AssumeTimezoneKernel,
     CalendarUnit,
+    ConvertTimezoneKernel,
     DateTruncKernel,
     DayKernel,
     DayNameKernel,
@@ -182,6 +184,7 @@ from ...kernels.temporal import (
     SecondKernel,
     WeekKernel,
     YearKernel,
+    WallClock,
 )
 from ...dtypes import (
     DecimalType,
@@ -939,6 +942,10 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return DateTruncKernel.apply(
                 a, CalendarUnit.parse(self._payload[String])
             )
+        if self._tag == "assume_timezone":
+            return AssumeTimezoneKernel.apply(a, self._payload[String])
+        if self._tag == "convert_timezone":
+            return ConvertTimezoneKernel.apply(a, self._payload[String])
         if self._tag == "isin":
             return IsInKernel.dispatch(
                 a, self._payload[DynArray].copy()
@@ -1914,6 +1921,24 @@ def date_trunc(var a: RuntimeValue, var unit: String) raises -> RuntimeValue:
     return RuntimeValue("date_trunc", a, Payload(unit^))
 
 
+def assume_timezone(
+    var a: RuntimeValue, var zone: String
+) raises -> RuntimeValue:
+    """Read a naive timestamp as wall-clock time in `zone` — pyarrow's
+    `assume_timezone`. The zone is validated here, as `date_trunc` parses
+    its unit, so an unknown one fails when the plan is built."""
+    _ = WallClock.load_zone(zone)
+    return RuntimeValue("assume_timezone", a, Payload(zone^))
+
+
+def convert_timezone(
+    var a: RuntimeValue, var zone: String
+) raises -> RuntimeValue:
+    """The same instants in `zone`; only their wall-clock reading changes."""
+    _ = WallClock.load_zone(zone)
+    return RuntimeValue("convert_timezone", a, Payload(zone^))
+
+
 # ---------------------------------------------------------------------------
 # Membership, casting, nested
 # ---------------------------------------------------------------------------
@@ -2030,8 +2055,9 @@ def array_contains(
 # What is deliberately absent is every verb whose construction does work:
 # `column` and `literal` carry payloads; `and`/`or`/`not` constant-fold, which
 # `PropagateEmpty` depends on; `coalesce` and `case_when` are n-ary; `like`,
-# `ilike`, `date_trunc`, `isin` and `cast` carry typed payloads, and
-# `date_trunc` validates its unit. Those keep their own constructors, and a
+# `ilike`, `date_trunc`, `assume_timezone`, `convert_timezone`, `isin` and
+# `cast` carry typed payloads, and `date_trunc` and the zone verbs validate
+# them. Those keep their own constructors, and a
 # frontend calls them by name.
 
 comptime UNARY_VERBS = [

@@ -734,6 +734,10 @@ class Corpus:
         echo(f"fixtures: {', '.join(written)}")
 
         connection = duckdb.connect()
+        # DuckDB renders and decomposes a TIMESTAMPTZ in the *session's* zone,
+        # which defaults to the host's. Pinned, so an expectation does not
+        # depend on where it was regenerated.
+        connection.execute("SET TimeZone = 'UTC'")
         for name in written:
             connection.register(name, self.fixtures.read(name))
 

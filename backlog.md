@@ -92,7 +92,7 @@ sit in the same shape.
 
 ### 1.4 Engine capability the golden corpus measures as missing
 
-`golden/COVERAGE.md` is authoritative: 285 cases, of which **52 carry
+`golden/COVERAGE.md` is authoritative: 286 cases, of which **51 carry
 `-- skip mojo`** because marrow has no API for them. Their bodies
 are never compiled, so they are proposals rather than verified spellings.
 
@@ -101,7 +101,7 @@ Recounted 2026-09-27, by prefix:
 | skipped | area |
 |---|---|
 | 12 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness |
-| 10 | temporal — date_diff, age, strftime/strptime, make_date, interval arithmetic, timezone attach |
+| 9 | temporal — date_diff, age, strftime/strptime, make_date, interval arithmetic |
 | 8 | nested — struct field, map lookup, list element/slice, unnest |
 | 7 | math — atan2 and the rest of the trigonometric family |
 | 2 | string — concat_ws, null-skipping `concat` |
@@ -146,11 +146,12 @@ blocked, four separate times.
   `GroupByOperator`: every group-by case in `expr/tests`, `golden/` and
   `python/marrow/tests` is far under the 50,000-row gate, so the engine's
   wiring to the parallel path is untested end to end.
-- **`mojo-regex` resolves only from git.** `pixi.toml` takes it from the
-  `marrow` branch of `kszucs/mojo-regex`, a fork of `msaelices/mojo-regex`
-  that builds on the pinned nightly. A git source resolves for a source build
-  and not for a conda install from prefix.dev. So before the next `v*` tag,
-  publish the fork to `mojo-community`, or return to upstream once it is
+- **`mojo-regex` and `morrow` resolve only from git.** `pixi.toml` takes
+  each from the `marrow` branch of a fork that builds on the pinned nightly:
+  `kszucs/mojo-regex` (of `msaelices/mojo-regex`) and `kszucs/morrow.mojo`
+  (of `mojoto/morrow.mojo`). A git source resolves for a source build and not
+  for a conda install from prefix.dev. So before the next `v*` tag, publish
+  both forks to `mojo-community`, or return to upstream once each is
   published and builds on marrow's Mojo.
 
 **The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
@@ -557,10 +558,31 @@ family: `regexp_full_match`, a global `regexp_replace` (DuckDB's `'g'` flag),
 `regexp_split_to_array`, and `regexp_extract` without a group argument.
 
 **Still absent — temporal:** `date_diff`, interval arithmetic,
-`strftime`/`strptime`, `make_date`, `age`, and timezone attachment. Timezones
-are carried on the type (`dtypes.mojo:404`) and **ignored by every kernel** —
-`marrow/kernels/temporal.mojo:11` states a non-UTC timestamp is decomposed in
-UTC.
+`strftime`/`strptime`, `make_date`, `age`, date to string casts, and the SQL
+spellings of the zone verbs: `timezone(zone, ts)` and `AT TIME ZONE` have no
+translation, and `TIMESTAMPTZ` is not a SQL type name. `assume_timezone` and
+`convert_timezone` exist in both lanes and Python, and extraction and
+`date_trunc` read a zoned timestamp in its zone, through morrow
+(`WallClock` in `marrow/kernels/temporal.mojo`).
+
+**No `ambiguous` / `nonexistent` choice.** pyarrow's `assume_timezone` and
+polars' `replace_time_zone` raise by default on a wall-clock time a
+transition repeats or skips. marrow's `assume_timezone` always resolves it as
+ICU and DuckDB do: the earlier instant, and the offset before the gap. A
+parameter taking pyarrow's values (`raise`, `earliest`, `latest`), defaulting
+to today's behaviour, closes that gap; morrow's `resolve` already reports
+both cases through `is_ambiguous` / `is_imaginary`.
+
+**A zoned timestamp is Arrow's, not DuckDB's.** Arrow reads a zoned
+timestamp's fields in the zone on its type; DuckDB reads a `TIMESTAMPTZ` in
+the session's. A SQL frontend that wants DuckDB's answers has to convert to
+the session zone first, which is why `timezone()` is not simply mapped to
+`assume_timezone`. The golden corpus pins DuckDB's session to UTC.
+
+**Each row's offset copies a zone.** morrow parses a zone once per process,
+but its per-instant answer is `TimeZone.at(utc)`, which returns a whole
+`TimeZone` value (two `String`s and a shared pointer) for one `Int`. A morrow
+API answering the offset alone removes that per-row copy.
 
 ibis's `strings.py` is the engine-level expectation: case, trim/pad,
 substring/slice, find/predicate, pattern match, regex (extract/split/
@@ -576,8 +598,7 @@ with a group above 0 and `regexp_replace` with a `\N` reference reach it;
 `marrow/kernels/tests/test_regex.mojo` pins the wrong answer so a fixed engine
 flips the test. Report both upstream with the reproductions from `ced18e32`.
 
-**What it would take.** Timezone conversion needs a tz database.
-`concat`/`concat_ws` is the one cheap item left: `||` already runs through
+**What it would take.** `concat`/`concat_ws` is the one cheap item left: `||` already runs through
 `ConcatKernel` in both lanes, and what is missing is the null-skipping
 variant.
 

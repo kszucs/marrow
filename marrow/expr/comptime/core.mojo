@@ -161,6 +161,7 @@ from .casts import (
     NumToString,
     NumericCast,
     StringToNum,
+    TimestampToString,
 )
 from .strings import (
     Ascii,
@@ -202,6 +203,8 @@ from .strings import (
     Upper,
 )
 from .temporal import (
+    AssumeTimezone,
+    ConvertTimezone,
     DateTrunc,
     Day,
     DayName,
@@ -219,7 +222,7 @@ from .temporal import (
     Second,
     Year,
 )
-from ...kernels.temporal import CalendarUnit
+from ...kernels.temporal import CalendarUnit, WallClock
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
@@ -1572,6 +1575,28 @@ trait TemporalValue(PrimitiveValue):
         unrepresentable.
         """
         return DateTrunc[Self](self.copy(), CalendarUnit.parse(unit))
+
+    # -- time zones ---------------------------------------------------------
+
+    def assume_timezone(self, zone: String) raises -> AssumeTimezone[Self]:
+        """Read a naive timestamp as wall-clock time in `zone` — pyarrow's
+        `assume_timezone`. The zone is validated here, so an unknown one
+        raises when the plan is built."""
+        _ = WallClock.load_zone(zone)
+        return AssumeTimezone[Self](self.copy(), zone.copy())
+
+    def convert_timezone(self, zone: String) raises -> ConvertTimezone[Self]:
+        """The same instants in `zone`: only the wall-clock reading, and so
+        every extracted field and the rendered text, changes."""
+        _ = WallClock.load_zone(zone)
+        return ConvertTimezone[Self](self.copy(), zone.copy())
+
+    def cast[
+        Target: StringLikeType
+    ](self, dtype: Target) -> TimestampToString[Target, Self]:
+        """A timestamp as text — `2021-06-15 14:30:45`, with the offset of a
+        zoned one (`+02`)."""
+        return TimestampToString[Target, Self](self.copy())
 
 
 trait DecimalValue(PrimitiveValue):

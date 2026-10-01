@@ -26,6 +26,7 @@ operands are numeric, and `DateTrunc` next to nothing at all.
 
 from ...arrays import (
     Date32Array,
+    DynArray,
     Int32Array,
     Int64Array,
     PrimitiveArray,
@@ -40,9 +41,13 @@ from ...dtypes import (
     Int64Type,
     StringType,
     TemporalType,
+    TimestampType,
 )
 from ...kernels.temporal import (
+    AssumeTimezoneKernel,
     CalendarUnit,
+    ConvertTimezoneKernel,
+    WallClock,
     DateTruncKernel,
     DayKernel,
     DayNameKernel,
@@ -63,6 +68,7 @@ from ...kernels.temporal import (
     TemporalExtractKernel,
     YearKernel,
 )
+from ...errors import TypeError
 from ...schema import Schema
 from ..logical import Shape
 from ..bindings import Bindings
@@ -123,7 +129,9 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
         # bound *is* the column: `Self.A.Bound` is opaque at this point —
         # declared `Copyable & Deinitable` — so it cannot be handed to a kernel
         # that wants a `PrimitiveArray`. Only the family's `Type` projects.
-        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        var t = WallClock.localise(
+            self.a.evaluate(batch, bindings).to_array(len(batch))
+        )
         return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
@@ -233,7 +241,9 @@ struct TemporalExtract64[K: TemporalExtract64Kernel, A: TemporalValue](
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        var t = WallClock.localise(
+            self.a.evaluate(batch, bindings).to_array(len(batch))
+        )
         return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
@@ -281,7 +291,9 @@ struct LastDay[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        var t = WallClock.localise(
+            self.a.evaluate(batch, bindings).to_array(len(batch))
+        )
         return LastDayKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
@@ -320,7 +332,9 @@ struct TemporalName[K: TemporalNameKernel, A: TemporalValue](
     # -- StringValue --------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        var t = WallClock.localise(
+            self.a.evaluate(batch, bindings).to_array(len(batch))
+        )
         return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -342,3 +356,67 @@ struct TemporalName[K: TemporalNameKernel, A: TemporalValue](
 
 comptime DayName = TemporalName[DayNameKernel, _]
 comptime MonthName = TemporalName[MonthNameKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# ZonedTimestamp — timestamp -> timestamp in a zone
+# ---------------------------------------------------------------------------
+struct ZonedTimestamp[A: TemporalValue, convert: Bool](
+    ColumnBound, TemporalValue, Unnamed
+):
+    """Attach a zone to a naive timestamp (`convert=False`,
+    `AssumeTimezoneKernel`) or relabel a zoned one (`convert=True`,
+    `ConvertTimezoneKernel`).
+
+    The zone is a field, as `DateTrunc`'s unit is, and for the same reason: it
+    is resolved once per batch, never per row. The output dtype is the
+    operand's unit with this zone, so `dtype` builds it rather than
+    forwarding.
+    """
+
+    comptime Type = Self.A.Type
+    comptime shape = Shape.columnar
+    comptime Bound = PrimitiveArray[Self.Type]
+
+    var a: Self.A
+    var _zone: String
+
+    def __init__(out self, var a: Self.A, var zone: String):
+        self.a = a^
+        self._zone = zone^
+
+    # -- Value --------------------------------------------------------------
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        var d = self.a.dtype(schema)
+        if not d.is_timestamp():
+            raise TypeError(t"{self}: expected a timestamp, got {d}")
+        comptime if not Self.convert:
+            if d.as_timestamp().timezone:
+                raise TypeError(t"{self}: {d} already has a time zone")
+        return DynType(TimestampType(d.as_timestamp().unit, self._zone))
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        var out: DynArray
+        comptime if Self.convert:
+            out = ConvertTimezoneKernel.apply(t, self._zone)
+        else:
+            out = AssumeTimezoneKernel.apply(t, self._zone)
+        return out.as_primitive[Self.Type]().copy()
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        var verb = "convert_timezone" if Self.convert else "assume_timezone"
+        writer.write(verb, "(", self.a, ", '", self._zone, "')")
+
+
+comptime AssumeTimezone = ZonedTimestamp[_, False]
+comptime ConvertTimezone = ZonedTimestamp[_, True]

@@ -30,6 +30,7 @@ backend = { name = "pixi-build-mojo", version = "0.1.*" }
 mojo-compiler = "==1.2.0.dev2026092105"
 mojo = "==1.2.0.dev2026092105"
 mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marrow" }
+morrow = { git = "https://github.com/kszucs/morrow.mojo.git", branch = "marrow" }
 
 [package.run-dependencies]
 # Mojo builds are compiled against a specific CPython minor version; update the
@@ -45,6 +46,11 @@ snappy = ">=1.1.0"
 lz4-c = ">=1.9.0"
 brotli = ">=1.0.9"
 zlib = ">=1.3.1"
+# Time zones for `marrow/kernels/temporal.mojo`: morrow, from the `marrow`
+# branch of a fork that builds on the pinned nightly, reading the IANA tz
+# database that `tzdata` installs under `$CONDA_PREFIX/share/zoneinfo`.
+morrow = { git = "https://github.com/kszucs/morrow.mojo.git", branch = "marrow" }
+tzdata = "*"
 # A git source resolves only for a source build; publish the fork to
 # mojo-community before a release -- see backlog.md.
 mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marrow" }
@@ -377,6 +383,11 @@ max = "==26.7.0.dev2026092105"
 # msaelices/mojo-regex whose `marrow` branch builds on the pinned nightly.
 # It installs `lib/mojo/regex.mojoc`, which mojo finds with no `-I`.
 mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marrow" }
+# Time zones for `marrow/kernels/temporal.mojo`: morrow, from the `marrow`
+# branch of a fork that builds on the pinned nightly, reading the IANA tz
+# database that `tzdata` installs under `$CONDA_PREFIX/share/zoneinfo`.
+morrow = { git = "https://github.com/kszucs/morrow.mojo.git", branch = "marrow" }
+tzdata = "*"
 # Mojo builds are compiled against a specific CPython minor version; update the
 # minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"

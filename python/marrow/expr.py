@@ -26,9 +26,9 @@ added to the Mojo lane now arrives here with no edit to this file.
 
 Anything needing real logic is still written by hand below, and those are
 exactly the verbs a table cannot describe: the operators (which coerce a bare
-Python scalar), ``cast``/``isin``/``like``/``ilike``/``date_trunc`` (typed
-payloads), ``coalesce``/``case_when`` (n-ary), and the boolean connectives
-(which constant-fold in Mojo).
+Python scalar), ``cast``/``isin``/``like``/``ilike``/``date_trunc`` and the
+zone verbs (typed payloads), ``coalesce``/``case_when`` (n-ary), and the
+boolean connectives (which constant-fold in Mojo).
 
 Two things the binding layer cannot do, and therefore does not:
 
@@ -293,6 +293,18 @@ class Column(_Wrapper):
         The unit is validated when the expression is built, not on the first
         row that evaluates it."""
         return Column.wrap(_ma.expr_date_trunc(self._binding, unit))
+
+    def assume_timezone(self, zone):
+        """Read a naive timestamp as wall-clock time in ``zone``, as pyarrow's
+        ``assume_timezone`` does. Where pyarrow raises by default, a skipped
+        wall-clock time is read with the offset before the transition and a
+        repeated one as its earlier instant, as DuckDB does."""
+        return Column.wrap(_ma.expr_assume_timezone(self._binding, zone))
+
+    def convert_timezone(self, zone):
+        """The same instants in ``zone``; only their wall-clock reading, and so
+        every extracted field, changes."""
+        return Column.wrap(_ma.expr_convert_timezone(self._binding, zone))
 
     def cast(self, target_type, *, safe=True):
         """Cast to `target_type`, a :class:`~marrow.DataType`.

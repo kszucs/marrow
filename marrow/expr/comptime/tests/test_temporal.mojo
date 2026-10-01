@@ -35,6 +35,7 @@ from ....dtypes import (
     int64,
     microsecond,
     second,
+    string,
     timestamp,
 )
 from ....tabular import RecordBatch, record_batch
@@ -253,3 +254,69 @@ def test_temporal_nodes_compose_into_a_plan() raises:
     var plan = table(b^).project(["y"], [col("ts", timestamp(second)).year()])
     assert_equal(plan.execute().num_rows(), 3)
     assert_true(plan.schema().fields[0].dtype.is_int32())
+
+
+# ---------------------------------------------------------------------------
+# Time zones
+# ---------------------------------------------------------------------------
+
+
+def test_assume_timezone_node_reads_wall_clock_time() raises:
+    """2019-06-15T12:30:45 read as Budapest summer time is 10:30:45 UTC, and
+    the output dtype carries the zone."""
+    var b = _events()
+    var zoned = col("ts", timestamp(second)).assume_timezone("Europe/Budapest")
+    assert_true(
+        zoned.dtype(b.schema) == DynType(timestamp(second, "Europe/Budapest"))
+    )
+    var got = _as_ts(zoned, b)
+    assert_equal(got[0].value(), Int64(1_560_601_845 - 7200))
+    assert_true(got.is_null(1))
+    assert_equal(got[2].value(), Int64(1_582_934_400 - 3600))
+
+
+def test_zoned_fields_and_text_follow_the_zone() raises:
+    var b = _events()
+    var zoned = col("ts", timestamp(second)).assume_timezone("UTC")
+    var hour = (
+        zoned.convert_timezone("Asia/Kolkata")
+        .hour()
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .as_int32()
+        .copy()
+    )
+    assert_equal(Int(hour[0].value()), 18)  # 12:30 UTC is 18:00 IST
+    var text = (
+        zoned.convert_timezone("Europe/Budapest")
+        .cast(string)
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .as_string()
+        .copy()
+    )
+    assert_equal(text[0].value(), "2019-06-15 14:30:45+02")
+    assert_true(text.is_null(1))
+    assert_equal(text[2].value(), "2020-02-29 01:00:00+01")
+
+
+def test_timezone_node_rejects_an_unknown_zone_at_construction() raises:
+    with assert_raises(contains="unknown time zone"):
+        _ = col("ts", timestamp(second)).assume_timezone("Mars/Base")
+
+
+def test_zone_nodes_refuse_the_wrong_input_when_planned() raises:
+    """A date cannot be rendered by the timestamp cast, and a zoned timestamp
+    cannot be attached to a second zone — both refused by `dtype`, which the
+    plan calls when it is built, rather than by the kernel on a batch."""
+    var b = _events()
+    with assert_raises(contains="expected a timestamp"):
+        _ = col("d", date32()).cast(string).dtype(b.schema)
+    var zoned = col("ts", timestamp(second)).assume_timezone("UTC")
+    with assert_raises(contains="already has a time zone"):
+        _ = zoned.assume_timezone("Europe/Budapest").dtype(b.schema)
+    # Converting a zoned timestamp is what is allowed.
+    assert_true(
+        zoned.convert_timezone("Asia/Kolkata").dtype(b.schema)
+        == DynType(timestamp(second, "Asia/Kolkata"))
+    )

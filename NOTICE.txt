@@ -155,3 +155,15 @@ mojo-regex -- MIT
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+morrow -- Apache-2.0
+    A dependency, compiled into binaries that use the time-zone kernels in
+    marrow/kernels/temporal.mojo, including the Python extension. Taken from
+    the `marrow` branch of https://github.com/kszucs/morrow.mojo, a fork of
+    https://github.com/mojoto/morrow.mojo
+
+    Copyright the morrow.mojo contributors. Licensed under the Apache License,
+    Version 2.0, the same licence as marrow (LICENSE.txt). morrow ships no
+    NOTICE file, so section 4(d) asks for nothing further.

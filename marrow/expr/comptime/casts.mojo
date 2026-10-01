@@ -31,7 +31,12 @@ The two breakers also call the kernels' **typed** `apply` rather than
 comptime parameter, so the dispatch and the round trip both disappear.
 """
 
-from ...arrays import BinaryLikeArray, PrimitiveArray, StructArray
+from ...arrays import (
+    BinaryLikeArray,
+    PrimitiveArray,
+    StructArray,
+    TimestampArray,
+)
 from ...buffers import Bitmap
 from ...dtypes import BoolType, DynType, NumericType, StringLikeType
 from ...kernels.cast import (
@@ -40,7 +45,9 @@ from ...kernels.cast import (
     NumToStringKernel,
     NumericCastKernel,
     StringToNumKernel,
+    TimestampToStringKernel,
 )
+from ...errors import TypeError
 from ...schema import Schema
 from ..logical import Shape
 from ..bindings import Bindings
@@ -49,6 +56,7 @@ from .core import (
     ColumnBound,
     NumericValue,
     StringValue,
+    TemporalValue,
     Unnamed,
 )
 
@@ -249,6 +257,51 @@ struct NumToString[To: StringLikeType, A: NumericValue](
         # `unsafe_get`, not `bound[idx]`: `lane` cannot raise, and the driver
         # has already consulted validity before asking for this row. The
         # `rebind` widens a borrow of `bound.values` to one of `bound`.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.a, ", ", Self.Type(), ")")
+
+
+struct TimestampToString[To: StringLikeType, A: TemporalValue](
+    ColumnBound, StringValue, Unnamed
+):
+    """Format timestamp -> string, zoned timestamps with their offset."""
+
+    comptime Type = Self.To
+    comptime shape = Shape.columnar
+    comptime Bound = BinaryLikeArray[Self.To]
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        # `TemporalValue` admits dates and times too; refuse them when the
+        # plan is built rather than when a batch reaches `bind`.
+        var d = self.a.dtype(schema)
+        if not d.is_timestamp():
+            raise TypeError(t"{self}: expected a timestamp, got {d}")
+        return DynType(Self.To())
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return TimestampToStringKernel.apply[Self.To](
+            arr.as_type[TimestampArray]()
+        )
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # See `NumToString.lane`.
         return rebind[StringSlice[origin_of(bound)]](
             bound.unsafe_get(UInt(idx))
         )
