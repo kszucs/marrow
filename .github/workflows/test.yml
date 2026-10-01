@@ -10,6 +10,11 @@ on:
   pull_request:
   workflow_call:
 
+# `actions: write` lets the Mojo compile cache replace its own previous entry.
+permissions:
+  contents: read
+  actions: write
+
 # A superseded push has nothing left to say; let the newer one have the runners.
 concurrency:
   group: tests-${{ github.ref }}
@@ -76,6 +81,11 @@ jobs:
           frozen: true
           environments: dev
 
+      - uses: ./.github/actions/mojo-cache
+        with:
+          mode: restore
+          name: test
+
       # Every selection runs even after one fails, and the job reports which
       # ones did at the end. One job per platform would otherwise mean one
       # failure per platform per run: the first red selection would hide the
@@ -117,6 +127,12 @@ jobs:
           fi
           echo "all selections passed"
 
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/mojo-cache
+        with:
+          mode: save
+          name: test
+
   # **The Mojo selections of `test`, again under AddressSanitizer**, one runner
   # each and longest first, so the slowest unit is never the one queued for a
   # free macOS runner. Keep the two lists in step. Python is left out:
@@ -155,5 +171,16 @@ jobs:
           frozen: true
           environments: asan
 
+      - uses: ./.github/actions/mojo-cache
+        with:
+          mode: restore
+          name: asan-${{ matrix.name }}
+
       - name: asan tests
         run: pixi run -e asan pytest -v --mojo --asan --mojo-timeout 7200 ${{ matrix.paths }}
+
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/mojo-cache
+        with:
+          mode: save
+          name: asan-${{ matrix.name }}

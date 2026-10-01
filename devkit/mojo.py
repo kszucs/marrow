@@ -41,9 +41,9 @@ from pathlib import Path
 def write_if_changed(path, text):
     """Write *text* to *path*, leaving the file alone if it already says that.
 
-    Rewriting identical bytes bumps the mtime, which invalidates both the Mojo
-    compiler's artifact cache and the harness's own content-addressed driver
-    cache -- so an unchanged selection would recompile from scratch every run.
+    Neither the harness nor the Mojo compile cache reads mtimes -- the cache is
+    keyed by IR -- so this only spares a pointless write and the file-watcher
+    churn it causes.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.read_text() != text:
@@ -601,6 +601,11 @@ class BuildOptions:
             # mojo does not auto-link libm on Linux (log10f and friends);
             # harmless on macOS where libm is part of libSystem.
             flags += ["-Xlinker", "-lm"]
+        if target_cpu := os.environ.get("MARROW_TARGET_CPU"):
+            # The target CPU is part of the compile cache's key, and mojo
+            # defaults to the host's: CI pins it so a runner on another CPU
+            # model still hits the cache an earlier runner filled.
+            flags += ["--target-cpu", target_cpu]
         return flags
 
 

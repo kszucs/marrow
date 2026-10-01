@@ -8,8 +8,10 @@ on:
     tags:
       - "v*"
 
+# `actions: write` is what the called test workflow's Mojo compile cache needs.
 permissions:
   contents: write
+  actions: write
 
 jobs:
   test:

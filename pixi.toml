@@ -45,6 +45,13 @@ lz4-c = ">=1.9.0"
 brotli = ">=1.0.9"
 zlib = ">=1.3.1"
 
+# One Mojo compile cache for every environment and every worktree. Its entries
+# are keyed by the IR being compiled, not by path, so a checkout reuses what
+# another built; the per-environment default kept a separate copy in each.
+# Nothing evicts entries -- clear it with `mojo --clear-cache`.
+[activation.env]
+MODULAR_CACHE_DIR = "${MODULAR_CACHE_DIR:-$HOME/.cache/marrow-mojo}"
+
 [tasks]
 # The developer CLI, with arguments passed through: `pixi run devkit license check`.
 devkit = "python -m devkit"

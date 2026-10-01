@@ -74,6 +74,15 @@ def test_flags_gpu_is_opt_in():
     assert "MARROW_GPU=true" in BuildOptions.for_benches(gpu=True).flags()
 
 
+def test_flags_target_cpu_is_opt_in(monkeypatch):
+    monkeypatch.delenv("MARROW_TARGET_CPU", raising=False)
+    assert "--target-cpu" not in BuildOptions.for_tests().flags()
+    monkeypatch.setenv("MARROW_TARGET_CPU", "x86-64-v3")
+    for options in (BuildOptions.for_tests(), BuildOptions.for_shared_lib()):
+        flags = options.flags()
+        assert flags[flags.index("--target-cpu") + 1] == "x86-64-v3"
+
+
 def test_flags_pass_every_define():
     assert BuildOptions.for_benches().flags().count("-D") == 0
     flags = BuildOptions.for_benches(defines=("A=1", "B=2")).flags()

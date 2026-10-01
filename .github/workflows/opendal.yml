@@ -30,6 +30,11 @@ on:
       - ".github/workflows/opendal.yml"
   workflow_dispatch:
 
+# `actions: write` lets the Mojo compile cache replace its own previous entry.
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   opendal:
     name: opendal (linux, x86_64)
@@ -55,6 +60,11 @@ jobs:
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
           frozen: true
           environments: opendal
+
+      - uses: ./.github/actions/mojo-cache
+        with:
+          mode: restore
+          name: opendal
 
       # The clone is idempotent (test -d guard) and must precede the cache
       # restore so the key is known. Pinned to a tag, so the key is stable
@@ -86,3 +96,9 @@ jobs:
 
       - name: Run the storage tests
         run: pixi run -e opendal test_opendal
+
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/mojo-cache
+        with:
+          mode: save
+          name: opendal
