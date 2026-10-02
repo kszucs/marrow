@@ -12,6 +12,7 @@ services:
     volumes:
       - .:/marrow                # source bind-mount
       - pixi_x86:/marrow/.pixi   # linux-64 pixi env, persisted across runs
+      - runners_x86:/marrow/.test_runners
 
   arm64:
     platform: linux/arm64
@@ -22,9 +23,15 @@ services:
       - .:/marrow
       # A separate volume per platform: the two environments hold different
       # binaries under the same path, and sharing one would leave whichever ran
-      # second executing the other's.
+      # second executing the other's. The test harness's binaries are named by
+      # what they test, not where they run, so they get one too -- otherwise a
+      # container and the host testing the same selection at once overwrite
+      # each other's (`Exec format error`).
       - pixi_arm64:/marrow/.pixi
+      - runners_arm64:/marrow/.test_runners
 
 volumes:
   pixi_x86:
   pixi_arm64:
+  runners_x86:
+  runners_arm64:
