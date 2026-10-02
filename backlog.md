@@ -135,6 +135,31 @@ where only the free `array_contains` exists. Re-checking a case by name is not
 enough to un-skip it: a case has been claimed unblocked, and found still
 blocked, four separate times.
 
+### 1.7b The view layouts, where they are not native
+
+`string_view` / `binary_view` read, write and compute natively in the core,
+the C Data Interface, IPC, Parquet, the structural kernels (filter, take,
+concat, cast, hash, equality, sort, min/max) and the hot string kernels
+(length, the map transforms, concat, the predicates, LIKE/ILIKE). What is not:
+
+- **The comptime lane produces `string` from a view column.**
+  `StringViewColumn` fuses over the views, but its `Type` is `StringType` and
+  `evaluate` casts, because every breaker string node downcasts its operands'
+  materialised columns to `BinaryLikeArray[X.Type]`. Projecting a view column
+  in the comptime lane therefore changes its type; the runtime lane keeps it.
+  Fixing it means binding those nodes on `BytesArray` rather than on the
+  offsets array.
+- **The SQL argument functions cast through `string`**: `substr`, `left`,
+  `right`, `repeat`, `lpad`/`rpad`, `replace`, `split_part` and
+  `trim(chars)` (`StringArgKernel.dispatch`). Each builds a new string per
+  row anyway. The measures (`char_length`, `ascii`, `position`) read views
+  natively.
+- **No prefix fast path in the hash join's key equality.** Sort orders on an
+  8-byte key read from the view, but `equal` compares the bytes of every pair.
+- **A written view column reads back as `string`** unless the reader passes
+  `binary_type=binary_view` or declares the column a view in its schema: the
+  writer does not store `ARROW:schema`.
+
 ### 1.8 Test and infrastructure gaps
 
 - **No cross-lane parity test.** "One engine, two drivers" was enforced by a

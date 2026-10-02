@@ -1,15 +1,15 @@
 {
-  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-10-01, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for decimal arithmetic: the runtime-lane gates link every decimal width's code path, query_streaming_agg +840,832 (+5.8%) and query_dynvalue +289,344 (+2.9%), accepted because a runtime-lane binary has already chosen the interpreter; every comptime-lane gate is unchanged. query_decimal_agg_fused is new: query_streaming_agg_fused over decimal128 columns, +5,248 (+0.36%) over its int64 twin. query_cli +14,656 (+0.49%) was already on main before this change.",
+  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-10-03, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for the string_view/binary_view layouts, accepted as a deliberate cost: against main the comptime-lane gates grow 4.4-5.4% (query_streaming +73,408), query_cli +206,784 (+6.9%), and the runtime-lane gates query_streaming_agg +1,104,768 (+6.9%) and query_dynvalue +339,584 (+3.1%). Most of the comptime-lane share is the two new members in each erased box's variant (DynType, DynArray, DynBuilder, DynScalar), paid by binaries that never name a view; the rest is the view arms in the kernels' dispatch. main had itself grown query_streaming_agg +745,236 and query_dynvalue +745,820 past the previous floor (the regex and timezone kernels), which this re-recording also absorbs.",
   "threshold_pct": 0.5,
   "gates": {
-    "query_streaming": 1449528,
-    "query_join": 1679668,
-    "query_streaming_agg_fused": 1475676,
-    "query_streaming_agg": 15287140,
-    "query_dynvalue": 10387932,
-    "query_expr2_streaming": 1435960,
-    "query_expr2_agg_fused": 1458084,
-    "query_cli": 3011884,
-    "query_decimal_agg_fused": 1480924
+    "query_streaming": 1526132,
+    "query_join": 1753512,
+    "query_streaming_agg_fused": 1555784,
+    "query_streaming_agg": 17137144,
+    "query_dynvalue": 11473336,
+    "query_expr2_streaming": 1513196,
+    "query_expr2_agg_fused": 1536848,
+    "query_cli": 3222572,
+    "query_decimal_agg_fused": 1561480
   }
 }
