@@ -1356,11 +1356,14 @@ release with both artifacts attached.
 1. **Testing**: conformance testing leans on PyArrow until Mojo has a JSON
    library.
 2. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
-   fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary,
-   decimal (32/64/128/256) and temporal (date/time/timestamp/duration/interval)
-   are implemented; union, run-end-encoded and view layouts are not. The archery
+   string_view/binary_view, fixed_size_binary, list/large_list/fixed_size_list,
+   struct, map, dictionary, decimal (32/64/128/256) and temporal
+   (date/time/timestamp/duration/interval) are implemented; union,
+   run-end-encoded and list-view layouts are not. The archery
    integration suite runs `map`, `map_non_canonical` and `interval_mdn` at
-   **14/14** against C++, Rust and Go, both directions. `interval`
+   **14/14** against C++, Rust and Go, both directions, and `binary_view` at
+   **10/14** — every C++ and Go phase; archery's pinned datagen skips the Rust
+   tester for that case (`.skip_tester('Rust')`). `interval`
    (YEAR_MONTH / DAY_TIME) is skipped there, but that is a pyarrow limit — it
    has no type for either unit and the harness bridges through pyarrow; marrow
    consumes all three from the other implementations.

@@ -11,6 +11,9 @@ from ..builders import (
     BoolBuilder,
     PrimitiveBuilder,
     StringBuilder,
+    StringViewBuilder,
+    BinaryViewBuilder,
+    DynBuilder,
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
@@ -2876,6 +2879,18 @@ def test_dictionary_array_eq_differing_values() raises:
     assert_false(arr == other)
 
 
+def test_dictionary_array_eq_over_views() raises:
+    """Decoded equality reaches a view dictionary as it does an offsets one:
+    a permuted dictionary is equal, a different value is not."""
+    var x: StringViewArray = ["x", "a value longer than twelve"]
+    var y: StringViewArray = ["a value longer than twelve", "x"]
+    var d1 = DictionaryArray.from_arrays(array([0, 1, None], int8), x^)
+    var d2 = DictionaryArray.from_arrays(array([1, 0, None], int8), y.copy())
+    assert_true(d1 == d2)
+    var d3 = DictionaryArray.from_arrays(array([0, 0, None], int8), y^)
+    assert_false(d1 == d3)
+
+
 def test_dictionary_scalar_eq_permuted_dictionary() raises:
     """The scalar makes the same call as the array: `_index` is where the value
     was stored, not the value."""
@@ -3013,3 +3028,476 @@ def test_fixed_size_list_eq_distinguishes_slices() raises:
 
     assert_false(fsl.slice(0, 1) == fsl.slice(1, 1))
     assert_true(fsl.slice(2, 1) == fsl.slice(2, 1))
+
+
+# ---------------------------------------------------------------------------
+# string_view / binary_view
+# ---------------------------------------------------------------------------
+
+
+def test_string_view_inline_and_out_of_line() raises:
+    # 12 bytes is the longest inline value, 13 the shortest out-of-line one.
+    var a: StringViewArray = [
+        "",
+        "short",
+        "exactly12byt",
+        "thirteen byte",
+        "a considerably longer value",
+    ]
+    assert_equal(len(a), 5)
+    assert_equal(a.null_count(), 0)
+    assert_equal(String(a.unsafe_get(0)), "")
+    assert_equal(String(a.unsafe_get(1)), "short")
+    assert_equal(String(a.unsafe_get(2)), "exactly12byt")
+    assert_equal(String(a.unsafe_get(3)), "thirteen byte")
+    assert_equal(String(a.unsafe_get(4)), "a considerably longer value")
+    assert_equal(a.view_length(2), 12)
+    assert_equal(a.view_length(3), 13)
+    # Only the two long values occupy a data buffer, both the same block.
+    assert_equal(len(a.buffers), 1)
+    assert_true(a.type() == string_view)
+
+
+def test_string_view_prefix_is_first_four_bytes() raises:
+    var a: StringViewArray = ["abcdefghijklmnop", "abcd", "ab"]
+    var b: StringViewArray = ["abcdzzzzzzzzzzzz", "abcd", "ab"]
+    assert_equal(a.view_prefix(0), b.view_prefix(0))
+    assert_equal(a.view_prefix(0), a.view_prefix(1))
+    assert_true(a.view_prefix(2) != a.view_prefix(1))
+
+
+def test_string_view_nulls() raises:
+    var b = StringViewBuilder()
+    b.append("hello")
+    b.append_null()
+    b.append("a value longer than twelve")
+    var a = b.finish()
+    assert_equal(len(a), 3)
+    assert_equal(a.null_count(), 1)
+    assert_true(a.is_valid(0))
+    assert_false(a.is_valid(1))
+    assert_equal(a.view_length(1), 0)
+    assert_equal(a[0].value(), "hello")
+    assert_false(a[1].is_valid())
+    assert_equal(a[2].value(), "a value longer than twelve")
+    assert_equal(
+        String(a), "StringViewArray([hello, NULL, a value longer than twelve])"
+    )
+
+
+def test_string_view_getitem_bounds() raises:
+    var a: StringViewArray = ["x"]
+    var raised = False
+    try:
+        _ = a[1]
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_string_view_slice() raises:
+    var b = StringViewBuilder()
+    b.append("zero")
+    b.append_null()
+    b.append("two is a long string")
+    b.append("three")
+    var a = b.finish()
+    var s = a.slice(1, 3)
+    assert_equal(len(s), 3)
+    assert_equal(s.offset, 1)
+    assert_equal(s.null_count(), 1)
+    assert_false(s.is_valid(0))
+    assert_equal(s[1].value(), "two is a long string")
+    assert_equal(s[2].value(), "three")
+    var t = a.slice(2)
+    assert_equal(t.null_count(), 0)
+    assert_equal(len(t), 2)
+
+
+def test_string_view_builder_multiple_blocks() raises:
+    # 8 KiB first block, so 1,000 values of 100 bytes need several.
+    var b = StringViewBuilder()
+    for i in range(1000):
+        b.append(String(i) + String("x") * 100)
+    var a = b.finish()
+    assert_equal(len(a), 1000)
+    assert_true(len(a.buffers) > 1)
+    for i in range(1000):
+        assert_equal(a[i].value(), String(i) + String("x") * 100)
+    a.validate()
+
+
+def test_string_view_builder_value_larger_than_block() raises:
+    var big = String("y") * (20 * 1024)
+    var b = StringViewBuilder()
+    b.append("a long first value")
+    b.append(big)
+    b.append("a long third value")
+    var a = b.finish()
+    assert_equal(a[1].value(), big)
+    assert_equal(a[2].value(), "a long third value")
+    a.validate()
+
+
+def test_string_view_builder_reuse() raises:
+    var b = StringViewBuilder()
+    b.append("first batch, long enough")
+    var first = b.finish()
+    b.append("second batch, long enough")
+    var second = b.finish()
+    assert_equal(len(first), 1)
+    assert_equal(len(second), 1)
+    assert_equal(first[0].value(), "first batch, long enough")
+    assert_equal(second[0].value(), "second batch, long enough")
+
+
+def test_string_view_eq() raises:
+    var a: StringViewArray = ["one", "a long string value", "three"]
+    var b: StringViewArray = ["one", "a long string value", "three"]
+    var c: StringViewArray = ["one", "a long string valuE", "three"]
+    assert_true(a == b)
+    assert_false(a == c)
+    assert_true(a.slice(1, 2) == b.slice(1, 2))
+    assert_false(a.slice(0, 2) == b.slice(1, 2))
+
+
+def test_binary_view_array() raises:
+    var b = BinaryViewBuilder()
+    b.append("bytes")
+    b.append("more than twelve bytes")
+    var a = b.finish()
+    assert_true(a.type() == binary_view)
+    assert_equal(a[1].value(), "more than twelve bytes")
+    assert_equal(String(a), "BinaryViewArray([bytes, more than twelve bytes])")
+
+
+def test_string_view_to_data_roundtrip() raises:
+    var b = StringViewBuilder()
+    b.append("inline")
+    b.append_null()
+    b.append("out of line value")
+    var a = b.finish()
+    var data = a.to_data()
+    assert_equal(len(data.buffers), 2)
+    data.validate()
+    var back = DynArray.from_data(data)
+    assert_true(back.dtype() == string_view)
+    assert_true(back.as_string_view() == a)
+
+
+def test_string_view_rejects_bad_view() raises:
+    var a: StringViewArray = ["a value longer than twelve"]
+    var data = a.to_data()
+    data.buffers = [data.buffers[0]]  # drop the data buffer it points into
+    var raised = False
+    try:
+        _ = StringViewArray(data)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_string_view_dyn_builder() raises:
+    var src: StringArray = ["from", "an offsets array, long"]
+    var b = DynBuilder(string_view)
+    b.extend(src^.to_dyn())
+    var a = b.finish()
+    assert_true(a.dtype() == string_view)
+    assert_equal(a.as_string_view()[1].value(), "an offsets array, long")
+    assert_equal(a[0].as_string_view().value(), "from")
+
+
+def test_empty_string_view() raises:
+    var a = StringViewArray.empty()
+    assert_equal(len(a), 0)
+    var b = StringViewBuilder()
+    assert_true(a == b.finish())
+
+
+def test_dispatch_bytes_reaches_every_byte_layout() raises:
+    """`DynArray.dispatch_bytes` hands the typed array to the callback for
+    all six byte-string types, and refuses anything else."""
+
+    def total_bytes[A: BytesArray](a: A) raises -> Int:
+        var n = 0
+        for i in range(len(a)):
+            if a.is_valid(i):
+                n += a.unsafe_get(UInt(i)).byte_length()
+        return n
+
+    var s: StringArray = ["ab", "a value longer than twelve"]
+    var v: StringViewArray = ["ab", "a value longer than twelve"]
+    var lb_values: List[Optional[String]] = ["xyz", None]
+    var lb = LargeBinaryArray.from_values(lb_values)
+    assert_equal(s^.to_dyn().dispatch_bytes(total_bytes), 28)
+    assert_equal(v^.to_dyn().dispatch_bytes(total_bytes), 28)
+    assert_equal(lb^.to_dyn().dispatch_bytes(total_bytes), 3)
+    var raised = False
+    try:
+        _ = array([1, 2], int32).to_dyn().dispatch_bytes(total_bytes)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_bytes_array_from_values_and_validity() raises:
+    """`from_values` and `validity` agree across the two layouts, sliced
+    windows included."""
+    var values: List[Optional[String]] = [
+        "zero",
+        None,
+        "a value longer than twelve",
+        "three",
+    ]
+    var s = StringArray.from_values(values)
+    var v = StringViewArray.from_values(values)
+    assert_equal(len(s), len(v))
+    for i in range(len(v)):
+        assert_equal(s.is_valid(i), v.is_valid(i))
+        if v.is_valid(i):
+            assert_equal(s[i].value(), v[i].value())
+    var sv = s.slice(1, 2).validity()
+    var vv = v.slice(1, 2).validity()
+    assert_true(sv and vv)
+    assert_false(vv.value().test(0))
+    assert_true(vv.value().test(1))
+    assert_true(sv.value() == vv.value())
+    var x: List[Optional[String]] = ["x"]
+    assert_false(StringViewArray.from_values(x).validity())
+
+
+def test_string_view_accessors_and_extents() raises:
+    var b = StringViewBuilder()
+    b.append("inline")
+    b.append("the first long value")
+    b.append_null()
+    b.append("the second long value")
+    var a = b.finish()
+    assert_equal(a.view_length(0), 6)
+    assert_equal(a.view_buffer_index(1), 0)
+    assert_equal(a.view_offset(1), 0)
+    assert_equal(a.view_buffer_index(3), 0)
+    assert_equal(a.view_offset(3), 20)
+    assert_equal(a.buffer_extents(), [41])
+    # A window reaches only as far as its own valid views.
+    assert_equal(a.slice(0, 2).buffer_extents(), [20])
+    assert_equal(a.slice(0, 1).buffer_extents(), [0])
+
+
+def test_string_view_validate_rejects_overrun() raises:
+    var a: StringViewArray = ["a value longer than twelve"]
+    var data = a.to_data()
+    var short = Buffer.alloc_zeroed[DType.uint8](0).to_immutable()
+    data.buffers = [data.buffers[0], short]
+    var raised = False
+    try:
+        _ = StringViewArray(data)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_string_view_builder_adopt_and_unsafe_append_in() raises:
+    """`unsafe_append_in` points a view at bytes already in an adopted
+    buffer."""
+    var src: StringArray = ["hello, a long enough value", "hi"]
+    var b = StringViewBuilder()
+    var idx = b.adopt(src.values)
+    b.reserve(2)
+    b.unsafe_append_in(src.unsafe_get(0), idx, 0)
+    b.unsafe_append_in(src.unsafe_get(1), idx, 26)
+    b.append("a copied value, also long")
+    var a = b.finish()
+    # The adopted buffer is shared, not copied; the copied value got a block.
+    assert_equal(len(a.buffers), 2)
+    assert_true(a.buffers[0] == src.values)
+    assert_equal(a[0].value(), "hello, a long enough value")
+    assert_equal(a[1].value(), "hi")
+    assert_equal(a[2].value(), "a copied value, also long")
+    a.validate()
+
+
+def test_string_view_builder_unsafe_append_from_rebases() raises:
+    """Two sources' buffers adopted into one builder: each view is re-pointed
+    at its own source's buffers."""
+    var one_values: List[Optional[String]] = [
+        "first source, long value",
+        None,
+        "x",
+    ]
+    var two_values: List[Optional[String]] = ["second source, long value"]
+    var one = StringViewArray.from_values(one_values)
+    var two = StringViewArray.from_values(two_values)
+    var b = StringViewBuilder()
+    b.append("own block value, long enough")
+    var base_one = b.adopt_buffers(one)
+    var base_two = b.adopt_buffers(two)
+    assert_equal(base_one, 1)
+    assert_equal(base_two, 2)
+    b.reserve(4)
+    b.unsafe_append_from(two, 0, base_two)
+    b.unsafe_append_from(one, 1, base_one)
+    b.unsafe_append_from(one, 0, base_one)
+    b.unsafe_append_from(one, 2, base_one)
+    var a = b.finish()
+    assert_equal(len(a.buffers), 3)
+    assert_equal(a[0].value(), "own block value, long enough")
+    assert_equal(a[1].value(), "second source, long value")
+    assert_false(a.is_valid(2))
+    assert_equal(a[3].value(), "first source, long value")
+    assert_equal(a[4].value(), "x")
+    a.validate()
+
+
+def test_string_view_builder_extend_view_shares_buffers() raises:
+    """A dense array's buffers are adopted, not copied."""
+    var src_values: List[Optional[String]] = [
+        "skipped",
+        "a long value that stays put, forty bytes",
+        None,
+    ]
+    var src = StringViewArray.from_values(src_values)
+    assert_false(src.slice(1).is_sparse())
+    var b = StringViewBuilder()
+    b.extend(src.slice(1).to_dyn())
+    var a = b.finish()
+    assert_equal(len(a), 2)
+    assert_true(a.buffers[0] == src.buffers[0])
+    assert_equal(a[0].value(), "a long value that stays put, forty bytes")
+    assert_false(a.is_valid(1))
+
+
+def test_string_view_builder_extend_copies_a_sparse_array() raises:
+    """A few rows of a large array are copied, so the builder's output does
+    not keep the large array's buffers alive -- a group-by's new keys, or a
+    selective filter's result, collected into one array."""
+    var b = StringViewBuilder()
+    for i in range(1000):
+        b.append(String(i) + " a value long enough to live out of line")
+    var big = b.finish()
+    var one = big.slice(500, 1)
+    assert_true(one.is_sparse())
+    var out = StringViewBuilder()
+    out.extend(one^.to_dyn())
+    var a = out.finish()
+    assert_equal(a[0].value(), big[500].value())
+    var held = 0
+    for buf in a.buffers:
+        held += len(buf)
+    assert_true(held <= 64)
+    assert_false(a.is_sparse())
+
+
+def test_string_view_compact() raises:
+    """A sparse array -- a slice reaching a few rows of its source -- is
+    copied into buffers of its own; a dense one comes back as it is, its
+    views and data buffers shared."""
+    var b = StringViewBuilder()
+    for i in range(200):
+        b.append(String(i) + " a value long enough to live out of line")
+    b.append_null()
+    var full = b.finish()
+    var kept = full.compact()
+    assert_true(kept.views == full.views)
+    assert_true(kept.buffers[0] == full.buffers[0])
+
+    var sliced = full.slice(190, 11)
+    assert_true(sliced.is_sparse())
+    var tight = sliced.compact()
+    assert_false(tight.is_sparse())
+    assert_false(tight.buffers[0] == full.buffers[0])
+    assert_equal(len(tight), 11)
+    assert_equal(tight.null_count(), 1)
+    for i in range(10):
+        assert_equal(tight[i].value(), sliced[i].value())
+    assert_false(tight.is_valid(10))
+
+
+def test_dyn_builder_as_string_view() raises:
+    var b = DynBuilder(string_view)
+    b.as_string_view().append("typed through the erased builder")
+    b.as_string_view().append_null()
+    var a = b.finish()
+    assert_equal(a.null_count(), 1)
+    assert_equal(
+        a.as_string_view()[0].value(),
+        "typed through the erased builder",
+    )
+
+
+def test_string_view_zeroes_wild_null_views() raises:
+    """A foreign null view pointing outside the data buffers is zeroed on
+    adoption, so a kernel that reads every row cannot follow it; a
+    well-formed layout is adopted without a copy."""
+    var b = StringViewBuilder()
+    b.append("a value longer than twelve")
+    b.append_null()
+    var clean = b.finish()
+
+    var adopted = StringViewArray(clean.to_data())
+    assert_true(adopted.views == clean.views)
+
+    # Point the null's view at bytes that do not exist: length 20 in buffer 7.
+    var data = clean.to_data()
+    var views = Buffer.alloc_zeroed[DType.uint8](len(data.buffers[0]))
+    views.view[DType.uint8]().copy_from(
+        data.buffers[0].view[DType.uint8](), len(data.buffers[0])
+    )
+    views.unsafe_set[DType.int32](4, 20)
+    views.unsafe_set[DType.int32](6, 7)
+    data.buffers[0] = views^.to_immutable()
+    var wild = StringViewArray(data)
+    assert_false(wild.is_valid(1))
+    assert_equal(wild.view_length(1), 0)
+    assert_equal(wild[0].value(), "a value longer than twelve")
+    # The producer's buffer is left as it was.
+    assert_equal(data.buffers[0].unsafe_get[DType.int32](4), 20)
+
+
+def test_string_view_ignores_inline_padding() raises:
+    """A foreign producer need not zero the bytes past a short inline value,
+    so equality and `sort_key` read the value and never the padding -- the
+    empty value included, whose key is zero."""
+    var clean: StringViewArray = ["ab", "abcdef", ""]
+    var data = clean.to_data()
+    var views = Buffer.alloc_zeroed[DType.uint8](len(data.buffers[0]))
+    views.view[DType.uint8]().copy_from(
+        data.buffers[0].view[DType.uint8](), len(data.buffers[0])
+    )
+    # Garbage past "ab" -- inside its prefix word and after it -- and past "".
+    for at in [4 + 2, 4 + 3, 8, 32 + 4, 32 + 9]:
+        views.unsafe_set[DType.uint8](at, 0x7A)
+    data.buffers[0] = views^.to_immutable()
+    var dirty = StringViewArray(data)
+    assert_equal(dirty[0].value(), "ab")
+    assert_equal(dirty[2].value(), "")
+    assert_true(dirty == clean)
+    for i in range(3):
+        assert_equal(dirty.sort_key(i), clean.sort_key(i))
+    assert_equal(dirty.sort_key(2), UInt64(0))
+
+
+def test_sort_key_orders_as_the_bytes_do() raises:
+    """`sort_key` agrees across the two layouts, pads short values with
+    zeros, reaches into the data buffer for a long view's bytes 4..7, and
+    orders keys as the bytes order the values."""
+    var values: List[Optional[String]] = [
+        "",
+        "a",
+        "ab",
+        "abcdefg",
+        "abcdefgh",
+        "abcdefgh, a long out-of-line value",
+        "abcdefgi, another long value",
+        "b",
+    ]
+    var s = StringArray.from_values(values)
+    var v = StringViewArray.from_values(values)
+    for i in range(len(values)):
+        assert_equal(s.sort_key(i), v.sort_key(i))
+    for i in range(len(values) - 1):
+        assert_true(v.sort_key(i) <= v.sort_key(i + 1))
+    assert_equal(v.sort_key(2), UInt64(0x6162000000000000))
+    # Equal keys decide nothing: "abcdefgh" and its longer sibling tie.
+    assert_equal(v.sort_key(4), v.sort_key(5))
+    assert_true(v.sort_key(5) < v.sort_key(6))

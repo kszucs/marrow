@@ -38,6 +38,9 @@ from std.os import abort
 from .dtypes import (
     DynType,
     BinaryLikeType,
+    BinaryViewLikeType,
+    BinaryViewType,
+    StringViewType,
     BinaryType,
     Date32Type,
     Date64Type,
@@ -100,6 +103,7 @@ from .arrays import (
     BoolArray,
     PrimitiveArray,
     BinaryLikeArray,
+    BinaryViewLikeArray,
     StringArray,
     ListLikeArray,
     MapArray,
@@ -213,6 +217,8 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         FixedSizeBinaryBuilder,
         StructBuilder,
         DictionaryBuilder,
+        BinaryViewBuilder,
+        StringViewBuilder,
     ]
 
     var _ptr: ArcPointer[Self.VariantType]
@@ -261,6 +267,10 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
             self = LargeStringBuilder(capacity)
         elif dtype.is_large_binary():
             self = LargeBinaryBuilder(capacity)
+        elif dtype.is_string_view():
+            self = StringViewBuilder(capacity)
+        elif dtype.is_binary_view():
+            self = BinaryViewBuilder(capacity)
         elif dtype.is_list():
             var child = DynBuilder(dtype.as_list().value_type())
             self = ListBuilder(child^, capacity)
@@ -466,6 +476,16 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         ref self,
     ) -> ref[self._ptr[][LargeBinaryBuilder]] LargeBinaryBuilder:
         return self.as_type[LargeBinaryBuilder]()
+
+    def as_string_view(
+        ref self,
+    ) -> ref[self._ptr[][StringViewBuilder]] StringViewBuilder:
+        return self.as_type[StringViewBuilder]()
+
+    def as_binary_view(
+        ref self,
+    ) -> ref[self._ptr[][BinaryViewBuilder]] BinaryViewBuilder:
+        return self.as_type[BinaryViewBuilder]()
 
     def as_list(ref self) -> ref[self._ptr[][ListBuilder]] ListBuilder:
         return self.as_type[ListBuilder]()
@@ -754,7 +774,22 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
 # ---------------------------------------------------------------------------
 
 
-struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
+trait BytesBuilder(Builder):
+    """A builder of byte strings, in either layout -- what a decoder that
+    produces bytes needs, whichever array it is asked to produce."""
+
+    def append[
+        origin: Origin[mut=False]
+    ](mut self, s: StringSlice[origin]) raises:
+        ...
+
+    def reserve_bytes(mut self, additional: Int) raises:
+        """A hint that about `additional` more value bytes are coming, so a
+        decoder that knows them can size the storage once."""
+        ...
+
+
+struct BinaryLikeBuilder[T: BinaryLikeType](BytesBuilder):
     """Builder for variable-length UTF-8 string or binary arrays."""
 
     comptime ArrayType = BinaryLikeArray[Self.T]
@@ -961,6 +996,308 @@ comptime BinaryBuilder = BinaryLikeBuilder[BinaryType]
 comptime LargeBinaryBuilder = BinaryLikeBuilder[LargeBinaryType]
 comptime StringBuilder = BinaryLikeBuilder[StringType]
 comptime LargeStringBuilder = BinaryLikeBuilder[LargeStringType]
+
+
+# ---------------------------------------------------------------------------
+# BinaryViewBuilder
+# ---------------------------------------------------------------------------
+
+
+struct BinaryViewLikeBuilder[T: BinaryViewLikeType](BytesBuilder):
+    """Builder for binary_view / string_view arrays.
+
+    Follows arrow-rs's `GenericByteViewBuilder`: a value of up to 12 bytes is
+    written into its own view; a longer one is appended to the in-progress
+    data block, which is sealed and replaced when it cannot take the next
+    value. Blocks start at 8 KiB and double up to 2 MiB, so a long column
+    lands in a handful of buffers without one huge reallocation, and a sealed
+    block is never copied again.
+    """
+
+    comptime ArrayType = BinaryViewLikeArray[Self.T]
+
+    comptime INITIAL_BLOCK_SIZE = 8 * 1024
+    comptime MAX_BLOCK_SIZE = 2 * 1024 * 1024
+
+    var _length: Int
+    var _capacity: Int
+    var _null_count: Int
+    var _bitmap: Bitmap[mut=True]
+    var _views: Buffer[mut=True]
+    var _blocks: List[Buffer[mut=False]]
+    """Sealed data blocks, in buffer-index order."""
+    var _block: Buffer[mut=True]
+    """The in-progress data block; its index is `len(_blocks)`."""
+    var _block_used: Int
+    var _next_block_size: Int
+
+    def __init__(out self, capacity: Int = 0):
+        self._length = 0
+        self._capacity = capacity
+        self._null_count = 0
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
+        self._views = Buffer.alloc_zeroed[DType.uint8](
+            capacity * Self.ArrayType.VIEW_SIZE
+        )
+        self._blocks = []
+        self._block = Buffer.alloc_zeroed[DType.uint8](0)
+        self._block_used = 0
+        self._next_block_size = Self.INITIAL_BLOCK_SIZE
+
+    def length(self) -> Int:
+        return self._length
+
+    def null_count(self) -> Int:
+        return self._null_count
+
+    def dtype(self) -> DynType:
+        return Self.T().to_dyn()
+
+    def append(mut self, value: String) raises:
+        self.append(StringSlice(value))
+
+    def append[
+        origin: Origin[mut=False]
+    ](mut self, s: StringSlice[origin]) raises:
+        """Append `s`, copying its bytes: into the view when it fits there,
+        otherwise into the in-progress data block."""
+        self.reserve(1)
+        var n = s.byte_length()
+        if n <= Self.ArrayType.INLINE_SIZE:
+            self.unsafe_append_in(s, 0, 0)
+        else:
+            if self._block_used + n > len(self._block):
+                self._new_block(n)
+            self._block.view[DType.uint8](self._block_used).copy_from(s)
+            self.unsafe_append_in(
+                s, Int32(len(self._blocks)), Int32(self._block_used)
+            )
+            self._block_used += n
+
+    def reserve_bytes(mut self, additional: Int) raises:
+        """Nothing to do: blocks are sized as values arrive, and a value short
+        enough to inline never reaches one."""
+        pass
+
+    def adopt(mut self, buffer: Buffer[mut=False]) raises -> Int32:
+        """Take `buffer` as a data buffer, shared rather than copied, and
+        return its index for `unsafe_append_in`."""
+        if self._block_used > 0:
+            self._seal_block()
+        self._blocks.append(buffer)
+        return Int32(len(self._blocks) - 1)
+
+    def adopt_buffers[
+        U: BinaryViewLikeType
+    ](mut self, src: BinaryViewLikeArray[U]) raises -> Int32:
+        """Adopt every data buffer of `src`, in order, and return the index
+        the first one lands at -- the base `unsafe_append_from` rebases
+        onto."""
+        if self._block_used > 0:
+            self._seal_block()
+        var base = Int32(len(self._blocks))
+        for b in src.buffers:
+            self._blocks.append(b)
+        return base
+
+    @always_inline
+    def unsafe_append_from[
+        U: BinaryViewLikeType
+    ](mut self, src: BinaryViewLikeArray[U], index: Int, base: Int32):
+        """Append element `index` of `src`, whose buffers were adopted at
+        `base` (see `adopt_buffers`): its view is copied and re-pointed, its
+        bytes stay where they are. The caller reserved the capacity.
+
+        The view is copied as two 8-byte words -- every `Buffer` is 64-byte
+        aligned -- and only an out-of-line view's buffer index is rewritten,
+        and only when `base` moves it. A null is written as a zeroed view,
+        whatever the source's held."""
+        var dst = self._length * 2
+        if src.is_valid(index):
+            var at = (src.offset + index) * 2
+            self._views.unsafe_set[DType.int64](
+                dst, src.views.unsafe_get[DType.int64](at)
+            )
+            self._views.unsafe_set[DType.int64](
+                dst + 1, src.views.unsafe_get[DType.int64](at + 1)
+            )
+            if (
+                base != 0
+                and src.view_length(index) > Self.ArrayType.INLINE_SIZE
+            ):
+                self._views.unsafe_set[DType.int32](
+                    dst * 2 + 2, base + src.view_buffer_index(index)
+                )
+            self._bitmap.set(self._length)
+            self._length += 1
+        else:
+            self.unsafe_append_null()
+
+    @always_inline
+    def unsafe_append_null(mut self):
+        """`append_null` without the capacity check; the caller reserved."""
+        self._views.unsafe_set[DType.int64](self._length * 2, 0)
+        self._views.unsafe_set[DType.int64](self._length * 2 + 1, 0)
+        self._bitmap.clear(self._length)
+        self._null_count += 1
+        self._length += 1
+
+    @always_inline
+    def unsafe_append_in[
+        origin: Origin[mut=False]
+    ](mut self, s: StringSlice[origin], buffer: Int32, offset: Int32):
+        """Append `s`, whose bytes already live at `offset` in adopted data
+        buffer `buffer` (see `adopt`): a view pointing at them, no bytes
+        copied. A value short enough to inline is copied into its view
+        instead, and `buffer` and `offset` are not read. The caller reserved
+        the capacity."""
+        var n = s.byte_length()
+        var word = self._length * 4
+        var inline = self._views.view[DType.uint8](
+            self._length * Self.ArrayType.VIEW_SIZE + 4
+        )
+        self._views.unsafe_set[DType.int32](word, Int32(n))
+        if n <= Self.ArrayType.INLINE_SIZE:
+            inline.copy_from(s)
+        else:
+            inline.copy_from(StringSlice(unsafe_from_utf8=s.as_bytes()[0:4]))
+            self._views.unsafe_set[DType.int32](word + 2, buffer)
+            self._views.unsafe_set[DType.int32](word + 3, offset)
+        self._bitmap.set(self._length)
+        self._length += 1
+
+    def _new_block(mut self, at_least: Int) raises:
+        """Seal the in-progress block (if it holds anything) and start one
+        big enough for `at_least` bytes."""
+        if self._block_used > 0:
+            self._seal_block()
+        var size = max(self._next_block_size, at_least)
+        self._next_block_size = min(
+            self._next_block_size * 2, Self.MAX_BLOCK_SIZE
+        )
+        self._block = Buffer.alloc_zeroed[DType.uint8](size)
+        self._block_used = 0
+
+    def _seal_block(mut self) raises:
+        """Freeze the in-progress block.
+
+        Trimmed only when less than half of it is used -- the last block at
+        `finish`, or one sealed early by `extend`. A block sealed because the
+        next value did not fit is nearly full, and trimming it would copy
+        every byte it holds once more for a few bytes of slack."""
+        if self._block_used * 2 < len(self._block):
+            self._block.resize[DType.uint8](self._block_used)
+        var sealed = self._block^.to_immutable()
+        self._blocks.append(sealed^)
+        self._block = Buffer.alloc_zeroed[DType.uint8](0)
+        self._block_used = 0
+
+    def append_null(mut self) raises:
+        self.reserve(1)
+        self.unsafe_append_null()
+
+    def extend(mut self, arr: DynArray) raises:
+        """Append an erased array of either binary layout.
+
+        An explicit ladder, for the reason `BinaryLikeBuilder.extend` gives."""
+        var dt = arr.dtype()
+        if dt.is_string_view():
+            self.extend(arr.as_string_view())
+        elif dt.is_binary_view():
+            self.extend(arr.as_binary_view())
+        elif dt.is_string():
+            self.extend(arr.as_string())
+        elif dt.is_large_string():
+            self.extend(arr.as_large_string())
+        elif dt.is_binary():
+            self.extend(arr.as_binary())
+        elif dt.is_large_binary():
+            self.extend(arr.as_large_binary())
+        else:
+            raise TypeError(
+                t"BinaryViewLikeBuilder.extend: expected a binary-like, got"
+                t" {dt}"
+            )
+
+    def extend[
+        U: BinaryViewLikeType
+    ](mut self, arr: BinaryViewLikeArray[U]) raises:
+        """Append every element of a view array.
+
+        A dense array's data buffers are adopted and its views re-pointed at
+        them, so `concat` moves 16 bytes per element however long the values
+        are. A sparse one's values are copied instead (see
+        `BinaryViewLikeArray.is_sparse`): adopting a few rows' worth of a
+        filter result, or of a group-by's new keys, would keep every source
+        buffer alive for as long as this builder's output lives."""
+        self.reserve(arr.length)
+        if arr.is_sparse():
+            for i in range(arr.length):
+                if arr.is_valid(i):
+                    self.append(arr.unsafe_get(UInt(i)))
+                else:
+                    self.unsafe_append_null()
+        else:
+            var base = self.adopt_buffers(arr)
+            for i in range(arr.length):
+                self.unsafe_append_from(arr, i, base)
+
+    def extend[U: BinaryLikeType](mut self, arr: BinaryLikeArray[U]) raises:
+        """Append every element of an offsets-layout array."""
+        self.reserve(arr.length)
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                self.append(arr.unsafe_get(UInt(i)))
+            else:
+                self.append_null()
+
+    def reserve(mut self, additional: Int) raises:
+        var needed = self._length + additional
+        if needed > self._capacity:
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._views.resize[DType.uint8](new_cap * Self.ArrayType.VIEW_SIZE)
+            self._capacity = new_cap
+
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> BinaryViewLikeArray[Self.T]:
+        if shrink_to_fit:
+            self._views.resize[DType.uint8](
+                self._length * Self.ArrayType.VIEW_SIZE
+            )
+        if self._block_used > 0:
+            self._seal_block()
+        var null_count = self._null_count
+        var bm: Optional[Bitmap[]] = None
+        if null_count != 0:
+            bm = self._bitmap^.to_immutable(length=self._length)
+            self._bitmap = Bitmap.alloc_zeroed(0)
+        var views = self._views^.to_immutable()
+        self._views = Buffer.alloc_zeroed[DType.uint8](0)
+        var blocks = self._blocks^
+        self._blocks = []
+        var result = BinaryViewLikeArray[Self.T](
+            length=self._length,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm^,
+            views=views^,
+            buffers=blocks^,
+        )
+        self.reset()
+        return result^
+
+    def reset(mut self):
+        self._length = 0
+        self._capacity = 0
+        self._null_count = 0
+        self._block_used = 0
+        self._next_block_size = Self.INITIAL_BLOCK_SIZE
+
+
+comptime BinaryViewBuilder = BinaryViewLikeBuilder[BinaryViewType]
+comptime StringViewBuilder = BinaryViewLikeBuilder[StringViewType]
 
 
 # ---------------------------------------------------------------------------

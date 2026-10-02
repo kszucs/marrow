@@ -560,6 +560,23 @@ def test_num_buffers_variable_width_types() raises:
     assert_equal(DynType(dt.large_binary).num_buffers(), 2)
 
 
+def test_view_types() raises:
+    """Views are their own family, disjoint from the offsets layout, and own
+    at least the views buffer."""
+    var sv = DynType(dt.string_view)
+    var bv = DynType(dt.binary_view)
+    assert_true(sv.is_string_view())
+    assert_true(bv.is_binary_view())
+    assert_false(sv.is_binary_view() or bv.is_string_view())
+    assert_false(sv.is_string_like() or sv.is_binary_like())
+    assert_false(DynType(dt.string).is_string_view())
+    assert_true(sv != bv)
+    assert_true(sv != DynType(dt.string))
+    assert_equal(String(sv), "string_view")
+    assert_equal(String(bv), "binary_view")
+    assert_equal(sv.num_buffers(), 1)
+
+
 def test_num_buffers_nested_types() raises:
     """A list owns its offsets; a struct and a fixed-size list own nothing —
     their data lives entirely in their children."""
@@ -592,3 +609,24 @@ def test_num_buffers_map_owns_its_offsets() raises:
     """
     var m = DynType(map_(DynType(StringType()), DynType(Int32Type())))
     assert_equal(m.num_buffers(), 1)
+
+
+def test_dispatch_binaryview() raises:
+    """Resolves both view dtypes to their comptime type and refuses the
+    offsets layout, which `dispatch_binarylike` owns."""
+
+    def name[T: BinaryViewLikeType](d: T) raises -> String:
+        return String(d)
+
+    assert_equal(
+        DynType(dt.string_view).dispatch_binaryview(name), "string_view"
+    )
+    assert_equal(
+        DynType(dt.binary_view).dispatch_binaryview(name), "binary_view"
+    )
+    var raised = False
+    try:
+        _ = DynType(dt.string).dispatch_binaryview(name)
+    except:
+        raised = True
+    assert_true(raised)

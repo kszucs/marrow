@@ -521,6 +521,17 @@ struct BufferView[
             count=src.byte_length(),
         )
 
+    def copy_from(
+        self,
+        src: Span[UInt8, _],
+    ) where Self.mut and Self.T == DType.uint8:
+        """Copy the bytes of `src` into this view."""
+        bulk_copy(
+            dest=self._data.unsafe_mut_cast[True]().unsafe_bitcast[Byte](),
+            src=src.unsafe_ptr(),
+            count=len(src),
+        )
+
     # --- Vectorized operations ---
 
     # TODO: remove this in favor of the free-function apply with explicit SIMD function parameters

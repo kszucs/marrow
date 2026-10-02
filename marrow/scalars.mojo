@@ -38,6 +38,7 @@ from .errors import InternalError, InvalidError, NotImplementedError
 from .arrays import (
     ArrayData,
     BinaryLikeArray,
+    BinaryViewLikeArray,
     BoolArray,
     DictionaryArray,
     DynArray,
@@ -50,6 +51,7 @@ from .buffers import Bitmap, Buffer
 from .utils.byteorder import LittleEndian
 from .builders import (
     BinaryLikeBuilder,
+    BinaryViewLikeBuilder,
     BoolBuilder,
     DynBuilder,
     FixedSizeBinaryBuilder,
@@ -60,6 +62,9 @@ from .builders import (
 from std.os import abort
 from .dtypes import (
     BinaryLikeType,
+    BinaryViewLikeType,
+    BinaryViewType,
+    StringViewType,
     BinaryType,
     LargeBinaryType,
     LargeStringType,
@@ -440,6 +445,82 @@ comptime StringScalar = BinaryLikeScalar[StringType]
 comptime LargeStringScalar = BinaryLikeScalar[LargeStringType]
 comptime BinaryScalar = BinaryLikeScalar[BinaryType]
 comptime LargeBinaryScalar = BinaryLikeScalar[LargeBinaryType]
+
+
+# ---------------------------------------------------------------------------
+# BinaryViewLikeScalar[T]
+# ---------------------------------------------------------------------------
+
+
+struct BinaryViewLikeScalar[T: BinaryViewLikeType](ArrowScalar):
+    """A single `string_view` or `binary_view` value — the scalar of
+    `BinaryViewLikeArray[T]`.
+
+    The same shape as `BinaryLikeScalar`: a scalar owns its bytes, so the
+    layout it came from shows only in its dtype.
+    """
+
+    var _value: String
+    var _is_valid: Bool
+
+    @implicit
+    def __init__(out self, value: String):
+        self._value = value
+        self._is_valid = True
+
+    def __init__(out self, *, is_valid: Bool):
+        self._value = String()
+        self._is_valid = is_valid
+
+    @staticmethod
+    def null() -> Self:
+        return Self(is_valid=False)
+
+    def type(self) -> DynType:
+        return Self.T().to_dyn()
+
+    def is_valid(self) -> Bool:
+        return self._is_valid
+
+    def value(self) -> String:
+        """Get the underlying value. Undefined if null."""
+        return self._value.copy()
+
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
+
+    def repeat(self, times: Int) raises -> BinaryViewLikeArray[Self.T]:
+        """Broadcast this scalar into an array of length `times`."""
+        var builder = BinaryViewLikeBuilder[Self.T](times)
+        if self._is_valid:
+            for _ in range(times):
+                builder.append(self._value)
+        else:
+            for _ in range(times):
+                builder.append_null()
+        return builder.finish()
+
+    def to_string(self) -> String:
+        """Get the value as an owned String."""
+        return self._value
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self._is_valid:
+            writer.write(self._value)
+        else:
+            writer.write("null")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        if self._is_valid:
+            writer.write('"')
+            writer.write(self._value)
+            writer.write('"')
+        else:
+            writer.write("null")
+
+
+comptime StringViewScalar = BinaryViewLikeScalar[StringViewType]
+comptime BinaryViewScalar = BinaryViewLikeScalar[BinaryViewType]
 
 
 # ---------------------------------------------------------------------------
@@ -866,6 +947,8 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         ListScalar,
         StructScalar,
         DictionaryScalar,
+        BinaryViewScalar,
+        StringViewScalar,
     ]
 
     var _v: Self.VariantType
@@ -1026,6 +1109,23 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     ) -> ref[self._v[LargeBinaryScalar]] LargeBinaryScalar:
         return self.as_type[LargeBinaryScalar]()
 
+    def as_binary_view_like[
+        T: BinaryViewLikeType
+    ](ref self) -> ref[self._v[BinaryViewLikeScalar[T]]] BinaryViewLikeScalar[
+        T
+    ]:
+        return self.as_type[BinaryViewLikeScalar[T]]()
+
+    def as_string_view(
+        ref self,
+    ) -> ref[self._v[StringViewScalar]] StringViewScalar:
+        return self.as_type[StringViewScalar]()
+
+    def as_binary_view(
+        ref self,
+    ) -> ref[self._v[BinaryViewScalar]] BinaryViewScalar:
+        return self.as_type[BinaryViewScalar]()
+
     def as_fixed_size_binary(
         ref self,
     ) -> ref[self._v[FixedSizeBinaryScalar]] FixedSizeBinaryScalar:
@@ -1143,6 +1243,14 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
                 return PythonObject(self.as_binary_like[T]().to_string())
 
             return dt.dispatch_binarylike(binarylike)
+        elif dt.is_string_view() or dt.is_binary_view():
+
+            def viewlike[
+                T: BinaryViewLikeType
+            ](d: T) raises {imm} -> PythonObject:
+                return PythonObject(self.as_binary_view_like[T]().to_string())
+
+            return dt.dispatch_binaryview(viewlike)
         elif dt.is_list():
             return self.as_list().value().to_python_object()
         elif dt.is_fixed_size_list():

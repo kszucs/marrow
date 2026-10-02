@@ -31,6 +31,7 @@ from ..dtypes import (
     int64,
     float64,
     string,
+    string_view,
     bool_,
     field,
     date32,
@@ -54,6 +55,7 @@ from ..scalars import (
     Int64Scalar,
     Float64Scalar,
     StringScalar,
+    StringViewScalar,
     ListScalar,
     StructScalar,
     YearMonthIntervalScalar,
@@ -121,6 +123,18 @@ def test_string_scalar() raises:
     var s = StringScalar("hello")
     assert_true(s.is_valid())
     assert_equal(s.to_string(), "hello")
+
+
+def test_string_view_scalar() raises:
+    var s = StringViewScalar("a value longer than twelve")
+    assert_true(s.type() == string_view)
+    var arr = s.repeat(3)
+    assert_equal(len(arr), 3)
+    assert_equal(arr[2].value(), "a value longer than twelve")
+    var d: DynScalar = s.copy()
+    assert_equal(d.as_string_view().value(), "a value longer than twelve")
+    assert_false(StringViewScalar.null().is_valid())
+    assert_equal(StringViewScalar.null().repeat(2).null_count(), 2)
 
 
 def test_string_scalar_null() raises:

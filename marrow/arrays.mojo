@@ -37,6 +37,7 @@ paths.  It is NOT stored inside DynArray.
 
 
 from std.memory import OwnedPointer
+from std.bit import byte_swap
 
 from max.gpu.host import DeviceContext
 from std.python import Python, PythonObject
@@ -59,6 +60,10 @@ from .dtypes import (
     DynType,
     BinaryLikeType,
     StringLikeType,
+    BinaryViewLikeType,
+    StringViewLikeType,
+    BinaryViewType,
+    StringViewType,
     BinaryType,
     Date32Type,
     Date64Type,
@@ -116,7 +121,12 @@ from .dtypes import (
     uint64,
     uint8,
 )
-from .builders import DynBuilder, PrimitiveBuilder, BinaryLikeBuilder
+from .builders import (
+    DynBuilder,
+    PrimitiveBuilder,
+    BinaryLikeBuilder,
+    BinaryViewLikeBuilder,
+)
 from .scalars import (
     DynScalar,
     NullScalar,
@@ -124,6 +134,7 @@ from .scalars import (
     FixedSizeBinaryScalar,
     PrimitiveScalar,
     BinaryLikeScalar,
+    BinaryViewLikeScalar,
     ListScalar,
     StructScalar,
     DictionaryScalar,
@@ -265,10 +276,15 @@ struct ArrayData(Copyable, Equatable, Movable):
         Interface importer. There a wrong count reads past the end of somebody
         else's allocation, so it must be checked in release builds too.
         """
-        debug_assert(
-            len(buffers) == dtype.num_buffers(),
-            "ArrayData: buffer count does not match dtype",
-        )
+        # A view layout has a variable number of data buffers after its views,
+        # so its count is a minimum; every other layout's is exact.
+        var want = dtype.num_buffers()
+        var fits: Bool
+        if dtype.is_string_view() or dtype.is_binary_view():
+            fits = len(buffers) >= want
+        else:
+            fits = len(buffers) == want
+        debug_assert(fits, "ArrayData: buffer count does not match dtype")
         self.dtype = dtype^
         self.length = length
         self.nulls = nulls
@@ -366,7 +382,14 @@ struct ArrayData(Copyable, Equatable, Movable):
         struct whose declared fields outnumber its children — the shape of B6.
         """
         var want = self.dtype.num_buffers()
-        if len(self.buffers) != want:
+        if self.dtype.is_string_view() or self.dtype.is_binary_view():
+            # Views plus a variable number of data buffers: `want` is the
+            # minimum, and the typed constructor checks each view.
+            if len(self.buffers) < want:
+                raise InvalidError(
+                    t"ArrayData: {self.dtype} needs a views buffer"
+                )
+        elif len(self.buffers) != want:
             raise InvalidError(
                 t"ArrayData: {self.dtype} owns {want} data buffer(s), got "
                 t"{len(self.buffers)}"
@@ -952,8 +975,40 @@ comptime Float64Array = PrimitiveArray[Float64Type]
 # ---------------------------------------------------------------------------
 
 
+trait BytesArray(Array):
+    """An array whose elements are byte strings, in either layout: offsets
+    (`BinaryLikeArray`) or views (`BinaryViewLikeArray`).
+
+    The one thing a kernel that only *reads* elements needs, so hashing,
+    equality, sorting and the string kernels are written once over both
+    layouts. A kernel that exploits a layout -- offsets arithmetic, gathering
+    views -- keeps a typed overload instead. The text/bytes distinction stays
+    on the dtype, where the kernels' runtime guards already check it.
+    """
+
+    def unsafe_get(ref self, index: UInt) -> StringSlice[origin_of(self)]:
+        """The element at `index`, borrowed; no bounds or validity check."""
+        ...
+
+    @staticmethod
+    def from_values(values: List[Optional[String]]) raises -> Self:
+        """An array of `values`, `None` as null, in this layout."""
+        ...
+
+    def validity(ref self) -> Optional[BitmapView[origin_of(self)]]:
+        """Validity bitmap view, offset-applied, or None if all values are
+        valid -- what `Bitmap.intersect_views` combines."""
+        ...
+
+    def sort_key(self, index: Int) -> UInt64:
+        """The element's first eight bytes, zero-padded, big-endian: two keys
+        compare as the elements' bytes do, and equal keys decide nothing. A
+        sort reads it once per row and settles most comparisons on it."""
+        ...
+
+
 @fieldwise_init
-struct BinaryLikeArray[T: BinaryLikeType](Array):
+struct BinaryLikeArray[T: BinaryLikeType](BytesArray):
     """An immutable Arrow array of variable-length bytes (binary or string).
 
     The semantic type (binary, large_binary, string, large_string) is carried
@@ -995,6 +1050,16 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
             b.append(value)
         self = b.finish()
 
+    @staticmethod
+    def from_values(values: List[Optional[String]]) raises -> Self:
+        var b = BinaryLikeBuilder[Self.T](capacity=len(values))
+        for v in values:
+            if v:
+                b.append(v.value())
+            else:
+                b.append_null()
+        return b.finish()
+
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 2:
             raise InvalidError("BinaryArray requires exactly two buffers")
@@ -1017,9 +1082,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
     def null_count(self) -> Int:
         return self.nulls
 
-    def validity(
-        ref self,
-    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
+    def validity(ref self) -> Optional[BitmapView[origin_of(self)]]:
         """Validity bitmap view, or None if all values are valid.
 
         Offset-applied, like every sibling's. This type was the one array
@@ -1028,7 +1091,18 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         """
         if not self.bitmap:
             return None
-        return self.bitmap.value().view(self.offset, self.length)
+        return rebind[BitmapView[origin_of(self)]](
+            self.bitmap.value().view(self.offset, self.length)
+        )
+
+    def sort_key(self, index: Int) -> UInt64:
+        var bytes = self.unsafe_get(UInt(index)).as_bytes()
+        var key = UInt64(0)
+        for k in range(8):
+            key <<= 8
+            if k < len(bytes):
+                key |= UInt64(bytes[k])
+        return key
 
     def type(self) -> DynType:
         return Self.T().to_dyn()
@@ -1082,18 +1156,16 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
             return True
         return self.bitmap.value().test(self.offset + index)
 
-    def unsafe_get(
-        ref self, index: UInt
-    ) -> StringSlice[origin_of(self.values)]:
+    def unsafe_get(ref self, index: UInt) -> StringSlice[origin_of(self)]:
         """Return a StringSlice for the element at the given index without bounds checking.
         """
         var offset_idx = Int(index) + self.offset
         var start_offset = self.offsets.unsafe_get[Self.T.offset](offset_idx)
         var end_offset = self.offsets.unsafe_get[Self.T.offset](offset_idx + 1)
         var length = end_offset - start_offset
-        return self.values.slice(
-            Int(start_offset), Int(length)
-        ).to_string_slice()
+        return rebind[StringSlice[origin_of(self)]](
+            self.values.slice(Int(start_offset), Int(length)).to_string_slice()
+        )
 
     def __getitem__(self, index: Int) raises -> BinaryLikeScalar[Self.T]:
         """Return the scalar for the element at the given index.
@@ -1156,6 +1228,451 @@ comptime BinaryArray = BinaryLikeArray[BinaryType]
 comptime LargeBinaryArray = BinaryLikeArray[LargeBinaryType]
 comptime StringArray = BinaryLikeArray[StringType]
 comptime LargeStringArray = BinaryLikeArray[LargeStringType]
+
+
+# ---------------------------------------------------------------------------
+# BinaryViewArray
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct BinaryViewLikeArray[T: BinaryViewLikeType](BytesArray):
+    """An immutable Arrow array of variable-length bytes in the *view* layout
+    (binary_view or string_view).
+
+    Each element is a 16-byte view in `views`, read as four `int32` words:
+
+        word 0      length
+        words 1-3   length <= 12: the bytes themselves, zero-padded
+                    length  > 12: 4-byte prefix, buffer index, byte offset
+
+    so a value of up to 12 bytes needs no data buffer at all, and a longer one
+    points into any of the variadic `buffers`. Slicing moves only `offset`
+    over the views; the data buffers are shared as they are, which is what lets
+    `take` and `filter` gather views without copying a byte.
+
+    The words are read as `int32`s rather than one 16-byte load: a buffer
+    imported over the C Data Interface is only guaranteed 8-byte alignment.
+    """
+
+    comptime ScalarType = BinaryViewLikeScalar[Self.T]
+
+    comptime VIEW_SIZE = 16
+    """Bytes per view."""
+    comptime INLINE_SIZE = 12
+    """The longest value stored inside its view."""
+
+    var length: Int
+    var nulls: Int
+    var offset: Int
+    var bitmap: Optional[Bitmap[mut=False]]
+    var views: Buffer[mut=False]
+    var buffers: List[Buffer[mut=False]]
+
+    @staticmethod
+    def empty() -> Self:
+        """A zero-length view array."""
+        return Self(
+            length=0,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            views=Buffer.alloc_zeroed[DType.uint8](0).to_immutable(),
+            buffers=[],
+        )
+
+    def __init__(
+        out self, var *values: String, __list_literal__: NoneType
+    ) raises:
+        """Constructs a view array from a list literal ["a", "b", ...].
+
+        Args:
+            values: The string values to populate the array with.
+            __list_literal__: Tells Mojo to use this method for list literal syntax.
+        """
+        var b = BinaryViewLikeBuilder[Self.T](capacity=len(values))
+        for value in values:
+            b.append(value)
+        self = b.finish()
+
+    @staticmethod
+    def from_values(values: List[Optional[String]]) raises -> Self:
+        var b = BinaryViewLikeBuilder[Self.T](capacity=len(values))
+        for v in values:
+            if v:
+                b.append(v.value())
+            else:
+                b.append_null()
+        return b.finish()
+
+    def __init__(out self, data: ArrayData) raises:
+        """Adopt a layout: `buffers[0]` holds the views, the rest are the
+        variadic data buffers. Every valid view is checked against the buffer
+        it points into — see `validate` — and a null view that points outside
+        them is zeroed, see `_zero_wild_null_views`."""
+        self = Self(unsafe_from_data=data)
+        self.validate()
+        self._zero_wild_null_views()
+
+    def __init__(out self, *, unsafe_from_data: ArrayData) raises:
+        """Adopt a layout without checking a view: for one marrow built
+        itself, such as `to_data()`'s, where the scan `validate` makes would
+        only re-prove what the builder guaranteed. Raises only when there is
+        no views buffer at all."""
+        ref data = unsafe_from_data
+        if len(data.buffers) < 1:
+            raise InvalidError("BinaryViewArray requires a views buffer")
+        var buffers = List[Buffer[mut=False]](capacity=len(data.buffers) - 1)
+        for i in range(1, len(data.buffers)):
+            buffers.append(data.buffers[i])
+        self = Self(
+            length=data.length,
+            nulls=data.nulls,
+            offset=data.offset,
+            bitmap=data.bitmap,
+            views=data.buffers[0],
+            buffers=buffers^,
+        )
+
+    def _wild(self, index: Int) -> Bool:
+        """Whether the view at `index` points outside the data buffers."""
+        var n = self.view_length(index)
+        if n < 0:
+            return True
+        elif n <= Self.INLINE_SIZE:
+            return False
+        else:
+            var b = Int(self.view_buffer_index(index))
+            var start = Int(self.view_offset(index))
+            return (
+                b < 0
+                or b >= len(self.buffers)
+                or start < 0
+                or start + n > len(self.buffers[b])
+            )
+
+    def _zero_wild_null_views(mut self) raises:
+        """Zero every null view that points outside the data buffers.
+
+        The format leaves a null's view undefined and `validate` exempts it,
+        as Arrow C++ and arrow-rs do -- but the fused string loops read every
+        row, nulls included, and let validity sort it out afterwards. A
+        foreign null view claiming bytes that do not exist would be read out
+        of bounds there. Zeroing it makes it an empty inline value.
+
+        The views buffer is copied only when such a view exists; marrow's own
+        builder zeroes null views, so arrays it produced never pay for it.
+        """
+        var wild = False
+        if self.nulls > 0:
+            for i in range(self.length):
+                if not self.is_valid(i) and self._wild(i):
+                    wild = True
+                    break
+        if wild:
+            var views = Buffer.alloc_uninit[DType.uint8](len(self.views))
+            views.view[DType.uint8]().copy_from(
+                self.views.view[DType.uint8](), len(self.views)
+            )
+            for i in range(self.length):
+                if not self.is_valid(i) and self._wild(i):
+                    var word = (self.offset + i) * 4
+                    for k in range(4):
+                        views.unsafe_set[DType.int32](word + k, 0)
+            self.views = views^.to_immutable()
+
+    def validate(self) raises:
+        """Raise unless every view in the window fits what it points at.
+
+        A view names a buffer and a byte range inside it, so a malformed one
+        is a read past the end of somebody else's allocation. This is the
+        check Arrow C++'s `ValidateFull` and arrow-rs's `ArrayData::validate`
+        both make for this layout; nulls are exempt, as they are there.
+        """
+        if len(self.views) < (self.offset + self.length) * Self.VIEW_SIZE:
+            raise InvalidError("BinaryViewArray: views buffer is too short")
+        var extents = self.buffer_extents()
+        for b in range(len(self.buffers)):
+            if extents[b] > len(self.buffers[b]):
+                raise InvalidError(
+                    t"BinaryViewArray: a view overruns data buffer {b}"
+                )
+
+    def is_sparse(self) -> Bool:
+        """Whether the data buffers hold more than twice the bytes the valid
+        views in this window reach -- a slice, or a filter, take or decode
+        result, keeping most of its source alive.
+
+        The rule `BinaryViewLikeBuilder.extend` decides by, as DataFusion's
+        batch coalescer does: adopt a dense array's buffers, copy a sparse
+        one's values."""
+        var held = 0
+        for b in self.buffers:
+            held += len(b)
+        var reached = 0
+        for i in range(self.length):
+            if self.is_valid(i):
+                var n = self.view_length(i)
+                if n > Self.INLINE_SIZE:
+                    reached += n
+        return reached * 2 < held
+
+    def compact(self) raises -> Self:
+        """The same values in buffers that are not `is_sparse()`: this array,
+        its buffers shared, when they already are not; otherwise the values
+        copied into data buffers of their own, holding only the bytes the
+        views reach.
+
+        What an array becomes wherever it outlives the source it was cut from
+        -- a query result, an IPC body -- so a filter or slice result does not
+        keep its source's pages alive."""
+        if self.is_sparse():
+            # `extend` copies a sparse array's values rather than adopting
+            # its buffers -- the one place that loop is written.
+            var b = BinaryViewLikeBuilder[Self.T](self.length)
+            b.extend(self)
+            return b.finish()
+        else:
+            return self.copy()
+
+    def buffer_extents(self) raises -> List[Int]:
+        """How far into each data buffer the valid views in this window reach
+        -- the byte length a consumer needs of it.
+
+        Raises if a view has a negative length or offset, or names a buffer
+        that does not exist. `validate` compares the extents with the
+        buffers; the C Data exporter reports them as the variadic sizes.
+        """
+        var extents = List[Int](length=len(self.buffers), fill=0)
+        for i in range(self.length):
+            if self.is_valid(i):
+                var n = self.view_length(i)
+                if n < 0:
+                    raise InvalidError(
+                        t"BinaryViewArray: negative length at {i}"
+                    )
+                if n > Self.INLINE_SIZE:
+                    var b = Int(self.view_buffer_index(i))
+                    var start = Int(self.view_offset(i))
+                    if b < 0 or b >= len(self.buffers) or start < 0:
+                        raise InvalidError(
+                            t"BinaryViewArray: view {i} points outside its"
+                            t" {len(self.buffers)} data buffer(s)"
+                        )
+                    extents[b] = max(extents[b], start + n)
+        return extents^
+
+    def __len__(self) -> Int:
+        """Return the number of elements in the array."""
+        return self.length
+
+    def __str__(self) -> String:
+        return String(self)
+
+    def null_count(self) -> Int:
+        return self.nulls
+
+    def validity(ref self) -> Optional[BitmapView[origin_of(self)]]:
+        """Validity bitmap view, or None if all values are valid."""
+        if not self.bitmap:
+            return None
+        return rebind[BitmapView[origin_of(self)]](
+            self.bitmap.value().view(self.offset, self.length)
+        )
+
+    def type(self) -> DynType:
+        return Self.T().to_dyn()
+
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
+        """Zero-copy slice of this array.
+
+        Matches PyArrow's Array.slice(offset, length) API.
+        """
+        var actual_length = length if length >= 0 else self.length - offset
+        return Self(
+            length=actual_length,
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
+            offset=self.offset + offset,
+            bitmap=self.bitmap,
+            views=self.views,
+            buffers=self.buffers.copy(),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        comptime if conforms_to(Self.T, StringViewLikeType):
+            writer.write("StringViewArray([")
+        else:
+            writer.write("BinaryViewArray([")
+        for i in range(self.length):
+            if i > 0:
+                writer.write(", ")
+            if i >= 10:
+                writer.write("...")
+                break
+            if self.is_valid(i):
+                writer.write(self.unsafe_get(UInt(i)))
+            else:
+                writer.write("NULL")
+        writer.write("])")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    def is_valid(self, index: Int) -> Bool:
+        """Return True if the element at the given index is not null."""
+        if not self.bitmap:
+            return True
+        return self.bitmap.value().test(self.offset + index)
+
+    @always_inline
+    def _word(self, index: Int, k: Int) -> Int32:
+        """Word `k` (0-3) of the view at `index`, offset applied."""
+        return self.views.unsafe_get[DType.int32]((self.offset + index) * 4 + k)
+
+    @always_inline
+    def view_length(self, index: Int) -> Int:
+        """Byte length of the element at `index`, read from its view alone."""
+        return Int(self._word(index, 0))
+
+    @always_inline
+    def view_prefix(self, index: Int) -> UInt32:
+        """The first four bytes of the element at `index`, zero-padded, as the
+        view stores them — inline or out of line alike, which is what makes it
+        a comparison fast path."""
+        return UInt32(self._word(index, 1))
+
+    def sort_key(self, index: Int) -> UInt64:
+        # The first four bytes are in the view for every value; the next four
+        # are too for an inline one, and at the value's offset+4 otherwise.
+        var n = self.view_length(index)
+        var key = UInt64(0)
+        if n > 0:
+            var high = UInt64(byte_swap(UInt32(self._word(index, 1))))
+            var low = UInt64(0)
+            if n <= Self.INLINE_SIZE:
+                low = UInt64(byte_swap(UInt32(self._word(index, 2))))
+            else:
+                ref data = self.buffers[Int(self.view_buffer_index(index))]
+                var at = Int(self.view_offset(index)) + 4
+                for k in range(4):
+                    low = (low << 8) | UInt64(
+                        data.unsafe_get[DType.uint8](at + k)
+                    )
+            key = (high << 32) | low
+            # Bytes past a short value are masked rather than trusted to be
+            # zero: a foreign producer need not pad an inline view.
+            if n < 8:
+                key &= ~((UInt64(1) << UInt64(8 * (8 - n))) - 1)
+        return key
+
+    @always_inline
+    def view_buffer_index(self, index: Int) -> Int32:
+        """Which data buffer an out-of-line element's bytes live in.
+        Meaningless for an element of `INLINE_SIZE` bytes or fewer."""
+        return self._word(index, 2)
+
+    @always_inline
+    def view_offset(self, index: Int) -> Int32:
+        """Where in its data buffer an out-of-line element's bytes start.
+        Meaningless for an element of `INLINE_SIZE` bytes or fewer."""
+        return self._word(index, 3)
+
+    def unsafe_get(ref self, index: UInt) -> StringSlice[origin_of(self)]:
+        """Return a StringSlice for the element at the given index without
+        bounds checking.
+
+        The bytes live either inside the view or in one of the data buffers;
+        the two borrows have different origins, both inside `self`, so each is
+        rebound to `origin_of(self)`.
+        """
+        # The whole view in one load: length, prefix, buffer, offset.
+        var j = Int(index) + self.offset
+        var view = self.views.view[DType.int32]().load[4](j * 4)
+        var n = Int(view[0])
+        if n <= Self.INLINE_SIZE:
+            return rebind[StringSlice[origin_of(self)]](
+                self.views.slice(j * Self.VIEW_SIZE + 4, n).to_string_slice()
+            )
+        else:
+            return rebind[StringSlice[origin_of(self)]](
+                self.buffers.unsafe_get(Int(view[2]))
+                .slice(Int(view[3]), n)
+                .to_string_slice()
+            )
+
+    def __getitem__(self, index: Int) raises -> BinaryViewLikeScalar[Self.T]:
+        """Return the scalar for the element at the given index.
+
+        Raises:
+            If the index is out of bounds.
+        """
+        if index < 0 or index >= self.length:
+            raise IndexError(
+                t"index {index} out of bounds for length {self.length}"
+            )
+        if not self.is_valid(index):
+            return BinaryViewLikeScalar[Self.T].null()
+        return BinaryViewLikeScalar[Self.T](
+            String(self.unsafe_get(UInt(index)))
+        )
+
+    def __eq__(self, other: Self) -> Bool:
+        """Structural equality: same length, null pattern, window and values.
+
+        Compared by value rather than by view, because two builders can lay
+        the same strings out across different buffers. Length and prefix are
+        compared first, from the views alone -- the prefix only once it is
+        four real bytes, since a foreign producer need not zero the padding
+        of a shorter inline value.
+        """
+        if self.length != other.length:
+            return False
+        if self.null_count() != other.null_count():
+            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
+                return False
+            if not (sv.value() == ov.value()):
+                return False
+        if self.offset != other.offset:
+            return False
+        for i in range(self.length):
+            if self.is_valid(i):
+                if self.view_length(i) != other.view_length(i):
+                    return False
+                if self.view_length(i) >= 4 and self.view_prefix(
+                    i
+                ) != other.view_prefix(i):
+                    return False
+                if self.unsafe_get(UInt(i)) != other.unsafe_get(UInt(i)):
+                    return False
+        return True
+
+    def to_data(self) -> ArrayData:
+        """Extract generic array layout for interop: the views, then every
+        data buffer."""
+        var buffers = List[Buffer[mut=False]](capacity=1 + len(self.buffers))
+        buffers.append(self.views)
+        for b in self.buffers:
+            buffers.append(b)
+        return ArrayData(
+            dtype=Self.T().to_dyn(),
+            length=self.length,
+            nulls=self.null_count(),
+            offset=self.offset,
+            bitmap=self.bitmap,
+            buffers=buffers^,
+            children=[],
+        )
+
+
+comptime BinaryViewArray = BinaryViewLikeArray[BinaryViewType]
+comptime StringViewArray = BinaryViewLikeArray[StringViewType]
 
 
 # ---------------------------------------------------------------------------
@@ -2450,11 +2967,8 @@ struct DictionaryArray(Array):
                         return False
             return True
 
-        def on_binary_like[T: BinaryLikeType](t: T) raises {imm} -> Bool:
-            return rows(
-                self._values[].as_type[BinaryLikeArray[T]](),
-                other._values[].as_type[BinaryLikeArray[T]](),
-            )
+        def on_bytes[A: BytesArray](lhs: A) raises {imm} -> Bool:
+            return rows(lhs, other._values[].as_type[A]())
 
         def on_primitive[T: PrimitiveType](t: T) raises {imm} -> Bool:
             return rows(
@@ -2474,8 +2988,12 @@ struct DictionaryArray(Array):
                 self._values[].as_fixed_size_binary(),
                 other._values[].as_fixed_size_binary(),
             )
-        elif value_type.is_binary_like():
-            return value_type.dispatch_binarylike(on_binary_like)
+        elif (
+            value_type.is_binary_like()
+            or value_type.is_string_view()
+            or value_type.is_binary_view()
+        ):
+            return self._values[].dispatch_bytes(on_bytes)
         elif value_type.is_primitive():
             return value_type.dispatch_primitive(on_primitive)
         else:
@@ -2640,6 +3158,8 @@ struct DynArray(
         StructArray,
         MapArray,
         DictionaryArray,
+        BinaryViewArray,
+        StringViewArray,
     ]
 
     var _v: Self.VariantType
@@ -2677,6 +3197,28 @@ struct DynArray(
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, Array]](self._v[T]))
         raise InternalError("DynArray._dispatch: no arm matched")
+
+    def dispatch_bytes[
+        R: Movable, //, Func: def[A: BytesArray](A) raises -> R
+    ](self, func: Func) raises -> R:
+        """Run `func` on this array as a `BytesArray` -- a binary or string
+        array in either layout, offsets or views.
+
+        For the consumers that only read elements: one arm instead of an
+        offsets arm and a views arm at every call site. The same local `isa`
+        ladder as `_dispatch`, narrowed to `BytesArray`; any other array raises
+        a `TypeError`.
+        """
+
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
+            comptime if conforms_to(T, BytesArray):
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, BytesArray]](self._v[T]))
+        raise TypeError(
+            t"dispatch_bytes: expected a binary or string array, got"
+            t" {self.dtype()}"
+        )
 
     # --- construction ---
 
@@ -2885,6 +3427,11 @@ struct DynArray(
     ](ref self) -> ref[self._v[BinaryLikeArray[T]]] BinaryLikeArray[T]:
         return self.as_type[BinaryLikeArray[T]]()
 
+    def as_binary_view_like[
+        T: BinaryViewLikeType
+    ](ref self) -> ref[self._v[BinaryViewLikeArray[T]]] BinaryViewLikeArray[T]:
+        return self.as_type[BinaryViewLikeArray[T]]()
+
     def as_null(ref self) -> ref[self._v[NullArray]] NullArray:
         return self.as_type[NullArray]()
 
@@ -2939,6 +3486,16 @@ struct DynArray(
         ref self,
     ) -> ref[self._v[LargeBinaryArray]] LargeBinaryArray:
         return self.as_type[LargeBinaryArray]()
+
+    def as_string_view(
+        ref self,
+    ) -> ref[self._v[StringViewArray]] StringViewArray:
+        return self.as_type[StringViewArray]()
+
+    def as_binary_view(
+        ref self,
+    ) -> ref[self._v[BinaryViewArray]] BinaryViewArray:
+        return self.as_type[BinaryViewArray]()
 
     def as_list(ref self) -> ref[self._v[ListArray]] ListArray:
         return self.as_type[ListArray]()
@@ -3065,6 +3622,10 @@ struct DynArray(
             return LargeStringArray(data)
         elif dt.is_large_binary():
             return LargeBinaryArray(data)
+        elif dt.is_string_view():
+            return StringViewArray(data)
+        elif dt.is_binary_view():
+            return BinaryViewArray(data)
         elif dt.is_list():
             return ListArray(data)
         elif dt.is_large_list():
@@ -3142,7 +3703,7 @@ def dispatch_array[
         `AggKernel.InArray` mean "some column-ish thing" and put an unchecked
         reinterpret at every call site.
 
-        Three arms rather than one ladder over every layout: each existing family
+        Four arms rather than one ladder over every layout: each existing family
         dispatcher already knows its own array, and `dispatch_primitive` spans
         numeric, temporal, interval and decimal. A layout outside them raises here,
         at plan time, rather than at the first morsel.
@@ -3155,6 +3716,12 @@ def dispatch_array[
             return func[BinaryLikeArray[T]]()
 
         return in_dtype.dispatch_stringlike(stringly)
+    elif in_dtype.is_string_view():
+
+        def viewly[T: BinaryViewLikeType](d: T) raises {imm func} -> R:
+            return func[BinaryViewLikeArray[T]]()
+
+        return in_dtype.dispatch_binaryview(viewly)
     elif in_dtype.is_primitive():
 
         def primitive[T: PrimitiveType](d: T) raises {imm func} -> R:

@@ -27,6 +27,7 @@ Concrete zero-size type structs (one per Arrow type):
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     Float16Type, Float32Type, Float64Type,
     BinaryLikeType (trait), StringLikeType (trait), BinaryType, LargeBinaryType, StringType, LargeStringType,
+    BinaryViewLikeType (trait), StringViewLikeType (trait), BinaryViewType, StringViewType,
     ListType, FixedSizeListType, FixedSizeBinaryType, StructType, DictionaryType,
     Date32Type, Date64Type, Time32Type, Time64Type, TimestampType, DurationType,
     YearMonthIntervalType, DayTimeIntervalType, MonthDayNanoIntervalType,
@@ -35,7 +36,8 @@ Concrete zero-size type structs (one per Arrow type):
 Comptime singletons (same names as before):
     null, bool_, int8, int16, int32, int64,
     uint8, uint16, uint32, uint64,
-    float16, float32, float64, binary, string
+    float16, float32, float64, binary, large_binary, string, large_string,
+    binary_view, string_view
 
 """
 
@@ -122,6 +124,27 @@ trait StringLikeType(BinaryLikeType):
     StringLikeType; byte-level operations constrain on BinaryLikeType and
     accept all four variants.
     """
+
+    pass
+
+
+trait BinaryViewLikeType(DataType, Defaultable, ImplicitlyCopyable):
+    """Variable-width binary-like types in the *view* layout: binary_view,
+    string_view.
+
+    A sibling of `BinaryLikeType`, not a refinement: there is no offsets buffer.
+    Each element is a 16-byte view — an `int32` length followed either by up to
+    12 inline bytes or by a 4-byte prefix, a data-buffer index and an offset —
+    and the bytes live in any number of variadic data buffers. Conforming to
+    `BinaryLikeType` would let every `dispatch_binarylike` caller instantiate
+    the offsets layout over it.
+    """
+
+    pass
+
+
+trait StringViewLikeType(BinaryViewLikeType):
+    """Sub-trait of BinaryViewLikeType for UTF-8 text (string_view)."""
 
     pass
 
@@ -320,6 +343,22 @@ struct LargeStringType(StringLikeType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("large_string")
+
+
+struct BinaryViewType(BinaryViewLikeType):
+    def __init__(out self):
+        pass
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("binary_view")
+
+
+struct StringViewType(StringViewLikeType):
+    def __init__(out self):
+        pass
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("string_view")
 
 
 struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
@@ -868,6 +907,8 @@ struct DynType(
         Decimal64Type,
         Decimal128Type,
         Decimal256Type,
+        BinaryViewType,
+        StringViewType,
     ]
 
     var _v: Self.VariantType
@@ -1021,6 +1062,20 @@ struct DynType(
                 if self._v.isa[T]():
                     return func(rebind[downcast[T, BinaryLikeType]](self._v[T]))
         raise TypeError("dispatch_binarylike: dtype is not binarylike")
+
+    def dispatch_binaryview[
+        R: Movable, //, Func: def[T: BinaryViewLikeType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_binaryview` — see `_dispatch`."""
+
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
+            comptime if conforms_to(T, BinaryViewLikeType):
+                if self._v.isa[T]():
+                    return func(
+                        rebind[downcast[T, BinaryViewLikeType]](self._v[T])
+                    )
+        raise TypeError("dispatch_binaryview: dtype is not a binary view")
 
     def dispatch_listlike[
         R: Movable, //, Func: def[T: ListLikeType](T) raises -> R
@@ -1222,6 +1277,11 @@ struct DynType(
             return 0
         elif self.is_binary_like():
             return 2  # offsets + data
+        elif self.is_string_view() or self.is_binary_view():
+            # The views buffer, then any number of variadic data buffers: the
+            # one layout whose count the dtype cannot fix. This is the minimum,
+            # and `ArrayData` checks `>=` for it.
+            return 1
         elif self.is_list_like():
             return 1  # offsets; the values are the child
         elif self.is_dictionary():
@@ -1257,6 +1317,12 @@ struct DynType(
         return (
             self.is_binary() or self.is_large_binary() or self.is_string_like()
         )
+
+    def is_string_view(self) -> Bool:
+        return self._v.isa[StringViewType]()
+
+    def is_binary_view(self) -> Bool:
+        return self._v.isa[BinaryViewType]()
 
     def is_list(self) -> Bool:
         return self._v.isa[ListType]()
@@ -1626,3 +1692,5 @@ comptime binary = BinaryType()
 comptime large_binary = LargeBinaryType()
 comptime string = StringType()
 comptime large_string = LargeStringType()
+comptime binary_view = BinaryViewType()
+comptime string_view = StringViewType()
