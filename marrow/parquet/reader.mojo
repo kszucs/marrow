@@ -18,14 +18,20 @@ from std.builtin.rebind import downcast
 from std.sys import size_of
 
 from ..errors import CorruptError, IndexError, InvalidError, NotImplementedError
-from ..arrays import DynArray, ArrayData
+from ..arrays import ArrayData, BinaryViewLikeArray, DynArray
 from ..buffers import Buffer, Bitmap, bulk_copy
 from ..execution import ExecContext, fan_out
 from ..builders import (
+    BinaryBuilder,
     BinaryLikeBuilder,
+    BinaryViewLikeBuilder,
     BoolBuilder,
+    BytesBuilder,
     FixedSizeBinaryBuilder,
+    LargeBinaryBuilder,
+    LargeStringBuilder,
     PrimitiveBuilder,
+    StringBuilder,
 )
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
@@ -33,6 +39,8 @@ from ..scalars import DynScalar
 from .. import dtypes as dt
 from ..dtypes import (
     BinaryLikeType,
+    BinaryViewLikeType,
+    StringViewLikeType,
     DataType,
     DecimalType,
     NumericType,
@@ -94,6 +102,11 @@ struct Page[o: Origin[mut=False]](Movable):
     var num_present: Int
     var encoding: Encoding
     var num_values: Int
+    var owner: Optional[Buffer[mut=False]]
+    """The buffer `body` was decompressed into, when the reader was asked to
+    give each page its own (`PageReader.owns_bodies`): `body` then starts at
+    its first byte, and a decoder may keep pointing into it after the page.
+    `None` for a body in the reused scratch or in the source."""
 
     def __init__(
         out self,
@@ -106,8 +119,10 @@ struct Page[o: Origin[mut=False]](Movable):
         var rep_levels: List[Int32] = [],
         var def_levels: List[Int32] = [],
         dictionary: Bool = False,
+        var owner: Optional[Buffer[mut=False]] = None,
     ):
         self.dictionary = dictionary
+        self.owner = owner^
         self.body = body
         self.def_levels = def_levels^
         self.rep_levels = rep_levels^
@@ -221,6 +236,11 @@ struct PageReader[o: Origin[mut=False]](Movable):
     var pos: Int  # chunk-relative offset of the next page header
     var produced: Int  # data-page values yielded so far
     var scratch: List[UInt8]  # reused decompression buffer for compressed pages
+    var owns_bodies: Bool
+    """Decompress each v1 PLAIN data page into a buffer of its own, carried
+    as `Page.owner`, instead of the reused scratch -- for a decoder whose
+    output points into the page. Off by default: every other decoder copies
+    out of the page and is better served by one reused buffer."""
 
     var locs: OffsetIndex
     """Where each *data* page starts, from the `OffsetIndex` — empty when the
@@ -262,6 +282,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
         self.leaf = leaf^
         self.produced = 0
         self.scratch = List[UInt8]()
+        self.owns_bodies = False
         self.locs = locs^
         self.page_i = 0
 
@@ -337,6 +358,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
         var body: Span[UInt8, bo],
         num_values: Int,
         encoding: Encoding,
+        var owner: Optional[Buffer[mut=False]] = None,
     ) raises -> Page[bo]:
         """Decode a v1 data page's leading rep/def level streams and build the
         `Page` — the single construction site for v1 pages (no field-by-field
@@ -385,6 +407,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
             encoding=encoding,
             rep_levels=reps^,
             def_levels=defs^,
+            owner=owner^,
         )
 
     def next(
@@ -427,6 +450,26 @@ struct PageReader[o: Origin[mut=False]](Movable):
         if ph.type == PageType.DATA:
             ref dph = ph.data_page_header.value()
             self.produced += dph.num_values
+            var codec = Compression(self.meta.codec)
+            # Only a PLAIN page's values are bytes a view can point at; a
+            # dictionary-index or delta page is decoded into fresh storage and
+            # is better served by the reused scratch.
+            if (
+                self.owns_bodies
+                and dph.encoding.is_plain()
+                and codec != Compression.UNCOMPRESSED
+            ):
+                var owned = codec.decompress_owned(
+                    codecs, comp, ph.uncompressed_page_size
+                )
+                # `body` borrows from `owned`, which the page carries with it;
+                # the origin is the reader's, as for a scratch body.
+                var body = rebind[
+                    Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+                ](owned.view[DType.uint8]().as_span())
+                return self._data_page_v1(
+                    body, dph.num_values, dph.encoding, owned^
+                )
             return self._data_page_v1(
                 self._body(comp, ph.uncompressed_page_size, codecs),
                 dph.num_values,
@@ -764,18 +807,19 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         )
 
 
-struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
-    """Variable-length byte values (string/binary, 32- or 64-bit offsets). Bytes
-    are appended verbatim, so the same builder serves UTF-8 and dt.binary."""
+struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
+    """Variable-length byte values into any byte-string builder: string or
+    binary, 32- or 64-bit offsets, or views. Bytes are appended verbatim, so
+    the same leaf serves UTF-8 and dt.binary."""
 
-    var builder: BinaryLikeBuilder[Self.BT]
+    var builder: Self.B
     var max_def: Int
     var dict_body: List[UInt8]
     var dict_off: List[Int]
     var dict_len: List[Int]
 
-    def __init__(out self, num_rows: Int, leaf: LeafColumn):
-        self.builder = BinaryLikeBuilder[Self.BT](num_rows)
+    def __init__(out self, var builder: Self.B, leaf: LeafColumn):
+        self.builder = builder^
         self.max_def = leaf.max_def
         self.dict_body = List[UInt8]()
         self.dict_off = List[Int]()
@@ -831,6 +875,40 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
 
         page.scatter(self.max_def, runs, place)
 
+    def _place_dictionary(
+        mut self,
+        page: Page,
+        vspan: Span[UInt8, _],
+        runs: Optional[List[Tuple[Int, Int]]] = None,
+    ) raises:
+        """Dictionary indices, each value copied straight out of the
+        dictionary page's bytes -- once, into storage sized up front."""
+        var indices = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+        var total = 0
+        for i in range(len(indices)):
+            total += self.dict_len[Int(indices[i])]
+        self.builder.reserve(page.num_values)
+        self.builder.reserve_bytes(total)
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if selected:
+                if present_here:
+                    var idx = Int(indices[vi])
+                    var start = self.dict_off[idx]
+                    self.builder.append(
+                        StringSlice(
+                            unsafe_from_utf8=Span(self.dict_body)[
+                                start : start + self.dict_len[idx]
+                            ]
+                        )
+                    )
+                else:
+                    self.builder.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
             Dictionary.decode_page_bytes(
@@ -844,7 +922,13 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
 
         var vspan = page.values()
         if page.is_plain():
+            # The page's bytes bound its values' (each carries a 4-byte length
+            # on top), so the storage is sized once rather than doubled.
+            self.builder.reserve(page.num_values)
+            self.builder.reserve_bytes(len(vspan))
             self._place_plain(page, vspan)
+        elif page.encoding.is_dictionary():
+            self._place_dictionary(page, vspan)
         else:
             # dictionary and DELTA_* share one decoder with the nested path.
             var values = page.encoding.decode_bytes(
@@ -862,6 +946,8 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
         var vspan = page.values()
         if page.is_plain():
             self._place_plain(page, vspan, runs.copy())
+        elif page.encoding.is_dictionary():
+            self._place_dictionary(page, vspan, runs.copy())
         else:
             var values = page.encoding.decode_bytes(
                 page.values(),
@@ -871,6 +957,155 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
                 self.dict_len,
             )
             self._scatter_values(page, values, runs.copy())
+
+    def finish(deinit self) raises -> DynArray:
+        var b = self.builder^
+        var out: DynArray = b.finish()
+        return out^
+
+
+struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
+    """A flat byte-array leaf decoded straight into views, no value copied.
+
+    A dictionary page becomes one data buffer and every row decoded from it a
+    16-byte view into that buffer, so a dictionary-encoded column costs a view
+    per row whatever its values' lengths. A PLAIN page is the data buffer its
+    rows point into: the page's own decompressed body when the reader gave it
+    one (`PageReader.owns_bodies`), else its value bytes taken in one copy,
+    since a scratch body is overwritten by the next page. DELTA_* pages
+    reconstruct their values and are appended as `ByteArrayLeafBuilder` does.
+
+    Either kind of page becomes a data buffer at the first *selected* row too
+    long to inline, and not before: a row that fits is copied into its view,
+    so a page whose selected rows all fit is never held.
+    """
+
+    comptime INLINE_SIZE = BinaryViewLikeArray[Self.T].INLINE_SIZE
+
+    var builder: BinaryViewLikeBuilder[Self.T]
+    var max_def: Int
+    var dict_buffer: Int32
+    """The dictionary's index among the builder's data buffers once a row
+    has pointed into it, else -1."""
+    var dict_bytes: Buffer[mut=False]
+    var dict_off: List[Int]
+    var dict_len: List[Int]
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.builder = BinaryViewLikeBuilder[Self.T](num_rows)
+        self.max_def = leaf.max_def
+        self.dict_buffer = -1
+        self.dict_bytes = Buffer.alloc_zeroed[DType.uint8](0).to_immutable()
+        self.dict_off = List[Int]()
+        self.dict_len = List[Int]()
+
+    @staticmethod
+    def _owned(bytes: Span[UInt8, _]) -> Buffer[mut=False]:
+        var buffer = Buffer.alloc_uninit[DType.uint8](len(bytes))
+        buffer.view[DType.uint8](0, len(bytes)).copy_from(bytes)
+        return buffer^.to_immutable()
+
+    def _consume(
+        mut self, var page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
+        if page.dictionary:
+            # The dictionary's bytes, out of the page once per chunk.
+            self.dict_bytes = Self._owned(page.body)
+            self.dict_buffer = -1
+            Dictionary.byte_offsets(
+                page.body, page.num_values, self.dict_off, self.dict_len
+            )
+            return
+
+        self.builder.reserve(page.num_values)
+        var vspan = page.values()
+        if page.is_plain():
+            # The page becomes a data buffer at the first value too long to
+            # inline. `base` is where the values start inside that buffer.
+            var owner = page.owner.copy()
+            var value_offset = page.value_offset
+            var at = Int32(-1)
+            var base = 0
+            var bpos = 0
+
+            def place_plain(
+                present_here: Bool, selected: Bool, vi: Int
+            ) raises {mut self, mut at, mut base, mut bpos, imm}:
+                if present_here:
+                    var n = LittleEndian.u32(vspan, bpos)
+                    bpos += 4
+                    if selected:
+                        if at < 0 and n > Self.INLINE_SIZE:
+                            if owner:
+                                at = self.builder.adopt(owner.value())
+                                base = value_offset
+                            else:
+                                at = self.builder.adopt(Self._owned(vspan))
+                        self.builder.unsafe_append_in(
+                            StringSlice(
+                                unsafe_from_utf8=vspan[bpos : bpos + n]
+                            ),
+                            at,
+                            Int32(base + bpos),
+                        )
+                    bpos += n
+                elif selected:
+                    self.builder.unsafe_append_null()
+
+            page.scatter(self.max_def, runs, place_plain)
+        elif page.encoding.is_dictionary():
+            var indices = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+
+            def place_dict(
+                present_here: Bool, selected: Bool, vi: Int
+            ) raises {mut self, imm}:
+                if selected:
+                    if present_here:
+                        var idx = Int(indices[vi])
+                        var start = self.dict_off[idx]
+                        var n = self.dict_len[idx]
+                        if self.dict_buffer < 0 and n > Self.INLINE_SIZE:
+                            self.dict_buffer = self.builder.adopt(
+                                self.dict_bytes
+                            )
+                        self.builder.unsafe_append_in(
+                            self.dict_bytes.slice(start, n).to_string_slice(),
+                            self.dict_buffer,
+                            Int32(start),
+                        )
+                    else:
+                        self.builder.unsafe_append_null()
+
+            page.scatter(self.max_def, runs, place_dict)
+        else:
+            var values = page.encoding.decode_bytes(
+                vspan,
+                page.num_present,
+                List[UInt8](),
+                self.dict_off,
+                self.dict_len,
+            )
+
+            def place_copied(
+                present_here: Bool, selected: Bool, vi: Int
+            ) raises {mut self, imm}:
+                if selected:
+                    if present_here:
+                        self.builder.append(
+                            StringSlice(unsafe_from_utf8=Span(values[vi]))
+                        )
+                    else:
+                        self.builder.append_null()
+
+            page.scatter(self.max_def, runs, place_copied)
+
+    def consume(mut self, var page: Page) raises:
+        self._consume(page^, None)
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._consume(page^, runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         var b = self.builder^
@@ -1290,6 +1525,8 @@ comptime LEAF_DECIMAL128 = LeafSet(1 << 20)
 comptime LEAF_DECIMAL256 = LeafSet(1 << 21)
 comptime LEAF_FIXED_SIZE_BINARY = LeafSet(1 << 22)
 comptime LEAF_INT96 = LeafSet(1 << 23)
+comptime LEAF_STRING_VIEW = LeafSet(1 << 24)
+comptime LEAF_BINARY_VIEW = LeafSet(1 << 25)
 
 
 def leaf_of[T: DataType]() -> LeafSet:
@@ -1332,6 +1569,10 @@ def leaf_of[T: DataType]() -> LeafSet:
             return LEAF_DECIMAL128
         else:
             return LEAF_DECIMAL256
+    elif conforms_to(T, StringViewLikeType):
+        return LEAF_STRING_VIEW
+    elif conforms_to(T, BinaryViewLikeType):
+        return LEAF_BINARY_VIEW
     elif conforms_to(T, StringLikeType):
         comptime if downcast[T, StringLikeType].offset == DType.int32:
             return LEAF_STRING
@@ -1434,12 +1675,15 @@ struct _PrimitiveSink[T: NumericType, phys: DType](LeveledSink, Movable):
 
 
 @fieldwise_init
-struct _BytesSink[BT: BinaryLikeType](LeveledSink, Movable):
+struct _BytesSink[B: BytesBuilder](LeveledSink, Movable):
     var dict_body: List[UInt8]
     var dict_off: List[Int]
     var dict_len: List[Int]
     var values: List[List[UInt8]]
-    var builder: BinaryLikeBuilder[Self.BT]
+    var indices: List[Int32]
+    """A dictionary-encoded page's indices; the values are read out of the
+    dictionary as they are placed, never materialised per row."""
+    var builder: Self.B
 
     def handle_dict(mut self, pg: Page) raises:
         Dictionary.decode_page_bytes(
@@ -1448,18 +1692,36 @@ struct _BytesSink[BT: BinaryLikeType](LeveledSink, Movable):
 
     def decode_present(mut self, pg: Page) raises:
         self.values.clear()
-        self.values.extend(
-            pg.encoding.decode_bytes(
-                pg.values(),
-                pg.num_present,
-                self.dict_body,
-                self.dict_off,
-                self.dict_len,
+        self.indices.clear()
+        var vspan = pg.values()
+        if pg.encoding.is_dictionary():
+            self.indices = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+        else:
+            self.values.extend(
+                pg.encoding.decode_bytes(
+                    vspan,
+                    pg.num_present,
+                    self.dict_body,
+                    self.dict_off,
+                    self.dict_len,
+                )
             )
-        )
 
     def place_present(mut self, vi: Int) raises:
-        self.builder.append(StringSlice(unsafe_from_utf8=Span(self.values[vi])))
+        if len(self.indices) > 0:
+            var idx = Int(self.indices[vi])
+            var start = self.dict_off[idx]
+            self.builder.append(
+                StringSlice(
+                    unsafe_from_utf8=Span(self.dict_body)[
+                        start : start + self.dict_len[idx]
+                    ]
+                )
+            )
+        else:
+            self.builder.append(
+                StringSlice(unsafe_from_utf8=Span(self.values[vi]))
+            )
 
     def place_null(mut self) raises:
         self.builder.append_null()
@@ -1807,16 +2069,21 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_bytes[
-        BT: BinaryLikeType
+        B: BytesBuilder
     ](
-        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+        mut self,
+        mut codecs: CompressionLibs,
+        floor: Int,
+        max_def: Int,
+        var builder: B,
     ) raises -> DecodedLeaf:
-        var sink = _BytesSink[BT](
+        var sink = _BytesSink[B](
             List[UInt8](),
             List[Int](),
             List[Int](),
             List[List[UInt8]](),
-            BinaryLikeBuilder[BT](self.num_rows),
+            List[Int32](),
+            builder^,
         )
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
@@ -1908,16 +2175,40 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
             )
             return self._flat_leaf(arr^)
 
-    def _emit_bytes[
-        BT: BinaryLikeType, leveled: Bool
+    def _emit_views[
+        T: dt.BinaryViewLikeType, leveled: Bool
     ](
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
+        """A view leaf: flat ones decode without copying a value (see
+        `ByteViewLeafBuilder`); leveled ones go through the copying sink."""
         comptime if leveled:
-            return self._drive_bytes[BT](codecs, floor, max_def)
+            return self._drive_bytes(
+                codecs, floor, max_def, BinaryViewLikeBuilder[T](self.num_rows)
+            )
+        else:
+            # The views point into each page, so each page keeps its own
+            # decompressed buffer rather than the reused scratch.
+            self.pages.owns_bodies = True
+            var arr = self._build(
+                ByteViewLeafBuilder[T](self.num_rows, self.pages.leaf), codecs
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_bytes[
+        B: BytesBuilder, leveled: Bool
+    ](
+        mut self,
+        mut codecs: CompressionLibs,
+        floor: Int,
+        max_def: Int,
+        var builder: B,
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_bytes(codecs, floor, max_def, builder^)
         else:
             var arr = self._build(
-                ByteArrayLeafBuilder[BT](self.num_rows, self.pages.leaf), codecs
+                ByteArrayLeafBuilder(builder^, self.pages.leaf), codecs
             )
             return self._flat_leaf(arr^)
 
@@ -2127,21 +2418,37 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
 
         comptime if Self.leaves.has(LEAF_STRING):
             if vt.is_string():
-                return self._emit_bytes[dt.StringType, leveled](codecs, f, md)
+                return self._emit_bytes[leveled=leveled](
+                    codecs, f, md, StringBuilder(self.num_rows)
+                )
 
         comptime if Self.leaves.has(LEAF_LARGE_STRING):
             if vt.is_large_string():
-                return self._emit_bytes[dt.LargeStringType, leveled](
-                    codecs, f, md
+                return self._emit_bytes[leveled=leveled](
+                    codecs, f, md, LargeStringBuilder(self.num_rows)
                 )
 
         comptime if Self.leaves.has(LEAF_BINARY):
             if vt.is_binary():
-                return self._emit_bytes[dt.BinaryType, leveled](codecs, f, md)
+                return self._emit_bytes[leveled=leveled](
+                    codecs, f, md, BinaryBuilder(self.num_rows)
+                )
 
         comptime if Self.leaves.has(LEAF_LARGE_BINARY):
             if vt.is_large_binary():
-                return self._emit_bytes[dt.LargeBinaryType, leveled](
+                return self._emit_bytes[leveled=leveled](
+                    codecs, f, md, LargeBinaryBuilder(self.num_rows)
+                )
+
+        comptime if Self.leaves.has(LEAF_STRING_VIEW):
+            if vt.is_string_view():
+                return self._emit_views[dt.StringViewType, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_BINARY_VIEW):
+            if vt.is_binary_view():
+                return self._emit_views[dt.BinaryViewType, leveled](
                     codecs, f, md
                 )
 
@@ -2398,19 +2705,39 @@ struct ParquetFile[
     """Reusable per-worker codec handles — see the pool comment in `read`."""
 
     def __init__(
-        out self: ParquetFile[BufferSource, Self.leaves], path: String
+        out self: ParquetFile[BufferSource, Self.leaves],
+        path: String,
+        *,
+        binary_type: dt.DynType = dt.binary,
+        schema: Optional[Schema] = None,
     ) raises:
-        # Convenience: open the local file as a memory map (S == BufferSource).
+        """Open a local file as a memory map (S == BufferSource).
+
+        `binary_type` is the Arrow type `BYTE_ARRAY` columns read as --
+        `binary` (the default), `large_binary` or `binary_view`; a `STRING`
+        column reads as the matching string type. `schema`, where it names a
+        column, decides that column's string layouts instead, leaf by leaf.
+        See `SchemaMapping.from_parquet`."""
         self._source = BufferSource(path)
         self._meta = _read_footer(self._source)
-        self._mapping = SchemaMapping.from_parquet(self._meta)
+        self._mapping = SchemaMapping.from_parquet(
+            self._meta, binary_type, schema
+        )
         self._codecs = ArcPointer(List[CompressionLibs]())
 
-    def __init__(out self, var source: Self.S) raises:
+    def __init__(
+        out self,
+        var source: Self.S,
+        *,
+        binary_type: dt.DynType = dt.binary,
+        schema: Optional[Schema] = None,
+    ) raises:
         # Read from any byte source; everything downstream goes through it.
         self._source = source^
         self._meta = _read_footer(self._source)
-        self._mapping = SchemaMapping.from_parquet(self._meta)
+        self._mapping = SchemaMapping.from_parquet(
+            self._meta, binary_type, schema
+        )
         self._codecs = ArcPointer(List[CompressionLibs]())
 
     def _read_at(
@@ -2826,9 +3153,11 @@ def read_table[
     row_selections: Optional[List[RowSelection]] = None,
     options: StorageOptions = StorageOptions(),
     ctx: ExecContext = ExecContext.auto(),
+    binary_type: dt.DynType = dt.binary,
 ) raises -> Table:
     """Read a Parquet file into a Marrow `Table` — a convenience wrapper over
     `ParquetFile(uri).read(...)` (mirrors `pyarrow.parquet.read_table`).
+    `binary_type` picks the `BYTE_ARRAY` read type, as on `ParquetFile`.
 
     `uri` is a path or a URL: `data.parquet`, `file:///tmp/data.parquet`,
     `s3://bucket/key.parquet`, `gs://…`, `az://…`, `https://…`. A bare path
@@ -2844,7 +3173,9 @@ def read_table[
     `leaves` narrows which leaf kinds the decoder is compiled for; the default
     compiles all of them. An AOT program that knows its schema can cut the
     decode ladder it links — see `LeafSet`."""
-    var pf = ParquetFile[DynSource, leaves](DynSource.open(uri, options))
+    var pf = ParquetFile[DynSource, leaves](
+        DynSource.open(uri, options), binary_type=binary_type
+    )
     return pf.read(columns, row_groups, row_selections, ctx)
 
 

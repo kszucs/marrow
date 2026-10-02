@@ -17,7 +17,11 @@ writer mirrors the reader's structure.
 
 
 from ..errors import InternalError, NotImplementedError
-from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
+from ..arrays import (
+    DynArray,
+    PrimitiveArray,
+    BytesArray,
+)
 from ..io import (
     BufferedSink,
     ByteSink,
@@ -117,14 +121,12 @@ struct ColumnWriter(Movable):
             Plain.encode_bool(col.as_bool(), body)
         elif vt.is_fixed_size_binary():
             Plain.encode_fixed_size_binary(col.as_fixed_size_binary(), body)
-        elif vt.is_binary_like():
+        elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
 
-            def encode_bytes[
-                BT: dt.BinaryLikeType
-            ](witness: BT) raises {mut body, imm}:
-                Plain.encode_bytes(col.as_type[BinaryLikeArray[BT]](), body)
+            def encode_bytes[A: BytesArray](arr: A) raises {mut body, imm}:
+                Plain.encode_bytes(arr, body)
 
-            vt.dispatch_binarylike(encode_bytes)
+            col.dispatch_bytes(encode_bytes)
         elif has_plain_physical(vt):
 
             def encode_fixed[
@@ -177,10 +179,8 @@ struct ColumnWriter(Movable):
                 hashes.append(XxHash64.hash(Span(b)[0:width]))
 
     @staticmethod
-    def _hash_bytes[
-        BT: dt.BinaryLikeType
-    ](arr: BinaryLikeArray[BT], mut hashes: List[UInt64]) raises:
-        for i in range(arr.length):
+    def _hash_bytes[A: BytesArray](arr: A, mut hashes: List[UInt64]) raises:
+        for i in range(len(arr)):
             if arr.is_valid(i):
                 hashes.append(XxHash64.hash(arr.unsafe_get(UInt(i)).as_bytes()))
 
@@ -204,14 +204,12 @@ struct ColumnWriter(Movable):
         ref vt = self.leaf.dtype
         if vt.is_fixed_size_binary():
             self._hash_fixed_size_binary(col, hashes)
-        elif vt.is_binary_like():
+        elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
 
-            def hash_bytes[
-                BT: dt.BinaryLikeType
-            ](witness: BT) raises {mut hashes, imm}:
-                Self._hash_bytes(col.as_type[BinaryLikeArray[BT]](), hashes)
+            def hash_bytes[A: BytesArray](arr: A) raises {mut hashes, imm}:
+                Self._hash_bytes(arr, hashes)
 
-            vt.dispatch_binarylike(hash_bytes)
+            col.dispatch_bytes(hash_bytes)
         elif has_plain_physical(vt):
 
             def hash_fixed[
@@ -257,6 +255,8 @@ struct ColumnWriter(Movable):
             dtype.is_integer()
             or dtype.is_floating_point()
             or dtype.is_binary_like()
+            or dtype.is_string_view()
+            or dtype.is_binary_view()
             or dtype.is_temporal()
             or dtype.is_decimal()
             or dtype.is_fixed_size_binary()
@@ -271,6 +271,8 @@ struct ColumnWriter(Movable):
             dtype.is_integer()
             or dtype.is_floating_point()
             or dtype.is_binary_like()
+            or dtype.is_string_view()
+            or dtype.is_binary_view()
         )
 
     # -----------------------------------------------------------------------
@@ -295,7 +297,11 @@ struct ColumnWriter(Movable):
             encoding == Encoding.DELTA_BYTE_ARRAY
             or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
         ):
-            return dtype.is_binary_like()
+            return (
+                dtype.is_binary_like()
+                or dtype.is_string_view()
+                or dtype.is_binary_view()
+            )
         return False
 
     @staticmethod
@@ -333,8 +339,8 @@ struct ColumnWriter(Movable):
             )
 
     def _encode_bytes_delta[
-        BT: dt.BinaryLikeType
-    ](self, arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
+        A: BytesArray
+    ](self, arr: A, mut out: List[UInt8]) raises:
         """Delta-encode a byte-array column per `self.encoding` (DELTA_BYTE_ARRAY
         or DELTA_LENGTH_BYTE_ARRAY)."""
         if self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY:
@@ -360,14 +366,12 @@ struct ColumnWriter(Movable):
                     t"parquet: cannot DELTA_BINARY_PACKED type {vt}"
                 )
             out.extend(Span(DeltaBinaryPacked.encode(ints)))
-        elif vt.is_string():
-            self._encode_bytes_delta(col.as_string(), out)
-        elif vt.is_large_string():
-            self._encode_bytes_delta(col.as_large_string(), out)
-        elif vt.is_binary():
-            self._encode_bytes_delta(col.as_binary(), out)
-        else:  # large_binary
-            self._encode_bytes_delta(col.as_large_binary(), out)
+        else:  # a byte-string column -- see `can_delta`
+
+            def delta_bytes[A: BytesArray](arr: A) raises {mut out, imm}:
+                self._encode_bytes_delta(arr, out)
+
+            col.dispatch_bytes(delta_bytes)
 
     # -----------------------------------------------------------------------
     # Page splitting — a column chunk is split into data pages of at most
@@ -397,11 +401,9 @@ struct ColumnWriter(Movable):
             return 0
 
     @staticmethod
-    def _bytes_total[
-        BT: dt.BinaryLikeType
-    ](arr: BinaryLikeArray[BT]) raises -> Int:
+    def _bytes_total[A: BytesArray](arr: A) raises -> Int:
         var total = 0
-        for i in range(arr.length):
+        for i in range(len(arr)):
             if arr.is_valid(i):
                 total += len(arr.unsafe_get(UInt(i)).as_bytes()) + 4
         return total
@@ -427,15 +429,11 @@ struct ColumnWriter(Movable):
         elif self.leaf.physical == PhysicalType.BOOLEAN:
             est = (num_present + 7) // 8
         elif self.leaf.physical == PhysicalType.BYTE_ARRAY:
-            ref vt = self.leaf.dtype
-            if vt.is_string():
-                est = Self._bytes_total(values.as_string())
-            elif vt.is_large_string():
-                est = Self._bytes_total(values.as_large_string())
-            elif vt.is_binary():
-                est = Self._bytes_total(values.as_binary())
-            else:
-                est = Self._bytes_total(values.as_large_binary())
+
+            def total[A: BytesArray](arr: A) raises {imm} -> Int:
+                return Self._bytes_total(arr)
+
+            est = values.dispatch_bytes(total)
         else:
             est = num_present * self._phys_width()
         if est <= 0 or num_rows == 0:

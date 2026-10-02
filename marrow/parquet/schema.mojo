@@ -15,7 +15,13 @@ geometry (`non_null_def`, `child_def`) computed once during the parse walk so
 
 from std.sys import bit_width_of
 
-from ..errors import CorruptError, InternalError, KeyError, NotImplementedError
+from ..errors import (
+    CorruptError,
+    InternalError,
+    InvalidError,
+    KeyError,
+    NotImplementedError,
+)
 from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -527,6 +533,8 @@ struct SchemaMapping(Movable):
     var elements: List[SchemaElement]
     var leaves: List[LeafColumn]
     var nodes: List[SchemaNode]
+    var binary_type: dt.DynType
+    """The Arrow type a `BYTE_ARRAY` leaf reads as -- see `from_parquet`."""
 
     def __init__(
         out self,
@@ -534,11 +542,13 @@ struct SchemaMapping(Movable):
         var elements: List[SchemaElement],
         var leaves: List[LeafColumn],
         var nodes: List[SchemaNode],
+        var binary_type: dt.DynType = dt.binary,
     ):
         self.schema = schema^
         self.elements = elements^
         self.leaves = leaves^
         self.nodes = nodes^
+        self.binary_type = binary_type^
 
     # -----------------------------------------------------------------------
     # Parquet metadata -> Arrow (read). A depth-first walk over the flat
@@ -546,17 +556,51 @@ struct SchemaMapping(Movable):
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def from_parquet(meta: FileMetaData) raises -> SchemaMapping:
+    def from_parquet(
+        meta: FileMetaData,
+        binary_type: dt.DynType = dt.binary,
+        declared: Optional[Schema] = None,
+    ) raises -> SchemaMapping:
+        """Parse a footer's schema for reading.
+
+        `binary_type` is the Arrow type `BYTE_ARRAY` leaves read as --
+        `binary`, `large_binary` or `binary_view` -- and a leaf annotated
+        `STRING` reads as the matching string type. The same option, with the
+        same allowed values, as Arrow C++'s `ArrowReaderProperties::
+        set_binary_type` and pyarrow's `read_table(binary_type=...)`.
+
+        `declared` is the Arrow schema the caller wants the columns as, as
+        arrow-rs's `ArrowReaderOptions::with_schema`: where it names a column,
+        each `BYTE_ARRAY` leaf under it takes the layout its declared type
+        has -- `string_view` in a `list<string_view>` reads as views -- and
+        `binary_type` decides only the leaves it does not reach.
+        """
+        if not (
+            binary_type.is_binary()
+            or binary_type.is_large_binary()
+            or binary_type.is_binary_view()
+        ):
+            raise InvalidError(
+                t"parquet: binary_type must be binary, large_binary or"
+                t" binary_view, got {binary_type}"
+            )
         var m = SchemaMapping(
             Schema(fields=List[dt.Field]()),
             meta.schema.copy(),
             List[LeafColumn](),
             List[SchemaNode](),
+            binary_type.copy(),
         )
         var idx = 1  # schema[0] is the root group
         var fields = List[dt.Field]()
         for _ in range(meta.schema[0].num_children):
-            var node = m._parse_node(idx, 0, 0)
+            var want = Optional[dt.DynType](None)
+            if declared:
+                ref name = meta.schema[idx].name
+                for ref f in declared.value().fields:
+                    if f.name == name:
+                        want = f.dtype.copy()
+            var node = m._parse_node(idx, 0, 0, declared=want^)
             fields.append(node.field.copy())
             m.nodes.append(node^)
         # File-level key/value metadata (incl. PyArrow's ARROW:schema) rides on
@@ -643,6 +687,31 @@ struct SchemaMapping(Movable):
             _LeafTypeRow(dt.binary, PhysicalType.BYTE_ARRAY, NO_CT, NO_LT)
         )
         return rows^
+
+    def _bytes_as(
+        self, var dtype: dt.DynType, declared: Optional[dt.DynType]
+    ) -> dt.DynType:
+        """A `BYTE_ARRAY` leaf's type: the layout its `declared` type has, or
+        `binary_type`'s where nothing is declared; any other leaf unchanged.
+        """
+        if not (dtype.is_binary() or dtype.is_string()):
+            return dtype^
+        var text = dtype.is_string()
+        var layout = self.binary_type.copy()
+        if declared:
+            ref d = declared.value()
+            if d.is_string_view() or d.is_binary_view():
+                layout = dt.binary_view
+            elif d.is_large_string() or d.is_large_binary():
+                layout = dt.large_binary
+            elif d.is_string() or d.is_binary():
+                layout = dt.binary
+        if layout.is_large_binary():
+            return dt.large_string if text else dt.large_binary
+        elif layout.is_binary_view():
+            return dt.string_view if text else dt.binary_view
+        else:
+            return dt.string if text else dt.binary
 
     @staticmethod
     def _leaf_dtype(el: SchemaElement) raises -> dt.DynType:
@@ -834,8 +903,13 @@ struct SchemaMapping(Movable):
         rep_base: Int,
         slot_def: Int = 0,
         under_optional: Bool = False,
+        declared: Optional[dt.DynType] = None,
     ) raises -> SchemaNode:
         """Consume the element at `idx` (advancing it) and return its Arrow node.
+
+        `declared` is the type the caller asked this node as, if any, walked
+        down alongside the file's own -- only its string layouts are read off
+        it (see `_bytes_as`).
 
         `slot_def` is the definition level at/above which this element's value
         slot exists — bumped past each enclosing list's repeated group so leaves
@@ -850,7 +924,7 @@ struct SchemaMapping(Movable):
         var nullable = rep != Repetition.REQUIRED
 
         if el.num_children == 0:
-            var dtype = Self._leaf_dtype(el)
+            var dtype = self._bytes_as(Self._leaf_dtype(el), declared)
             var li = len(self.leaves)
             self.leaves.append(
                 LeafColumn(
@@ -888,11 +962,27 @@ struct SchemaMapping(Movable):
                     t"and a value (column '{el.name}')"
                 )
             idx += 1
+            var want_key = Optional[dt.DynType](None)
+            var want_item = Optional[dt.DynType](None)
+            if declared and declared.value().is_map():
+                ref m = declared.value().as_map()
+                want_key = m.key_type()
+                want_item = m.item_type()
             var key_node = self._parse_node(
-                idx, d + 1, r + 1, slot_def=d + 1, under_optional=under_optional
+                idx,
+                d + 1,
+                r + 1,
+                slot_def=d + 1,
+                under_optional=under_optional,
+                declared=want_key^,
             )
             var val_node = self._parse_node(
-                idx, d + 1, r + 1, slot_def=d + 1, under_optional=under_optional
+                idx,
+                d + 1,
+                r + 1,
+                slot_def=d + 1,
+                under_optional=under_optional,
+                declared=want_item^,
             )
             return Self._map_node(
                 el.name, key_node^, val_node^, d, r, slot_def, nullable
@@ -906,12 +996,18 @@ struct SchemaMapping(Movable):
             # the repeated middle group (adds one def + one rep level) and parse
             # the element as this list's single child.
             idx += 1
+            var want = Optional[dt.DynType](None)
+            if declared and declared.value().is_list():
+                want = declared.value().as_list().value_type().copy()
+            elif declared and declared.value().is_large_list():
+                want = declared.value().as_large_list().value_type().copy()
             var elem = self._parse_node(
                 idx,
                 d + 1,
                 r + 1,
                 slot_def=d + 1,
                 under_optional=under_optional,
+                declared=want^,
             )
             return Self._list_node(el.name, elem^, d, r, slot_def, nullable)
 
@@ -922,8 +1018,19 @@ struct SchemaMapping(Movable):
         var child_fields = List[dt.Field]()
         var child_optional = under_optional or nullable
         for _ in range(el.num_children):
+            var want = Optional[dt.DynType](None)
+            if declared and declared.value().is_struct():
+                ref name = self.elements[idx].name
+                for ref f in declared.value().as_struct().fields:
+                    if f.name == name:
+                        want = f.dtype.copy()
             var cn = self._parse_node(
-                idx, d, r, slot_def=slot_def, under_optional=child_optional
+                idx,
+                d,
+                r,
+                slot_def=slot_def,
+                under_optional=child_optional,
+                declared=want^,
             )
             child_fields.append(cn.field.copy())
             child_nodes.append(cn^)
@@ -1044,14 +1151,15 @@ struct SchemaMapping(Movable):
         elif dtype.is_fixed_size_binary():
             el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
             el.type_length = dtype.as_fixed_size_binary().byte_width
-        elif dtype.is_large_string():
-            # Parquet has a single BYTE_ARRAY; large_ offsets are an Arrow-only
-            # distinction, so a large_string is emitted as a UTF8 BYTE_ARRAY
-            # (it reads back as string, exactly like arrow-rs / parquet-cpp).
+        elif dtype.is_large_string() or dtype.is_string_view():
+            # Parquet has a single BYTE_ARRAY; large_ offsets and views are
+            # Arrow-only distinctions, so either is emitted as a UTF8
+            # BYTE_ARRAY (it reads back as string, exactly like arrow-rs /
+            # parquet-cpp, unless the reader asks for views).
             el.type = PhysicalType.BYTE_ARRAY
             el.converted_type = ConvertedType.UTF8
             el.logical_type = LogicalType.STRING
-        elif dtype.is_large_binary():
+        elif dtype.is_large_binary() or dtype.is_binary_view():
             el.type = PhysicalType.BYTE_ARRAY
         else:
             var phys, conv, logi = Self._physical(dtype)

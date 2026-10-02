@@ -21,7 +21,11 @@ from std.bit import bit_width
 from std.sys import size_of
 
 from ..errors import InvalidError
-from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
+from ..arrays import (
+    DynArray,
+    PrimitiveArray,
+    BytesArray,
+)
 from .. import dtypes as dt
 from .gearhash import gearhash_table, NUM_GEARHASH_TABLES
 
@@ -327,12 +331,12 @@ struct ContentDefinedChunker(Movable):
                 )
 
             return self._calculate(table, defs, reps, num_levels, roll_bool)
-        elif vt.is_binary_like():
-            # Every binary-like leaf hashes its element bytes -- string,
-            # binary and their large_ variants all share this path.
+        elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
+            # Every byte-string leaf hashes its element bytes -- string,
+            # binary, their large_ variants and both views share this path.
             def bytes_leaf[
-                BT: dt.BinaryLikeType
-            ](witness: BT) raises {
+                A: BytesArray
+            ](arr: A) raises {
                 mut self,
                 imm table,
                 imm values,
@@ -341,10 +345,10 @@ struct ContentDefinedChunker(Movable):
                 imm num_levels,
             } -> List[Chunk]:
                 return self._chunks_binary_like_typed(
-                    table, values.as_binary_like[BT](), defs, reps, num_levels
+                    table, arr, defs, reps, num_levels
                 )
 
-            return vt.dispatch_binarylike(bytes_leaf)
+            return values.dispatch_bytes(bytes_leaf)
         elif vt.is_fixed_size_binary():
             var fsb = values.as_fixed_size_binary().copy()
 
@@ -398,17 +402,18 @@ struct ContentDefinedChunker(Movable):
             return vt.dispatch_primitive(primitive_leaf)
 
     def _chunks_binary_like_typed[
-        BT: dt.BinaryLikeType
+        A: BytesArray
     ](
         mut self,
         table: List[UInt64],
-        arr: BinaryLikeArray[BT],
+        arr: A,
         defs: List[Int32],
         reps: List[Int32],
         num_levels: Int,
     ) raises -> List[Chunk]:
-        """Roll one binary-like leaf's element bytes through the rolling
-        hash -- string, binary and their large_ variants all share this."""
+        """Roll one byte-array leaf's element bytes through the rolling
+        hash -- string, binary, their large_ variants and both view types
+        share this."""
 
         def roll(
             mut c: ContentDefinedChunker, i: Int

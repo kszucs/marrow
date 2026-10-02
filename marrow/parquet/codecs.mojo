@@ -29,10 +29,12 @@ from std.sys import size_of
 
 from ..buffers import bulk_copy
 from ..errors import NotImplementedError
+from ..buffers import Buffer
 from ..arrays import (
     DynArray,
     PrimitiveArray,
     BinaryLikeArray,
+    BytesArray,
     BoolArray,
     FixedSizeBinaryArray,
 )
@@ -547,12 +549,10 @@ struct Plain:
             out.append(acc)
 
     @staticmethod
-    def encode_bytes[
-        BT: dt.BinaryLikeType
-    ](arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
+    def encode_bytes[A: BytesArray](arr: A, mut out: List[UInt8]) raises:
         """PLAIN byte arrays: each present value's 4-byte LE length then its raw
         bytes. Serves string/binary and their large_ variants alike."""
-        for i in range(arr.length):
+        for i in range(len(arr)):
             if arr.is_valid(i):
                 var b = arr.unsafe_get(UInt(i)).as_bytes()
                 LittleEndian.put_u32(out, len(b))
@@ -637,18 +637,18 @@ struct Dictionary:
 
     @staticmethod
     def _encode_bytes[
-        BT: dt.BinaryLikeType
+        A: BytesArray
     ](
-        arr: BinaryLikeArray[BT],
+        arr: A,
         mut dict_body: List[UInt8],
         mut indices: List[Int32],
     ) raises -> Int:
-        """Dictionary-encode a byte-array column (string/binary and their large_
-        variants): length-prefixed distinct values in the dictionary page, one
+        """Dictionary-encode a byte-array column (string/binary, their large_
+        and view variants): length-prefixed distinct values in the dictionary page, one
         index per present value."""
         var seen = Dict[String, Int]()
         var num_dict = 0
-        for i in range(arr.length):
+        for i in range(len(arr)):
             if arr.is_valid(i):
                 var v = String(arr.unsafe_get(UInt(i)))
                 if v in seen:
@@ -716,14 +716,18 @@ struct Dictionary:
             return Self._encode_prim[dt.UInt16Type, DType.int32](
                 col.as_uint16(), dict_body, indices
             )
-        elif dtype.is_string():
-            return Self._encode_bytes(col.as_string(), dict_body, indices)
-        elif dtype.is_large_string():
-            return Self._encode_bytes(col.as_large_string(), dict_body, indices)
-        elif dtype.is_binary():
-            return Self._encode_bytes(col.as_binary(), dict_body, indices)
-        elif dtype.is_large_binary():
-            return Self._encode_bytes(col.as_large_binary(), dict_body, indices)
+        elif (
+            dtype.is_binary_like()
+            or dtype.is_string_view()
+            or dtype.is_binary_view()
+        ):
+
+            def encode_bytes[
+                A: BytesArray
+            ](arr: A) raises {mut dict_body, mut indices, imm} -> Int:
+                return Self._encode_bytes(arr, dict_body, indices)
+
+            return col.dispatch_bytes(encode_bytes)
         else:
             raise NotImplementedError(
                 t"parquet: cannot dictionary-encode column type {dtype}"
@@ -750,13 +754,28 @@ struct Dictionary:
         mut dict_off: List[Int],
         mut dict_len: List[Int],
     ) raises:
-        """Read a byte-array dictionary page (length-prefixed values)."""
+        """Read a byte-array dictionary page: its bytes into `dict_body`, and
+        where each value sits in them (see `byte_offsets`)."""
         dict_body.clear()
         dict_body.extend(body)
-        var span = Span(dict_body)
+        Self.byte_offsets(body, num_values, dict_off, dict_len)
+
+    @staticmethod
+    def byte_offsets(
+        body: Span[UInt8, _],
+        num_values: Int,
+        mut dict_off: List[Int],
+        mut dict_len: List[Int],
+    ) raises:
+        """Where each value of a byte-array dictionary page starts and how
+        long it is: the page is length-prefixed values, so each offset points
+        past its 4-byte prefix. Replaces what the lists held -- the indices of
+        a data page address one chunk's dictionary."""
+        dict_off.clear()
+        dict_len.clear()
         var off = 0
         for _ in range(num_values):
-            var n = LittleEndian.u32(span, off)
+            var n = LittleEndian.u32(body, off)
             off += 4
             dict_off.append(off)
             dict_len.append(n)
@@ -873,14 +892,12 @@ struct DeltaLengthByteArray:
         return out^
 
     @staticmethod
-    def encode[
-        BT: dt.BinaryLikeType
-    ](arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
+    def encode[A: BytesArray](arr: A, mut out: List[UInt8]) raises:
         """DELTA_LENGTH_BYTE_ARRAY: a delta-packed length stream then the
         concatenated present-value bytes."""
         var lengths = List[Int64]()
         var data = List[UInt8]()
-        for i in range(arr.length):
+        for i in range(len(arr)):
             if arr.is_valid(i):
                 var b = arr.unsafe_get(UInt(i)).as_bytes()
                 lengths.append(Int64(len(b)))
@@ -915,9 +932,7 @@ struct DeltaByteArray:
         return out^
 
     @staticmethod
-    def encode[
-        BT: dt.BinaryLikeType
-    ](arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
+    def encode[A: BytesArray](arr: A, mut out: List[UInt8]) raises:
         """DELTA_BYTE_ARRAY: a delta-packed shared-prefix-length stream, then a
         delta-packed suffix-length stream, then the suffix bytes; each value is
         `prev[:prefix] + suffix`."""
@@ -925,7 +940,7 @@ struct DeltaByteArray:
         var suffix_lens = List[Int64]()
         var suffix_data = List[UInt8]()
         var prev = List[UInt8]()
-        for i in range(arr.length):
+        for i in range(len(arr)):
             if arr.is_valid(i):
                 var v = List[UInt8](arr.unsafe_get(UInt(i)).as_bytes())
                 var m = min(len(prev), len(v))
@@ -1092,7 +1107,31 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
     ) raises:
         """Decompress `src` into `scratch` (resized, reused across pages)."""
         scratch.resize(unsafe_uninit_length=out_size)
-        var ptr = scratch.unsafe_ptr()
+        self._decompress_to(libs, src, out_size, scratch.unsafe_ptr())
+
+    def decompress_owned(
+        self,
+        mut libs: CompressionLibs,
+        src: Span[UInt8, _],
+        out_size: Int,
+    ) raises -> Buffer[mut=False]:
+        """Decompress `src` into a buffer of its own, for a decoder that keeps
+        pointing into the page after the reader has moved on."""
+        var out = Buffer.alloc_uninit[DType.uint8](out_size)
+        self._decompress_to(
+            libs, src, out_size, out.view[DType.uint8]().unsafe_ptr()
+        )
+        return out^.to_immutable()
+
+    def _decompress_to[
+        o: Origin[mut=True]
+    ](
+        self,
+        mut libs: CompressionLibs,
+        src: Span[UInt8, _],
+        out_size: Int,
+        ptr: Pointer[UInt8, o],
+    ) raises:
         if self == Self.UNCOMPRESSED:
             bulk_copy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
         elif self == Self.ZSTD:

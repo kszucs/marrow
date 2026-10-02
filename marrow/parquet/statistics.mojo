@@ -14,13 +14,18 @@ from std.sys import size_of
 
 from .. import dtypes as dt
 from ..dtypes import PrimitiveType
-from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
+from ..arrays import (
+    DynArray,
+    PrimitiveArray,
+    BytesArray,
+)
 from ..utils import LittleEndian
 from ..scalars import (
     PrimitiveScalar,
     DynScalar,
     BoolScalar,
     StringScalar,
+    StringViewScalar,
     Int8Scalar,
     Int16Scalar,
     Int32Scalar,
@@ -165,9 +170,9 @@ struct Statistics:
 
     @staticmethod
     def _bytes_stats[
-        BT: dt.BinaryLikeType
+        A: BytesArray
     ](
-        arr: BinaryLikeArray[BT],
+        arr: A,
         mut min_out: List[UInt8],
         mut max_out: List[UInt8],
     ) raises -> Bool:
@@ -178,7 +183,7 @@ struct Statistics:
         var seen = False
         var lo = List[UInt8]()
         var hi = List[UInt8]()
-        for i in range(arr.length):
+        for i in range(len(arr)):
             if arr.is_valid(i):
                 Self._update_minmax(
                     arr.unsafe_get(UInt(i)).as_bytes(), lo, hi, seen
@@ -248,14 +253,14 @@ struct Statistics:
             min_out.append(UInt8(0) if any_false else UInt8(1))
             max_out.append(UInt8(1) if any_true else UInt8(0))
             return True
-        elif vt.is_string():
-            return Self._bytes_stats(col.as_string(), min_out, max_out)
-        elif vt.is_large_string():
-            return Self._bytes_stats(col.as_large_string(), min_out, max_out)
-        elif vt.is_binary():
-            return Self._bytes_stats(col.as_binary(), min_out, max_out)
-        elif vt.is_large_binary():
-            return Self._bytes_stats(col.as_large_binary(), min_out, max_out)
+        elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
+
+            def bytes_stats[
+                A: BytesArray
+            ](arr: A) raises {mut min_out, mut max_out, imm} -> Bool:
+                return Self._bytes_stats(arr, min_out, max_out)
+
+            return col.dispatch_bytes(bytes_stats)
         elif vt.is_date32():
             # temporal stored as INT32/INT64 — signed integer ordering
             return Self._int_stats[width=4](col.as_date32(), min_out, max_out)
@@ -326,6 +331,11 @@ struct Statistics:
             return BoolScalar(b[0] != 0).to_dyn()
         elif dtype.is_string():
             return StringScalar(
+                String(StringSlice(unsafe_from_utf8=Span(b)))
+            ).to_dyn()
+        elif dtype.is_string_view():
+            # The same bound, in the layout the column was read as.
+            return StringViewScalar(
                 String(StringSlice(unsafe_from_utf8=Span(b)))
             ).to_dyn()
         elif dtype.is_fixed_size_binary():

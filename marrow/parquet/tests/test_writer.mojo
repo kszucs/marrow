@@ -1496,3 +1496,336 @@ def test_nested_row_group_leaf_slicing() raises:
         assert_equal(ParquetFile(path).num_row_groups(), 3)
         assert_true(Bool(pq.read_table(path).equals(want)))
         assert_equal(read_table(path).num_rows(), n)
+
+
+# ---------------------------------------------------------------------------
+# string_view / binary_view: written as BYTE_ARRAY, read back as either layout
+# ---------------------------------------------------------------------------
+
+from ...dtypes import string_view, binary_view, large_binary, int32
+from ...dtypes import string as string_dt
+
+
+def _view_values(n: Int) raises -> PythonObject:
+    """Short, long and null values, so both inline and out-of-line views and
+    several data pages appear."""
+    var out = Python.list()
+    for i in range(n):
+        if i % 11 == 0:
+            out.append(Python.none())
+        elif i % 3 == 0:
+            out.append("value number " + String(i) + " is long")
+        else:
+            out.append("v" + String(i % 50))
+    return out^
+
+
+def _assert_view_file(path: String, expected: PythonObject) raises:
+    """pyarrow reads what marrow wrote; marrow reads it as `string` by
+    default and as `string_view` when asked."""
+    var pq = Python.import_module("pyarrow.parquet")
+    var got = pq.read_table(path).column("x").to_pylist()
+    assert_true(got == expected)
+
+    var plain = read_table(path)
+    assert_true(plain.schema.fields[0].dtype == string_dt)
+
+    var views = read_table(path, binary_type=binary_view)
+    assert_true(views.schema.fields[0].dtype == string_view)
+    var i = 0
+    for ref batch in views.to_batches():
+        ref col = batch.columns[0].as_string_view()
+        col.validate()
+        for j in range(len(col)):
+            if expected[i] is Python.none():
+                assert_false(col.is_valid(j))
+            else:
+                assert_equal(col[j].value(), String(py=expected[i]))
+            i += 1
+    assert_equal(i, len(expected))
+
+
+def test_string_view_write_dictionary() raises:
+    var pa = Python.import_module("pyarrow")
+    var values = _view_values(5000)
+    var t = _one_col(pa.array(values, type=pa.string_view()))
+    with ScratchDir() as dir:
+        var path = join(dir, "sv_dict.parquet")
+        write_table(t, path)
+        _assert_view_file(path, values)
+
+
+def test_string_view_write_plain_and_delta() raises:
+    var pa = Python.import_module("pyarrow")
+    var values = _view_values(3000)
+    var t = _one_col(pa.array(values, type=pa.string_view()))
+    with ScratchDir() as dir:
+        var plain = join(dir, "sv_plain.parquet")
+        write_table(t, plain, use_dictionary=False)
+        _assert_view_file(plain, values)
+        var dba = join(dir, "sv_dba.parquet")
+        write_table(t, dba, encoding=Encoding.DELTA_BYTE_ARRAY)
+        _assert_view_file(dba, values)
+        var dlba = join(dir, "sv_dlba.parquet")
+        write_table(t, dlba, encoding=Encoding.DELTA_LENGTH_BYTE_ARRAY)
+        _assert_view_file(dlba, values)
+
+
+def test_string_view_statistics() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(
+            Python.list("pear", None, "apple is a long value", "zucchini"),
+            type=pa.string_view(),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "sv_stats.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_equal(String(py=s.min), "apple is a long value")
+        assert_equal(String(py=s.max), "zucchini")
+        assert_equal(Int(py=s.null_count), 1)
+
+
+def test_binary_type_read_option() raises:
+    """`binary_type` maps un-annotated BYTE_ARRAY to itself and STRING to the
+    matching string type, nested leaves included."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            b=pa.array(
+                Python.evaluate(
+                    "[b'a', None, b'bytes beyond the inline limit']"
+                )
+            ),
+            l=pa.array(
+                Python.evaluate(
+                    "[['x', 'a long list element value'], None, []]"
+                ),
+                type=pa.list_(pa.string()),
+            ),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "binary_type.parquet")
+        pq.write_table(t, path, store_schema=False)
+        var views = read_table(path, binary_type=binary_view)
+        assert_true(views.schema.fields[0].dtype == binary_view)
+        ref l = views.to_batches()[0].columns[1].as_list()
+        assert_true(l.values().dtype() == string_view)
+        var large = read_table(path, binary_type=large_binary)
+        assert_true(large.schema.fields[0].dtype == large_binary)
+
+        var raised = False
+        try:
+            _ = read_table(path, binary_type=int32)
+        except:
+            raised = True
+        assert_true(raised)
+
+
+from ...parquet.reader import LeafSet, leaf_of
+from ...dtypes import StringViewType, Int64Type
+
+
+def test_parquet_file_binary_type_with_narrowed_leaves() raises:
+    """`ParquetFile(binary_type=...)` directly, compiled for exactly the view
+    leaf it will see."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            s=pa.array(Python.list("a", None, "a value longer than twelve")),
+            n=pa.array(Python.list(1, 2, 3), type=pa.int64()),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "narrowed.parquet")
+        pq.write_table(t, path, store_schema=False)
+        var f = ParquetFile[
+            leaves=leaf_of[StringViewType]() | leaf_of[Int64Type]()
+        ](path, binary_type=binary_view)
+        var got = f.read()
+        assert_true(got.schema.fields[0].dtype == string_view)
+        ref col = got.to_batches()[0].columns[0].as_string_view()
+        assert_false(col.is_valid(1))
+        assert_equal(col[2].value(), "a value longer than twelve")
+
+
+from ...schema import Schema
+from ...dtypes import Field, list_
+
+
+def test_declared_schema_picks_the_layout_per_column() raises:
+    """A declared schema decides each named column's string layout, leaf by
+    leaf: a top-level view does not turn a nested list into views, a nested
+    view needs no top-level one, and an undeclared column falls back to
+    `binary_type`."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            s=pa.array(Python.list("a", None, "a value longer than twelve")),
+            u=pa.array(Python.list("x", "y", "z")),
+            tags=pa.array(
+                Python.evaluate(
+                    "[['p', 'a long list element value'], None, []]"
+                ),
+                type=pa.list_(pa.string()),
+            ),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "declared.parquet")
+        pq.write_table(t, path, store_schema=False)
+
+        var top = ParquetFile(
+            path,
+            schema=Schema(
+                fields=[
+                    Field("s", string_view),
+                    Field("tags", list_(string_dt)),
+                ]
+            ),
+        ).read()
+        assert_true(top.schema.fields[0].dtype == string_view)
+        assert_true(top.schema.fields[1].dtype == string_dt)
+        assert_true(top.schema.fields[2].dtype == list_(string_dt))
+        ref s = top.to_batches()[0].columns[0].as_string_view()
+        assert_equal(s[2].value(), "a value longer than twelve")
+
+        var nested = ParquetFile(
+            path, schema=Schema(fields=[Field("tags", list_(string_view))])
+        ).read()
+        assert_true(nested.schema.fields[0].dtype == string_dt)
+        assert_true(nested.schema.fields[2].dtype == list_(string_view))
+        ref tags = nested.to_batches()[0].columns[2].as_list()
+        assert_equal(
+            tags.values().as_string_view()[1].value(),
+            "a long list element value",
+        )
+
+
+from ...parquet.reader import RowSelection
+
+
+def test_view_decode_adopts_only_pages_with_long_values() raises:
+    """A page or dictionary is taken as a data buffer at the first selected
+    row too long to inline, and not before -- holding it would only keep it
+    alive -- in every page shape the decoder sees: PLAIN from the source,
+    PLAIN decompressed, and a dictionary. A row selection that leaves the long
+    row out leaves the page out too."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            short=pa.array(Python.list("a", None, "twelve bytes")),
+            long=pa.array(Python.list("a", None, "thirteen bytes")),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "inline.parquet")
+        for dictionary in [False, True]:
+            for codec in ["none", "snappy"]:
+                pq.write_table(
+                    t, path, use_dictionary=dictionary, compression=codec
+                )
+                var got = ParquetFile(path, binary_type=binary_view).read()
+                var batch = got.to_batches()[0].copy()
+                var short = batch.columns[0].as_string_view().copy()
+                var long = batch.columns[1].as_string_view().copy()
+                assert_equal(len(short.buffers), 0)
+                assert_equal(short[2].value(), "twelve bytes")
+                assert_equal(len(long.buffers), 1)
+                assert_equal(long[2].value(), "thirteen bytes")
+                assert_false(long[1].is_valid())
+
+                var keep: List[Bool] = [True, True, False]
+                var selections: List[RowSelection] = [RowSelection(keep^)]
+                var groups: List[Int] = [0]
+                var head = ParquetFile(path, binary_type=binary_view).read(
+                    row_groups=Optional(groups^),
+                    row_selections=Optional(selections^),
+                )
+                var unselected = (
+                    head.to_batches()[0].columns[1].as_string_view().copy()
+                )
+                assert_equal(len(unselected), 2)
+                assert_equal(len(unselected.buffers), 0)
+                assert_equal(unselected[0].value(), "a")
+
+
+def test_view_decode_matches_string_decode() raises:
+    """The zero-copy view decoder against the copying string one, over a
+    pyarrow file with dictionary pages, a PLAIN fallback past the dictionary
+    limit, nulls, several row groups, and a row selection."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var values = Python.list()
+    for i in range(6000):
+        if i % 13 == 0:
+            values.append(Python.none())
+        elif i % 2 == 0:
+            values.append("k" + String(i % 7))
+        else:
+            values.append("a high-cardinality value number " + String(i))
+    var t = pa.table(Python.dict(s=pa.array(values, type=pa.string())))
+    with ScratchDir() as dir:
+        var path = join(dir, "view_decode.parquet")
+        pq.write_table(
+            t,
+            path,
+            row_group_size=2500,
+            data_page_size=4096,
+            dictionary_pagesize_limit=8192,
+        )
+        var f = ParquetFile(path)
+        var plain = f.read()
+        var views = ParquetFile(path, binary_type=binary_view).read()
+
+        var keep = List[Bool](length=2500, fill=False)
+        for i in range(0, 2500, 3):
+            keep[i] = True
+        var selections: List[RowSelection] = [RowSelection(keep^)]
+        var groups: List[Int] = [1]
+        var sel_plain = f.read(
+            row_groups=Optional(groups.copy()),
+            row_selections=Optional(selections.copy()),
+        )
+        var sel_views = ParquetFile(path, binary_type=binary_view).read(
+            row_groups=Optional(groups^), row_selections=Optional(selections^)
+        )
+
+        for pair in [
+            (plain.copy(), views.copy()),
+            (sel_plain.copy(), sel_views.copy()),
+        ]:
+            ref a = pair[0]
+            ref b = pair[1]
+            assert_equal(a.num_rows(), b.num_rows())
+            var ab = a.to_batches()
+            var bb = b.to_batches()
+            var i = 0
+            var j = 0
+            var ai = 0
+            var bi = 0
+            while i < len(ab) and j < len(bb):
+                ref sa = ab[i].columns[0].as_string()
+                ref sb = bb[j].columns[0].as_string_view()
+                sb.validate()
+                assert_equal(sa.is_valid(ai), sb.is_valid(bi))
+                if sa.is_valid(ai):
+                    assert_equal(
+                        sa[ai].value(),
+                        sb[bi].value(),
+                    )
+                ai += 1
+                bi += 1
+                if ai == len(sa):
+                    i += 1
+                    ai = 0
+                if bi == len(sb):
+                    j += 1
+                    bi = 0
