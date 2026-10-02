@@ -48,6 +48,8 @@ from .dtypes import (
     int8,
     large_binary,
     large_string,
+    binary_view,
+    string_view,
     microsecond,
     millisecond,
     month_day_nano_interval,
@@ -68,6 +70,8 @@ from .dtypes import (
 from .arrays import (
     DynArray,
     ArrayData,
+    BinaryViewArray,
+    StringViewArray,
 )
 from .schema import Schema
 from .tabular import RecordBatch, Table
@@ -369,6 +373,10 @@ struct CArrowSchema(Copyable, Movable):
             fmt = "u"
         elif dtype.is_large_string():
             fmt = "U"
+        elif dtype.is_binary_view():
+            fmt = "vz"
+        elif dtype.is_string_view():
+            fmt = "vu"
         elif dtype.is_list():
             fmt = "+l"
             n_children = 1
@@ -713,6 +721,10 @@ struct CArrowSchema(Copyable, Movable):
             return string
         elif fmt == "U":
             return large_string
+        elif fmt == "vz":
+            return binary_view
+        elif fmt == "vu":
+            return string_view
         elif fmt == "+l":
             # Preserve the child Field as-is (its name may not be the default
             # "item" when constructed by other Arrow implementations).
@@ -1033,6 +1045,7 @@ struct CArrowArray(Copyable, Movable):
                 Buffer.from_foreign(self.buffers[unsafe_offset=2], n, owner)
             )
         elif dtype.is_large_string() or dtype.is_large_binary():
+            self._need_buffers(3, dtype)
             var offsets = Buffer.from_foreign(
                 self.buffers[unsafe_offset=1],
                 (Int(length) + 1) * size_of[DType.int64](),
@@ -1043,6 +1056,32 @@ struct CArrowArray(Copyable, Movable):
             buffers.append(
                 Buffer.from_foreign(self.buffers[unsafe_offset=2], n, owner)
             )
+        elif dtype.is_string_view() or dtype.is_binary_view():
+            # Validity, views, the variadic data buffers, then one int64 per
+            # data buffer giving its byte length -- the only place a consumer
+            # learns how long each data buffer is.
+            self._need_buffers(3, dtype)
+            var n_data = Int(self.n_buffers) - 3
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[unsafe_offset=1],
+                    Int(length) * StringViewArray.VIEW_SIZE,
+                    owner,
+                )
+            )
+            var sizes = Buffer.from_foreign(
+                self.buffers[unsafe_offset=Int(self.n_buffers) - 1],
+                n_data * size_of[DType.int64](),
+                owner,
+            )
+            for i in range(n_data):
+                buffers.append(
+                    Buffer.from_foreign(
+                        self.buffers[unsafe_offset=2 + i],
+                        Int(sizes.unsafe_get[DType.int64](i)),
+                        owner,
+                    )
+                )
         elif dtype.is_list():
             buffers.append(
                 Buffer.from_foreign(
@@ -1182,6 +1221,22 @@ struct CArrowArray(Copyable, Movable):
             n_buffers = 0
         else:
             n_buffers = Int64(1 + len(data.buffers))  # 1 = validity bitmap slot
+        if data.dtype.is_string_view() or data.dtype.is_binary_view():
+            # The trailing variadic-sizes buffer: how far into each data
+            # buffer the views reach, not `len(buffer)`, which is rounded up
+            # to 64 bytes and, for a buffer that was itself imported, can run
+            # past the producer's allocation. Appended to the heap copy below,
+            # so the release callback frees it with everything else. The
+            # extents depend only on the layout, so either view alias reads
+            # them, and the layout is an array's own, so it is not re-checked.
+            var extents = BinaryViewArray(
+                unsafe_from_data=data
+            ).buffer_extents()
+            var sizes = Buffer.alloc_zeroed[DType.int64](len(extents))
+            for i in range(len(extents)):
+                sizes.unsafe_set[DType.int64](i, Int64(extents[i]))
+            data.buffers.append(sizes^.to_immutable())
+            n_buffers += 1
         # Dictionary arrays expose values via the `dictionary` field, not children.
         var n_children = Int64(0) if is_dictionary else Int64(
             len(data.children)

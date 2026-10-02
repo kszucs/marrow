@@ -32,7 +32,15 @@ from .errors import (
     InvalidError,
     NotImplementedError,
 )
-from .arrays import DynArray, ArrayData, DictionaryArray, NullArray, Int32Array
+from .arrays import (
+    ArrayData,
+    BinaryViewArray,
+    DictionaryArray,
+    DynArray,
+    Int32Array,
+    NullArray,
+    StringViewArray,
+)
 from .buffers import Buffer, Bitmap
 from .execution import ExecContext
 from .io import (
@@ -72,6 +80,8 @@ comptime _TYPE_UTF8: UInt8 = 5
 comptime _TYPE_LARGE_BINARY: UInt8 = 19
 comptime _TYPE_LARGE_UTF8: UInt8 = 20
 comptime _TYPE_LARGE_LIST: UInt8 = 21
+comptime _TYPE_BINARY_VIEW: UInt8 = 23
+comptime _TYPE_UTF8_VIEW: UInt8 = 24
 comptime _TYPE_INTERVAL: UInt8 = 11
 comptime _INTERVAL_UNIT_YEAR_MONTH: UInt16 = 0
 comptime _INTERVAL_UNIT_DAY_TIME: UInt16 = 1
@@ -684,11 +694,14 @@ struct _IpcEncoder(Movable):
         length: Int64,
         nodes: List[_FieldNode],
         buffers: List[_BodyBuffer],
+        variadic_counts: List[Int64],
     ) raises -> List[UInt8]:
         var enc = _IpcEncoder(512)
         var nodes_vec = enc._write_field_nodes_vec(nodes)
         var bufs_vec = enc._write_body_buffers_vec(buffers)
-        var rb_pos = enc._write_record_batch_table(length, nodes_vec, bufs_vec)
+        var rb_pos = enc._write_record_batch_table(
+            length, nodes_vec, bufs_vec, variadic_counts
+        )
 
         var max_end = Int64(0)
         for b in buffers:
@@ -736,8 +749,23 @@ struct _IpcEncoder(Movable):
         length: Int64,
         nodes_vec: UInt32,
         bufs_vec: UInt32,
+        variadic_counts: List[Int64],
     ) raises -> UInt32:
+        # Slot 4, `variadicBufferCounts`: one entry per view-layout node, in
+        # node order, giving how many data buffers follow its views buffer.
+        # Written only when a view column is present, as the spec allows.
+        var vc_vec = UInt32(0)
+        if len(variadic_counts) > 0:
+            var data = List[UInt8](capacity=len(variadic_counts) * 8)
+            for c in variadic_counts:
+                LittleEndian.append[DType.int64](data, c)
+            vc_vec = self._fb.create_vector_structs(
+                data, len(variadic_counts), 8, 8
+            )
         var ts = self._fb.offset()
+        var vc_at = UInt32(0)
+        if len(variadic_counts) > 0:
+            vc_at = self._fb.prepend_uoffset(vc_vec)
         var bv_at = self._fb.prepend_uoffset(bufs_vec)
         var nv_at = self._fb.prepend_uoffset(nodes_vec)
         var ln_at = self._fb.prepend_i64(length)
@@ -745,6 +773,8 @@ struct _IpcEncoder(Movable):
         flds.append(_FieldOffset(0, ln_at))
         flds.append(_FieldOffset(1, nv_at))
         flds.append(_FieldOffset(2, bv_at))
+        if len(variadic_counts) > 0:
+            flds.append(_FieldOffset(4, vc_at))
         return self._fb.write_table(flds, ts)
 
     def _write_footer_table(
@@ -824,6 +854,10 @@ struct _IpcEncoder(Movable):
             return _TYPE_UTF8
         elif dtype.is_large_string():
             return _TYPE_LARGE_UTF8
+        elif dtype.is_binary_view():
+            return _TYPE_BINARY_VIEW
+        elif dtype.is_string_view():
+            return _TYPE_UTF8_VIEW
         elif dtype.is_map():
             # Before `is_list()`: a map is a list of entry structs, and if
             # `is_list()` answered first a map would be written as a plain list
@@ -867,6 +901,8 @@ struct _IpcEncoder(Movable):
             or dtype.is_large_binary()
             or dtype.is_string()
             or dtype.is_large_string()
+            or dtype.is_string_view()
+            or dtype.is_binary_view()
             or dtype.is_list()
             or dtype.is_large_list()
             or dtype.is_struct()
@@ -1325,8 +1361,11 @@ struct _IpcDecoder(Movable):
         var rb_pos = self._r.read_table(db_pos, 1)
         var nodes = List[_FieldNode]()
         var bufs = List[_BodyBuffer]()
-        var _l = self._read_record_batch_meta(rb_pos, nodes, bufs)
-        var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^, dict_values)
+        var variadic = List[Int64]()
+        var _l = self._read_record_batch_meta(rb_pos, nodes, bufs, variadic)
+        var batch_dec = _BatchDecoder(
+            body^, 0, nodes^, bufs^, variadic^, dict_values
+        )
         return batch_dec.read_array(value_dtype, values_ipc_info)
 
     def decode_record_batch(
@@ -1346,8 +1385,11 @@ struct _IpcDecoder(Movable):
         var rb_pos = self._r.read_table(msg_tp, 2)
         var nodes = List[_FieldNode]()
         var bufs = List[_BodyBuffer]()
-        var _l = self._read_record_batch_meta(rb_pos, nodes, bufs)
-        var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^, dict_values)
+        var variadic = List[Int64]()
+        var _l = self._read_record_batch_meta(rb_pos, nodes, bufs, variadic)
+        var batch_dec = _BatchDecoder(
+            body^, 0, nodes^, bufs^, variadic^, dict_values
+        )
         var columns = List[DynArray]()
         for i in range(len(schema.fields)):
             var ipc = (
@@ -1410,6 +1452,7 @@ struct _IpcDecoder(Movable):
         rb_pos: UInt32,
         mut nodes: List[_FieldNode],
         mut bufs: List[_BodyBuffer],
+        mut variadic_counts: List[Int64],
     ) raises -> Int64:
         var length = self._r.read_i64(rb_pos, 0, 0)
 
@@ -1444,6 +1487,13 @@ struct _IpcDecoder(Movable):
                     LittleEndian.checked[DType.int64](sb, 8),
                 )
             )
+
+        if self._r.has_field(rb_pos, 4):
+            var vc_vec = self._r.read_vector(rb_pos, 4)
+            var nv = Int(self._r.vector_len(vc_vec))
+            for i in range(nv):
+                var sb = self._r.vec_struct_bytes(vc_vec, UInt32(i), 8)
+                variadic_counts.append(LittleEndian.checked[DType.int64](sb, 0))
 
         return length
 
@@ -1528,6 +1578,10 @@ struct _IpcDecoder(Movable):
             dtype = dt.string
         elif type_type == _TYPE_LARGE_UTF8:
             dtype = dt.large_string
+        elif type_type == _TYPE_BINARY_VIEW:
+            dtype = dt.binary_view
+        elif type_type == _TYPE_UTF8_VIEW:
+            dtype = dt.string_view
         elif type_type == _TYPE_MAP:
             var tp = self._r.read_table(fp, 3)
             var keys_sorted = self._r.read_bool(tp, 0, False)
@@ -1739,10 +1793,12 @@ struct _BatchEncoder(Movable):
 
     var nodes: List[_FieldNode]
     var raw_bufs: List[List[UInt8]]
+    var variadic_counts: List[Int64]
 
     def __init__(out self):
         self.nodes = List[_FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
+        self.variadic_counts = List[Int64]()
 
     @staticmethod
     def dense(arr: DynArray) raises -> ArrayData:
@@ -1775,6 +1831,19 @@ struct _BatchEncoder(Movable):
             if data.dtype.is_null():
                 continue
 
+            # A sparse view node -- a slice, or a filter or take result still
+            # sharing its source's buffers -- is compacted first, or the body
+            # would carry every byte those buffers hold. The same ladder as
+            # `Pipeline.collect`'s.
+            if data.dtype.is_string_view():
+                data = (
+                    StringViewArray(unsafe_from_data=data).compact().to_data()
+                )
+            elif data.dtype.is_binary_view():
+                data = (
+                    BinaryViewArray(unsafe_from_data=data).compact().to_data()
+                )
+
             var validity_bytes = List[UInt8]()
             if data.nulls > 0 and data.bitmap:
                 var bv = data.bitmap.value()
@@ -1789,6 +1858,8 @@ struct _BatchEncoder(Movable):
                     validity_bytes.append(byte_val)
             self.raw_bufs.append(validity_bytes^)
 
+            if data.dtype.is_string_view() or data.dtype.is_binary_view():
+                self.variadic_counts.append(Int64(len(data.buffers) - 1))
             for buf in data.buffers:
                 var n = buf.length[DType.uint8]()
                 var bytes = List[UInt8](capacity=n)
@@ -1843,7 +1914,7 @@ struct _BatchEncoder(Movable):
         var body = List[UInt8]()
         self._build_body(buf_meta, body)
         var rb_meta = _IpcEncoder.encode_record_batch(
-            Int64(batch.num_rows()), self.nodes, buf_meta
+            Int64(batch.num_rows()), self.nodes, buf_meta, self.variadic_counts
         )
         var meta_len = len(rb_meta)
         var padded_meta = meta_len + (8 - meta_len % 8) % 8
@@ -1852,6 +1923,7 @@ struct _BatchEncoder(Movable):
         var msg = _IpcEncoder.frame_message(rb_meta, body)
         self.nodes = List[_FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
+        self.variadic_counts = List[Int64]()
         return _EncodedBatch(msg^, metadata_length, body_length)
 
     @staticmethod
@@ -1869,7 +1941,7 @@ struct _BatchEncoder(Movable):
         var nodes_vec = enc._write_field_nodes_vec(benc.nodes)
         var bufs_vec = enc._write_body_buffers_vec(buf_meta)
         var rb_pos = enc._write_record_batch_table(
-            Int64(values.length()), nodes_vec, bufs_vec
+            Int64(values.length()), nodes_vec, bufs_vec, benc.variadic_counts
         )
         var db_pos = enc._write_dictionary_batch_table(dict_id, False, rb_pos)
 
@@ -1904,8 +1976,10 @@ struct _BatchDecoder(Movable):
     var body_offset: Int
     var nodes: List[_FieldNode]
     var bufs: List[_BodyBuffer]
+    var variadic_counts: List[Int64]
     var node_idx: Int
     var buf_idx: Int
+    var variadic_idx: Int
     var dict_values: List[DynArray]
 
     def __init__(
@@ -1914,14 +1988,17 @@ struct _BatchDecoder(Movable):
         body_offset: Int,
         var nodes: List[_FieldNode],
         var bufs: List[_BodyBuffer],
+        var variadic_counts: List[Int64],
         dict_values: List[DynArray] = List[DynArray](),
     ):
         self.body = body^
         self.body_offset = body_offset
         self.nodes = nodes^
         self.bufs = bufs^
+        self.variadic_counts = variadic_counts^
         self.node_idx = 0
         self.buf_idx = 0
+        self.variadic_idx = 0
         self.dict_values = dict_values.copy()
 
     def read_array(
@@ -1976,6 +2053,17 @@ struct _BatchDecoder(Movable):
         # silently shifting every buffer read after it.
         for _ in range(dtype.num_buffers()):
             self._consume_buffer(data_buffers)
+        if dtype.is_string_view() or dtype.is_binary_view():
+            # The views buffer is counted above; the data buffers after it are
+            # counted per node, in `variadicBufferCounts`.
+            if self.variadic_idx >= len(self.variadic_counts):
+                raise CorruptError(
+                    t"_BatchDecoder: {dtype} column without a variadic count"
+                )
+            var n_data = Int(self.variadic_counts[self.variadic_idx])
+            self.variadic_idx += 1
+            for _ in range(n_data):
+                self._consume_buffer(data_buffers)
 
         if dtype.is_map():
             var child_ipc = (

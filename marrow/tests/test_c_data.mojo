@@ -11,8 +11,19 @@ from std.python import Python, PythonObject
 from std.memory.alloc import unsafe_alloc
 from ..c_data import *
 from ..tabular import Table
-from ..arrays import DynArray, BoolArray, PrimitiveArray, StringArray
-from ..builders import PrimitiveBuilder, StringBuilder, BoolBuilder
+from ..arrays import (
+    DynArray,
+    BoolArray,
+    PrimitiveArray,
+    StringArray,
+    StringViewArray,
+)
+from ..builders import (
+    PrimitiveBuilder,
+    StringBuilder,
+    StringViewBuilder,
+    BoolBuilder,
+)
 from ..dtypes import *
 
 
@@ -1230,3 +1241,88 @@ def test_import_rejects_too_few_buffers() raises:
     arr.n_buffers = 1  # a primitive array needs validity + values
     with assert_raises(contains="buffers"):
         _ = arr^.to_array(int32)
+
+
+def test_string_view_from_pyarrow() raises:
+    """Import `vu`: inline and out-of-line values, a null, and an offset."""
+    var pa = Python.import_module("pyarrow")
+    var values = Python.list(
+        "short", None, "a value longer than twelve bytes", "", "exactly12byt"
+    )
+    var pyarr = pa.array(values, type=pa.string_view()).slice(1)
+    var dtype = c_schema_from_pyobj(pyarr.type).to_dtype()
+    assert_equal(dtype, string_view)
+    var arr = c_array_from_pyobj(pyarr).to_array(dtype)
+    ref sv = arr.as_string_view()
+    assert_equal(len(sv), 4)
+    assert_equal(sv.offset, 1)
+    assert_equal(sv.null_count(), 1)
+    assert_false(sv.is_valid(0))
+    assert_equal(sv[1].value(), "a value longer than twelve bytes")
+    assert_equal(sv[2].value(), "")
+    assert_equal(sv[3].value(), "exactly12byt")
+
+
+def test_binary_view_from_pyarrow() raises:
+    var pa = Python.import_module("pyarrow")
+    var pydata = Python.evaluate("[b'ab', b'bytes beyond the inline limit']")
+    var pyarr = pa.array(pydata, type=pa.binary_view())
+    var dtype = c_schema_from_pyobj(pyarr.type).to_dtype()
+    assert_equal(dtype, binary_view)
+    var arr = c_array_from_pyobj(pyarr).to_array(dtype)
+    assert_equal(
+        arr.as_binary_view()[1].value(),
+        "bytes beyond the inline limit",
+    )
+
+
+def test_string_view_to_pyarrow() raises:
+    """Export `vu` with the trailing variadic-sizes buffer, over several data
+    buffers, and let pyarrow's full validation check every view."""
+    var pa = Python.import_module("pyarrow")
+    var b = StringViewBuilder()
+    var expected = Python.list()
+    for i in range(500):
+        if i % 7 == 0:
+            b.append_null()
+            expected.append(Python.none())
+        else:
+            var v = String(i) + String("-") * (i % 40)
+            b.append(v)
+            expected.append(v)
+    var arr = b.finish()
+    assert_true(len(arr.buffers) > 1)
+    var dyn = arr^.to_dyn()
+    var schema_capsule = CArrowSchema.from_dtype(dyn.dtype()).to_pycapsule()
+    var array_capsule = CArrowArray.from_array(dyn).to_pycapsule()
+    var pyarr = pa.Array._import_from_c_capsule(schema_capsule, array_capsule)
+    pyarr.validate(full=True)
+    assert_true(pyarr.type == pa.string_view())
+    assert_true(pyarr.to_pylist() == expected)
+
+
+def test_string_view_sliced_to_pyarrow() raises:
+    var pa = Python.import_module("pyarrow")
+    var src: StringViewArray = [
+        "zero",
+        "one is long enough",
+        "two",
+        "three is also long",
+    ]
+    var dyn = src.slice(1, 2).to_dyn()
+    var pyarr = pa.Array._import_from_c_capsule(
+        CArrowSchema.from_dtype(dyn.dtype()).to_pycapsule(),
+        CArrowArray.from_array(dyn).to_pycapsule(),
+    )
+    pyarr.validate(full=True)
+    assert_true(pyarr.to_pylist() == Python.list("one is long enough", "two"))
+
+
+def test_string_view_c_data_roundtrip() raises:
+    var b = StringViewBuilder()
+    b.append("inline")
+    b.append_null()
+    b.append("out of line value")
+    var arr = b.finish()
+    var back = CArrowArray.from_array(arr.copy().to_dyn()).to_array(string_view)
+    assert_true(back.as_string_view() == arr)

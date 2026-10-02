@@ -28,6 +28,8 @@ from ..builders import (
     Float32Builder,
     Float64Builder,
     StringBuilder,
+    StringViewBuilder,
+    BinaryViewBuilder,
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
@@ -1055,3 +1057,139 @@ def test_ipc_file_reader_reads_only_its_tail() raises:
         var got = r.read_batch(0)
         assert_equal(got.num_rows(), 50000)
         _ = whole^
+
+
+# ---------------------------------------------------------------------------
+# string_view / binary_view: variadicBufferCounts
+# ---------------------------------------------------------------------------
+
+
+def _view_batch() raises -> RecordBatch:
+    """A string_view column over several data buffers, a binary_view column
+    with none, and an int32 column after both -- so a wrong variadic count
+    shifts the int32 column's buffers and shows up there."""
+    var sb = StringViewBuilder()
+    for i in range(400):
+        if i % 9 == 0:
+            sb.append_null()
+        else:
+            sb.append(String(i) + String("-") * (i % 50))
+    var sv = sb.finish()
+    assert_true(len(sv.buffers) > 1)
+    var bb = BinaryViewBuilder()
+    for i in range(400):
+        bb.append(String(i))
+    var ib = Int32Builder(400)
+    for i in range(400):
+        ib.append(Int32(i))
+    var fields = List[Field]()
+    fields.append(field("s", string_view, nullable=True))
+    fields.append(field("b", binary_view))
+    fields.append(field("i", int32))
+    var cols = List[DynArray]()
+    cols.append(sv^.to_dyn())
+    cols.append(bb.finish().to_dyn())
+    cols.append(ib.finish().to_dyn())
+    return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
+
+
+def test_view_file_roundtrip() raises:
+    var batch = _view_batch()
+    var result = _roundtrip_file(batch)
+    assert_true(result.schema.fields[0].dtype == string_view)
+    assert_true(result.schema.fields[1].dtype == binary_view)
+    assert_true(batch == result)
+
+
+def test_view_stream_roundtrip() raises:
+    var batch = _view_batch()
+    assert_true(batch == _roundtrip_stream(batch))
+
+
+def test_pyarrow_reads_view_file() raises:
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var batches_in = List[RecordBatch]()
+    batches_in.append(_view_batch())
+    write_ipc_file(path, batches_in)
+    var pa_batch = pa.ipc.open_file(path).get_batch(0)
+    pa_batch.validate(full=True)
+    assert_true(pa_batch.schema.field(0).type == pa.string_view())
+    assert_true(pa_batch.schema.field(1).type == pa.binary_view())
+    var s = pa_batch.column(0)
+    assert_equal(Int(py=s.null_count), 45)
+    assert_true(s[0].as_py() is None)
+    assert_equal(String(py=s[1].as_py()), "1-")
+    assert_equal(String(py=s[49].as_py()), "49" + String("-") * 49)
+    assert_equal(Int(py=pa_batch.column(2)[399].as_py()), 399)
+
+
+def test_marrow_reads_pyarrow_view_file() raises:
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var sv = pa.array(
+        Python.list("a", None, "a value longer than twelve bytes"),
+        type=pa.string_view(),
+    )
+    var bv = pa.array(
+        Python.evaluate("[b'x', b'y', b'bytes beyond the inline limit']"),
+        type=pa.binary_view(),
+    )
+    var iv = pa.array(Python.list(1, 2, 3), type=pa.int32())
+    var pa_batch = pa.RecordBatch.from_arrays(
+        Python.list(sv, bv, iv), names=Python.list("s", "b", "i")
+    )
+    var writer = pa.ipc.new_file(path, pa_batch.schema)
+    writer.write(pa_batch)
+    writer.close()
+
+    var batches = read_ipc_file(path)
+    ref cols = batches[0].columns
+    assert_true(cols[0].dtype() == string_view)
+    assert_true(cols[1].dtype() == binary_view)
+    ref s = cols[0].as_string_view()
+    assert_equal(s.null_count(), 1)
+    assert_equal(s[2].value(), "a value longer than twelve bytes")
+    assert_equal(
+        cols[1].as_binary_view()[2].value(),
+        "bytes beyond the inline limit",
+    )
+    assert_equal(cols[2].as_int32()[2].value(), 3)
+
+
+def test_view_sparse_column_is_compacted_on_write() raises:
+    """A view column reaching a small part of its data buffers -- two rows of
+    a hundred -- is written with only the bytes it reaches, so the body does
+    not carry the rest of its source."""
+    var sb = StringViewBuilder()
+    for i in range(100):
+        sb.append(String(i) + " is a value longer than twelve")
+    var sparse = sb.finish().slice(40, 2)
+    assert_true(sparse.is_sparse())
+    var batch = _single_col_batch(
+        sparse.copy().to_dyn(), field("s", string_view)
+    )
+    var result = _roundtrip_file(batch)
+    ref got = result.columns[0].as_string_view()
+    assert_false(got.is_sparse())
+    assert_equal(got[0].value(), "40 is a value longer than twelve")
+    assert_equal(got[1].value(), "41 is a value longer than twelve")
+
+
+def test_view_sliced_roundtrip() raises:
+    """A sliced view column is written dense: its views are gathered to start
+    at 0, and the data buffers go with them."""
+    var sb = StringViewBuilder()
+    for i in range(20):
+        sb.append(String(i) + " is a value longer than twelve")
+    var sliced = sb.finish().slice(5, 10)
+    var expected = sliced.copy()
+    var batch = _single_col_batch(sliced^.to_dyn(), field("s", string_view))
+    var result = _roundtrip_file(batch)
+    ref got = result.columns[0].as_string_view()
+    assert_equal(len(got), 10)
+    for i in range(10):
+        assert_equal(
+            got[i].value(),
+            expected[i].value(),
+        )
