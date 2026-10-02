@@ -105,10 +105,9 @@ def test_flags_asan_on_linux_leave_the_runtime_to_the_linker(monkeypatch):
     """`cc` links its own runtime for `--sanitize address`; linking ours too
     puts two in the process, and ASAN never finishes initialising."""
     monkeypatch.setattr(sys, "platform", "linux")
-    runtime = AsanRuntime("/tmp/libclang_rt.asan-aarch64.so")
-    flags = BuildOptions.for_tests(asan=True).flags(runtime)
+    flags = BuildOptions.for_tests(asan=True).flags(AsanRuntime.locate({}))
     assert flags[flags.index("--sanitize") + 1] == "address"
-    assert str(runtime.path) not in flags
+    assert not any("libclang_rt" in flag for flag in flags)
 
 
 def test_flags_tsan_only_when_requested():
@@ -166,28 +165,22 @@ def test_libm_is_linked_for_runners_only():
     assert "-lm" not in BuildOptions.for_size_gate().flags()
 
 
-def test_asan_runtime_locate_prefers_the_conda_prefix(tmp_path):
+def test_asan_runtime_locate_prefers_the_conda_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
     lib = tmp_path / "lib"
     lib.mkdir()
-    names = (
-        AsanRuntime.MACOS_LIBS if sys.platform == "darwin" else AsanRuntime.LINUX_LIBS
-    )
-    planted = lib / names[0]
+    planted = lib / AsanRuntime.MACOS_LIBS[0]
     planted.touch()
     found = AsanRuntime.locate({"CONDA_PREFIX": str(tmp_path)})
     assert found is not None and found.path == planted
 
 
-@pytest.mark.parametrize("name", AsanRuntime.LINUX_LIBS)
-def test_asan_runtime_locate_finds_each_linux_architecture(tmp_path, monkeypatch, name):
-    """compiler-rt names the Linux runtime by architecture: a linux-aarch64 env
-    has only `-aarch64`, and ASAN could not run there without it."""
+def test_asan_runtime_on_linux_needs_no_finding(monkeypatch):
+    """`cc` brings its own runtime there, so a missing `libcompiler-rt` must
+    not stop an ASAN run."""
     monkeypatch.setattr(sys, "platform", "linux")
-    lib = tmp_path / "lib"
-    lib.mkdir()
-    (lib / name).touch()
-    found = AsanRuntime.locate({"CONDA_PREFIX": str(tmp_path)})
-    assert found is not None and found.path == lib / name
+    found = AsanRuntime.locate({})
+    assert found is not None and found.path is None
 
 
 # ---------------------------------------------------------------------------
@@ -402,15 +395,15 @@ def test_toolchain_version_is_best_effort():
     assert MojoToolchain(None, executable="no-such-mojo").version() == ""
 
 
-def test_asan_runtime_flags_link_the_library(tmp_path):
+def test_asan_runtime_flags_link_the_library(tmp_path, monkeypatch):
+    """On macOS the runtime is linked explicitly, with an rpath so dyld
+    resolves the pixi env's copy rather than the Xcode toolchain's."""
+    monkeypatch.setattr(sys, "platform", "darwin")
     runtime = AsanRuntime(tmp_path / "lib" / "libclang_rt.asan.dylib")
     flags = runtime.flags()
     assert flags[:2] == ["--sanitize", "address"]
     assert flags[-2:] == ["-Xlinker", str(runtime.path)]
-    if sys.platform == "darwin":
-        # dyld must resolve the pixi env's copy, not the Xcode toolchain's.
-        assert "-rpath" in flags
-        assert str(runtime.path.parent) in flags
+    assert "-rpath" in flags and str(runtime.path.parent) in flags
 
 
 def test_process_runner_stringifies_path_arguments(tmp_path):

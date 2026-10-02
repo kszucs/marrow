@@ -450,27 +450,31 @@ class ProcessRunner:
 
 
 class AsanRuntime:
-    """The upstream LLVM AddressSanitizer runtime, as found on this machine."""
+    """The AddressSanitizer runtime a sanitized build links.
+
+    On macOS that is the upstream LLVM runtime, found on this machine and
+    linked explicitly (see `flags`). On Linux the system `cc` links its own,
+    so there is nothing to find and `path` is None.
+    """
 
     MACOS_LIBS = ("libclang_rt.asan_osx_dynamic.dylib",)
-    LINUX_LIBS = (
-        "libclang_rt.asan-x86_64.so",
-        "libclang_rt.asan-aarch64.so",
-        "libclang_rt.asan.so",
-    )
     CLANGS = ("clang", "clang-18", "clang-17", "clang-16")
 
-    def __init__(self, path):
-        self.path = Path(path)
+    def __init__(self, path=None):
+        self.path = None if path is None else Path(path)
 
     def __repr__(self):
-        return f"AsanRuntime({str(self.path)!r})"
+        return f"AsanRuntime({None if self.path is None else str(self.path)!r})"
 
     @classmethod
     def locate(cls, env=None):
-        """Search `$CONDA_PREFIX/lib`, then every clang resource dir on PATH."""
+        """On macOS, search `$CONDA_PREFIX/lib`, then every clang resource dir
+        on PATH, and answer None when none has the runtime. Elsewhere the
+        compiler's own runtime serves, and needs no finding."""
+        if sys.platform != "darwin":
+            return cls()
         env = os.environ if env is None else env
-        names = cls.MACOS_LIBS if sys.platform == "darwin" else cls.LINUX_LIBS
+        names = cls.MACOS_LIBS
 
         candidates = []
         prefix = env.get("CONDA_PREFIX")
@@ -588,9 +592,15 @@ class BuildOptions:
         return cls(opt="-O1", debug="-g", debug_info_language="C")
 
     @property
+    def sanitizer(self):
+        """The sanitizer this build links -- "asan", "tsan" or "" -- which
+        also names its binary."""
+        return "asan" if self.asan else "tsan" if self.tsan else ""
+
+    @property
     def sanitized(self):
         """A sanitizer runtime has to be linked into a real binary."""
-        return self.asan or self.tsan
+        return bool(self.sanitizer)
 
     def flags(self, asan_runtime=None):
         if self.asan and self.tsan:

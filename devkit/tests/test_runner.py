@@ -4,6 +4,8 @@
 """Options, lanes, selections, drivers and the suite runner."""
 
 import argparse
+import platform
+import sys
 from pathlib import Path
 
 import pytest
@@ -454,6 +456,10 @@ def test_driver_skips_files_without_cases(repo):
 # ---------------------------------------------------------------------------
 
 
+ONE_PASS = '[{"name": "test_one", "status": "PASS"}]'
+"""The runner's JSON for a selection of one case that passed."""
+
+
 def result(stdout="", stderr="", returncode=0):
     return CommandResult(
         argv=("mojo",),
@@ -472,6 +478,7 @@ class FakeToolchain:
         self.calls = []
         self.steps = []
         self.envs = []
+        self.programs = []
         self._built = ""
 
     def run(self, source, options, args=(), label=""):
@@ -488,6 +495,7 @@ class FakeToolchain:
     def execute(self, program, args=(), label="", env=None):
         self.steps.append("execute")
         self.envs.append(env)
+        self.programs.append(Path(program).name)
         return self._respond(self._built)
 
 
@@ -644,7 +652,7 @@ def test_asan_builds_a_binary_and_then_runs_it(repo):
     results, toolchain = run_suite(
         repo,
         cases,
-        lambda _: result('[{"name": "test_one", "status": "PASS"}]'),
+        lambda _: result(ONE_PASS),
         options=BuildOptions.for_tests(asan=True),
     )
     assert toolchain.steps == ["build", "execute"]
@@ -656,11 +664,35 @@ def test_tsan_builds_a_binary_and_then_runs_it(repo):
     results, toolchain = run_suite(
         repo,
         cases,
-        lambda _: result('[{"name": "test_one", "status": "PASS"}]'),
+        lambda _: result(ONE_PASS),
         options=BuildOptions.for_tests(tsan=True),
     )
     assert toolchain.steps == ["build", "execute"]
     assert results["test_one"].status == "PASS"
+
+
+@pytest.mark.parametrize(
+    "options, flavor",
+    [
+        (BuildOptions.for_tests(asan=True), "asan"),
+        (BuildOptions.for_tests(tsan=True), "tsan"),
+        (BuildOptions.for_tests(), "bin"),
+    ],
+)
+def test_a_binary_is_named_for_its_build_and_platform(repo, options, flavor):
+    """A host and a container testing one tree build the same selection to
+    the same stem; the platform in the suffix keeps either from running the
+    other's binary."""
+    cases = selection(repo, marrow__tests__test_x=["test_one"])
+    _, toolchain = run_suite(
+        repo,
+        cases,
+        lambda _: result(ONE_PASS),
+        options=options,
+        repeat=2,
+    )
+    suffix = f".{flavor}-{sys.platform}-{platform.machine()}"
+    assert toolchain.programs and all(p.endswith(suffix) for p in toolchain.programs)
 
 
 def test_a_failed_asan_build_never_reaches_the_binary(repo):
@@ -684,7 +716,7 @@ def outputs(*runs):
 
 def test_repeat_builds_once_and_runs_each_time(repo):
     cases = selection(repo, marrow__tests__test_x=["test_one"])
-    passed = result('[{"name": "test_one", "status": "PASS"}]')
+    passed = result(ONE_PASS)
     results, toolchain = run_suite(
         repo, cases, outputs(passed, passed, passed), repeat=3
     )
@@ -710,7 +742,7 @@ def test_repeat_fails_a_case_that_failed_in_any_run(repo):
 
 def test_repeat_stops_at_a_run_that_crashed(repo):
     cases = selection(repo, marrow__tests__test_x=["test_one"])
-    passed = result('[{"name": "test_one", "status": "PASS"}]')
+    passed = result(ONE_PASS)
     crashed = result("", "Segmentation fault", returncode=-11)
     results, toolchain = run_suite(
         repo, cases, outputs(passed, crashed, passed), repeat=3
@@ -812,7 +844,7 @@ def test_leaks_fail_every_case_on_a_leak_report(repo):
 def test_leaks_fail_every_case_when_leak_sanitizer_dies(repo):
     """A LeakSanitizer that could not check is no evidence of no leak."""
     cases = selection(repo, marrow__tests__test_x=["test_one"])
-    passed = '[{"name": "test_one", "status": "PASS"}]'
+    passed = ONE_PASS
     died = (
         "==1==LeakSanitizer has encountered a fatal error.\n"
         "==1==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)\n"
@@ -831,7 +863,7 @@ def test_leaks_fail_every_case_when_leak_sanitizer_dies(repo):
 def test_a_leak_report_passes_without_leaks(repo):
     """Linux runs LeakSanitizer under ASAN by default; only --leaks fails on it."""
     cases = selection(repo, marrow__tests__test_x=["test_one"])
-    passed = '[{"name": "test_one", "status": "PASS"}]'
+    passed = ONE_PASS
     results, toolchain = run_suite(
         repo,
         cases,
@@ -845,9 +877,7 @@ def test_a_leak_report_passes_without_leaks(repo):
 def test_the_non_asan_path_compiles_and_runs_in_one_step(repo):
     """`mojo run` leaves no artifact behind; compilation is what takes the minutes."""
     cases = selection(repo, marrow__tests__test_x=["test_one"])
-    _, toolchain = run_suite(
-        repo, cases, lambda _: result('[{"name": "test_one", "status": "PASS"}]')
-    )
+    _, toolchain = run_suite(repo, cases, lambda _: result(ONE_PASS))
     assert toolchain.steps == ["run"]
 
 

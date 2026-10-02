@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import sys
 from dataclasses import dataclass
@@ -670,15 +671,13 @@ class SuiteRunner:
             # be linked into a real binary -- and a binary is what gives
             # symbolicated crash traces.  A repeat does, so that one build
             # serves every run.  The content-addressed stem is shared with the
-            # driver and the suffix names the build, so parallel sessions never
-            # link over each other.
-            if self._options.asan:
-                flavor = "asan"
-            elif self._options.tsan:
-                flavor = "tsan"
-            else:
-                flavor = "bin"
-            binary = driver.with_suffix(f".{flavor}")
+            # driver and the suffix names the build and the platform it is
+            # for, so parallel sessions never link over each other -- nor do
+            # a host and a container testing one tree.
+            flavor = self._options.sanitizer or "bin"
+            binary = driver.with_suffix(
+                f".{flavor}-{sys.platform}-{platform.machine()}"
+            )
             built = self._toolchain.build(
                 driver, binary, self._options, f"{label} ({flavor})"
             )
