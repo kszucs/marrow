@@ -26,7 +26,8 @@ from std.collections import Set
 from std.os import listdir, remove, rmdir
 from std.os.path import join
 from std.reflection import get_function_name, call_location, SourceLocation
-from std.sys import argv
+from std.ffi import external_call
+from std.sys import argv, get_defined_bool
 from std.tempfile import mkdtemp
 from std.testing import TestSuite as _StdTestSuite
 from std.testing.suite import TestResult, TestSuiteReport
@@ -99,6 +100,12 @@ struct TestSuite:
         Parameters:
             funcs: Pass ``__functions_in_module__()``.
         """
+        comptime if get_defined_bool["MARROW_TSAN", False]():
+            # ThreadSanitizer cannot see Mojo's own allocator, so a block freed
+            # on one thread and reused on another reads as a race. Swap in
+            # libc's, which it intercepts — what the stdlib does for ASAN at
+            # startup — before this process allocates anything it will free.
+            external_call["KGEN_CompilerRT_SetAsanAllocators", NoneType]()
         var flags = CLIFlags()
 
         if flags.list_cases:

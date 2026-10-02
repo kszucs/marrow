@@ -13,7 +13,7 @@ reads past its scratch, and neither shows up as a compile error.
 
 from std.testing import assert_equal, assert_true, assert_false
 
-from ...execution import ExecContext, fan_out
+from ...execution import ExecContext
 from std.sys import CompilationTarget, has_accelerator
 
 
@@ -296,16 +296,17 @@ def _fan_out_visits(count: Int, workers: Int) raises -> List[Int]:
     def visit(wid: Int, i: Int) raises {mut by, imm}:
         by[i] = wid if by[i] == -1 else -2
 
-    fan_out(count, workers, visit)
+    ExecContext.parallel().fan_out(count, visit, workers)
     return by^
 
 
-def test_fan_out_runs_every_item_once_round_robin() raises:
-    """Each item runs exactly once, on worker `i % workers` — the dealing a
-    caller's per-worker scratch relies on."""
+def test_fan_out_runs_every_item_once_on_a_lane() raises:
+    """Each item runs exactly once, on a lane in `[0, workers)` — the bound a
+    caller's per-lane scratch is sized to. Which lane is not fixed: a lane
+    takes the next item when it finishes one."""
     var by = _fan_out_visits(1001, 4)
     for i in range(1001):
-        assert_equal(by[i], i % 4)
+        assert_true(by[i] >= 0 and by[i] < 4)
 
 
 def test_fan_out_clamps_workers_to_the_item_count() raises:
@@ -313,7 +314,7 @@ def test_fan_out_clamps_workers_to_the_item_count() raises:
     `min(workers, count)`, the bound a caller allocates to."""
     var by = _fan_out_visits(3, 16)
     for i in range(3):
-        assert_equal(by[i], i)
+        assert_true(by[i] >= 0 and by[i] < 3)
 
 
 def test_fan_out_serial_for_one_worker_or_none() raises:
@@ -331,7 +332,7 @@ def test_fan_out_zero_items_runs_nothing() raises:
     def visit(wid: Int, i: Int) raises {mut calls, imm}:
         calls[0] += 1
 
-    fan_out(0, 4, visit)
+    ExecContext.parallel().fan_out(0, visit, 4)
     assert_equal(calls[0], 0)
 
 
@@ -344,7 +345,7 @@ def _fan_out_error(count: Int, workers: Int) raises -> String:
             raise Error("item ", i)
 
     try:
-        fan_out(count, workers, visit)
+        ExecContext.parallel().fan_out(count, visit, workers)
     except e:
         return String(e)
     return String()
@@ -359,7 +360,7 @@ def test_fan_out_raises_the_lowest_failing_item() raises:
 
 
 def test_fan_out_runs_every_item_below_the_first_failure() raises:
-    """Workers cannot be cancelled, and each stops at its own first error, so
+    """A failure stops the lanes at the items above it, never below, so
     everything below the lowest failure has run by the time it is raised."""
     var ran = List[Int](length=100, fill=0)
 
@@ -370,7 +371,7 @@ def test_fan_out_runs_every_item_below_the_first_failure() raises:
 
     var msg = String()
     try:
-        fan_out(100, 4, visit)
+        ExecContext.parallel().fan_out(100, visit, 4)
     except e:
         msg = String(e)
     assert_equal(msg, "item 60")

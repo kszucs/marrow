@@ -75,7 +75,7 @@ Measured on Apple M-series (int64):
 comptime _PARALLEL_THRESHOLD: Int = 524_288
 """Minimum element count for parallel histogram/scatter in radix sort.
 
-At N < 512K, sync_parallelize thread-spawn overhead exceeds the speedup.
+At N < 512K, the parallel dispatch overhead exceeds the speedup.
 Serial radix at N=100K: ~2.6 ms; parallel: ~3.1 ms (20% slower due to overhead).
 Parallel pays off above ~512K where the work per thread is large enough.
 """

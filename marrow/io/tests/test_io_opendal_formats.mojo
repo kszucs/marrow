@@ -317,7 +317,7 @@ def test_opendal_parquet_parallel_decode_is_sound() raises:
     """A remote read big enough to fan out across threads.
 
     The regression this exists for: `ParquetFile.read` used to call
-    `ByteSource.read_at` from inside its `sync_parallelize` workers.
+    `ByteSource.read_at` from inside its pool workers.
     `OpenDalSource.read_at` has to retain what it hands back — the trait
     returns a span borrowed from the source — so it appended to an arena
     behind an `ArcPointer`, and N workers appending to one unsynchronised

@@ -20,7 +20,7 @@ from std.sys import size_of
 from ..errors import CorruptError, IndexError, InvalidError, NotImplementedError
 from ..arrays import ArrayData, BinaryViewLikeArray, DynArray
 from ..buffers import Buffer, Bitmap, bulk_copy
-from ..execution import ExecContext, fan_out
+from ..execution import ExecContext
 from ..builders import (
     BinaryBuilder,
     BinaryLikeBuilder,
@@ -2886,7 +2886,7 @@ struct ParquetFile[
             )
             decoded[t] = reader.decode(codecs[][w])
 
-        fan_out(total, nt, decode)
+        ctx.fan_out(total, decode, nt)
         return plan.assemble(decoded)
 
     def _plan(

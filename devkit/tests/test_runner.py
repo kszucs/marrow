@@ -101,6 +101,13 @@ def test_defines_are_refused_with_saved_benchmarks():
         RunnerOptions.from_config(FakeConfig(define=["X=1"], competition_json="o"))
 
 
+def test_leaks_are_refused_without_asan():
+    """LeakSanitizer runs inside ASAN: alone, the flag would check nothing."""
+    with pytest.raises(ValueError, match="--asan"):
+        RunnerOptions.from_config(FakeConfig(leaks=True))
+    assert RunnerOptions.from_config(FakeConfig(leaks=True, asan=True)).leaks
+
+
 @pytest.mark.parametrize("text", ["X", "=1", "1X=2", "A-B=1"])
 def test_define_arg_rejects_malformed_input(text):
     with pytest.raises(argparse.ArgumentTypeError):
@@ -464,6 +471,7 @@ class FakeToolchain:
         self._respond = respond
         self.calls = []
         self.steps = []
+        self.envs = []
         self._built = ""
 
     def run(self, source, options, args=(), label=""):
@@ -477,15 +485,20 @@ class FakeToolchain:
         self._built = Path(source).read_text()
         return self._respond(self._built)
 
-    def execute(self, program, args=(), label=""):
+    def execute(self, program, args=(), label="", env=None):
         self.steps.append("execute")
+        self.envs.append(env)
         return self._respond(self._built)
 
 
-def run_suite(repo, cases, respond, options=None):
+def run_suite(repo, cases, respond, options=None, repeat=1, leaks=False):
     toolchain = FakeToolchain(respond)
     runner = SuiteRunner(
-        toolchain, DriverGenerator(repo, "test"), options or BuildOptions.for_tests()
+        toolchain,
+        DriverGenerator(repo, "test"),
+        options or BuildOptions.for_tests(),
+        repeat=repeat,
+        leaks=leaks,
     )
     return runner.run(cases), toolchain
 
@@ -638,6 +651,18 @@ def test_asan_builds_a_binary_and_then_runs_it(repo):
     assert results["test_one"].status == "PASS"
 
 
+def test_tsan_builds_a_binary_and_then_runs_it(repo):
+    cases = selection(repo, marrow__tests__test_x=["test_one"])
+    results, toolchain = run_suite(
+        repo,
+        cases,
+        lambda _: result('[{"name": "test_one", "status": "PASS"}]'),
+        options=BuildOptions.for_tests(tsan=True),
+    )
+    assert toolchain.steps == ["build", "execute"]
+    assert results["test_one"].status == "PASS"
+
+
 def test_a_failed_asan_build_never_reaches_the_binary(repo):
     cases = selection(repo, marrow__tests__test_x=["test_one"])
     results, toolchain = run_suite(
@@ -649,6 +674,172 @@ def test_a_failed_asan_build_never_reaches_the_binary(repo):
     assert toolchain.steps == ["build"]
     assert results["test_one"].failed
     assert "link failed" in results["test_one"].error
+
+
+def outputs(*runs):
+    """Answer the build, then each run in turn with the next of *runs*."""
+    answers = iter((result(), *runs))
+    return lambda _: next(answers)
+
+
+def test_repeat_builds_once_and_runs_each_time(repo):
+    cases = selection(repo, marrow__tests__test_x=["test_one"])
+    passed = result('[{"name": "test_one", "status": "PASS"}]')
+    results, toolchain = run_suite(
+        repo, cases, outputs(passed, passed, passed), repeat=3
+    )
+    assert toolchain.steps == ["build", "execute", "execute", "execute"]
+    assert results["test_one"].status == "PASS"
+
+
+def test_repeat_fails_a_case_that_failed_in_any_run(repo):
+    """A race that shows once in N runs is a failure, named by its run."""
+    cases = selection(repo, marrow__tests__test_x=["test_one", "test_two"])
+    both = '[{"name": "test_one", "status": "PASS"}, {"name": "test_two", "status": "PASS"}]'
+    racy = (
+        '[{"name": "test_one", "status": "FAIL", "error": "lost a wake-up"},'
+        ' {"name": "test_two", "status": "PASS"}]'
+    )
+    results, _ = run_suite(
+        repo, cases, outputs(result(both), result(racy), result(both)), repeat=3
+    )
+    assert results["test_one"].failed
+    assert results["test_one"].error == "run 2 of 3: lost a wake-up"
+    assert results["test_two"].status == "PASS"
+
+
+def test_repeat_stops_at_a_run_that_crashed(repo):
+    cases = selection(repo, marrow__tests__test_x=["test_one"])
+    passed = result('[{"name": "test_one", "status": "PASS"}]')
+    crashed = result("", "Segmentation fault", returncode=-11)
+    results, toolchain = run_suite(
+        repo, cases, outputs(passed, crashed, passed), repeat=3
+    )
+    assert toolchain.steps == ["build", "execute", "execute"]
+    assert results["test_one"].failed
+    assert results["test_one"].error.startswith("run 2 of 3: ")
+    assert "Segmentation fault" in results["test_one"].error
+
+
+def tsan_report(*frames):
+    """A ThreadSanitizer report as the runtime prints it, one Mojo frame per
+    `(function, location)`, each symbol as long as a real one."""
+    lines = [
+        "==================",
+        "WARNING: ThreadSanitizer: data race (pid=7)",
+        "  Read of size 8 at 0x000108f04040 by main thread:",
+    ]
+    for depth, (function, location) in enumerate(frames):
+        lines.append(
+            f"    #{depth} {function}(::Arc[$0]$),T=[typevalue<{'x' * 300}>] "
+            f"{location} (driver.tsan:arm64+0x{depth})"
+        )
+    lines += ["SUMMARY: ThreadSanitizer: data race", "=================="]
+    return "\n".join(lines) + "\n"
+
+
+def test_a_tsan_report_fails_the_case_it_names(repo):
+    """TSAN reports and carries on, so the JSON says every case passed."""
+    cases = selection(repo, marrow__tests__test_x=["test_one", "test_two"])
+    both = '[{"name": "test_one", "status": "PASS"}, {"name": "test_two", "status": "PASS"}]'
+    stderr = (
+        tsan_report(
+            (
+                "std::memory::arc_pointer::ArcPointer::__deinit__",
+                "arc_pointer.mojo:280",
+            ),
+            ("marrow::tests::test_x::test_one", "test_x.mojo:12"),
+        )
+        + "ThreadSanitizer: reported 1 warnings\n"
+    )
+    results, _ = run_suite(
+        repo,
+        cases,
+        outputs(result(both, stderr, returncode=66)),
+        options=BuildOptions.for_tests(tsan=True),
+    )
+    assert results["test_one"].failed
+    error = results["test_one"].error
+    assert (
+        "std::memory::arc_pointer::ArcPointer::__deinit__ arc_pointer.mojo:280" in error
+    )
+    assert "marrow::tests::test_x::test_one test_x.mojo:12" in error
+    assert "x" * 300 not in error
+    assert results["test_two"].status == "PASS"
+
+
+def test_a_tsan_report_naming_no_case_fails_them_all(repo):
+    cases = selection(repo, marrow__tests__test_x=["test_one", "test_two"])
+    both = '[{"name": "test_one", "status": "PASS"}, {"name": "test_two", "status": "PASS"}]'
+    stderr = tsan_report(("marrow::utils::threads::_Shared::work", "threads.mojo:9"))
+    results, _ = run_suite(
+        repo,
+        cases,
+        outputs(result(both, stderr, returncode=66)),
+        options=BuildOptions.for_tests(tsan=True),
+    )
+    assert results["test_one"].failed and results["test_two"].failed
+    assert "_Shared::work threads.mojo:9" in results["test_two"].error
+
+
+LEAKED = (
+    "=================================================================\n"
+    "==1==ERROR: LeakSanitizer: detected memory leaks\n\n"
+    "Direct leak of 48 byte(s) in 1 object(s) allocated from:\n"
+    "    #0 0x0001037e2f28 in malloc+0x70\n"
+    "    #5 0x000102f55e20 in _create_pool threads.mojo:1038 (driver.asan:arm64+0x1)\n"
+    "\nSUMMARY: AddressSanitizer: 48 byte(s) leaked in 1 allocation(s).\n"
+)
+
+
+def test_leaks_fail_every_case_on_a_leak_report(repo):
+    """A leak belongs to the process, not to the case that allocated it."""
+    cases = selection(repo, marrow__tests__test_x=["test_one", "test_two"])
+    both = '[{"name": "test_one", "status": "PASS"}, {"name": "test_two", "status": "PASS"}]'
+    results, toolchain = run_suite(
+        repo,
+        cases,
+        outputs(result(both, LEAKED, returncode=23)),
+        options=BuildOptions.for_tests(asan=True),
+        leaks=True,
+    )
+    assert results["test_one"].failed and results["test_two"].failed
+    assert "_create_pool threads.mojo:1038" in results["test_one"].error
+    assert "48 byte(s) leaked" in results["test_one"].error
+    assert "detect_leaks=1" in toolchain.envs[0]["ASAN_OPTIONS"]
+
+
+def test_leaks_fail_every_case_when_leak_sanitizer_dies(repo):
+    """A LeakSanitizer that could not check is no evidence of no leak."""
+    cases = selection(repo, marrow__tests__test_x=["test_one"])
+    passed = '[{"name": "test_one", "status": "PASS"}]'
+    died = (
+        "==1==LeakSanitizer has encountered a fatal error.\n"
+        "==1==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)\n"
+    )
+    results, _ = run_suite(
+        repo,
+        cases,
+        outputs(result(passed, died, returncode=1)),
+        options=BuildOptions.for_tests(asan=True),
+        leaks=True,
+    )
+    assert results["test_one"].failed
+    assert results["test_one"].error.startswith("==1==LeakSanitizer has encountered")
+
+
+def test_a_leak_report_passes_without_leaks(repo):
+    """Linux runs LeakSanitizer under ASAN by default; only --leaks fails on it."""
+    cases = selection(repo, marrow__tests__test_x=["test_one"])
+    passed = '[{"name": "test_one", "status": "PASS"}]'
+    results, toolchain = run_suite(
+        repo,
+        cases,
+        outputs(result(passed, LEAKED, returncode=23)),
+        options=BuildOptions.for_tests(asan=True),
+    )
+    assert results["test_one"].status == "PASS"
+    assert toolchain.envs == [None]
 
 
 def test_the_non_asan_path_compiles_and_runs_in_one_step(repo):

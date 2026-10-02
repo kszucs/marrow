@@ -138,6 +138,12 @@ precompile = { cmd = "python -m devkit build precompile" }
 selftest = { cmd = "pytest devkit/tests -q" }
 # The comptime lane against the runtime lane: see docs/reference/comptime.qmd.
 bench-comptime = { cmd = "pytest marrow/expr/tests/bench_comptime.mojo --competition-winner comptime --competition-json docs/data/comptime.json" }
+# marrow's thread pool against MAX's `sync_parallelize`, per operation.
+bench-threads = { cmd = "pytest marrow/utils/tests/bench_threads.mojo --benchmark --competition" }
+# The thread pool's benchmarks at each commit: `pixi run -e dev
+# bench-threads-history main HEAD`. The `max` rows are the control, since no
+# change to the pool can move them.
+bench-threads-history = { cmd = "python -m devkit bench history --file marrow/utils/tests/bench_threads.mojo -k bench_" }
 # The same benchmarks across commits, each commit a contender:
 # `pixi run -e dev bench-history HEAD~5 HEAD`.
 bench-history = { cmd = "python -m devkit bench history" }
@@ -147,6 +153,18 @@ golden_sql = { cmd = "python -m devkit golden sql", depends-on = ["build_python"
 test_mojo = { cmd = "pytest --mojo -v" }
 test_python = { cmd = "pytest --python -v" }
 test_gpu = { cmd = "pytest --gpu -v" }
+# The thread pool, and `ExecContext` dispatching through it, under
+# ThreadSanitizer. Mojo's driver finds the TSAN runtime itself (Xcode's clang
+# on macOS); `MARROW_TSAN` swaps Mojo's tcmalloc, which TSAN cannot follow,
+# for libc's allocator. A race report fails the case whose stack names it;
+# `--repeat N` runs the build N times.
+test_tsan = { cmd = "pytest --mojo --tsan -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo" }
+# The thread pool, and `ExecContext` dispatching through it, once.
+test_threads = { cmd = "pytest --mojo -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo" }
+# The thread pool's suite built once and run in 30 fresh processes, each soak
+# loop 50x longer — a few minutes, for the race that shows once in a hundred
+# runs.
+test_threads_stress = { cmd = "pytest --mojo -v --repeat 30 --define MARROW_THREADS_STRESS=50 marrow/utils/tests/test_threads.mojo" }
 test = { cmd = "pytest -v" }
 # One selection = one compilation unit, so there is nothing for xdist to
 # parallelise across: splitting by file would rebuild the same unit per worker.
@@ -223,6 +241,9 @@ libcompiler-rt = ">=17,<23"
 # selection is one unit.  CI runs the same cases split into the `test` job's
 # selections -- the `asan` job in `test.yml`.
 test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
+# The thread pool, and `ExecContext` dispatching through it, under ASAN with
+# LeakSanitizer: any memory still allocated at exit fails the run.
+test_threads_asan = { cmd = "pytest --mojo --asan --leaks -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo" }
 
 # Bench — benchmark dependencies and tasks (polars/duckdb for comparison benches).
 [feature.bench.dependencies]

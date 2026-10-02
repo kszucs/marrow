@@ -27,8 +27,9 @@ Dependencies (pinned in `pixi.toml`):
   resolves `max.package_root`, and `std.gpu` went private as `std._gpu` in the
   `dev2026090305` nightly, so `max.gpu` is the only public source.
   `DeviceContext`/`DeviceBuffer`/`HostBuffer` and `get_gpu_target` come from
-  `max.gpu.host`; `sync_parallelize`/`elementwise`/`_reduce_generator` from
-  `max.algorithm.*`. `vectorize` stayed in `std`.
+  `max.gpu.host`; `elementwise`/`_reduce_generator` from `max.algorithm.*`.
+  `vectorize` stayed in `std`. CPU threads do **not** come from MAX: they are
+  marrow's own pthread pool, `marrow/utils/threads.mojo`.
 - `python >=3.14,<3.15` — Mojo nightlies are built against one CPython minor;
   bump it together with `mojo`.
 - `pyarrow >=23.0.1,<24` (dev/test only) — the PyPI wheel, not conda-forge; see
@@ -59,6 +60,8 @@ pixi run -e dev selftest            # the devkit suite, ~1 s, no Mojo compilatio
 pixi run -e bench bench             # every benchmark (bench-mojo, bench-python: halves)
 pixi run -e bench bench-engines     # marrow against pyarrow, polars, duckdb, numpy
 pixi run -e dev bench-comptime      # comptime lane must beat runtime lane
+pixi run -e dev bench-threads       # the thread pool against MAX's sync_parallelize
+pixi run -e dev test_tsan           # the thread pool under ThreadSanitizer
 pixi run -e dev bench-history A B   # the same benchmarks at each commit
 pixi run bench-size                 # AOT/hybrid/runtime binary-size gate
 pixi run bench-size-check           # the same gate against its recorded baseline
@@ -429,7 +432,14 @@ Rules:
   primitives), `utils/compression.mojo` with `parquet/reader.mojo` and
   `parquet/codecs.mojo` for the page codecs, and `io/opendal.mojo` for the
   object store — plus `utils/snappy.mojo`, a codec built from unchecked block
-  copies and shuffles. Everything else goes through the view abstractions.
+  copies and shuffles. `utils/threads.mojo` holds raw pointers too, handing
+  pthread objects and coroutine frames to libc, and it is the one module exempt
+  from the two rules below: it casts origins to `MutUntrackedOrigin` for state
+  other threads share, and calls the stdlib's private coroutine API
+  (`_set_noop_callback`, `_take_handle`, `_coro_resume_fn`), because Mojo has no
+  public one and a coroutine frame is the only way to erase a closure. A nightly
+  may change those names; the thread tests fail first if it does. Everything
+  else goes through the view abstractions.
 
   **A C library is declared, not wired by hand.** One declaration per module:
   `LibSet[key, [LibSpec(...), ...]]` in `utils/dylib.mojo` names the
@@ -774,7 +784,7 @@ marrow/
 ├── errors.mojo           # ArrowError + ErrorKind — the error taxonomy
 ├── io/                   # core (ByteSource/ByteSink), local, opendal, dispatch
 ├── utils/                # byteorder, checksum, hashing, compression, datetime,
-│                         #   dylib, uri
+│                         #   dylib, uri, threads (ThreadPool, Thread, Mutex)
 │   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/
 │   ├── core.mojo         # the Kernel base trait
@@ -1138,6 +1148,63 @@ looks obvious. Terse on purpose — the reproductions are in git history.
   an argument-position existential, not a field type. **Any new erased box needs
   the fourth trampoline**; three virtual methods plus a pointer looks complete
   and is not.
+
+### Threads
+
+- **State other threads write *while a function runs* must never be read
+  through `mut self` or a `mut` argument in that function.** A `mut` reference
+  is exclusive, so the compiler may keep a field's value across an unlock, a
+  condition wait or an atomic another thread writes. (Reading back what worker
+  threads wrote *after* the call that ran them returns is fine — the compiler
+  cannot carry a value across a call that may have written it, which is how
+  `fan_out` collects its errors.) It did both ways in `utils/threads.mojo`:
+  a task counter read through a `mut` argument stayed at its pre-decrement
+  value and the waiter slept forever, and a queue method taking `mut self`
+  reused a stale `head`, ran one task twice and double-freed its frame. Keep
+  such state on the heap and reach it only through a raw pointer
+  (`_Shared`, `_ScopeState`).
+- **A closure cannot be erased into a `def(...) thin` pointer.** Any function
+  instantiated over a closure type is itself `capturing`, and taking one as a
+  value fails with *"capturing closures cannot be materialized as runtime
+  values"* — a struct-static trampoline included. Erase it into a coroutine
+  frame instead: a top-level `async def` over a heap box, `_take_handle()`,
+  then `_coro_resume_fn` / `_coro_destroy_fn` from `std.builtin._coroutine`.
+  **A coroutine's arguments must be register-passable** — raw pointers, not
+  structs: the frame keeps a borrowed argument as a *reference into the
+  caller's stack*, so a `_Shared` passed to an `async def` was garbage by the
+  time a worker resumed it (a null-mutex crash), and a closure moved into the
+  arguments reads as uninitialised. Do not write an `async def` *closure*
+  either — that shape crashed the compiler on `query_join` under the stdlib's
+  `std.runtime._asyncrt.TaskGroup`.
+- **`Pointer(to=arg)` of a by-value argument points at the callee's copy.** A
+  closure capturing only references is register-passable, so it arrives in
+  registers and taking its address spills it to a temporary that dies with the
+  callee. `ThreadPool.run` stored exactly that for its workers and they called
+  through a dangling pointer; every test passed on stack-reuse luck until a
+  stress run crashed. Take the argument as `ref` when its address must outlive
+  the call.
+
+- **`_Shared`'s queue operations are size-critical.** They are not generic,
+  but the compiler inlines them into each of the ~100 `ThreadPool.run[Body]`
+  instantiations, and small edits flip that: splitting `push` into an enqueue
+  plus a batched wake cost ~14 KB per size gate, and `broadcast` → `signal` in
+  it ~8.6 KB. Measure any change there with `pixi run bench-size-check`.
+- **A closure handed to another thread does not keep what it borrows alive.**
+  Mojo ends a value's life at its last visible use, and a closure boxed into a
+  `Thread` is invisible to that analysis: a `Mutex` captured `{imm mutex}` and
+  not used after `join` was destroyed while eight threads still locked it (a
+  hang), and a counter they incremented was freed under them (71,989 of
+  160,000). That is why spawning goes only through `ThreadPool.scope`, whose
+  body is in use until every task has finished, and why `run` takes its body
+  by `ref`. With a bare `Thread`, capture by value or `keep(x)` each borrowed
+  value after the join.
+- **TSAN needs `-D MARROW_TSAN=true`, which `--tsan` passes.** Mojo allocates
+  through its own tcmalloc, which TSAN does not intercept, so a block freed on
+  one thread and reused on another reads as a race; under the define
+  `TestSuite.run` first swaps in libc's allocator
+  (`KGEN_CompilerRT_SetAsanAllocators`), which TSAN does intercept. TSAN
+  reports a race and carries on, so the harness fails each case a report
+  names, with the report as its message.
 
 ### Closures
 

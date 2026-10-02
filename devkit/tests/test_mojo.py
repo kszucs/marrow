@@ -92,12 +92,36 @@ def test_flags_pass_every_define():
     assert tests[tests.index("A=1") - 1] == "-D" and "ASSERT=all" in tests
 
 
-def test_flags_asan_only_when_requested():
+def test_flags_asan_only_when_requested(monkeypatch):
     assert "--sanitize" not in BuildOptions.for_tests().flags()
+    monkeypatch.setattr(sys, "platform", "darwin")
     runtime = AsanRuntime("/tmp/libclang_rt.asan.dylib")
     flags = BuildOptions.for_tests(asan=True).flags(runtime)
     assert flags[flags.index("--sanitize") + 1] == "address"
     assert str(runtime.path) in flags
+
+
+def test_flags_asan_on_linux_leave_the_runtime_to_the_linker(monkeypatch):
+    """`cc` links its own runtime for `--sanitize address`; linking ours too
+    puts two in the process, and ASAN never finishes initialising."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    runtime = AsanRuntime("/tmp/libclang_rt.asan-aarch64.so")
+    flags = BuildOptions.for_tests(asan=True).flags(runtime)
+    assert flags[flags.index("--sanitize") + 1] == "address"
+    assert str(runtime.path) not in flags
+
+
+def test_flags_tsan_only_when_requested():
+    assert "thread" not in BuildOptions.for_tests().flags()
+    flags = BuildOptions.for_tests(tsan=True).flags()
+    assert flags[flags.index("--sanitize") + 1] == "thread"
+    assert flags[flags.index("MARROW_TSAN=true") - 1] == "-D"
+
+
+def test_asan_and_tsan_together_is_an_error():
+    runtime = AsanRuntime("/tmp/libclang_rt.asan.dylib")
+    with pytest.raises(ValueError, match="cannot instrument the same build"):
+        BuildOptions.for_tests(asan=True, tsan=True).flags(runtime)
 
 
 def test_asan_without_a_runtime_is_an_error():
@@ -152,6 +176,18 @@ def test_asan_runtime_locate_prefers_the_conda_prefix(tmp_path):
     planted.touch()
     found = AsanRuntime.locate({"CONDA_PREFIX": str(tmp_path)})
     assert found is not None and found.path == planted
+
+
+@pytest.mark.parametrize("name", AsanRuntime.LINUX_LIBS)
+def test_asan_runtime_locate_finds_each_linux_architecture(tmp_path, monkeypatch, name):
+    """compiler-rt names the Linux runtime by architecture: a linux-aarch64 env
+    has only `-aarch64`, and ASAN could not run there without it."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / name).touch()
+    found = AsanRuntime.locate({"CONDA_PREFIX": str(tmp_path)})
+    assert found is not None and found.path == lib / name
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ reachable from a plain unit test.
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -55,6 +56,9 @@ class RunnerOptions:
     no_gpu: bool = False
     benchmark: bool = False
     asan: bool = False
+    tsan: bool = False
+    leaks: bool = False
+    repeat: int = 1
     mojo_timeout: int = 1800
     competition: bool = False
     competition_winner: str = ""
@@ -115,6 +119,31 @@ class RunnerOptions:
             action="store_true",
             default=False,
             help="Run Mojo tests under AddressSanitizer (ASAN)",
+        )
+        add(
+            "--tsan",
+            action="store_true",
+            default=False,
+            help="Run Mojo tests under ThreadSanitizer (TSAN); a race report "
+            "fails the case whose stack names it",
+        )
+        add(
+            "--leaks",
+            action="store_true",
+            default=False,
+            help="With --asan, which it needs, run LeakSanitizer and fail the "
+            "run if the process leaks: a leak is the whole run's, so every case "
+            "fails with the report. Opt-in, for a lane that holds itself to it.",
+        )
+        add(
+            "--repeat",
+            type=int,
+            default=1,
+            metavar="N",
+            help="Build the Mojo test selection once and run it N times, each "
+            "in a fresh process; a case fails if it failed in any run. For "
+            "races that show once in a hundred runs, such as the thread "
+            "pool's.",
         )
         add(
             "--mojo-timeout",
@@ -215,6 +244,10 @@ class RunnerOptions:
                 "built with " + ", ".join(values["define"]) + " would be "
                 "recorded as the tree's own"
             )
+        # LeakSanitizer runs inside AddressSanitizer: alone, the flag would
+        # check nothing and every run would pass.
+        if values["leaks"] and not values["asan"]:
+            raise ValueError("--leaks needs --asan: LeakSanitizer runs inside it")
         return cls(**values)
 
 
@@ -531,12 +564,22 @@ class SuiteRunner:
     """
 
     CRASH_MARKERS = ("Please submit a bug report", "Stack dump:")
+    TSAN_REPORT = "WARNING: ThreadSanitizer"
+    # A leak report, or LeakSanitizer dying before it could check: neither run
+    # is evidence of no leak.
+    LEAK_REPORT = "LeakSanitizer"
+    _FRAME = re.compile(
+        r"^\s*#\d+\s+(?:0x[0-9a-fA-F]+ in )?(?P<func>[^\s(\[]+)"
+        r".*?(?P<loc>[\w./-]+\.mojo:\d+)"
+    )
 
-    def __init__(self, toolchain, driver, options, notify=None):
+    def __init__(self, toolchain, driver, options, notify=None, repeat=1, leaks=False):
         self._toolchain = toolchain
         self._driver = driver
         self._options = options
         self._notify = notify if notify is not None else (lambda message: None)
+        self._repeat = max(1, repeat)
+        self._leaks = leaks
 
     @classmethod
     def compiler_crashed(cls, detail):
@@ -622,23 +665,122 @@ class SuiteRunner:
         driver = self._driver.write(selection)
         label = self._label(selection)
 
-        if self._options.asan:
-            # ASAN goes through `mojo build` because the sanitizer runtime has
-            # to be linked into a real binary -- and a binary is what gives
-            # symbolicated crash traces.  The content-addressed stem is shared
-            # with the driver, so parallel sessions never link over each other.
-            binary = driver.with_suffix("")
+        if self._options.sanitized or self._repeat > 1:
+            # A sanitizer goes through `mojo build` because its runtime has to
+            # be linked into a real binary -- and a binary is what gives
+            # symbolicated crash traces.  A repeat does, so that one build
+            # serves every run.  The content-addressed stem is shared with the
+            # driver and the suffix names the build, so parallel sessions never
+            # link over each other.
+            if self._options.asan:
+                flavor = "asan"
+            elif self._options.tsan:
+                flavor = "tsan"
+            else:
+                flavor = "bin"
+            binary = driver.with_suffix(f".{flavor}")
             built = self._toolchain.build(
-                driver, binary, self._options, f"{label} (asan)"
+                driver, binary, self._options, f"{label} ({flavor})"
             )
             if not built.ok:
                 return None, f"mojo build failed for {driver}:\n{built.stderr}"
-            result = self._toolchain.execute(binary, ("--json",), f"running {label}")
-        else:
-            # `mojo run` compiles and executes in one step without leaving an
-            # artifact behind; compilation is what takes the minutes.
-            result = self._toolchain.run(driver, self._options, ("--json",), label)
+            return self._execute(binary, self._label(selection, "running"))
+        # `mojo run` compiles and executes in one step without leaving an
+        # artifact behind; compilation is what takes the minutes.
+        return self._parse(
+            self._toolchain.run(driver, self._options, ("--json",), label)
+        )
 
+    def _execute(self, binary, label):
+        """Run the built *binary* once per repeat, each in a fresh process.
+
+        A case's result is its first failure across the runs, or its pass. A
+        run whose output cannot be parsed -- a crash -- ends the sweep and
+        fails the unit, as a single run would.
+        """
+        merged = {}
+        for run in range(1, self._repeat + 1):
+            note = f" ({run}/{self._repeat})" if self._repeat > 1 else ""
+            result = self._toolchain.execute(
+                binary, ("--json",), f"{label}{note}", env=self._environment()
+            )
+            entries, detail = self._parse(result)
+            if entries is None:
+                if self._repeat > 1:
+                    detail = f"run {run} of {self._repeat}: {detail}"
+                return None, detail
+            if self._options.tsan and self.TSAN_REPORT in result.stderr:
+                entries = self._blame(entries, result.stderr)
+            if self._leaks and self.LEAK_REPORT in result.stderr:
+                at = result.stderr.index(self.LEAK_REPORT)
+                line = result.stderr.rfind("\n", 0, at) + 1
+                report = self._condense(result.stderr[line:])
+                entries = [dict(e, status="FAIL", error=report) for e in entries]
+            for entry in entries:
+                failed = entry.get("status") == "FAIL"
+                if failed and self._repeat > 1:
+                    error = f"run {run} of {self._repeat}: {entry.get('error', '')}"
+                    entry = dict(entry, error=error)
+                kept = merged.get(entry["name"])
+                if kept is None or (failed and kept.get("status") != "FAIL"):
+                    merged[entry["name"]] = entry
+        return list(merged.values()), ""
+
+    def _environment(self):
+        """The binary's environment: the inherited one, with LeakSanitizer
+        turned on for `--leaks`; None leaves it untouched."""
+        if not self._leaks:
+            return None
+        env = dict(os.environ)
+        env["ASAN_OPTIONS"] = ":".join(
+            filter(None, [env.get("ASAN_OPTIONS", ""), "detect_leaks=1"])
+        )
+        return env
+
+    @classmethod
+    def _blame(cls, entries, stderr):
+        """Fail every case a ThreadSanitizer report names.
+
+        TSAN reports a race and carries on, so the run's JSON still says each
+        case passed: only stderr and the exit status know. A report names the
+        case whose stack it was found in, or the one that started the thread
+        it was found on; a report that names no case fails them all.
+        """
+        blamed = {}
+        for block in stderr.split("=================="):
+            if cls.TSAN_REPORT not in block:
+                continue
+            report = cls._condense(block)
+            names = [e["name"] for e in entries if f"::{e['name']}(" in block]
+            for name in names or [e["name"] for e in entries]:
+                blamed.setdefault(name, report)
+        return [
+            dict(e, status="FAIL", error=blamed[e["name"]])
+            if e["name"] in blamed
+            else e
+            for e in entries
+        ]
+
+    @classmethod
+    def _condense(cls, report):
+        """A sanitizer report with each Mojo frame cut to its function and line.
+
+        A Mojo symbol spells out every parameter, so one frame runs to
+        kilobytes; frames outside Mojo source carry nothing to act on.
+        """
+        lines = []
+        for line in report.strip().splitlines():
+            frame = cls._FRAME.match(line)
+            if frame:
+                lines.append(f"    {frame['func']} {frame['loc']}")
+            elif not line.lstrip().startswith("#"):
+                lines.append(line[:200])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse(result):
+        """The runner's JSON entries and its stderr, or None and what to report
+        against every case when there are none."""
         # Warnings on a successful build would otherwise be swallowed.
         if result.stderr and result.ok:
             sys.stderr.write(result.stderr)
@@ -647,6 +789,6 @@ class SuiteRunner:
         except ValueError:
             return None, result.output or f"exit code {result.returncode}"
 
-    def _label(self, selection):
+    def _label(self, selection, verb="compiling"):
         noun = "benchmarks" if self._driver.kind == "bench" else "tests"
-        return f"compiling {len(selection)} {noun} from {selection.file_count} files"
+        return f"{verb} {len(selection)} {noun} from {selection.file_count} files"

@@ -349,7 +349,8 @@ class ProcessRunner:
         self._timeout = timeout
         self._suspend = suspend
 
-    def run(self, argv, label):
+    def run(self, argv, label, env=None):
+        """Run *argv*; *env* replaces the inherited environment when given."""
         argv = [str(part) for part in argv]
         started = time.monotonic()
         # None until `_communicate` returns one.  `finish` accepts that: a
@@ -363,15 +364,16 @@ class ProcessRunner:
             # leave rich's live region running, and a live region that is never
             # torn down swallows the rest of the session's stdout.
             try:
-                result = self._communicate(argv, started)
+                result = self._communicate(argv, started, env)
             finally:
                 self._progress.finish(label, result)
         return result
 
-    def _communicate(self, argv, started):
+    def _communicate(self, argv, started, env=None):
         process = subprocess.Popen(
             argv,
             cwd=self._cwd,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -451,7 +453,11 @@ class AsanRuntime:
     """The upstream LLVM AddressSanitizer runtime, as found on this machine."""
 
     MACOS_LIBS = ("libclang_rt.asan_osx_dynamic.dylib",)
-    LINUX_LIBS = ("libclang_rt.asan-x86_64.so", "libclang_rt.asan.so")
+    LINUX_LIBS = (
+        "libclang_rt.asan-x86_64.so",
+        "libclang_rt.asan-aarch64.so",
+        "libclang_rt.asan.so",
+    )
     CLANGS = ("clang", "clang-18", "clang-17", "clang-16")
 
     def __init__(self, path):
@@ -492,17 +498,21 @@ class AsanRuntime:
     def flags(self):
         """Compiler and linker flags that link this runtime in.
 
-        `--shared-libasan` is Clang-only; on Linux the system `cc` is GCC and
-        rejects it, where the explicit `-Xlinker` path is sufficient on its own.
-        The rpath entry puts the conda env's lib dir first so dyld resolves the
-        runtime from the pixi environment rather than the incompatible Xcode
-        toolchain copy.
+        On macOS the runtime is linked explicitly, with an rpath entry that
+        puts the conda env's lib dir first, so dyld resolves it from the pixi
+        environment rather than the incompatible Xcode toolchain copy.
+
+        On Linux it is not linked at all: the system `cc` links its own runtime
+        for `--sanitize address`, and a second one makes the two initialise
+        each other forever -- the process spins in `AsanInitIsRunning` before
+        `main`, which the harness only reports as a timeout.
         """
         flags = ["--sanitize", "address"]
         if sys.platform == "darwin":
             flags += ["--shared-libasan"]
             flags += ["-Xlinker", "-rpath", "-Xlinker", str(self.path.parent)]
-        return flags + ["-Xlinker", str(self.path)]
+            flags += ["-Xlinker", str(self.path)]
+        return flags
 
 
 @dataclass(frozen=True)
@@ -520,31 +530,34 @@ class BuildOptions:
     asserts: bool = False
     gpu: bool = False
     asan: bool = False
+    tsan: bool = False
     include: tuple = (".",)
     debug_info_language: str = ""
     link_libm: bool = False
     defines: tuple = ()
 
     @classmethod
-    def for_tests(cls, *, gpu=False, asan=False, defines=()):
+    def for_tests(cls, *, gpu=False, asan=False, tsan=False, defines=()):
         return cls(
             opt="-O1",
             debug="-g1",
             asserts=True,
             gpu=gpu,
             asan=asan,
+            tsan=tsan,
             link_libm=True,
             defines=tuple(defines),
         )
 
     @classmethod
-    def for_benches(cls, *, gpu=False, asan=False, defines=()):
+    def for_benches(cls, *, gpu=False, asan=False, tsan=False, defines=()):
         return cls(
             opt="-O3",
             debug="-g1",
             asserts=False,
             gpu=gpu,
             asan=asan,
+            tsan=tsan,
             link_libm=True,
             defines=tuple(defines),
         )
@@ -574,7 +587,14 @@ class BuildOptions:
         """
         return cls(opt="-O1", debug="-g", debug_info_language="C")
 
+    @property
+    def sanitized(self):
+        """A sanitizer runtime has to be linked into a real binary."""
+        return self.asan or self.tsan
+
     def flags(self, asan_runtime=None):
+        if self.asan and self.tsan:
+            raise ValueError("ASAN and TSAN cannot instrument the same build")
         flags = [self.opt, self.debug]
         for path in self.include:
             flags += ["-I", path]
@@ -597,6 +617,12 @@ class BuildOptions:
                     "Install libcompiler-rt via conda-forge."
                 )
             flags += asan_runtime.flags()
+        if self.tsan:
+            # `MARROW_TSAN` makes `TestSuite.run` swap Mojo's own allocator,
+            # which TSAN does not intercept, for libc's: otherwise a block freed
+            # on one thread and reused on another reads as a race
+            # (`marrow/utils/testing.mojo`).
+            flags += ["--sanitize", "thread", "-D", "MARROW_TSAN=true"]
         if self.link_libm and sys.platform != "darwin":
             # mojo does not auto-link libm on Linux (log10f and friends);
             # harmless on macOS where libm is part of libSystem.
@@ -655,14 +681,14 @@ class MojoToolchain:
             label,
         )
 
-    def execute(self, program, args=(), label=""):
+    def execute(self, program, args=(), label="", env=None):
         """Run an artifact this toolchain already built.
 
         Not a `mojo` invocation, but it belongs to the same collaborator: an
         ASAN suite is built to a binary and then run, and both halves want the
         same progress display and the same timeout.
         """
-        return self._runner.run([program, *args], label)
+        return self._runner.run([program, *args], label, env=env)
 
     def precompile(self, package, out, label="precompiling marrow"):
         """Build-only check over a whole package.

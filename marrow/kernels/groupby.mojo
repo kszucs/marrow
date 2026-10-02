@@ -59,8 +59,6 @@ so the two paths collide identically.
 from std.math import exp
 from std.sys import get_defined_int
 
-from max.algorithm.functional import sync_parallelize
-
 from ..arrays import (
     DynArray,
     UInt64Array,
@@ -206,8 +204,9 @@ waiting exactly where it was. The extra cost is the scatter, which went 493 ->
 fitting, which is the classic radix fan-out limit and the reason this constant
 is 6 rather than a tuning knob.
 
-The other tuning lever fails too: `MODULAR_THREAD_BUSY_WAIT_US`, which trades
-semaphore sleeps for spinning at each barrier, is best left at its default —
+The other tuning lever fails too: spinning longer at each barrier instead of
+sleeping (measured through MAX's `MODULAR_THREAD_BUSY_WAIT_US`; marrow's own
+pool exposes `MARROW_THREADS_SPIN_NS`) is best left at its default —
 200 is a wash and 2000 costs 50%, because spinning threads take cycles from the
 ones still working. So the waiting is genuine idleness at ~5 barriers per
 grouping rather than wakeup latency.
@@ -221,7 +220,8 @@ on all 64 inserts. Removing that dependency means giving each partition a fixed
 id block instead of a measured one, which makes the global numbering sparse —
 and `Groups` is dense precisely because an accumulator allocates one slot per
 id. A wavefront (partition `i` writing back as soon as inserts `0..i` finish)
-would recover part of it and is not expressible through `sync_parallelize`.
+would recover part of it; it needs per-partition dependencies, which a single
+`ThreadPool.run` does not express.
 
 So the idle is a cost of dense ids, not an implementation defect. Anyone
 attacking it should start there, not at the fan-out or the pool."""
@@ -458,10 +458,9 @@ struct HashGrouping(Movable):
         # host read of device memory for no benefit. `worth_parallel` already
         # answers False on a GPU context, so this is the same decision the
         # placement gate makes, applied one step earlier.
-        var hash_ctx = ExecContext.parallel(
-            self._ctx.resolved_num_threads()
-        ) if self._ctx.is_gpu() else self._ctx.copy()
-        var batch_hashes = RapidHashKernel.apply(keys, num_rows, hash_ctx^)
+        var batch_hashes = RapidHashKernel.apply(
+            keys, num_rows, self._ctx.on_cpu()
+        )
 
         # Asked on *every* serial batch, not just the first. Deciding once and
         # for all off batch one looked equivalent and is not: a source hands
@@ -737,6 +736,8 @@ struct HashGrouping(Movable):
         var fcap = max(new_total, 1)
         var first_buf = Buffer.alloc_uninit[int32.native](fcap)
         var first_view = first_buf.view[int32.native](0, fcap)
+        # Taken before the closure, which borrows `self` mutably.
+        var ctx = self._ctx.copy()
 
         def finish_partition(i: Int) {mut self, imm}:
             var pk = prev_key_counts[i]
@@ -779,7 +780,7 @@ struct HashGrouping(Movable):
                 var g = Int32(b + bid - pk) if bid >= pk else l2g[bid]
                 id_view.store[1](Int(rows.unsafe_get(j)), g)
 
-        sync_parallelize(finish_partition, p)
+        ctx.run(p, finish_partition)
 
         var ids = Int32Array(
             length=n,

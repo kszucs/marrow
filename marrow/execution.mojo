@@ -16,26 +16,29 @@ Bundles the two axes of parallelism a dispatch site needs to know about:
   ``Optional[DeviceContext]`` parameter that appears on every apply /
   kernel.
 - **Threads** — CPU worker count for striped parallelism on the non-GPU
-  path. ``1`` is serial (current pre-parallel behavior), ``>1`` uses
-  ``sync_parallelize``, ``0`` means "auto" → ``num_physical_cores()``.
+  path. ``1`` is serial (current pre-parallel behavior), ``>1`` stripes
+  across that many threads, ``0`` means "auto" → every thread the pool has.
   Below ``min_parallel_size`` (per-kernel threshold) the dispatch
-  collapses to serial so stripe overhead never exceeds the work.
+  collapses to serial so stripe overhead never exceeds the work. The
+  threads come from a ``ThreadPool`` (``utils/threads.mojo``): the
+  process-wide shared one unless ``with_pool`` names another.
 
 Kernels take one of these instead of a bare ``Optional[DeviceContext]``
 so the CPU multi-thread path can be enabled uniformly — rather than each
-kernel implementing its own ``sync_parallelize`` stripe loop.
+kernel implementing its own stripe loop.
 
 Implicit conversions from ``Optional[DeviceContext]`` keep all existing
 call sites working without source changes.
 """
 
-from max.algorithm.functional import sync_parallelize
 from max.gpu.host import DeviceContext
 from std.math import ceildiv
+from std.memory import ArcPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from std.sys.info import num_physical_cores
 from std.sys import has_accelerator, CompilationTarget, get_defined_bool
+
+from .utils.threads import ThreadPool
 
 
 # The single switch for GPU code generation across marrow.  **Off by default**:
@@ -86,7 +89,7 @@ struct ExecContext(
     - ``1``           — **Serial (forced)**: always run on the calling thread,
       irrespective of problem size.
     - ``N >= 2``      — **Multi(N) (forced)**: always stripe across exactly
-      ``N`` workers via ``sync_parallelize``, irrespective of problem size.
+      ``N`` workers, irrespective of problem size.
     - ``0`` (default) — **Auto**: dispatch picks serial vs all-cores-multi
       based on the per-kernel ``min_parallel_size`` threshold consulted by
       ``wants_parallel()``.
@@ -96,19 +99,29 @@ struct ExecContext(
     var device: Optional[DeviceContext]
     """GPU ``DeviceContext``, or ``None`` for CPU execution."""
 
+    var pool: Optional[ArcPointer[ThreadPool]]
+    """The threads CPU work runs on, or ``None`` for ``ThreadPool.shared()``.
+
+    ``num_threads`` caps how many of them one dispatch uses; the pool is where
+    they come from. A separate pool keeps work apart — blocking object-store
+    fetches in ``fan_out`` off the threads the kernels compute on, say."""
+
     def __init__(
         out self,
         num_threads: Int = 1,
         device: Optional[DeviceContext] = None,
+        pool: Optional[ArcPointer[ThreadPool]] = None,
     ):
         self.num_threads = num_threads
         self.device = device.copy() if device else None
+        self.pool = pool.copy()
 
     @implicit
     def __init__(out self, device: DeviceContext):
         """Implicit conversion from ``DeviceContext``."""
         self.num_threads = 1
         self.device = Optional[DeviceContext](device)
+        self.pool = None
 
     @implicit
     def __init__(out self, device: Optional[DeviceContext]):
@@ -122,10 +135,12 @@ struct ExecContext(
         """
         self.num_threads = 1
         self.device = device.copy() if device else None
+        self.pool = None
 
     def __init__(out self, *, copy: Self):
         self.num_threads = copy.num_threads
         self.device = copy.device.copy() if copy.device else None
+        self.pool = copy.pool.copy()
 
     # --- factories ----------------------------------------------------
 
@@ -177,7 +192,26 @@ struct ExecContext(
         `num_threads: Int` across its API boundary so the device was gone before
         it was ever called.
         """
-        return Self(num_threads=num_threads, device=self.device.copy())
+        return Self(
+            num_threads=num_threads,
+            device=self.device.copy(),
+            pool=self.pool.copy(),
+        )
+
+    def with_pool(self, pool: ArcPointer[ThreadPool]) -> Self:
+        """This context running its CPU work on ``pool``, with the same worker
+        count and device."""
+        var ctx = self.copy()
+        ctx.pool = pool.copy()
+        return ctx^
+
+    def on_cpu(self) -> Self:
+        """This context without its device: the same worker count and pool,
+        for a step that has to run on the host whatever the kernel around it
+        does. Derived by copy, so a field added later is kept."""
+        var ctx = self.copy()
+        ctx.device = None
+        return ctx^
 
     # --- queries ------------------------------------------------------
 
@@ -227,16 +261,26 @@ struct ExecContext(
         """True when work should be dispatched to the GPU."""
         return Bool(self.device)
 
+    def thread_pool(self) -> ArcPointer[ThreadPool]:
+        """The pool CPU work runs on: ``pool`` if set, else the shared one."""
+        if self.pool:
+            return self.pool.value().copy()
+        return ThreadPool.shared()
+
     def resolved_num_threads(self) -> Int:
         """Normalize ``num_threads`` into a concrete worker count.
 
         - ``num_threads >= 1`` → returned as-is.
-        - ``num_threads == 0`` (auto) → ``num_physical_cores()``.
+        - ``num_threads == 0`` (auto) → the pool's ``concurrency()``: every
+          thread one dispatch can run on at once, so a stripe per thread.
         - ``num_threads < 0`` → treated as auto for now (reserved range).
+
+        Auto starts the shared pool if nothing has yet, so ask it only once
+        the work is known to be worth striping.
         """
         if self.num_threads >= 1:
             return self.num_threads
-        return num_physical_cores()
+        return self.thread_pool()[].concurrency()
 
     def wants_parallel(self, n: Int, min_parallel_size: Int = 32768) -> Bool:
         """Decide whether a CPU kernel of size ``n`` should stripe work.
@@ -247,8 +291,8 @@ struct ExecContext(
         - ``num_threads >= 2`` → **multi(N) (forced)**: always ``True``,
           regardless of ``n``.
         - ``num_threads == 0`` → **auto**: ``True`` iff
-          ``n >= min_parallel_size``. Below that threshold,
-          ``sync_parallelize`` dispatch overhead dominates the actual compute.
+          ``n >= min_parallel_size``. Below that threshold, waking the
+          pool's threads costs more than the work itself.
         - GPU path always returns ``False`` (GPU handles its own parallelism).
         """
         if self.is_gpu():
@@ -288,11 +332,9 @@ struct ExecContext(
         three hand-rolled copies of this test did not: they asked
         ``resolved_num_threads()``, which knows nothing about the device.
         """
-        if self.is_gpu():
+        if self.is_gpu() or n < min_parallel_size:
             return False
-        if self.resolved_num_threads() <= 1:
-            return False
-        return n >= min_parallel_size
+        return self.resolved_num_threads() > 1
 
     # --- striped execution ------------------------------------------------
 
@@ -348,9 +390,9 @@ struct ExecContext(
         **Mark ``body`` ``@always_inline``.** Measured on `TakeKernel.apply`'s gather
         over 1M elements: without it the conversion was ~10 % *slower* than the
         hand-rolled loop it replaced (median 3.1 ms vs 2.8 ms); with it, ~18 %
-        faster (2.3 ms), and the striped path went 373 µs → 309 µs. A hand-rolled
-        worker got inlined for free because `sync_parallelize` consumed it
-        directly; routed through here it will not unless you say so.
+        faster (2.3 ms), and the striped path went 373 µs → 309 µs. A body handed
+        straight to the pool gets inlined for free; routed through here it
+        will not unless you say so.
 
         ``align`` rounds each stripe **up** to a multiple of itself. Pass the
         SIMD width when ``body`` is a vectorized loop with a scalar tail: it
@@ -359,14 +401,14 @@ struct ExecContext(
         1 for such a body is a silent throughput loss, not a correctness bug,
         which is exactly why it is a parameter rather than an assumption.
 
-        **``body`` may not raise.** `sync_parallelize` aborts the process on a
-        raising worker. A body that genuinely raises goes through ``fan_out``
-        instead, which parks each worker's error and re-raises after the join.
-        Do **not** reach for
-        `sync_parallelize`'s parameter form instead: it accepts a raising worker
-        but needs an implicitly-capturing closure whose captures are silently
-        not made, and the body then reads garbage at run time. The tell is an
-        "assignment was never used" warning on a buffer the body writes.
+        **``body`` may not raise** — ``ThreadPool.run`` takes a non-raising
+        body, so this is a type error rather than a crash. A body that genuinely
+        raises goes through ``fan_out`` instead, which parks each worker's
+        error and re-raises after the join.
+
+        Stripes are claimed by whichever pool thread is free, so stripe ``wid``
+        is not tied to one thread; scratch indexed by ``wid`` is still never
+        shared, because each stripe runs exactly once.
 
         ``body`` is a **unified closure passed by value**, so it carries an
         explicit capture list (``{imm}``, ``{mut scratch, imm}``, …) rather than
@@ -390,12 +432,64 @@ struct ExecContext(
                 if start < end:
                     body(wid, start, end)
 
-            sync_parallelize(task, workers)
+            self.thread_pool()[].run(workers, task, workers)
         else:
             # Stripe 0 of 1 — matches `stripe_workers` returning 1 here, so a
             # body with per-worker scratch reads slot 0 and the caller only
             # allocated one.
             body(0, 0, length)
+
+    def run[Body: def(Int) -> None](self, n: Int, ref body: Body):
+        """``ThreadPool.run`` on this context's ``thread_pool()``: call
+        ``body(i)`` for every ``i`` in ``[0, n)`` on at most
+        ``resolved_num_threads()`` threads, the caller included, and return
+        once every call has. One thread under ``serial()``."""
+        self.thread_pool()[].run(n, body, self.resolved_num_threads())
+
+    def fan_out[
+        Body: def(Int, Int) raises -> None
+    ](self, n: Int, body: Body, lanes: Int) raises:
+        """``ThreadPool.fan_out`` on this context's ``thread_pool()``: run
+        ``body(wid, i)`` for every ``i`` in ``[0, n)`` on up to ``lanes``
+        lanes — and no more than ``resolved_num_threads()`` — each taking the
+        next item when it finishes one, and raise what the lowest failing
+        ``i`` raised. ``wid`` stays below ``lanes``, so scratch sized for
+        ``lanes`` still fits.
+
+        ``stripe``'s counterpart for a body that raises. A body that blocks —
+        a remote fetch waiting on a socket — goes through
+        ``fan_out_blocking`` instead.
+        """
+        self.thread_pool()[].fan_out(
+            n, body, min(lanes, self.resolved_num_threads())
+        )
+
+    def fan_out[
+        Body: def(Int, Int) raises -> Bool
+    ](self, n: Int, body: Body, lanes: Int) raises:
+        """``fan_out`` for a body that can stop early: it returns whether the
+        items after ``i`` are still wanted, and False hands out no more — a
+        serial loop's ``break``. See ``ThreadPool.fan_out``."""
+        self.thread_pool()[].fan_out(
+            n, body, min(lanes, self.resolved_num_threads())
+        )
+
+    def fan_out_blocking[
+        Body: def(Int, Int) raises -> None
+    ](self, n: Int, body: Body) raises:
+        """``fan_out`` for work that blocks, on ``ThreadPool.shared_io()``.
+
+        Kept off the compute pool because a thread waiting there runs whatever
+        is queued, and would otherwise pick up a fetch and wait on the network.
+        At most ``num_threads`` items run at once — one at a time under
+        ``serial()`` — or, under ``auto()``, one per I/O pool thread; sizing it
+        never starts the compute pool.
+        """
+        var io = ThreadPool.shared_io()
+        var lanes = (
+            self.num_threads if self.num_threads >= 1 else io[].concurrency()
+        )
+        io[].fan_out(n, body, lanes)
 
     # --- Writable ---------------------------------------------------------
 
@@ -415,67 +509,3 @@ struct ExecContext(
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
-
-
-def fan_out[
-    Body: def(Int, Int) raises -> None
-](count: Int, workers: Int, body: Body) raises:
-    """Run ``body(wid, i)`` for every ``i`` in ``[0, count)``, across at most
-    ``workers`` threads, and raise what the lowest failing ``i`` raised.
-
-    This is ``stripe``'s counterpart for a body that **raises** — a fetch, a
-    decode, an operator over a partition — where an error has to reach the
-    caller rather than abort the process, which is what `sync_parallelize`
-    does with a raising worker. Every caller that needed that used to write
-    the same block by hand: result slots, one ``Optional[Error]`` per worker,
-    the dispatch, the raise after the join. There were three copies, and each
-    raised the lowest-numbered *worker's* error, which is a different item on
-    a machine with a different core count.
-
-    Items are dealt round-robin: worker ``wid`` runs ``wid``, ``wid +
-    workers``, ... in that order, and stops at its first error. ``wid`` is in
-    ``[0, min(workers, count))`` and indexes per-worker scratch the caller
-    allocated; a body writing a result slot indexes it by ``i``, so no two
-    workers ever touch the same memory.
-
-    **The error raised is deterministic.** Each worker records the item it
-    failed on, and the smallest wins. An item a worker never reached lies
-    after that worker's own failure, so the winner is the lowest failing
-    item overall — the one a serial loop would have stopped at — however many
-    cores the machine has and whichever thread finished first. Workers cannot
-    be cancelled, so the others run to their own first error or to the end.
-
-    With one effective worker the loop runs on the calling thread and the
-    error propagates directly, with no dispatch and no parking.
-
-    The body runs on the MAX CPU pool, the same one ``stripe`` uses. A body
-    that blocks — a remote fetch waiting on a socket — holds a pool thread for
-    as long as it waits; that is why ``workers`` is the caller's to choose.
-    """
-    var nt = max(1, min(workers, count))
-    if nt == 1:
-        for i in range(count):
-            body(0, i)
-    else:
-        var errs = List[Optional[Error]](length=nt, fill=None)
-        var failed_at = List[Int](length=nt, fill=-1)
-
-        def task(
-            wid: Int,
-        ) {mut errs, mut failed_at, imm body, imm count, imm nt}:
-            var i = wid
-            try:
-                while i < count:
-                    body(wid, i)
-                    i += nt
-            except e:
-                errs[wid] = e
-                failed_at[wid] = i
-
-        sync_parallelize(task, nt)
-        var first = -1
-        for w in range(nt):
-            if errs[w] and (first < 0 or failed_at[w] < failed_at[first]):
-                first = w
-        if first >= 0:
-            raise errs[first].value()

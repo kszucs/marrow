@@ -25,6 +25,7 @@ import marrow.kernels as mk
 from marrow.kernels.filter import filter as _filter_kernel
 from marrow.kernels.boolean import IsNullKernel, NotNullKernel
 from marrow.execution import ExecContext
+from marrow.utils.threads import ThreadPool
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +87,24 @@ def _ctx_serial() raises -> PythonObject:
 
 def _ctx_parallel() raises -> PythonObject:
     return ExecContext.parallel().to_python_object()
+
+
+def _cpu_count() raises -> PythonObject:
+    return PythonObject(ThreadPool.shared()[].concurrency())
+
+
+def _set_cpu_count(count: PythonObject) raises -> PythonObject:
+    ThreadPool.resize_shared(Int(py=count))
+    return PythonObject(None)
+
+
+def _io_thread_count() raises -> PythonObject:
+    return PythonObject(ThreadPool.shared_io()[].concurrency())
+
+
+def _set_io_thread_count(count: PythonObject) raises -> PythonObject:
+    ThreadPool.resize_shared_io(Int(py=count))
+    return PythonObject(None)
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +233,10 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_staticmethod[_ctx_serial]("serial")
         .def_staticmethod[_ctx_parallel]("parallel")
     )
+    mb.def_function[_cpu_count]("cpu_count")
+    mb.def_function[_set_cpu_count]("set_cpu_count")
+    mb.def_function[_io_thread_count]("io_thread_count")
+    mb.def_function[_set_io_thread_count]("set_io_thread_count")
     mb.def_function[_binary[mk.AddKernel.dispatch]()]("add")
     mb.def_function[_binary[mk.SubKernel.dispatch]()]("subtract")
     mb.def_function[_binary[mk.MulKernel.dispatch]()]("multiply")

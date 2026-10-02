@@ -16,12 +16,13 @@ only the *striped* phases — key hashing, the radix histogram and scatter, and
 the closing `take` — because `ExecContext.stripe` sets concurrency by choosing
 `resolved_num_threads()` work items. The dominant phase does not go through
 `stripe`: the 64 per-partition `SwissHashTable` inserts are dispatched as
-`fan_out(64, 64, run)` in `RadixPartitioner.map_partitions`, and the id
-write-back as `sync_parallelize(finish_partition, 64)` below it. Both hand 64
-work items to the global runtime pool, which sizes itself and never sees `ctx`.
+`ctx.fan_out(64, run, 64)` in `RadixPartitioner.map_partitions`, and the id
+write-back as `pool[].run(64, finish_partition, 64)` below it. Both hand 64
+work items to the context's `ThreadPool`, which caps them at its own size and
+never sees `num_threads`.
 
 **That split is intended, not a defect to be fixed here.** A partitioned phase
-is sized by the partition count, and the runtime owns how many threads drain a
+is sized by the partition count, and the pool owns how many threads drain a
 64-item queue; threading `ctx` into `map_partitions` would put a second thread
 budget next to the one the pool already keeps, for the join as well as for the
 group-by. The consequence to know about is that a thread-limited host is

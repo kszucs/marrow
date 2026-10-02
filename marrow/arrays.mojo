@@ -3402,7 +3402,7 @@ struct DynArray(
         `Variant.__getitem__` and aborts with a bare `get: wrong variant type`
         naming this line and nothing else. Every array type shares this
         accessor, so that message identifies neither the type held nor the type
-        asked for; from a `sync_parallelize` worker it also prints once per
+        asked for; from a pool worker it also prints once per
         thread. Diagnosing one costs an afternoon.
 
         So: **only call this where the type has actually been proven** — inside

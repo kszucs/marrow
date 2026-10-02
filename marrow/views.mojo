@@ -28,10 +28,8 @@ from std.memory import bitcast
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
-from max.algorithm.functional import sync_parallelize
 from max.algorithm.functional import elementwise
 from max.algorithm.reduction import _reduce_generator
-from std.math import ceildiv
 from std.utils.index import IndexList
 from std.utils.coord import Coord
 from max.gpu.host import get_gpu_target
@@ -2239,31 +2237,22 @@ def _reduce_dispatch[
 
     comptime cpu_width = cpu_lanes[T]
 
-    # This stripes by hand, unlike `_apply_dispatch` above, and deliberately so.
-    # Routing it through `ctx.stripe` works and removes the duplicated fold body,
-    # but it forces the serial arm to allocate a one-slot partials buffer it does
-    # not otherwise need. Measured, five interleaved repeats: `sumint64_1k`
-    # 0.19-0.20 -> 0.30-0.32 us and `sumfloat64_1k` 0.23-0.24 -> 0.34-0.37 us —
-    # ranges fully disjoint, ~55% on small reductions, for one heap allocation.
-    # A reduce is a fold *plus* a merge, and the merge's scratch is exactly what
-    # a serial fold should not pay for. The parallel arm below allocates it
-    # because it genuinely needs it.
+    # The serial arm below folds without scratch; only a parallel reduce needs
+    # a partials slot per stripe, so the buffer is allocated inside this branch
+    # rather than by a body `ctx.stripe` would also run serially. Routing the
+    # serial case through `stripe` cost ~55% on small reductions (`sumint64_1k`
+    # 0.19 -> 0.31 us) for that one allocation.
     if ctx.wants_parallel(length):
-        var workers = ctx.resolved_num_threads()
-        var chunk = ceildiv(length, workers)
+        var workers = ctx.stripe_workers(length)
         var partials = Buffer.alloc_zeroed[T](workers)
         var partials_view = partials.view[T]()
         for w in range(workers):
             partials_view.store[1](w, identity)
 
         @always_inline
-        def task(
-            wid: Int,
-        ) {imm chunk, imm length, imm identity, imm partials_view,}:
-            var start = wid * chunk
-            var end = min(start + chunk, length)
-            if end <= start:
-                return
+        def fold(
+            wid: Int, start: Int, end: Int
+        ) {imm identity, imm partials_view,}:
             var simd_acc = SIMD[T, cpu_width](identity)
             var i = start
             var simd_end = start + ((end - start) // cpu_width) * cpu_width
@@ -2280,7 +2269,7 @@ def _reduce_dispatch[
                 i += 1
             partials_view.store[1](wid, acc)
 
-        sync_parallelize(task, workers)
+        ctx.stripe(length, fold, align=cpu_width)
 
         var acc = identity
         for w in range(workers):

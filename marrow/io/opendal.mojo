@@ -62,7 +62,7 @@ from std.sys import size_of
 
 from ..errors import IOError, InvalidError
 from ..buffers import Buffer, bulk_copy
-from ..execution import ExecContext, fan_out
+from ..execution import ExecContext
 from ..utils.dylib import (
     CString,
     LibSet,
@@ -230,7 +230,7 @@ struct OpenDalStore(Movable):
     field is an `Arc<dyn T>` with `T: Send + Sync` -- so `blocking::Operator`
     is `Sync`. `OpenDalWriter` is **not**: `opendal_writer_write` takes
     `&mut self`, which is why that type is `Movable` only and must never be
-    captured by a `sync_parallelize` closure.
+    captured by a closure a pool thread runs.
 
     ```mojo
     var store = OpenDalStore("s3", {"bucket": "example", "region": "us-east-1"})
@@ -680,11 +680,11 @@ struct OpenDalSource(ByteSource):
         bounds-checked *before* dispatch, so a caller bug stays on the calling
         thread and costs no requests at all.
 
-        **`ctx` sets the concurrency, and a compute pool caps it.** At most
-        `min(len(ranges), ctx.resolved_num_threads())` requests are ever in
-        flight: one at a time under `ExecContext.serial()`, one per core under
-        `auto()`. `object_store::get_ranges` instead hands the whole set to an
-        async runtime and issues them all, where here a thread blocked on a
+        **The requests go through `ctx.fan_out_blocking`**, on the I/O pool:
+        one at a time under `ExecContext.serial()`, at most `num_threads` under
+        `parallel(n)`, one per I/O thread under `auto()`.
+        `object_store::get_ranges` instead hands the whole set to an async
+        runtime and issues them all, where here a thread blocked on a
         socket is a pool thread doing nothing. Marrow has no async runtime and
         no other way to overlap I/O, so this is N/nt round trips instead of N
         -- the right shape, at a fraction of the reach. Do not ask for more
@@ -704,7 +704,7 @@ struct OpenDalSource(ByteSource):
         def fetch(wid: Int, i: Int) raises {mut slots, imm}:
             slots[i] = self._fetch(ranges[i][0], ranges[i][1])
 
-        fan_out(n, ctx.resolved_num_threads(), fetch)
+        ctx.fan_out_blocking(n, fetch)
 
         var out = Fetched(capacity=n)
         for i in range(n):

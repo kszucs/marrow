@@ -10,7 +10,8 @@ Two surfaces, told apart by the entry point:
   :class:`~marrow.lazy.LazyTable`. Nothing runs until `collect()`.
 
 This module is re-exports. The implementations live next door: `types`,
-`arrays`, `tabular`, `expr`, `lazy`, `compute`, `parquet`, `ipc`.
+`arrays`, `tabular`, `expr`, `lazy`, `compute`, `parquet`, `ipc`,
+`threads`.
 """
 
 from ._dylibs import configure as _configure_dylibs
@@ -72,6 +73,7 @@ from .types import (
     year_month_interval,
 )
 from .arrays import Array, ChunkedArray, Scalar, array, chunked_array
+from .threads import cpu_count, io_thread_count, set_cpu_count, set_io_thread_count
 from .tabular import (
     RecordBatch,
     Table,
@@ -174,6 +176,7 @@ __all__ = [
     "concat_arrays",
     "concat_tables",
     "count_star",
+    "cpu_count",
     "cume_dist",
     "date32",
     "date64",
@@ -193,6 +196,7 @@ __all__ = [
     "int16",
     "int32",
     "int64",
+    "io_thread_count",
     "is_in",
     "lazy",
     "list_",
@@ -213,6 +217,8 @@ __all__ = [
     "record_batch",
     "row_number",
     "schema",
+    "set_cpu_count",
+    "set_io_thread_count",
     "sql",
     "string",
     "string_view",

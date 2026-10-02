@@ -174,7 +174,7 @@ def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
 # Take (gather) benchmarks
 #
 # `TakeKernel.apply` is the hot gather behind joins, group-by and sort, and it owns
-# one of the hand-rolled `sync_parallelize` stripe loops (Q2.4). It had no
+# one of the hand-rolled stripe loops (Q2.4). It had no
 # benchmark at all, so any change to that loop was unmeasurable — these exist to
 # make it measurable. Both the serial default and a forced-parallel context are
 # covered, since the stripe loop only runs on the latter.

@@ -320,6 +320,44 @@ def test_drop_nulls_float64():
     assert result.null_count == 0
 
 
+# ── Threads ──────────────────────────────────────────────────────────────────
+
+
+def test_cpu_count_follows_set_cpu_count():
+    original = ma.cpu_count()
+    assert original >= 1
+    try:
+        ma.set_cpu_count(3)
+        assert ma.cpu_count() == 3
+        # Work runs on the new pool.
+        a = ma.array(list(range(100_000)), type=ma.int64())
+        doubled = ma.compute.add(a, a, ctx=ma.ExecContext.parallel())
+        assert doubled.to_pylist()[-1] == 2 * 99_999
+    finally:
+        ma.set_cpu_count(original)
+    assert ma.cpu_count() == original
+
+
+def test_io_thread_count_follows_set_io_thread_count():
+    original = ma.io_thread_count()
+    assert original >= 1
+    try:
+        ma.set_io_thread_count(2)
+        assert ma.io_thread_count() == 2
+    finally:
+        ma.set_io_thread_count(original)
+    assert ma.io_thread_count() == original
+
+
+@pytest.mark.parametrize("setter", [ma.set_cpu_count, ma.set_io_thread_count])
+def test_thread_counts_refuse_fewer_than_one_thread(setter):
+    for count in (0, -1):
+        with pytest.raises(ValueError, match="concurrency"):
+            setter(count)
+    with pytest.raises(TypeError):
+        setter(2.5)
+
+
 # ── GPU ──────────────────────────────────────────────────────────────────────
 
 

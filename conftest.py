@@ -142,9 +142,12 @@ class Harness:
             build(
                 gpu=self.options.gpu,
                 asan=self.options.asan,
+                tsan=self.options.tsan,
                 defines=self.options.define,
             ),
             notify=lambda message: print(message, flush=True),
+            repeat=self.options.repeat if kind == "test" else 1,
+            leaks=self.options.leaks and kind == "test",
         )
 
     # -- the Python lane ----------------------------------------------------

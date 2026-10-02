@@ -534,7 +534,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
       build side is below ``_PARALLEL_THRESHOLD``.
     * **Partition-parallel** — rows are split by the top bits of their
       hash into ``2^radix_bits`` independent ``SwissHashTable`` instances,
-      built and probed concurrently via ``sync_parallelize``. No atomics,
+      built and probed concurrently on the ``ThreadPool``. No atomics,
       no locks: each partition is fully independent.
 
     The public ``build`` / ``probe`` entry points are thin dispatchers over
@@ -1000,7 +1000,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     ) raises:
         """One ``take`` per column, appended in order.
 
-        After ``sync_parallelize`` in ``probe_parallel`` has finished
+        After the fan-out in ``probe_parallel`` has finished
         there's no outer parallel region, so each per-column ``take``
         can safely fan its SIMD gather loop across workers internally.
         We pass this join's own ``ExecContext`` through, and ``take``

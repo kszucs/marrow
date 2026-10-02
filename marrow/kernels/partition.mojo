@@ -18,7 +18,7 @@ radix group-by path.
 from ..arrays import Int32Array, UInt64Array
 from ..buffers import Buffer
 from ..dtypes import int32, uint64
-from ..execution import ExecContext, fan_out
+from ..execution import ExecContext
 
 
 comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
@@ -301,7 +301,7 @@ struct RadixPartitioner(Movable):
                 partitions[i].hashes.copy(),
             )
 
-        fan_out(p, p, run)
+        self.ctx.fan_out(p, run, p)
 
         var out = List[R](capacity=p)
         for i in range(p):
