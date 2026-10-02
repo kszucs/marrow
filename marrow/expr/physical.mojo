@@ -556,7 +556,20 @@ struct Pipeline(Operator):
         # still a *well-formed* batch — `RecordBatch.empty` gives one
         # zero-length column per field, so anything walking columns by schema
         # index stays in bounds.
-        return _concat_batches(out, schema, ExecContext.serial())
+        var result = _concat_batches(out, schema, ExecContext.serial())
+        # Several morsels were concatenated, and that compacts sparse view
+        # columns already; a single one is returned as it is, so its view
+        # columns are compacted here -- a result must not keep the pages it
+        # was filtered out of alive. An explicit ladder rather than
+        # `dispatch_binaryview` with a closure: every plan collects, and the
+        # closure form measured +13.8 KB of `__text` on each fused size gate.
+        for i in range(len(result.children)):
+            ref child = result.children[i]
+            if child.dtype().is_string_view():
+                result.children[i] = child.as_string_view().compact().to_dyn()
+            elif child.dtype().is_binary_view():
+                result.children[i] = child.as_binary_view().compact().to_dyn()
+        return result^
 
 
 # ---------------------------------------------------------------------------
@@ -1667,8 +1680,11 @@ struct ParquetScanOperator(Operator):
             if not self._file:
                 # Opened on first use, not at plan time: a `Relation` is a
                 # description and must not touch the filesystem to exist.
+                # The scan's schema decides each string column's layout, leaf
+                # by leaf: a column declared `string_view` -- or holding one,
+                # as `list<string_view>` -- decodes straight into views.
                 self._file = ParquetFile[DynSource, LeafSet.all()](
-                    DynSource.open(self._path)
+                    DynSource.open(self._path), schema=self._schema.copy()
                 )
                 if len(self._pushed) == 0:
                     # Nothing to prove, so nothing to decode. Statistics are

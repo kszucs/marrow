@@ -726,10 +726,14 @@ def page_selections[
 
     var arrow = file.schema()
     for ref f in arrow.fields:
+        # Byte strings in either layout: a view column is as flat as an
+        # offsets one, and its pages are the same pages.
         if not (
             f.dtype.is_primitive()
             or f.dtype.is_string_like()
             or f.dtype.is_binary_like()
+            or f.dtype.is_string_view()
+            or f.dtype.is_binary_view()
         ):
             return out^
 

@@ -162,6 +162,7 @@ from .`comptime`.leaves import (
     NumericLiteral,
     NumericParam,
     StringColumn,
+    StringViewColumn,
     StringLiteral,
     StringParam,
     StructColumn,

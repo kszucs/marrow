@@ -21,7 +21,7 @@ from std.testing import assert_equal, assert_false, assert_true
 from std.os.path import join
 
 from ...utils.testing import ScratchDir
-from ...dtypes import Int64Type, field, int64
+from ...dtypes import Int64Type, field, int64, string_view
 from ...execution import ExecContext
 from ...schema import schema
 from ...parquet.reader import ParquetFile
@@ -236,6 +236,56 @@ def test_scan_pruning_a_plan_reads_fewer_rows_through_the_page_index() raises:
         ref c = out.column("a").as_int64()
         assert_equal(Int(c[0].value()), 351)
         assert_equal(Int(c[48].value()), 399)
+
+
+def test_scan_pruning_pages_with_a_declared_view_column() raises:
+    """A view column does not switch page pruning off. The file is read with
+    `s` declared `string_view`, so the index decodes that column's statistics
+    as views; the predicate on `a` still skips pages, and the views that come
+    back are the surviving rows' own."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var a = Python.list()
+    var s = Python.list()
+    for i in range(400):
+        a.append(i)
+        s.append("row number " + String(i) + " of the paged file")
+    var tbl = pa.table(Python.dict(a=pa.array(a), s=pa.array(s)))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_pages_view.parquet")
+        # As `_write_paged`: `write_batch_size` is what makes the pages.
+        pq.write_table(
+            tbl,
+            path,
+            row_group_size=400,
+            data_page_size=400,
+            write_batch_size=50,
+            write_page_index=True,
+            use_dictionary=False,
+            compression="none",
+        )
+        var declared = schema([field("a", int64), field("s", string_view)])
+        var f = ParquetFile(path, schema=declared.copy())
+        var pushed: List[DynValue] = [
+            DynValue(col("a", int64) > lit(350, int64))
+        ]
+        var idx = Index.from_parquet(f)
+        var keep = idx.read_plan(pushed)
+        var sels = page_selections(f, idx, keep, pushed)
+        assert_equal(len(sels), 1, "the view column switched page pruning off")
+        assert_true(
+            sels[0].num_selected() < sels[0].total_rows(),
+            "the page index proved nothing",
+        )
+
+        var plan = scan(path, declared^).filter(
+            col("a", int64) > lit(350, int64)
+        )
+        var out = plan.optimize[AllRules]().execute()
+        assert_equal(out.num_rows(), 49)
+        ref v = out.column("s").as_string_view()
+        assert_equal(v[0].value(), "row number 351 of the paged file")
+        assert_equal(v[48].value(), "row number 399 of the paged file")
 
 
 # ---------------------------------------------------------------------------

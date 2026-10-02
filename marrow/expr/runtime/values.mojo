@@ -207,41 +207,6 @@ from ..physical import Evaluable, DynOperator, EvalOperator
 from .aggregates import RuntimeAggregate
 
 
-def promote_dyn(l: DynType, r: DynType) raises -> DynType:
-    """The common numeric domain of two runtime dtypes.
-
-    The runtime twin of `comptime/rules.mojo`'s `promote[L, R]`, and it states
-    the same two rules: a float outranks any integer whatever the widths, and
-    otherwise the wider one wins. It lives here rather than beside its twin
-    because `rules.mojo` belongs to the comptime lane -- reaching across would
-    make this file import the package it exists to stay out of.
-
-    **Widening, not "try a cast each way".** The earlier rule cast the right
-    operand to the left's type and fell back to the reverse on failure, which
-    reads as symmetric and is not: `cast` accepts a *narrowing* integer
-    conversion and only rejects it per value, so `int32_col > lit(2**40)`
-    tried `int64 -> int32` first, succeeded structurally, and raised on the
-    literal instead of comparing. Widening cannot narrow, so there is no
-    ordering to get wrong.
-
-    With a decimal on either side the answer is `DecimalPromotion.common`,
-    Arrow's rule. That is the type both sides of a *comparison* take; decimal
-    arithmetic has a result type per operator and does not come through here.
-    """
-    if l == r:
-        return l.copy()
-    if l.is_decimal() or r.is_decimal():
-        return DecimalPromotion.common(l, r)
-    if not l.is_numeric() or not r.is_numeric():
-        raise TypeError(t"promote: no common numeric type for {l} and {r}")
-    var l_float = l.is_floating_point()
-    if l_float != r.is_floating_point():
-        return l.copy() if l_float else r.copy()
-    # `byte_width`, not `bit_width`: `DynType` has only the former, and the
-    # ordering it induces over the numeric types is the same one.
-    return l.copy() if l.byte_width() >= r.byte_width() else r.copy()
-
-
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
 """What a node carries besides its children — a column name, a cast target, a
 literal, an `IsIn` value set.
@@ -686,32 +651,36 @@ struct RuntimeValue(Evaluable, Movable, Value):
     def _compare[
         K: NumericCompareKernel, S: StringPredicateKernel
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
-        """One operator, two kernels: the runtime dtype picks which runs.
+        """One operator, two kernels: the operands' dtype picks which runs.
 
         Both halves are named at the call site, so a binary links the numeric
-        *and* the string kernel for every comparison its expressions mention --
-        and nothing else. Mixed numeric widths are promoted to the wider domain
-        first, so `int32_col > int64_lit` compares rather than raising.
+        *and* the byte-string kernel for every comparison its expressions
+        mention -- and nothing else. The operands meet at their common type
+        first, so `int32_col > int64_lit` and `view_col == lit("x")` compare
+        rather than raising.
+
+        Two primitives that are not both numbers or decimals -- temporal
+        columns at different resolutions, say -- meet on the left operand's
+        type instead:
+        `_common_type` deliberately has no rule there, and inventing one here
+        would be a second promotion rule that could disagree with it.
         """
-        if l.dtype().is_string_like() or r.dtype().is_string_like():
-            if not (l.dtype().is_string_like() and r.dtype().is_string_like()):
-                raise TypeError(
-                    t"compare: cannot compare {l.dtype()} with {r.dtype()}"
-                )
-            return S.dispatch(l^, r^)
-        if l.dtype() == r.dtype():
-            return K.dispatch(l^, r^)
-        if (l.dtype().is_numeric() or l.dtype().is_decimal()) and (
-            r.dtype().is_numeric() or r.dtype().is_decimal()
+        var l_dt = l.dtype()
+        var r_dt = r.dtype()
+        var l_number = l_dt.is_numeric() or l_dt.is_decimal()
+        var r_number = r_dt.is_numeric() or r_dt.is_decimal()
+        if (
+            l_dt.is_primitive()
+            and r_dt.is_primitive()
+            and not (l_number and r_number)
         ):
-            var to = promote_dyn(l.dtype(), r.dtype())
-            return K.dispatch(cast_array(l^, to), cast_array(r^, to))
-        # Anything else -- two temporal columns at different resolutions, say
-        # -- meets on the left operand's type. `promote_dyn` deliberately has
-        # no answer outside the numeric and decimal domains, and inventing one
-        # here would be a second promotion rule that could disagree with it.
-        var to = l.dtype()
-        return K.dispatch(l^, cast_array(r^, to))
+            return K.dispatch(l, cast_array(r^, l_dt))
+        else:
+            var pair = Self._unified([l^, r^])
+            if pair[0].dtype().is_primitive():
+                return K.dispatch(pair[0], pair[1])
+            else:
+                return S.dispatch(pair[0], pair[1])
 
     @staticmethod
     def _decimal_arith[
@@ -768,11 +737,10 @@ struct RuntimeValue(Evaluable, Movable, Value):
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
         """`+ - * // %` — both operands promoted to their common domain first.
 
-        `promote_dyn` is the same rule the comptime lane's `promote[L, R]`
-        applies at compile time. Doing it here rather than letting the kernel's
+        `_common_type` widens them the way the comptime lane's `promote[L, R]`
+        does at compile time. Doing it here rather than letting the kernel's
         `expect_same_dtype` raise is what makes `int32_col + int64_lit` add
-        instead of failing, and doing it *by widening* rather than by trying a
-        cast in each direction is what keeps it from silently narrowing.
+        instead of failing.
         """
         if (l.dtype().is_numeric() or l.dtype().is_decimal()) and (
             r.dtype().is_numeric() or r.dtype().is_decimal()
@@ -780,7 +748,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             # A decimal reaches a numeric type only against a float, which
             # Arrow computes in `float64`; two decimals are decimal arithmetic
             # (`DecimalBinaryKernel`), and `//` / `%` have none.
-            var to = promote_dyn(l.dtype(), r.dtype())
+            var to = Self._common_type(l.dtype(), r.dtype())
             if to.is_numeric():
                 return K.dispatch(cast_array(l^, to), cast_array(r^, to))
         raise TypeError(
@@ -947,9 +915,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "convert_timezone":
             return ConvertTimezoneKernel.apply(a, self._payload[String])
         if self._tag == "isin":
-            return IsInKernel.dispatch(
-                a, self._payload[DynArray].copy()
-            ).to_dyn()
+            var pair = Self._unified([a^, self._payload[DynArray].copy()])
+            return IsInKernel.dispatch(pair[0], pair[1]).to_dyn()
         if self._tag == "cast" or self._tag == "cast_unsafe":
             return cast_array(
                 a^, self._payload[DynType].copy(), self._tag == "cast"
@@ -962,11 +929,22 @@ struct RuntimeValue(Evaluable, Movable, Value):
         """The two-operand tags `evaluate` does not spell out itself."""
         if self._tag == "add":
             # `+` over erased operands cannot know at build time whether it
-            # means addition or concatenation, so the runtime dtype decides --
+            # means addition or concatenation, so the runtime dtypes decide: a
+            # number or decimal on either side adds, and `_arith` names the
+            # pair when the other side is not one; anything else concatenates,
             # which is the call `ConcatKernel.dispatch` exists for.
-            if l.dtype().is_string_like():
-                return ConcatKernel.dispatch(l^, r^)
-            return Self._decimal_arith[AddKernel, DecimalAddKernel](l^, r^)
+            var l_dt = l.dtype()
+            var r_dt = r.dtype()
+            if (
+                l_dt.is_numeric()
+                or l_dt.is_decimal()
+                or r_dt.is_numeric()
+                or r_dt.is_decimal()
+            ):
+                return Self._decimal_arith[AddKernel, DecimalAddKernel](l^, r^)
+            else:
+                var pair = Self._unified([l^, r^])
+                return ConcatKernel.dispatch(pair[0], pair[1])
         if self._tag == "sub":
             return Self._decimal_arith[SubKernel, DecimalSubKernel](l^, r^)
         if self._tag == "mul":
@@ -998,13 +976,17 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return Self._arith[MaxKernel](l^, r^)
 
         if self._tag == "startswith":
-            return StartsWithKernel.dispatch(l^, r^)
+            var pair = Self._unified([l^, r^])
+            return StartsWithKernel.dispatch(pair[0], pair[1])
         if self._tag == "endswith":
-            return EndsWithKernel.dispatch(l^, r^)
+            var pair = Self._unified([l^, r^])
+            return EndsWithKernel.dispatch(pair[0], pair[1])
         if self._tag == "contains":
-            return ContainsKernel.dispatch(l^, r^)
+            var pair = Self._unified([l^, r^])
+            return ContainsKernel.dispatch(pair[0], pair[1])
         if self._tag == "regexp_matches":
-            return RegexpMatchesKernel.dispatch(l^, r^)
+            var pair = Self._unified([l^, r^])
+            return RegexpMatchesKernel.dispatch(pair[0], pair[1])
 
         # Nested. A binary tag rather than a payload one, unlike `isin`: the
         # search value varies per row, so it is a column the batch supplies and
@@ -1111,31 +1093,82 @@ struct RuntimeValue(Evaluable, Movable, Value):
         return cast_array(a, DynType(int64)).as_int64().copy()
 
     @staticmethod
+    def _common_type(l: DynType, r: DynType) raises -> DynType:
+        """The type two operands meet at, raising `TypeError` when they have
+        none. The runtime lane's one coercion rule, and symmetric: which
+        operand came first never changes the answer.
+
+        **Numbers widen** -- the runtime twin of `comptime/rules.mojo`'s
+        `promote[L, R]`, stating its two rules: a float outranks any integer
+        whatever the widths, and otherwise the wider one wins. Widening, not
+        "try a cast each way": `cast` accepts a *narrowing* integer conversion
+        and rejects it only per value, so an earlier rule that cast the right
+        operand to the left's type made `int32_col > lit(2**40)` raise on the
+        literal instead of comparing.
+
+        **Byte strings of one kind take the wider layout** -- text with text,
+        bytes with bytes; a view over an offsets layout, `large` over plain.
+        That is DataFusion's string and binary coercion, and also the cheap
+        direction: an offsets column becomes a view by pointing into its bytes,
+        where a view becomes offsets by copying them. Text and bytes do not
+        meet: `binary -> string` has to validate UTF-8, which makes it a cast a
+        caller writes rather than one the engine invents.
+
+        **Decimals follow `DecimalPromotion.common`**, Arrow's rule: the type
+        both sides of a comparison take. Decimal arithmetic has a result type
+        per operator and does not come through here.
+
+        **`null` takes the other type**, as `cast` turns a null array into any
+        type -- which is what makes `coalesce(x, NULL)` well-typed.
+        """
+        var both_text = (l.is_string_like() or l.is_string_view()) and (
+            r.is_string_like() or r.is_string_view()
+        )
+        var both_bytes = (
+            l.is_binary() or l.is_large_binary() or l.is_binary_view()
+        ) and (r.is_binary() or r.is_large_binary() or r.is_binary_view())
+        if l == r or r.is_null():
+            return l.copy()
+        elif l.is_null():
+            return r.copy()
+        elif l.is_decimal() or r.is_decimal():
+            return DecimalPromotion.common(l, r)
+        elif l.is_numeric() and r.is_numeric():
+            var l_float = l.is_floating_point()
+            if l_float != r.is_floating_point():
+                return l.copy() if l_float else r.copy()
+            else:
+                # `byte_width`, not `bit_width`: `DynType` has only the former,
+                # and the ordering it induces over the numeric types is the
+                # same.
+                return (
+                    l.copy() if l.byte_width() >= r.byte_width() else r.copy()
+                )
+        elif both_text or both_bytes:
+            var l_view = l.is_string_view() or l.is_binary_view()
+            var r_view = r.is_string_view() or r.is_binary_view()
+            var r_large = r.is_large_string() or r.is_large_binary()
+            return r.copy() if r_view or (r_large and not l_view) else l.copy()
+        else:
+            raise TypeError(t"no common type for {l} and {r}")
+
+    @staticmethod
     def _unified(var arrays: List[DynArray]) raises -> List[DynArray]:
-        """Cast a set of *alternatives* to one common type.
+        """The operands cast to their common type: `_common_type` folded over
+        their dtypes, raising when two of them have none -- the honest answer
+        for `coalesce(string_col, int_col)`.
 
-        The n-ary counterpart of `_arith`'s promotion, for the conditionals --
-        `coalesce`, `case_when` and the two-armed `nullif` / `fill_null`. Each
-        of those kernels picks one of its inputs per row and therefore needs
-        them to agree on a dtype, which two independently written expressions
-        will not: `coalesce(int_col, lit(0.5))` is an ordinary thing to write.
-
-        A non-numeric mismatch is left alone rather than guessed at, so the
-        kernel raises and its message names both dtypes. That is the honest
-        answer for `coalesce(string_col, int_col)`, which has no common type.
+        Every verb whose kernel needs its operands to agree on a dtype goes
+        through here -- the comparisons, `+` between non-numbers,
+        `startswith`, `endswith`, `contains`, `isin`, and the conditionals
+        (`coalesce`, `case_when`, `nullif`, `fill_null`), which pick one input
+        per row. Independently written expressions will not agree on their
+        own: `coalesce(int_col, lit(0.5))` and `view_col == lit("x")` are
+        ordinary things to write.
         """
         var to = arrays[0].dtype()
-        var mixed = False
         for ref a in arrays:
-            if a.dtype() != to:
-                mixed = True
-        if not mixed:
-            return arrays^
-        for ref a in arrays:
-            if not a.dtype().is_numeric():
-                return arrays^
-        for ref a in arrays:
-            to = promote_dyn(to, a.dtype())
+            to = Self._common_type(to, a.dtype())
         var out = List[DynArray](capacity=len(arrays))
         for ref a in arrays:
             out.append(cast_array(a.copy(), to))

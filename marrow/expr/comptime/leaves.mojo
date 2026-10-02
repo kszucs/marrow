@@ -12,11 +12,13 @@ from ...arrays import (
     BinaryLikeArray,
     BoolArray,
     DictionaryArray,
+    DynArray,
     FixedSizeBinaryArray,
     FixedSizeListArray,
     ListLikeArray,
     NullArray,
     PrimitiveArray,
+    StringViewArray,
     StructArray,
 )
 from ...builders import BinaryLikeBuilder
@@ -31,9 +33,12 @@ from ...dtypes import (
     NumericType,
     PrimitiveType,
     StringLikeType,
+    StringType,
+    StringViewType,
     TemporalType,
     bool_,
 )
+from ...kernels.cast import ViewCastKernel
 from ...scalars import (
     ArrowScalar,
     BinaryLikeScalar,
@@ -457,6 +462,63 @@ struct StringColumn[T: StringLikeType](ColumnBound, StringValue):
         return rebind[StringSlice[origin_of(bound)]](
             bound.unsafe_get(UInt(idx))
         )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct StringViewColumn(ColumnBound, StringValue):
+    """A `string_view` column, resolved by name once per batch.
+
+    The fused loop reads the views directly -- `bind` holds the
+    `StringViewArray` and `lane` borrows each element from it, inline or out
+    of line, without converting the column.
+
+    What it *produces* is `string`: `Type` is `StringType`, and `evaluate`
+    converts. The string nodes that break fusion take their operands'
+    materialised columns as `BinaryLikeArray[X.Type]`, so a leaf evaluating
+    to a view would have to be special-cased in every one of them. A view
+    column projected by the comptime lane therefore comes out as `string`;
+    the runtime lane keeps it a view.
+    """
+
+    comptime Type = StringType
+    comptime shape = Shape.columnar
+    comptime Bound = StringViewArray
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def references(self, mut into: References):
+        into.column(self._name)
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        # The typed conversion, not `cast`: the erased router would link
+        # every cast family into a binary that names one view column.
+        var column: DynArray = ViewCastKernel.to_offsets[
+            StringViewType, StringType
+        ](self.bind(batch, bindings), safe=False)
+        return column^
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_string_view().copy()
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        return bound.unsafe_get(UInt(idx))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")

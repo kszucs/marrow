@@ -679,3 +679,73 @@ def test_an_unused_string_function_slot_contributes_no_column() raises:
     assert_equal(len(cols), 2)
     assert_equal(cols[0], "s")
     assert_equal(cols[1], "n")
+
+
+# ---------------------------------------------------------------------------
+# string_view columns: fused over the views, producing `string`
+# ---------------------------------------------------------------------------
+
+from ....builders import StringViewBuilder
+from ....dtypes import string_view
+
+
+def _view_batch() raises -> RecordBatch:
+    var sb = StringViewBuilder()
+    sb.append("pear")
+    sb.append("a quince longer than twelve")
+    sb.append_null()
+    sb.append("apple")
+    return record_batch(
+        [sb.finish().to_dyn(), array([1, 2, 3, 4], int64).copy()],
+        names=["name", "a"],
+    )
+
+
+def test_string_view_column_compares_in_place() raises:
+    var b = _view_batch()
+    var got = (
+        (col("name", string_view) == lit("pear", string))
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(4)
+        .as_bool()
+        .copy()
+    )
+    assert_true(got[0].value())
+    assert_true(not got[1].value())
+    assert_true(got.is_null(2))
+    assert_true(not got[3].value())
+
+
+def test_string_view_column_filters_and_projects_as_string() raises:
+    var plan = (
+        table(_view_batch())
+        .filter(
+            col("name", string_view).startswith(lit("a", string))
+            & (col("a", int64) > lit(1, int64))
+        )
+        .project(["up"], [col("name", string_view).upper()])
+    )
+    assert_true(plan.schema().fields[0].dtype == DynType(string))
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    ref names = out.columns[0].as_string()
+    assert_equal(names[0].value(), "A QUINCE LONGER THAN TWELVE")
+    assert_equal(names[1].value(), "APPLE")
+
+
+def test_string_view_column_min_max() raises:
+    var out = (
+        table(_view_batch())
+        .aggregate(
+            [
+                col("name", string_view).min().alias("lo"),
+                col("name", string_view).max().alias("hi"),
+            ]
+        )
+        .execute()
+    )
+    assert_equal(
+        out.columns[0].as_string()[0].value(),
+        "a quince longer than twelve",
+    )
+    assert_equal(out.columns[1].as_string()[0].value(), "pear")

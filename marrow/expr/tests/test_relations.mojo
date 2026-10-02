@@ -18,9 +18,9 @@ from std.testing import assert_equal, assert_true
 from std.os.path import join
 
 from ...utils.testing import ScratchDir
-from ...arrays import StructArray, DynArray
+from ...arrays import StructArray, DynArray, StringArray
 from ...builders import array
-from ...dtypes import DynType, Int64Type, float64, int64
+from ...dtypes import DynType, Int64Type, float64, int64, string, string_view
 from ...execution import ExecContext
 from ...kernels.join import (
     JOIN_INNER,
@@ -1153,3 +1153,28 @@ def test_join_schema_ignores_the_build_side() raises:
     assert_equal(s.fields[0].name, "k")
     assert_equal(s.fields[1].name, "lv")
     assert_true(s == built_left.schema())
+
+
+def test_a_parquet_scan_schema_picks_the_string_layout() raises:
+    """A string column declared `string_view` in the scan's schema is decoded
+    as views; one declared `string` beside it keeps the offsets layout."""
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_scan_views.parquet")
+        var s: StringArray = ["pear", "a value longer than twelve", "plum"]
+        var t: StringArray = ["x", "y", "z"]
+        var b = record_batch([s^.to_dyn(), t^.to_dyn()], names=["s", "t"])
+        write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
+
+        var views = schema([field("s", string_view), field("t", string)])
+        var out = (
+            scan(path.copy(), views^)
+            .filter(col("s", string_view) != lit("plum", string))
+            .execute()
+        )
+        assert_equal(out.num_rows(), 2)
+        assert_true(out.columns[0].dtype() == DynType(string_view))
+        assert_true(out.columns[1].dtype() == DynType(string))
+        assert_equal(
+            out.columns[0].as_string_view()[1].value(),
+            "a value longer than twelve",
+        )

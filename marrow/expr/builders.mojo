@@ -58,6 +58,7 @@ from .`comptime`.leaves import (
     NumericLiteral,
     NumericParam,
     StringColumn,
+    StringViewColumn,
     StringLiteral,
     StringParam,
     StructColumn,
@@ -98,6 +99,7 @@ from ..dtypes import (
     NullType,
     NumericType,
     StringLikeType,
+    StringViewType,
     StringType,
     StructType,
     TemporalType,
@@ -149,6 +151,12 @@ def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
     caller writes `col("name", string)` either way.
     """
     return StringColumn[T](name^)
+
+
+def col(var name: String, dtype: StringViewType) -> StringViewColumn:
+    """A `string_view` column. Fuses by reading the views in place, and
+    produces `string` -- see `StringViewColumn`."""
+    return StringViewColumn(name^)
 
 
 def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:

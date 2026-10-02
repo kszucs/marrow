@@ -17,7 +17,7 @@ from std.testing import (
     assert_true,
 )
 
-from ....arrays import StructArray, DynArray
+from ....arrays import StructArray, DynArray, StringArray
 from ...bindings import Bindings
 from .. import values as rv
 from ...builders import array_contains as build_array_contains
@@ -38,7 +38,13 @@ from ....dtypes import (
     second,
     timestamp,
 )
-from ....scalars import DynScalar, Int32Scalar, Int64Scalar, StringScalar
+from ....scalars import (
+    DynScalar,
+    Int32Scalar,
+    Int64Scalar,
+    NullScalar,
+    StringScalar,
+)
 from ....tabular import RecordBatch, record_batch
 from ...logical import Shape
 from ....builders import (
@@ -71,6 +77,8 @@ from ..values import (
     floordiv,
     ge,
     gt,
+    contains,
+    endswith,
     ilike,
     if_else,
     is_null,
@@ -702,21 +710,27 @@ def test_runtime_conditionals_unify_mixed_branches() raises:
     assert_true(chosen.dtype() == DynType(float64))
     assert_true(chosen == array([1.5, 0.0, 3.5], float64))
 
+    # `null` takes the other operand's type.
+    var none = literal(DynScalar(NullScalar()))
+    var kept = _over(b, coalesce([column("f"), none^]))
+    assert_true(kept.dtype() == DynType(float64))
+    assert_true(kept.is_null(1))
 
-def test_runtime_conditionals_leave_a_hopeless_mix_to_the_kernel() raises:
-    """`coalesce(string, int)` has no common type, so the guess is not made
-    here — the kernel raises and its message names both dtypes."""
+
+def test_runtime_conditionals_refuse_a_hopeless_mix() raises:
+    """`coalesce(string, int)` has no common type, so no guess is made: the
+    operands' unification raises, naming both dtypes."""
     var sb = StringBuilder(1)
     sb.append("x")
     var b = record_batch(
         [sb.finish().to_dyn(), array([1], int64).to_dyn()], names=["s", "n"]
     )
-    var raised = False
+    var msg = String()
     try:
         _ = _over(b, coalesce([column("s"), column("n")]))
-    except:
-        raised = True
-    assert_true(raised)
+    except e:
+        msg = String(e)
+    assert_true("no common type" in msg, msg)
 
 
 def _text() raises -> RecordBatch:
@@ -1106,3 +1120,151 @@ def test_conjuncts_does_not_split_or_or_xor() raises:
     var b = rv.lt(rv.column("b"), rv.literal(DynScalar(Int64Scalar(9))))
     assert_equal(len(rv.or_(a.copy(), b.copy()).conjuncts()), 1)
     assert_equal(len(rv.xor(a.copy(), b.copy()).conjuncts()), 1)
+
+
+from ....builders import StringViewBuilder
+from ....dtypes import string_view
+
+
+def test_runtime_string_view_column() raises:
+    """A `string_view` column meets `string` literals on its own layout."""
+    var sb = StringViewBuilder()
+    sb.append("pear")
+    sb.append("a value longer than twelve")
+    sb.append_null()
+    var b = record_batch([sb.finish().to_dyn()], names=["s"])
+
+    var hit = (
+        _over(b, eq(column("s"), literal(DynScalar(StringScalar("pear")))))
+        .as_bool()
+        .copy()
+    )
+    assert_true(hit[0].value())
+    assert_false(hit[1].value())
+    assert_true(hit.is_null(2))
+
+    var pred = _over(b, like(column("s"), "%twelve")).as_bool().copy()
+    assert_true(pred[1].value())
+
+    var up = _over(b, upper(column("s")))
+    assert_true(up.dtype() == DynType(string_view))
+    assert_equal(up.as_string_view()[0].value(), "PEAR")
+
+    var joined = _over(
+        b, add(column("s"), literal(DynScalar(StringScalar("!"))))
+    )
+    assert_equal(joined.as_string_view()[0].value(), "pear!")
+    assert_equal(Int(_over(b, length(column("s"))).as_int32()[1].value()), 26)
+
+
+def test_runtime_string_view_meets_string_in_every_verb() raises:
+    """`startswith`, `endswith`, `contains` and `isin` take a `string` literal
+    against a `string_view` column, as comparison and `+` do."""
+    var sb = StringViewBuilder()
+    sb.append("pear")
+    sb.append("a value longer than twelve")
+    sb.append_null()
+    var b = record_batch([sb.finish().to_dyn()], names=["s"])
+
+    var sw = (
+        _over(
+            b,
+            startswith(column("s"), literal(DynScalar(StringScalar("a val")))),
+        )
+        .as_bool()
+        .copy()
+    )
+    assert_false(sw[0].value())
+    assert_true(sw[1].value())
+    assert_true(sw.is_null(2))
+    var ew = (
+        _over(b, endswith(column("s"), literal(DynScalar(StringScalar("ar")))))
+        .as_bool()
+        .copy()
+    )
+    assert_true(ew[0].value())
+    var ct = (
+        _over(
+            b, contains(column("s"), literal(DynScalar(StringScalar("longer"))))
+        )
+        .as_bool()
+        .copy()
+    )
+    assert_true(ct[1].value())
+    var values: StringArray = ["pear", "plum"]
+    var hit = _over(b, isin(column("s"), values^.to_dyn())).as_bool().copy()
+    assert_true(hit[0].value())
+    assert_false(hit[1].value())
+
+
+from ....builders import BinaryViewBuilder
+from ....dtypes import binary_view
+from ....scalars import BinaryScalar
+
+
+def test_runtime_operands_meet_at_one_byte_layout() raises:
+    """Byte strings of one kind meet on the wider layout, whichever side it
+    is on -- a view over offsets -- so the conditionals and comparisons take a
+    `string` literal against a `string_view` column and a `binary` literal
+    against a `binary_view` one. Text and binary never meet."""
+    var sb = StringViewBuilder()
+    sb.append("pear")
+    sb.append_null()
+    sb.append("a value longer than twelve")
+    var bb = BinaryViewBuilder()
+    bb.append("pear")
+    bb.append_null()
+    bb.append("a value longer than twelve")
+    var b = record_batch(
+        [sb.finish().to_dyn(), bb.finish().to_dyn()], names=["s", "b"]
+    )
+    var none = literal(DynScalar(StringScalar("none")))
+
+    var filled = _over(b, fill_null(column("s"), none.copy()))
+    assert_true(filled.dtype() == DynType(string_view))
+    assert_equal(filled.as_string_view()[1].value(), "none")
+    assert_equal(
+        filled.as_string_view()[2].value(), "a value longer than twelve"
+    )
+    var merged = _over(b, coalesce([column("s"), none.copy()]))
+    assert_true(merged.dtype() == DynType(string_view))
+    assert_equal(merged.as_string_view()[1].value(), "none")
+    var nulled = _over(
+        b, nullif(column("s"), literal(DynScalar(StringScalar("pear"))))
+    )
+    assert_true(nulled.dtype() == DynType(string_view))
+    assert_true(nulled.is_null(0))
+    # Symmetric: the literal first still meets on the column's layout.
+    var flipped = _over(b, coalesce([none.copy(), column("s")]))
+    assert_true(flipped.dtype() == DynType(string_view))
+    assert_equal(flipped.as_string_view()[0].value(), "none")
+
+    var pear = literal(DynScalar(BinaryScalar("pear")))
+    var hit = _over(b, eq(column("b"), pear.copy())).as_bool().copy()
+    assert_true(hit[0].value())
+    assert_true(hit.is_null(1))
+    assert_false(hit[2].value())
+    var bfilled = _over(b, fill_null(column("b"), pear.copy()))
+    assert_true(bfilled.dtype() == DynType(binary_view))
+    assert_equal(bfilled.as_binary_view()[1].value(), "pear")
+
+    var raised = False
+    try:
+        _ = _over(b, eq(column("s"), column("b")))
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_runtime_string_plus_number_still_raises() raises:
+    """A number on either side makes `+` addition: `"pear" + 1` is a type
+    error, not `"pear1"`."""
+    var sb = StringViewBuilder()
+    sb.append("pear")
+    var b = record_batch([sb.finish().to_dyn()], names=["s"])
+    var raised = False
+    try:
+        _ = _over(b, add(column("s"), literal(DynScalar(Int64Scalar(1)))))
+    except:
+        raised = True
+    assert_true(raised)

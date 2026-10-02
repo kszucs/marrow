@@ -1726,8 +1726,9 @@ struct Planner(Copyable, Movable):
         does not.
 
         Typing by **magnitude** rather than by the other operand is what keeps
-        this safe: `promote_dyn`'s docstring records that narrowing a literal
-        to match a column made `int32_col > 2**40` raise instead of compare.
+        this safe: `RuntimeValue._common_type`'s docstring records that
+        narrowing a literal to match a column made `int32_col > 2**40` raise
+        instead of compare.
         A literal that does not fit in `int32` simply is `int64`, and widening
         takes it from there.
         """
