@@ -111,6 +111,7 @@ from std.builtin.builtin_slice import ContiguousSlice
 from std.ffi import external_call
 from std.io.file import FileHandle
 from std.memory import (
+    MutPointer,
     unsafe_memset_zero,
     unsafe_memcpy,
     unsafe_memset,
@@ -118,7 +119,7 @@ from std.memory import (
 )
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import simd_byte_width
-from std.sys import size_of
+from std.sys import llvm_intrinsic, size_of
 import std.math as math
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from .errors import IOError, InvalidError, NotImplementedError
@@ -126,6 +127,28 @@ from .views import (
     BufferView,
     BitmapView,
 )
+
+
+@always_inline
+def bulk_copy[
+    T: AnyType
+](*, dest: MutPointer[T, _], src: Pointer[T, _], count: Int):
+    """`unsafe_memcpy` -- `count` elements of `T` between non-overlapping host
+    buffers -- handing long copies to the platform's `memcpy`.
+
+    At run time the stdlib's copy is written inline: a 32-byte loop that ends
+    byte by byte, never reaching libc's `memcpy`, which is tuned per CPU.
+    `llvm.memcpy` with a run-time length compiles to a call to it. Measured on
+    Snappy over incompressible pages, one 64 KiB literal per fragment: the
+    stdlib copy is 1.05-1.11x slower. Copies under 256 bytes stay inline; that
+    threshold is a guess, not tuned. Host memory only."""
+    var n = count * size_of[T]()
+    if n >= 256:
+        llvm_intrinsic["llvm.memcpy", NoneType](
+            dest, src, n.__mlir_index__(), False
+        )
+    else:
+        unsafe_memcpy(dest=dest, src=src, count=count)
 
 
 struct DeviceType:
@@ -670,7 +693,7 @@ struct Buffer[*, mut: Bool = False](
         """
         if Int(ptr) % 64 != 0:
             var aligned = Buffer.alloc_uninit(Int(size))
-            unsafe_memcpy(
+            bulk_copy(
                 dest=aligned._ptr,
                 src=rebind[Pointer[UInt8, MutUntrackedOrigin]](ptr),
                 count=Int(size),
@@ -806,7 +829,7 @@ struct Buffer[*, mut: Bool = False](
             new = Buffer.alloc_host[T](self._owner[].host_context(), length)
         else:
             new = Buffer.alloc_zeroed[T](length)
-        unsafe_memcpy(
+        bulk_copy(
             dest=new._ptr, src=self._ptr, count=min(new._size, self._size)
         )
         swap(self, new)
@@ -822,7 +845,7 @@ struct Buffer[*, mut: Bool = False](
     ) where Self.mut:
         """Copy `count` elements of type T from `src` into self at `dst_offset`.
         """
-        unsafe_memcpy(
+        bulk_copy(
             dest=self._ptr.unsafe_mut_cast[True]()
             .unsafe_bitcast[Scalar[T]]()
             .unsafe_offset(dst_offset),
@@ -1361,7 +1384,7 @@ struct Bitmap[*, mut: Bool = False](
         """Copy `length` bits from `src` into self at `dst_start`.
 
         Three code paths:
-        1. Same sub-byte alignment → unsafe_memcpy for middle bytes.
+        1. Same sub-byte alignment → bulk_copy for middle bytes.
         2. Different alignment → shift-and-merge byte-by-byte.
         3. Short runs (< 16 bits) → bit-by-bit fallback.
         """
@@ -1409,7 +1432,7 @@ struct Bitmap[*, mut: Bool = False](
                 dst_byte += 1
 
             if end_byte > dst_byte:
-                unsafe_memcpy(
+                bulk_copy(
                     dest=dst.unsafe_offset(dst_byte),
                     src=src_ptr.unsafe_offset(src_byte),
                     count=end_byte - dst_byte,

@@ -688,3 +688,23 @@ struct ScratchDir:
         except:
             pass
         return False
+
+
+struct Rng:
+    """A xorshift64* generator: a seedable, reproducible stream for test and
+    bench inputs -- the same seed gives the same bytes on every platform."""
+
+    var s: UInt64
+
+    def __init__(out self, seed: UInt64):
+        self.s = seed * 0x9E3779B97F4A7C15 + 1
+
+    def next(mut self) -> UInt64:
+        self.s ^= self.s >> 12
+        self.s ^= self.s << 25
+        self.s ^= self.s >> 27
+        return self.s * 0x2545F4914F6CDD1D
+
+    def below(mut self, n: Int) -> Int:
+        """A value in `[0, n)`."""
+        return Int(self.next() >> 33) % n

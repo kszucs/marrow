@@ -238,6 +238,53 @@ Order of work if picked up: link the codecs behind a `BuildOptions` flag,
 measure the size gate and the wheel, then delete the staging only once both
 platforms are green.
 
+### The Mojo Snappy codec — what the experiment leaves open
+
+`marrow/utils/snappy.mojo` is a port of libsnappy 1.2.2. Its module docstring
+has the measurements. Parquet still calls libsnappy. Routing it through
+`Snappy` is two lines in `Compression.decompress_into` and
+`Compression.compress` (`parquet/codecs.mojo`); with that local patch all 279
+`marrow/parquet/tests` passed once, and `bench_parquet` read as parity.
+
+- **The reader should prefetch a chunk before decoding it.** A local file is
+  memory-mapped and faulted in as the decoder touches it, so disk time and
+  decode time add up. `benchmarks/codecs/snappy_disk.mojo` measures this on
+  cold files. `posix_madvise(..., POSIX_MADV_WILLNEED)` over the chunk first
+  made libsnappy 1.2x faster on `strings` and `ints` and several times faster
+  on incompressible `floats`. It is POSIX (macOS and Linux), and it belongs
+  in `BufferSource.read_ranges`, with the call in `buffers.mojo`. It helps
+  every codec, uncompressed pages included.
+- **Pair decoding needs the reader to hand it pairs.** `PageReader._body`
+  decompresses one page at a time into one scratch buffer. Using
+  `decompress_pair_into` means parsing the next page header before decoding
+  this page, and keeping two scratch buffers. Without the prefetch above it
+  helps less from a cold mapping, and on incompressible pages it hurts:
+  alternating between two regions of the file seems to defeat read-ahead.
+  With the prefetch it reached 1.76x on `strings` and 1.92x on `ints` against
+  plain libsnappy from cold disk.
+- **Before flipping the default:**
+  - Run the `query_cli` size gate with Parquet routed through `Snappy`.
+  - Run `bench_parquet` on a quiet machine. The end-to-end runs so far were
+    under a load average of 30-60, and they read as parity within the noise.
+  - Get a Linux x86-64 run. There the stdlib's shuffle is `pshufb`; only
+    Linux arm64 has run, under Docker.
+- **The compressor's 5-10% gap on tag-heavy data** (`ints`, `strings`) is not
+  algorithmic. Its disassembly has the same CRC hash, 16-position probe and
+  `rbit`/`clz` match finder as libsnappy. That gap was not chased.
+- **`CompressionLibs` returns a fresh list per page, for every codec.** The
+  writer then copies it again into the file buffer, and the decompress
+  methods take a raw `Pointer` destination. Taking `mut out: List[UInt8]` to
+  append to, and a `Span` destination, as `Snappy.compress` and
+  `Snappy.decompress_into` do, would drop a copy and an allocation per page
+  and take raw pointers out of every caller.
+- **`bulk_copy` (`buffers.mojo`) is measured on one caller only.** The
+  stdlib's `unsafe_memcpy` is a 32-byte loop above 16 bytes and never calls
+  libc; handing copies of 256 bytes or more to libc `memcpy` took Snappy
+  compression of incompressible data from 0.83-0.88x libsnappy to parity.
+  PLAIN pages in `parquet/reader.mojo`, the uncompressed arm of
+  `Compression.decompress_into`, `BufferView.copy_from` and `Buffer.resize`
+  switched with it; that they gain too is inferred, not measured.
+
 ### 1.9 The Parquet reader, after page-level pruning landed
 
 A `RowSelection` now narrows what is *fetched*, not just what is decoded: the

@@ -3,12 +3,13 @@
 
 """System-library loading for the block compression codecs.
 
-The codecs are not reimplemented; the standard C libraries (`libzstd`,
+The codecs are not reimplemented here; the standard C libraries (`libzstd`,
 `libsnappy`, `liblz4`, `libz`, `libbrotli`) are `dlopen`-ed at runtime and their
 block APIs called directly — the same approach arrow-rs and duckdb take, just
 without a link-time dependency. `CompressionLibs` is the primitive block calls
 plus the per-call scratch they need; the handles themselves live in the
-`Codecs` set below, one process-global for all six.
+`Codecs` set below, one process-global for all six. Snappy also has a Mojo
+implementation, `marrow.utils.snappy`, which Parquet does not use yet.
 
 **Nothing here is Parquet-specific**, which is why it lives in `marrow.utils`
 rather than in `marrow.parquet` where it started (as a second module named

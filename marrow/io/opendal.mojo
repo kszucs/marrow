@@ -57,11 +57,11 @@ therefore has no null state and rejects an embedded NUL.
 """
 
 from std.ffi import _DLHandle
-from std.memory import ArcPointer, unsafe_memcpy
+from std.memory import ArcPointer
 from std.sys import size_of
 
 from ..errors import IOError, InvalidError
-from ..buffers import Buffer
+from ..buffers import Buffer, bulk_copy
 from ..execution import ExecContext, fan_out
 from ..utils.dylib import (
     CString,
@@ -438,7 +438,7 @@ struct OpenDalStore(Movable):
             if over:
                 n = len(dst)
             if n > 0:
-                unsafe_memcpy(
+                bulk_copy(
                     dest=dst.unsafe_ptr(), src=res.data.data.value(), count=n
                 )
         # Before the raise: the bytes are ours either way.

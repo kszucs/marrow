@@ -98,6 +98,20 @@ def test_le_write_fills_existing_slots() raises:
     assert_equal(out[4], UInt8(0))
 
 
+def test_le_store_writes_unaligned_little_endian() raises:
+    """An odd offset, so the wide store is unaligned, and nothing either side
+    of the 4 bytes is touched."""
+    var out = _bytes(0, 0, 0, 0, 0, 0, 0)
+    LittleEndian.store(Span(out), 1, UInt32(0xDEADBEEF))
+    assert_equal(out[0], UInt8(0))
+    assert_equal(out[1], UInt8(0xEF))
+    assert_equal(out[2], UInt8(0xBE))
+    assert_equal(out[3], UInt8(0xAD))
+    assert_equal(out[4], UInt8(0xDE))
+    assert_equal(out[5], UInt8(0))
+    assert_equal(LittleEndian.fixed[DType.uint32](Span(out), 1), 0xDEADBEEF)
+
+
 def test_le_write_append_roundtrip_through_fixed() raises:
     var out = List[UInt8]()
     LittleEndian.append[DType.uint64](out, UInt64(0xDEADBEEFCAFEBABE))

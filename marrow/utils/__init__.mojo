@@ -12,9 +12,10 @@ out on its own:
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
 | `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
 | `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
-| `checksum` | `Crc32` — the ISO-3309 / zlib / gzip checksum |
+| `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64` |
 | `compression` | `CompressionLibs` — `dlopen`ed zstd / snappy / lz4 / zlib / brotli |
+| `snappy` | `Snappy` — Snappy raw-block compression, in Mojo |
 | `dylib` | `Dylib`, `LibSpec` — declaring and opening an optional C library |
 | `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
 | `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
@@ -38,9 +39,10 @@ whether there is a device.
 
 from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
 from .byteorder import LittleEndian
-from .checksum import Crc32
+from .checksum import Crc32, Crc32c
 from .compression import CompressionLibs
 from .datetime import CivilDate, Epoch, floor_div
 from .dylib import Dylib, LibSpec
 from .uri import StorageOptions, Uri
 from .hashing import AHash64, Hasher, RapidHash64, RapidSecret, XxHash64
+from .snappy import Snappy

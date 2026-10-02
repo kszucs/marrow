@@ -26,8 +26,8 @@ each introduced by a ULEB128 header. `header & 1` selects the run kind:
 
 from std.bit import byte_swap
 from std.sys import size_of
-from std.memory import unsafe_memcpy
 
+from ..buffers import bulk_copy
 from ..errors import NotImplementedError
 from ..arrays import (
     DynArray,
@@ -1067,7 +1067,7 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
 struct Compression(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `CompressionCodec` value: the codec identity plus the
     `compress` / `decompress` operations, dispatched onto a `CompressionLibs`
-    handle pool (the `dlopen` bindings in `utils.mojo`).
+    handle pool (the `dlopen` bindings in `utils/compression.mojo`).
 
     Enum values:
         0 UNCOMPRESSED  1 SNAPPY  2 GZIP  4 BROTLI  5 LZ4  6 ZSTD  7 LZ4_RAW
@@ -1094,7 +1094,7 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
         scratch.resize(unsafe_uninit_length=out_size)
         var ptr = scratch.unsafe_ptr()
         if self == Self.UNCOMPRESSED:
-            unsafe_memcpy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
+            bulk_copy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
         elif self == Self.ZSTD:
             libs.zstd_decompress(src, ptr, out_size)
         elif self == Self.SNAPPY:

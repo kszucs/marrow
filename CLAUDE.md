@@ -428,7 +428,8 @@ Rules:
   to a `dlopen`ed C library** — `utils/dylib.mojo` (the shared marshalling
   primitives), `utils/compression.mojo` with `parquet/reader.mojo` and
   `parquet/codecs.mojo` for the page codecs, and `io/opendal.mojo` for the
-  object store. Everything else goes through the view abstractions.
+  object store — plus `utils/snappy.mojo`, a codec built from unchecked block
+  copies and shuffles. Everything else goes through the view abstractions.
 
   **A C library is declared, not wired by hand.** One declaration per module:
   `LibSet[key, [LibSpec(...), ...]]` in `utils/dylib.mojo` names the
@@ -943,6 +944,14 @@ vectors at dim >= 384.
   flat.
 - **Use existing building blocks.** Do not hand-roll a loop to AND/OR two bitmaps
   when `Bitmap` already exposes bitwise operations.
+- **Prefer architecture-independent code, even when it is slightly slower.**
+  Reach for an `llvm.aarch64.*` / `llvm.x86.*` intrinsic or a
+  `CompilationTarget` CPU check only when the portable form is materially
+  slower; a stdlib call that dispatches per target itself (`_dynamic_shuffle`,
+  `prefetch`, `llvm.memcpy`) counts as portable. Snappy hashes with a portable
+  multiply rather than the CRC32C instruction for this reason: measured equal,
+  where gating the instruction on a list of CPU names made every other target
+  compress 7-10x slower.
 
 ### Types and naming
 

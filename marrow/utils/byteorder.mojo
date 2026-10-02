@@ -22,9 +22,9 @@ struct LittleEndian:
 
     @staticmethod
     def fixed[T: DType](data: Span[UInt8, _], pos: Int) -> Scalar[T]:
-        """Read a `T`-width little-endian scalar at byte `pos`. Not bounds-checked
-        — callers validate `pos` (matches the raw span reads in the hot decode
-        paths).
+        """Read a `T`-width little-endian scalar at byte `pos`. The bound is a
+        `debug_assert` -- checked in a test build (`-D ASSERT=all`), free in a
+        release one -- so callers validate `pos`, as the hot decode paths do.
 
         **One unaligned wide load, not a byte loop.** This used to copy `W`
         bytes into an `Array` and call `SIMD.from_bytes`, which cost ~8 loads
@@ -40,6 +40,7 @@ struct LittleEndian:
         faults on an odd address. That is exactly what `SIMD.from_bytes` does,
         and it crashed `PrimitiveScalar.value()` on Linux x86-64 while ARM, which
         does not trap on alignment, passed."""
+        Self._check[T](len(data), pos)
         var v = (
             data.unsafe_ptr()
             .unsafe_offset(pos)
@@ -50,6 +51,37 @@ struct LittleEndian:
             return byte_swap(v)
         else:
             return v
+
+    @staticmethod
+    def store[
+        T: DType
+    ](data: Span[mut=True, UInt8, _], pos: Int, value: Scalar[T]):
+        """Write `value` as `T`-width little-endian bytes at byte `pos` --
+        `fixed`'s inverse, one unaligned wide store, its bound asserted the
+        same way."""
+        Self._check[T](len(data), pos)
+        var v: Scalar[T]
+        comptime if is_big_endian():
+            v = byte_swap(value)
+        else:
+            v = value
+        data.unsafe_ptr().unsafe_offset(pos).unsafe_bitcast[
+            Scalar[T]
+        ]().unsafe_store[alignment=1](v)
+
+    @staticmethod
+    @always_inline
+    def _check[T: DType](length: Int, pos: Int):
+        debug_assert(
+            0 <= pos and pos + size_of[Scalar[T]]() <= length,
+            "LittleEndian: ",
+            size_of[Scalar[T]](),
+            "-byte access at ",
+            pos,
+            " is out of bounds for ",
+            length,
+            " bytes",
+        )
 
     @staticmethod
     def partial[T: DType](data: Span[UInt8, _], pos: Int) -> Scalar[T]:

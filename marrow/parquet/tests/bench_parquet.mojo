@@ -12,7 +12,13 @@ from std.os.path import join
 from std.python import Python, PythonObject
 
 from ...utils.testing import Benchmark, ScratchDir
-from ...parquet import ParquetFile, RowSelection, read_table, write_table
+from ...parquet import (
+    Compression,
+    ParquetFile,
+    RowSelection,
+    read_table,
+    write_table,
+)
 from ...parquet.reader import Coverage
 
 
@@ -87,6 +93,36 @@ def bench_read_snappy_1m(mut b: Benchmark) raises:
 
 def bench_read_uncompressed_1m(mut b: Benchmark) raises:
     _bench_read(b, 1_000_000, "none")
+
+
+def _bench_write(mut b: Benchmark, n: Int, compression: Compression) raises:
+    """Write `_corpus(n)` PLAIN (`use_dictionary=False`), so every value byte
+    passes through the page codec and the snappy and uncompressed rows differ
+    by the codec alone."""
+    with ScratchDir() as dir:
+        var src = join(dir, "marrow_bench_write_src.parquet")
+        var dst = join(dir, "marrow_bench_write_dst.parquet")
+        _prepare(src, n, "none")
+        var table = read_table(src)
+        b.throughput(BenchMetric.elements, n)
+
+        @always_inline
+        def call() raises {imm}:
+            write_table(
+                table, dst, compression=compression, use_dictionary=False
+            )
+
+        b.iter(call)
+        keep(dst)
+        keep(table.num_rows())
+
+
+def bench_write_snappy_1m(mut b: Benchmark) raises:
+    _bench_write(b, 1_000_000, Compression.SNAPPY)
+
+
+def bench_write_uncompressed_1m(mut b: Benchmark) raises:
+    _bench_write(b, 1_000_000, Compression.UNCOMPRESSED)
 
 
 def bench_read_dict_1m(mut b: Benchmark) raises:

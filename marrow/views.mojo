@@ -24,7 +24,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import bitcast, unsafe_memcpy
+from std.memory import bitcast
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
@@ -37,7 +37,7 @@ from std.utils.coord import Coord
 from max.gpu.host import get_gpu_target
 
 from .errors import InvalidError, NotImplementedError
-from .buffers import Buffer, Bitmap
+from .buffers import Buffer, Bitmap, bulk_copy
 from .execution import ExecContext
 
 
@@ -136,6 +136,12 @@ struct BufferView[
     ):
         self._data = ptr
         self._length = length
+
+    @always_inline
+    def __init__(out self, span: Span[Scalar[Self.T], Self.origin]):
+        """A view of `span`'s elements."""
+        self._data = span.unsafe_ptr()
+        self._length = len(span)
 
     # --- Sized ---
 
@@ -424,10 +430,12 @@ struct BufferView[
         count: Int,
     ) where Self.mut:
         """Copy `count` elements from `src` into `self`."""
-        unsafe_memcpy(
-            dest=self._data.unsafe_mut_cast[True]().unsafe_bitcast[UInt8](),
-            src=src._data.unsafe_bitcast[UInt8](),
-            count=count * size_of[Scalar[Self.T]](),
+        self._check_range(0, count)
+        src._check_range(0, count)
+        bulk_copy(
+            dest=self._data.unsafe_mut_cast[True](),
+            src=src._data,
+            count=count,
         )
 
     def filter(
@@ -507,7 +515,7 @@ struct BufferView[
         src: StringSlice[_],
     ) where Self.mut and Self.T == DType.uint8:
         """Copy bytes from a StringSlice into this view."""
-        unsafe_memcpy(
+        bulk_copy(
             dest=self._data.unsafe_mut_cast[True]().unsafe_bitcast[Byte](),
             src=src.unsafe_ptr(),
             count=src.byte_length(),

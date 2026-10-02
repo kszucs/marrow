@@ -16,11 +16,10 @@ page-index readers reuse the same footer decode without touching column data.
 from std.memory import ArcPointer
 from std.builtin.rebind import downcast
 from std.sys import size_of
-from std.memory import unsafe_memcpy
 
 from ..errors import CorruptError, IndexError, InvalidError, NotImplementedError
 from ..arrays import DynArray, ArrayData
-from ..buffers import Buffer, Bitmap
+from ..buffers import Buffer, Bitmap, bulk_copy
 from ..execution import ExecContext, fan_out
 from ..builders import (
     BinaryLikeBuilder,
@@ -617,7 +616,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
 
     `phys_dt` is the Parquet physical width read from the file, `store_dt` the
     Arrow storage width. When they match (the common case, incl. temporal types)
-    a whole all-present PLAIN page is one unsafe_memcpy; when they differ (dt.int8/16 stored
+    a whole all-present PLAIN page is one bulk_copy; when they differ (dt.int8/16 stored
     as physical INT32) each value is read wide and narrowed.
     """
 
@@ -662,14 +661,14 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """Place `page.num_present` contiguous decoded values into the output
-        buffer, honoring definition levels — one unsafe_memcpy when the page is
+        buffer, honoring definition levels — one bulk_copy when the page is
         all-present and fully selected, else a per-row scatter that materializes
         the validity bitmap. With `runs`, only the rows they select are placed
         (the page-boundary partial-page path). Every encoding funnels its decoded
         present values through here."""
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if not runs and page.all_present():
-            unsafe_memcpy(
+            bulk_copy(
                 dest=vptr.unsafe_offset(self.wpos),
                 src=present,
                 count=page.num_present,
@@ -702,7 +701,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         if page.dictionary:
             comptime if Self.SAME:
                 self.dict.resize(unsafe_uninit_length=page.num_values)
-                unsafe_memcpy(
+                bulk_copy(
                     dest=self.dict.unsafe_ptr(),
                     src=page.body.unsafe_ptr().unsafe_bitcast[
                         Scalar[Self.store_dt]
@@ -1618,7 +1617,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
 ):
     """Decode one column chunk. `decode` picks the path from the leaf's max
     repetition: a flat leaf (`max_rep == 0`) fills a fixed-size `LeafBuilder`
-    with the PLAIN-unsafe_memcpy / fused-gather fast paths; a repeated (list-element)
+    with the PLAIN-bulk_copy / fused-gather fast paths; a repeated (list-element)
     leaf grows a builder while accumulating the Dremel rep/def levels the
     assembler folds into list offsets. Both share the per-encoding value
     decoders on `Encoding`, so every encoding works on either path."""
@@ -1670,7 +1669,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
             return self._dispatch[False](codecs)
 
     # -----------------------------------------------------------------------
-    # Flat path — fixed-size LeafBuilder, one unsafe_memcpy/gather per all-present page
+    # Flat path — fixed-size LeafBuilder, one bulk_copy/gather per all-present page
     # -----------------------------------------------------------------------
 
     def _run[
