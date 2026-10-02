@@ -904,3 +904,68 @@ def test_filter_null_mask_entry_is_not_selected() raises:
     var erased: DynArray = values.copy()
     var kept = filter(erased, mask.copy())
     assert_equal(kept.length(), 3)  # 1, 6, 2 — never the null lane
+
+
+from ...arrays import StringViewArray
+from ...builders import StringViewBuilder
+from ...dtypes import string_view
+
+
+# ---------------------------------------------------------------------------
+# string_view: views are gathered, data buffers shared
+# ---------------------------------------------------------------------------
+
+
+def _views_with_null() raises -> StringViewArray:
+    var b = StringViewBuilder()
+    b.append("zero")
+    b.append_null()
+    b.append("two is longer than twelve")
+    b.append("three")
+    b.append("four is longer than twelve")
+    return b.finish()
+
+
+def test_filter_string_view() raises:
+    var src = _views_with_null()
+    var mask: DynArray = array([True, True, False, True, True])
+    var out = filter(src.copy().to_dyn(), mask)
+    assert_true(out.dtype() == string_view)
+    ref v = out.as_string_view()
+    assert_equal(len(v), 4)
+    assert_equal(v.null_count(), 1)
+    assert_equal(v[0].value(), "zero")
+    assert_false(v.is_valid(1))
+    assert_equal(v[3].value(), "four is longer than twelve")
+    # No byte copied: the result shares the source's data buffer.
+    assert_equal(len(v.buffers), len(src.buffers))
+    v.validate()
+
+
+def test_filter_string_view_sliced() raises:
+    var src = _views_with_null().slice(2, 3)
+    var mask: DynArray = array([False, True, True])
+    var out = filter(src^.to_dyn(), mask)
+    ref v = out.as_string_view()
+    assert_equal(len(v), 2)
+    assert_equal(v.null_count(), 0)
+    assert_equal(v[0].value(), "three")
+    assert_equal(v[1].value(), "four is longer than twelve")
+
+
+def test_take_string_view() raises:
+    var src = _views_with_null()
+    var ib = Int32Builder(4)
+    ib.append(Int32(4))
+    ib.append_null()
+    ib.append(Int32(1))
+    ib.append(Int32(2))
+    var out = take(src^.to_dyn(), ib.finish())
+    ref v = out.as_string_view()
+    assert_equal(len(v), 4)
+    assert_equal(v.null_count(), 2)
+    assert_equal(v[0].value(), "four is longer than twelve")
+    assert_false(v.is_valid(1))
+    assert_false(v.is_valid(2))
+    assert_equal(v[3].value(), "two is longer than twelve")
+    v.validate()

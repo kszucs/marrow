@@ -583,3 +583,30 @@ def test_null_produces_sentinel() raises:
     assert_true(UInt64(h.unsafe_get(0)) != NULL_HASH_SENTINEL)
     assert_equal(UInt64(h.unsafe_get(1)), NULL_HASH_SENTINEL)
     assert_true(UInt64(h.unsafe_get(2)) != NULL_HASH_SENTINEL)
+
+
+from ...arrays import StringViewArray
+from ...builders import BinaryViewBuilder, BinaryBuilder
+
+
+def test_hash_string_view_matches_string() raises:
+    """A value hashes the same in either layout, so keys can be compared
+    across them."""
+    var s: StringArray = ["a", "a value longer than twelve", ""]
+    var v: StringViewArray = ["a", "a value longer than twelve", ""]
+    var hs = RapidHashKernel.dispatch(s^.to_dyn())
+    var hv = RapidHashKernel.dispatch(v^.to_dyn())
+    assert_true(hs == hv)
+
+
+def test_hash_apply_takes_every_byte_layout() raises:
+    """One generic `apply` hashes a `BinaryViewArray` and a `BinaryArray` of the
+    same bytes identically."""
+    var bv = BinaryViewBuilder()
+    var bb = BinaryBuilder(2)
+    for v in ["short", "a value longer than twelve"]:
+        bv.append(v)
+        bb.append(v)
+    assert_true(
+        RapidHashKernel.apply(bv.finish()) == RapidHashKernel.apply(bb.finish())
+    )

@@ -955,3 +955,84 @@ def test_scale_zero_decimal_to_int_overflow_raises() raises:
     var d = cast(array([10_000_000_000], int64), decimal128(20, 0))
     with assert_raises():
         _ = cast(d, int32, True)
+
+
+from ...arrays import BinaryViewArray, StringArray, StringViewArray
+from ...builders import (
+    StringViewBuilder,
+    BinaryViewBuilder,
+    StringBuilder,
+    BinaryBuilder,
+)
+from std.testing import assert_false
+from ...dtypes import string_view, binary_view
+
+
+# ---------------------------------------------------------------------------
+# string_view / binary_view casts
+# ---------------------------------------------------------------------------
+
+
+def test_cast_string_to_string_view_zero_copy() raises:
+    var b = StringBuilder(4)
+    b.append("skip")
+    b.append("inline")
+    b.append_null()
+    b.append("a value longer than twelve")
+    var src = b.finish().slice(1)
+    var out = cast(src.copy().to_dyn(), string_view)
+    ref v = out.as_string_view()
+    assert_equal(len(v), 3)
+    assert_equal(v.null_count(), 1)
+    assert_equal(v[0].value(), "inline")
+    assert_false(v.is_valid(1))
+    assert_equal(v[2].value(), "a value longer than twelve")
+    # The one data buffer is the source's values buffer, shared.
+    assert_equal(len(v.buffers), 1)
+    assert_true(v.buffers[0] == src.values)
+    v.validate()
+
+
+def test_cast_short_strings_to_string_view_hold_no_buffer() raises:
+    """Every value fits in its view, so the source's values buffer is not
+    taken: the result keeps nothing of it alive."""
+    var src: StringArray = ["a", "twelve bytes", ""]
+    var out = cast(src^.to_dyn(), string_view)
+    ref v = out.as_string_view()
+    assert_equal(len(v.buffers), 0)
+    assert_equal(v[1].value(), "twelve bytes")
+    assert_equal(v[2].value(), "")
+
+
+def test_cast_string_view_to_string() raises:
+    var src: StringViewArray = ["a", "a value longer than twelve", ""]
+    var out = cast(src^.to_dyn(), string)
+    ref s = out.as_string()
+    assert_equal(len(s), 3)
+    assert_equal(s[1].value(), "a value longer than twelve")
+    assert_equal(s[2].value(), "")
+
+
+def test_cast_string_view_roundtrip_large_string() raises:
+    var src: StringViewArray = ["x", "a value longer than twelve"]
+    var back = cast(cast(src.copy().to_dyn(), large_string), string_view)
+    assert_true(back.as_string_view() == src)
+
+
+def test_cast_binary_view_to_string_view_validates_utf8() raises:
+    var b = BinaryViewBuilder()
+    b.append("valid bytes")
+    var ok = cast(b.finish().to_dyn(), string_view)
+    assert_equal(ok.as_string_view()[0].value(), "valid bytes")
+    var bad = BinaryBuilder(1)
+    bad.append(StringSlice(unsafe_from_utf8=Span[Byte]([0xFF, 0xFE])))
+    with assert_raises(contains="UTF-8"):
+        _ = cast(bad.finish().to_dyn(), string_view)
+
+
+def test_cast_string_view_numeric() raises:
+    var src: StringViewArray = ["1", "22", "333"]
+    var ints = cast(src^.to_dyn(), int64)
+    assert_equal(ints.as_int64()[2].value(), 333)
+    var back = cast(ints, string_view)
+    assert_equal(back.as_string_view()[1].value(), "22")

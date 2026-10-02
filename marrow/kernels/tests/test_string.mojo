@@ -423,3 +423,108 @@ def test_apply_scalar_empty_pattern_and_all_wildcards() raises:
     assert_true(any[0].value())
     assert_true(any[1].value())
     assert_true(any.is_null(2))
+
+
+# ---------------------------------------------------------------------------
+# string_view: the same kernels, natively over the view layout
+# ---------------------------------------------------------------------------
+
+from ...arrays import StringViewArray
+from ...builders import StringViewBuilder
+from ...dtypes import string_view
+from ...kernels.string import ConcatKernel
+
+
+def _views() raises -> StringViewArray:
+    var b = StringViewBuilder()
+    b.append("apple")
+    b.append_null()
+    b.append("a value longer than twelve")
+    b.append("Banana")
+    return b.finish()
+
+
+def test_length_string_view() raises:
+    var out = LengthKernel.dispatch(_views().to_dyn())
+    ref n = out.as_int32()
+    assert_equal(n.null_count(), 1)
+    assert_equal(n[0].value(), 5)
+    assert_false(n.is_valid(1))
+    assert_equal(n[2].value(), 26)
+
+
+def test_upper_string_view_keeps_layout() raises:
+    var out = UpperKernel.dispatch(_views().to_dyn())
+    assert_true(out.dtype() == string_view)
+    ref v = out.as_string_view()
+    assert_equal(v[2].value(), "A VALUE LONGER THAN TWELVE")
+    assert_false(v.is_valid(1))
+
+
+def test_startswith_string_view() raises:
+    var pat: StringViewArray = ["app", "x", "a value", "b"]
+    var out = StartsWithKernel.dispatch(_views().to_dyn(), pat^.to_dyn())
+    ref r = out.as_bool()
+    assert_true(r[0].value())
+    assert_false(r.is_valid(1))
+    assert_true(r[2].value())
+    assert_false(r[3].value())
+
+
+from ...arrays import BinaryArray, BinaryViewArray
+from ...kernels.string import StringLtKernel
+
+
+def test_predicate_dispatch_takes_binary_in_either_layout() raises:
+    """Comparisons and `startswith` are byte operations, so `dispatch` takes
+    binary as Arrow's do -- offsets or views -- and still refuses a pair of
+    different dtypes."""
+    var bin: BinaryArray = ["apple", "pear", "a value longer than twelve"]
+    var pat: BinaryArray = ["app", "q", "a value"]
+    var hit = StartsWithKernel.dispatch(bin.copy().to_dyn(), pat^.to_dyn())
+    assert_true(hit.as_bool() == array([True, False, True]))
+
+    var views: BinaryViewArray = ["apple", "pear", "a value longer than twelve"]
+    var bound: BinaryViewArray = ["banana", "pear", "a value"]
+    var lt = StringLtKernel.dispatch(views^.to_dyn(), bound^.to_dyn())
+    assert_true(lt.as_bool() == array([True, False, False]))
+
+    with assert_raises(contains="dtype mismatch"):
+        _ = StringEqKernel.dispatch(bin^.to_dyn(), _views().to_dyn())
+
+
+def test_eq_string_view_mixed_with_string() raises:
+    """The typed kernel takes either layout on either side."""
+    var s: StringArray = ["apple", "pear", "a value longer than twelve", "x"]
+    var r = StringEqKernel.apply(_views(), s)
+    assert_true(r[0].value())
+    assert_false(r.is_valid(1))
+    assert_true(r[2].value())
+    assert_false(r[3].value())
+
+
+def test_like_string_view() raises:
+    var out = LikeKernel.dispatch(_views().to_dyn(), "a%")
+    ref r = out.as_bool()
+    assert_true(r[0].value())
+    assert_false(r.is_valid(1))
+    assert_true(r[2].value())
+    assert_false(r[3].value())
+
+
+def test_ilike_string_view_arrays() raises:
+    var pat: StringViewArray = ["APPLE", "x", "%TWELVE", "b%"]
+    var r = ILikeKernel.apply(_views(), pat)
+    assert_true(r[0].value())
+    assert_true(r[2].value())
+    assert_true(r[3].value())
+
+
+def test_concat_kernel_string_view() raises:
+    var rhs: StringViewArray = ["!", "?", " and more", ""]
+    var out = ConcatKernel.dispatch(_views().to_dyn(), rhs^.to_dyn())
+    assert_true(out.dtype() == string_view)
+    ref v = out.as_string_view()
+    assert_equal(v[0].value(), "apple!")
+    assert_false(v.is_valid(1))
+    assert_equal(v[2].value(), "a value longer than twelve and more")

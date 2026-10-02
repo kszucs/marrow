@@ -1147,3 +1147,50 @@ def test_sort_multi_key_ties_preserve_secondary_order() raises:
             assert_true(kk > prev_k, String("primary key out of order at ", p))
         prev_k = kk
         prev_v = vv
+
+
+from ...arrays import StringViewArray
+from ...builders import StringViewBuilder, BinaryViewBuilder
+
+
+def test_sort_indices_string_view() raises:
+    var b = StringViewBuilder()
+    b.append("pear, a long enough value")
+    b.append_null()
+    b.append("apple")
+    b.append("pear")
+    b.append("banana split, longer")
+    var idx = sort_indices(b.finish().to_dyn(), nulls_first=False)
+    var expected = [2, 4, 3, 0, 1]
+    for i in range(5):
+        assert_equal(Int(idx[i].value()), expected[i])
+
+
+def test_sort_apply_on_binary_view() raises:
+    var b = BinaryViewBuilder()
+    b.append("zz, a long enough value")
+    b.append("aa")
+    b.append_null()
+    var idx = SortIndices.apply(b.finish(), nulls_first=True)
+    var expected = [2, 1, 0]
+    for i in range(3):
+        assert_equal(Int(idx[i].value()), expected[i])
+
+
+def test_sort_string_view_prefix_ties_and_short_values() raises:
+    """Values whose first four bytes tie fall back to the bytes; values
+    shorter than four bytes order before their extensions."""
+    var b = StringViewBuilder()
+    for v in [
+        "abcdz, a long value",
+        "abcd",
+        "ab",
+        "abcda, a long value",
+        "",
+        "b",
+    ]:
+        b.append(v)
+    var idx = SortIndices.apply(b.finish())
+    var expected = [4, 2, 1, 3, 0, 5]
+    for i in range(6):
+        assert_equal(Int(idx[i].value()), expected[i])

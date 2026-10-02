@@ -47,12 +47,18 @@ directly and never this ladder.
 """
 
 from ...errors import KeyError, TypeError
-from ...arrays import Array, dispatch_array
+from ...arrays import (
+    Array,
+    BinaryLikeArray,
+    BinaryViewLikeArray,
+    dispatch_array,
+)
 from ...dtypes import (
     DecimalType,
     DynType,
     NumericType,
     StringLikeType,
+    BinaryViewLikeType,
     TemporalType,
     int64,
 )
@@ -226,12 +232,22 @@ def resolve_aggregate[
         # other's body.
         def extremum[T: StringLikeType](d: T) raises {imm func, imm name} -> R:
             if name == MIN:
-                return func[LexicalExtremum[MinOp, T]]()
+                return func[LexicalExtremum[MinOp, BinaryLikeArray[T]]]()
             else:
-                return func[LexicalExtremum[MaxOp, T]]()
+                return func[LexicalExtremum[MaxOp, BinaryLikeArray[T]]]()
 
-        if in_dtype.is_string() or in_dtype.is_large_string():
+        def view_extremum[
+            T: BinaryViewLikeType
+        ](d: T) raises {imm func, imm name} -> R:
+            if name == MIN:
+                return func[LexicalExtremum[MinOp, BinaryViewLikeArray[T]]]()
+            else:
+                return func[LexicalExtremum[MaxOp, BinaryViewLikeArray[T]]]()
+
+        if in_dtype.is_string_like():
             return in_dtype.dispatch_stringlike(extremum)
+        elif in_dtype.is_string_view():
+            return in_dtype.dispatch_binaryview(view_extremum)
         elif name == MIN:
             return _fold_agg[K=MinFold](in_dtype, func)
         else:

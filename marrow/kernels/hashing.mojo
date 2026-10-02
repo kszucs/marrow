@@ -12,7 +12,7 @@ Public API — the ``RapidHashKernel`` kernel:
     - BoolArray: vectorized via precomputed hash + SIMD select
     - PrimitiveArray[T]: vectorized rapidhash (SIMD via elementwise); values
       wider than 64 bits (decimal128/256) fold their 64-bit limbs
-    - BinaryLikeArray[T]: per-element AHash (variable-length fallback)
+    - BytesArray (either string layout): per-element hash of the bytes
     - StructArray: per-column hash with combining (multi-key)
     - ListLikeArray[T] / FixedSizeListArray: fold the child hashes per row
   - ``RapidHashKernel.dispatch``: runtime-typed dispatch, routed through the
@@ -34,7 +34,7 @@ from std.utils.numerics import nan
 
 from ..arrays import (
     BoolArray,
-    BinaryLikeArray,
+    BytesArray,
     PrimitiveArray,
     StructArray,
     ListLikeArray,
@@ -52,7 +52,6 @@ from ..utils import AHash64, Hasher, RapidHash64, XxHash64
 from ..execution import ExecContext, GPU_ENABLED
 from ..errors import InvalidError, TypeError
 from ..dtypes import (
-    BinaryLikeType,
     IntegerType,
     PrimitiveType,
     ListLikeType,
@@ -260,12 +259,12 @@ struct HashKernel[H: Hasher](Kernel):
         var dt = keys.dtype()
         if dt == bool_:
             return Self.apply(keys.as_bool(), ctx)
-        elif dt.is_binary_like():
+        elif dt.is_binary_like() or dt.is_string_view() or dt.is_binary_view():
 
-            def binarylike[T: BinaryLikeType](d: T) raises {imm} -> UInt64Array:
-                return Self.apply(keys.as_binary_like[T](), ctx)
+            def bytes_leaf[A: BytesArray](arr: A) raises {imm} -> UInt64Array:
+                return Self.apply(arr, ctx)
 
-            return dt.dispatch_binarylike(binarylike)
+            return keys.dispatch_bytes(bytes_leaf)
         elif dt.is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> UInt64Array:
@@ -430,18 +429,19 @@ struct HashKernel[H: Hasher](Kernel):
 
     @staticmethod
     def apply[
-        T: BinaryLikeType
-    ](
-        keys: BinaryLikeArray[T],
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> UInt64Array:
-        """Hash each element of a binary-like array (string, large_string,
-        binary, large_binary).
+        A: BytesArray
+    ](keys: A, ctx: ExecContext = ExecContext.serial()) raises -> UInt64Array:
+        """Hash each element of a byte-string array, in either layout (string,
+        large_string, binary, large_binary, string_view, binary_view).
 
-        Hashed with `H` like every other leaf. This used to call
-        `std.hashlib.hash` (aHash) regardless of `H`, because the multi-branch
-        byte-string path did not exist; a string column and a numeric column
-        were therefore hashed by different algorithms. `H.hash` is that path.
+        The bytes are hashed, not the layout, so a value hashes the same in
+        every one of them. The key columns of a join or group-by still have
+        to agree on a dtype: `equal` checks that before comparing a row.
+        Hashed with `H` like every other leaf. This used
+        to call `std.hashlib.hash` (aHash) regardless of `H`, because the
+        multi-branch byte-string path did not exist; a string column and a
+        numeric column were therefore hashed by different algorithms. `H.hash`
+        is that path.
 
         Currently scalar-serial; parallelising variable-length hashing is future
         work — the ``ctx`` parameter exists for API consistency.
@@ -449,10 +449,10 @@ struct HashKernel[H: Hasher](Kernel):
         _ = ctx  # TODO: SIMD + parallel string hashing
         var n = len(keys)
         var builder = UInt64Builder(capacity=n)
-        var has_bitmap = Bool(keys.bitmap)
+        var has_nulls = keys.null_count() > 0
 
         for i in range(n):
-            if has_bitmap and not keys.bitmap.value().test(keys.offset + i):
+            if has_nulls and not keys.is_valid(i):
                 builder.unsafe_append(NULL_HASH_SENTINEL)
             else:
                 builder.unsafe_append(

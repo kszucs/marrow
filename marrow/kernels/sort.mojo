@@ -9,7 +9,8 @@ delegators.
     for N ≥ 32768. Values wider than 64 bits (decimal128/256) have no UInt64
     radix key and always take the comparison path.
   - BoolArray: O(N) counting sort.
-  - BinaryLikeArray[T]: stdlib comparison sort (bytewise lexicographic).
+  - BytesArray (either string layout): stdlib comparison sort (bytewise
+    lexicographic).
 
 `SortIndices.dispatch` resolves a runtime dtype through the `DynType.dispatch_*`
 family. Temporal, interval, and decimal32/64 columns sort through their
@@ -40,6 +41,7 @@ from std.sys import size_of
 
 from ..arrays import (
     BinaryLikeArray,
+    BytesArray,
     BoolArray,
     PrimitiveArray,
     StructArray,
@@ -48,7 +50,6 @@ from ..arrays import (
 )
 from ..buffers import Buffer
 from ..dtypes import (
-    BinaryLikeType,
     IntegerType,
     PrimitiveType,
     bool_ as bool_dt,
@@ -438,18 +439,14 @@ struct SortIndices(Kernel):
             result = SortIndices.apply(
                 array.as_bool(), ascending, nulls_first, ctx
             )
-        elif dt.is_binary_like():
+        elif dt.is_binary_like() or dt.is_string_view() or dt.is_binary_view():
 
-            def binarylike[T: BinaryLikeType](d: T) raises {imm} -> Int32Array:
+            def bytes_leaf[A: BytesArray](arr: A) raises {imm} -> Int32Array:
                 return SortIndices.apply(
-                    array.as_binary_like[T](),
-                    ascending,
-                    nulls_first,
-                    stable,
-                    ctx,
+                    arr, ascending, nulls_first, stable, ctx
                 )
 
-            result = dt.dispatch_binarylike(binarylike)
+            result = array.dispatch_bytes(bytes_leaf)
         elif dt.is_dictionary():
             # Order by the *decoded* values: dictionary index order is an
             # encoding artefact (`ordered=False` is the norm), not a value
@@ -764,18 +761,78 @@ struct SortIndices(Kernel):
         )
 
     @staticmethod
+    def _sort_bytes[
+        A: BytesArray
+    ](arr: A, mut rows: List[Int32], ascending: Bool, stable: Bool):
+        """Sort `rows` of `arr` bytewise, in two phases.
+
+        First by each row's 8-byte `sort_key`, a comparison over one
+        contiguous array of integers. Then each run of rows whose keys tie is
+        sorted by its values. Rows that differ in their first eight bytes --
+        the common case for short or varied values -- never reach the second
+        phase; values sharing a long prefix, like URLs, all do, and cost one
+        cheap pass over equal keys on top of the value sort.
+
+        Two phases rather than one comparator that falls back on a tie: with
+        the value comparison inlined the comparator was 3x slower even when
+        no tie occurred, and with it out of line every tie paid a call.
+        """
+        var keys = List[UInt64](capacity=len(arr))
+        for i in range(len(arr)):
+            keys.append(arr.sort_key(i))
+
+        def key_asc(a: Int32, b: Int32) {imm keys} -> Bool:
+            return keys[Int(a)] < keys[Int(b)]
+
+        def key_desc(a: Int32, b: Int32) {imm keys} -> Bool:
+            return keys[Int(b)] < keys[Int(a)]
+
+        def value_asc(a: Int32, b: Int32) {imm arr} -> Bool:
+            return arr.unsafe_get(UInt(a)) < arr.unsafe_get(UInt(b))
+
+        def value_desc(a: Int32, b: Int32) {imm arr} -> Bool:
+            return arr.unsafe_get(UInt(b)) < arr.unsafe_get(UInt(a))
+
+        if ascending and stable:
+            _sort_impl[stable=True](rows, key_asc)
+        elif ascending:
+            _sort_impl(rows, key_asc)
+        elif stable:
+            _sort_impl[stable=True](rows, key_desc)
+        else:
+            _sort_impl(rows, key_desc)
+
+        var start = 0
+        while start < len(rows):
+            var end = start + 1
+            var key = keys[Int(rows[start])]
+            while end < len(rows) and keys[Int(rows[end])] == key:
+                end += 1
+            if end - start > 1:
+                var run = Span(rows)[start:end]
+                if ascending and stable:
+                    _sort_impl[stable=True](run, value_asc)
+                elif ascending:
+                    _sort_impl(run, value_asc)
+                elif stable:
+                    _sort_impl[stable=True](run, value_desc)
+                else:
+                    _sort_impl(run, value_desc)
+            start = end
+
+    @staticmethod
     def apply[
-        T: BinaryLikeType
+        A: BytesArray
     ](
-        arr: BinaryLikeArray[T],
+        arr: A,
         ascending: Bool = True,
         nulls_first: Bool = True,
         stable: Bool = False,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
-        """Comparison sort for binary-like arrays (string, large_string, binary,
-        large_binary) using the Mojo stdlib sort — bytewise lexicographic, which
-        is Arrow's ordering for all four."""
+        """Comparison sort over byte strings in either layout, using the Mojo
+        stdlib sort — bytewise lexicographic, which is Arrow's ordering for
+        every binary and string type."""
         var n = len(arr)
         if n == 0:
             return Int32Array.empty(Int32Type())
@@ -792,23 +849,7 @@ struct SortIndices(Kernel):
                 null_list.append(Int32(i))
 
         if n_valid > 1:
-
-            def cmp_asc(a: Int32, b: Int32) {imm arr} -> Bool:
-                return arr.unsafe_get(UInt(a)) < arr.unsafe_get(UInt(b))
-
-            def cmp_desc(a: Int32, b: Int32) {imm arr} -> Bool:
-                return arr.unsafe_get(UInt(b)) < arr.unsafe_get(UInt(a))
-
-            if ascending:
-                if stable:
-                    _sort_impl[stable=True](valid_list, cmp_asc)
-                else:
-                    _sort_impl(valid_list, cmp_asc)
-            else:
-                if stable:
-                    _sort_impl[stable=True](valid_list, cmp_desc)
-                else:
-                    _sort_impl(valid_list, cmp_desc)
+            Self._sort_bytes(arr, valid_list, ascending, stable)
 
         var out = Buffer.alloc_uninit[DType.int32](n)
         var ov = out.view[DType.int32](0, n)

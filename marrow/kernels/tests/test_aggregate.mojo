@@ -3,7 +3,7 @@
 
 from std.testing import assert_equal, assert_true, assert_false
 
-from ...arrays import DynArray, PrimitiveArray
+from ...arrays import DynArray, PrimitiveArray, StringArray
 from ...scalars import DynScalar
 from ...builders import (
     array,
@@ -143,14 +143,14 @@ def _strings(var items: List[String]) raises -> DynArray:
 
 def test_min_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[LexicalExtremum[MinOp, StringType]](a)
+    var r = whole[LexicalExtremum[MinOp, StringArray]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "apple")
 
 
 def test_max_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[LexicalExtremum[MaxOp, StringType]](a)
+    var r = whole[LexicalExtremum[MaxOp, StringArray]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "cherry")
 
@@ -163,11 +163,11 @@ def test_min_string_skips_nulls() raises:
     b.append_null()
     var a: DynArray = b.finish()
     assert_equal(
-        whole[LexicalExtremum[MinOp, StringType]](a).as_string().to_string(),
+        whole[LexicalExtremum[MinOp, StringArray]](a).as_string().to_string(),
         "a",
     )
     assert_equal(
-        whole[LexicalExtremum[MaxOp, StringType]](a).as_string().to_string(),
+        whole[LexicalExtremum[MaxOp, StringArray]](a).as_string().to_string(),
         "m",
     )
 
@@ -177,14 +177,14 @@ def test_min_string_all_null_is_null() raises:
     b.append_null()
     b.append_null()
     var a: DynArray = b.finish()
-    assert_false(whole[LexicalExtremum[MinOp, StringType]](a).is_valid())
-    assert_false(whole[LexicalExtremum[MaxOp, StringType]](a).is_valid())
+    assert_false(whole[LexicalExtremum[MinOp, StringArray]](a).is_valid())
+    assert_false(whole[LexicalExtremum[MaxOp, StringArray]](a).is_valid())
 
 
 def test_min_string_empty_is_null() raises:
     var b = StringBuilder(0)
     var a: DynArray = b.finish()
-    assert_false(whole[LexicalExtremum[MinOp, StringType]](a).is_valid())
+    assert_false(whole[LexicalExtremum[MinOp, StringArray]](a).is_valid())
 
 
 # ---------------------------------------------------------------------------

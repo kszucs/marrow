@@ -39,6 +39,7 @@ from ..arrays import (
     Float64Array,
     BoolArray,
     BinaryLikeArray,
+    BytesArray,
     PrimitiveArray,
     DynArray,
     Int32Array,
@@ -1338,9 +1339,13 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
         return out.finish()
 
 
-struct LexicalExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
+struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
     """`min`/`max` over a string column — a bytewise (lexicographic) scan,
     matching Arrow's `hash_min`/`hash_max`.
+
+    Parameterised on the array, not the dtype, so one kernel serves both
+    string layouts (`StringArray`, `StringViewArray`, …); the output keeps the
+    input's layout.
 
     Not a fold: there is no scalar accumulator to combine. That is also why it
     is not mergeable — but it *is* streamable, because it keeps the best
@@ -1352,8 +1357,8 @@ struct LexicalExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
     """
 
     comptime name = Self.Op.name
-    comptime InArray = BinaryLikeArray[Self.T]
-    comptime OutArray = BinaryLikeArray[Self.T]
+    comptime InArray = Self.A
+    comptime OutArray = Self.A
 
     var _best: List[Optional[String]]
     """The winning value per slot, not its row index — an index is only
@@ -1364,30 +1369,26 @@ struct LexicalExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
-        """An extremum *is* one of the input's values, so it keeps its type.
-
-        Answered from `T`, not from the argument: `StringLikeType` is
-        `Defaultable`, so `T` already carries everything the output type needs.
-        The temporal and decimal kernels cannot do this — a timestamp's unit
-        and timezone live in the *value* — which is the whole reason the trait
-        still takes an `in_dtype` at all."""
-        return DynType(Self.T())
+        """An extremum *is* one of the input's values, so it keeps its type."""
+        return in_dtype.copy()
 
     def reserve(mut self, slots: Int) raises:
         while len(self._best) < slots:
             self._best.append(None)
 
     @always_inline
-    def _offer(mut self, g: Int, var candidate: String):
-        """Keep `candidate` if it beats slot `g`'s incumbent."""
+    def _offer(mut self, g: Int, candidate: StringSlice):
+        """Keep `candidate` if it beats slot `g`'s incumbent. Compared as a
+        borrow, so a losing row allocates nothing."""
+        var better: Bool
         if not self._best[g]:
-            self._best[g] = candidate^
-            return
-        var better = (
-            candidate < self._best[g].value()
-        ) if Self.Op.is_min else (self._best[g].value() < candidate)
+            better = True
+        elif Self.Op.is_min:
+            better = candidate < StringSlice(self._best[g].value())
+        else:
+            better = StringSlice(self._best[g].value()) < candidate
         if better:
-            self._best[g] = candidate^
+            self._best[g] = String(candidate)
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         """No dispatch: `T` is the input's type, so the scan is monomorphized.
@@ -1398,22 +1399,16 @@ struct LexicalExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
             for i in range(len(input)):
                 if has_null and not input.is_valid(i):
                     continue
-                self._offer(0, String(input.unsafe_get(UInt(i))))
+                self._offer(0, input.unsafe_get(UInt(i)))
         else:
             var gids = groups.ids.values()
             for i in range(len(groups.ids)):
                 if has_null and not input.is_valid(i):
                     continue
-                self._offer(Int(gids[i]), String(input.unsafe_get(UInt(i))))
+                self._offer(Int(gids[i]), input.unsafe_get(UInt(i)))
 
     def finish(mut self) raises -> Self.OutArray:
-        var out = BinaryLikeBuilder[Self.T](capacity=len(self._best))
-        for g in range(len(self._best)):
-            if self._best[g]:
-                out.append(self._best[g].value())
-            else:
-                out.append_null()
-        return out.finish()
+        return Self.A.from_values(self._best)
 
 
 struct ValidCount[A: Array](AggKernel):

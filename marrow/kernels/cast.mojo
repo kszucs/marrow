@@ -44,6 +44,8 @@ from ..arrays import (
     DynArray,
     ArrayData,
     BinaryLikeArray,
+    BinaryViewLikeArray,
+    BytesArray,
     BoolArray,
     FixedSizeBinaryArray,
     PrimitiveArray,
@@ -53,6 +55,7 @@ from ..buffers import Buffer, Bitmap
 from ..builders import (
     DynBuilder,
     BinaryLikeBuilder,
+    BinaryViewLikeBuilder,
     BoolBuilder,
     FixedSizeBinaryBuilder,
     PrimitiveBuilder,
@@ -60,7 +63,10 @@ from ..builders import (
 from ..views import apply, apply_checked, BufferView, BitmapView
 from ..dtypes import (
     DynType,
+    DataType,
     BinaryLikeType,
+    BinaryViewLikeType,
+    StringViewLikeType,
     DType,
     NumericType,
     DecimalType,
@@ -70,6 +76,8 @@ from ..dtypes import (
     StringLikeType,
     TimestampType,
     int32,
+    string,
+    binary,
 )
 from .core import Kernel
 from .temporal import WallClock, ticks_per_second
@@ -1946,6 +1954,180 @@ struct DictionaryCastKernel(CastKernel):
 
 
 # ---------------------------------------------------------------------------
+# ViewCastKernel — the view layout ↔ itself and the offsets layout
+# ---------------------------------------------------------------------------
+
+
+struct ViewCastKernel(CastKernel):
+    """Cast between the view layout (binary_view, string_view) and the offsets
+    layout (binary, large_binary, string, large_string), or within the view
+    layout.
+
+    - view → view: a relabel sharing the views and data buffers.
+    - offsets → view: zero-copy too. Each view points into the source's values
+      buffer, which becomes the one data buffer, as Arrow C++'s
+      `string → string_view` cast does -- unless every value fits inline, when
+      there is nothing to point at. Falls back to copying when a large type's
+      offsets pass `int32`, which a view cannot address.
+    - view → offsets: rebuilt through a builder; the bytes have to become
+      contiguous.
+
+    Producing text from bytes validates UTF-8 under ``safe``, per element, as
+    `BinaryLikeCastKernel` does. `ctx` is unused: every path is a relabel or a
+    sequential rebuild.
+    """
+
+    comptime name = "view_cast"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        var src = array.dtype()
+        if src.is_string_view() or src.is_binary_view():
+
+            def from_view[
+                From: BinaryViewLikeType
+            ](s: From) raises {imm} -> DynArray:
+                ref a = array.as_binary_view_like[From]()
+                if to.is_string_view() or to.is_binary_view():
+
+                    def to_view[
+                        To: BinaryViewLikeType
+                    ](d: To) raises {imm} -> DynArray:
+                        return Self.relabel[From, To](a, safe).to_dyn()
+
+                    return to.dispatch_binaryview(to_view)
+
+                def to_offsets[
+                    To: BinaryLikeType
+                ](d: To) raises {imm} -> DynArray:
+                    return Self.to_offsets[From, To](a, safe).to_dyn()
+
+                return to.dispatch_binarylike(to_offsets)
+
+            return src.dispatch_binaryview(from_view)
+
+        def from_offsets[
+            From: BinaryLikeType
+        ](s: From) raises {imm} -> DynArray:
+            ref a = array.as_binary_like[From]()
+
+            def to_view[To: BinaryViewLikeType](d: To) raises {imm} -> DynArray:
+                return Self.to_views[From, To](a, safe).to_dyn()
+
+            return to.dispatch_binaryview(to_view)
+
+        return src.dispatch_binarylike(from_offsets)
+
+    @staticmethod
+    def _needs_utf8_check[From: DataType, To: DataType](safe: Bool) -> Bool:
+        """Text produced from bytes, under ``safe``."""
+        comptime to_text = conforms_to(To, StringLikeType) or conforms_to(
+            To, StringViewLikeType
+        )
+        comptime from_text = conforms_to(From, StringLikeType) or conforms_to(
+            From, StringViewLikeType
+        )
+        return safe and to_text and not from_text
+
+    @staticmethod
+    def _check_utf8[A: BytesArray](array: A) raises:
+        """Reject an array holding invalid UTF-8 in any non-null element."""
+        for i in range(len(array)):
+            if array.is_valid(i) and not _is_valid_utf8(
+                array.unsafe_get(UInt(i)).as_bytes()
+            ):
+                raise InvalidError(
+                    "cast: invalid UTF-8 in binary → string cast"
+                )
+
+    @staticmethod
+    def relabel[
+        From: BinaryViewLikeType, To: BinaryViewLikeType
+    ](
+        array: BinaryViewLikeArray[From], safe: Bool
+    ) raises -> BinaryViewLikeArray[To]:
+        if Self._needs_utf8_check[From, To](safe):
+            Self._check_utf8(array)
+        return BinaryViewLikeArray[To](
+            length=array.length,
+            nulls=array.nulls,
+            offset=array.offset,
+            bitmap=array.bitmap.copy(),
+            views=array.views,
+            buffers=array.buffers.copy(),
+        )
+
+    @staticmethod
+    def to_offsets[
+        From: BinaryViewLikeType, To: BinaryLikeType
+    ](array: BinaryViewLikeArray[From], safe: Bool) raises -> BinaryLikeArray[
+        To
+    ]:
+        if Self._needs_utf8_check[From, To](safe):
+            Self._check_utf8(array)
+        # Sized from the views alone, so the bytes are copied once into a
+        # buffer that never grows.
+        var n = len(array)
+        var total = 0
+        for i in range(n):
+            if array.is_valid(i):
+                total += array.view_length(i)
+        var b = BinaryLikeBuilder[To](n, bytes_capacity=total)
+        for i in range(n):
+            if array.is_valid(i):
+                b.unsafe_append(array.unsafe_get(UInt(i)))
+            else:
+                b.unsafe_append_null()
+        return b.finish()
+
+    @staticmethod
+    def to_views[
+        From: BinaryLikeType, To: BinaryViewLikeType
+    ](array: BinaryLikeArray[From], safe: Bool) raises -> BinaryViewLikeArray[
+        To
+    ]:
+        if Self._needs_utf8_check[From, To](safe):
+            Self._check_utf8(array)
+        var n = len(array)
+        var end = Int(array.offsets.unsafe_get[From.offset](array.offset + n))
+        var b = BinaryViewLikeBuilder[To](n)
+        if end > Int(Int32.MAX):
+            # Out of a view's reach: copy into fresh blocks instead.
+            b.extend(array)
+        else:
+            # The values buffer is adopted at the first value too long to
+            # inline, so a column of short values does not keep it alive.
+            b.reserve(n)
+            var values = Int32(-1)
+            for i in range(n):
+                if array.is_valid(i):
+                    var s = array.unsafe_get(UInt(i))
+                    if (
+                        values < 0
+                        and s.byte_length()
+                        > BinaryViewLikeArray[To].INLINE_SIZE
+                    ):
+                        values = b.adopt(array.values)
+                    b.unsafe_append_in(
+                        s,
+                        values,
+                        Int32(
+                            array.offsets.unsafe_get[From.offset](
+                                array.offset + i
+                            )
+                        ),
+                    )
+                else:
+                    b.unsafe_append_null()
+        return b.finish()
+
+
+# ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
 
@@ -1972,6 +2154,18 @@ def cast(
         return BinaryLikeCastKernel.dispatch(
             array, to, safe, ctx
         )  # bytes ↔ bytes
+    elif (
+        src.is_binary_like() or src.is_string_view() or src.is_binary_view()
+    ) and (to.is_binary_like() or to.is_string_view() or to.is_binary_view()):
+        return ViewCastKernel.dispatch(array, to, safe, ctx)  # views ↔ bytes
+    elif src.is_string_view() or src.is_binary_view():
+        # Anything else from a view goes through its offsets counterpart,
+        # which every other cast kernel reads.
+        var via = string.to_dyn() if src.is_string_view() else binary.to_dyn()
+        return cast(cast(array, via, safe, ctx), to, safe, ctx)
+    elif to.is_string_view() or to.is_binary_view():
+        var via = string.to_dyn() if to.is_string_view() else binary.to_dyn()
+        return cast(cast(array, via, safe, ctx), to, safe, ctx)
     elif (src.is_fixed_size_binary() and to.is_binary_like()) or (
         src.is_binary_like() and to.is_fixed_size_binary()
     ):

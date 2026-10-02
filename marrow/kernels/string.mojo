@@ -32,20 +32,25 @@ from std.utils.index import IndexList
 from ..arrays import (
     DynArray,
     BinaryLikeArray,
+    BinaryViewLikeArray,
+    BytesArray,
     BoolArray,
     Int32Array,
     Int64Array,
     PrimitiveArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..builders import BinaryLikeBuilder
+from ..builders import BinaryLikeBuilder, BinaryViewLikeBuilder, BytesBuilder
 from ..dtypes import (
     DType,
     Int64Type,
     PrimitiveType,
     StringLikeType,
     StringType,
+    StringViewLikeType,
+    string,
 )
+from .cast import cast
 from .core import Kernel
 from ..views import apply
 from ..execution import ExecContext
@@ -116,11 +121,35 @@ struct LengthKernel(Kernel):
         )
 
     @staticmethod
+    def apply[
+        T: StringViewLikeType
+    ](
+        array: BinaryViewLikeArray[T],
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> Int32Array:
+        """Byte length of each view, read from the view's length word alone
+        -- no data buffer is touched."""
+        _ = ctx
+        var n = len(array)
+        var out = Buffer.alloc_uninit[DType.int32](n)
+        for i in range(n):
+            out.unsafe_set[DType.int32](i, Int32(array.view_length(i)))
+        return Int32Array(
+            length=n,
+            nulls=array.null_count(),
+            offset=0,
+            bitmap=_passthrough_validity(array),
+            buffer=out.to_immutable(),
+        )
+
+    @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
         # Guard before dispatching so the diagnostic names *this kernel* and the
         # family it wanted. `dispatch_stringlike` would otherwise fall through to
         # `_dispatch`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
+        if dt.is_string_view():
+            return Self.apply(array.as_string_view()).to_dyn()
         if not dt.is_string_like():
             raise Self.error[TypeError](t"expected a string array, got {dt}")
 
@@ -148,14 +177,29 @@ trait StringMapKernel(Kernel):
     def apply[
         T: StringLikeType
     ](array: BinaryLikeArray[T]) raises -> BinaryLikeArray[T]:
-        var n = len(array)
-        var builder = BinaryLikeBuilder[T](capacity=n)
-        for i in range(n):
+        var builder = BinaryLikeBuilder[T](capacity=len(array))
+        Self._map_into(array, builder)
+        return builder.finish()
+
+    @staticmethod
+    def apply[
+        T: StringViewLikeType
+    ](array: BinaryViewLikeArray[T]) raises -> BinaryViewLikeArray[T]:
+        """The same map over a view array; the output keeps the view layout."""
+        var builder = BinaryViewLikeBuilder[T](capacity=len(array))
+        Self._map_into(array, builder)
+        return builder.finish()
+
+    @staticmethod
+    def _map_into[
+        Arr: BytesArray, Bld: BytesBuilder
+    ](array: Arr, mut builder: Bld) raises:
+        """The null-preserving map loop, shared by both layouts' `apply`."""
+        for i in range(len(array)):
             if array.is_valid(i):
                 builder.append(Self.transform(array.unsafe_get(UInt(i))))
             else:
                 builder.append_null()
-        return builder.finish()
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
@@ -163,6 +207,8 @@ trait StringMapKernel(Kernel):
         # family it wanted. `dispatch_stringlike` would otherwise fall through to
         # `_dispatch`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
+        if dt.is_string_view():
+            return Self.apply(array.as_string_view()).to_dyn()
         if not dt.is_string_like():
             raise Self.error[TypeError](t"expected a string array, got {dt}")
 
@@ -271,6 +317,12 @@ struct ConcatKernel(Kernel):
         erased operands cannot know at build time whether it means addition or
         concatenation, so the choice is made on the runtime dtype."""
         var dt = left.dtype()
+        if dt.is_string_view():
+            Self.expect_same_dtype(dt, right.dtype())
+            Self.expect_same_length(len(left), len(right))
+            return Self.apply(
+                left.as_string_view(), right.as_string_view()
+            ).to_dyn()
         if not dt.is_string_like():
             raise Self.error[TypeError](t"expected a string array, got {dt}")
         Self.expect_same_dtype(dt, right.dtype())
@@ -296,10 +348,29 @@ struct ConcatKernel(Kernel):
         separately, so a single `T` would reject `string || large_string` at the
         call site rather than at a place that could say why.
         """
+        var builder = BinaryLikeBuilder[L](capacity=len(left))
+        Self._concat_into(left, right, builder)
+        return builder.finish()
+
+    @staticmethod
+    def apply[
+        L: StringViewLikeType, R: StringViewLikeType
+    ](
+        left: BinaryViewLikeArray[L], right: BinaryViewLikeArray[R]
+    ) raises -> BinaryViewLikeArray[L]:
+        """The same concatenation over view arrays, output in the view layout.
+        """
+        var builder = BinaryViewLikeBuilder[L](capacity=len(left))
+        Self._concat_into(left, right, builder)
+        return builder.finish()
+
+    @staticmethod
+    def _concat_into[
+        L: BytesArray, R: BytesArray, B: BytesBuilder
+    ](left: L, right: R, mut builder: B) raises:
+        """The null-propagating concat loop, shared by both layouts' `apply`."""
         Self.expect_same_length(len(left), len(right))
-        var n = len(left)
-        var builder = BinaryLikeBuilder[L](capacity=n)
-        for i in range(n):
+        for i in range(len(left)):
             if left.is_valid(i) and right.is_valid(i):
                 builder.append(
                     Self.combine(
@@ -309,7 +380,6 @@ struct ConcatKernel(Kernel):
                 )
             else:
                 builder.append_null()
-        return builder.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +388,13 @@ struct ConcatKernel(Kernel):
 
 
 trait StringPredicateKernel(Kernel):
-    """Element-wise `string × string → bool` predicate. Concrete kernels define
+    """Element-wise `bytes × bytes → bool` predicate. Concrete kernels define
     `predicate`; `apply` (bit-packed, null-propagating) and `dispatch` default.
+
+    Over text and binary alike, in any layout, as Arrow's comparisons,
+    `starts_with`, `ends_with` and `match_substring` are. `LIKE` is the text
+    operation of the family, and stays one through its own pattern
+    `dispatch`, which `LikePattern` guards.
     """
 
     @staticmethod
@@ -330,8 +405,9 @@ trait StringPredicateKernel(Kernel):
 
     @staticmethod
     def apply[
-        L: StringLikeType, R: StringLikeType
-    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        L: BytesArray, R: BytesArray
+    ](left: L, right: R) raises -> BoolArray:
+        """Over either string layout, on either side."""
         Self.expect_same_length(len(left), len(right))
         var n = len(left)
         var bm = Bitmap.intersect_views(left.validity(), right.validity())
@@ -352,8 +428,8 @@ trait StringPredicateKernel(Kernel):
 
     @staticmethod
     def apply_scalar[
-        T: StringLikeType
-    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
         """`array × one constant pattern`, without materialising the constant.
 
         The peer of `apply` for the case where the right operand is a scalar.
@@ -378,23 +454,18 @@ trait StringPredicateKernel(Kernel):
             length=n,
             nulls=array.null_count(),
             offset=0,
-            bitmap=_passthrough_validity(array, n),
+            bitmap=_passthrough_validity(array),
             buffer=data.to_immutable(),
         )
 
     @staticmethod
     def dispatch(left: DynArray, right: DynArray) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
-        var dt = left.dtype()
-        if not dt.is_string_like():
-            raise Self.error[TypeError](t"expected string arrays, got {dt}")
 
-        def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
-            return Self.apply(
-                left.as_binary_like[T](), right.as_binary_like[T]()
-            ).to_dyn()
+        def leaf[A: BytesArray](l: A) raises {imm} -> DynArray:
+            return Self.apply(l, right.as_type[A]()).to_dyn()
 
-        return dt.dispatch_stringlike(leaf)
+        return left.dispatch_bytes(leaf)
 
 
 struct StartsWithKernel(StringPredicateKernel):
@@ -835,9 +906,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
             j += 1
         return j == m
 
-    def match_array[
-        T: StringLikeType
-    ](self, array: BinaryLikeArray[T]) raises -> BoolArray:
+    def match_array[A: BytesArray](self, array: A) raises -> BoolArray:
         """This pattern over every element of `array`.
 
         Compiled once, by whoever built it, so this is O(rows x pattern) work
@@ -854,14 +923,14 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
             length=n,
             nulls=array.null_count(),
             offset=0,
-            bitmap=_passthrough_validity(array, n),
+            bitmap=_passthrough_validity(array),
             buffer=data.to_immutable(),
         )
 
     @staticmethod
     def match_arrays[
-        L: StringLikeType, R: StringLikeType
-    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        L: BytesArray, R: BytesArray
+    ](left: L, right: R) raises -> BoolArray:
         """Array x array ``LIKE``, compiling the right operand once per *run*
         of equal patterns instead of once per row.
 
@@ -908,6 +977,8 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         """Type-erased entry point for the scalar-pattern overloads."""
         var compiled = Self(pattern)
         var dt = array.dtype()
+        if dt.is_string_view():
+            return compiled.match_array(array.as_string_view()).to_dyn()
         if not dt.is_string_like():
             raise TypeError(t"{name}: expected a string array, got {dt}")
 
@@ -918,12 +989,14 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
 
 
 def _passthrough_validity[
-    T: StringLikeType
-](array: BinaryLikeArray[T], n: Int) raises -> Optional[Bitmap[mut=False]]:
-    """The left operand's validity, offset-applied — what a predicate against a
-    constant returns, since a constant operand is never null."""
-    if array.bitmap:
-        return array.bitmap.value().view(array.offset, n).to_owned()
+    A: BytesArray
+](array: A) raises -> Optional[Bitmap[mut=False]]:
+    """The operand's validity, offset-applied and owned — what a unary result
+    or a predicate against a constant returns, since a constant operand is
+    never null."""
+    var v = array.validity()
+    if v:
+        return v.value().to_owned()
     return None
 
 
@@ -946,22 +1019,22 @@ struct LikeKernel(StringPredicateKernel):
 
     @staticmethod
     def apply[
-        L: StringLikeType, R: StringLikeType
-    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        L: BytesArray, R: BytesArray
+    ](left: L, right: R) raises -> BoolArray:
         # Overrides the trait default, which would compile the pattern per row.
         Self.expect_same_length(len(left), len(right))
-        return LikePattern[False].match_arrays[L, R](left, right)
+        return LikePattern[False].match_arrays(left, right)
 
     @staticmethod
     def apply[
-        T: StringLikeType
-    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
         return LikePattern[False](pattern).match_array(array)
 
     @staticmethod
     def apply_scalar[
-        T: StringLikeType
-    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
         # Compile once, not once per row — which is the whole point of
         # `LikePattern`, and had no non-test caller before this.
         return Self.apply(array, pattern)
@@ -985,22 +1058,22 @@ struct ILikeKernel(StringPredicateKernel):
 
     @staticmethod
     def apply[
-        L: StringLikeType, R: StringLikeType
-    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        L: BytesArray, R: BytesArray
+    ](left: L, right: R) raises -> BoolArray:
         # Overrides the trait default, which would compile the pattern per row.
         Self.expect_same_length(len(left), len(right))
-        return LikePattern[True].match_arrays[L, R](left, right)
+        return LikePattern[True].match_arrays(left, right)
 
     @staticmethod
     def apply[
-        T: StringLikeType
-    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
         return LikePattern[True](pattern).match_array(array)
 
     @staticmethod
     def apply_scalar[
-        T: StringLikeType
-    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
         return Self.apply(array, pattern)
 
     @staticmethod
@@ -1244,6 +1317,12 @@ trait StringArgKernel(Kernel):
         OC: PrimitiveType,
     ](array: DynArray, ops: StringOperands[OT, OA, OS, OC]) raises -> DynArray:
         var dt = array.dtype()
+        if dt.is_string_view():
+            # Through the offsets layout and back: each of these functions
+            # builds a new string per row anyway, so the conversion is one
+            # more copy of bytes it was about to write.
+            var out = Self.dispatch(cast(array, string.to_dyn()), ops)
+            return cast(out, dt)
         if not dt.is_string_like():
             raise Self.error[TypeError](t"expected a string array, got {dt}")
 
@@ -1798,15 +1877,13 @@ trait StringMeasureKernel(Kernel):
 
     @staticmethod
     def apply[
-        T: StringLikeType,
+        A: BytesArray,
         //,
         OT: StringLikeType,
         OA: StringLikeType,
         OS: PrimitiveType,
         OC: PrimitiveType,
-    ](
-        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
-    ) raises -> Int64Array:
+    ](array: A, ops: StringOperands[OT, OA, OS, OC]) raises -> Int64Array:
         ...
 
     @staticmethod
@@ -1817,6 +1894,8 @@ trait StringMeasureKernel(Kernel):
         OC: PrimitiveType,
     ](array: DynArray, ops: StringOperands[OT, OA, OS, OC]) raises -> DynArray:
         var dt = array.dtype()
+        if dt.is_string_view():
+            return Self.apply(array.as_string_view(), ops).to_dyn()
         if not dt.is_string_like():
             raise Self.error[TypeError](t"expected a string array, got {dt}")
 
@@ -1852,14 +1931,12 @@ def _measured(
 
 def _measure_plain[
     K: StringToIntKernel,
-    T: StringLikeType,
+    A: BytesArray,
     OT: StringLikeType,
     OA: StringLikeType,
     OS: PrimitiveType,
     OC: PrimitiveType,
-](
-    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
-) raises -> Int64Array:
+](array: A, ops: StringOperands[OT, OA, OS, OC]) raises -> Int64Array:
     var n = len(array)
     var out = Buffer.alloc_uninit[DType.int64](n)
     var dst = out.view[DType.int64](0, n)
@@ -1891,15 +1968,13 @@ struct CharLengthKernel(StringMeasureKernel, StringToIntKernel):
 
     @staticmethod
     def apply[
-        T: StringLikeType,
+        A: BytesArray,
         //,
         OT: StringLikeType,
         OA: StringLikeType,
         OS: PrimitiveType,
         OC: PrimitiveType,
-    ](
-        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
-    ) raises -> Int64Array:
+    ](array: A, ops: StringOperands[OT, OA, OS, OC]) raises -> Int64Array:
         return _measure_plain[Self](array, ops)
 
 
@@ -1942,15 +2017,13 @@ struct AsciiKernel(StringMeasureKernel, StringToIntKernel):
 
     @staticmethod
     def apply[
-        T: StringLikeType,
+        A: BytesArray,
         //,
         OT: StringLikeType,
         OA: StringLikeType,
         OS: PrimitiveType,
         OC: PrimitiveType,
-    ](
-        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
-    ) raises -> Int64Array:
+    ](array: A, ops: StringOperands[OT, OA, OS, OC]) raises -> Int64Array:
         return _measure_plain[Self](array, ops)
 
 
@@ -1984,15 +2057,13 @@ struct PositionKernel(StringMeasureKernel):
 
     @staticmethod
     def apply[
-        T: StringLikeType,
+        A: BytesArray,
         //,
         OT: StringLikeType,
         OA: StringLikeType,
         OS: PrimitiveType,
         OC: PrimitiveType,
-    ](
-        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
-    ) raises -> Int64Array:
+    ](array: A, ops: StringOperands[OT, OA, OS, OC]) raises -> Int64Array:
         if not ops.text:
             raise InternalError("missing operand: text")
         ref needles = ops.text.value()

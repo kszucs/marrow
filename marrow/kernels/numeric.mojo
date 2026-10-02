@@ -45,6 +45,7 @@ import std.math as math
 from ..arrays import (
     PrimitiveArray,
     BinaryLikeArray,
+    BytesArray,
     DynArray,
     BoolArray,
     StructArray,
@@ -60,8 +61,8 @@ from ..dtypes import (
 )
 from .core import Kernel
 from .boolean import AndKernel, NotKernel, XorKernel
+from .string import StringEqKernel
 from ..execution import ExecContext, GPU_ENABLED
-from ..errors import InvalidError
 
 
 # ---------------------------------------------------------------------------
@@ -682,9 +683,9 @@ def equal[
     equality. This names that once instead of open-coding the same two-line
     branch at each.
 
-    The split is `binarylike` vs everything else, not `stringlike` vs
-    everything else: what decides the kernel is whether the payload is
-    variable-width, and `binary` is as variable-width as `string`.
+    The split is `primitive` vs everything else: what decides the kernel is
+    whether the payload is fixed-width, and every byte string -- `binary` as
+    much as `string`, in either layout -- is not.
 
     Not to be confused with the erased arm in `NumericCompare`, which answers a different
     question — which kernel the *user's* `==` meant — and lives in the
@@ -711,19 +712,6 @@ def equal[
             XorKernel.apply(left.as_bool().copy(), right.as_bool().copy(), ctx),
             ctx,
         )
-    elif left.dtype().is_binary_like():
-        # `is_binary_like`, not `is_string_like`. `binary` and `large_binary`
-        # are perfectly ordinary hash-join key columns, but they are *not*
-        # stringlike, so the old `is_string() or is_large_string()` test dropped
-        # them into the numeric arm and `dispatch_primitive` raised "dtype is
-        # not primitive" — joining on a `binary` key was impossible while the
-        # same join on `string` worked.
-        def leaf[T: BinaryLikeType](d: T) raises {imm} -> BoolArray:
-            return _bytes_equal(
-                left.as_binary_like[T](), right.as_binary_like[T]()
-            )
-
-        return left.dtype().dispatch_binarylike(leaf)
     elif nan_safe and left.dtype().is_floating_point():
         # `dispatch_floating`, not the kernel's own `dispatch`: only a float has
         # a NaN, so `dispatch_primitive` would link ~25 arms of `_binary_cmp` to
@@ -736,45 +724,22 @@ def equal[
             )
 
         return left.dtype().dispatch_floating(total)
-    else:
+    elif left.dtype().is_primitive():
         return EqKernel.dispatch(left, right, ctx).as_bool().copy()
+    else:
+        # Every byte-string dtype, not just the text ones. `binary` and
+        # `large_binary` are perfectly ordinary hash-join key columns, but an
+        # earlier `is_string() or is_large_string()` test dropped them into the
+        # numeric arm and `dispatch_primitive` raised "dtype is not primitive"
+        # -- joining on a `binary` key was impossible while the same join on
+        # `string` worked. Anything else (a nested key) raises in the dispatch.
+        # `apply` through a local leaf, not `StringEqKernel.dispatch`: the
+        # erased result's round trip measured +22 KB of `__text` on the join
+        # gate, which verifies every key row through here.
+        def leaf[A: BytesArray](arr: A) raises {imm} -> BoolArray:
+            return StringEqKernel.apply(arr, right.as_type[A]())
 
-
-def _bytes_equal[
-    T: BinaryLikeType
-](left: BinaryLikeArray[T], right: BinaryLikeArray[T]) raises -> BoolArray:
-    """Element-wise byte equality over a `binarylike` pair.
-
-    `StringEqKernel` computes exactly this for text, and its body is already
-    byte-level — but the whole `StringPredicateKernel` family is deliberately
-    bound on `StringLikeType`, because `LIKE`, `upper` and `startswith` *are*
-    text operations and their `is_string_like` guards exist to say so. Row
-    equality is not a text operation: `equal` has to compare whatever a key
-    column happens to hold. Widening the text family to reach `binary` would
-    have made `upper(binary)` type-check, so the byte-level bound lives here
-    instead, next to the one caller that needs it.
-
-    Null semantics match `StringPredicateKernel.apply`: null on either side
-    yields null out, and the data bit at a null position is left clear.
-    """
-    if len(left) != len(right):
-        raise InvalidError(
-            t"equal: length mismatch, {len(left)} vs {len(right)}"
-        )
-    var n = len(left)
-    var bm = Bitmap.intersect_views(left.validity(), right.validity())
-    var data = Bitmap.alloc_zeroed(n)
-    for i in range(n):
-        if left.is_valid(i) and right.is_valid(i):
-            if left.unsafe_get(UInt(i)) == right.unsafe_get(UInt(i)):
-                data.set(i)
-    return BoolArray(
-        length=n,
-        nulls=bm.value().unset_count() if bm else 0,
-        offset=0,
-        bitmap=bm,
-        buffer=data.to_immutable(),
-    )
+        return left.dispatch_bytes(leaf)
 
 
 struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):

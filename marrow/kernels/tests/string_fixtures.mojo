@@ -36,3 +36,12 @@ def broadcast(pattern: String, n: Int) raises -> StringArray:
     for _ in range(n):
         b.append(pattern)
     return b.finish()
+
+
+def codes(n: Int) raises -> StringArray:
+    """Short identifiers, at most 12 bytes -- every one fits inside a view,
+    the case the view layout is built for."""
+    var b = StringBuilder(capacity=n)
+    for i in range(n):
+        b.append("c" + String(i % 100_000))
+    return b.finish()

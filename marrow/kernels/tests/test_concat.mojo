@@ -506,3 +506,35 @@ def test_combine_chunks_binary() raises:
     assert_equal(r[0].to_string(), "p")
     assert_equal(r[1].to_string(), "q")
     assert_equal(r[2].to_string(), "r")
+
+
+from ...arrays import StringViewArray
+from ...builders import StringViewBuilder
+
+
+def test_concat_string_view() raises:
+    # Values long enough that each source is dense, so its buffers are
+    # adopted rather than its values copied.
+    var b = StringViewBuilder()
+    b.append("first array, a long value of forty bytes")
+    b.append_null()
+    var a1 = b.finish()
+    var a2: StringViewArray = [
+        "short",
+        "second array, a long value of forty-two",
+        "x",
+    ]
+    var arrs = List[DynArray]()
+    arrs.append(a1^.to_dyn())
+    arrs.append(a2.slice(1).to_dyn())
+    var out = concat(arrs)
+    ref v = out.as_string_view()
+    assert_equal(len(v), 4)
+    assert_equal(v.null_count(), 1)
+    assert_equal(v[0].value(), "first array, a long value of forty bytes")
+    assert_false(v.is_valid(1))
+    assert_equal(v[2].value(), "second array, a long value of forty-two")
+    assert_equal(v[3].value(), "x")
+    # Both sources' data buffers are adopted, none copied.
+    assert_equal(len(v.buffers), 2)
+    v.validate()

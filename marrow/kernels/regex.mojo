@@ -32,7 +32,7 @@ as n identical rows, and those collapse to one compile.
 
 from regex.matcher import CompiledRegex, Match
 
-from ..arrays import BinaryLikeArray, BoolArray
+from ..arrays import BinaryLikeArray, BoolArray, BytesArray
 from ..builders import BinaryLikeBuilder, BoolBuilder
 from ..dtypes import PrimitiveType, StringLikeType
 from ..errors import InternalError
@@ -209,8 +209,8 @@ struct RegexpMatchesKernel(StringPredicateKernel):
 
     @staticmethod
     def apply[
-        L: StringLikeType, R: StringLikeType
-    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        L: BytesArray, R: BytesArray
+    ](left: L, right: R) raises -> BoolArray:
         Self.expect_same_length(len(left), len(right))
         var n = len(left)
         var out = BoolBuilder(capacity=n)
@@ -225,8 +225,8 @@ struct RegexpMatchesKernel(StringPredicateKernel):
 
     @staticmethod
     def apply_scalar[
-        T: StringLikeType
-    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
         var compiled = RegexPattern()
         compiled.use(pattern)
         var n = len(array)

@@ -1892,3 +1892,31 @@ def test_negates_is_invariant_under_mirror() raises:
     assert_false(JOIN_SEMI.negates())
     assert_false(JOIN_RIGHT_SEMI.negates())
     assert_false(JOIN_INNER.negates())
+
+
+from ...builders import StringViewBuilder
+
+
+def _view_join_side(keys: List[String], vals: List[Int]) raises -> StructArray:
+    var kb = StringViewBuilder()
+    for k in keys:
+        kb.append(k)
+    var vb = Int32Builder(capacity=len(vals))
+    for v in vals:
+        vb.append(Scalar[int32.native](v))
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
+    return record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+
+def test_inner_join_string_view_keys() raises:
+    var left = _view_join_side(
+        ["a", "a key longer than twelve", "c", "b"], [1, 2, 3, 4]
+    )
+    var right = _view_join_side(
+        ["a key longer than twelve", "b", "a key longer than twelve"],
+        [20, 30, 40],
+    )
+    var result = hash_join(left, right, _left_on(), _right_on())
+    assert_equal(len(result), 3)

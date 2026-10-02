@@ -460,3 +460,25 @@ def test_a_null_argument_makes_a_measure_null() raises:
     assert_equal(got[0].value(), Int64(2))
     assert_true(got.is_null(1))
     assert_equal(got.null_count(), 1)
+
+
+# --- string_view: through the offsets layout and back ----------------------
+
+from ...arrays import StringViewArray
+from ...dtypes import string_view
+
+
+def test_substr_string_view() raises:
+    var a: StringViewArray = ["abcdef", "a value longer than twelve"]
+    var out = SubstrKernel.dispatch(a^.to_dyn(), _ops(2, start=2, count=3))
+    assert_true(out.dtype() == string_view)
+    ref v = out.as_string_view()
+    assert_equal(v[0].value(), "bcd")
+    assert_equal(v[1].value(), " va")
+
+
+def test_char_length_string_view() raises:
+    var a: StringViewArray = ["héllo", "a value longer than twelve"]
+    var out = CharLengthKernel.dispatch(a^.to_dyn(), _ops(2))
+    assert_equal(out.as_int64()[0].value(), 5)
+    assert_equal(out.as_int64()[1].value(), 26)

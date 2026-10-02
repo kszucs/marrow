@@ -16,6 +16,7 @@ from ..arrays import (
     BoolArray,
     PrimitiveArray,
     BinaryLikeArray,
+    BinaryViewLikeArray,
     DynArray,
     StructArray,
     NullArray,
@@ -30,10 +31,12 @@ from ..buffers import Bitmap
 from ..builders import (
     BoolBuilder,
     BinaryLikeBuilder,
+    BinaryViewLikeBuilder,
 )
 from ..dtypes import (
     PrimitiveType,
     BinaryLikeType,
+    BinaryViewLikeType,
     ListLikeType,
     Int32Type,
     bool_,
@@ -91,6 +94,14 @@ struct FilterKernel(Kernel):
                 ).to_dyn()
 
             return dt.dispatch_binarylike(binarylike)
+        elif dt.is_string_view() or dt.is_binary_view():
+
+            def viewlike[T: BinaryViewLikeType](d: T) raises {imm} -> DynArray:
+                return FilterKernel.apply(
+                    array.as_binary_view_like[T](), mask, ctx
+                ).to_dyn()
+
+            return dt.dispatch_binaryview(viewlike)
         elif dt.is_null():
             return FilterKernel.apply(array.as_null(), mask, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
@@ -213,6 +224,41 @@ struct FilterKernel(Kernel):
             bitmap=bm,
             buffer=filtered_data,
         )
+
+    @staticmethod
+    def apply[
+        T: BinaryViewLikeType
+    ](
+        array: BinaryViewLikeArray[T],
+        mask: BitmapView[_],
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> BinaryViewLikeArray[T]:
+        """Filter a view array, keeping elements where ``mask`` is set.
+
+        Gathers the selected 16-byte views and shares the data buffers as
+        they are: no value byte is copied, whatever the string lengths. The
+        buffers keep bytes the result no longer reaches; that is the layout's
+        trade, as in Arrow C++ and arrow-rs.
+        """
+        Self.expect_same_length(len(array), len(mask))
+        var n = len(array)
+        var out_len = mask.count_set_bits()
+        var out = BinaryViewLikeBuilder[T](capacity=out_len)
+        out.reserve(out_len)
+        var base = out.adopt_buffers(array)
+        var wb = 0
+        while wb < n:
+            var w = mask.load_bits[DType.uint64](wb)
+            var rem = n - wb
+            if rem < 64:
+                w &= (UInt64(1) << UInt64(rem)) - 1
+            while w != 0:
+                out.unsafe_append_from(
+                    array, wb + Int(count_trailing_zeros(w)), base
+                )
+                w &= w - 1
+            wb += 64
+        return out.finish()
 
     @staticmethod
     def apply[
@@ -629,6 +675,14 @@ struct TakeKernel(Kernel):
                 ).to_dyn()
 
             return dt.dispatch_binarylike(binarylike)
+        elif dt.is_string_view() or dt.is_binary_view():
+
+            def viewlike[T: BinaryViewLikeType](d: T) raises {imm} -> DynArray:
+                return TakeKernel.apply(
+                    array.as_binary_view_like[T](), indices, ctx
+                ).to_dyn()
+
+            return dt.dispatch_binaryview(viewlike)
         elif dt.is_null():
             return TakeKernel.apply(array.as_null(), indices, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
@@ -779,6 +833,27 @@ struct TakeKernel(Kernel):
                 else:
                     builder.append(array[src_idx].value())
         return builder.finish()
+
+    @staticmethod
+    def apply[
+        T: BinaryViewLikeType
+    ](
+        array: BinaryViewLikeArray[T],
+        indices: Int32Array,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> BinaryViewLikeArray[T]:
+        """Gather a view array at `indices`: the views are gathered, the data
+        buffers shared. Null indices produce null output elements."""
+        var n = len(indices)
+        var out = BinaryViewLikeBuilder[T](capacity=n)
+        out.reserve(n)
+        var base = out.adopt_buffers(array)
+        for i in range(n):
+            if indices.is_valid(i):
+                out.unsafe_append_from(array, Int(indices.unsafe_get(i)), base)
+            else:
+                out.unsafe_append_null()
+        return out.finish()
 
     @staticmethod
     def apply[

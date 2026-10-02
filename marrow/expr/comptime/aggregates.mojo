@@ -362,10 +362,10 @@ comptime StdDev[ddof: Int, A: NumericValue] = Aggregate[
     Dispersion[ddof, True, A.Type], A
 ]
 comptime StringMin[A: StringValue] = Aggregate[
-    LexicalExtremum[MinOp, A.Type], A
+    LexicalExtremum[MinOp, BinaryLikeArray[A.Type]], A
 ]
 comptime StringMax[A: StringValue] = Aggregate[
-    LexicalExtremum[MaxOp, A.Type], A
+    LexicalExtremum[MaxOp, BinaryLikeArray[A.Type]], A
 ]
 # The three cardinalities are dtype-generic in what they *compute* — an int64
 # whatever was counted — but each still names the array it reads, because a
