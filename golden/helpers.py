@@ -38,6 +38,7 @@ SHIMS = {
     "int32",
     "float64",
     "string",
+    "string_view",
     "bool_",
     # `timestamp(microsecond)` vs `marrow.timestamp("us")`: the unit half of
     # the same difference. Mojo names it with a `TimeUnit` constant, Python
@@ -57,6 +58,7 @@ int64 = marrow.int64()
 int32 = marrow.int32()
 float64 = marrow.float64()
 string = marrow.string()
+string_view = marrow.string_view()
 bool_ = marrow.bool_()
 
 
@@ -131,6 +133,7 @@ NAMESPACE = {
     "int32": int32,
     "float64": float64,
     "string": string,
+    "string_view": string_view,
     "bool_": bool_,
     "date32": date32,
     "list_": list_,

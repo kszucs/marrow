@@ -739,7 +739,7 @@ class Corpus:
         # depend on where it was regenerated.
         connection.execute("SET TimeZone = 'UTC'")
         for name in written:
-            connection.register(name, self.fixtures.read(name))
+            connection.register(name, self.fixtures.read_offsets(name))
 
         for case in self.cases():
             table = pa.table(connection.execute(case.sql).arrow())

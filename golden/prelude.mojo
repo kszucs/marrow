@@ -43,6 +43,7 @@ from marrow.dtypes import (
     list_,
     microsecond,
     string,
+    string_view,
     timestamp,
 )
 from marrow.expr import array_length, col, count_star, if_else, lit

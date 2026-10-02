@@ -269,6 +269,18 @@ TABLES = {
 }
 
 
+# The same tables with the string key in Arrow's view layout, so the corpus
+# runs its filter, join, sort and distinct cases over `string_view` too. Built
+# from the originals rather than written out again, so the two cannot drift.
+for _name in ("sales", "regions"):
+    _table = TABLES[_name]
+    _i = _table.schema.get_field_index("region")
+    TABLES[f"{_name}_view"] = _table.set_column(
+        _i, "region", _table.column(_i).cast(pa.string_view())
+    )
+del _name, _table, _i
+
+
 class FixtureSet:
     """The corpus's input tables, on disk as Arrow IPC files."""
 
@@ -292,3 +304,23 @@ class FixtureSet:
     def read(self, name):
         with pa.ipc.open_file(self.path(name)) as reader:
             return reader.read_all()
+
+    def read_offsets(self, name):
+        """`read(name)` with view columns cast to their offsets layout.
+
+        For DuckDB: it scans a registered pyarrow table through pyarrow's own
+        dataset filter, which has no `is_in` kernel over `string_view`, so a
+        view fixture fails the scan. The values are what an expectation is
+        about; the layout is what marrow's lanes are tested on, from the file.
+        """
+        table = self.read(name)
+        for i, field in enumerate(table.schema):
+            if pa.types.is_string_view(field.type):
+                table = table.set_column(
+                    i, field.name, table.column(i).cast(pa.string())
+                )
+            elif pa.types.is_binary_view(field.type):
+                table = table.set_column(
+                    i, field.name, table.column(i).cast(pa.binary())
+                )
+        return table
