@@ -24,6 +24,7 @@ __all__ = [
     "Field",
     "Schema",
     "binary",
+    "binary_view",
     "bool_",
     "date32",
     "date64",
@@ -45,6 +46,7 @@ __all__ = [
     "null",
     "schema",
     "string",
+    "string_view",
     "struct",
     "time32",
     "time64",
@@ -175,7 +177,7 @@ class Schema(_Wrapper):
 
 _NULLARY = (
     "null bool_ int8 int16 int32 int64 uint8 uint16 uint32 uint64 "
-    "float16 float32 float64 string binary"
+    "float16 float32 float64 string binary string_view binary_view"
 ).split()
 
 

@@ -13,10 +13,11 @@ Reads and writes Arrow only; no PyArrow at runtime.
 
 from . import libmarrow as _ma
 from ._wrapper import unwrap
+from . import types
 from .tabular import Table
 
 
-def read_table(source, columns=None):
+def read_table(source, columns=None, binary_type=None):
     """Read a Parquet file into a marrow :class:`Table`.
 
     Parameters
@@ -26,9 +27,14 @@ def read_table(source, columns=None):
     columns : list of str, optional
         Only read these top-level columns, in the given order. Reads all
         columns when ``None``.
+    binary_type : DataType, optional
+        Read Parquet binary columns as this type: ``binary()`` (the default)
+        or ``binary_view()``. Columns annotated as strings read as the
+        matching string type, e.g. ``string_view()``.
     """
     cols = list(columns) if columns is not None else None
-    return Table.wrap(_ma.parquet_read_table(str(source), cols))
+    bt = binary_type if binary_type is not None else types.binary()
+    return Table.wrap(_ma.parquet_read_table(str(source), cols, unwrap(bt)))
 
 
 _PAGE_VERSIONS = {"1.0": 1, "2.0": 2, 1: 1, 2: 2}

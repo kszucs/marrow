@@ -47,6 +47,7 @@ from marrow.builders import (
     DynBuilder,
     BoolBuilder,
     BinaryBuilder,
+    BinaryViewLikeBuilder,
     Int32Builder,
     PrimitiveBuilder,
     StringBuilder,
@@ -547,6 +548,8 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         PyPrimitiveConverter[dt.Float64Type],
         PyStringConverter,
         PyBinaryConverter,
+        PyViewConverter[dt.StringViewType],
+        PyViewConverter[dt.BinaryViewType],
         PyListConverter,
         PyFixedSizeListConverter,
         PyStructConverter,
@@ -607,6 +610,10 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
             self = Self(PyStringConverter(builder, has_nulls))
         elif dtype.is_binary():
             self = Self(PyBinaryConverter(builder, has_nulls))
+        elif dtype.is_string_view():
+            self = Self(PyViewConverter[dt.StringViewType](builder))
+        elif dtype.is_binary_view():
+            self = Self(PyViewConverter[dt.BinaryViewType](builder))
         elif dtype.is_list():
             self = Self(PyListConverter(builder, has_nulls))
         elif dtype.is_fixed_size_list():
@@ -852,6 +859,42 @@ struct PyBinaryConverter(PyConverter):
             b.append_null()
         else:
             b.append(self.py.to_bytes_slice(value))
+
+
+# ---------------------------------------------------------------------------
+# PyViewConverter — string_view / binary_view
+# ---------------------------------------------------------------------------
+
+
+struct PyViewConverter[T: dt.BinaryViewLikeType](PyConverter):
+    """Appends `str` (string_view) or `bytes` (binary_view) values.
+
+    No byte pre-count, unlike the offsets converters: a view builder has no
+    single values buffer to size, and grows its data blocks geometrically.
+    """
+
+    var _builder: DynBuilder
+    var py: PyHelpers
+
+    def __init__(out self, builder: DynBuilder):
+        self._builder = builder
+        self.py = PyHelpers()
+
+    def extend(mut self, values: PyObjectPtr) raises:
+        var n = self.py.length(values)
+        self._builder.as_type[BinaryViewLikeBuilder[Self.T]]().reserve(n)
+        for i in range(n):
+            self.append(self.py.list_getitem(values, i))
+
+    def append(mut self, value: PyObjectPtr) raises:
+        ref b = self._builder.as_type[BinaryViewLikeBuilder[Self.T]]()
+        if self.py.is_none(value):
+            b.append_null()
+        else:
+            comptime if conforms_to(Self.T, dt.StringViewLikeType):
+                b.append(self.py.to_string_slice(value))
+            else:
+                b.append(self.py.to_bytes_slice(value))
 
 
 # ---------------------------------------------------------------------------

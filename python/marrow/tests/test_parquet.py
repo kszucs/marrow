@@ -181,3 +181,29 @@ def test_content_defined_chunking_rejects_bad_type(tmp_path):
         mpq.write_table(
             mt, tmp_path / "bad.parquet", use_content_defined_chunking="yes"
         )
+
+
+def test_read_binary_type_view(tmp_path):
+    """`binary_type=binary_view()` reads strings as `string_view`, as
+    pyarrow's option of the same name does."""
+    import marrow as ma
+
+    p = tmp_path / "t.parquet"
+    pq.write_table(_sample(), p, store_schema=False)
+    got = _to_pa(mpq.read_table(p, binary_type=ma.binary_view()))
+    want = pq.read_table(p, binary_type=pa.binary_view())
+    assert got.schema.field("s").type == pa.string_view()
+    assert got.equals(want)
+
+
+def test_write_string_view(tmp_path):
+    """A string_view column writes as an ordinary string column."""
+    import marrow as ma
+
+    src = tmp_path / "src.parquet"
+    pq.write_table(_sample(), src, store_schema=False)
+    views = mpq.read_table(src, binary_type=ma.binary_view())
+    assert _to_pa(views).schema.field("s").type == pa.string_view()
+    out = tmp_path / "out.parquet"
+    mpq.write_table(views, out)
+    _assert_equiv(pq.read_table(out), _sample())

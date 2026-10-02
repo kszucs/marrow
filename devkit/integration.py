@@ -101,6 +101,10 @@ def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | Non
         return pa.large_binary()
     if name == "largeutf8":
         return pa.large_utf8()
+    if name == "binaryview":
+        return pa.binary_view()
+    if name == "utf8view":
+        return pa.string_view()
     if name == "largelist":
         child = _json_field_to_pa(children_fields[0])
         return None if child is None else pa.large_list(child)
@@ -203,6 +207,24 @@ def _find_field_for_dict_id(json_fields: list, dict_id: int) -> dict | None:
     return None
 
 
+def _json_view_values(col_obj: dict, pa_type: pa.DataType) -> list:
+    """The values of a view column: each view is either INLINED or points into
+    one of VARIADIC_DATA_BUFFERS. Binary is hex-encoded throughout; a
+    string_view's INLINED value is plain text, its data buffers hex."""
+    is_text = pa.types.is_string_view(pa_type)
+    buffers = [bytes.fromhex(b) for b in col_obj.get("VARIADIC_DATA_BUFFERS", [])]
+    values = []
+    for view in col_obj.get("VIEWS", []):
+        if "INLINED" in view:
+            raw = view["INLINED"]
+            value = raw.encode() if is_text else bytes.fromhex(raw)
+        else:
+            start = view["OFFSET"]
+            value = buffers[view["BUFFER_INDEX"]][start : start + view["SIZE"]]
+        values.append(value.decode() if is_text else value)
+    return values
+
+
 def _json_col_to_pa(
     col_obj: dict,
     pa_type: pa.DataType,
@@ -255,6 +277,9 @@ def _json_col_to_pa(
 
     if pa.types.is_string(pa_type) or pa.types.is_large_string(pa_type):
         return pa.array(col_obj.get("DATA", []), type=pa_type, mask=mask_np)
+
+    if pa.types.is_binary_view(pa_type) or pa.types.is_string_view(pa_type):
+        return pa.array(_json_view_values(col_obj, pa_type), type=pa_type, mask=mask_np)
 
     if pa.types.is_decimal(pa_type):
         from decimal import Decimal as _Decimal
@@ -741,7 +766,6 @@ class ArcherySuite:
         {
             "interval",
             "union",
-            "binary_view",
             "list_view",
             "extension",
             "run_end_encoded",

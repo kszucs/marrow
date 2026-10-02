@@ -143,6 +143,16 @@ def binary() raises -> PythonObject:
     return dt.binary.to_dyn().to_python_object()
 
 
+def string_view() raises -> PythonObject:
+    """Create a string_view DataType."""
+    return dt.string_view.to_dyn().to_python_object()
+
+
+def binary_view() raises -> PythonObject:
+    """Create a binary_view DataType."""
+    return dt.binary_view.to_dyn().to_python_object()
+
+
 def fixed_size_binary(byte_width: PythonObject) raises -> PythonObject:
     """Create a fixed-size binary DataType."""
     return dt.fixed_size_binary_(Int(py=byte_width)).to_dyn().to_python_object()
@@ -290,6 +300,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[float64]("float64")
     mb.def_function[string]("string")
     mb.def_function[binary]("binary")
+    mb.def_function[string_view]("string_view")
+    mb.def_function[binary_view]("binary_view")
     mb.def_function[fixed_size_binary]("fixed_size_binary")
     mb.def_function[field]("field")
     mb.def_function[list_]("list_")

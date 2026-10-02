@@ -19,6 +19,7 @@ from marrow.parquet import (
 from marrow.parquet.chunker import ContentDefinedChunking
 from marrow.parquet.codecs import Compression
 from marrow.tabular import Table
+from marrow.dtypes import DynType
 
 
 def _codec(name: String) raises -> Compression:
@@ -35,15 +36,18 @@ def _codec(name: String) raises -> Compression:
 
 
 def parquet_read_table(
-    path: PythonObject, columns: PythonObject
+    path: PythonObject, columns: PythonObject, binary_type: PythonObject
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
+    var bt = DynType(py=binary_type)
     if columns.__is__(builtins.None):
-        return _read_table(String(py=path)).to_python_object()
+        return _read_table(String(py=path), binary_type=bt).to_python_object()
     var cols = List[String]()
     for i in range(Int(py=columns.__len__())):
         cols.append(String(py=columns[i]))
-    return _read_table(String(py=path), columns=cols^).to_python_object()
+    return _read_table(
+        String(py=path), columns=cols^, binary_type=bt
+    ).to_python_object()
 
 
 def parquet_write_table(

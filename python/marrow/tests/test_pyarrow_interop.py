@@ -36,6 +36,8 @@ def test_datatype_from_pyarrow():
         (pa.float64(), ma.float64),
         (pa.bool_(), ma.bool_),
         (pa.string(), ma.string),
+        (pa.string_view(), ma.string_view),
+        (pa.binary_view(), ma.binary_view),
     ]:
         ma_dt = ma_factory()
         pa_field = pa.field("x", pa_type)
@@ -214,6 +216,54 @@ def test_array_from_pyarrow_string():
     assert len(ma_arr) == 2
     roundtripped = pa.array(ma_arr)
     assert roundtripped.equals(pa_arr)
+
+
+VIEW_VALUES = ["", "short", None, "exactly12byt", "a value longer than twelve bytes"]
+
+
+def test_array_string_view_from_python():
+    arr = ma.array(VIEW_VALUES, type=ma.string_view())
+    assert arr.null_count == 1
+    pyarr = pa.array(arr)
+    pyarr.validate(full=True)
+    assert pyarr.type == pa.string_view()
+    assert pyarr.to_pylist() == VIEW_VALUES
+    assert arr[4] == VIEW_VALUES[4]
+    assert arr[1] == VIEW_VALUES[1]
+
+
+def test_array_binary_view_from_python():
+    values = [b"ab", None, b"bytes beyond the inline limit"]
+    pyarr = pa.array(ma.array(values, type=ma.binary_view()))
+    pyarr.validate(full=True)
+    assert pyarr.type == pa.binary_view()
+    assert pyarr.to_pylist() == values
+
+
+@pytest.mark.parametrize("pa_type", [pa.string_view(), pa.binary_view()])
+def test_array_view_roundtrip_pyarrow(pa_type):
+    values = (
+        VIEW_VALUES
+        if pa_type == pa.string_view()
+        else [None if v is None else v.encode() for v in VIEW_VALUES]
+    )
+    pa_arr = pa.array(values, type=pa_type).slice(1)
+    ma_arr = ma.array(pa_arr)
+    assert len(ma_arr) == 4
+    roundtripped = pa.array(ma_arr)
+    roundtripped.validate(full=True)
+    assert roundtripped.equals(pa_arr)
+
+
+def test_record_batch_string_view_ipc_roundtrip(tmp_path):
+    batch = pa.record_batch(
+        [pa.array(VIEW_VALUES, type=pa.string_view()), pa.array(range(5))],
+        names=["s", "i"],
+    )
+    path = str(tmp_path / "views.arrow")
+    ma.write_ipc_file(path, batches=[ma.record_batch(batch)])
+    back = pa.record_batch(list(ma.read_ipc_file(path))[0])
+    assert back.equals(batch)
 
 
 def test_array_from_pyarrow_bool():

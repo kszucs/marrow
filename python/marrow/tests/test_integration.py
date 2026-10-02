@@ -46,7 +46,7 @@ UNSUPPORTED_CASE_PATTERNS = [
     "timestamp",
     "extension",
     "large",
-    "view",
+    "list_view",
     "run_end",
     "null",
 ]
@@ -76,6 +76,8 @@ def _type_supported(t: pa.DataType) -> bool:
     ):
         return True
     if pa.types.is_string(t) and not pa.types.is_large_string(t):
+        return True
+    if pa.types.is_binary_view(t) or pa.types.is_string_view(t):
         return True
     if (
         pa.types.is_list(t)
