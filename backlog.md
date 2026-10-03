@@ -319,16 +319,15 @@ skipped page is stepped over from the index rather than by parsing its header.
 `ByteSource` -- the only way to tell "returned the right rows" from "did less
 work". What is left:
 
-- **A remote `read_ranges` fans out, but over a compute pool.**
-  `OpenDalSource.read_ranges` issues its fetches concurrently through
-  `execution.fan_out`, the helper `ParquetFile.read` and `map_partitions` use
-  too. What it is not is asynchrony: `fan_out` runs on a fixed pool, so at most
-  `min(len(ranges), num_physical_cores())` requests are ever in flight where
+- **A remote `read_ranges` fans out on threads, not asynchronously.**
+  `OpenDalSource.read_ranges` issues its fetches through
+  `ctx.fan_out_blocking`, on the shared I/O pool (`ThreadPool.shared_io()`,
+  `MARROW_IO_THREADS` threads, else one per logical core). What it is not is
+  asynchrony: no more requests are in flight than that pool has threads, where
   `object_store::get_ranges` hands the whole set to a runtime, and a thread
   blocked on a socket is a pool thread doing nothing. That is N/nt round trips
   instead of N. Closing the rest needs an async I/O primitive marrow does not
-  have, and raising the worker count does not substitute for one -- the pool is
-  fixed, so extra work items queue rather than overlap.
+  have; widening the I/O pool raises nt but does not substitute for one.
 
 - **`bench_read_selected_prefix_snappy_1m` reads an uncompressed file.**
   `_prepare_groups` in `marrow/parquet/tests/bench_parquet.mojo` takes a
@@ -704,10 +703,10 @@ them.
 
 #### 2.1 Parallelism above the kernel
 
-**What exists.** Data parallelism *inside* kernels only —
-`sync_parallelize`/`ctx.stripe` appear in `partition.mojo` (6), `views.mojo` (3),
-`groupby.mojo` (3), `parquet/reader.mojo` (3), `sort.mojo` (2), `join.mojo` (2)
-and `filter.mojo` (1), outside `execution.mojo`, which defines them.
+**What exists.** Data parallelism *inside* kernels only — `ExecContext`'s
+`stripe`, `run` and `fan_out` over marrow's own `ThreadPool`
+(`utils/threads.mojo`), called from `partition.mojo`, `views.mojo`,
+`groupby.mojo`, `sort.mojo`, `filter.mojo` and the Parquet and OpenDAL readers.
 **Group-by placement is parallel**, as of the radix-partitioned `HashGrouping`
 — one `SwissHashTable` per partition of the key hash's top 6 bits, so no
 aggregate state is ever split and no merge step exists. Aggregate *accumulation*
@@ -717,8 +716,10 @@ exact `count_distinct` makes impossible. There is no pipeline parallelism:
 `Pipeline._flow` pushes one morsel through the stages on the calling thread.
 
 **What it would take.** True pipeline parallelism is the remaining item: the
-push `Operator` contract is a good foundation, but nothing owns a task queue
-today.
+push `Operator` contract is a good foundation, and `ThreadPool` is the substrate
+a scheduler would run on — its task queue, `TaskScope` spawning, and a `fan_out`
+whose body can stop early for a `LIMIT`. What is missing is the scheduler: nothing
+runs pipelines or morsels on it yet.
 
 Group-by placement has three open costs, all measured by the "Calibration
 sweeps" in `bench_groupby.mojo`:

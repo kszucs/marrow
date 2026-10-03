@@ -77,7 +77,7 @@ from std.builtin._coroutine import (
     _coro_destroy_fn,
     _coro_resume_fn,
 )
-from std.ffi import c_int, external_call, _get_global
+from std.ffi import c_int, c_ssize_t, external_call, _get_global
 from std.math import ceildiv
 from std.memory import ArcPointer
 from std.memory.alloc import unsafe_alloc
@@ -162,9 +162,7 @@ struct Mutex(Movable):
     initialised mutex undefined, and a Mojo value moves whenever it is
     returned or stored. Moving a `Mutex` moves only the pointer.
 
-    Prefer `with mutex.locked():` to a `lock`/`unlock` pair: the block unlocks
-    however it is left, an error included, and `as guard` names the hold that
-    `Condition.wait` needs.
+    Prefer `with mutex.locked():` to a `lock`/`unlock` pair; see `locked`.
 
     Creating one is checked; `lock` and `unlock` — and `Condition`'s `wait`,
     `signal` and `broadcast` — are not. On a default mutex they fail only on a
@@ -214,9 +212,8 @@ struct Mutex(Movable):
 
 
 struct MutexLock[origin: ImmOrigin](Movable):
-    """What `Mutex.locked()` returns: a `with` block's hold on a mutex, taken
-    on entering the block and released on leaving it. It borrows the mutex,
-    which therefore outlives the block."""
+    """What `Mutex.locked()` returns; see there. It borrows the mutex, which
+    therefore outlives the block."""
 
     var _mutex: Pointer[Mutex, Self.origin]
 
@@ -234,12 +231,10 @@ struct MutexLock[origin: ImmOrigin](Movable):
 
 
 struct MutexGuard[origin: ImmOrigin](ImplicitlyCopyable, Movable):
-    """What a `with mutex.locked() as guard:` block holds, and what
-    `Condition.wait` takes — so waiting on a mutex, rather than inside a block
-    that locked it, does not type-check. It is copyable and tied to the
-    mutex's lifetime, not the block's: a guard kept past its block still
-    type-checks, so it proves a block took the lock, not that one holds it
-    now."""
+    """What `with mutex.locked() as guard:` names, and `Condition.wait`
+    takes. It is copyable and tied to the mutex's lifetime, not the block's: a
+    guard kept past its block still type-checks, so it proves a block took the
+    lock, not that one holds it now."""
 
     var _mutex: Pointer[Mutex, Self.origin]
 
@@ -310,14 +305,21 @@ struct Condition(Movable):
 async def _call_boxed[F: def() -> None](box: Pointer[F, MutUntrackedOrigin]):
     """Run a heap-boxed closure once, then destroy and free it."""
     box[]()
+    _destroy(box)
+
+
+def _box[T: Movable](var value: T) -> Pointer[T, MutUntrackedOrigin]:
+    """`value`, moved into a heap cell of its own: what a raw pointer shared
+    with other threads, or a coroutine that outlives its caller, points at."""
+    var p = unsafe_alloc[T](1)
+    p.unsafe_write(value^)
+    return p
+
+
+def _destroy[T: Deinitable](box: Pointer[T, MutUntrackedOrigin]):
+    """Destroy the value `_box` moved onto the heap, and free its cell."""
     box.unsafe_deinit_pointee()
     box.unsafe_free()
-
-
-def _box[F: def() -> None](var f: F) -> Pointer[F, MutUntrackedOrigin]:
-    var p = unsafe_alloc[F](1)
-    p.unsafe_write(f^)
-    return p
 
 
 def _erase[
@@ -401,8 +403,7 @@ struct Thread(Movable):
             self._handle = Self._spawn(task, stack_size)
         except e:
             _coro_destroy_fn(task)
-            box.unsafe_deinit_pointee()
-            box.unsafe_free()
+            _destroy(box)
             raise e^
 
     @staticmethod
@@ -410,8 +411,7 @@ struct Thread(Movable):
         # Kept apart from `__init__` so a failure raises before `self` exists:
         # a half-built `Thread` would run `__deinit__` on a handle of 0, and
         # `pthread_detach(0)` crashes on glibc.
-        var start = unsafe_alloc[AnyCoroutine](1)
-        start.unsafe_write(task)
+        var start = _box(task)
         var attr = _alloc_pthread_object()
         _ = external_call["pthread_attr_init", c_int](attr)
         var bad_stack = (
@@ -728,8 +728,7 @@ struct TaskScope:
         # `ThreadPool.scope` is the one caller, and `_Shared` the pool's
         # internal queue.
         self._shared = shared
-        self._state = unsafe_alloc[_ScopeState](1)
-        self._state.unsafe_write(_ScopeState())
+        self._state = _box(_ScopeState())
 
     def __deinit__(deinit self):
         """Wait for every spawned task and drop any error they raised."""
@@ -749,8 +748,7 @@ struct TaskScope:
         var error: Optional[DynError] = None
         if self._state[].outcome.ends_in_failure():
             error = self._state[].outcome.take_error()
-        self._state.unsafe_deinit_pointee()
-        self._state.unsafe_free()
+        _destroy(self._state)
         return error^
 
     def spawn[F: def() -> None](self, var task: F):
@@ -963,11 +961,8 @@ struct _PoolState(Movable):
     var shutdown: Bool
     var spin_ns: Int
     """How long an idle thread polls for work before it sleeps."""
-    var name: String
-    """What the pool's workers are named after: `{name}-{k}` for worker
-    `k`."""
 
-    def __init__(out self, spin_ns: Int, name: String):
+    def __init__(out self, spin_ns: Int):
         self.ring = _Ring()
         self.mutex = Mutex()
         self.work_cond = Condition()
@@ -976,7 +971,6 @@ struct _PoolState(Movable):
         self.idle_waiters = Atomic[Int64](0)
         self.shutdown = False
         self.spin_ns = spin_ns
-        self.name = name
 
 
 comptime _StatePtr = Pointer[_PoolState, MutUntrackedOrigin]
@@ -1168,8 +1162,7 @@ def _claim[Body: def(Int) -> None](job: _JobPtr[Body], shared: _Shared):
 
 def _release[Body: def(Int) -> None](job: _JobPtr[Body]):
     if job[].holders.fetch_sub(1) == 1:
-        job.unsafe_deinit_pointee()
-        job.unsafe_free()
+        _destroy(job)
 
 
 async def _offer[Body: def(Int) -> None](job: _JobPtr[Body], state: _StatePtr):
@@ -1185,12 +1178,34 @@ async def _offer[Body: def(Int) -> None](job: _JobPtr[Body], state: _StatePtr):
 
 def _read_text(path: String) -> Optional[String]:
     """A small text file's contents — a `/proc` or `/sys` file, which reads
-    to its end whatever size it reports — or None if it cannot be read."""
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except:
+    to its end whatever size it reports — or None if it cannot be read.
+
+    Read through libc, not `open()`: on Linux, where this runs on every
+    shared pool's start, the stdlib's read path here deadlocked the compiler
+    on the golden suite's unit. The calls are declared exactly as the
+    stdlib's own, which share their symbols.
+    """
+    var c_path = path.copy()
+    var fd = external_call["open", c_int, num_fixed_args=2](
+        c_path.as_c_string_span(), c_int(0), c_int(0o666)
+    )
+    if fd < 0:
         return None
+    var bytes = List[UInt8](length=4096, fill=0)
+    var size = 0
+    var got = c_ssize_t(1)
+    while got > 0:
+        if size == len(bytes):
+            bytes.resize(2 * size, 0)
+        got = external_call["read", c_ssize_t](
+            Int(fd), bytes.unsafe_ptr().unsafe_offset(size), len(bytes) - size
+        )
+        if got > 0:
+            size += Int(got)
+    _ = external_call["close", c_int](fd)
+    if got < 0:
+        return None
+    return String(from_utf8_lossy=Span(bytes)[:size])
 
 
 def _positive_int(text: StringSlice) -> Int:
@@ -1229,6 +1244,17 @@ def _quota_cpus(quota: StringSlice, period: StringSlice) -> Optional[Int]:
     return None
 
 
+def _cpu_max_cap(path: String) -> Optional[Int]:
+    """The cap a cgroup v2 `cpu.max` file (`<quota> <period>`, or `max
+    <period>`) sets, in whole CPUs rounded up; None for no cap or no file."""
+    var text = _read_text(path)
+    if text:
+        var fields = text.value().split()
+        if len(fields) == 2:
+            return _quota_cpus(fields[0], fields[1])
+    return None
+
+
 def _cgroup_cpu_limit(proc_cgroup: String, root: String) -> Optional[Int]:
     """The CPU quota this process's cgroup sets, in whole CPUs rounded up, or
     None if it sets none — what `docker --cpus` and a Kubernetes CPU limit
@@ -1236,10 +1262,10 @@ def _cgroup_cpu_limit(proc_cgroup: String, root: String) -> Optional[Int]:
     `/sys/fs/cgroup`; a test passes others.
 
     Under cgroup v2 the process's group is its `0::` line, and each group from
-    there up to the root may cap it in `cpu.max` (`<quota> <period>`, or
-    `max <period>`); the lowest cap applies. When none does, a v1 `cpu`
-    controller is read at its root, which is a container's own group:
-    `cpu.cfs_quota_us` (-1 for none) over `cpu.cfs_period_us`.
+    there up to the root may cap it in `cpu.max` (see `_cpu_max_cap`); the
+    lowest cap applies. When none does, a v1 `cpu` controller is read at its
+    root, which is a container's own group: `cpu.cfs_quota_us` (-1 for none)
+    over `cpu.cfs_period_us`.
     """
     var limit: Optional[Int] = None
     var membership = _read_text(proc_cgroup)
@@ -1250,15 +1276,9 @@ def _cgroup_cpu_limit(proc_cgroup: String, root: String) -> Optional[Int]:
                 if group == "/":
                     group = ""
                 while True:
-                    var cpu_max = _read_text(root + group + "/cpu.max")
-                    if cpu_max:
-                        var fields = cpu_max.value().split()
-                        if len(fields) == 2:
-                            var cap = _quota_cpus(fields[0], fields[1])
-                            if cap and (
-                                not limit or cap.value() < limit.value()
-                            ):
-                                limit = cap
+                    var cap = _cpu_max_cap(root + group + "/cpu.max")
+                    if cap and (not limit or cap.value() < limit.value()):
+                        limit = cap
                     if group == "":
                         break
                     var parent = String(group[byte = 0 : group.rfind("/")])
@@ -1364,9 +1384,7 @@ struct _PoolCell(Movable):
     @staticmethod
     def create() -> _GlobalPtr:
         """A fresh cell on the heap: the registry's creating function."""
-        var cell = unsafe_alloc[_PoolCell](1)
-        cell.unsafe_write(_PoolCell())
-        return cell.unsafe_bitcast[NoneType]()
+        return _box(_PoolCell()).unsafe_bitcast[NoneType]()
 
     @staticmethod
     def destroy(cell: _GlobalPtr):
@@ -1374,9 +1392,7 @@ struct _PoolCell(Movable):
         to be registered. Dropping the last reference to its pool shuts the
         workers down and joins them."""
         if cell:
-            var held = cell.unsafe_value().unsafe_bitcast[_PoolCell]()
-            held.unsafe_deinit_pointee()
-            held.unsafe_free()
+            _destroy(cell.unsafe_value().unsafe_bitcast[_PoolCell]())
 
     @staticmethod
     def lock_for(cell: _CellPtr, pid: Int64):
@@ -1420,11 +1436,9 @@ struct _SharedPool[io: Bool]:
 
     @staticmethod
     def default_concurrency() -> Int:
-        """How many threads the pool starts with: `variable`'s value when it
-        is a positive integer, and otherwise one per performance core (per
-        logical core and at least two, for I/O) within the CPUs this process
-        may use. A value that is not a positive integer is reported on stderr
-        and ignored."""
+        """How many threads the pool starts with; see `ThreadPool.shared` and
+        `ThreadPool.shared_io`. A value of `variable` that is not a positive
+        integer is reported on stderr and ignored."""
         var text = getenv(Self.variable)
         var chosen = _positive_int(text)
         if text and chosen == 0:
@@ -1438,7 +1452,7 @@ struct _SharedPool[io: Bool]:
         if chosen == 0:
             var cpus = _available_cpus()
             comptime if Self.io:
-                chosen = max(min(num_logical_cores(), cpus), 2)
+                chosen = max(cpus, 2)
             else:
                 chosen = max(min(num_performance_cores(), cpus), 1)
         return chosen
@@ -1511,18 +1525,16 @@ def _abandon[T: Movable](var value: T):
     """Make sure `value` is never destroyed, by moving it into a heap cell
     nothing points at. For what a forked child must not touch; see
     `ThreadPool.__deinit__`."""
-    unsafe_alloc[T](1).unsafe_write(value^)
+    _ = _box(value^)
 
 
 struct ThreadPool(Movable):
     """Worker threads and one queue of tasks.
 
     A pool built with `ThreadPool(n)` owns `n` threads and joins them when it
-    is destroyed, after they have drained the queue. `shared()` is the
-    process-wide compute pool, with a worker per *performance* core but one —
-    the caller of `run` is always the extra participant, and an efficiency core
-    would set the pace of any stripe it drew. `shared_io()` is the one for
-    blocking work.
+    is destroyed, after they have drained the queue. `shared()` and
+    `shared_io()` are the process-wide pools, for compute and for blocking
+    work.
 
     Workers run at the default QoS class, the one placement control macOS
     honours, while a command-line caller runs at `USER_INTERACTIVE`. Raising
@@ -1560,14 +1572,15 @@ struct ThreadPool(Movable):
             raise InvalidError(t"ThreadPool: {workers} workers")
         if spin_ns < 0:
             raise InvalidError(t"ThreadPool: spin of {spin_ns} ns")
-        self._state = ArcPointer(_PoolState(spin_ns, name))
+        self._state = ArcPointer(_PoolState(spin_ns))
         self._threads = List[Thread](capacity=workers)
         self._pid = _pid()
         var shared = _Shared.of(self._state)
         for k in range(workers):
+            var label = name.copy()
 
-            def body() {var shared, var k}:
-                _name_thread(shared.state[].name, k)
+            def body() {var shared, var k, var label^}:
+                _name_thread(label, k)
                 shared.work()
 
             self._threads.append(Thread(body^, stack_size))
@@ -1607,7 +1620,8 @@ struct ThreadPool(Movable):
 
         It runs `MARROW_NUM_THREADS` threads, counting the caller of `run`,
         when that is set to a positive integer; otherwise one per performance
-        core, within the CPUs the process may use — on Linux its affinity
+        core, since an efficiency core would set the pace of any stripe it
+        drew, within the CPUs the process may use — on Linux its affinity
         mask and cgroup CPU quota can allow fewer. `resize_shared` replaces
         it, and a `fork`ed child starts its own on first use there.
 
@@ -1877,8 +1891,7 @@ struct ThreadPool(Movable):
             _claim[Body](_raw(serial), _Shared.of(self._state))
             _ = serial^
         else:
-            var job = unsafe_alloc[_ForJob[Body]](1)
-            job.unsafe_write(_ForJob[Body](body_ptr, n, holders=k))
+            var job = _box(_ForJob[Body](body_ptr, n, holders=k))
             var shared = _Shared.of(self._state)
             for _ in range(k - 1):
                 var offer = _handle(_offer[Body](job, shared.state))

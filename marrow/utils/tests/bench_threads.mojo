@@ -17,8 +17,8 @@ The `bench_threads_*` rows have no MAX counterpart, and each pins one property
 a change to the pool can regress:
 
 - **scope_spawn_1k** — spawning cost, one coroutine frame per task.
-- **fan_out_raising_1k** — `fan_out`'s error slots and claim counter over
-  `run`, on empty items.
+- **fan_out_raising_1k** — `fan_out`'s failure bookkeeping and claim counter
+  over `run`, on empty items.
 - **fan_out_skewed** — load balance: every fourth item is 50x the rest, so a
   pool that deals each lane a fixed share runs ~4x slower here.
 - **run_100k** — the per-index cost of `run` on indices too small to be worth
@@ -42,11 +42,11 @@ baseline the pool has to beat.
 from std.algorithm.backend.vectorize import vectorize
 from std.benchmark import BenchMetric, keep
 from std.math import align_up, ceildiv
-from std.time import perf_counter_ns, sleep
+from std.time import sleep
 
 from max.algorithm.functional import sync_parallelize
 
-from ..testing import Benchmark
+from ..testing import Benchmark, busy_wait_us
 from ..threads import TaskScope, ThreadPool
 
 comptime N = 1_000_000
@@ -55,13 +55,6 @@ comptime N = 1_000_000
 def _widths() -> Int:
     """Every thread the shared pool can put on one job."""
     return ThreadPool.shared()[].concurrency()
-
-
-def _pause_us(us: Int):
-    """Busy work for `us` microseconds — unlike a sleep, it keeps the core."""
-    var end = perf_counter_ns() + us * 1000
-    while perf_counter_ns() < end:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +79,7 @@ def _bench_dispatch[
     @always_inline
     def call() {imm pool, imm k}:
         comptime if gap_us > 0:
-            _pause_us(gap_us)
+            busy_wait_us(gap_us)
         comptime if lib == "marrow":
             pool[].run(k, task, k)
         else:
@@ -249,8 +242,8 @@ def bench_threads_scope_spawn_1k(mut b: Benchmark) raises:
 
 
 def bench_threads_fan_out_raising_1k(mut b: Benchmark) raises:
-    # `fan_out` pays for error slots and a raising body; this is the cost of
-    # that over `run`, on 1,000 empty items.
+    # `fan_out` pays for its failure bookkeeping and a raising body; this is
+    # the cost of that over `run`, on 1,000 empty items.
     var pool = ThreadPool.shared()
     var lanes = pool[].concurrency()
     b.throughput(BenchMetric.elements, 1_000)
@@ -275,7 +268,7 @@ def bench_threads_fan_out_skewed(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 64)
 
     def visit(wid: Int, i: Int) raises:
-        _pause_us(50 if i % 4 == 0 else 1)
+        busy_wait_us(50 if i % 4 == 0 else 1)
 
     @always_inline
     def call() raises {imm pool}:

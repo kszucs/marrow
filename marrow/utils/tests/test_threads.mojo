@@ -29,9 +29,8 @@ from std.benchmark import keep
 from std.ffi import c_int, external_call
 from std.memory import ArcPointer
 from std.memory.alloc import unsafe_alloc
-from std.os import makedirs, setenv, unsetenv
+from std.os import makedirs, remove, rmdir, setenv, unsetenv
 from std.sys import CompilationTarget, get_defined_bool, get_defined_int
-from std.tempfile import TemporaryDirectory
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 from std.time import perf_counter_ns, sleep
 
@@ -41,10 +40,14 @@ from ..threads import (
     TaskScope,
     Thread,
     ThreadPool,
+    _Counter,
     _SharedPool,
     _cgroup_cpu_limit,
+    _raw,
+    _read_text,
     _start_with_fewer,
 )
+from ..testing import ScratchDir, busy_wait_us
 from ...errors import DynError, IndexError, IOError, KeyError
 from ...execution import ExecContext
 
@@ -82,12 +85,6 @@ def _assert_ran_on(pool: ThreadPool, ids: List[Int]) raises:
     allowed.append(Thread.current_id())
     for id in ids:
         assert_true(id in allowed)
-
-
-def _pause_us(us: Int):
-    var end = perf_counter_ns() + us * 1000
-    while perf_counter_ns() < end:
-        pass
 
 
 def _eventually[P: def() -> Bool](ready: P) -> Bool:
@@ -130,7 +127,7 @@ def _thread_of_each(
 
     def body(i: Int) {mut ids, imm pause_us}:
         ids[i] = Thread.current_id()
-        _pause_us(pause_us)
+        busy_wait_us(pause_us)
 
     pool.run(n, body, max_threads)
     return ids^
@@ -153,22 +150,19 @@ def _spawned(pool: ThreadPool, n: Int) raises -> Int:
     return Int(hits.load())
 
 
-comptime _Count = Pointer[Atomic[Int64], MutUntrackedOrigin]
-
-
 struct _Tally(Movable):
     """Counts its own destructions, to prove an erased closure is dropped."""
 
-    var drops: _Count
+    var drops: _Counter
 
-    def __init__(out self, drops: _Count):
+    def __init__(out self, drops: _Counter):
         self.drops = drops
 
     def __deinit__(deinit self):
         _ = self.drops[].fetch_add(1)
 
 
-def _spawn_tallies(scope: TaskScope, n: Int, drops: _Count, runs: _Count):
+def _spawn_tallies(scope: TaskScope, n: Int, drops: _Counter, runs: _Counter):
     """Spawn `n` tasks, each owning a `_Tally` and counting its run. The
     pointers are captured by value: the tasks outlive this call."""
     for _ in range(n):
@@ -190,7 +184,7 @@ def _names_on_workers(pool: ThreadPool) -> List[String]:
     def body(i: Int) {mut ids, mut names}:
         ids[i] = Thread.current_id()
         names[i] = Thread.current_name()
-        _pause_us(200)
+        busy_wait_us(200)
 
     pool.run(64, body, pool.concurrency())
     var workers = pool.thread_ids()
@@ -278,7 +272,7 @@ def test_threads_mutex_serialises_increments() raises:
     # broken one.
     var mutex = Mutex()
     var total = List[Int](length=1, fill=0)
-    var tp = Pointer(to=total).unsafe_origin_cast[MutUntrackedOrigin]()
+    var tp = _raw(total)
     var go = Atomic[Int64](0)
     var gp = Pointer(to=go)
     var threads = List[Thread]()
@@ -306,7 +300,7 @@ def test_threads_condition_signal_hands_off() raises:
     var mutex = Mutex()
     var cond = Condition()
     var slot = List[Int](length=1, fill=0)
-    var sp = Pointer(to=slot).unsafe_origin_cast[MutUntrackedOrigin]()
+    var sp = _raw(slot)
 
     def producer() {imm mutex, imm cond, imm sp}:
         with mutex.locked():
@@ -390,7 +384,7 @@ def test_threads_join_waits_for_the_body() raises:
     var dp = Pointer(to=done)
 
     def slow() {imm dp}:
-        _pause_us(1_000)
+        busy_wait_us(1_000)
         dp[].store(1)
 
     var t = Thread(slow)
@@ -430,8 +424,8 @@ def test_threads_thread_rejects_a_bad_stack_size() raises:
     # The body must be destroyed, not leaked and not run.
     var drops = Atomic[Int64](0)
     var runs = Atomic[Int64](0)
-    var drops_ptr = Pointer(to=drops).unsafe_origin_cast[MutUntrackedOrigin]()
-    var runs_ptr = Pointer(to=runs).unsafe_origin_cast[MutUntrackedOrigin]()
+    var drops_ptr = _raw(drops)
+    var runs_ptr = _raw(runs)
     var tally = _Tally(drops_ptr)
 
     def body() {var tally^, imm runs_ptr}:
@@ -582,7 +576,7 @@ def test_threads_run_soak() raises:
         pool.run(n, add, 1 + rep % 7)
         expect += n
         if rep % 500 == 0:
-            _pause_us(150)
+            busy_wait_us(150)
     assert_equal(Int(total.load()), expect)
 
 
@@ -618,7 +612,7 @@ def test_threads_sleep_and_wake_across_nested_jobs() raises:
         pool.scope(body)
         expect += spawns
         if rep % 3 == 0:
-            _pause_us(120)
+            busy_wait_us(120)
     assert_equal(Int(total.load()), expect)
 
 
@@ -654,7 +648,7 @@ def test_threads_scope_keeps_borrowed_values_alive() raises:
     var pool = ThreadPool(3)
     var mutex = Mutex()
     var total = List[Int](length=1, fill=0)
-    var tp = Pointer(to=total).unsafe_origin_cast[MutUntrackedOrigin]()
+    var tp = _raw(total)
 
     def body(scope: TaskScope) {imm mutex, imm tp}:
         for _ in range(64):
@@ -692,7 +686,7 @@ def test_threads_scope_tasks_spawn_more_tasks() raises:
     # the scope must wait for tasks spawned after it began waiting.
     var pool = ThreadPool(3)
     var nodes = Atomic[Int64](0)
-    var np = Pointer(to=nodes).unsafe_origin_cast[MutUntrackedOrigin]()
+    var np = _raw(nodes)
 
     def body(scope: TaskScope) {imm np}:
         _spawn_tree(scope, np, 0)
@@ -757,8 +751,8 @@ def test_threads_scope_across_pools() raises:
 def test_threads_scope_destroys_each_task_once() raises:
     var drops = Atomic[Int64](0)
     var runs = Atomic[Int64](0)
-    var drops_ptr = Pointer(to=drops).unsafe_origin_cast[MutUntrackedOrigin]()
-    var runs_ptr = Pointer(to=runs).unsafe_origin_cast[MutUntrackedOrigin]()
+    var drops_ptr = _raw(drops)
+    var runs_ptr = _raw(runs)
     var pool = ThreadPool(3)
 
     def body(scope: TaskScope) {imm drops_ptr, imm runs_ptr}:
@@ -837,7 +831,7 @@ def test_threads_scope_raises_the_earliest_spawned_failure() raises:
     var pool = ThreadPool(3)
     for _ in range(20 * STRESS):
         var ran = List[Int](length=200, fill=0)
-        var rp = Pointer(to=ran).unsafe_origin_cast[MutUntrackedOrigin]()
+        var rp = _raw(ran)
 
         def body(scope: TaskScope) {imm rp}:
             for i in range(200):
@@ -845,7 +839,7 @@ def test_threads_scope_raises_the_earliest_spawned_failure() raises:
                 def task() raises {imm rp, var i}:
                     rp[][i] = 1
                     if i == 40:
-                        _pause_us(300)
+                        busy_wait_us(300)
                         raise Error("task ", i)
                     if i == 41 or i == 150 or i == 199:
                         raise Error("task ", i)
@@ -868,8 +862,8 @@ def test_threads_scope_failure_cancels_and_skips_later_tasks() raises:
     var pool = ThreadPool(3)
     var drops = Atomic[Int64](0)
     var runs = Atomic[Int64](0)
-    var drops_ptr = Pointer(to=drops).unsafe_origin_cast[MutUntrackedOrigin]()
-    var runs_ptr = Pointer(to=runs).unsafe_origin_cast[MutUntrackedOrigin]()
+    var drops_ptr = _raw(drops)
+    var runs_ptr = _raw(runs)
 
     def body(scope: TaskScope) raises {imm drops_ptr, imm runs_ptr}:
         def first() raises:
@@ -894,8 +888,8 @@ def test_threads_scope_cancel_skips_what_has_not_started() raises:
     var pool = ThreadPool(3)
     var drops = Atomic[Int64](0)
     var runs = Atomic[Int64](0)
-    var drops_ptr = Pointer(to=drops).unsafe_origin_cast[MutUntrackedOrigin]()
-    var runs_ptr = Pointer(to=runs).unsafe_origin_cast[MutUntrackedOrigin]()
+    var drops_ptr = _raw(drops)
+    var runs_ptr = _raw(runs)
 
     def body(scope: TaskScope) raises {imm drops_ptr, imm runs_ptr}:
         assert_false(scope.cancelled())
@@ -945,7 +939,7 @@ def test_threads_scope_body_error_wins_after_running_tasks_finish() raises:
     def body(scope: TaskScope) raises {imm sp, imm fp}:
         def slow() raises {imm sp, imm fp}:
             sp[].store(1)
-            _pause_us(2_000)
+            busy_wait_us(2_000)
             fp[].store(1)
             raise Error("task")
 
@@ -1044,7 +1038,7 @@ def test_threads_fan_out_lanes_are_exclusive() raises:
         assert_true(wid >= 0 and wid < lanes)
         if busy.unsafe_offset(wid)[].fetch_add(1) != 0:
             _ = op[].fetch_add(1)
-        _pause_us(10)
+        busy_wait_us(10)
         per_lane[wid] += 1
         seen[i] += 1
         _ = busy.unsafe_offset(wid)[].fetch_sub(1)
@@ -1091,7 +1085,7 @@ def test_threads_fan_out_raises_the_lowest_failure_every_time() raises:
         def visit(wid: Int, i: Int) raises {mut ran}:
             ran[i] = 1
             if i == 250:
-                _pause_us(300)
+                busy_wait_us(300)
                 raise Error("item ", i)
             if i == 251 or i == 397:
                 raise Error("item ", i)
@@ -1135,7 +1129,7 @@ def test_threads_fan_out_skips_items_after_a_failure() raises:
         _ = rp[].fetch_add(1)
         if i == 0:
             raise Error("item 0")
-        _pause_us(100)
+        busy_wait_us(100)
 
     with assert_raises(contains="item 0"):
         pool.fan_out(4_000, visit, 4)
@@ -1159,7 +1153,7 @@ def _stopping_fan_out(
     def visit(wid: Int, i: Int) raises {mut ran, mut ids} -> Bool:
         ran[i] += 1
         ids[i] = Thread.current_id()
-        _pause_us(1)
+        busy_wait_us(1)
         return i != 100
 
     if ctx:
@@ -1302,15 +1296,30 @@ def test_threads_pool_rejects_a_negative_spin() raises:
 
 
 def test_threads_idle_workers_spin_then_sleep() raises:
-    # An idle worker polls for work for `spin_ns`, then sleeps. 10 ms after a
-    # job, a pool spinning 100 ms still has workers polling — its deadline is
-    # wall-clock, so only a worker idle or descheduled for 90 ms could have
-    # slept, and not all three; with no spin, every worker falls asleep.
-    var spinning = ThreadPool(3, spin_ns=100_000_000)
+    """An idle worker polls for work for `spin_ns`, then sleeps; with no spin,
+    every worker falls asleep.
+
+    Every spin starts after its pool does, so a reading taken less than
+    `spin_ns` after the pool started cannot see a worker that slept on its
+    deadline. 10 ms after a job is well inside 100 ms, but a loaded machine
+    can stretch the 10 ms past it, so a reading outside the window proves
+    nothing and the round is run again. Two spinning workers and the caller
+    fit a three-core CI runner."""
+    comptime spin_ns = 100_000_000
+    var conclusive = False
+    for _ in range(10):
+        var started = perf_counter_ns()
+        var spinning = ThreadPool(2, spin_ns=spin_ns)
+        _ = _thread_of_each(spinning, 64, spinning.concurrency(), 100)
+        sleep(0.01)
+        var asleep = spinning.sleeping()
+        if perf_counter_ns() - started < spin_ns:
+            assert_true(asleep < spinning.size())
+            conclusive = True
+            break
+    if not conclusive:
+        raise Error("never read a spinning pool within its spin, ten times")
     var sleeping = ThreadPool(3, spin_ns=0)
-    _ = _thread_of_each(spinning, 64, spinning.concurrency(), 100)
-    sleep(0.01)
-    assert_true(spinning.sleeping() < spinning.size())
     _ = _thread_of_each(sleeping, 64, sleeping.concurrency(), 100)
     assert_true(_all_asleep(sleeping))
 
@@ -1484,7 +1493,7 @@ def test_threads_cgroup_v2_quota_takes_the_lowest_cap_up_the_tree() raises:
     """A cgroup v2 quota is counted in whole CPUs, rounded up, and every group
     from the process's own up to the root may cap it: the lowest cap
     applies."""
-    with TemporaryDirectory() as root:
+    with ScratchDir() as root:
         var membership = root + "/cgroup"
         makedirs(root + "/a/b")
         _write(membership, "0::/a/b\n")
@@ -1496,10 +1505,15 @@ def test_threads_cgroup_v2_quota_takes_the_lowest_cap_up_the_tree() raises:
         assert_equal(_cgroup_cpu_limit(membership, root).value(), 8)
         _write(root + "/cpu.max", "max 100000\n")
         assert_false(Bool(_cgroup_cpu_limit(membership, root)))
+        # `ScratchDir` removes one level.
+        remove(root + "/a/b/cpu.max")
+        rmdir(root + "/a/b")
+        remove(root + "/a/cpu.max")
+        rmdir(root + "/a")
 
 
 def test_threads_cgroup_v1_quota_is_read_at_the_cpu_controller() raises:
-    with TemporaryDirectory() as root:
+    with ScratchDir() as root:
         var membership = root + "/cgroup"
         makedirs(root + "/cpu")
         _write(membership, "12:cpu,cpuacct:/docker/abc\n4:memory:/docker/abc\n")
@@ -1511,10 +1525,27 @@ def test_threads_cgroup_v1_quota_is_read_at_the_cpu_controller() raises:
         assert_equal(_cgroup_cpu_limit(membership, root).value(), 3)
         _write(root + "/cpu/cpu.cfs_quota_us", "-1\n")
         assert_false(Bool(_cgroup_cpu_limit(membership, root)))
+        remove(root + "/cpu/cpu.cfs_quota_us")
+        remove(root + "/cpu/cpu.cfs_period_us")
+        rmdir(root + "/cpu")
+
+
+def test_threads_read_text_reads_a_file_past_one_buffer() raises:
+    """The cgroup reader returns a file whole, however many reads it takes,
+    and None for one it cannot open."""
+    with ScratchDir() as root:
+        var text = String()
+        for i in range(2_000):
+            text += String(i) + ","
+        _write(root + "/big", text)
+        assert_equal(_read_text(root + "/big").value(), text)
+        _write(root + "/empty", "")
+        assert_equal(_read_text(root + "/empty").value(), "")
+        assert_false(Bool(_read_text(root + "/missing")))
 
 
 def test_threads_cgroup_files_that_are_missing_or_garbled_cap_nothing() raises:
-    with TemporaryDirectory() as root:
+    with ScratchDir() as root:
         assert_false(Bool(_cgroup_cpu_limit(root + "/missing", root)))
         var membership = root + "/cgroup"
         _write(membership, "0::/\n")
@@ -1583,7 +1614,7 @@ def test_threads_exec_context_fan_out_stays_within_num_threads() raises:
 
     def visit(wid: Int, i: Int) raises {mut ids}:
         ids[i] = Thread.current_id()
-        _pause_us(200)
+        busy_wait_us(200)
 
     ExecContext.parallel(2).with_pool(pool.copy()).fan_out(64, visit, 8)
     assert_true(_distinct(ids) <= 2)
@@ -1616,7 +1647,7 @@ def test_threads_exec_context_run_stays_within_num_threads() raises:
 
     def body(i: Int) {mut ids}:
         ids[i] = Thread.current_id()
-        _pause_us(200)
+        busy_wait_us(200)
 
     ExecContext.parallel(2).with_pool(pool.copy()).run(64, body)
     assert_true(_distinct(ids) <= 2)

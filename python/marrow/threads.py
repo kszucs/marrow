@@ -6,8 +6,9 @@ and ``io_thread_count``, and their setters.
 
 CPU work runs on one process-wide pool and blocking I/O on a second. Each
 starts on first use with ``MARROW_NUM_THREADS`` or ``MARROW_IO_THREADS``
-threads when that is set to a positive integer, and otherwise with one per
-core the process may use. A count includes the calling thread, which always
+threads when that is set to a positive integer. Otherwise the CPU pool takes
+one thread per performance core the process may use, and the I/O pool one per
+logical core, at least two. A count includes the calling thread, which always
 takes part in the work it starts.
 """
 

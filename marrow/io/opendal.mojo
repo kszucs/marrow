@@ -687,9 +687,10 @@ struct OpenDalSource(ByteSource):
         runtime and issues them all, where here a thread blocked on a
         socket is a pool thread doing nothing. Marrow has no async runtime and
         no other way to overlap I/O, so this is N/nt round trips instead of N
-        -- the right shape, at a fraction of the reach. Do not ask for more
-        workers than cores to chase more: the pool is fixed, so extra work
-        items queue rather than overlap.
+        -- the right shape, at a fraction of the reach. No more requests
+        overlap than the I/O pool has threads, the rest queue, so reach
+        further by widening it (`MARROW_IO_THREADS`,
+        `ThreadPool.resize_shared_io`) rather than by asking for more lanes.
         """
         var n = len(ranges)
         for ref r in ranges:

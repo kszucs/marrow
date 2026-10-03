@@ -31,6 +31,7 @@ from std.sys import argv, get_defined_bool
 from std.tempfile import mkdtemp
 from std.testing import TestSuite as _StdTestSuite
 from std.testing.suite import TestResult, TestSuiteReport
+from std.time import perf_counter_ns
 
 from ..arrays import DynArray
 from ..kernels.aggregate import AllKernel
@@ -695,6 +696,14 @@ struct ScratchDir:
         except:
             pass
         return False
+
+
+def busy_wait_us(us: Int):
+    """Keep the calling thread busy for `us` microseconds. Unlike a sleep it
+    holds on to the core, which is what a stand-in for real work needs."""
+    var end = perf_counter_ns() + us * 1000
+    while perf_counter_ns() < end:
+        pass
 
 
 struct Rng:

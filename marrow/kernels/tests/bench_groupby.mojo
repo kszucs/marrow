@@ -10,28 +10,12 @@ Every row groups the same column; only the `ExecContext` differs, so a `serial`
 row and a `par8` row of the same cardinality are directly comparable and the
 speedup is the ratio between them.
 
-**`parallel(N)` does not bound the radix path to N workers, so read the `parN`
-rows as one "parallel" data point and not as a scaling curve.** `ctx` governs
-only the *striped* phases — key hashing, the radix histogram and scatter, and
-the closing `take` — because `ExecContext.stripe` sets concurrency by choosing
-`resolved_num_threads()` work items. The dominant phase does not go through
-`stripe`: the 64 per-partition `SwissHashTable` inserts are dispatched as
-`ctx.fan_out(64, run, 64)` in `RadixPartitioner.map_partitions`, and the id
-write-back as `pool[].run(64, finish_partition, 64)` below it. Both hand 64
-work items to the context's `ThreadPool`, which caps them at its own size and
-never sees `num_threads`.
-
-**That split is intended, not a defect to be fixed here.** A partitioned phase
-is sized by the partition count, and the pool owns how many threads drain a
-64-item queue; threading `ctx` into `map_partitions` would put a second thread
-budget next to the one the pool already keeps, for the join as well as for the
-group-by. The consequence to know about is that a thread-limited host is
-oversubscribed by this path regardless of what `ctx` says.
-
-The measurement says so on its own: `par2_10m_card5m` runs at **2.82x** serial,
-and a genuine two-worker budget cannot exceed 2.00x. That is also why the sweep
-is flat from `par4` on — every `parN` row already inserts at full machine width,
-and only the striped remainder responds to N.
+Every phase runs within `parallel(N)`'s budget, so the `parN` rows form a
+scaling curve. The striped phases — key hashing, the radix histogram and
+scatter, and the closing `take` — go through `ExecContext.stripe`; the 64
+per-partition `SwissHashTable` inserts (`RadixPartitioner.map_partitions`) and
+the id write-back go through `ExecContext.fan_out` and `ExecContext.run`, which
+cap a call at `resolved_num_threads()`.
 
 `bench_groupby_anchor_*` touches no group-by code at all — it is a raw
 `SwissHashTable` insert. It is here to be *ignored*, which is the point: this
