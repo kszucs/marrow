@@ -580,7 +580,7 @@ SPDX-License-Identifier: Apache-2.0
 </section>
 <section id="what-the-corpus-measures-as-missing" class="level2">
 <h2 class="anchored" data-anchor-id="what-the-corpus-measures-as-missing">What the corpus measures as missing</h2>
-<p>58 of the 285 cases carry <code>-- skip mojo</code>: marrow has no API for them, so the SQL and the DuckDB answer are recorded and the marrow body is a <em>proposal</em> rather than a verified spelling.</p>
+<p>51 of the 286 cases carry <code>-- skip mojo</code>: marrow has no API for them, so the SQL and the DuckDB answer are recorded and the marrow body is a <em>proposal</em> rather than a verified spelling.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 57%">
@@ -598,8 +598,8 @@ SPDX-License-Identifier: Apache-2.0
 <td>aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness, <code>bool_and</code>/<code>bool_or</code></td>
 </tr>
 <tr class="even">
-<td style="text-align: right;">10</td>
-<td>temporal — date_diff, age, strftime/strptime, make_date, epoch seconds, month intervals, time zones, timestamp literals</td>
+<td style="text-align: right;">9</td>
+<td>temporal — date_diff, age, strftime/strptime, make_date, epoch seconds, month intervals, timestamp literals</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;">8</td>
@@ -610,8 +610,8 @@ SPDX-License-Identifier: Apache-2.0
 <td>math — greatest/least, rounding to digits, bitwise operators, gcd/lcm, signbit, trigonometry</td>
 </tr>
 <tr class="odd">
-<td style="text-align: right;">5</td>
-<td>string — regexp, concat_ws</td>
+<td style="text-align: right;">2</td>
+<td>string — concat_ws, null-skipping <code>concat</code></td>
 </tr>
 <tr class="even">
 <td style="text-align: right;">4</td>
@@ -626,14 +626,10 @@ SPDX-License-Identifier: Apache-2.0
 <td>filters — SQL <code>NOT IN</code> null semantics, <code>.is_in</code> as a method</td>
 </tr>
 <tr class="odd">
-<td style="text-align: right;">3</td>
-<td>decimals in expressions</td>
-</tr>
-<tr class="even">
 <td style="text-align: right;">2</td>
 <td>subqueries</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td style="text-align: right;">1</td>
 <td><code>DISTINCT ON</code></td>
 </tr>
