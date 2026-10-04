@@ -58,7 +58,7 @@ domain under The Unlicense, which imposes no conditions. Noted for courtesy.
 --------------------------------------------------------------------------------
 
 xxHash -- BSD 2-Clause
-    marrow/utils/hashing.mojo, `XxHash64`
+    marrow/utils/hashing.mojo, `XxHash64` and `XxHash32`
     https://github.com/Cyan4973/xxHash
 
     xxHash Library
@@ -91,8 +91,8 @@ xxHash -- BSD 2-Clause
 --------------------------------------------------------------------------------
 
 Snappy -- BSD 3-Clause
-    marrow/utils/snappy.mojo, `Snappy`: ported from google/snappy 1.2.2
-    `snappy.cc` and `snappy-internal.h`.
+    marrow/utils/snappy.mojo, `Snappy`, and marrow/utils/lz77.mojo, `LzCopy`:
+    ported from google/snappy 1.2.2 `snappy.cc` and `snappy-internal.h`.
     marrow/utils/tests/test_snappy.mojo: edge cases following
     `snappy_unittest.cc`.
     https://github.com/google/snappy
@@ -128,6 +128,87 @@ Snappy -- BSD 3-Clause
 
 --------------------------------------------------------------------------------
 
+Zstandard -- BSD 3-Clause
+    marrow/utils/zstd/matcher.mojo, `FastMatcher`: ported from libzstd
+    1.5.7's `zstd_fast.c`; and marrow/utils/lz77.mojo, `match_length`, from
+    its `ZSTD_count`.
+    marrow/utils/zstd/fse.mojo, huffman.mojo and encoder.mojo: the encoders,
+    ported from `fse_compress.c`, `huf_compress.c`, `zstd_compress.c`,
+    `zstd_compress_literals.c`, `zstd_compress_sequences.c`, `hist.c` and
+    `zstd_preSplit.c`; and the Huffman decoder's choice of table, from
+    `huf_decompress.c`.
+    marrow/utils/tests/test_zstd.mojo: frames from libzstd 1.5.7's
+    `tests/golden-decompression` and `tests/golden-decompression-errors`.
+    https://github.com/facebook/zstd
+
+    BSD License
+
+    For Zstandard software
+
+    Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without modification,
+    are permitted provided that the following conditions are met:
+
+     * Redistributions of source code must retain the above copyright notice, this
+       list of conditions and the following disclaimer.
+
+     * Redistributions in binary form must reproduce the above copyright notice,
+       this list of conditions and the following disclaimer in the documentation
+       and/or other materials provided with the distribution.
+
+     * Neither the name Facebook, nor Meta, nor the names of its contributors may
+       be used to endorse or promote products derived from this software without
+       specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+    (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+    ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
+
+LZ4 -- BSD 2-Clause
+    marrow/utils/lz4.mojo: the compressor, ported from liblz4 1.10.0's
+    `lib/lz4.c` (`LZ4_compress_generic`) and the frame writer from
+    `lib/lz4frame.c` (`LZ4F_compressFrame`).
+    https://github.com/lz4/lz4
+
+    LZ4 Library
+    Copyright (c) 2011-2023, Yann Collet
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+    * Redistributions of source code must retain the above copyright notice,
+      this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+    IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+    THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+    CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+    EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
+
 Apache Arrow -- Apache-2.0
     marrow/parquet/chunker.mojo, marrow/parquet/gearhash.mojo and
     marrow/parquet/tests/test_chunker.mojo: content-defined chunking, ported
@@ -135,6 +216,8 @@ Apache Arrow -- Apache-2.0
     `chunker_internal_generated.h`, and from Arrow Rust
     `parquet/src/column/chunker/cdc.rs`, with test vectors from
     `chunker_internal_test.cc`.
+    marrow/utils/lz4.mojo: `Lz4.decompress_hadoop_into`, ported from Arrow C++
+    `cpp/src/arrow/util/compression_lz4.cc` (`Lz4HadoopCodec`).
     marrow/parquet/tests/test_page_skip.mojo: one case ported from Arrow Rust
     `parquet/src/arrow/arrow_reader/selection/ranges.rs`.
     python/marrow/tests/test_arrays.py: ported from PyArrow's

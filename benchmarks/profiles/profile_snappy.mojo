@@ -25,7 +25,7 @@ from std.os.env import getenv
 from std.sys.info import CompilationTarget
 
 from marrow.utils import CompressionLibs, Snappy
-from marrow.utils.tests.bench_snappy import LibSnappy, corpus
+from marrow.utils.tests.codec_data import LibSnappy, corpus
 
 comptime N = 1 << 20
 

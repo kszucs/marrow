@@ -30,79 +30,15 @@ from ..byteorder import LittleEndian
 from ..compression import CompressionLibs
 from ..snappy import Snappy
 from ..testing import Rng
-
-
-# ---------------------------------------------------------------------------
-# inputs
-# ---------------------------------------------------------------------------
-
-
-def _random(n: Int, seed: UInt64 = 1) -> List[UInt8]:
-    var rng = Rng(seed)
-    var out = List[UInt8](capacity=n)
-    for _ in range(n):
-        out.append(UInt8(rng.next() >> 56))
-    return out^
-
-
-def _text(n: Int, seed: UInt64 = 2) -> List[UInt8]:
-    """Words from a small vocabulary: short literals, short copies."""
-    var words: List[String] = [
-        "the ",
-        "quick ",
-        "brown ",
-        "fox ",
-        "jumps ",
-        "over ",
-        "lazy ",
-        "dog ",
-        "parquet ",
-        "arrow ",
-        "column ",
-        "page ",
-        "snappy ",
-        "marrow ",
-        "mojo ",
-        "vector ",
-        "of ",
-        "and ",
-        "a ",
-        "in ",
-    ]
-    var rng = Rng(seed)
-    var out = List[UInt8](capacity=n + 16)
-    while len(out) < n:
-        for b in words[rng.below(len(words))].as_bytes():
-            out.append(b)
-        if rng.below(7) == 0:
-            out.append(UInt8(48 + rng.below(10)))
-    out.shrink(n)
-    return out^
-
-
-def _ints(n: Int, seed: UInt64 = 3) -> List[UInt8]:
-    """PLAIN int64 with a small range: offset-8 patterns and zero runs."""
-    var rng = Rng(seed)
-    var out = List[UInt8](capacity=n + 8)
-    while len(out) < n:
-        LittleEndian.put_le(out, UInt64(rng.below(1000)), 8)
-    out.shrink(n)
-    return out^
-
-
-def _shapes() -> List[List[UInt8]]:
-    var out = List[List[UInt8]]()
-    out.append(List[UInt8]())
-    out.append([UInt8(7)])
-    out.append(List[UInt8](length=100_000, fill=0))
-    out.append(_random(200_000))
-    out.append(_text(300_000))
-    out.append(_ints(1 << 20))
-    out.append(_text(65_535, seed=5))
-    out.append(_text(65_536, seed=6))
-    out.append(_text(65_537, seed=7))
-    out.append(_ints(200_003, seed=8))
-    return out^
+from .codec_data import (
+    assert_bytes,
+    assert_canary,
+    canary,
+    random_bytes,
+    shapes,
+    small_ints,
+    words,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -141,25 +77,6 @@ def _decompress(comp: List[UInt8]) raises -> List[UInt8]:
     return out^
 
 
-def _assert_bytes(got: List[UInt8], want: List[UInt8], what: String) raises:
-    assert_equal(len(got), len(want), what + ": length")
-    for i in range(len(want)):
-        if got[i] != want[i]:
-            assert_equal(Int(got[i]), Int(want[i]), String(t"{what}: byte {i}"))
-
-
-def _canary(n: Int) -> List[UInt8]:
-    """An `n`-byte destination followed by 256 canary bytes."""
-    return List[UInt8](length=n + 256, fill=0xA5)
-
-
-def _assert_canary(buf: List[UInt8], n: Int, what: String) raises:
-    """Nothing was written past `n`."""
-    for i in range(n, len(buf)):
-        if buf[i] != 0xA5:
-            assert_equal(Int(buf[i]), 0xA5, String(t"{what}: canary byte {i}"))
-
-
 def _roundtrip(data: List[UInt8], what: String) raises:
     var comp = _compress(data)
     assert_true(
@@ -179,14 +96,14 @@ def test_utils_snappy_roundtrip_every_small_length() raises:
     """0..300 bytes: below and across the 15-byte input margin, the 16-byte
     literal fast path, and the 60-byte literal-length boundary."""
     for n in range(301):
-        _roundtrip(_random(n, seed=UInt64(n)), String(t"random {n}"))
-        _roundtrip(_text(n, seed=UInt64(n)), String(t"text {n}"))
+        _roundtrip(random_bytes(n, seed=UInt64(n)), String(t"random {n}"))
+        _roundtrip(words(n, seed=UInt64(n)), String(t"text {n}"))
 
 
 def test_utils_snappy_roundtrip_shapes() raises:
-    var shapes = _shapes()
-    for i in range(len(shapes)):
-        _roundtrip(shapes[i], String(t"shape {i}"))
+    var all = shapes()
+    for i in range(len(all)):
+        _roundtrip(all[i], String(t"shape {i}"))
 
 
 def test_utils_snappy_compress_matches_libsnappy() raises:
@@ -194,15 +111,15 @@ def test_utils_snappy_compress_matches_libsnappy() raises:
     size, skip heuristic and emitters, under one of libsnappy's two hashes.
     Which one it uses is a build flag, so every input must match the same one
     -- and it is logged."""
-    var shapes = _shapes()
-    shapes.append(_text(3 * 65_536 + 5, seed=9))
-    var n = len(shapes)
+    var all = shapes()
+    all.append(words(3 * 65_536 + 5, seed=9))
+    var n = len(all)
     var crc = 0
     var multiply = 0
     for i in range(n):
-        var lib = _lib_compress(shapes[i])
-        crc += Int(_compress_hashing[True](shapes[i]) == lib)
-        multiply += Int(_compress_hashing[False](shapes[i]) == lib)
+        var lib = _lib_compress(all[i])
+        crc += Int(_compress_hashing[True](all[i]) == lib)
+        multiply += Int(_compress_hashing[False](all[i]) == lib)
     assert_true(crc < n or multiply < n, "no input tells the hashes apart")
     assert_true(
         crc == n or multiply == n,
@@ -219,19 +136,19 @@ def test_utils_snappy_compress_matches_libsnappy() raises:
 
 
 def test_utils_snappy_decodes_libsnappy() raises:
-    var shapes = _shapes()
-    for i in range(len(shapes)):
-        var comp = _lib_compress(shapes[i])
-        _assert_bytes(_decompress(comp), shapes[i], String(t"shape {i}"))
+    var all = shapes()
+    for i in range(len(all)):
+        var comp = _lib_compress(all[i])
+        assert_bytes(_decompress(comp), all[i], String(t"shape {i}"))
 
 
 def test_utils_snappy_libsnappy_decodes_ours() raises:
-    var shapes = _shapes()
-    for i in range(len(shapes)):
-        var comp = _compress(shapes[i])
-        _assert_bytes(
-            _lib_decompress(comp, len(shapes[i])),
-            shapes[i],
+    var all = shapes()
+    for i in range(len(all)):
+        var comp = _compress(all[i])
+        assert_bytes(
+            _lib_decompress(comp, len(all[i])),
+            all[i],
             String(t"shape {i}"),
         )
 
@@ -239,16 +156,16 @@ def test_utils_snappy_libsnappy_decodes_ours() raises:
 def test_utils_snappy_appends() raises:
     """`compress` and `decompress` append; a copy never reaches into what the
     list held before."""
-    var data = _text(5000)
+    var data = words(5000)
     var comp: List[UInt8] = [1, 2, 3]
     Snappy.compress(Span(data), comp)
     var body = List[UInt8](Span(comp)[3:])
-    _assert_bytes(_decompress(body), data, "compressed body")
+    assert_bytes(_decompress(body), data, "compressed body")
     var out: List[UInt8] = [9, 9]
     Snappy.decompress(Span(body), out)
     assert_equal(len(out), 2 + len(data))
     assert_equal(out[0], 9)
-    _assert_bytes(List[UInt8](Span(out)[2:]), data, "appended")
+    assert_bytes(List[UInt8](Span(out)[2:]), data, "appended")
 
 
 def test_utils_snappy_max_compressed_length() raises:
@@ -300,20 +217,20 @@ def _copy4(mut out: List[UInt8], offset: Int, length: Int):
 
 
 def _expect(stream: List[UInt8], want: List[UInt8], what: String) raises:
-    _assert_bytes(_decompress(stream), want, what)
+    assert_bytes(_decompress(stream), want, what)
     var exact = List[UInt8](length=len(want), fill=0)
     Snappy.decompress_into(Span(stream), Span(exact))
-    _assert_bytes(exact, want, what + " (decompress_into)")
+    assert_bytes(exact, want, what + " (decompress_into)")
 
 
 def test_utils_snappy_literal_length_forms() raises:
     """Tags 60..63 carry len-1 in 1..4 bytes; an over-long form is legal."""
-    var data = _text(100)
+    var data = words(100)
     for nb in range(1, 5):
         var s = _stream(100)
         _literal(s, Span(data), nb)
         _expect(s, data, String(t"{nb} length bytes"))
-    var big = _random(70_000)
+    var big = random_bytes(70_000)
     var s = _stream(len(big))
     _literal(s, Span(big))
     _expect(s, big, "3-byte literal length")
@@ -322,7 +239,7 @@ def test_utils_snappy_literal_length_forms() raises:
 def test_utils_snappy_copy_forms() raises:
     """The same back-reference as copy-1, copy-2 and copy-4, and copy-2 and
     copy-4 shorter than the 4 bytes libsnappy ever emits."""
-    var head = _text(300)
+    var head = words(300)
     for length in range(1, 65):
         var want = head.copy()
         for i in range(length):
@@ -344,7 +261,7 @@ def test_utils_snappy_copy_forms() raises:
 def test_utils_snappy_four_byte_offset() raises:
     """A copy-4 reaching back past 64 KiB -- legal, never emitted by
     libsnappy's 64 KiB fragments."""
-    var head = _random(100_000)
+    var head = random_bytes(100_000)
     var want = head.copy()
     for i in range(64):
         want.append(head[i + 1])
@@ -357,8 +274,8 @@ def test_utils_snappy_four_byte_offset() raises:
 def test_utils_snappy_pattern_extension() raises:
     """Every overlapping copy (offset < length) for offsets 1..20, as the
     last tag of the buffer and followed by a 300-byte literal."""
-    var pre = _random(300, seed=11)
-    var post = _random(300, seed=12)
+    var pre = random_bytes(300, seed=11)
+    var post = random_bytes(300, seed=12)
     for offset in range(1, 21):
         for length in range(1, 65):
             for tail in range(2):
@@ -421,17 +338,17 @@ def test_utils_snappy_rejects_bad_copies() raises:
     _rejects(s, "copy first")
 
     s = _stream(8)
-    _literal(s, Span(_text(4)))
+    _literal(s, Span(words(4)))
     _copy2(s, 0, 4)  # offset 0
     _rejects(s, "zero offset")
 
     s = _stream(8)
-    _literal(s, Span(_text(4)))
+    _literal(s, Span(words(4)))
     _copy2(s, 5, 4)  # past the start
     _rejects(s, "offset past start")
 
     s = _stream(6)
-    _literal(s, Span(_text(4)))
+    _literal(s, Span(words(4)))
     _copy1(s, 4, 4)  # overflows the declared 6
     _rejects(s, "copy overflow")
 
@@ -439,15 +356,15 @@ def test_utils_snappy_rejects_bad_copies() raises:
 def test_utils_snappy_rejects_bad_literals() raises:
     var s = _stream(10)
     s.append(UInt8(9 << 2))  # 10-byte literal ...
-    s.extend(Span(_text(3)))  # ... with 3 bytes present
+    s.extend(Span(words(3)))  # ... with 3 bytes present
     _rejects(s, "truncated literal")
 
     s = _stream(5)
-    _literal(s, Span(_text(10)))  # more than declared
+    _literal(s, Span(words(10)))  # more than declared
     _rejects(s, "literal overflow")
 
     s = _stream(10)
-    _literal(s, Span(_text(5)))  # less than declared
+    _literal(s, Span(words(5)))  # less than declared
     _rejects(s, "short output")
 
     s = _stream(100)
@@ -457,7 +374,7 @@ def test_utils_snappy_rejects_bad_literals() raises:
 
 
 def test_utils_snappy_rejects_wrong_destination() raises:
-    var data = _text(1000)
+    var data = words(1000)
     var comp = _compress(data)
     var short = List[UInt8](length=999, fill=0)
     with assert_raises():
@@ -472,7 +389,7 @@ def test_utils_snappy_decompress_refuses_an_impossible_length() raises:
     declaring more than 22x its own size is refused before `decompress`
     allocates the length -- and the densest valid stream still decodes."""
     var bomb = _stream(1 << 30)
-    _literal(bomb, Span(_text(1)))
+    _literal(bomb, Span(words(1)))
     var dst = List[UInt8]()
     with assert_raises():
         Snappy.decompress(Span(bomb), dst)
@@ -480,7 +397,7 @@ def test_utils_snappy_decompress_refuses_an_impossible_length() raises:
 
     var copies = 1000
     var dense = _stream(1 + 64 * copies)
-    var byte = _text(1)
+    var byte = words(1)
     _literal(dense, Span(byte))
     for _ in range(copies):
         _copy2(dense, 1, 64)
@@ -492,7 +409,7 @@ def test_utils_snappy_survives_corruption() raises:
     """Truncate a valid stream at every position and flip bytes at random:
     each decode either raises or yields exactly `n` bytes -- and never writes
     past them (the canary)."""
-    var data = _text(3000)
+    var data = words(3000)
     var comp = _compress(data)
     for cut in range(len(comp)):
         var s = List[UInt8](Span(comp)[:cut])
@@ -504,12 +421,12 @@ def test_utils_snappy_survives_corruption() raises:
         for _ in range(1 + rng.below(4)):
             s[rng.below(len(s))] = UInt8(rng.below(256))
         var n = len(data) + rng.below(3) - 1
-        var buf = _canary(n)
+        var buf = canary(n)
         try:
             Snappy.decompress_into(Span(s), Span(buf)[:n])
         except:
             pass
-        _assert_canary(buf, n, String(t"trial {trial}"))
+        assert_canary(buf, n, String(t"trial {trial}"))
 
 
 # ---------------------------------------------------------------------------
@@ -520,18 +437,18 @@ def test_utils_snappy_survives_corruption() raises:
 def test_utils_snappy_decompress_into_writes_nothing_past_n() raises:
     var cases = List[List[UInt8]]()
     for n in range(0, 400, 7):
-        cases.append(_text(n, seed=UInt64(n)))
-        cases.append(_ints(n, seed=UInt64(n)))
+        cases.append(words(n, seed=UInt64(n)))
+        cases.append(small_ints(n, seed=UInt64(n)))
         cases.append(List[UInt8](length=n, fill=3))
-    cases.append(_text(100_000))
-    cases.append(_ints(100_000))
+    cases.append(words(100_000))
+    cases.append(small_ints(100_000))
     for i in range(len(cases)):
         var comp = _compress(cases[i])
         var n = len(cases[i])
-        var buf = _canary(n)
+        var buf = canary(n)
         Snappy.decompress_into(Span(comp), Span(buf)[:n])
-        _assert_bytes(List[UInt8](Span(buf)[:n]), cases[i], String(t"case {i}"))
-        _assert_canary(buf, n, String(t"case {i}"))
+        assert_bytes(List[UInt8](Span(buf)[:n]), cases[i], String(t"case {i}"))
+        assert_canary(buf, n, String(t"case {i}"))
 
 
 # ---------------------------------------------------------------------------
@@ -543,32 +460,32 @@ def test_utils_snappy_pair_decodes_every_shape_pairing() raises:
     """Every pairing of shapes -- equal and unequal lengths, one stream far
     shorter, long literals in either -- so each stream leaves the shared loop
     at a different point and finishes alone."""
-    var shapes = _shapes()
-    shapes.append(_text(5000))
-    shapes.append(_random(300))
+    var all = shapes()
+    all.append(words(5000))
+    all.append(random_bytes(300))
     var comps = List[List[UInt8]]()
-    for i in range(len(shapes)):
-        comps.append(_compress(shapes[i]))
-    for i in range(len(shapes)):
-        for j in range(len(shapes)):
-            var na = len(shapes[i])
-            var nb = len(shapes[j])
-            var buf_a = _canary(na)
-            var buf_b = _canary(nb)
+    for i in range(len(all)):
+        comps.append(_compress(all[i]))
+    for i in range(len(all)):
+        for j in range(len(all)):
+            var na = len(all[i])
+            var nb = len(all[j])
+            var buf_a = canary(na)
+            var buf_b = canary(nb)
             Snappy.decompress_pair_into(
                 Span(comps[i]),
                 Span(buf_a)[:na],
                 Span(comps[j]),
                 Span(buf_b)[:nb],
             )
-            _assert_bytes(
-                List[UInt8](Span(buf_a)[:na]), shapes[i], String(t"a {i} {j}")
+            assert_bytes(
+                List[UInt8](Span(buf_a)[:na]), all[i], String(t"a {i} {j}")
             )
-            _assert_bytes(
-                List[UInt8](Span(buf_b)[:nb]), shapes[j], String(t"b {i} {j}")
+            assert_bytes(
+                List[UInt8](Span(buf_b)[:nb]), all[j], String(t"b {i} {j}")
             )
-            _assert_canary(buf_a, na, String(t"a {i} {j}"))
-            _assert_canary(buf_b, nb, String(t"b {i} {j}"))
+            assert_canary(buf_a, na, String(t"a {i} {j}"))
+            assert_canary(buf_b, nb, String(t"b {i} {j}"))
 
 
 def _copy_tag_after(stream: List[UInt8], pos: Int) raises -> Int:
@@ -606,7 +523,7 @@ def test_utils_snappy_pair_rejects_either_corrupt_stream() raises:
     """A zero copy offset past the middle of a stream -- inside the shared
     loop -- and a stream cut at 60%, each in either position."""
     var n = 50_000
-    var good = _compress(_text(n))
+    var good = _compress(words(n))
     var zero = good.copy()
     var t = _copy_tag_after(good, len(good) // 2)
     if good[t] & 3 == 1:

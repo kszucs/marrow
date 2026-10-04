@@ -2,17 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0 AND MIT AND BSD-2-Clause
 
 # `RapidHash64` is ported from rapidhash V3, Copyright (C) 2025 Nicolas De Carli
-# (MIT), and `XxHash64` from xxHash, Copyright (c) 2012-2021 Yann Collet (BSD
-# 2-Clause); both licences are reproduced in NOTICE.txt.
+# (MIT), and `XxHash64` and `XxHash32` from xxHash, Copyright (c) 2012-2021
+# Yann Collet (BSD 2-Clause); both licences are reproduced in NOTICE.txt.
 
-"""The two hash functions marrow implements.
+"""The hash functions marrow implements.
 
-Neither is in the Mojo standard library, and neither is substitutable:
+None is in the Mojo standard library, and none is substitutable:
 
 - **XXH64** is *mandated* by the Parquet spec for split-block bloom filters, so
   the value has to match other implementations byte for byte.
 - **rapidhash v3** is the group-by / join key hash, chosen for throughput; its
   mixing steps are consumed by a SIMD kernel a lane at a time.
+- **XXH32** is *mandated* by the LZ4 frame format for its checksums.
 
 `Hasher` is the swap point: one static `hash(span, seed)` plus a `name`, which
 is the shape marrow's callers actually use. `XxHash64` conforms. `RapidHash64`
@@ -28,7 +29,7 @@ consuming `finish` inside hot loops, for no gain — `AHasher` and `Fnv1a` are
 different algorithms and neither can replace XXH64, which the Parquet spec
 mandates.
 
-Both are namespaces of static methods, and this module depends on `.byteorder`
+All are namespaces of static methods, and this module depends on `.byteorder`
 alone — no arrays, no dtypes — so each algorithm can be read and checked against
 its reference vectors without the array layer in scope.
 
@@ -37,14 +38,15 @@ dispatch, the GPU launch — is `marrow.kernels.hashing`.
 
 Attribution
 -----------
-Both structs are ports, so they are derivative works and carry their upstream
-licences. The notices are in `NOTICE.txt` at the repository root, as MIT and
-BSD-2-Clause both require; marrow is Apache-2.0, with which both are compatible.
+All three structs are ports, so they are derivative works and carry their
+upstream licences. The notices are in `NOTICE.txt` at the repository root, as
+MIT and BSD-2-Clause both require; marrow is Apache-2.0, with which both are
+compatible.
 
 - `RapidHash64` — rapidhash V3, MIT, (C) 2025 Nicolas De Carli.
   `RapidSecret.make` further derives from wyhash's `make_secret` by Wang Yi
   (public domain). <https://github.com/Nicoshev/rapidhash>
-- `XxHash64` — xxHash, BSD 2-Clause, (c) 2012-2021 Yann Collet.
+- `XxHash64`, `XxHash32` — xxHash, BSD 2-Clause, (c) 2012-2021 Yann Collet.
   <https://github.com/Cyan4973/xxHash>
 
 Reference vectors in `tests/test_hashing.mojo` were generated from those
@@ -682,6 +684,77 @@ struct XxHash64(Hasher):
         h ^= h >> 29
         h *= Self._P3
         h ^= h >> 32
+        return h
+
+
+struct XxHash32:
+    """XXH32 -- the checksum of the LZ4 frame format: its header-checksum byte
+    and its optional block and content checksums.
+
+    A namespace like `XxHash64`, and not a `Hasher`: nothing hashes values
+    with it."""
+
+    comptime _P1 = UInt32(0x9E3779B1)
+    comptime _P2 = UInt32(0x85EBCA77)
+    comptime _P3 = UInt32(0xC2B2AE3D)
+    comptime _P4 = UInt32(0x27D4EB2F)
+    comptime _P5 = UInt32(0x165667B1)
+
+    @staticmethod
+    @always_inline
+    def _round(acc: UInt32, input: UInt32) -> UInt32:
+        return rotate_bits_left[13](acc + input * Self._P2) * Self._P1
+
+    @staticmethod
+    def hash(data: Span[UInt8, _], seed: UInt32 = 0) -> UInt32:
+        """The 32-bit xxHash of `data` (wrapping arithmetic throughout),
+        matching the canonical XXH32."""
+        var n = len(data)
+        var h: UInt32
+        var p = 0
+        if n >= 16:
+            var v1 = seed + Self._P1 + Self._P2
+            var v2 = seed + Self._P2
+            var v3 = seed + 0
+            var v4 = seed - Self._P1
+            var limit = n - 16
+            while p <= limit:
+                v1 = Self._round(v1, LittleEndian.fixed[DType.uint32](data, p))
+                v2 = Self._round(
+                    v2, LittleEndian.fixed[DType.uint32](data, p + 4)
+                )
+                v3 = Self._round(
+                    v3, LittleEndian.fixed[DType.uint32](data, p + 8)
+                )
+                v4 = Self._round(
+                    v4, LittleEndian.fixed[DType.uint32](data, p + 12)
+                )
+                p += 16
+            h = (
+                rotate_bits_left[1](v1)
+                + rotate_bits_left[7](v2)
+                + rotate_bits_left[12](v3)
+                + rotate_bits_left[18](v4)
+            )
+        else:
+            h = seed + Self._P5
+
+        h += UInt32(n)
+
+        while p + 4 <= n:
+            h += LittleEndian.fixed[DType.uint32](data, p) * Self._P3
+            h = rotate_bits_left[17](h) * Self._P4
+            p += 4
+        while p < n:
+            h += UInt32(data[p]) * Self._P5
+            h = rotate_bits_left[11](h) * Self._P1
+            p += 1
+
+        h ^= h >> 15
+        h *= Self._P2
+        h ^= h >> 13
+        h *= Self._P3
+        h ^= h >> 16
         return h
 
 

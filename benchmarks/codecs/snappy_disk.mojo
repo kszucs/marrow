@@ -41,7 +41,7 @@ from std.time import perf_counter_ns
 from marrow.io.local import BufferSource
 from marrow.utils import CompressionLibs, Snappy
 from marrow.utils.testing import ScratchDir
-from marrow.utils.tests.bench_snappy import LibSnappy, corpus
+from marrow.utils.tests.codec_data import LibSnappy, corpus
 
 comptime PAGES = 8
 comptime PAGE = 1 << 20

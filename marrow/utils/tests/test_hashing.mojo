@@ -19,6 +19,7 @@ from std.bit import pop_count
 
 from std.hashlib._ahash import AHasher
 
+from ..compression import Codecs
 from ..hashing import (
     mul_fold,
     mul_wide,
@@ -27,6 +28,7 @@ from ..hashing import (
     Hasher,
     RapidHash64,
     RapidSecret,
+    XxHash32,
     XxHash64,
 )
 
@@ -184,6 +186,42 @@ def test_xxhash64_seed_changes_the_digest() raises:
         XxHash64.hash(Span(hello), seed=0x9E3779B1),
         UInt64(0xB011219B6933E0AB),
     )
+
+
+# ---------------------------------------------------------------------------
+# XxHash32 -- canonical vectors and libzstd's own XXH32
+# ---------------------------------------------------------------------------
+
+
+def _lib_xxh32(data: List[UInt8], seed: UInt32) raises -> UInt32:
+    """libzstd's exported `XXH32`, an implementation independent of ours."""
+    return Codecs.handle["zstd"]().call["ZSTD_XXH32", UInt32](
+        data.unsafe_ptr(), len(data), seed
+    )
+
+
+def test_xxhash32_empty() raises:
+    """The xxHash sanity-check vectors for an empty input."""
+    var empty = List[UInt8]()
+    assert_equal(XxHash32.hash(Span(empty)), UInt32(0x02CC5D05))
+    assert_equal(
+        XxHash32.hash(Span(empty), seed=0x9E3779B1), UInt32(0x36B78AE7)
+    )
+
+
+def test_xxhash32_matches_libzstd() raises:
+    """Every length 0..100 -- the byte tail, the 4-byte tail and the 16-byte
+    stripes -- and a long input, unseeded and seeded."""
+    for n in range(101):
+        var data = _iota_bytes(n)
+        for seed in [UInt32(0), UInt32(0x9E3779B1), UInt32(0xFFFFFFFF)]:
+            assert_equal(
+                XxHash32.hash(Span(data), seed=seed), _lib_xxh32(data, seed)
+            )
+    var long = List[UInt8]()
+    for i in range(100_003):
+        long.append(UInt8((i * 7919) & 0xFF))
+    assert_equal(XxHash32.hash(Span(long)), _lib_xxh32(long, 0))
 
 
 def test_xxhash64_conforms_to_hasher() raises:

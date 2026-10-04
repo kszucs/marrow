@@ -13,9 +13,11 @@ out on its own:
 | `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
 | `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
-| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64` |
+| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`; `XxHash32` |
 | `compression` | `CompressionLibs` — `dlopen`ed zstd / snappy / lz4 / zlib / brotli |
 | `snappy` | `Snappy` — Snappy raw-block compression, in Mojo |
+| `lz4` | `Lz4` — LZ4 block, frame and Hadoop-framed compression, in Mojo |
+| `zstd` | `Zstd` — Zstandard, writing libzstd's level-1 frames, in Mojo |
 | `dylib` | `Dylib`, `LibSpec` — declaring and opening an optional C library |
 | `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
 | `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
@@ -44,5 +46,14 @@ from .compression import CompressionLibs
 from .datetime import CivilDate, Epoch, floor_div
 from .dylib import Dylib, LibSpec
 from .uri import StorageOptions, Uri
-from .hashing import AHash64, Hasher, RapidHash64, RapidSecret, XxHash64
+from .hashing import (
+    AHash64,
+    Hasher,
+    RapidHash64,
+    RapidSecret,
+    XxHash32,
+    XxHash64,
+)
+from .lz4 import Lz4
 from .snappy import Snappy
+from .zstd import Zstd

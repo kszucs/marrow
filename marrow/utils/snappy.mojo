@@ -23,18 +23,19 @@ instruction, where a portable CRC32C is 7-10x slower to compress with. Same
 output means the tests compare bytes with libsnappy rather than only
 round-tripping.
 
-`Snappy` is the whole public surface. Behind it, `_Compressor` owns the hash
-table and walks the input in `_Fragment`s, each finding matches through a
-`_Table` view and writing tags through an `_Emitter`; a `_Decoder` is one
-stream being decoded, and two of them `interleave`. They hold their bytes as
-`Span`s, indexed checked, except where a check was measured to cost (below):
-the decoder's fast loop, the hash table and the wide loads. Those go through
-`BufferView` and `LittleEndian`, whose bounds are `debug_assert`s -- checked in
-a test build (`-D ASSERT=all`), free in a release one -- so the tests catch an
-access a hot loop's argued bound got wrong. The one raw address left picks a
-copy's source in `_fast_tag`. All of these are small values the hot loops copy
-into locals: their methods take `self` by reference, and a store through an
-output pointer could otherwise force every position back to memory.
+`Snappy` is the whole public surface. The decoder's copy primitives are shared
+with the LZ4 and Zstandard codecs in `lz77.mojo`; the rest is Snappy's own: the
+`_Compressor` and its `_Fragment` match finder, the `_Emitter` that turns
+matches into tags, and the `_Decoder` that reads them -- one stream, or two that
+`interleave`. They hold their bytes as `Span`s, indexed checked, except where a
+check was measured to cost (below): the decoder's fast loop, the hash table and
+the wide loads. Those go through `BufferView` and `LittleEndian`, whose bounds
+are `debug_assert`s -- checked in a test build (`-D ASSERT=all`), free in a
+release one -- so the tests catch an access a hot loop's argued bound got wrong.
+The one raw address left picks a copy's source in `_fast_tag`. All of these are
+small values the hot loops copy into locals: their methods take `self` by
+reference, and a store through an output pointer could otherwise force every
+position back to memory.
 
 **The decoder is libsnappy's two-tier loop.** The fast loop takes two tags
 per bounds check with unconditional 32-byte copies, NEON `tbl` pattern
@@ -83,8 +84,8 @@ Measured and reverted, each slower here:
 replacement in one process, order rotated per call (replacement time / this
 code; an identical copy of the module reads 0.96-1.03):
 
-- `_copy64`'s whole 32-byte blocks against an exact-length `unsafe_memcpy`:
-  1.85-2.35 decoding `strings`, 3.0-4.1 decoding pairs;
+- `LzCopy.blocks64`'s whole 32-byte blocks against an exact-length
+  `unsafe_memcpy`: 1.85-2.35 decoding `strings`, 3.0-4.1 decoding pairs;
 - selecting the copy's source *address* against branching on literal or copy:
   1.08-1.12 decoding `strings`, 1.18-1.37 decoding pairs;
 - the fast loop's `BufferView` accesses, asserted in a test build only,
@@ -111,6 +112,7 @@ from ..errors import CorruptError, InvalidError
 from ..views import BufferView
 from .byteorder import LittleEndian
 from .checksum import Crc32c
+from .lz77 import LzCopy
 
 
 # ---------------------------------------------------------------------------
@@ -444,14 +446,12 @@ struct _Decoder[sm: Bool, //, so: Origin[mut=sm], do: MutOrigin](
     """One stream being decoded: the tags from input position `ip`, into the
     output up to position `op`."""
 
-    comptime SLOP = 128
+    comptime SLOP = 2 * LzCopy.SLOP
     """The most a fast round of two tags writes past `op`: each tag is at most
     64 bytes and is written as whole 32- or 16-byte blocks, so 64 per tag. The
     fast loop stops this far from the end of the output."""
 
     comptime TAGS = Self._tag_table()
-    comptime PATTERN_MASKS = Self._pattern_masks(0)
-    comptime RESHUFFLE_MASKS = Self._pattern_masks(16)
 
     var _src: Span[UInt8, Self.so]
     var ip: Int
@@ -495,36 +495,7 @@ struct _Decoder[sm: Bool, //, so: Origin[mut=sm], do: MutOrigin](
             t[tag] = Int16(v)
         return t^
 
-    @staticmethod
-    def _pattern_masks(start: Int) -> Array[SIMD[DType.uint8, 16], 16]:
-        """Row `p - 1`, lane `i`: `(start + i) % p`. Shuffling the first `p`
-        output bytes by row `p - 1` of the `start = 0` table repeats them
-        across 16 lanes; shuffling *that* by the `start = 16` table rotates it
-        to the next 16 bytes of the same repetition."""
-        var t = Array[SIMD[DType.uint8, 16], 16](fill=0)
-        for p in range(1, 17):
-            for i in range(16):
-                t[p - 1][i] = UInt8((start + i) % p)
-        return t^
-
     # --- the fast loop -----------------------------------------------------
-
-    @staticmethod
-    @always_inline
-    def _copy64(
-        src: BufferView[DType.uint8, _],
-        dst: BufferView[mut=True, DType.uint8, _],
-        length: Int,
-    ):
-        """`length <= 64` bytes from the start of `src` to the start of `dst`,
-        as one or two whole 32-byte blocks: up to 63 bytes past `length` are
-        written, inside the `SLOP` the fast loop keeps free, and each block is
-        loaded before it is stored, so a source that overlaps the destination
-        past `length` reads what was there. Neither is `unsafe_memcpy`'s
-        contract."""
-        dst.store[32](0, src.load[32](0))
-        if length > 32:
-            dst.store[32](32, src.load[32](32))
 
     @always_inline
     def _fits(self, at: Int) -> Bool:
@@ -534,36 +505,6 @@ struct _Decoder[sm: Bool, //, so: Origin[mut=sm], do: MutOrigin](
         return (
             at < len(self._src) - 130 and self.op <= len(self._dst) - Self.SLOP
         )
-
-    @always_inline
-    def _pattern64(self, offset: Int):
-        """64 bytes at `op` repeating the `offset` (1..64) bytes before it --
-        libsnappy's `Copy64BytesWithPatternExtension`. Up to 16, the pattern
-        is built in a register with one shuffle and rotated with one more per
-        16 bytes, so no store feeds a later load."""
-        # Two slices, not one view indexed at `op - offset + 16 * i`: the
-        # single view measured 5-9% slower decoding, the slices as fast as raw
-        # pointers.
-        var out = BufferView(self._dst)
-        var from_ = out.slice(self.op - offset)
-        var to = out.slice(self.op)
-        if offset <= 16:
-            var gen = global_constant[Self.PATTERN_MASKS]().unsafe_get(
-                offset - 1
-            )
-            var rot = global_constant[Self.RESHUFFLE_MASKS]().unsafe_get(
-                offset - 1
-            )
-            # `_dynamic_shuffle` is private to the stdlib, and used here on
-            # purpose: it is one NEON `tbl` or SSSE3 `pshufb`, measured equal
-            # to writing the intrinsics out.
-            var pattern = from_.load[16](0)._dynamic_shuffle(gen)
-            comptime for i in range(4):
-                to.store[16](16 * i, pattern)
-                pattern = pattern._dynamic_shuffle(rot)
-        else:
-            comptime for i in range(4):
-                to.store[16](16 * i, from_.load[16](16 * i))
 
     @always_inline
     def _fast_tag(mut self) -> Bool:
@@ -592,7 +533,7 @@ struct _Decoder[sm: Bool, //, so: Origin[mut=sm], do: MutOrigin](
             if unlikely(length & 0x80 != 0 or offset == 0 or offset > self.op):
                 self.ip = at
                 return False
-            self._pattern64(offset)
+            LzCopy.pattern64(BufferView(self._dst), self.op, offset)
         else:
             # Literal or copy, one path: pick the source *address* -- the
             # input after the tag, or `offset` back in the output -- so an
@@ -622,7 +563,7 @@ struct _Decoder[sm: Bool, //, so: Origin[mut=sm], do: MutOrigin](
                 ),
                 length=in_left if literal else out_left,
             )
-            Self._copy64(source, out.slice(self.op), length)
+            LzCopy.blocks64(source, out.slice(self.op), length)
         self.op += length
         return True
 
@@ -657,15 +598,6 @@ struct _Decoder[sm: Bool, //, so: Origin[mut=sm], do: MutOrigin](
             self = s
 
     # --- the checked path --------------------------------------------------
-
-    @always_inline
-    def _copy_exact(self, offset: Int, length: Int):
-        """Snappy's copy, `length` bytes from `offset` back, writing nothing
-        past `op + length`. It goes byte by byte forward, so where the regions
-        overlap the bytes it just wrote are read again and the pattern repeats
-        -- not `memmove`'s semantics."""
-        for i in range(self.op, self.op + length):
-            self._dst[i] = self._dst[i - offset]
 
     def _checked_tag(mut self) raises CorruptError:
         """Decode the one tag at `ip`, checking every bound and writing
@@ -728,7 +660,7 @@ struct _Decoder[sm: Bool, //, so: Origin[mut=sm], do: MutOrigin](
                     t"snappy: {length}-byte copy at output {op} overflows the"
                     t" declared {n} bytes"
                 )
-            self._copy_exact(offset, length)
+            LzCopy.copy_exact(self._dst, op, offset, length)
             self.ip = ip + trailer
             self.op = op + length
 
