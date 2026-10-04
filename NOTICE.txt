@@ -235,6 +235,14 @@ Apache Arrow -- Apache-2.0
 
 --------------------------------------------------------------------------------
 
+Apache Arrow testing data -- Apache-2.0
+    marrow/tests/data/ipc/generated_{lz4,zstd,uncompressible_lz4,
+    uncompressible_zstd}.{arrow_file,stream}, copied unchanged from its
+    `data/arrow-ipc-stream/integration/2.0.0-compression/` directory.
+    https://github.com/apache/arrow-testing
+
+--------------------------------------------------------------------------------
+
 Apache Parquet testing data -- Apache-2.0
     marrow/parquet/tests/data/{hadoop_lz4_compressed,non_hadoop_lz4_compressed,
     lz4_raw_compressed}.parquet, copied unchanged from its `data/` directory.

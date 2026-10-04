@@ -502,6 +502,33 @@ class TestIPCRoundtrip:
         assert len(result_batches) == 1
         assert batch.equals(pa.record_batch(result_batches[0]))
 
+    @pytest.mark.parametrize("codec", ["lz4", "zstd"])
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("native_codecs", [True, False])
+    def test_compressed(self, codec, stream, native_codecs, tmp_path):
+        """Marrow writes compressed bodies, in Mojo or through liblz4 and
+        libzstd; pyarrow and marrow read them, marrow either way."""
+        batch = pa.record_batch(
+            {
+                "a": pa.array(range(10_000), type=pa.int64()),
+                "s": pa.array([f"v{i % 37}" for i in range(10_000)]),
+            }
+        )
+        write = marrow.write_ipc_stream if stream else marrow.write_ipc_file
+        read = marrow.read_ipc_stream if stream else marrow.read_ipc_file
+        open_pa = pa.ipc.open_stream if stream else pa.ipc.open_file
+        path = str(tmp_path / "compressed.arrow")
+        write(
+            path,
+            batches=[marrow.record_batch(batch)],
+            compression=codec,
+            native_codecs=native_codecs,
+        )
+        assert open_pa(path).read_all().to_batches()[0].equals(batch)
+        for read_native in [True, False]:
+            got = read(path, native_codecs=read_native)
+            assert batch.equals(pa.record_batch(got[0]))
+
     def test_pyarrow_writes_marrow_reads_file(self):
         """PyArrow writes IPC file, Marrow reads it."""
         batch = _make_pa_batch()

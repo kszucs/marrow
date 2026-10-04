@@ -42,7 +42,10 @@ from ..execution import ExecContext
 from ..io import ByteSource, Fetched, BufferSource
 from ..schema import Schema
 from ..tabular import RecordBatch, record_batch
+from ..c_data import CArrowArrayStream
+from ..errors import CorruptError
 from ..ipc import (
+    BodyCompression,
     read_ipc_file,
     read_ipc_stream,
     read_ipc_file_schema,
@@ -776,31 +779,202 @@ def test_file_roundtrip_sliced_string_column() raises:
     assert_true(got.columns[0] == array(["b", "c"]).to_dyn())
 
 
-def test_compressed_ipc_file_is_rejected_not_misread() raises:
-    """A ZSTD-compressed body must fail loudly, not decode as raw bytes.
-
-    `RecordBatch.compression` is FlatBuffer slot 3 and was never read, so a
-    compressed file was decoded as if its buffers were uncompressed — garbage
-    values, no error. Reading the codec is the prerequisite for supporting it;
-    until then the only correct behaviour is to say so.
-    """
+def _pyarrow_of(var batches: List[RecordBatch]) raises -> PythonObject:
+    """`batches` as a pyarrow table, through the C stream interface."""
     var pa = Python.import_module("pyarrow")
-    var path = _tmp_path()
-    var table = pa.table({"a": [1, 2, 3, 4]})
-    var opts = pa.ipc.IpcWriteOptions(compression="zstd")
-    var sink = pa.OSFile(path, "wb")
-    var writer = pa.ipc.new_file(sink, table.schema, options=opts)
-    _ = writer.write_table(table)
-    _ = writer.close()
-    _ = sink.close()
+    var schema = batches[0].schema.copy()
+    var caps = CArrowArrayStream.from_batches(schema^, batches^).to_pycapsule()
+    return pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
 
-    var raised = False
+
+def _compressed_table() raises -> PythonObject:
+    """Nulls, nested and dictionary columns, and one string column large
+    enough that its buffers span several 64 KiB LZ4 frame blocks."""
+    var pa = Python.import_module("pyarrow")
+    var n = 6000
+    var ints = Python.list()
+    var words = Python.list()
+    var lists = Python.list()
+    var structs = Python.list()
+    var maps = Python.list()
+    var dicts = Python.list()
+    var flags = Python.list()
+    for i in range(n):
+        ints.append(Python.none() if i % 7 == 0 else PythonObject(i * 31))
+        words.append(String("value-", i % 97, "-", i))
+        lists.append(Python.list(i, i + 1) if i % 5 else Python.list())
+        structs.append(Python.dict(a=i, b=String("s", i % 13)))
+        var m = Python.list()
+        m.append(Python.tuple(String("k", i % 3), i))
+        maps.append(m)
+        dicts.append(String("cat", i % 4))
+        flags.append(i % 3 == 0)
+    return pa.table(
+        Python.dict(
+            ints=pa.array(ints, type=pa.int64()),
+            words=pa.array(words),
+            lists=pa.array(lists, type=pa.list_(pa.int64())),
+            structs=pa.array(
+                structs,
+                type=pa.struct(
+                    Python.list(
+                        pa.field("a", pa.int64()), pa.field("b", pa.string())
+                    )
+                ),
+            ),
+            maps=pa.array(maps, type=pa.map_(pa.string(), pa.int64())),
+            dicts=pa.array(dicts).dictionary_encode(),
+            flags=pa.array(flags, type=pa.bool_()),
+        )
+    )
+
+
+def test_ipc_reads_compressed_bodies() raises:
+    """Files and streams pyarrow writes with LZ4 frame and ZSTD bodies,
+    dictionaries included, in several batches -- decoded in Mojo and through
+    liblz4 and libzstd."""
+    var pa = Python.import_module("pyarrow")
+    var want = _compressed_table()
+    for codec in ["lz4", "zstd"]:
+        for stream in [False, True]:
+            var path = _tmp_path()
+            var opts = pa.ipc.IpcWriteOptions(compression=codec)
+            var sink = pa.OSFile(path, "wb")
+            var writer = pa.ipc.new_stream(
+                sink, want.schema, options=opts
+            ) if stream else pa.ipc.new_file(sink, want.schema, options=opts)
+            _ = writer.write_table(want, max_chunksize=2500)
+            _ = writer.close()
+            _ = sink.close()
+            for native in [True, False]:
+                var batches = read_ipc_stream(
+                    path, native_codecs=native
+                ) if stream else read_ipc_file(path, native_codecs=native)
+                assert_equal(len(batches), 3)
+                var got = _pyarrow_of(batches^)
+                assert_true(
+                    Bool(got.equals(want)),
+                    String(
+                        codec,
+                        " stream" if stream else " file",
+                        " native" if native else " library",
+                    ),
+                )
+
+
+def test_ipc_writes_compressed_bodies() raises:
+    """Pyarrow reads the files and streams marrow writes with LZ4 frame and
+    ZSTD bodies, dictionaries included, and so does marrow -- compressed in
+    Mojo or through liblz4 and libzstd, and decoded either way."""
+    var pa = Python.import_module("pyarrow")
+    var want = _compressed_table()
+    var caps = want.__arrow_c_stream__(Python.none())
+    var batches = CArrowArrayStream.from_pycapsule(caps).to_table().to_batches()
+    for codec in [BodyCompression.LZ4_FRAME, BodyCompression.ZSTD]:
+        for written in [True, False]:
+            var path = _tmp_path()
+            write_ipc_file(
+                path, batches, compression=codec, native_codecs=written
+            )
+            assert_true(
+                Bool(pa.ipc.open_file(path).read_all().equals(want)), "pa file"
+            )
+            write_ipc_stream(
+                path + "s", batches, compression=codec, native_codecs=written
+            )
+            assert_true(
+                Bool(pa.ipc.open_stream(path + "s").read_all().equals(want)),
+                "pa stream",
+            )
+            for read_native in [True, False]:
+                var file = read_ipc_file(path, native_codecs=read_native)
+                assert_true(Bool(_pyarrow_of(file^).equals(want)), "file")
+                var stream = read_ipc_stream(
+                    path + "s", native_codecs=read_native
+                )
+                assert_true(Bool(_pyarrow_of(stream^).equals(want)), "stream")
+
+
+def test_ipc_reads_arrow_testing_compression() raises:
+    """The 2.0.0-compression integration files from apache/arrow-testing,
+    the uncompressible ones storing their buffers raw behind a -1 length."""
+    var pa = Python.import_module("pyarrow")
+    var dir = "marrow/tests/data/ipc/"
+    for name in [
+        "generated_lz4",
+        "generated_zstd",
+        "generated_uncompressible_lz4",
+        "generated_uncompressible_zstd",
+    ]:
+        var file = dir + name + ".arrow_file"
+        var stream = dir + name + ".stream"
+        var want_file = pa.ipc.open_file(file).read_all()
+        var want_stream = pa.ipc.open_stream(stream).read_all()
+        for native in [True, False]:
+            var got = read_ipc_file(file, native_codecs=native)
+            assert_true(Bool(_pyarrow_of(got^).equals(want_file)), file)
+            got = read_ipc_stream(stream, native_codecs=native)
+            assert_true(Bool(_pyarrow_of(got^).equals(want_stream)), stream)
+
+
+def test_ipc_body_compression_buffers() raises:
+    """A buffer is its uncompressed length as an i64, then its frame -- or,
+    behind -1, its bytes as they are; anything else is corrupt."""
+    var raw: List[UInt8] = [
+        0xFF,
+        0xFF,
+        0xFF,
+        0xFF,
+        0xFF,
+        0xFF,
+        0xFF,
+        0xFF,
+        7,
+        8,
+        9,
+    ]
+    var buf = BodyCompression.ZSTD.decompress(Span(raw))
+    assert_equal(len(buf), 64)  # 3 bytes, in a 64-byte allocation
+    assert_equal(Int(buf.unsafe_get(0)), 7)
+    assert_equal(Int(buf.unsafe_get(2)), 9)
+    # Nothing at all, as `compress` writes an empty buffer, and a length of
+    # 0 with nothing after it, as Arrow Java writes one: both empty, without
+    # asking the codec.
+    for codec in [BodyCompression.LZ4_FRAME, BodyCompression.ZSTD]:
+        assert_equal(len(codec.decompress(Span(List[UInt8]()))), 0)
+        var zero = List[UInt8](length=8, fill=0)
+        assert_equal(len(codec.decompress(Span(zero))), 0)
+    var cases = List[List[UInt8]]()
+    cases.append([3, 0, 0, 0, 0, 0, 0])  # a short length
+    cases.append([0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 1])  # -2
+    cases.append([5, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3])  # not a frame
+    # More than any 3-byte frame holds: refused before it is allocated.
+    cases.append([0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 1, 2, 3])
+    for bad in cases:
+        for codec in [BodyCompression.LZ4_FRAME, BodyCompression.ZSTD]:
+            for native in [True, False]:
+                var refused = False
+                try:
+                    _ = codec.decompress(Span(bad), native)
+                except e:
+                    refused = e.isa[CorruptError]()
+                assert_true(refused, String(t"{len(bad)}-byte buffer accepted"))
+
+
+def test_ipc_body_compression_names() raises:
+    """The codecs by pyarrow's names for them, in any case."""
+    for name in ["lz4", "LZ4", "lz4_frame", "LZ4_FRAME"]:
+        assert_true(
+            BodyCompression.from_name(name) == BodyCompression.LZ4_FRAME
+        )
+    for name in ["zstd", "ZSTD", "Zstd"]:
+        assert_true(BodyCompression.from_name(name) == BodyCompression.ZSTD)
+    var refused = False
     try:
-        _ = read_ipc_file(path)
-    except e:
-        raised = True
-        assert_true("compress" in String(e))
-    assert_true(raised, "expected a compressed body to be rejected")
+        _ = BodyCompression.from_name("snappy")
+    except:
+        refused = True  # an `InvalidError`, as `from_name` declares
+    assert_true(refused, "snappy accepted")
 
 
 def test_delta_dictionary_batch_appends_not_replaces() raises:

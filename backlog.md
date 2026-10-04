@@ -263,6 +263,50 @@ Order of work if picked up: link the codecs behind a `BuildOptions` flag,
 measure the size gate and the wheel, then delete the staging only once both
 platforms are green.
 
+### The Mojo LZ4 and Zstandard codecs — what is left
+
+`marrow/utils/lz4.mojo` and `marrow/utils/zstd/` run Parquet's LZ4, LZ4_RAW
+and ZSTD pages and Arrow IPC's LZ4_FRAME and ZSTD bodies, in both
+directions; a reader or writer made with `native_codecs=False` runs them
+through liblz4 and libzstd instead. Both compressors write their library's bytes: LZ4 blocks
+and frames as liblz4 1.10.0's `LZ4_compress_default` and
+`LZ4F_compressFrame`, Zstandard frames as libzstd 1.5.7's level 1, and the
+tests hold them identical. Speeds below are `benchmarks/codecs/codec_ab.mojo`
+-- thread CPU time, the two sides alternated, best of 25 -- native over the
+library, under 1 being faster.
+
+- **LZ4 decoding is 1.12-1.17x liblz4 on text**, 1.03-1.04x on int64s
+  and 1.08-1.13x on floats (14 us a MiB, nearly all one literal copy).
+  Profiles of both loops show the same mispredicted branch -- whether a
+  match is longer than 18 -- taking about 29% of each, the same loads and a
+  few more instructions on ours; liblz4's 18-byte copy, tried in SIMD and in
+  integer registers, made it no faster. Compression is 0.92-1.03x.
+- **Zstandard compression is 1.05-1.09x libzstd on 64 KiB of text and
+  1.06x on 1 MiB of int64s**, decoding 1.04-1.05x on 64 KiB of text; every
+  other case is 0.92-1.03x. Per-phase timings against libzstd's exported `HIST_*`,
+  `HUF_*` and `FSE_*` functions were the way to find each gap so far
+  (throwaway drivers, not kept); the end-to-end benchmark is too noisy on
+  this machine to resolve a few percent.
+- **Zstandard's sequence decoding runs short of registers.** On 64 KiB of
+  text, 28% of the loop's samples are stack loads and stores, and small
+  changes around it move that: a call anywhere in the loop, even in its
+  rarely taken branch, took it to 36% and decoding 10-20% slower; the
+  guard at the top of `Zstd.decompress_into` is worth 13-25% on text and
+  int64s, though the length check after the loop catches the same input.
+  Cutting what the loop keeps live -- three FSE tables behind one base
+  pointer, the bounds as end positions -- is the open fix, so its speed
+  stops depending on what surrounds it.
+- **Zstandard compresses at level 1 only.** Neither writer takes a level
+  yet; when one does, levels above 1 need libzstd's double-fast and lazy
+  match finders, or `native_codecs=False` for those levels.
+- **The size gate needs re-recording when this lands.** `query_cli` carries
+  the native decoders where it had `dlopen` calls: +31,296 bytes of `__text`
+  (+1.04%) over this work's merge base, `zstd` 28 KB of it and `lz4` 2.8 KB.
+  No encoder links into a binary that never compresses. Keeping liblz4 and
+  libzstd selectable (`native_codecs`) adds +5,632 to `query_cli` and about
+  11 KB to `query_scan` and `query_param`; the whole sweep now reads
+  `query_cli` at 3,056,172, +1.47% over the recorded baseline.
+
 ### The Mojo Snappy codec — what the experiment leaves open
 
 `marrow/utils/snappy.mojo` is a port of libsnappy 1.2.2. Its module docstring
@@ -873,9 +917,7 @@ differentiator hiding inside a table-stakes item.
 
 #### 2.9 Interop and format gaps
 
-- **Compressed Arrow IPC bodies are unsupported.** `marrow/ipc.mojo:1420`
-  raises on LZ4_FRAME/ZSTD bodies. Marked *unverified* as to how much it would
-  buy on marrow's reader. - **No `__dataframe__` protocol**, though
+- **No `__dataframe__` protocol**, though
   the PyCapsule/C Stream path marrow already has is the better-supported
   modern route.
 

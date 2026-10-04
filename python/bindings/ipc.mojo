@@ -7,6 +7,7 @@ from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.errors import InvalidError
 from marrow.ipc import (
+    BodyCompression,
     read_ipc_file as _ipc_read_file,
     read_ipc_stream as _ipc_read_stream,
     read_ipc_file_schema as _ipc_read_file_schema,
@@ -17,9 +18,11 @@ from marrow.ipc import (
 from marrow.tabular import RecordBatch
 
 
-def read_ipc_file(path: PythonObject) raises -> PythonObject:
+def read_ipc_file(
+    path: PythonObject, native_codecs: PythonObject
+) raises -> PythonObject:
     var path_str = String(py=path)
-    var batches = _ipc_read_file(path_str)
+    var batches = _ipc_read_file(path_str, native_codecs=Bool(py=native_codecs))
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for batch in batches:
@@ -27,8 +30,21 @@ def read_ipc_file(path: PythonObject) raises -> PythonObject:
     return result
 
 
+def _compression(
+    compression: PythonObject,
+) raises -> Optional[BodyCompression]:
+    """`None`, or a codec by pyarrow's name for it."""
+    if compression.__is__(Python.none()):
+        return None
+    return BodyCompression.from_name(String(py=compression))
+
+
 def write_ipc_file(
-    path: PythonObject, batches: PythonObject, schema: PythonObject
+    path: PythonObject,
+    batches: PythonObject,
+    schema: PythonObject,
+    compression: PythonObject,
+    native_codecs: PythonObject,
 ) raises -> PythonObject:
     var path_str = String(py=path)
     var rb_list = List[RecordBatch]()
@@ -39,9 +55,20 @@ def write_ipc_file(
             rb_list.append(RecordBatch(py=batches[i]))
     if not schema.__is__(builtins.None):
         var schema_rb = RecordBatch(py=schema)
-        _ipc_write_file(path_str, schema_rb.schema, rb_list)
+        _ipc_write_file(
+            path_str,
+            schema_rb.schema,
+            rb_list,
+            compression=_compression(compression),
+            native_codecs=Bool(py=native_codecs),
+        )
     elif len(rb_list) > 0:
-        _ipc_write_file(path_str, rb_list)
+        _ipc_write_file(
+            path_str,
+            rb_list,
+            compression=_compression(compression),
+            native_codecs=Bool(py=native_codecs),
+        )
     else:
         raise InvalidError(
             "write_ipc_file requires 'batches' or 'schema' keyword argument"
@@ -49,9 +76,13 @@ def write_ipc_file(
     return Python.evaluate("None")
 
 
-def read_ipc_stream(path: PythonObject) raises -> PythonObject:
+def read_ipc_stream(
+    path: PythonObject, native_codecs: PythonObject
+) raises -> PythonObject:
     var path_str = String(py=path)
-    var batches = _ipc_read_stream(path_str)
+    var batches = _ipc_read_stream(
+        path_str, native_codecs=Bool(py=native_codecs)
+    )
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for batch in batches:
@@ -60,7 +91,11 @@ def read_ipc_stream(path: PythonObject) raises -> PythonObject:
 
 
 def write_ipc_stream(
-    path: PythonObject, batches: PythonObject, schema: PythonObject
+    path: PythonObject,
+    batches: PythonObject,
+    schema: PythonObject,
+    compression: PythonObject,
+    native_codecs: PythonObject,
 ) raises -> PythonObject:
     var path_str = String(py=path)
     var rb_list = List[RecordBatch]()
@@ -71,9 +106,20 @@ def write_ipc_stream(
             rb_list.append(RecordBatch(py=batches[i]))
     if not schema.__is__(builtins.None):
         var schema_rb = RecordBatch(py=schema)
-        _ipc_write_stream(path_str, schema_rb.schema, rb_list)
+        _ipc_write_stream(
+            path_str,
+            schema_rb.schema,
+            rb_list,
+            compression=_compression(compression),
+            native_codecs=Bool(py=native_codecs),
+        )
     elif len(rb_list) > 0:
-        _ipc_write_stream(path_str, rb_list)
+        _ipc_write_stream(
+            path_str,
+            rb_list,
+            compression=_compression(compression),
+            native_codecs=Bool(py=native_codecs),
+        )
     else:
         raise InvalidError(
             "write_ipc_stream requires 'batches' or 'schema' keyword argument"

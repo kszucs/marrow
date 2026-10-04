@@ -21,12 +21,17 @@ Reader/writer classes for incremental I/O:
 
 Supported types: bool, int8-64, uint8-64, float16/32/64, binary, utf8,
 list, fixed_size_list, struct, dictionary.
+
+Bodies compressed with LZ4_FRAME or ZSTD (`BodyCompression`) are read, and
+written when a writer is given one, with the native codecs in
+`marrow.utils`.
 """
 
 from std.math import ceildiv
 
 from .errors import (
     CorruptError,
+    DynError,
     IndexError,
     InternalError,
     InvalidError,
@@ -42,6 +47,7 @@ from .arrays import (
     StringViewArray,
 )
 from .buffers import Buffer, Bitmap
+from .views import BufferView
 from .execution import ExecContext
 from .io import (
     FOOTER_READ_SIZE,
@@ -59,7 +65,7 @@ from .tabular import RecordBatch
 from .builders import Int32Builder
 from .kernels.concat import concat as _concat
 from .kernels.filter import take as _take
-from .utils import LittleEndian
+from .utils import CompressionLibs, LittleEndian, Lz4, Zstd
 from . import dtypes as dt
 
 
@@ -137,6 +143,108 @@ struct _FieldNode(ImplicitlyCopyable, Movable):
 struct _BodyBuffer(ImplicitlyCopyable, Movable):
     var offset: Int64
     var length: Int64
+
+
+@fieldwise_init
+struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
+    """How a record batch's body buffers are compressed (`Message.fbs`'s
+    `BodyCompression`, method `BUFFER`): each on its own, with one of two
+    codecs, prefixed by its uncompressed length as a little-endian i64 -- `-1`
+    for a buffer stored as is. An empty buffer carries no prefix."""
+
+    var codec: Int
+
+    comptime LZ4_FRAME = Self(0)
+    comptime ZSTD = Self(1)
+
+    @staticmethod
+    def from_code(code: Int) raises CorruptError -> Self:
+        """The codec a `BodyCompression` table names."""
+        if code != 0 and code != 1:
+            raise CorruptError(t"ipc: unknown body compression codec {code}")
+        return Self(code)
+
+    @staticmethod
+    def from_name(name: String) raises InvalidError -> Self:
+        """`lz4` (or `lz4_frame`) or `zstd`, in any case, as pyarrow's
+        `IpcWriteOptions` names them."""
+        var lower = name.lower()
+        if lower == "lz4" or lower == "lz4_frame":
+            return Self.LZ4_FRAME
+        elif lower == "zstd":
+            return Self.ZSTD
+        raise InvalidError(t"ipc: unknown body compression '{name}'")
+
+    def compress(
+        self,
+        src: Span[mut=False, UInt8, _],
+        mut out: List[UInt8],
+        native: Bool = True,
+    ) raises:
+        """Append `src`, compressed behind its length, to `out` -- always
+        compressed, as Arrow C++ writes it unless asked for a minimum saving
+        -- or nothing for an empty `src`. Without `native`, liblz4 or
+        libzstd compresses it."""
+        if len(src) > 0:
+            LittleEndian.append[DType.int64](out, Int64(len(src)))
+            if self == Self.LZ4_FRAME:
+                if native:
+                    Lz4.compress_frame(src, out)
+                else:
+                    CompressionLibs.lz4_compress_frame(src, out)
+            elif native:
+                Zstd.compress(src, out)
+            else:
+                CompressionLibs.zstd_compress(src, out)
+
+    def decompress(
+        self, src: Span[UInt8, _], native: Bool = True
+    ) raises DynError -> Buffer[mut=False]:
+        """The buffer whose compressed form is `src` -- empty for an empty
+        `src`, as `compress` writes an empty buffer. Without `native`,
+        liblz4 or libzstd decompresses it."""
+        var n = 0
+        var payload = src
+        var raw = False
+        if len(src) > 0:
+            n = Int(LittleEndian.checked[DType.int64](src, 0))
+            payload = src[8:]
+            raw = n == -1
+        if raw:
+            n = len(payload)
+        else:
+            # Checked before allocating: the length comes from the file.
+            var most: Int
+            if self == Self.LZ4_FRAME:
+                most = Lz4.max_decompressed_length(len(payload))
+            else:
+                most = Zstd.max_decompressed_length(len(payload))
+            if n < 0 or n > most:
+                raise CorruptError(
+                    t"ipc: a compressed buffer of {n} bytes in {len(payload)}"
+                )
+        var buf = Buffer.alloc_uninit[DType.uint8](n)
+        var dst = buf.view(0, n)
+        if raw:
+            dst.copy_from(BufferView(payload), n)
+        elif n > 0:
+            # A length of 0 is an empty buffer, whatever follows it: Arrow
+            # Java writes one with nothing after it.
+            if native and self == Self.LZ4_FRAME:
+                Lz4.decompress_frame_into(payload, dst.as_span())
+            elif native:
+                Zstd.decompress_into(payload, dst.as_span())
+            else:
+                try:
+                    if self == Self.LZ4_FRAME:
+                        CompressionLibs.lz4_decompress_frame(
+                            payload, dst.as_span()
+                        )
+                    else:
+                        CompressionLibs.zstd_decompress(payload, dst.as_span())
+                except e:
+                    raise DynError(e)
+        return buf^.to_immutable()
 
 
 @fieldwise_init
@@ -695,12 +803,13 @@ struct _IpcEncoder(Movable):
         nodes: List[_FieldNode],
         buffers: List[_BodyBuffer],
         variadic_counts: List[Int64],
+        compression: Optional[BodyCompression],
     ) raises -> List[UInt8]:
         var enc = _IpcEncoder(512)
         var nodes_vec = enc._write_field_nodes_vec(nodes)
         var bufs_vec = enc._write_body_buffers_vec(buffers)
         var rb_pos = enc._write_record_batch_table(
-            length, nodes_vec, bufs_vec, variadic_counts
+            length, nodes_vec, bufs_vec, variadic_counts, compression
         )
 
         var max_end = Int64(0)
@@ -750,6 +859,7 @@ struct _IpcEncoder(Movable):
         nodes_vec: UInt32,
         bufs_vec: UInt32,
         variadic_counts: List[Int64],
+        compression: Optional[BodyCompression],
     ) raises -> UInt32:
         # Slot 4, `variadicBufferCounts`: one entry per view-layout node, in
         # node order, giving how many data buffers follow its views buffer.
@@ -762,14 +872,26 @@ struct _IpcEncoder(Movable):
             vc_vec = self._fb.create_vector_structs(
                 data, len(variadic_counts), 8, 8
             )
+        # The BodyCompression table, slot 3, goes in ahead of its parent too.
+        var bc_pos = UInt32(0)
+        if compression:
+            var bts = self._fb.offset()
+            var method_at = self._fb.prepend_u8(0)  # BUFFER
+            var codec_at = self._fb.prepend_u8(UInt8(compression.value().codec))
+            var bflds = List[_FieldOffset]()
+            bflds.append(_FieldOffset(0, codec_at))
+            bflds.append(_FieldOffset(1, method_at))
+            bc_pos = self._fb.write_table(bflds, bts)
         var ts = self._fb.offset()
+        var flds = List[_FieldOffset]()
         var vc_at = UInt32(0)
         if len(variadic_counts) > 0:
             vc_at = self._fb.prepend_uoffset(vc_vec)
+        if compression:
+            flds.append(_FieldOffset(3, self._fb.prepend_uoffset(bc_pos)))
         var bv_at = self._fb.prepend_uoffset(bufs_vec)
         var nv_at = self._fb.prepend_uoffset(nodes_vec)
         var ln_at = self._fb.prepend_i64(length)
-        var flds = List[_FieldOffset]()
         flds.append(_FieldOffset(0, ln_at))
         flds.append(_FieldOffset(1, nv_at))
         flds.append(_FieldOffset(2, bv_at))
@@ -1355,6 +1477,7 @@ struct _IpcDecoder(Movable):
         values_ipc_info: _FieldIpcInfo,
         var body: List[UInt8],
         dict_values: List[DynArray] = List[DynArray](),
+        native_codecs: Bool = True,
     ) raises -> DynArray:
         var msg_tp = self._r.root()
         var db_pos = self._r.read_table(msg_tp, 2)
@@ -1362,9 +1485,18 @@ struct _IpcDecoder(Movable):
         var nodes = List[_FieldNode]()
         var bufs = List[_BodyBuffer]()
         var variadic = List[Int64]()
-        var _l = self._read_record_batch_meta(rb_pos, nodes, bufs, variadic)
+        var compression = self._read_record_batch_meta(
+            rb_pos, nodes, bufs, variadic
+        )
         var batch_dec = _BatchDecoder(
-            body^, 0, nodes^, bufs^, variadic^, dict_values
+            body^,
+            0,
+            nodes^,
+            bufs^,
+            variadic^,
+            compression,
+            native_codecs,
+            dict_values,
         )
         return batch_dec.read_array(value_dtype, values_ipc_info)
 
@@ -1374,6 +1506,7 @@ struct _IpcDecoder(Movable):
         ipc_infos: List[_FieldIpcInfo],
         var body: List[UInt8],
         dict_values: List[DynArray] = List[DynArray](),
+        native_codecs: Bool = True,
     ) raises -> RecordBatch:
         var msg_tp = self._r.root()
         var hdr_type = self._r.read_u8(msg_tp, 1, 0)
@@ -1386,9 +1519,18 @@ struct _IpcDecoder(Movable):
         var nodes = List[_FieldNode]()
         var bufs = List[_BodyBuffer]()
         var variadic = List[Int64]()
-        var _l = self._read_record_batch_meta(rb_pos, nodes, bufs, variadic)
+        var compression = self._read_record_batch_meta(
+            rb_pos, nodes, bufs, variadic
+        )
         var batch_dec = _BatchDecoder(
-            body^, 0, nodes^, bufs^, variadic^, dict_values
+            body^,
+            0,
+            nodes^,
+            bufs^,
+            variadic^,
+            compression,
+            native_codecs,
+            dict_values,
         )
         var columns = List[DynArray]()
         for i in range(len(schema.fields)):
@@ -1453,17 +1595,21 @@ struct _IpcDecoder(Movable):
         mut nodes: List[_FieldNode],
         mut bufs: List[_BodyBuffer],
         mut variadic_counts: List[Int64],
-    ) raises -> Int64:
-        var length = self._r.read_i64(rb_pos, 0, 0)
-
-        # Slot 3 is `BodyCompression`. Ignoring it does not mean "uncompressed";
-        # it means the buffers below are read as if they were raw, which decodes
-        # a compressed body into garbage with no error. Refuse until the codecs
-        # are wired through (they are already available for Parquet).
+    ) raises -> Optional[BodyCompression]:
+        """Read the batch's field nodes, buffers and view buffer counts into
+        `nodes`, `bufs` and `variadic_counts`; return how its body is
+        compressed, if it is."""
+        # Slot 3 is `BodyCompression`; absent, the buffers are raw.
+        var compression = Optional[BodyCompression]()
         if self._r.has_field(rb_pos, 3):
-            raise NotImplementedError(
-                "ipc: record batch body is compressed; reading compressed IPC "
-                "bodies (LZ4_FRAME / ZSTD) is not supported"
+            var bc = self._r.read_table(rb_pos, 3)
+            var method = Int(self._r.read_u8(bc, 1, 0))
+            if method != 0:
+                raise NotImplementedError(
+                    t"ipc: body compression method {method}"
+                )
+            compression = BodyCompression.from_code(
+                Int(self._r.read_u8(bc, 0, 0))
             )
 
         var nodes_vec = self._r.read_vector(rb_pos, 1)
@@ -1495,7 +1641,7 @@ struct _IpcDecoder(Movable):
                 var sb = self._r.vec_struct_bytes(vc_vec, UInt32(i), 8)
                 variadic_counts.append(LittleEndian.checked[DType.int64](sb, 0))
 
-        return length
+        return compression
 
     def _read_field(
         self, fp: UInt32, mut out_ipc: List[_FieldIpcInfo]
@@ -1794,11 +1940,17 @@ struct _BatchEncoder(Movable):
     var nodes: List[_FieldNode]
     var raw_bufs: List[List[UInt8]]
     var variadic_counts: List[Int64]
+    var compression: Optional[BodyCompression]
+    var native_codecs: Bool
 
-    def __init__(out self):
+    def __init__(
+        out self, compression: Optional[BodyCompression], native_codecs: Bool
+    ):
         self.nodes = List[_FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
         self.variadic_counts = List[Int64]()
+        self.compression = compression
+        self.native_codecs = native_codecs
 
     @staticmethod
     def dense(arr: DynArray) raises -> ArrayData:
@@ -1898,13 +2050,19 @@ struct _BatchEncoder(Movable):
 
     def _build_body(
         mut self, mut buf_meta: List[_BodyBuffer], mut body: List[UInt8]
-    ):
-        """Assemble raw buffers into a padded body, populating buf_meta offsets.
-        """
+    ) raises:
+        """Assemble the buffers into a padded body, populating buf_meta
+        offsets -- each non-empty one compressed if the batch is."""
         for buf in self.raw_bufs:
             _pad_to(body, 8)
-            buf_meta.append(_BodyBuffer(Int64(len(body)), Int64(len(buf))))
-            body.extend(Span(buf))
+            var at = len(body)
+            if self.compression:
+                self.compression.value().compress(
+                    Span(buf), body, self.native_codecs
+                )
+            else:
+                body.extend(Span(buf))
+            buf_meta.append(_BodyBuffer(Int64(at), Int64(len(body) - at)))
         _pad_to(body, 8)
 
     def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
@@ -1914,7 +2072,11 @@ struct _BatchEncoder(Movable):
         var body = List[UInt8]()
         self._build_body(buf_meta, body)
         var rb_meta = _IpcEncoder.encode_record_batch(
-            Int64(batch.num_rows()), self.nodes, buf_meta, self.variadic_counts
+            Int64(batch.num_rows()),
+            self.nodes,
+            buf_meta,
+            self.variadic_counts,
+            self.compression,
         )
         var meta_len = len(rb_meta)
         var padded_meta = meta_len + (8 - meta_len % 8) % 8
@@ -1926,12 +2088,12 @@ struct _BatchEncoder(Movable):
         self.variadic_counts = List[Int64]()
         return _EncodedBatch(msg^, metadata_length, body_length)
 
-    @staticmethod
     def encode_dict_message(
-        dict_id: Int64, values: DynArray
+        self, dict_id: Int64, values: DynArray
     ) raises -> _EncodedBatch:
-        """Encode a dictionary values array as a DictionaryBatch IPC message."""
-        var benc = _BatchEncoder()
+        """Encode a dictionary values array as a DictionaryBatch IPC message,
+        compressed as this encoder's batches are."""
+        var benc = _BatchEncoder(self.compression, self.native_codecs)
         benc.write_array(_BatchEncoder.dense(values))
         var buf_meta = List[_BodyBuffer]()
         var body = List[UInt8]()
@@ -1941,7 +2103,11 @@ struct _BatchEncoder(Movable):
         var nodes_vec = enc._write_field_nodes_vec(benc.nodes)
         var bufs_vec = enc._write_body_buffers_vec(buf_meta)
         var rb_pos = enc._write_record_batch_table(
-            Int64(values.length()), nodes_vec, bufs_vec, benc.variadic_counts
+            Int64(values.length()),
+            nodes_vec,
+            bufs_vec,
+            benc.variadic_counts,
+            self.compression,
         )
         var db_pos = enc._write_dictionary_batch_table(dict_id, False, rb_pos)
 
@@ -1980,6 +2146,8 @@ struct _BatchDecoder(Movable):
     var node_idx: Int
     var buf_idx: Int
     var variadic_idx: Int
+    var compression: Optional[BodyCompression]
+    var native_codecs: Bool
     var dict_values: List[DynArray]
 
     def __init__(
@@ -1989,6 +2157,8 @@ struct _BatchDecoder(Movable):
         var nodes: List[_FieldNode],
         var bufs: List[_BodyBuffer],
         var variadic_counts: List[Int64],
+        compression: Optional[BodyCompression],
+        native_codecs: Bool,
         dict_values: List[DynArray] = List[DynArray](),
     ):
         self.body = body^
@@ -1999,6 +2169,8 @@ struct _BatchDecoder(Movable):
         self.node_idx = 0
         self.buf_idx = 0
         self.variadic_idx = 0
+        self.compression = compression
+        self.native_codecs = native_codecs
         self.dict_values = dict_values.copy()
 
     def read_array(
@@ -2023,7 +2195,7 @@ struct _BatchDecoder(Movable):
             var off = Int(validity_buf.offset) + self.body_offset
             var n_bytes = Int(validity_buf.length)
             bitmap = Bitmap[mut=False](
-                self._slice_body(off, n_bytes), length=length
+                self._body_buffer(off, n_bytes), length=length
             )
 
         var data_buffers = List[Buffer[mut=False]]()
@@ -2127,22 +2299,28 @@ struct _BatchDecoder(Movable):
         )
         return DynArray.from_data(ad)
 
-    def _slice_body(self, off: Int, n_bytes: Int) -> Buffer[mut=False]:
+    def _body_buffer(
+        self, off: Int, n_bytes: Int
+    ) raises DynError -> Buffer[mut=False]:
+        """The `n_bytes` of the body at `off`, decompressed if the batch is."""
+        if off < 0 or n_bytes < 0 or n_bytes > len(self.body) - off:
+            raise CorruptError(
+                t"ipc: a {n_bytes}-byte buffer at {off} is outside the"
+                t" {len(self.body)}-byte body"
+            )
+        var src = Span(self.body)[off : off + n_bytes]
+        if self.compression:
+            return self.compression.value().decompress(src, self.native_codecs)
         var buf = Buffer.alloc_uninit[DType.uint8](n_bytes)
-        for i in range(n_bytes):
-            buf.unsafe_set[DType.uint8](i, self.body[off + i])
-        return buf.to_immutable()
+        buf.view(0, n_bytes).copy_from(BufferView(src), n_bytes)
+        return buf^.to_immutable()
 
     def _consume_buffer(mut self, mut out: List[Buffer[mut=False]]) raises:
         var bb = self.bufs[self.buf_idx]
         self.buf_idx += 1
-        var n_bytes = Int(bb.length)
-        if n_bytes > 0:
-            out.append(
-                self._slice_body(Int(bb.offset) + self.body_offset, n_bytes)
-            )
-        else:
-            out.append(Buffer.alloc_zeroed[DType.uint8](0).to_immutable())
+        out.append(
+            self._body_buffer(Int(bb.offset) + self.body_offset, Int(bb.length))
+        )
 
     def _consume_primitive_array(
         mut self,
@@ -2198,16 +2376,29 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
         out self: RecordBatchFileWriter[FileSink],
         path: String,
         schema: Schema,
+        compression: Optional[BodyCompression] = None,
+        native_codecs: Bool = True,
     ) raises:
         """Write to a local file — the convenience that pins `S == FileSink`."""
-        self = RecordBatchFileWriter[FileSink](FileSink(path), schema)
+        self = RecordBatchFileWriter[FileSink](
+            FileSink(path), schema, compression, native_codecs
+        )
 
-    def __init__(out self, var sink: Self.S, schema: Schema) raises:
+    def __init__(
+        out self,
+        var sink: Self.S,
+        schema: Schema,
+        compression: Optional[BodyCompression] = None,
+        native_codecs: Bool = True,
+    ) raises:
+        """`compression` compresses every body buffer, dictionaries'
+        included -- in Mojo, or with `native_codecs=False` through liblz4
+        and libzstd."""
         self._out = BufferedSink(sink^)
         self._schema = Schema(copy=schema)
         self._dict_blocks = List[_Block]()
         self._blocks = List[_Block]()
-        self._enc = _BatchEncoder()
+        self._enc = _BatchEncoder(compression, native_codecs)
         self._dicts_written = List[Bool]()
         self._closed = False
 
@@ -2234,9 +2425,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
             if self._dicts_written[did]:
                 continue
             var dict_blk_start = Int64(self._out.tell())
-            var eb = _BatchEncoder.encode_dict_message(
-                Int64(did), pairs[j].values
-            )
+            var eb = self._enc.encode_dict_message(Int64(did), pairs[j].values)
             self._out.write(Span(eb.msg))
             self._dict_blocks.append(
                 _Block(dict_blk_start, eb.metadata_length, eb.body_length)
@@ -2286,13 +2475,26 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](Movable):
         out self: RecordBatchStreamWriter[FileSink],
         path: String,
         schema: Schema,
+        compression: Optional[BodyCompression] = None,
+        native_codecs: Bool = True,
     ) raises:
         """Write to a local file — the convenience that pins `S == FileSink`."""
-        self = RecordBatchStreamWriter[FileSink](FileSink(path), schema)
+        self = RecordBatchStreamWriter[FileSink](
+            FileSink(path), schema, compression, native_codecs
+        )
 
-    def __init__(out self, var sink: Self.S, schema: Schema) raises:
+    def __init__(
+        out self,
+        var sink: Self.S,
+        schema: Schema,
+        compression: Optional[BodyCompression] = None,
+        native_codecs: Bool = True,
+    ) raises:
+        """`compression` compresses every body buffer, dictionaries'
+        included -- in Mojo, or with `native_codecs=False` through liblz4
+        and libzstd."""
         self._out = BufferedSink(sink^)
-        self._enc = _BatchEncoder()
+        self._enc = _BatchEncoder(compression, native_codecs)
         self._closed = False
 
         var schema_msg = _IpcEncoder.frame_message(
@@ -2310,7 +2512,7 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](Movable):
         for col in batch.columns:
             _BatchEncoder.collect_dict_pairs(col.to_data(), pairs, next_id)
         for j in range(len(pairs)):
-            var eb = _BatchEncoder.encode_dict_message(
+            var eb = self._enc.encode_dict_message(
                 Int64(pairs[j].dict_id), pairs[j].values
             )
             self._out.write(Span(eb.msg))
@@ -2346,15 +2548,25 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
     var _blocks: List[_Block]
     var _src: Self.S
     var _dict_values: List[DynArray]
+    var _native_codecs: Bool
+    """Whether compressed bodies decode in Mojo, the default, or through
+    liblz4 and libzstd."""
 
     def __init__(
-        out self: RecordBatchFileReader[BufferSource], path: String
+        out self: RecordBatchFileReader[BufferSource],
+        path: String,
+        native_codecs: Bool = True,
     ) raises:
         """Open a local file as a memory map — the convenience that pins
         `S == BufferSource`."""
-        self = RecordBatchFileReader[BufferSource](BufferSource(path))
+        self = RecordBatchFileReader[BufferSource](
+            BufferSource(path), native_codecs
+        )
 
-    def __init__(out self, var source: Self.S) raises:
+    def __init__(
+        out self, var source: Self.S, native_codecs: Bool = True
+    ) raises:
+        self._native_codecs = native_codecs
         var n = source.size()
         if n < 14:
             raise CorruptError("IPC file too short")
@@ -2418,6 +2630,7 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
                     lkup.value().value_ipc_info,
                     body^,
                     self._dict_values,
+                    self._native_codecs,
                 )
                 while len(self._dict_values) <= dict_id:
                     self._dict_values.append(NullArray(0))
@@ -2438,7 +2651,11 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
         var _ok = _read_message(self._src, pos, meta, body)
         var dec = _IpcDecoder(meta^)
         return dec.decode_record_batch(
-            self.schema, self._ipc_infos, body^, self._dict_values
+            self.schema,
+            self._ipc_infos,
+            body^,
+            self._dict_values,
+            self._native_codecs,
         )
 
     def read_all(mut self) raises -> List[RecordBatch]:
@@ -2462,15 +2679,25 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
     var _ipc_infos: List[_FieldIpcInfo]
     var _src: Self.S
     var _pos: Int
+    var _native_codecs: Bool
+    """Whether compressed bodies decode in Mojo, the default, or through
+    liblz4 and libzstd."""
 
     def __init__(
-        out self: RecordBatchStreamReader[BufferSource], path: String
+        out self: RecordBatchStreamReader[BufferSource],
+        path: String,
+        native_codecs: Bool = True,
     ) raises:
         """Open a local file as a memory map — the convenience that pins
         `S == BufferSource`."""
-        self = RecordBatchStreamReader[BufferSource](BufferSource(path))
+        self = RecordBatchStreamReader[BufferSource](
+            BufferSource(path), native_codecs
+        )
 
-    def __init__(out self, var source: Self.S) raises:
+    def __init__(
+        out self, var source: Self.S, native_codecs: Bool = True
+    ) raises:
+        self._native_codecs = native_codecs
         self._src = source^
         self._pos = 0
         var meta = List[UInt8]()
@@ -2508,6 +2735,7 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
                         lkup.value().value_ipc_info,
                         body^,
                         dict_values,
+                        self._native_codecs,
                     )
                     while len(dict_values) <= dict_id:
                         dict_values.append(NullArray(0))
@@ -2523,7 +2751,11 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
                 var dec = _IpcDecoder(meta^)
                 batches.append(
                     dec.decode_record_batch(
-                        self.schema, self._ipc_infos, body^, dict_values
+                        self.schema,
+                        self._ipc_infos,
+                        body^,
+                        dict_values,
+                        self._native_codecs,
                     )
                 )
         return batches^
@@ -2539,9 +2771,15 @@ def write_ipc_file(
     schema: Schema,
     batches: List[RecordBatch],
     options: StorageOptions = StorageOptions(),
+    compression: Optional[BodyCompression] = None,
+    native_codecs: Bool = True,
 ) raises:
-    """Write RecordBatches to an Arrow IPC file with an explicit schema."""
-    var w = RecordBatchFileWriter(DynSink.open(uri, options), schema)
+    """Write RecordBatches to an Arrow IPC file with an explicit schema;
+    `compression` runs in Mojo, or with `native_codecs=False` through liblz4
+    and libzstd."""
+    var w = RecordBatchFileWriter(
+        DynSink.open(uri, options), schema, compression, native_codecs
+    )
     for batch in batches:
         w.write_batch(batch)
     w.close()
@@ -2551,6 +2789,8 @@ def write_ipc_file(
     uri: String,
     batches: List[RecordBatch],
     options: StorageOptions = StorageOptions(),
+    compression: Optional[BodyCompression] = None,
+    native_codecs: Bool = True,
 ) raises:
     """Write RecordBatches to an Arrow IPC file."""
     if len(batches) == 0:
@@ -2558,7 +2798,9 @@ def write_ipc_file(
             "write_ipc_file: no batches; use write_ipc_file(path, schema, "
             "batches) for schema-only files"
         )
-    write_ipc_file(uri, batches[0].schema, batches, options)
+    write_ipc_file(
+        uri, batches[0].schema, batches, options, compression, native_codecs
+    )
 
 
 def write_ipc_stream(
@@ -2566,9 +2808,14 @@ def write_ipc_stream(
     schema: Schema,
     batches: List[RecordBatch],
     options: StorageOptions = StorageOptions(),
+    compression: Optional[BodyCompression] = None,
+    native_codecs: Bool = True,
 ) raises:
-    """Write RecordBatches to an Arrow IPC stream with an explicit schema."""
-    var w = RecordBatchStreamWriter(DynSink.open(uri, options), schema)
+    """Write RecordBatches to an Arrow IPC stream with an explicit schema;
+    `compression` runs as `write_ipc_file` says."""
+    var w = RecordBatchStreamWriter(
+        DynSink.open(uri, options), schema, compression, native_codecs
+    )
     for batch in batches:
         w.write_batch(batch)
     w.close()
@@ -2578,6 +2825,8 @@ def write_ipc_stream(
     uri: String,
     batches: List[RecordBatch],
     options: StorageOptions = StorageOptions(),
+    compression: Optional[BodyCompression] = None,
+    native_codecs: Bool = True,
 ) raises:
     """Write RecordBatches to an Arrow IPC stream."""
     if len(batches) == 0:
@@ -2585,22 +2834,31 @@ def write_ipc_stream(
             "write_ipc_stream: no batches; use write_ipc_stream(path, schema, "
             "batches) for schema-only streams"
         )
-    write_ipc_stream(uri, batches[0].schema, batches, options)
+    write_ipc_stream(
+        uri, batches[0].schema, batches, options, compression, native_codecs
+    )
 
 
 def read_ipc_file(
-    uri: String, options: StorageOptions = StorageOptions()
+    uri: String,
+    options: StorageOptions = StorageOptions(),
+    native_codecs: Bool = True,
 ) raises -> List[RecordBatch]:
-    """Read an Arrow IPC file and return all RecordBatches."""
-    var r = RecordBatchFileReader(DynSource.open(uri, options))
+    """Read an Arrow IPC file and return all RecordBatches; compressed
+    bodies decode in Mojo, or with `native_codecs=False` through liblz4 and
+    libzstd."""
+    var r = RecordBatchFileReader(DynSource.open(uri, options), native_codecs)
     return r.read_all()
 
 
 def read_ipc_stream(
-    uri: String, options: StorageOptions = StorageOptions()
+    uri: String,
+    options: StorageOptions = StorageOptions(),
+    native_codecs: Bool = True,
 ) raises -> List[RecordBatch]:
-    """Read an Arrow IPC stream and return all RecordBatches."""
-    var r = RecordBatchStreamReader(DynSource.open(uri, options))
+    """Read an Arrow IPC stream and return all RecordBatches; compressed
+    bodies decode as `read_ipc_file` says."""
+    var r = RecordBatchStreamReader(DynSource.open(uri, options), native_codecs)
     return r.read_all()
 
 

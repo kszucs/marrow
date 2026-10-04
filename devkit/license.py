@@ -112,12 +112,14 @@ PLACEMENTS = {
 #: reads whole.
 EXEMPT = {
     ".arrow",
+    ".arrow_file",
     ".gitkeep",
     ".json",
     ".lock",
     ".parquet",
     ".png",
     ".python-version",
+    ".stream",
     ".svg",
     ".theme",
     ".txt",
