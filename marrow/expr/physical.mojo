@@ -58,6 +58,14 @@ from ..kernels.dictionary import DictionaryEncoder
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..io import ByteSource, DynSource
+from ..ipc import RecordBatchFileReader
+from ..json import (
+    JsonReader,
+    ParseOptions,
+    ReadOptions,
+    UnexpectedFieldBehavior,
+    open_json,
+)
 from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
 from ..utils import KeyHash
 from .bindings import Bindings
@@ -1807,6 +1815,71 @@ struct ParquetScanOperator(Operator):
             for ref b in table.to_batches():
                 self._pending.append(b.to_struct_array())
         return Datum(self._pending.pop(0).to_dyn())
+
+
+struct IpcScanOperator(Operator):
+    """Runs an `IpcScan`: one record batch of the file per `drain`, its
+    columns selected by the scan's schema. The file is opened on the first
+    `drain`, not here: a `Relation` must not touch the filesystem to exist."""
+
+    var _path: String
+    var _names: List[String]
+    var _reader: Optional[RecordBatchFileReader[DynSource]]
+    var _next: Int
+
+    def __init__(out self, var path: String, schema: Schema):
+        self._path = path^
+        self._names = schema.names()
+        self._reader = None
+        self._next = 0
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        # A source consumes nothing; the driver never calls this.
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if not self._reader:
+            self._reader = RecordBatchFileReader[DynSource](
+                DynSource.open(self._path)
+            )
+        ref reader = self._reader.value()
+        if self._next >= reader.num_record_batches():
+            return None
+        var batch = reader.read_batch(self._next)
+        self._next += 1
+        return Datum(batch.select(self._names).to_struct_array().to_dyn())
+
+
+struct JsonScanOperator(Operator):
+    """Runs a `JsonScan`: one block of the file per `drain`, parsed into the
+    scan's schema with keys outside it skipped. The file is opened on the
+    first `drain`, not here: a `Relation` must not touch the filesystem to
+    exist."""
+
+    var _path: String
+    var _schema: Schema
+    var _reader: Optional[JsonReader[DynSource]]
+
+    def __init__(out self, var path: String, var schema: Schema):
+        self._path = path^
+        self._schema = schema^
+        self._reader = None
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        # A source consumes nothing; the driver never calls this.
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if not self._reader:
+            self._reader = open_json(
+                self._path,
+                ReadOptions(),
+                ParseOptions(self._schema, UnexpectedFieldBehavior.IGNORE),
+            )
+        var batch = self._reader.value().read_next_batch()
+        if not batch:
+            return None
+        return Datum(batch.value().to_struct_array().to_dyn())
 
 
 def admitted_bits(mask: DynArray) raises -> Bitmap[mut=False]:

@@ -537,7 +537,9 @@ share no node types**:
   descriptions (`schema` / `to_operator` / `write`), erased by `DynRelation`:
   a `Variant` for inspection, so `isa[R]()` is a discriminant compare and the
   optimizer's rules read a real typed node, plus a trampoline for lowering. The
-  nodes are `EmptyRelation`, `InMemoryTable`, `ParquetScan`, `Filter`,
+  nodes are `EmptyRelation`, `InMemoryTable`, the `FileScan`s (`ParquetScan`,
+  `IpcScan`, `JsonScan`; `with_schema` is how `ColumnPruning` narrows any of
+  them), `Filter`,
   `Project`, `Aggregate`, `Limit`, `Sort`, `Window`, `Join`, `Union`,
   `Intersection` and `Difference`, chained by `.filter()` / `.select()` /
   `.project()` / `.aggregate()` / `.sort_by()` / `.limit()` / `.join()` /
@@ -562,7 +564,8 @@ share no node types**:
   — `FilterOperator`, `ProjectOperator`, `GroupedAggregateOperator`,
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
   `UnionOperator`, `MultisetOperator[M]`, `LimitOperator`,
-  `ParquetScanOperator`, `BatchSourceOperator` — plus
+  `ParquetScanOperator`, `IpcScanOperator`, `JsonScanOperator`,
+  `BatchSourceOperator` — plus
   `Pipeline` and `EvalOperator`.
 - **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
   `boolean.mojo`, `strings.mojo`, `temporal.mojo`, `nested.mojo`, `casts.mojo`,
@@ -762,6 +765,14 @@ added to the wheel staging in `python/marrow/compile.py`; nothing links it, so
 `ByteSource` — the only way to tell "returned the right rows" from "did less
 work".
 
+**JSON** (`marrow/json/`): newline-delimited JSON, matching `pyarrow.json`
+down to its error messages — `read_json`, the streaming `JsonReader` /
+`open_json`, and `write_json` / `JsonWriter`. A read is two passes over
+newline-cut `Blocks`, each walked by a `JsonCursor` over EmberJson's pull
+`Parser`: `ColumnShape` settles the schema by Arrow C++'s promotion rules,
+then each block is parsed straight into builders of it. `marrow.json` imports
+nothing from `marrow.expr`; `JsonScan` reads through it.
+
 **Tabular** (`marrow/tabular.mojo`): `RecordBatch` (schema + column arrays) and
 `Table` (schema + chunked columns). `marrow/schema.mojo` holds `Schema`, `Field`
 and metadata. `marrow/ipc.mojo` is the Arrow IPC file/stream reader and writer.
@@ -825,6 +836,8 @@ marrow/
 │   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
 │   │   └── tests/
 │   └── tests/
+├── json/                 # NDJSON: types (shared kinds), reader (options,
+│   └── tests/            #   cursor, both passes), writer
 ├── parquet/              # reader, writer, schema, format, codecs, bloom,
 │   └── tests/            # statistics
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
@@ -1119,6 +1132,12 @@ looks obvious. Terse on purpose — the reproductions are in git history.
   Implementing all 26 was tried and reverted. The cost of leaving it is
   cosmetic: `repr(list_(int64))` never shows the element type. Revisit only if a
   genuine hang appears.
+
+- **Imports are resolved while parsing, before any `comptime if`**, so a
+  `-D` switch cannot make a dependency optional. And a precompiled package is
+  all or nothing: importing `pkg.a` from `pkg.mojoc` fails with `failed to
+  resolve parent package body` when a sibling `pkg.b` imports a package the
+  consumer lacks. That is why a precompiled marrow needs EmberJson beside it.
 
 - **An `__eq__` that compares *elements* of an erased container deadlocks the
   compiler.** Comparing a nested array element-wise materialises a `DynArray`

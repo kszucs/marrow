@@ -118,6 +118,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -213,6 +215,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/54/a5/8cbc83f04aba433ca7b331b38f39e000efd9f0c7ce47128670e737542996/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_aarch64.whl
@@ -304,6 +308,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
@@ -410,6 +416,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -508,6 +516,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/54/a5/8cbc83f04aba433ca7b331b38f39e000efd9f0c7ce47128670e737542996/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_aarch64.whl
@@ -602,6 +612,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
@@ -705,6 +717,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -800,6 +814,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/54/a5/8cbc83f04aba433ca7b331b38f39e000efd9f0c7ce47128670e737542996/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_aarch64.whl
@@ -891,6 +907,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
@@ -994,6 +1012,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -1089,6 +1109,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/54/a5/8cbc83f04aba433ca7b331b38f39e000efd9f0c7ce47128670e737542996/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_aarch64.whl
@@ -1180,6 +1202,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
@@ -1387,6 +1411,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -1579,6 +1605,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/54/a5/8cbc83f04aba433ca7b331b38f39e000efd9f0c7ce47128670e737542996/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_aarch64.whl
@@ -1771,6 +1799,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
@@ -1861,6 +1891,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -1945,6 +1977,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/54/a5/8cbc83f04aba433ca7b331b38f39e000efd9f0c7ce47128670e737542996/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_aarch64.whl
@@ -2025,6 +2059,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/66/e5/5e4dbd42ce9a2affb3be90d9ab17cebde1a6f28b0d9fb4b83d612d5c8e42/datafusion-54.0.0-cp310-abi3-macosx_11_0_arm64.whl
@@ -2116,6 +2152,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       linux-aarch64:
@@ -2198,6 +2236,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       osx-arm64:
@@ -2276,6 +2316,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
   integration:
@@ -2413,6 +2455,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
@@ -2545,6 +2589,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
@@ -2686,6 +2732,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
@@ -2813,6 +2861,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
@@ -2931,6 +2981,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
@@ -3038,6 +3090,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
@@ -3143,6 +3197,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[fdb6871f] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[e0dcfbc1] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -3238,6 +3294,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[db5dc244] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/54/a5/8cbc83f04aba433ca7b331b38f39e000efd9f0c7ce47128670e737542996/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_aarch64.whl
@@ -3329,6 +3387,8 @@ environments:
       - conda: https://conda.modular.com/max-nightly/osx-arm64/max-core-26.7.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.2.0.dev2026092105-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+      - conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+      - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
       - conda_source: mojo-regex[f0e4be1e] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
       - conda_source: morrow[54ec0332] @ git+https://github.com/kszucs/morrow.mojo?branch=marrow#80bfda2f2da506243560b90d6000769c601b168d
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
@@ -5027,6 +5087,20 @@ packages:
     - openssl >=3.6.4,<4.0a0
   size: 3202955
   timestamp: 1787698780103
+- conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
+  sha256: 9c1533f1cf784f0e250919c0c9762d0b0e6bc727a79290ffb7cea1ceca1d038c
+  md5: 5a51a2ea653f120240b1a9bf76e0aae9
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  - ca-certificates
+  - libgcc >=15
+  license: Apache-2.0
+  license_family: Apache
+  run_exports:
+    weak:
+    - openssl >=3.6.5,<4.0a0
+  size: 3195299
+  timestamp: 1791098052301
 - conda: https://conda.anaconda.org/conda-forge/linux-64/pandoc-3.8.3-ha770c72_0.conda
   sha256: 87ec986d1e0d16d9d2aa149653abeb73d1ac4bd9e6d7dc13ba33ec00134c8a7a
   md5: 0e4aa34e44a68aeb850349fe51a6a3d0
@@ -6969,6 +7043,19 @@ packages:
     - openssl >=3.6.4,<4.0a0
   size: 3712923
   timestamp: 1787698545024
+- conda: https://conda.anaconda.org/conda-forge/linux-aarch64/openssl-3.6.5-he6ad1d5_0.conda
+  sha256: 238136f1df197ecd89bafd728a34d0642176f3170423d13d8276746d675a9485
+  md5: 92aec5ec417d2ce9ae109e6c5ad377ff
+  depends:
+  - ca-certificates
+  - libgcc >=15
+  license: Apache-2.0
+  license_family: Apache
+  run_exports:
+    weak:
+    - openssl >=3.6.5,<4.0a0
+  size: 3716078
+  timestamp: 1791097887829
 - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/pandoc-3.8.3-h8af1aa0_0.conda
   sha256: 323e57b0c641369576f77aea4c86fee3b6fe9b23dc45c2b9581dcef7427401c4
   md5: c836be24263e59aaaea502e96215692e
@@ -11929,6 +12016,19 @@ packages:
     - openssl >=3.6.4,<4.0a0
   size: 3110142
   timestamp: 1787698648639
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.5-h55eecbc_0.conda
+  sha256: 44fbc526456571a9fb8fa18157f6f269d4d4bd40eef20183a93b9c9296f94497
+  md5: 45d9179cdf6e53d88aec034246f0dad6
+  depends:
+  - __osx >=11.0
+  - ca-certificates
+  license: Apache-2.0
+  license_family: Apache
+  run_exports:
+    weak:
+    - openssl >=3.6.5,<4.0a0
+  size: 3111573
+  timestamp: 1791097959641
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pandoc-3.8.3-hce30654_0.conda
   sha256: 39af2080d16088c0b9c19db5d0f8b2c845e70c428126a4773d0e54b609d8af91
   md5: 68bc0f4209fe5cbb03a401177f3a36c2
@@ -12769,6 +12869,300 @@ packages:
   run_exports: {}
   size: 63369535
   timestamp: 1789969009586
+- conda_source: emberjson[4e026052] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+  version: 0.4.0
+  build: he8cfe8b_0
+  subdir: linux-aarch64
+  variants:
+    target_platform: linux-aarch64
+  depends:
+  - mojo-compiler ==1.2.0.dev2026092105
+  - emberserde
+  source_depends:
+    emberserde:
+      git: https://github.com/kszucs/EmberSerde.git
+      rev: d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/bzip2-1.0.8-h4777abc_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/icu-78.3-py311h3512406_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/ld_impl_linux-aarch64-2.46.1-default_h1979696_102.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libexpat-2.8.5-h4154aff_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libffi-3.7.0-hdaad0be_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libgcc-16.2.0-h205dda4_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libgomp-16.2.0-h8acb6b2_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/liblzma-5.8.3-he30d5cf_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libmpdec-4.0.0-he30d5cf_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libpython-3.14.7-hc71fabe_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsqlite-3.53.4-h399dd60_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libstdcxx-16.2.0-hef695bb_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libuuid-2.42.4-hd6fdeab_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libzlib-1.3.2-hdc9db2a_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/ncurses-6.6-h2b6f883_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/openssl-3.6.5-he6ad1d5_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/python-3.14.7-hbec3b18_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/readline-8.3-ha7194a6_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/tk-8.6.13-noxft_hf03c496_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/zstd-1.5.7-h9d15635_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+  - conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  host_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/bzip2-1.0.8-h4777abc_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/icu-78.3-py311h3512406_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/ld_impl_linux-aarch64-2.46.1-default_h1979696_102.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libexpat-2.8.5-h4154aff_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libffi-3.7.0-hdaad0be_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libgcc-16.2.0-h205dda4_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libgomp-16.2.0-h8acb6b2_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/liblzma-5.8.3-he30d5cf_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libmpdec-4.0.0-he30d5cf_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libpython-3.14.7-hc71fabe_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsqlite-3.53.4-h399dd60_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libstdcxx-16.2.0-hef695bb_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libuuid-2.42.4-hd6fdeab_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libzlib-1.3.2-hdc9db2a_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/ncurses-6.6-h2b6f883_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/openssl-3.6.5-he6ad1d5_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/python-3.14.7-hbec3b18_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/readline-8.3-ha7194a6_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/tk-8.6.13-noxft_hf03c496_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/zstd-1.5.7-h9d15635_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+- conda_source: emberjson[f895cceb] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+  version: 0.4.0
+  build: h60d57d3_0
+  subdir: osx-arm64
+  variants:
+    target_platform: osx-arm64
+  depends:
+  - mojo-compiler ==1.2.0.dev2026092105
+  - emberserde
+  source_depends:
+    emberserde:
+      git: https://github.com/kszucs/EmberSerde.git
+      rev: d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-h4e30115_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/icu-78.3-py310h579977c_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libcxx-23.1.2-h55c6f16_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.5-h6111c0a_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.7.0-h47dc5ef_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libpython-3.14.7-h4311e70_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.53.4-hca69786_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-he64c551_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.5-h55eecbc_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.7-h0ae1c2c_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h8b90a29_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-hbeba79b_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+  - conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  host_packages:
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-h4e30115_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/icu-78.3-py310h579977c_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libcxx-23.1.2-h55c6f16_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.5-h6111c0a_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.7.0-h47dc5ef_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libpython-3.14.7-h4311e70_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.53.4-hca69786_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-he64c551_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.5-h55eecbc_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.7-h0ae1c2c_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h8b90a29_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-hbeba79b_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+- conda_source: emberjson[fed0b418] @ git+https://github.com/kszucs/emberjson?branch=marrow#c197bb4531c9a6ea849bd2ca65431bd459aa68c5
+  version: 0.4.0
+  build: hb0f4dca_0
+  subdir: linux-64
+  variants:
+    target_platform: linux-64
+  depends:
+  - mojo-compiler ==1.2.0.dev2026092105
+  - emberserde
+  source_depends:
+    emberserde:
+      git: https://github.com/kszucs/EmberSerde.git
+      rev: d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.5-hd2095e1_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.7-hdc7f604_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.7-hcd007b5_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+  - conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  host_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.5-hd2095e1_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.7-hdc7f604_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.7-hcd007b5_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+- conda_source: emberserde[06854d82] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  version: 0.1.0
+  build: h60d57d3_0
+  subdir: osx-arm64
+  variants:
+    target_platform: osx-arm64
+  depends:
+  - mojo-compiler ==1.2.0.dev2026092105
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-h4e30115_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/icu-78.3-py310h579977c_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libcxx-23.1.2-h55c6f16_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.5-h6111c0a_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.7.0-h47dc5ef_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libpython-3.14.7-h4311e70_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.53.4-hca69786_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-he64c551_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.4-h55eecbc_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.7-h0ae1c2c_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h8b90a29_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-hbeba79b_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.2.0.dev2026092105-release.conda
+- conda_source: emberserde[1dfb6dcc] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  version: 0.1.0
+  build: hb0f4dca_0
+  subdir: linux-64
+  variants:
+    target_platform: linux-64
+  depends:
+  - mojo-compiler ==1.2.0.dev2026092105
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.5-hd2095e1_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.7-hdc7f604_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.7-hcd007b5_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
+- conda_source: emberserde[6162f663] @ git+https://github.com/kszucs/emberserde?rev=d6e6e0417dc0f1cf5d09755abc5af178dde90bb3#d6e6e0417dc0f1cf5d09755abc5af178dde90bb3
+  version: 0.1.0
+  build: he8cfe8b_0
+  subdir: linux-aarch64
+  variants:
+    target_platform: linux-aarch64
+  depends:
+  - mojo-compiler ==1.2.0.dev2026092105
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/bzip2-1.0.8-h4777abc_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/icu-78.3-py311h3512406_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/ld_impl_linux-aarch64-2.46.1-default_h1979696_102.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libexpat-2.8.5-h4154aff_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libffi-3.7.0-hdaad0be_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libgcc-16.2.0-h205dda4_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libgomp-16.2.0-h8acb6b2_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/liblzma-5.8.3-he30d5cf_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libmpdec-4.0.0-he30d5cf_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libpython-3.14.7-hc71fabe_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsqlite-3.53.4-h399dd60_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libstdcxx-16.2.0-hef695bb_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libuuid-2.42.4-hd6fdeab_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libzlib-1.3.2-hdc9db2a_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/ncurses-6.6-h2b6f883_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/openssl-3.6.4-he6ad1d5_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/python-3.14.7-hbec3b18_106_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/readline-8.3-ha7194a6_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/tk-8.6.13-noxft_hf03c496_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/zstd-1.5.7-h9d15635_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-aarch64/mojo-compiler-1.2.0.dev2026092105-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0.dev2026092105-release.conda
 - conda_source: mojo-regex[91e3acbf] @ git+https://github.com/kszucs/mojo-regex?branch=marrow#dd96ce78da10b245a90adca3ee446d96a2ebad06
   version: 0.21.0
   build: he8cfe8b_0

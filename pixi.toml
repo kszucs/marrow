@@ -31,6 +31,7 @@ mojo-compiler = "==1.2.0.dev2026092105"
 mojo = "==1.2.0.dev2026092105"
 mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marrow" }
 morrow = { git = "https://github.com/kszucs/morrow.mojo.git", branch = "marrow" }
+emberjson = { git = "https://github.com/kszucs/EmberJson.git", branch = "marrow" }
 
 [package.run-dependencies]
 # Mojo builds are compiled against a specific CPython minor version; update the
@@ -415,6 +416,10 @@ mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marro
 # database that `tzdata` installs under `$CONDA_PREFIX/share/zoneinfo`.
 morrow = { git = "https://github.com/kszucs/morrow.mojo.git", branch = "marrow" }
 tzdata = "*"
+# The JSON tokenizer behind `marrow/json/`: a fork of bgreni/EmberJson whose
+# `marrow` branch builds on the pinned nightly. It installs
+# `lib/mojo/emberjson.mojoc` (with its `emberserde`).
+emberjson = { git = "https://github.com/kszucs/EmberJson.git", branch = "marrow" }
 # Mojo builds are compiled against a specific CPython minor version; update the
 # minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"

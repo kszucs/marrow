@@ -397,6 +397,10 @@ struct TimeUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
         else:
             return "ns"
 
+    def fraction_digits(self) -> Int:
+        """Decimal digits below the second: 0, 3, 6 or 9."""
+        return 3 * self.value
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self.to_string())
 
