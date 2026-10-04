@@ -84,7 +84,8 @@ from .distinct import (
 )
 from .dictionary import DictionaryEncoder
 from .hashing import HashKernel
-from ..utils import Fmix64, KeyHash
+from .window import WindowExtents, WindowFrame
+from ..utils import Fmix64, KeyHash, Monoid, SegmentTree
 
 
 # ---------------------------------------------------------------------------
@@ -1106,7 +1107,100 @@ trait Foldable(AggKernel):
         ...
 
 
-struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
+# ---------------------------------------------------------------------------
+# Windowable — an aggregate over many overlapping row ranges at once.
+# ---------------------------------------------------------------------------
+
+
+trait Windowable(AggKernel):
+    """An aggregate that answers every row's window frame in one pass.
+
+    `over(input, extents, frame)` answers, for every sorted row `j`, this
+    aggregate over the rows of `extents.frame(j, frame)`, reusing work across
+    frames rather than evaluating each from scratch — which is O(n^2) under
+    SQL's default frame.
+
+    `Fold` conforms through a segment tree of partial folds, `ValidCount`
+    through a prefix count; a window evaluates any other aggregate frame by
+    frame.
+    """
+
+    @staticmethod
+    def over(
+        input: Self.InArray, extents: WindowExtents, frame: WindowFrame
+    ) raises -> Self.OutArray:
+        ...
+
+
+@fieldwise_init
+struct FoldPartial[K: FoldKernel, A: DType](Monoid):
+    """A fold over some rows, not yet finalized — one `AggState` slot — and
+    `K`'s lane algebra as a `Monoid` over them.
+
+    `K.combine` is associative with `K.identity` as its unit, and valid counts
+    add, so a `SegmentTree` can answer any range of rows. `finalize` stays
+    outside: it runs once per answer, on the combined partial, which is what
+    makes `mean` correct — the average of averages is not the average.
+    """
+
+    var acc: Scalar[Self.A]
+    var count: Int
+
+    @staticmethod
+    def identity() -> Self:
+        return Self(Self.K.identity[Self.A](), 0)
+
+    @staticmethod
+    def combine(a: Self, b: Self) -> Self:
+        return Self(Self.K.combine[Self.A, 1](a.acc, b.acc), a.count + b.count)
+
+
+def fold_frames[
+    F: Foldable
+](
+    mut agg: F,
+    leaves: List[FoldPartial[F.Lane, F.Acc]],
+    extents: WindowExtents,
+    frame: WindowFrame,
+) raises:
+    """Fold each row `j`'s frame, `extents.frame(j, frame)`, of `leaves` into
+    slot `j` of `agg`.
+
+    Each frame comes from the previous one where it can and from a
+    `SegmentTree` where it cannot; no row is ever subtracted. A frame sharing
+    the previous start extends the running fold by the rows it adds, and one
+    starting at or past the previous stop restarts it: frames are monotone, so
+    both total O(n) and cover cumulative frames, peer groups and whole
+    partitions without a tree. Only a frame overlapping the previous one from a
+    later start is a range query, O(log n). Answers go through `reserve` and
+    `combine_at`, so `finish` applies `finalize` and `empty_is_null` exactly as
+    in a `GROUP BY`.
+    """
+    comptime P = FoldPartial[F.Lane, F.Acc]
+    agg.reserve(len(extents))
+    var tree: Optional[SegmentTree[P]] = None
+    var run = P.identity()
+    var prev_lo = 0
+    var prev_hi = 0
+    for j in range(len(extents)):
+        var lo, hi = extents.frame(j, frame)
+        if j > 0 and lo == prev_lo and hi >= prev_hi:
+            for i in range(prev_hi, hi):
+                run = P.combine(run, leaves[i])
+        elif j == 0 or lo >= prev_hi:
+            run = P.identity()
+            for i in range(lo, hi):
+                run = P.combine(run, leaves[i])
+        else:
+            if not tree:
+                tree = SegmentTree(leaves)
+            run = tree.value().query(lo, hi)
+        agg.combine_at(j, run.acc, run.count)
+        prev_lo = lo
+        prev_hi = hi
+
+
+struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     """The aggregate expressible as a lane fold, over a column of type `V` —
     `sum`, `product`, `mean`, `min`, `max`, `count`.
 
@@ -1235,6 +1329,28 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
         mut self, slot: Int, value: Scalar[Self.Acc], count: Int
     ) raises:
         self._state.combine_at(slot, value, count)
+
+    # -- Windowable -----------------------------------------------------------
+
+    @staticmethod
+    def over(
+        input: Self.InArray, extents: WindowExtents, frame: WindowFrame
+    ) raises -> Self.OutArray:
+        """`fold_frames` over the column's rows, a null folding as the
+        identity."""
+        comptime P = FoldPartial[Self.Lane, Self.Acc]
+        var values = input.values()
+        var leaves = List[P](capacity=len(input))
+        for i in range(len(input)):
+            leaves.append(P(values[i].cast[Self.Acc](), 1))
+        if input.null_count() > 0:
+            var valid = input.validity().value()
+            for i in range(len(input)):
+                if not valid[i]:
+                    leaves[i] = P.identity()
+        var agg = Self(input.type())
+        fold_frames(agg, leaves, extents, frame)
+        return agg.finish()
 
 
 struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
@@ -1414,7 +1530,7 @@ struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
         return Self.A.from_values(self._best)
 
 
-struct ValidCount[A: Array](AggKernel):
+struct ValidCount[A: Array](Windowable):
     """`COUNT(x)` — the *non-null* values of `x`, over a column of any type.
 
     A validity scan and nothing else, so it is defined for every dtype and
@@ -1486,6 +1602,30 @@ struct ValidCount[A: Array](AggKernel):
         var out = Int64Builder(len(self._counts))
         for g in range(len(self._counts)):
             out.append(Scalar[int64.native](self._counts[g]))
+        return out.finish()
+
+    @staticmethod
+    def over(
+        input: Self.InArray, extents: WindowExtents, frame: WindowFrame
+    ) raises -> Self.OutArray:
+        """The frame's length, less its nulls: a count is invertible and
+        exact, so a prefix count of the valid rows answers any frame in O(1)
+        and needs no tree."""
+        var out = Int64Builder(len(extents))
+        if input.null_count() > 0:
+            var data = input.to_data()
+            var valid = data.validity().value()
+            var prefix = List[Int](capacity=len(input) + 1)
+            prefix.append(0)
+            for i in range(len(input)):
+                prefix.append(prefix[i] + Int(valid[i]))
+            for j in range(len(extents)):
+                var lo, hi = extents.frame(j, frame)
+                out.append(Int64(prefix[hi] - prefix[lo]))
+        else:
+            for j in range(len(extents)):
+                var lo, hi = extents.frame(j, frame)
+                out.append(Int64(hi - lo))
         return out.finish()
 
 

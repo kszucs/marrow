@@ -95,7 +95,9 @@ from ...kernels.aggregate import (
     LexicalExtremum,
     SumFold,
     ValidCount,
+    Windowable,
 )
+from ...kernels.window import WindowFrame
 from ...schema import Schema
 from ..logical import (
     DynValue,
@@ -113,6 +115,9 @@ from std.memory import ArcPointer
 from ...kernels.groupby import Groups
 from ..physical import (
     BufferedAggregateOperator,
+    DynFrameOperator,
+    PerFrameOperator,
+    WindowedAggregateOperator,
     Datum,
     DynOperator,
     Morsel,
@@ -492,6 +497,38 @@ struct RuntimeAggregate(Value):
                 grouped,
                 d,
             )
+
+        return resolve_aggregate(self._name, d, job)
+
+    def to_window(
+        self,
+        schema: Schema,
+        bindings: Bindings,
+        frame: WindowFrame,
+    ) raises -> DynFrameOperator:
+        """Resolve the name against the operand's dtype — the ladder
+        `to_operator` uses — and lower to a `WindowedAggregateOperator` when
+        the kernel it resolves to is `Windowable`, to one aggregate per
+        distinct frame otherwise."""
+        var d = self._input.dtype(schema)
+        if self._where:
+            reject_non_boolean_filter(self._where.value().dtype(schema))
+
+        def job[Agg: AggKernel]() raises {imm} -> DynFrameOperator:
+            comptime if conforms_to(Agg, Windowable):
+                return WindowedAggregateOperator[Agg, RuntimeValue](
+                    self._input.copy(),
+                    _lower_filter(self._where, schema, bindings),
+                    bindings.copy(),
+                    frame,
+                )
+            else:
+                return PerFrameOperator(
+                    DynValue(self.copy()),
+                    schema.copy(),
+                    bindings.copy(),
+                    frame,
+                )
 
         return resolve_aggregate(self._name, d, job)
 

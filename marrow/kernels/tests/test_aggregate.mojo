@@ -1,13 +1,15 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
+from std.math import nan
 from std.testing import assert_equal, assert_true, assert_false
 
-from ...arrays import DynArray, PrimitiveArray, StringArray
+from ...arrays import DynArray, Int32Array, PrimitiveArray, StringArray
 from ...scalars import DynScalar
 from ...builders import (
     array,
     nulls,
+    Float64Builder,
     PrimitiveBuilder,
     Int32Builder,
     StringBuilder,
@@ -30,6 +32,7 @@ from ...dtypes import (
     TimestampType,
 )
 from ...kernels.groupby import Groups
+from ...kernels.window import WindowExtents, WindowFrame
 from ...kernels.aggregate import (
     AggKernel,
     Fold,
@@ -41,6 +44,8 @@ from ...kernels.aggregate import (
     LexicalExtremum,
     SumFold,
     CountFold,
+    Windowable,
+    ValidCount,
 )
 
 
@@ -240,3 +245,69 @@ def test_min_max_timestamp_preserves_unit_tz() raises:
     assert_equal(
         whole[Fold[MaxFold, TimestampType]](a).as_timestamp().value(), 3000
     )
+
+
+# -- Windowable.over: one answer per frame, against the aggregate over each --
+
+
+def _check_over[A: Windowable](value: DynArray) raises:
+    """Every frame shape a window produces — the default `RANGE` frame over
+    tied peers, sliding, whole-partition, empty, past the partition and
+    two-sided `ROWS` frames — over three partitions, each row checked against
+    `A` over that row's slice."""
+    var n = len(value)
+    var new_partition = List[Bool](length=n, fill=False)
+    var new_peer = List[Bool](length=n, fill=False)
+    for j in range(n):
+        new_partition[j] = j == 0 or j == 7 or j == 15
+        new_peer[j] = new_partition[j] or j % 3 == 0
+    var extents = WindowExtents(new_partition^, new_peer^)
+    var frames = [
+        WindowFrame.default(),
+        WindowFrame(True, -3, 0),
+        WindowFrame(True, -1000, 1000),
+        WindowFrame(True, -3, -1),
+        WindowFrame(True, 5, 10),
+        WindowFrame(True, 0, 0),
+        WindowFrame(True, -1, 2),
+    ]
+    for frame in frames:
+        var got = A.over(A.InArray(value.to_data()), extents, frame).to_dyn()
+        assert_equal(len(got), n)
+        for j in range(n):
+            var lo, hi = extents.frame(j, frame)
+            var expected = whole[A](value.slice(lo, hi - lo))
+            assert_equal(
+                String(got[j]), String(expected), String(frame, " row ", j)
+            )
+
+
+def test_over_matches_the_aggregate_over_each_frame() raises:
+    var b = Int32Builder(23)
+    for i in range(23):
+        if i % 5 == 2:
+            b.append_null()
+        else:
+            b.append(Int32((i * 7919) % 41 - 20))
+    var col: DynArray = b.finish()
+    _check_over[Fold[SumFold, Int32Type]](col)
+    _check_over[Fold[MinFold, Int32Type]](col)
+    _check_over[Fold[MaxFold, Int32Type]](col)
+    _check_over[Fold[MeanFold, Int32Type]](col)
+    _check_over[Fold[CountFold, Int32Type]](col)
+    _check_over[ValidCount[Int32Array]](col)
+
+
+def test_over_float_min_max_with_nan() raises:
+    var b = Float64Builder(23)
+    for i in range(23):
+        if i % 7 == 3:
+            b.append(nan[DType.float64]())
+        elif i % 6 == 1:
+            b.append_null()
+        else:
+            b.append(Float64((i * 31) % 17) - 8.5)
+    var col: DynArray = b.finish()
+    _check_over[Fold[MinFold, Float64Type]](col)
+    _check_over[Fold[MaxFold, Float64Type]](col)
+    _check_over[Fold[SumFold, Float64Type]](col)

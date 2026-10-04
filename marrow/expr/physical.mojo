@@ -46,10 +46,12 @@ from ..errors import InternalError
 from ..arrays import BoolArray, DynArray, Int32Array, StructArray
 from ..buffers import Bitmap
 from ..scalars import ArrowScalar, DynScalar, NullScalar
+from std.builtin.rebind import downcast
 from std.utils import Variant
 from ..builders import Int32Builder, nulls
 from ..dtypes import Field, field, struct_
-from ..kernels.aggregate import AggKernel
+from ..kernels.aggregate import AggKernel, Windowable
+from ..kernels.conditional import case_when
 from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter, take
@@ -72,7 +74,7 @@ from .bindings import Bindings
 from .logical import DynValue, Multiplicity, WindowExpr
 from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
-from ..kernels.window import WindowExtents, mark_changes
+from ..kernels.window import WindowExtents, WindowFrame, mark_changes
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 
@@ -1179,7 +1181,7 @@ struct WindowOperator(Operator):
         # `WindowExpr`'s slot, instantiated where the verb named it, so the
         # bodies of the ones this binary never writes are not linked. The
         # aggregate is the one kind with no slot: its argument is an ordinary
-        # aggregate `Value`, so it runs through that value's own operator.
+        # aggregate `Value`, evaluated over each frame by its own kernel.
         if expr.is_aggregate():
             return self._framed_aggregate(expr, extents, sorted_batch)
 
@@ -1188,13 +1190,7 @@ struct WindowOperator(Operator):
         if not expr.fixed_dtype:
             argument = self._eval(expr.argument.value(), sorted_batch)
         return expr.compute.value()(
-            extents,
-            argument^,
-            expr.offset,
-            expr.frame.is_rows,
-            expr.frame.preceding,
-            expr.frame.following,
-            self._ctx,
+            extents, argument^, expr.offset, expr.frame, self._ctx
         )
 
     def _framed_aggregate(
@@ -1203,86 +1199,14 @@ struct WindowOperator(Operator):
         extents: WindowExtents,
         sorted_batch: StructArray,
     ) raises -> DynArray:
-        """An aggregate evaluated once per distinct frame.
-
-        **The aggregate runs through its own operator**, on a slice of the
-        sorted batch. That is what makes every aggregate a window aggregate at
-        once — `SUM`, `MIN`, `COUNT`, `AVG` and anything added later — with the
-        kernel's own null semantics rather than a second implementation of
-        them: `SUM` over an all-null frame answers null here because `SumFold`
-        answers null, not because this file decided it should.
-
-        The cost is one operator per distinct frame. Overlapping frames that
-        are not identical share nothing: an operator's `drain` is one-shot, so
-        a partial result cannot be carried forward and extended. A running
-        accumulator would be a per-aggregate, per-dtype kernel reached through
-        a new `DynValue` slot — `backlog.md` 1.13.
-
-        **A frame equal to the previous row's is not re-evaluated.** Under
-        `RANGE` that is every row of a peer group, and under `ROWS` every row
-        whose frame both partition edges clip, such as `rows=(-1000, 1000)` on
-        a short partition. A bounded `ROWS` frame moves with the row and never
-        repeats. Equal bounds are the same aggregate over the same slice, and
-        two partitions never share a non-empty frame, so the reuse cannot
-        carry an answer across a partition boundary. Each distinct answer is
-        kept once and the column is one gather over them, rather than `n`
-        one-row arrays handed to `concat`.
-
-        **An empty frame still runs the aggregate**, on a zero-row slice,
-        rather than short-circuiting to null: `COUNT` over no rows is 0 and
-        `MIN` over no rows is NULL, and that is the aggregate's to decide.
-        Short-circuiting once made every `COUNT(*) OVER (... ROWS BETWEEN 30
-        PRECEDING AND 1 PRECEDING)` report NULL for a partition's first row.
-
-        Slicing rather than gathering keeps the per-frame cost at O(1) for the
-        batch itself — `StructArray.slice` is zero-copy and `field()` pushes
-        the offset down to each child — so only the aggregate's own scan is
-        linear in the frame. Zero-copy is not free, though: a slice copies the
-        struct's dtype, one `Field` per column. So the batch is first narrowed
-        to the columns the aggregate reads, which keeps each frame's slice
-        independent of how wide the input is.
-        """
-        var n = len(extents)
-        var dtype = expr.dtype(self._input_schema)
-        if n == 0:
-            return nulls(0, dtype^)
-        ref aggregate = expr.argument.value()
-        var reads = List[Int]()
-        for name in aggregate.columns():
-            # A name missing here is left for `to_operator` to report.
-            var i = self._input_schema.get_field_index(name)
-            if i >= 0:
-                reads.append(i)
-        var input = sorted_batch.select(reads)
-        var input_schema = schema(input.dtype.as_struct().fields.copy())
-        var answers = List[DynArray]()
-        var which = Int32Builder(n)
-        var prev_lo = -1
-        var prev_hi = -1
-        for j in range(n):
-            var lo, hi = extents.frame(
-                j,
-                expr.frame.is_rows,
-                expr.frame.preceding,
-                expr.frame.following,
-            )
-            if lo != prev_lo or hi != prev_hi:
-                var op = aggregate.to_operator(
-                    input_schema, False, self._bindings
-                )
-                var produced = op.push(
-                    Morsel.ungrouped(input.slice(lo, hi - lo))
-                )
-                if not produced:
-                    produced = op.drain()
-                if produced:
-                    answers.append(produced.value().to_array(1))
-                else:
-                    answers.append(nulls(1, dtype.copy()))
-                prev_lo = lo
-                prev_hi = hi
-            which.append(Int32(len(answers) - 1))
-        return take(concat(answers^, self._ctx), which.finish(), self._ctx)
+        """An aggregate over every row's frame, through the frame operator the
+        aggregate lowers to (`Value.to_window`): one pass when its kernel
+        combines partial results, one aggregate per distinct frame when it
+        does not."""
+        var op = expr.argument.value().to_window(
+            self._input_schema, self._bindings, expr.frame
+        )
+        return op.run(sorted_batch, extents, self._ctx)
 
 
 struct BatchSourceOperator(Operator):
@@ -1932,6 +1856,188 @@ def compact_to_admitted(
         )
         groups = Groups(ids^, groups.num_groups)
     column = filter(column, keep^)
+
+
+trait FrameOperator(Deinitable, Movable):
+    """Answers one window aggregate over every frame of a sorted batch.
+
+    What `Value.to_window` lowers to, the window counterpart of `Operator`.
+    The frame spec is fixed when it is built; the extents come from the sort the
+    window ran, so one `run` over the sorted batch answers the whole column.
+    """
+
+    def run(
+        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+    ) raises -> DynArray:
+        ...
+
+
+struct DynFrameOperator(Movable):
+    """A `FrameOperator`, erased — the window counterpart of `DynOperator`,
+    and erased the same way."""
+
+    var _data: ArcPointer[NoneType]
+    var _virt_run: def(
+        ArcPointer[NoneType], StructArray, WindowExtents, ExecContext
+    ) thin raises -> DynArray
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
+    """Erasure forgets the pointee's destructor; this carries it. See
+    `DynOperator._virt_drop`."""
+
+    @staticmethod
+    def _run_tramp[
+        O: FrameOperator
+    ](
+        ptr: ArcPointer[NoneType],
+        batch: StructArray,
+        extents: WindowExtents,
+        ctx: ExecContext,
+    ) raises -> DynArray:
+        return rebind[ArcPointer[O]](ptr)[].run(batch, extents, ctx)
+
+    @staticmethod
+    def _drop_tramp[O: FrameOperator](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[O]](ptr)
+        _ = ptr^
+        _ = typed^
+
+    @implicit
+    def __init__[O: FrameOperator](out self, var value: O):
+        var ptr = ArcPointer[O](value^)
+        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_run = Self._run_tramp[O]
+        self._virt_drop = Self._drop_tramp[O]
+
+    def __deinit__(deinit self):
+        self._virt_drop(self._data^)
+
+    def run(
+        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+    ) raises -> DynArray:
+        return self._virt_run(self._data, batch, extents, ctx)
+
+
+struct WindowedAggregateOperator[Agg: AggKernel, A: Evaluable](FrameOperator):
+    """A `Windowable` aggregate over every frame: evaluate the operand to a
+    column, mask it by the `FILTER`, answer each frame through `Agg.over`.
+
+    The window counterpart of `BufferedAggregateOperator`, and here for the
+    same reason: it needs only an operand that evaluates to a column, which
+    both lanes have. A `FILTER` is applied as `CASE WHEN p THEN x END`: a row
+    it does not admit folds like a null.
+    """
+
+    var _input: Self.A
+    var _where: Optional[DynOperator]
+    var _bindings: Bindings
+    var _frame: WindowFrame
+
+    def __init__(
+        out self,
+        var input: Self.A,
+        var predicate: Optional[DynOperator],
+        var bindings: Bindings,
+        frame: WindowFrame,
+    ):
+        self._input = input^
+        self._where = predicate^
+        self._bindings = bindings^
+        self._frame = frame
+
+    def run(
+        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+    ) raises -> DynArray:
+        comptime F = downcast[Self.Agg, Windowable]
+        var n = len(batch)
+        var operand = self._input.evaluate(batch, self._bindings).to_array(n)
+        if self._where:
+            var admitted = self._where.value().push(
+                Morsel.ungrouped(batch.copy())
+            )
+            operand = case_when(
+                [admitted.value().to_array(n).as_bool().copy()], [operand^]
+            )
+        return F.over(
+            F.InArray(operand.to_data()), extents, self._frame
+        ).to_dyn()
+
+
+struct PerFrameOperator(FrameOperator):
+    """An aggregate evaluated once per distinct frame, through its own
+    operator — what an aggregate with no `Windowable.over` lowers to, and what
+    makes every aggregate a window aggregate at once.
+
+    A frame equal to the previous row's is not re-evaluated: under `RANGE`
+    that is every row of a peer group, and under `ROWS` every row whose frame
+    both partition edges clip. Two partitions never share a non-empty frame,
+    so the reuse cannot carry an answer across a partition boundary. Each
+    distinct answer is kept once and the column is one gather over them.
+
+    **An empty frame still runs the aggregate**, on a zero-row slice, rather
+    than short-circuiting to null: `COUNT` over no rows is 0 and `MIN` over no
+    rows is NULL, and that is the aggregate's to decide.
+
+    The batch is narrowed to the columns the aggregate reads before it is
+    sliced: `StructArray.slice` is zero-copy but copies the struct's dtype, one
+    `Field` per column, so narrowing keeps each frame's cost independent of how
+    wide the input is.
+    """
+
+    var _aggregate: DynValue
+    var _schema: Schema
+    var _bindings: Bindings
+    var _frame: WindowFrame
+
+    def __init__(
+        out self,
+        var aggregate: DynValue,
+        var schema: Schema,
+        var bindings: Bindings,
+        frame: WindowFrame,
+    ):
+        self._aggregate = aggregate^
+        self._schema = schema^
+        self._bindings = bindings^
+        self._frame = frame
+
+    def run(
+        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+    ) raises -> DynArray:
+        var n = len(extents)
+        var dtype = self._aggregate.dtype(self._schema)
+        if n == 0:
+            return nulls(0, dtype^)
+        var reads = List[Int]()
+        for name in self._aggregate.columns():
+            # A name missing here is left for `to_operator` to report.
+            var i = self._schema.get_field_index(name)
+            if i >= 0:
+                reads.append(i)
+        var input = batch.select(reads)
+        var input_schema = schema(input.dtype.as_struct().fields.copy())
+        var answers = List[DynArray]()
+        var which = Int32Builder(n)
+        var prev_lo = 0
+        var prev_hi = 0
+        for j in range(n):
+            var lo, hi = extents.frame(j, self._frame)
+            if j == 0 or lo != prev_lo or hi != prev_hi:
+                var op = self._aggregate.to_operator(
+                    input_schema, False, self._bindings
+                )
+                var produced = op.push(
+                    Morsel.ungrouped(input.slice(lo, hi - lo))
+                )
+                if not produced:
+                    produced = op.drain()
+                if produced:
+                    answers.append(produced.value().to_array(1))
+                else:
+                    answers.append(nulls(1, dtype.copy()))
+            which.append(Int32(len(answers) - 1))
+            prev_lo = lo
+            prev_hi = hi
+        return take(concat(answers^, ctx), which.finish(), ctx)
 
 
 struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):

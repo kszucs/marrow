@@ -21,6 +21,7 @@ out on its own:
 | `zstd` | `Zstd` — Zstandard, writing libzstd's level-1 frames, in Mojo |
 | `dylib` | `Dylib`, `LibSpec` — declaring and opening an optional C library |
 | `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
+| `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
 | `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
 
 The names are re-exported here, so `from ..utils import LittleEndian` is the
@@ -46,6 +47,7 @@ from .checksum import Crc32, Crc32c
 from .compression import CompressionLibs
 from .datetime import CivilDate, Epoch, floor_div
 from .dylib import Dylib, LibSpec
+from .segment_tree import Monoid, SegmentTree
 from .uri import StorageOptions, Uri
 from .hex import hex_digit
 from .hashing import (

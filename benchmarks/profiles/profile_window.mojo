@@ -5,17 +5,14 @@
 
     pixi run profile benchmarks/profiles/profile_window.mojo --sample --no-open
 
-`WindowOperator._framed_aggregate` builds one aggregate operator per distinct
-frame and scans that frame, so a framed aggregate has two costs that scale
-differently: the per-frame operator construction, which is linear, and the
-frame scan, which under SQL's default frame is quadratic. `MARROW_PROFILE_SHAPE`
-picks what the trace shows:
+`sum` runs over its frames in one pass (`Windowable.over`): a running fold
+while the frame's start holds still, a segment-tree query otherwise.
+`MARROW_PROFILE_SHAPE` picks what the trace shows:
 
-- `sliding` (default) — `ROWS BETWEEN 9 PRECEDING AND CURRENT ROW`: every frame
-  is distinct and the scan is O(1) per row, so the trace is the per-frame
-  constant alone.
-- `cumulative` — the default `RANGE` frame over distinct keys: the quadratic.
-- `ties` — the default frame over 16 ordering values: 16 distinct frames.
+- `sliding` (default) — `ROWS BETWEEN 9 PRECEDING AND CURRENT ROW`: every
+  frame's start moves, so every row is a tree query.
+- `cumulative` — the default `RANGE` frame over distinct keys: the running fold.
+- `ties` — the default frame over 16 ordering values: 16 peer groups.
 - `row_number` — no frame: the sort, boundary scan and scatter every shape pays.
 
 Overrides: `MARROW_PROFILE_N` (default 20_000), `MARROW_PROFILE_ITERS`

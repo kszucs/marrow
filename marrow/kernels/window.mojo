@@ -45,6 +45,60 @@ from .filter import TakeKernel
 from .hashing import KeyCompare
 
 
+struct WindowFrame(Copyable, ImplicitlyCopyable, Movable, Writable):
+    """Which rows of the partition an aggregate window function sees.
+
+    Two forms, and the difference between them is the one thing about frames
+    that reliably surprises:
+
+    - the **default** — `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`,
+      which SQL applies whenever a window has an `ORDER BY` and no explicit
+      frame. `RANGE` counts *peers*, so "current row" means the end of the
+      current row's peer group, and tied rows all see the same frame.
+    - **`ROWS`**, which counts rows, so tied rows see different frames.
+
+    The two agree only when the `ORDER BY` key has no duplicates, which is why
+    `window_explicit_rows_frame` exists as a separate golden case from
+    `window_partitioned_running_sum`.
+
+    With no `ORDER BY` at all the default frame is the whole partition. That
+    falls out here rather than being special-cased: with no order key every row
+    is a peer of every other, so the peer group *is* the partition.
+    """
+
+    var is_rows: Bool
+    """`True` for `ROWS`, `False` for the default `RANGE`."""
+
+    var preceding: Int
+    """`ROWS` only: rows before the current one, as a non-positive offset."""
+
+    var following: Int
+    """`ROWS` only: rows after the current one, as a non-negative offset."""
+
+    def __init__(out self, is_rows: Bool, preceding: Int, following: Int):
+        self.is_rows = is_rows
+        self.preceding = preceding
+        self.following = following
+
+    @staticmethod
+    def default() -> WindowFrame:
+        """`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`."""
+        return WindowFrame(False, 0, 0)
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self.is_rows == other.is_rows
+            and self.preceding == other.preceding
+            and self.following == other.following
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self.is_rows:
+            writer.write("rows ", self.preceding, "..", self.following)
+        else:
+            writer.write("range unbounded..current")
+
+
 struct WindowExtents(Copyable, Movable, Sized):
     """Where each row's partition and peer group begin and end.
 
@@ -130,9 +184,7 @@ struct WindowExtents(Copyable, Movable, Sized):
     def __len__(self) -> Int:
         return len(self.partition_start)
 
-    def frame(
-        self, j: Int, is_rows: Bool, preceding: Int, following: Int
-    ) -> Tuple[Int, Int]:
+    def frame(self, j: Int, frame: WindowFrame) -> Tuple[Int, Int]:
         """Row `j`'s frame as a half-open `[start, stop)` of sorted rows.
 
         Under `ROWS` the offsets are clipped to the partition. Under `RANGE`
@@ -144,12 +196,14 @@ struct WindowExtents(Copyable, Movable, Sized):
         lying wholly past its partition (`rows=(5, 10)` on a 3-row partition)
         is pulled back to the partition end, so the range can be sliced as is.
         """
-        if is_rows:
+        if frame.is_rows:
             var start = min(
-                max(self.partition_start[j], j + preceding),
+                max(self.partition_start[j], j + frame.preceding),
                 self.partition_end[j],
             )
-            var stop = max(start, min(self.partition_end[j], j + following + 1))
+            var stop = max(
+                start, min(self.partition_end[j], j + frame.following + 1)
+            )
             return (start, stop)
         return (self.partition_start[j], self.peer_end[j])
 
@@ -218,9 +272,7 @@ trait WindowFunction:
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         ...
@@ -242,9 +294,7 @@ struct RowNumber(WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         var out = Int64Builder(len(extents))
@@ -269,9 +319,7 @@ struct Rank(WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         var out = Int64Builder(len(extents))
@@ -298,9 +346,7 @@ struct DenseRank(WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         var out = Int64Builder(len(extents))
@@ -330,9 +376,7 @@ struct Offset[lead: Bool](WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         var idx = Int32Builder(len(extents))
@@ -370,14 +414,12 @@ struct Edge[first: Bool](WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         var idx = Int32Builder(len(extents))
         for j in range(len(extents)):
-            var start, stop = extents.frame(j, is_rows, preceding, following)
+            var start, stop = extents.frame(j, frame)
             if stop == start:
                 idx.append_null()
             elif Self.first:
@@ -409,9 +451,7 @@ struct PercentRank(WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         var out = Float64Builder(len(extents))
@@ -439,9 +479,7 @@ struct CumeDist(WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         var out = Float64Builder(len(extents))
@@ -475,9 +513,7 @@ struct NTile(WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         if offset < 1:
@@ -522,16 +558,14 @@ struct NthValue(WindowFunction):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
         if offset < 1:
             raise InvalidError(t"nth_value: n must be positive, got {offset}")
         var idx = Int32Builder(len(extents))
         for j in range(len(extents)):
-            var lo, hi = extents.frame(j, is_rows, preceding, following)
+            var lo, hi = extents.frame(j, frame)
             var at = lo + offset - 1
             if at < hi:
                 idx.append(Int32(at))

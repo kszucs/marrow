@@ -48,6 +48,9 @@ from ...kernels.aggregate import (
     DistinctCount,
     Fold,
     Foldable,
+    FoldPartial,
+    Windowable,
+    fold_frames,
     CountFold,
     DecimalMeanFold,
     DecimalSumFold,
@@ -64,6 +67,7 @@ from ...buffers import Bitmap
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import (
+    DynValue,
     Nothing,
     References,
     Shape,
@@ -75,9 +79,14 @@ from ..bindings import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
 from ...kernels.groupby import Groups
+from ...kernels.window import WindowExtents, WindowFrame
 from ...arrays import DynArray
 from ..physical import (
     BufferedAggregateOperator,
+    DynFrameOperator,
+    FrameOperator,
+    PerFrameOperator,
+    WindowedAggregateOperator,
     Evaluable,
     Datum,
     EvalOperator,
@@ -290,6 +299,40 @@ struct Aggregate[
                 bindings.copy(),
                 grouped,
                 self._input.dtype(schema),
+            )
+
+    def to_window(
+        self,
+        schema: Schema,
+        bindings: Bindings,
+        frame: WindowFrame,
+    ) raises -> DynFrameOperator:
+        """The window counterpart of `to_operator`, the machine chosen the
+        same way: a fused aggregate folds its frames straight from the
+        operand's lanes, any other `Windowable` one evaluates its operand to a
+        column first, and the rest run one aggregate per distinct frame."""
+        comptime if Self.filters:
+            reject_non_boolean_filter(self._where.dtype(schema))
+        comptime if Self.fuses:
+            return WindowedFoldOperator[Self.Agg, Self.A, Self.P](
+                self._input.copy(),
+                self._where.copy(),
+                bindings.copy(),
+                self._input.dtype(schema),
+                frame,
+            )
+        elif conforms_to(Self.Agg, Windowable):
+            var predicate: Optional[DynOperator] = None
+            comptime if Self.filters:
+                predicate = Optional(
+                    self._where.to_operator(schema, False, bindings.copy())
+                )
+            return WindowedAggregateOperator[Self.Agg, Self.A](
+                self._input.copy(), predicate^, bindings.copy(), frame
+            )
+        else:
+            return PerFrameOperator(
+                DynValue(self.copy()), schema.copy(), bindings.copy(), frame
             )
 
     def alias(self, var name: String) -> Self:
@@ -588,6 +631,67 @@ struct ScatteredAggregateOperator[
         # Nothing to seed: `push` reserved every group a morsel named, and over
         # no morsel at all a grouped query correctly emits no rows.
         return _emit_fold(self._state, 0)
+
+
+struct WindowedFoldOperator[
+    Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing
+](FrameOperator):
+    """A fused fold over every window frame of one batch: the frame leaves
+    come straight from the operand's lanes — `bind` once, `lane[1]` per row,
+    `FILTER` as a validity mask — with no intermediate column, and
+    `fold_frames` answers each frame.
+
+    The window counterpart of `RegisterAggregateOperator`.
+    """
+
+    comptime filters = is_filled[Self.P]
+
+    var _input: Self.A
+    var _where: Self.P
+    var _bindings: Bindings
+    var _in_dtype: DynType
+    var _frame: WindowFrame
+
+    def __init__(
+        out self,
+        var input: Self.A,
+        var predicate: Self.P,
+        var bindings: Bindings,
+        var in_dtype: DynType,
+        frame: WindowFrame,
+    ):
+        self._input = input^
+        self._where = predicate^
+        self._bindings = bindings^
+        self._in_dtype = in_dtype^
+        self._frame = frame
+
+    def run(
+        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+    ) raises -> DynArray:
+        comptime Leaf = FoldPartial[Self.Agg.Lane, Self.Agg.Acc]
+        var n = len(batch)
+        var bound = self._input.bind(batch, self._bindings)
+        var leaves = List[Leaf](capacity=n)
+        for i in range(n):
+            leaves.append(
+                Leaf(self._input.lane[1](bound, i).cast[Self.Agg.Acc](), 1)
+            )
+        var valid: Optional[Bitmap[mut=False]]
+        comptime if Self.filters:
+            valid = _admitted_validity(
+                self._input, bound, self._where, batch, self._bindings
+            )
+        else:
+            valid = self._input.validity(bound)
+        if valid:
+            var bits = valid.value().view()
+            for i in range(n):
+                if not bits[i]:
+                    leaves[i] = Leaf.identity()
+        var agg = Self.Agg(self._in_dtype)
+        fold_frames(agg, leaves, extents, self._frame)
+        return agg.finish().to_dyn()
 
 
 struct RegisterAggregateOperator[

@@ -53,6 +53,7 @@ from ..arrays import BoolArray, DynArray, StructArray
 from ..execution import ExecContext
 from ..kernels.join import JoinKind, JOIN_INNER, JoinBuildSide, BUILD_LEFT
 from ..kernels.window import (
+    WindowFrame,
     DenseRank,
     Edge,
     FirstValue,
@@ -83,6 +84,8 @@ from .`comptime`.leaves import StringParam
 from .runtime.values import column
 from .physical import (
     Datum,
+    DynFrameOperator,
+    PerFrameOperator,
     Evaluable,
     AggregateLowering,
     GroupedAggregateOperator,
@@ -315,8 +318,23 @@ trait Value(Copyable, Deinitable, Writable):
         do with a frame, and `col("v", int64).over(...)` is a mistake worth a
         diagnostic rather than a silent column of copies.
         """
-        return WindowExpr.aggregating(DynValue(self.copy())).over(
+        return WindowExpr.aggregating(self).over(
             partition_by^, order_by^, ascending^, nulls_first, rows^
+        )
+
+    def to_window(
+        self,
+        schema: Schema,
+        bindings: Bindings,
+        frame: WindowFrame,
+    ) raises -> DynFrameOperator:
+        """The operator that answers this aggregate over every `frame` of the
+        window it runs in: by default one aggregate per distinct frame through
+        `to_operator`. `Aggregate[Agg, A, P]` and `RuntimeAggregate` override
+        it with one pass when their kernel combines partial results; reached
+        through `DynValue._to_window`."""
+        return PerFrameOperator(
+            DynValue(self.copy()), schema.copy(), bindings.copy(), frame
         )
 
     def references(self, mut into: References):
@@ -393,8 +411,9 @@ struct DynValue(Copyable, Movable, Writable):
     and no Python frontend can build) and runtime expressions everywhere (which
     is the 4.91 MB configuration).
 
-    Seven function slots — `references`, `name`, `dtype`, `write`,
-    `to_operator`, `mask` and `_drop` — plus two constant fields, `shape` and
+    Eight function slots — `references`, `name`, `dtype`, `write`,
+    `to_operator`, `mask`, `to_window` and `_drop` — plus two constant
+    fields, `shape` and
     `aggregates`, read once at construction because both are comptime
     constants. `_drop` is the
     destructor trampoline every erased box here needs; erasure through
@@ -438,6 +457,16 @@ struct DynValue(Copyable, Movable, Writable):
     so a projection value or a sort key wires a trampoline to `keep_every` and
     drags in nothing. The cone belongs to predicates that actually read an
     index, and those were paying for it anyway."""
+
+    var _to_window: def(
+        ArcPointer[NoneType], Schema, Bindings, WindowFrame
+    ) thin raises -> DynFrameOperator
+    """The boxed aggregate's frame operator.
+
+    **Wired only by `windowed`.** Every other box wires one shared stub that
+    raises, so a binary that boxes an aggregate for a `GROUP BY` instantiates
+    no window code; only `Value.over`, which boxes through `windowed`, links
+    the frame operators and their segment tree."""
 
     var _shape: Shape
     var _aggregates: Bool
@@ -493,6 +522,29 @@ struct DynValue(Copyable, Movable, Writable):
         return String(rebind[ArcPointer[V]](ptr)[])
 
     @staticmethod
+    def _to_window_tramp[
+        V: Value
+    ](
+        ptr: ArcPointer[NoneType],
+        schema: Schema,
+        bindings: Bindings,
+        frame: WindowFrame,
+    ) raises -> DynFrameOperator:
+        return rebind[ArcPointer[V]](ptr)[].to_window(schema, bindings, frame)
+
+    @staticmethod
+    def _not_windowed(
+        ptr: ArcPointer[NoneType],
+        schema: Schema,
+        bindings: Bindings,
+        frame: WindowFrame,
+    ) raises -> DynFrameOperator:
+        raise InvalidError(
+            "window: this value was not boxed for a window; build it with"
+            " `.over(...)`"
+        )
+
+    @staticmethod
     def _drop_tramp[V: Value](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[V]](ptr)
         _ = ptr^
@@ -510,7 +562,15 @@ struct DynValue(Copyable, Movable, Writable):
         self._write = Self._write_tramp[V]
         self._to_operator = Self._to_operator_tramp[V]
         self._mask = Self._mask_tramp[V]
+        self._to_window = Self._not_windowed
         self._shape = V.shape
+
+    @staticmethod
+    def windowed[V: Value](value: V) -> DynValue:
+        """`value` boxed with its frame operator wired; see `_to_window`."""
+        var boxed = DynValue(value)
+        boxed._to_window = Self._to_window_tramp[V]
+        return boxed^
 
     def __deinit__(deinit self):
         self._drop(self._boxed^)
@@ -527,6 +587,15 @@ struct DynValue(Copyable, Movable, Writable):
         monomorphic.
         """
         return self._mask(self._boxed, index, bindings)
+
+    def to_window(
+        self,
+        schema: Schema,
+        bindings: Bindings,
+        frame: WindowFrame,
+    ) raises -> DynFrameOperator:
+        """The boxed aggregate's frame operator. See `Value.to_window`."""
+        return self._to_window(self._boxed, schema, bindings, frame)
 
     def references(self, mut into: References):
         self._references(self._boxed, into)
@@ -732,60 +801,6 @@ otherwise have to be taught to each of them separately."""
 # ---------------------------------------------------------------------------
 # Window functions — the description
 # ---------------------------------------------------------------------------
-struct WindowFrame(Copyable, ImplicitlyCopyable, Movable, Writable):
-    """Which rows of the partition an aggregate window function sees.
-
-    Two forms, and the difference between them is the one thing about frames
-    that reliably surprises:
-
-    - the **default** — `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`,
-      which SQL applies whenever a window has an `ORDER BY` and no explicit
-      frame. `RANGE` counts *peers*, so "current row" means the end of the
-      current row's peer group, and tied rows all see the same frame.
-    - **`ROWS`**, which counts rows, so tied rows see different frames.
-
-    The two agree only when the `ORDER BY` key has no duplicates, which is why
-    `window_explicit_rows_frame` exists as a separate golden case from
-    `window_partitioned_running_sum`.
-
-    With no `ORDER BY` at all the default frame is the whole partition. That
-    falls out here rather than being special-cased: with no order key every row
-    is a peer of every other, so the peer group *is* the partition.
-    """
-
-    var is_rows: Bool
-    """`True` for `ROWS`, `False` for the default `RANGE`."""
-
-    var preceding: Int
-    """`ROWS` only: rows before the current one, as a non-positive offset."""
-
-    var following: Int
-    """`ROWS` only: rows after the current one, as a non-negative offset."""
-
-    def __init__(out self, is_rows: Bool, preceding: Int, following: Int):
-        self.is_rows = is_rows
-        self.preceding = preceding
-        self.following = following
-
-    @staticmethod
-    def default() -> WindowFrame:
-        """`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`."""
-        return WindowFrame(False, 0, 0)
-
-    def __eq__(self, other: Self) -> Bool:
-        return (
-            self.is_rows == other.is_rows
-            and self.preceding == other.preceding
-            and self.following == other.following
-        )
-
-    def write_to[W: Writer](self, mut writer: W):
-        if self.is_rows:
-            writer.write("rows ", self.preceding, "..", self.following)
-        else:
-            writer.write("range unbounded..current")
-
-
 struct WindowExpr(Copyable, Movable, Writable):
     """A window function together with the window it runs over.
 
@@ -814,7 +829,7 @@ struct WindowExpr(Copyable, Movable, Writable):
     # -- the function ------------------------------------------------------
     var compute: Optional[
         def(
-            WindowExtents, Optional[DynArray], Int, Bool, Int, Int, ExecContext
+            WindowExtents, Optional[DynArray], Int, WindowFrame, ExecContext
         ) thin raises -> DynArray
     ]
     """The function itself, as a pointer instantiated where the verb names it.
@@ -826,9 +841,9 @@ struct WindowExpr(Copyable, Movable, Writable):
     here for the reason it is safe there: this type is not self-referential,
     which is the condition the miscompile in `runtime/values.mojo` needed.
 
-    `None` means **the aggregate**, the one open kind — its argument is an
-    ordinary aggregate `Value` evaluated over each frame, so it runs through
-    that value's own operator rather than through a window kernel."""
+    `None` means **the aggregate**, the one open kind: its argument is an
+    ordinary aggregate `Value`, evaluated over every frame by the frame
+    operator its `to_window` lowers to."""
 
     var name: String
     """How the function renders. A stored string, because with the kinds behind
@@ -866,14 +881,10 @@ struct WindowExpr(Copyable, Movable, Writable):
         extents: WindowExtents,
         argument: Optional[DynArray],
         offset: Int,
-        is_rows: Bool,
-        preceding: Int,
-        following: Int,
+        frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        return F.compute(
-            extents, argument, offset, is_rows, preceding, following, ctx
-        )
+        return F.compute(extents, argument, offset, frame, ctx)
 
     @staticmethod
     def of[
@@ -903,19 +914,23 @@ struct WindowExpr(Copyable, Movable, Writable):
         )
 
     @staticmethod
-    def aggregating(var argument: DynValue) raises -> Self:
+    def aggregating[V: Value](value: V) raises -> Self:
         """The open kind: an ordinary aggregate, evaluated over each frame.
+
+        Takes the aggregate typed, not boxed, and boxes it through
+        `DynValue.windowed`: a plain box would wire the stub and silently run
+        every frame through the operator.
 
         The argument is **not** optional, unlike the field: an aggregate window
         is built from the aggregate, so there is no state in which this has
         none. Only the three ranking functions reach the `None` case.
         """
-        if not argument.aggregates():
+        if not V.aggregates:
             raise InvalidError(
-                t"window: '{argument.name()}' is not an aggregate; only an "
+                t"window: '{value.name()}' is not an aggregate; only an "
                 t"aggregate takes a frame"
             )
-        var boxed: Optional[DynValue] = argument^
+        var boxed: Optional[DynValue] = DynValue.windowed(value)
         return Self(None, String("agg"), None, boxed^, 0)
 
     def __init__(
@@ -925,9 +940,7 @@ struct WindowExpr(Copyable, Movable, Writable):
                 WindowExtents,
                 Optional[DynArray],
                 Int,
-                Bool,
-                Int,
-                Int,
+                WindowFrame,
                 ExecContext,
             ) thin raises -> DynArray
         ],
@@ -956,7 +969,7 @@ struct WindowExpr(Copyable, Movable, Writable):
         self.frame = frame
 
     def is_aggregate(self) -> Bool:
-        """Whether this is the open kind, run through its own operator."""
+        """Whether this is the open kind: an aggregate over each frame."""
         return not self.compute
 
     def over(
@@ -2527,8 +2540,12 @@ struct Window(Relation, Writable):
             raise InvalidError("window: needs at least one expression")
         for ref e in exprs:
             if e.spec() != exprs[0].spec():
+                # Rendered first: a t-string over a `WindowExpr` names its
+                # whole layout in one symbol, which outgrew the linker's limit.
+                var this = String(e)
+                var first = String(exprs[0])
                 raise InvalidError(
-                    t"window: '{e}' and '{exprs[0]}' do not share a window; "
+                    t"window: '{this}' and '{first}' do not share a window; "
                     t"build one node per window"
                 )
         self._schema = Self._output_schema(input.schema(), names, exprs)

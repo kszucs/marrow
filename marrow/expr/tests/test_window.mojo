@@ -24,7 +24,8 @@ from std.os.path import join
 from ...utils.testing import ScratchDir
 from ...builders import array, nulls
 from ...dtypes import float64, int64, string
-from ...tabular import record_batch
+from ...tabular import RecordBatch, record_batch
+from ..logical import Value, WindowExpr
 from ..optimizer import AllRules
 from ..builders import (
     col,
@@ -351,12 +352,14 @@ def test_the_default_frame_runs_to_the_peer_group_not_the_row() raises:
 
 def test_a_frame_that_spans_its_partition_repeats_for_every_row() raises:
     """Every row's frame is the whole partition, so every row shares one
-    answer — the shape `_framed_aggregate` evaluates once and reuses.
+    answer — and the partition boundary is what has to interrupt it.
 
-    Two partitions of equal size, because the reuse is what a partition
-    boundary has to interrupt: a memo that compared only the frame's *length*,
-    or that never noticed the bounds had moved, would carry the first
-    partition's total into the second and answer 3 everywhere.
+    Two partitions of equal size, so a reuse that compared only the frame's
+    *length*, or never noticed the bounds had moved, would carry the first
+    partition's answer into the second. `sum` meets that edge in
+    `Windowable.over`, where the second partition restarts the running fold;
+    `variance` has no `over` and meets it in `_per_frame`'s reuse of equal
+    frames.
     """
     var b = record_batch(
         [
@@ -366,7 +369,7 @@ def test_a_frame_that_spans_its_partition_repeats_for_every_row() raises:
         names=["k", "v"],
     )
     var plan = table(b^).with_columns(
-        ["s"],
+        ["s", "var"],
         [
             col("v", int64)
             .sum()
@@ -374,11 +377,22 @@ def test_a_frame_that_spans_its_partition_repeats_for_every_row() raises:
                 partition_by=[col("k", string)],
                 order_by=[col("v", int64)],
                 rows=(-1000, 1000),
-            )
+            ),
+            col("v", int64)
+            .variance()
+            .over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(-1000, 1000),
+            ),
         ],
     )
     var out = plan.execute()
     assert_true(out.column("s").as_int64() == array([3, 3, 30, 30], int64))
+    assert_true(
+        out.column("var").as_float64()
+        == array([0.25, 0.25, 25.0, 25.0], float64)
+    )
 
 
 def test_a_windowed_count_star_reads_no_column() raises:
@@ -413,7 +427,7 @@ def test_a_sum_over_an_all_null_frame_is_null() raises:
     `SUM` skips nulls and answers null when it saw none, so the row whose frame
     is `{null}` is null while the row whose frame is `{null, 4}` is 4. Getting
     this from `SumFold` rather than from an accumulator written here is the
-    reason the aggregate goes through its own operator.
+    reason the frame is folded with the aggregate's own `FoldKernel`.
     """
     var b = record_batch([array([None, 4], int64).copy()], names=["v"])
     var plan = table(b^).with_columns(
@@ -671,3 +685,152 @@ def test_nth_value_is_null_past_the_end_of_the_frame() raises:
     ref n2 = plan.execute().column("n2").as_int64()
     var expected: List[Optional[Int]] = [None, 20, 20]
     assert_true(n2 == array(expected, int64))
+
+
+# ---------------------------------------------------------------------------
+# One-pass window aggregates — `Windowable.over` against hand-computed frames
+# ---------------------------------------------------------------------------
+def _partitioned_with_nulls() raises -> RecordBatch:
+    """Two partitions in a distinct order `o`, each holding a null, so every
+    frame shape meets a null and a partition edge."""
+    return record_batch(
+        [
+            array(["a", "a", "a", "a", "b", "b", "b"]).copy(),
+            array([0, 1, 2, 3, 4, 5, 6], int64).copy(),
+            array([1, None, 3, 6, 10, 20, None], int64).copy(),
+        ],
+        names=["k", "o", "v"],
+    )
+
+
+def _sliding[V: Value](aggregate: V) raises -> WindowExpr:
+    """`aggregate OVER (PARTITION BY k ORDER BY o ROWS 1 PRECEDING)`."""
+    return aggregate.over(
+        partition_by=[col("k", string)],
+        order_by=[col("o", int64)],
+        rows=(-1, 0),
+    )
+
+
+def test_a_sliding_frame_folds_mean_min_and_max() raises:
+    """`ROWS 1 PRECEDING` moves its start every row, so every frame is a
+    range query rather than an extension of the previous one."""
+    var plan = table(_partitioned_with_nulls()).with_columns(
+        ["mean", "min", "max"],
+        [
+            _sliding(col("v", int64).mean()),
+            _sliding(col("v", int64).min()),
+            _sliding(col("v", int64).max()),
+        ],
+    )
+    var out = plan.execute()
+    assert_true(
+        out.column("mean").as_float64()
+        == array([1.0, 1.0, 3.0, 4.5, 10.0, 15.0, 20.0], float64)
+    )
+    assert_true(
+        out.column("min").as_int64() == array([1, 1, 3, 3, 10, 10, 20], int64)
+    )
+    assert_true(
+        out.column("max").as_int64() == array([1, 1, 3, 6, 10, 20, 20], int64)
+    )
+
+
+def test_a_cumulative_frame_restarts_at_each_partition() raises:
+    """The default frame extends one running fold row by row; the partition
+    edge is where its start moves, and the running total must not leak."""
+    var plan = table(_partitioned_with_nulls()).with_columns(
+        ["s"],
+        [
+            col("v", int64)
+            .sum()
+            .over(partition_by=[col("k", string)], order_by=[col("o", int64)])
+        ],
+    )
+    assert_true(
+        plan.execute().column("s").as_int64()
+        == array([1, 1, 4, 10, 10, 30, 30], int64)
+    )
+
+
+def test_a_runtime_aggregate_takes_the_one_pass_path() raises:
+    """The runtime lane resolves its kernel by name at execution, `sum` to a
+    fold and `count` to `ValidCount`'s prefix count."""
+    var plan = table(_partitioned_with_nulls()).with_columns(
+        ["s", "n"],
+        [
+            col("v").sum().over(partition_by=[col("k")], order_by=[col("o")]),
+            col("v")
+            .count()
+            .over(partition_by=[col("k")], order_by=[col("o")], rows=(-1, 0)),
+        ],
+    )
+    var out = plan.execute()
+    assert_true(
+        out.column("s").as_int64() == array([1, 1, 4, 10, 10, 30, 30], int64)
+    )
+    assert_true(
+        out.column("n").as_int64() == array([1, 1, 1, 2, 1, 2, 1], int64)
+    )
+
+
+def test_a_filtered_aggregate_skips_rows_its_filter_rejects() raises:
+    """`SUM(v) FILTER (WHERE v > 2) OVER (ORDER BY v)`: a rejected row folds
+    like a null, so a frame of rejected rows only is null, not 0."""
+    var b = record_batch([array([1, 2, 3, 4], int64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["s"],
+        [
+            col("v", int64)
+            .sum()
+            .filter(col("v", int64) > lit(2, int64))
+            .over(order_by=[col("v", int64)])
+        ],
+    )
+    assert_true(
+        plan.execute().column("s").as_int64()
+        == array([None, None, 3, 7], int64)
+    )
+
+
+def test_an_aggregate_without_over_is_evaluated_per_frame() raises:
+    """`variance` has no `Windowable.over`, so it is evaluated frame by frame
+    through its operator — the fallback, pinned so it stays reachable."""
+    var b = record_batch([array([1.0, 2.0, 3.0], float64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["var"],
+        [col("v", float64).variance().over(order_by=[col("v", float64)])],
+    )
+    ref got = plan.execute().column("var").as_float64()
+    assert_almost_equal(got[0].value(), 0.0)
+    assert_almost_equal(got[1].value(), 0.25)
+    assert_almost_equal(got[2].value(), 2.0 / 3.0)
+
+
+def test_a_windowed_filter_must_be_boolean() raises:
+    """A window aggregate lowers through `to_window`, not `to_operator`, so
+    it must reject a non-boolean `FILTER` there too, in both lanes, or
+    narrowing the predicate to a `BoolArray` aborts the process."""
+    var b = record_batch([array([1, 2, 3], int64).copy()], names=["v"])
+    var plans = [
+        table(b.copy()).with_columns(
+            ["s"],
+            [
+                col("v", int64)
+                .sum()
+                .filter(col("v", int64))
+                .over(order_by=[col("v", int64)])
+            ],
+        ),
+        table(b.copy()).with_columns(
+            ["s"],
+            [col("v").sum().filter(col("v")).over(order_by=[col("v")])],
+        ),
+    ]
+    for ref plan in plans:
+        var raised = False
+        try:
+            _ = plan.execute()
+        except:
+            raised = True
+        assert_true(raised)

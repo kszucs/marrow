@@ -644,23 +644,22 @@ or compares it. Fifteen sources, eight gated — `query_arith`, `query_exprs`,
 `query_sort` are all ungated. Adding the baseline entries, not the programs, is
 the task, and until it is done the next instance is equally invisible.
 
-### 1.13 Framed window aggregates are O(n^2)
+### 1.13 Window `variance`, string `min`/`max` and `count_distinct` are O(n * frames)
 
-`WindowOperator._framed_aggregate` constructs **one aggregate operator per
-row** and rescans that row's frame. Under SQL's default frame the frame grows
-to the whole partition, so `SUM(x) OVER (ORDER BY y)` over 100k rows is about
-5 billion element visits.
+An aggregate with a `Windowable.over` (`kernels/aggregate.mojo`) runs over all
+its frames in one pass: a running fold while the frame's start holds still, a
+`SegmentTree` query otherwise, as DuckDB's `WindowSegmentTree` does. `Fold`
+(`sum`, `product`, `min`, `max`, `mean`, `count`) and `ValidCount` conform. The
+other three do not, so `WindowOperator._per_frame` runs their operator once per
+distinct frame, and a cumulative `variance` over 100k distinct keys is
+quadratic.
 
-The implementation says so itself — *"one operator per row ... the honest price
-of the reuse; a running accumulator would be a per-aggregate, per-dtype kernel
-and is what to write when this shows up in a profile"* — and the trade it buys
-is real: every aggregate is a window aggregate at once, with the kernel's own
-null semantics rather than a second implementation of them.
-
-Note this is the *one* window cost a comptime lane cannot address. Fusion has
-nothing to fuse in a breaker, the per-row work is already typed kernels, and
-`lag`/`lead`/`first_value`/`last_value` reduce to one `take`. The accumulator
-is an algorithmic change that happens to want comptime as its mechanism.
+Each is one more `Windowable` conformer. `Dispersion` needs only a Welford
+`(n, mean, m2)` `Monoid` with Chan's merge — its math combines, it just has no
+`over`. String `min`/`max` needs a `Monoid` over `Optional[String]`, or over row
+indices plus one `take`. `count_distinct` needs a merge sort tree (DuckDB's
+`WindowDistinctAggregator`) rather than a segment tree, since a set union is
+not a cheap combine.
 
 ### 1.14 Readers that crash on malformed input — the fuzzing findings
 
