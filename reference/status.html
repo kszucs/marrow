@@ -657,7 +657,7 @@ SPDX-License-Identifier: Apache-2.0
 </tr>
 <tr class="even">
 <td><strong>Sources</strong></td>
-<td>A lazy scan reads <strong>one Parquet file</strong>, local or at an object-store URI through OpenDAL (whose C library is installed separately), or an in-memory batch. Arrow IPC is read and written eagerly. <strong>No CSV, no JSON</strong>, and no globs, directories or hive partitions</td>
+<td>A lazy scan reads <strong>one Parquet file</strong>, local or at an object-store URI through OpenDAL (whose C library is installed separately), or an in-memory batch, and <strong>one newline-delimited JSON file</strong> (<code>marrow.read_json</code>). Arrow IPC is read and written eagerly, NDJSON eagerly through <code>marrow.json</code>. <strong>No CSV</strong>, and no globs, directories or hive partitions</td>
 </tr>
 <tr class="odd">
 <td><strong>Parquet</strong></td>
