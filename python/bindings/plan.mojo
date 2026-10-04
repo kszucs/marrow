@@ -57,6 +57,8 @@ from marrow.expr.logical import WindowExpr
 from marrow.kernels.join import JoinKind
 from marrow.io import DynSource
 from marrow.parquet import ParquetFile
+from marrow.expr.builders import scan_json as _scan_json
+from marrow.json import open_json
 from marrow.schema import Schema
 from marrow.expr.sql import Catalog, sql as _sql
 from marrow.tabular import RecordBatch
@@ -488,6 +490,24 @@ def parquet_scan(
     return _wrap(_scan(p^, sch^))
 
 
+def json_scan(path: PythonObject, schema: PythonObject) raises -> PythonObject:
+    """A plan leaf reading newline-delimited JSON.
+
+    ``schema`` doubles as the projection, as for ``parquet_scan``. Passing
+    ``None`` infers it from the file's first block, as
+    ``marrow.json.open_json`` does: a key first seen later is skipped, and a
+    later value its column's type cannot hold is an error at execution.
+    """
+    var p = String(py=path)
+    var builtins = Python.import_module("builtins")
+    var sch: Schema
+    if schema.__is__(builtins.None):
+        sch = open_json(p).schema.copy()
+    else:
+        sch = Schema(py=schema)
+    return _wrap(_scan_json(p^, sch^))
+
+
 # ---------------------------------------------------------------------------
 # Module registration
 # ---------------------------------------------------------------------------
@@ -523,4 +543,5 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
 
     mb.def_function[in_memory_table]("in_memory_table")
     mb.def_function[parquet_scan]("parquet_scan")
+    mb.def_function[json_scan]("json_scan")
     mb.def_function[sql_plan]("sql_plan")

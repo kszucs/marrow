@@ -71,6 +71,8 @@ from .`comptime`.leaves import (
 from .logical import (
     DynRelation,
     InMemoryTable,
+    IpcScan,
+    JsonScan,
     ParquetScan,
     ScanPath,
     WindowExpr,
@@ -757,6 +759,35 @@ def scan(
     offers it as `--src`.
     """
     return DynRelation(ParquetScan(ScanPath(path^), schema^))
+
+
+def scan_json(var path: String, var schema: Schema) raises -> DynRelation:
+    """A newline-delimited JSON file, as a plan; see `marrow.json`.
+
+    The schema is required, as it is for `scan`: a plan is a description, and
+    building it must not open the file. Keys outside it are skipped.
+    """
+    return DynRelation(JsonScan(ScanPath(path^), schema^))
+
+
+def scan_json(
+    var path: StringParam[StringType], var schema: Schema
+) raises -> DynRelation:
+    """A newline-delimited JSON file named at run time, as a plan."""
+    return DynRelation(JsonScan(ScanPath(path^), schema^))
+
+
+def scan_ipc(var path: String, var schema: Schema) raises -> DynRelation:
+    """An Arrow IPC file, as a plan: one record batch at a time, the schema
+    selecting the columns."""
+    return DynRelation(IpcScan(ScanPath(path^), schema^))
+
+
+def scan_ipc(
+    var path: StringParam[StringType], var schema: Schema
+) raises -> DynRelation:
+    """An Arrow IPC file named at run time, as a plan."""
+    return DynRelation(IpcScan(ScanPath(path^), schema^))
 
 
 def count_star() -> (

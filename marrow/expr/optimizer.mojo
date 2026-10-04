@@ -99,8 +99,11 @@ from .logical import (
     DynRelation,
     DynValue,
     EmptyRelation,
+    FileScan,
     Filter,
     InMemoryTable,
+    IpcScan,
+    JsonScan,
     Join,
     Limit,
     ParquetScan,
@@ -1068,18 +1071,30 @@ struct ColumnPruning(Copyable, Movable):
         return Self.apply(node, node.schema().names())
 
     @staticmethod
+    def _narrow_scan[
+        S: FileScan
+    ](node: DynRelation, needed: List[String]) raises -> DynRelation:
+        """`node`, an `S`, reading only the columns `needed` leaves it."""
+        ref scan = node.get[S]()
+        var source = scan.schema()
+        var keep = Self._narrowed(source, needed)
+        if len(keep) == len(source.fields):
+            return node.copy()
+        var fields = List[Field](capacity=len(keep))
+        for ref name in keep:
+            fields.append(source.field(name=name).copy())
+        var out: DynRelation = scan.with_schema(schema(fields^))
+        return out^
+
+    @staticmethod
     def apply(node: DynRelation, needed: List[String]) raises -> DynRelation:
         """`node`, with its sources narrowed to `needed`."""
         if node.isa[ParquetScan]():
-            ref scan = node.get[ParquetScan]()
-            var keep = Self._narrowed(scan.schema(), needed)
-            if len(keep) == len(scan.schema().fields):
-                return node.copy()
-            var fields = List[Field](capacity=len(keep))
-            for ref name in keep:
-                fields.append(scan.schema().field(name=name).copy())
-            var out: DynRelation = scan.with_schema(schema(fields^))
-            return out^
+            return Self._narrow_scan[ParquetScan](node, needed)
+        if node.isa[IpcScan]():
+            return Self._narrow_scan[IpcScan](node, needed)
+        if node.isa[JsonScan]():
+            return Self._narrow_scan[JsonScan](node, needed)
 
         if node.isa[InMemoryTable]():
             ref src = node.get[InMemoryTable]()

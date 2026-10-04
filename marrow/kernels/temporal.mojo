@@ -85,14 +85,7 @@ from ..utils import CivilDate, floor_div
 def _unit_tps(u: TimeUnit) -> Int:
     """Ticks per second for a sub-second time unit (s=1, ms=1e3, us=1e6, ns=1e9).
     """
-    if u.value == 0:
-        return 1
-    elif u.value == 1:
-        return 1_000
-    elif u.value == 2:
-        return 1_000_000
-    else:
-        return 1_000_000_000
+    return 10 ** u.fraction_digits()
 
 
 def ticks_per_second(dt: DynType) raises -> Int:

@@ -579,6 +579,20 @@ def read_parquet(path, schema=None):
     return LazyTable.wrap(_ma.parquet_scan(str(path), unwrap(schema)))
 
 
+def read_json(path, schema=None):
+    """A lazy table over a newline-delimited JSON file.
+
+    The schema doubles as the projection, as for :func:`read_parquet`, and is
+    inferred from the file's first block when omitted, as
+    :func:`marrow.json.open_json` infers it. That is not what the eager
+    :func:`marrow.json.read_json` does, which infers over the whole file: here
+    a key first seen in a later block is skipped, and a later value its
+    column's type cannot hold raises when the plan runs. Pass ``schema`` to
+    avoid both.
+    """
+    return LazyTable.wrap(_ma.json_scan(str(path), unwrap(schema)))
+
+
 def memtable(batch):
     """A lazy table over an in-memory :class:`marrow.RecordBatch`.
 

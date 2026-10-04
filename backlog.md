@@ -27,7 +27,7 @@ all of them.
 
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
-| 1 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
+| 1 | **CSV reader** | A first user arrives with a CSV, not a Parquet file. NDJSON reads (`marrow.json`, §1.2); CSV does not | **M** | — |
 | 2 | **Declared error types** — every raise site raises an `ArrowError` kind, but ~1,800 signatures still declare bare `raises` | A bare frame keeps only an error's text, so a caller recovers the kind by parsing it (`DynError(e)`) instead of catching a type, and Python gets it through the same parse. Migrate bottom-up: a function declares its kind (`raises CorruptError`) or `DynError` once nothing it calls raises a bare `Error`; dispatch ladders forward `raises E`. It also pays back a size cost: a kind raised in a bare frame is converted to `Error` inline at the site, which put +21 KB (+1.5%) on `query_streaming_agg_fused` and `query_expr2_agg_fused`, mostly in the `dispatch_*` and `DynBuilder._dispatch_mut` ladders | **L** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
 | 4 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
@@ -89,6 +89,14 @@ only in `kernels/groupby.mojo`'s module docstring.
 interpolating a recursive `Writable` value inside a function-level recursion
 cycle deadlocks the compiler. Three sites were fixed; the rest are untested and
 sit in the same shape.
+
+**`DynRelation`'s mangled names sit near Apple `ld`'s 1 MiB cap.** Mojo spells
+every variant member's layout into some symbol names (`Optional[DynRelation]`'s
+`Variant` constructor among them). With an extra scan node holding a path, a
+schema, a string and a function pointer inline, two names reached 1,051,066
+bytes, `ld` asserted (`name.size() <= maxLength`) and `libmarrow.so` failed to
+link; the tree builds without it. A new relation node with large by-value
+fields can trip it; holding them behind an `ArcPointer` is the known fix.
 
 ### 1.4 Engine capability the golden corpus measures as missing
 
@@ -521,15 +529,53 @@ A user rejects the library outright without these.
 
 #### 1.2 CSV and JSON readers
 
-**What exists.** No reader. The only CSV code under `marrow/` is `QueryCli`'s
-output writer (`render_csv`, `marrow/expr/cli.mojo`).
+**What exists.** NDJSON: `marrow/json/` reads (`read_json`, `open_json`) and
+writes (`write_json`) like `pyarrow.json`, from Mojo and Python, and scans as
+`scan_json`. No CSV: the only CSV code is `QueryCli`'s output writer
+(`render_csv`, `marrow/expr/cli.mojo`); `QueryCli` has no `--format json`.
 
-**What it would take.** marrow already has the hard parts: `Buffer`,
-`BufferView`, every builder, and `LittleEndian.fixed` as the byte-order
-primitive. What is new is a tokenizer, a sampling inference pass, and a
-type-widening lattice. NDJSON is the same shape with a different tokenizer.
-**This is the highest ratio of user value to engineering novelty on the whole
-page.**
+**CSV — what it would take.** A tokenizer (most of the work), a sampling
+inference pass and a type-widening order. The value side exists: every builder,
+`Iso8601` in `utils/datetime.mojo`, and the string-to-number/bool cast kernels;
+`marrow.json`'s two-pass shape (infer, then parse into builders of the settled
+schema) carries over. **This is the highest ratio of user value to engineering
+novelty on the whole page.**
+
+**JSON — open.**
+
+- *EmberJson is not published.* `marrow.expr` imports `marrow.json`, so
+  `package/marrow.mojoc`, the conda package and `marrow compile` need
+  `emberjson`/`emberserde` built by the same nightly beside them, and a conda
+  package cannot depend on a git source. Repository builds get it from the
+  fork's `marrow` branch.
+- *Speed: 1.7-2.5x single-threaded pyarrow* (`bench_json.py --competition`,
+  2026-10-04: flat 1M rows 436 ms against 254 ms, nested 100k 115 ms against
+  47 ms). Keys and strings are matched and appended in place, not copied, and
+  key lookup tries the next expected field first. Left: `read_json` tokenizes
+  the input twice (inference, then parsing); the per-column slot tree and its
+  builders are rebuilt for every block.
+- *Parallel reads.* Blocks are independent once the schema is settled, and
+  pyarrow's threaded reader is ~10x its serial one on the bench file. Cut the
+  block ranges first (the newline scan `Blocks` already does), run pass 1 per
+  block on `utils/threads.mojo`'s pool with a `ColumnShape.merge` by the same
+  promotion rules (what Arrow C++ does), keep per-block row counts so errors
+  still say "in row N", then run pass 2 per block and reassemble in order.
+  `ReadOptions(use_threads=...)` as pyarrow spells it. An OpenDAL source is
+  not safe to `read_at` from several threads: fetch its ranges up front with
+  `read_ranges`. Cover it with the `test_tsan` lane.
+- *Remote sources fetch every block twice*: once per pass, since `read_json`
+  infers before it parses. Each fetch is released when the next replaces it.
+- *Differences from pyarrow*: `NaN`/`Infinity` are rejected; a file of empty
+  objects reads as zero rows; a row longer than `block_size` grows the read
+  instead of failing; an empty local file raises `IOError` (from
+  `Buffer.mmap_file`); `newlines_in_values` and an explicit `date32` are
+  unsupported.
+
+**The conda package build is probably broken on 1.2, JSON or not.** `mojo
+package -o x.mojopkg` now fails with `output path must have a '.mojoc'
+extension` (measured 2026-09-25), and `pixi-build-mojo 0.1.*`, which
+`pixi.toml` pins, writes `lib/mojo/marrow.mojopkg`. Not yet confirmed with
+`pixi build` itself.
 
 #### 1.3 Datasets: multi-file, partitioned, remote
 

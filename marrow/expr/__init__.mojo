@@ -42,6 +42,8 @@ from .builders import (
     rank,
     row_number,
     scan,
+    scan_ipc,
+    scan_json,
     table,
 )
 from .logical import (
@@ -50,8 +52,11 @@ from .logical import (
     Difference,
     DynValue,
     Except,
+    FileScan,
     Filter,
     InMemoryTable,
+    IpcScan,
+    JsonScan,
     Intersect,
     Intersection,
     Join,
@@ -71,7 +76,13 @@ from .logical import (
     WindowExpr,
     WindowFrame,
 )
-from .physical import Datum, DynOperator, Morsel, Operator, Pipeline
+from .physical import (
+    Datum,
+    DynOperator,
+    Morsel,
+    Operator,
+    Pipeline,
+)
 from .index import ColumnZones, Index, ZoneMaps, keep_every
 from .estimates import (
     Approx,

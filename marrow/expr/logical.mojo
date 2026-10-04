@@ -91,6 +91,8 @@ from .physical import (
     Pipeline,
     FilterOperator,
     JoinOperator,
+    IpcScanOperator,
+    JsonScanOperator,
     ParquetScanOperator,
     ProjectOperator,
     MultisetOperator,
@@ -1187,6 +1189,8 @@ struct DynRelation(Copyable, Movable, Writable):
         Intersection,
         Difference,
         ParquetScan,
+        IpcScan,
+        JsonScan,
     ]
 
     var _v: Self.VariantType
@@ -3109,7 +3113,7 @@ struct ScanPath(Copyable, Movable, Writable):
             writer.write(self._literal)
 
 
-struct ParquetScan(Relation, Writable):
+struct ParquetScan(FileScan, Writable):
     """A Parquet file as a source, read one row group at a time.
 
     **The schema is the projection.** The scan reads only its own columns out
@@ -3235,3 +3239,109 @@ struct ParquetScan(Relation, Writable):
         writer.write("ParquetScan(", self.path, ")")
         if len(self.pruners):
             writer.write(" pruned by ", len(self.pruners))
+
+
+trait FileScan(Relation):
+    """A relation reading one file: `ParquetScan`, `IpcScan` or `JsonScan`.
+
+    Each is a plan node of its own, run by an operator of its own, so the
+    optimizer tells formats apart with `isa`. What they share is that the
+    schema is supplied rather than read — building the plan does no I/O — and
+    is the projection: `with_schema` is how `ColumnPruning` narrows what any
+    of them reads.
+    """
+
+    def with_schema(self, var schema: Schema) -> Self:
+        """This scan over a narrower schema."""
+        ...
+
+
+struct IpcScan(FileScan, Writable):
+    """An Arrow IPC file, one record batch at a time, the schema selecting
+    columns by name. IPC stores whole columns per batch, so a narrowed scan
+    still reads the others; it has no statistics and prunes nothing."""
+
+    var path: ScanPath
+    var _schema: Schema
+
+    def __init__(out self, var path: ScanPath, var schema: Schema):
+        self.path = path^
+        self._schema = schema^
+
+    def references(self, mut into: References):
+        self.path.references(into)
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def with_schema(self, var schema: Schema) -> Self:
+        return Self(self.path.copy(), schema^)
+
+    def estimate(self) raises -> Estimate:
+        """Unknown, and column-shaped for the reason `ParquetScan`'s is."""
+        return Estimate.unknown(self._schema)
+
+    def cost(self) raises -> Cost:
+        var estimate = self.estimate()
+        return Cost.source(estimate.rows, estimate.row_width())
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+    ) raises -> Pipeline:
+        return Pipeline(
+            IpcScanOperator(self.path.resolve(bindings), self._schema.copy())
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("IpcScan(", self.path, ")")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+struct JsonScan(FileScan, Writable):
+    """A newline-delimited JSON file, one batch per block; see `marrow.json`.
+    Keys outside the schema are skipped, so a narrowed scan reads only the
+    columns the plan needs out of rows that carry more. It has no statistics
+    and prunes nothing."""
+
+    var path: ScanPath
+    var _schema: Schema
+
+    def __init__(out self, var path: ScanPath, var schema: Schema):
+        self.path = path^
+        self._schema = schema^
+
+    def references(self, mut into: References):
+        self.path.references(into)
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def with_schema(self, var schema: Schema) -> Self:
+        return Self(self.path.copy(), schema^)
+
+    def estimate(self) raises -> Estimate:
+        """Unknown, and column-shaped for the reason `ParquetScan`'s is."""
+        return Estimate.unknown(self._schema)
+
+    def cost(self) raises -> Cost:
+        var estimate = self.estimate()
+        return Cost.source(estimate.rows, estimate.row_width())
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+    ) raises -> Pipeline:
+        return Pipeline(
+            JsonScanOperator(self.path.resolve(bindings), self._schema.copy())
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("JsonScan(", self.path, ")")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
