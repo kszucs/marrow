@@ -51,6 +51,7 @@ from .errors import (
     KeyError,
     NotImplementedError,
     TypeError,
+    debug_assert_lazy,
 )
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
@@ -3418,9 +3419,11 @@ struct DynArray(
         `LargeStringType` off the *builder's* offset width, which says nothing
         about whether the *source* holds text or bytes, and a `binary` column
         aborted every group-by that crossed into the thread-local path."""
-        debug_assert(
-            self._v.isa[T](), "as_type: wrong type, holds ", self.dtype()
-        )
+
+        def held() {imm} -> DynType:
+            return self.dtype()
+
+        debug_assert_lazy(self._v.isa[T](), "as_type: wrong type, holds ", held)
         return self._v[T]
 
     def as_primitive[

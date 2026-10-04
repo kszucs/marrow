@@ -34,7 +34,12 @@ from std.python.conversions import ConvertibleToPython
 from std.builtin.rebind import downcast
 from std.memory import OwnedPointer
 
-from .errors import InternalError, InvalidError, NotImplementedError
+from .errors import (
+    InternalError,
+    InvalidError,
+    NotImplementedError,
+    debug_assert_lazy,
+)
 from .arrays import (
     ArrayData,
     BinaryLikeArray,
@@ -1039,9 +1044,11 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     def as_type[T: ArrowScalar](ref self) -> ref[self._v[T]] T:
         """This scalar as the concrete `T` it holds — a borrow, no copy."""
-        debug_assert(
-            self._v.isa[T](), "as_type: wrong type, holds ", self.type()
-        )
+
+        def held() {imm} -> DynType:
+            return self.type()
+
+        debug_assert_lazy(self._v.isa[T](), "as_type: wrong type, holds ", held)
         return self._v[T]
 
     def as_null(ref self) -> ref[self._v[NullScalar]] NullScalar:

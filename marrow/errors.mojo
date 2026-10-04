@@ -140,3 +140,27 @@ struct DynError(ImplicitlyCopyable, Writable):
         if self.kind:
             writer.write(self.kind, ": ")
         writer.write(self.message)
+
+
+@always_inline
+def debug_assert_lazy[
+    M: Writable & Deinitable, //, F: def() -> M
+](cond: Bool, prefix: StaticString, ref message: F):
+    """`debug_assert(cond, prefix, message())`, with `message` run only when
+    `cond` fails.
+
+    A `debug_assert` message is an ordinary argument, evaluated before the
+    call whether assertions are on or not. One that copies or dispatches —
+    `self.dtype()` on an erased container — then costs every passing call;
+    `DynBuilder.as_type` copying a struct dtype per value was ~21% of an
+    NDJSON read. Hand such a message over as a closure instead:
+
+    ```mojo
+    def held() {imm} -> DynType:
+        return self.dtype()
+
+    debug_assert_lazy(self._v.isa[T](), "as_type: wrong type, holds ", held)
+    ```
+    """
+    if not cond:
+        debug_assert(False, prefix, message())
