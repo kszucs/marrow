@@ -30,7 +30,13 @@ Example
 from std.memory import ArcPointer
 from std.utils import Variant
 
-from .errors import InternalError, InvalidError, NotImplementedError, TypeError
+from .errors import (
+    InternalError,
+    InvalidError,
+    NotImplementedError,
+    TypeError,
+    debug_assert_lazy,
+)
 from .buffers import Buffer, Bitmap
 
 from std.builtin.rebind import downcast
@@ -412,9 +418,11 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
 
     def as_type[T: Builder](ref self) -> ref[self._ptr[][T]] T:
         """This builder as the concrete `T` it holds — a borrow, no copy."""
-        debug_assert(
-            self._ptr[].isa[T](), "_as: wrong type, holds ", self.dtype()
-        )
+
+        def held() {imm} -> DynType:
+            return self.dtype()
+
+        debug_assert_lazy(self._ptr[].isa[T](), "_as: wrong type, holds ", held)
         return self._ptr[][T]
 
     def as_primitive[
