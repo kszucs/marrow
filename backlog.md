@@ -72,7 +72,20 @@ all.
 
 ### 1.2 Known-wrong answers
 
-None known.
+- **A NULL dictionary entry joins NULL to NULL** (unconfirmed: found by
+  review, no test yet). `JoinHashTable.probe` (`kernels/join.mojo`) skips a
+  null probe key through `key.null_count()` and `NotNullKernel`, and for a
+  dictionary column both read only the *index* validity. A row whose index is
+  valid but points at a NULL dictionary value decodes to NULL, and
+  `DictionaryEncoder` treats NULL as equal to NULL, so it matches the build
+  side's NULL key: an INNER join emits a NULL = NULL pair and LEFT/ANTI joins
+  get the wrong unmatched rows. SQL `=` matches nothing on NULL. Not known
+  whether the pre-encoder join behaved the same. `count_distinct` and the
+  grouped `DistinctCount` share the index-only null test, so a NULL entry
+  behind a valid index counts as a distinct value there too — that one
+  predates the encoder. The fix is a logical null test for dictionary
+  columns (index valid *and* entry valid), in one place both callers use,
+  plus a test with a NULL dictionary entry behind a valid index.
 
 ### 1.2b Found by the differential property tests (2026-10-04)
 
