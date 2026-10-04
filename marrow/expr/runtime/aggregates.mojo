@@ -81,6 +81,7 @@ from ...kernels.aggregate import (
     FoldKernel,
     AggKernel,
     Dispersion,
+    ApproxDistinctCount,
     DistinctCount,
     MaxFold,
     MaxOp,
@@ -193,9 +194,9 @@ def resolve_aggregate[
             if name == COUNT:
                 return func[ValidCount[A]]()
             elif name == COUNT_DISTINCT:
-                return func[DistinctCount[True, A]]()
+                return func[DistinctCount[A]]()
             else:
-                return func[DistinctCount[False, A]]()
+                return func[ApproxDistinctCount[A]]()
 
         return dispatch_array(in_dtype, counted)
     elif (
@@ -447,15 +448,15 @@ struct RuntimeAggregate(Value):
 
     # `empty()` — the one-row answer over an input that produced no column at
     # all — used to live here, a four-arm switch on `_name` that only the
-    # cardinalities answered. It had **no production caller**: `GroupByOperator`
-    # holds its folds as `DynOperator`s and cannot reach a node, so there was
-    # nowhere for it to be called from, and its null-fill branch was unreachable
-    # besides — the aggregate operators always answer `Some` from their first
-    # `drain`. `AggKernel.reserve` now covers the case properly and covers all
-    # ten names rather than three: an operator with no keys seeds one slot at
-    # `drain`, so `count_distinct` of nothing is one `0` and `min` of nothing is
-    # one NULL, computed by the kernel that owns the answer instead of by a
-    # second switch that could disagree with it.
+    # cardinalities answered. It had **no production caller**:
+    # `GroupedAggregateOperator` holds its folds as `DynOperator`s and cannot
+    # reach a node, so there was nowhere for it to be called from, and its
+    # null-fill branch was unreachable besides — the aggregate operators always
+    # answer `Some` from their first `drain`. `AggKernel.reserve` now covers the
+    # case properly and covers all ten names rather than three: an operator with
+    # no keys seeds one slot at `drain`, so `count_distinct` of nothing is one
+    # `0` and `min` of nothing is one NULL, computed by the kernel that owns the
+    # answer instead of by a second switch that could disagree with it.
 
     # -- to_operator --------------------------------------------------------
 

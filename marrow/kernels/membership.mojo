@@ -7,44 +7,30 @@
 whether it appears in ``value_set`` (SQL ``x IN (...)``, PyArrow
 ``pyarrow.compute.is_in``).
 
-The set is built **once** from ``value_set`` and every value is probed against
-it, reusing the exact hashing / hash-table building blocks that group-by, join,
-and ``count_distinct`` use:
-
-- ``RapidHashKernel`` (``hashing.mojo``) hashes both sides column-wise.
-- ``SwissHashTable`` (``hashtable.mojo``) holds the set: ``build_hashes`` inserts
-  the ``value_set`` hashes and builds the CSR row index; ``probe_hashes`` looks
-  every ``values`` hash up (``single_match=True``) and reports which value rows
-  found a matching bucket.
-
-Membership is exact to the same 64-bit-hash basis the group-by / join dedup on
-(collision probability ~n·m/2^64) — the same trade ``count_distinct`` documents.
+The set is a ``DictionaryEncoder`` over ``value_set``, and every value is
+looked up in it: membership is exact, as a group-by's keys are — two values
+whose hashes collide are still told apart.
 
 Null handling matches PyArrow ``is_in``'s default (``null_matching_behavior=
-"match"``): the output is always valid (never null), and a null in ``values``
-is ``true`` iff ``value_set`` itself contains a null and ``false`` otherwise.
-This falls out for free from ``RapidHashKernel`` mapping every null to a single
-``NULL_HASH_SENTINEL`` bucket — a null probes as ``true`` exactly when
-``value_set`` inserted that sentinel bucket.
+"match"``): the output is always valid, and a null in ``values`` is ``true``
+iff ``value_set`` itself contains a null — NULL is a key like any other to the
+encoder.
 """
 
 from ..arrays import DynArray, Array, BoolArray
-from ..builders import BoolBuilder
+from ..dtypes import DynType, int32
+from ..views import apply
+from ..buffers import Bitmap
 from .core import Kernel
 from ..execution import ExecContext
-from .hashing import RapidHashKernel
-from ..utils import RapidHash64
-from .hashtable import SwissHashTable
+from .dictionary import DictionaryEncoder, has_code
 
 
 struct IsInKernel(Kernel):
     """Membership predicate — is each element of ``values`` in ``value_set``?
 
-    Unlike the element-wise kernel families this one has **no typed leaves**:
-    membership is decided entirely on the 64-bit hash, so every data type
-    ``RapidHashKernel`` supports funnels through the same code. There is one
-    implementation, and a newly supported type is one ``RapidHashKernel`` learns —
-    not one this kernel gains an overload for.
+    No typed leaves of its own: the encoder resolves the type, so every type it
+    encodes is supported here with no overload per type.
     """
 
     comptime name = "is_in"
@@ -53,32 +39,29 @@ struct IsInKernel(Kernel):
     def apply(
         values: DynArray, value_set: DynArray, ctx: ExecContext
     ) raises -> BoolArray:
-        """Hash ``value_set`` into a ``SwissHashTable`` once, then probe each
-        value.
+        """Encode ``value_set`` once, then look every value up in it.
 
         Returns an all-valid ``BoolArray`` of ``len(values)`` — ``true`` where
-        the value's hash is present in the set. Null semantics follow from the
-        shared ``NULL_HASH_SENTINEL`` bucket (see module docstring)."""
+        the value has a code."""
+        var types = List[DynType]()
+        types.append(value_set.dtype())
+        var encoder = DictionaryEncoder(types^, ctx.copy())
+        var set_column = List[DynArray]()
+        set_column.append(value_set.copy())
+        _ = encoder.encode(set_column)
+        var value_column = List[DynArray]()
+        value_column.append(values.copy())
+        var codes = encoder.lookup(value_column)
         var n = len(values)
-
-        var table = SwissHashTable[RapidHash64]()
-        table.build_hashes(RapidHashKernel.dispatch(value_set, ctx))
-        var indices = table.probe_hashes(
-            RapidHashKernel.dispatch(values, ctx),
-            num_build_rows=len(value_set),
-            single_match=True,
+        var found = Bitmap.alloc_uninit(n)
+        apply[int32.native, has_code](codes.values(), found.view())
+        return BoolArray(
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=found^.to_immutable(),
         )
-        ref probe_rows = indices[1]
-
-        # ``single_match`` → each matching value row appears exactly once.
-        var mask = List[Bool](length=n, fill=False)
-        for i in range(len(probe_rows)):
-            mask[Int(probe_rows.unsafe_get(i))] = True
-
-        var out = BoolBuilder(n)
-        for i in range(n):
-            out.append(mask[i])
-        return out.finish()
 
     @staticmethod
     def dispatch(
@@ -109,9 +92,8 @@ def is_in(
 ) raises -> BoolArray:
     """Membership of each value in ``value_set``.
 
-    ``values`` and ``value_set`` must share the same data type. Supports every
-    type ``RapidHashKernel`` handles — numeric, bool, string, and the nested types —
-    covering the ClickBench ``IN (...)`` case (int) and strings.
+    ``values`` and ``value_set`` must share the same data type: numeric, bool,
+    string, binary, temporal, decimal, dictionary and the nested types.
     """
     return IsInKernel.dispatch(values, value_set, ctx)
 

@@ -13,7 +13,7 @@ out on its own:
 | `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
 | `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
-| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`; `XxHash32` |
+| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32` |
 | `compression` | `CompressionLibs` — `dlopen`ed snappy / zlib / brotli, and libzstd / liblz4 where chosen over the Mojo codecs |
 | `snappy` | `Snappy` — Snappy raw-block compression, in Mojo |
 | `lz4` | `Lz4` — LZ4 block, frame and Hadoop-framed compression, in Mojo |
@@ -49,8 +49,11 @@ from .uri import StorageOptions, Uri
 from .hashing import (
     AHash64,
     Hasher,
+    Fmix64,
+    KeyHash,
     RapidHash64,
     RapidSecret,
+    TruncatedHash64,
     XxHash32,
     XxHash64,
 )

@@ -1243,7 +1243,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         return RuntimeAggregate(self.copy(), String(COUNT_DISTINCT))
 
     def approx_count_distinct(self) raises -> RuntimeAggregate:
-        """`APPROX_COUNT_DISTINCT(self)` — see `DistinctCount[exact=False]`."""
+        """`APPROX_COUNT_DISTINCT(self)` — see `ApproxDistinctCount`."""
         return RuntimeAggregate(self.copy(), String(APPROX_COUNT_DISTINCT))
 
     # --- Arithmetic operators ---
@@ -1981,13 +1981,13 @@ def isin(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
     """True where `a`'s value appears in `value_set` — SQL `IN (...)`.
 
     The set is a `DynArray` payload rather than a child: it is the same set on
-    every row and every batch, so hashing it into the probe table is work that
-    belongs to the plan, not to the morsel.
+    every row and every batch. It is encoded again for every batch, unified
+    with the operand's dtype first.
 
     The comptime lane's counterpart is `IsIn`, and it is a **breaker** there
-    rather than a fusing node: `IsInKernel` decides membership on the 64-bit
-    hash alone, so it has no typed leaf to fuse into and the node runs it over
-    a whole column. `builders.is_in` reaches both.
+    rather than a fusing node: `IsInKernel` encodes the set and looks the
+    column up in it, so it has no typed leaf to fuse into and the node runs it
+    over a whole column. `builders.is_in` reaches both.
     """
     return RuntimeValue("isin", a, Payload(value_set^))
 

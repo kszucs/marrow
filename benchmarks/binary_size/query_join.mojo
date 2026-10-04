@@ -5,8 +5,9 @@
 
 `SELECT ... FROM l JOIN r ON l.k = r.k` over two small in-memory batches. The
 delta against `query_streaming.mojo` is the cost of the join machinery: the
-`SwissHashTable` build and probe, `rapidhash` over the key columns, the radix
-partitioner, and the gather that assembles the output.
+`DictionaryEncoder` that places the build keys and looks the probe keys up
+(the key hashing, `KeyCompare` and the radix-partitioned `HashIndex`), and the
+gather that assembles the output.
 
 That is the largest single block of kernel code an AOT query can pull in, and
 before this gate nothing linked it — a plan that never joins should not pay for

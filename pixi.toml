@@ -166,6 +166,12 @@ test_threads = { cmd = "pytest --mojo -v marrow/utils/tests/test_threads.mojo ma
 # runs.
 test_threads_stress = { cmd = "pytest --mojo -v --repeat 30 --define MARROW_THREADS_STRESS=50 marrow/utils/tests/test_threads.mojo" }
 test = { cmd = "pytest -v" }
+# The exact hash consumers — group-by and join — with a 6-bit key hash, so
+# nearly every probe meets a colliding key and a hash-only answer would be
+# wrong (`KeyHash` in marrow/utils/hashing.mojo). Mojo lanes only:
+# `libmarrow.so` is built without defines. Three runs, not one: together they
+# are one compilation unit that can outlast the harness's 30-minute timeout.
+test_collisions = { cmd = "pytest --mojo -v --define MARROW_HASH_BITS=6 marrow/kernels/tests && pytest --mojo -v --define MARROW_HASH_BITS=6 marrow/expr/tests && pytest --mojo -v --define MARROW_HASH_BITS=6 golden" }
 # One selection = one compilation unit, so there is nothing for xdist to
 # parallelise across: splitting by file would rebuild the same unit per worker.
 # Narrow the selection instead (a directory, a file) — that shrinks the unit.

@@ -9,8 +9,9 @@ def plan() raises -> DynRelation:
     SELECT d, CAST(count(*) AS BIGINT) AS n FROM events GROUP BY d ORDER BY d NULLS FIRST
 
     A date32 group key, including the NULL group. The key column has to come
-    back as date32 — the grouper materializes keys through `DynBuilder(dtype)`,
-    so a key that lost its type would show up here as an int32 day count.
+    back as date32 — the encoder keeps the key columns it was given, typed as
+    they came, so a key that lost its type would show up here as an int32 day
+    count.
 
     **This case is the record of a disagreement that `marrow/expr` settled.**
     `Aggregate._output_schema` names a key after its source column when the

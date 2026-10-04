@@ -1,15 +1,15 @@
 {
-  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-10-04, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for the native LZ4 and Zstandard codecs, accepted as a deliberate cost: query_cli +48,000 (+1.49%), the zstd and lz4 decoders where it had dlopen calls and keeping liblz4 and libzstd selectable (native_codecs=False), and query_streaming and query_expr2_streaming +0.19%. The other gates measure 2.3-3.4% under the previous floors on main as it stands, and are recorded as measured.",
+  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-10-04, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for exact keys through DictionaryEncoder (group-by, joins, is_in, count_distinct), keys held as struct arrays, and DictionaryBuilder.extend merging a differently-encoded array's dictionary: query_streaming_agg_fused +258,292 (+17.17%), query_expr2_agg_fused +270,836 (+18.23%) and query_decimal_agg_fused +262,772 (+17.40%), the exact erased encoder in place of the hash-only grouper; query_join +89,252 (+5.25%), the encoder in place of the hash-indexed join table; query_streaming_agg +219,264 (+1.31%) and query_dynvalue +265,408 (+2.40%); query_streaming +24,576 (+1.61%), query_expr2_streaming +24,640 (+1.63%) and query_cli +24,192 (+0.74%), DictionaryBuilder.extend's dictionary arm, which every binary that can extend a builder links. Deltas are against the parent commit's recorded floors, same machine and mojo.",
   "threshold_pct": 0.5,
   "gates": {
-    "query_streaming": 1528992,
-    "query_join": 1701088,
-    "query_streaming_agg_fused": 1504600,
-    "query_streaming_agg": 16731064,
-    "query_dynvalue": 11072824,
-    "query_expr2_streaming": 1516064,
-    "query_expr2_agg_fused": 1485272,
-    "query_cli": 3270572,
-    "query_decimal_agg_fused": 1510232
+    "query_streaming": 1553568,
+    "query_join": 1790340,
+    "query_streaming_agg_fused": 1762892,
+    "query_streaming_agg": 16950328,
+    "query_dynvalue": 11338232,
+    "query_expr2_streaming": 1540704,
+    "query_expr2_agg_fused": 1756108,
+    "query_cli": 3294764,
+    "query_decimal_agg_fused": 1773004
   }
 }

@@ -559,7 +559,7 @@ share no node types**:
   dispatches over every scalar kind, and a comptime leaf that erased first cost
   every AOT gate ~4% of `__text`. One
   operator per plan node
-  — `FilterOperator`, `ProjectOperator`, `GroupByOperator`,
+  — `FilterOperator`, `ProjectOperator`, `GroupedAggregateOperator`,
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
   `UnionOperator`, `MultisetOperator[M]`, `LimitOperator`,
   `ParquetScanOperator`, `BatchSourceOperator` — plus
@@ -797,10 +797,11 @@ marrow/
 │   ├── distinct.mojo     # (approx_)count_distinct, grouped variants
 │   ├── filter.mojo       # filter / take / drop_null
 │   ├── sort.mojo         # sort / sort_indices
-│   ├── groupby.mojo      # hash group-by, and `Groups` (row -> slot)
+│   ├── dictionary.mojo   # DictionaryEncoder: distinct keys -> dense codes
+│   ├── groupby.mojo      # `Groups` (row -> slot)
 │   ├── join.mojo         # hash join
-│   ├── hashtable.mojo    # SwissHashTable
-│   ├── hashing.mojo      # rapidhash
+│   ├── hashtable.mojo    # SwissHashTable, HashIndex (serial -> radix)
+│   ├── hashing.mojo      # HashKernel, KeyCompare (key identity)
 │   ├── partition.mojo    # radix partitioning
 │   ├── membership.mojo   # is_in
 │   ├── string.mojo       # string kernels incl. LIKE/ILIKE

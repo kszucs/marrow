@@ -9,6 +9,7 @@ from std.testing import (
 )
 
 from ...arrays import (
+    DictionaryArray,
     DynArray,
     PrimitiveArray,
     BoolArray,
@@ -27,10 +28,12 @@ from ...builders import (
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    Int8Builder,
     Int32Builder,
     Float32Builder,
 )
 from ...dtypes import *
+from ...kernels.cast import decode_dictionary
 from ...kernels.concat import concat
 
 
@@ -538,3 +541,60 @@ def test_concat_string_view() raises:
     # Both sources' data buffers are adopted, none copied.
     assert_equal(len(v.buffers), 2)
     v.validate()
+
+
+# ---------------------------------------------------------------------------
+# concat — dictionary arrays
+# ---------------------------------------------------------------------------
+
+
+def test_concat_dictionaries_with_different_dictionaries() raises:
+    """Each input's indices point into its own dictionary, so the result's
+    must point at the same values — `x` is index 0 of one input and 1 of the
+    other."""
+    var a = DictionaryArray.from_arrays(
+        array[Int32Type]([0, 1, None, 0], int32), array(["x", "y"])
+    )
+    var b = DictionaryArray.from_arrays(array([1, 0], int32), array(["z", "x"]))
+    var out = concat([a^.to_dyn(), b^.to_dyn()])
+    assert_true(out.dtype().is_dictionary())
+    assert_equal(len(out), 6)
+    assert_equal(
+        String(decode_dictionary(out.as_dictionary())),
+        String(array(["x", "y", None, "x", "x", "z"])),
+    )
+
+
+def test_concat_dictionaries_sharing_a_dictionary() raises:
+    """Slices of one array: each keeps naming the entries it named. The
+    dictionary repeats rather than being compared — see
+    `DictionaryBuilder.extend`."""
+    var whole = DictionaryArray.from_arrays(
+        array([2, 0, 1, 2], int32), array(["p", "q", "r"])
+    )
+    var out = concat([whole.slice(0, 2).to_dyn(), whole.slice(2, 2).to_dyn()])
+    assert_equal(
+        String(decode_dictionary(out.as_dictionary())),
+        String(array(["r", "p", "q", "r"])),
+    )
+
+
+def test_concat_dictionaries_beyond_their_index_type_raise() raises:
+    """Two int8-indexed inputs of 100 entries each cannot share one int8
+    dictionary of 200."""
+    var indices = Int8Builder(100)
+    for i in range(100):
+        indices.append(Int8(i))
+    var codes = indices.finish()
+    var parts = List[DynArray]()
+    for prefix in ["a-", "b-"]:
+        var entries = StringBuilder(100)
+        for i in range(100):
+            entries.append(String(prefix) + String(i))
+        parts.append(
+            DictionaryArray.from_arrays(
+                codes.copy().to_dyn(), entries.finish().to_dyn()
+            )
+        )
+    with assert_raises(contains="do not fit its index type"):
+        _ = concat(parts)

@@ -7,19 +7,28 @@
 
 """The hash functions marrow implements.
 
-None is in the Mojo standard library, and none is substitutable:
+Three follow published algorithms; none is in the Mojo standard library, and
+none is substitutable:
 
 - **XXH64** is *mandated* by the Parquet spec for split-block bloom filters, so
   the value has to match other implementations byte for byte.
-- **rapidhash v3** is the group-by / join key hash, chosen for throughput; its
-  mixing steps are consumed by a SIMD kernel a lane at a time.
+- **rapidhash v3** is the byte-string hash, chosen for throughput, and a
+  column hash for benchmarks and tests (`RapidHashKernel`); its mixing steps
+  are consumed by a SIMD kernel a lane at a time.
 - **XXH32** is *mandated* by the LZ4 frame format for its checksums.
 
-`Hasher` is the swap point: one static `hash(span, seed)` plus a `name`, which
-is the shape marrow's callers actually use. `XxHash64` conforms. `RapidHash64`
-does **not** — it is a set of mixing primitives consumed a SIMD lane at a time,
-not a byte-span hash; porting rapidhash's byte-string path would let it conform,
-and that is the follow-up if a second span hash is ever wanted.
+Two more serve key identity rather than a format: `Fmix64`, a bijection of
+64-bit words and the key hash of the group-by, `is_in` and the join, so a
+one-word key is identified by its hash; and `TruncatedHash64`, a test
+instrument that squeezes rapidhash into `2**bits` digests so collisions become
+common. `KeyHash` is how a build selects between them
+(`-D MARROW_HASH_BITS`).
+
+`Hasher` is the swap point, and every hasher here conforms: a static
+`hash(span, seed)` for byte strings, `hash_lanes` for fixed-width values a SIMD
+lane at a time, `combine_lanes` to fold one column's digest into another's, and
+a `name`. `HashKernel` is generic over it, so choosing an algorithm is a
+parameter rather than a rewrite.
 
 `std.hashlib`'s own `Hasher` trait is deliberately not reused: it is a
 *streaming* protocol (`__init__` / `_update_with_bytes` / `update` /
@@ -29,7 +38,7 @@ consuming `finish` inside hot loops, for no gain — `AHasher` and `Fnv1a` are
 different algorithms and neither can replace XXH64, which the Parquet spec
 mandates.
 
-All are namespaces of static methods, and this module depends on `.byteorder`
+Each is a namespace of static methods, and this module depends on `.byteorder`
 alone — no arrays, no dtypes — so each algorithm can be read and checked against
 its reference vectors without the array layer in scope.
 
@@ -54,6 +63,7 @@ implementations; neither is vendored.
 """
 
 from std.bit import pop_count, rotate_bits_left
+from std.sys import get_defined_int
 from std.sys.info import is_gpu
 from std.hashlib._ahash import AHasher
 
@@ -369,8 +379,8 @@ struct RapidHash64(Hasher):
     utilities when they are one hash function's internals.
 
     Every method is `@always_inline`: this is the hot path under
-    `RapidHash.dispatch`, and the mixing steps are a handful of multiplies that
-    must fold into the caller's loop.
+    `HashKernel`, and the mixing steps are a handful of multiplies that must
+    fold into the caller's loop.
     """
 
     comptime _SECRET1 = UInt64(0x8BB84B93962EACC9)
@@ -840,3 +850,154 @@ struct AHash64(Hasher):
         return (folded << rot) | (
             folded >> ((SIMD[DType.uint64, W](64) - rot) & 63)
         )
+
+
+struct Fmix64(Hasher):
+    """MurmurHash3's 64-bit finalizer as a lane hash — a well-mixed
+    **bijection** of `UInt64`.
+
+    Every step is invertible (an xor-shift by at least half the width, or a
+    multiply by an odd constant), so distinct words hash to distinct digests.
+    That is what makes a key that *is* one word — any fixed-width value of up
+    to 64 bits, widened by `HashKernel` — identified by its hash alone, with
+    no key comparison; `DictionaryEncoder` relies on it, and
+    `tests/test_hashing.mojo` inverts it to prove it.
+
+    Only the lanes are injective. `hash` of a byte span is rapidhash's —
+    nothing hashes more than 64 bits to 64 bits injectively — and a
+    multi-column key is not identified by its hash either.
+
+    **`combine_lanes` is its own, not the default fold.** The bijection maps 0
+    to 0, and the default multiply-fold maps a 0 operand to 0, so under it
+    every multi-column key holding a 0 would hash alike. `mix(existing * K +
+    new)` is a bijection in each operand for the other held fixed, so no
+    column can erase another.
+    """
+
+    comptime name = StaticString("fmix64")
+
+    @always_inline
+    @staticmethod
+    def mix[W: Int](x: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
+        """The bijection itself."""
+        var k = x
+        k ^= k >> 33
+        k *= SIMD[DType.uint64, W](0xFF51AFD7ED558CCD)
+        k ^= k >> 33
+        k *= SIMD[DType.uint64, W](0xC4CEB9FE1A85EC53)
+        k ^= k >> 33
+        return k
+
+    @staticmethod
+    def hash(data: Span[UInt8, _], seed: UInt64 = 0) -> UInt64:
+        return RapidHash64.hash(data, seed)
+
+    @always_inline
+    @staticmethod
+    def hash_lanes[
+        byte_width: Int, W: Int
+    ](values: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
+        return Self.mix[W](values)
+
+    @always_inline
+    @staticmethod
+    def combine_lanes[
+        W: Int
+    ](existing: SIMD[DType.uint64, W], new: SIMD[DType.uint64, W]) -> SIMD[
+        DType.uint64, W
+    ]:
+        """Fold `new` into `existing`: `mix(existing * K + new)` with `K` odd,
+        a bijection in either operand — see the struct docstring for why the
+        default fold will not do here."""
+        return Self.mix[W](
+            existing * SIMD[DType.uint64, W](0x9E3779B97F4A7C15) + new
+        )
+
+
+struct TruncatedHash64[bits: Int](Hasher):
+    """`RapidHash64` squeezed into exactly `2**bits` distinct digests — a
+    hasher that collides on purpose.
+
+    A 64-bit collision cannot be constructed on demand, so code that must be
+    exact *in spite of* collisions — the group-by and the join resolve a key by
+    comparing it, never by its hash alone — cannot be tested against real ones.
+    This makes them common instead: the digest keeps its low `bits` and is then
+    remixed, so the `2**bits` survivors are still spread over all 64 bits. The
+    slot index, the H2 fingerprint and the radix partition all stay
+    well-distributed; only *equality* of hashes becomes frequent.
+
+    `bits = 0` is one digest for every key — the worst case, every probe one
+    chain, fit only for small inputs. A handful of bits gives realistic partial
+    collisions over thousands of keys.
+
+    **`combine_lanes` truncates too.** A multi-column key folds its per-column
+    digests together, and the default `mul_fold` would re-expand the entropy
+    the truncation removed — two-column keys would collide far less than
+    single-column ones, hiding exactly the multi-column cases.
+
+    Selected build-wide by `-D MARROW_HASH_BITS=N` through `KeyHash`.
+    """
+
+    comptime name = StaticString("truncated-rapidhash64")
+
+    comptime _MASK = UInt64(0) if Self.bits <= 0 else (
+        ~UInt64(0) if Self.bits >= 64 else (UInt64(1) << UInt64(Self.bits)) - 1
+    )
+
+    @always_inline
+    @staticmethod
+    def _squeeze[W: Int](h: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
+        """Keep `bits` bits, then spread them back over the word."""
+        return mul_fold[W](
+            (h & SIMD[DType.uint64, W](Self._MASK))
+            ^ SIMD[DType.uint64, W](RapidHash64._SECRET1),
+            SIMD[DType.uint64, W](RapidHash64._SECRET2),
+        )
+
+    @staticmethod
+    def hash(data: Span[UInt8, _], seed: UInt64 = 0) -> UInt64:
+        return Self._squeeze[1](RapidHash64.hash(data, seed))[0]
+
+    @always_inline
+    @staticmethod
+    def hash_lanes[
+        byte_width: Int, W: Int
+    ](values: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
+        return Self._squeeze[W](RapidHash64.hash_lanes[byte_width, W](values))
+
+    @always_inline
+    @staticmethod
+    def combine_lanes[
+        W: Int
+    ](existing: SIMD[DType.uint64, W], new: SIMD[DType.uint64, W]) -> SIMD[
+        DType.uint64, W
+    ]:
+        return Self._squeeze[W](
+            mul_fold[W](
+                existing ^ SIMD[DType.uint64, W](0x9E3779B97F4A7C15), new
+            )
+        )
+
+
+comptime _KEY_HASH_BITS = get_defined_int["MARROW_HASH_BITS", 64]()
+"""How many bits of the key hash survive — 64 in every real build.
+
+`-D MARROW_HASH_BITS=N` for `N < 64` swaps `KeyHash` for
+`TruncatedHash64[N]`, so a whole suite runs with the hash tables' key hashes
+colliding constantly (`pixi run -e dev test_collisions`)."""
+
+# One hasher for every key shape, so a binary links one hash ladder rather
+# than one per hasher.
+comptime KeyHash = TruncatedHash64[
+    _KEY_HASH_BITS
+] if _KEY_HASH_BITS < 64 else Fmix64
+"""The key hash of every consumer that must be exact under collisions: the
+group-by, `is_in`, the join and `count_distinct`.
+
+**`Fmix64` in every real build.** A key that is one fixed-width value hashes
+to a bijection of its word, which is what lets `DictionaryEncoder` skip
+comparing it. Byte strings hash with rapidhash either way.
+
+**Only those.** The Parquet bloom filter hashes to a spec (`XxHash64`), and
+`approx_count_distinct` decides on the hash by design, so a truncated hash
+would change its answer rather than test it. It names `Fmix64` directly."""

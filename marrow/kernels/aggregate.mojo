@@ -15,8 +15,9 @@ Two levels, and they answer different questions.
 - **``AggKernel``** — one aggregate, whole, **typed on what it consumes and
   produces** (``InArray`` / ``OutArray``): the output dtype from the input
   dtype, and one value per group. Every aggregate has one — ``Fold[K, V]``
-  wraps the level above, and ``LexicalExtremum``, ``Dispersion``, ``ValidCount``
-  and ``DistinctCount`` have no fold algebra to wrap.
+  wraps the level above, and ``LexicalExtremum``, ``Dispersion``,
+  ``ValidCount``, ``DistinctCount`` and ``ApproxDistinctCount`` have no fold
+  algebra to wrap.
 
 Typing at the second level is deliberate, and it is what lets a single
 vocabulary serve both expression lanes: the comptime lane names an
@@ -66,6 +67,7 @@ from ..dtypes import (
     UInt8Type,
     WideDecimalType,
     float64,
+    int32,
     int64,
 )
 from ..scalars import PrimitiveScalar, DynScalar
@@ -80,9 +82,9 @@ from .distinct import (
     hll_estimate,
     hll_rho,
 )
-from .hashing import RapidHashKernel
-from .hashtable import SwissHashTable
-from ..utils import RapidHash64
+from .dictionary import DictionaryEncoder
+from .hashing import HashKernel
+from ..utils import Fmix64, KeyHash
 
 
 # ---------------------------------------------------------------------------
@@ -903,9 +905,9 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
 trait AggKernel(Deinitable, Kernel, Movable):
     """One aggregate, **typed on what it consumes and produces**.
 
-    Five implementations, named for what they compute rather than for what they
+    Six implementations, named for what they compute rather than for what they
     consume: `Fold[K, V]`, `LexicalExtremum[Op, T]`, `Dispersion[ddof, root, V]`,
-    `ValidCount` and `DistinctCount[exact]`.
+    `ValidCount`, `DistinctCount` and `ApproxDistinctCount`.
 
     **Typed first, narrowed once at the boundary — the same shape as every
     other kernel family here.** `filter`, `take`, `cast` and `concat` all put
@@ -928,7 +930,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
     Every conformer answers with a concrete array, including the two whose
     *algebra* is dtype-generic. `Fold[K, V]` eats a `PrimitiveArray[V]`,
     `LexicalExtremum[Op, T]` a `BinaryLikeArray[T]`, `Dispersion[…, V]` a
-    `PrimitiveArray[V]` — and `ValidCount[A]` / `DistinctCount[exact, A]` eat
+    `PrimitiveArray[V]` — and `ValidCount[A]` / `DistinctCount[A]` eat
     an `A`, because a cardinality is dtype-generic in what it *computes* and
     not in how it *reads*: a valid count wants a validity bitmap and a distinct
     count wants to hash values, and both are faster knowing the array type than
@@ -1052,8 +1054,9 @@ trait Foldable(AggKernel):
     """An `AggKernel` that wraps a lane algebra, and can name it.
 
     `Fold[K]` is the only conformer, and `Lane` is the `K` it was built from.
-    `LexicalExtremum` and `DistinctCount` deliberately do not conform: a bytewise
-    scan and a hash set have no identity, combine or finalize.
+    `LexicalExtremum`, `DistinctCount` and `ApproxDistinctCount` deliberately
+    do not conform: a bytewise scan, a set and a sketch have no identity,
+    combine or finalize.
 
     This exists so the expression layer can ask *at compile time* whether an
     aggregate is capable of fusing, without a second parallel hierarchy of
@@ -1486,56 +1489,103 @@ struct ValidCount[A: Array](AggKernel):
         return out.finish()
 
 
-struct DistinctCount[exact: Bool, A: Array](AggKernel):
-    """`COUNT(DISTINCT x)` exactly, or a HyperLogLog estimate of it.
+struct DistinctCount[A: Array](AggKernel):
+    """`COUNT(DISTINCT x)`, exactly. Nulls are excluded (SQL semantics,
+    PyArrow's `only_valid`).
 
-    Not a fold — the per-slot state is a hash set or a sketch, not a scalar
-    accumulator — which is why there is no `FoldKernel` for it, no fused form
-    to fall back to, and no merge: two sketches of the same rows do not add.
-    Nulls are excluded (SQL semantics, PyArrow's `only_valid`).
-
-    **Streaming, and this is the aggregate that most needed it.** Both states
-    are naturally incremental: the exact form dedups `(group, value)` pairs in
-    one `SwissHashTable` that simply persists across morsels, and HyperLogLog
-    is definitionally updatable. The previous contract still made a query
-    containing a `count_distinct` hold its entire input column in memory,
-    because `grouped` was one-shot. Exact is now O(distinct pairs) and approx
-    is O(groups * 2**11) — neither is O(rows).
-
-    **The tradeoff:** a streaming state sees one morsel at a time, so it
-    cannot take `count_distinct`'s radix-partition-parallel path above 200k
-    rows. Whole-column parallelism and bounded memory are not simultaneously
-    available through this interface, and bounded memory is the one an
-    execution engine needs. `count_distinct` itself is unchanged for callers
-    holding the whole column.
-
-    Both field sets are declared, and one is empty in each instantiation: a
-    `comptime if` cannot select a *field*, and an unused `SwissHashTable` or
-    `List[UInt8]` is a few words, not per-group.
+    Not a fold — the per-slot state is a set, not a scalar accumulator — so
+    there is no `FoldKernel` for it and no fused form. It streams: one
+    `DictionaryEncoder` encodes `(group, value)` pairs across morsels, and a
+    pair counts the first time it is given a code, so the state is
+    O(distinct pairs), never O(rows). A morsel is encoded on the calling
+    thread, where `count_distinct` over a whole column can place it on
+    radix-partitioned tables.
     """
 
-    comptime name = COUNT_DISTINCT if Self.exact else APPROX_COUNT_DISTINCT
+    comptime name = COUNT_DISTINCT
+    comptime InArray = Self.A
+    comptime OutArray = Int64Array
+
+    var _in_dtype: DynType
+    var _encoder: Optional[DictionaryEncoder[KeyHash]]
+    """The pairs seen so far — the value alone at one slot. Built at the first
+    `update`, which is when the slot count is known."""
+    var _counts: List[Int64]
+    """The running distinct count per slot."""
+
+    def __init__(out self, in_dtype: DynType) raises:
+        self._in_dtype = in_dtype.copy()
+        self._encoder = None
+        self._counts = List[Int64]()
+
+    @staticmethod
+    def dtype(in_dtype: DynType) raises -> DynType:
+        # A cardinality, whatever was counted.
+        return DynType(int64)
+
+    def reserve(mut self, slots: Int) raises:
+        while len(self._counts) < slots:
+            self._counts.append(0)
+
+    def update(mut self, groups: Groups, input: Self.InArray) raises:
+        ref value = input
+        var single = groups.is_single()
+        self.reserve(1 if single else groups.num_groups)
+        var has_null = value.null_count() > 0
+        if not self._encoder:
+            var types = List[DynType]()
+            if not single:
+                types.append(DynType(int32))
+            types.append(self._in_dtype.copy())
+            self._encoder = DictionaryEncoder[KeyHash](
+                types^, ExecContext.serial()
+            )
+        # The pair `(group, value)` is what makes one encoder serve every
+        # slot: a row is new when its pair is new, which is when the pair is
+        # given a code. At one slot the group is constant, so the value alone
+        # identifies the pair.
+        var columns = List[DynArray]()
+        if not single:
+            columns.append(groups.ids.copy().to_dyn())
+        columns.append(input.copy().to_dyn())
+        var firsts = self._encoder.value().encode(columns).firsts.copy()
+        # Each new pair is counted once, at the row that introduced it; a pair
+        # whose value is NULL is not counted at all.
+        for j in range(len(firsts)):
+            var i = Int(firsts.unsafe_get(j))
+            if has_null and not value.is_valid(i):
+                continue
+            var g = 0 if single else Int(groups.ids.unsafe_get(i))
+            self._counts[g] += 1
+
+    def finish(mut self) raises -> Self.OutArray:
+        var out = Int64Builder(len(self._counts))
+        for g in range(len(self._counts)):
+            out.append(Scalar[int64.native](self._counts[g]))
+        return out.finish()
+
+
+struct ApproxDistinctCount[A: Array](AggKernel):
+    """`APPROX_COUNT_DISTINCT(x)`: a HyperLogLog estimate per slot, with
+    `2**11` registers each (~2.3% standard error). Nulls are excluded.
+
+    Not a fold, and no merge: two sketches of the same rows do not add. It
+    streams, keeping O(slots * 2**11) registers, never O(rows).
+    """
+
+    comptime name = APPROX_COUNT_DISTINCT
     comptime InArray = Self.A
     comptime OutArray = Int64Array
 
     comptime _p = HLL_P_GROUPED
     comptime _m = 1 << Self._p
 
-    var _table: SwissHashTable[RapidHash64]
-    """Exact: one table over `(group, value)` pairs, kept between morsels."""
-    var _seen: List[Bool]
-    """Exact: whether a table slot has already been counted."""
     var _registers: List[UInt8]
-    """Approx: `2**11` HLL registers per slot."""
-    var _counts: List[Int64]
-    """Exact: the running distinct count per slot."""
+    """`2**11` HLL registers per slot."""
     var _slots: Int
 
     def __init__(out self, in_dtype: DynType) raises:
-        self._table = SwissHashTable[RapidHash64]()
-        self._seen = List[Bool]()
         self._registers = List[UInt8]()
-        self._counts = List[Int64]()
         self._slots = 0
 
     @staticmethod
@@ -1546,88 +1596,40 @@ struct DistinctCount[exact: Bool, A: Array](AggKernel):
     def reserve(mut self, slots: Int) raises:
         if slots <= self._slots:
             return
-        comptime if Self.exact:
-            while len(self._counts) < slots:
-                self._counts.append(0)
-        else:
-            while len(self._registers) < slots * Self._m:
-                self._registers.append(0)
+        while len(self._registers) < slots * Self._m:
+            self._registers.append(0)
         self._slots = slots
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         ref value = input
-        # The exact arm hashes a `(group, value)` pair, so it needs the value
-        # column erased — once per morsel, to build the column list, not per
-        # row. The approximate arm hashes `input` directly.
-        var erased = input.copy().to_dyn()
         var single = groups.is_single()
         self.reserve(1 if single else groups.num_groups)
-        var n = len(value) if single else len(groups.ids)
         var has_null = value.null_count() > 0
-
-        comptime if Self.exact:
-            # The pair `(group, value)` is what makes one table serve every
-            # slot: a row is new when its *pair* is new. At one slot the group
-            # is constant, so the value alone identifies the pair and hashing
-            # it is enough.
-            # `List[DynArray]` because a pair holds columns of differing
-            # types, so it cannot be one typed list — not because this kernel
-            # is erased. The columns go straight to the hasher, which combines
-            # them per row; it used to need them wrapped in a `StructArray`
-            # carrying invented field names, which is what the group-by's own
-            # key hashing stopped doing.
-            var columns = List[DynArray]()
-            if not single:
-                columns.append(groups.ids.copy().to_dyn())
-            columns.append(erased.copy())
-            var bids = self._table.insert_hashes(
-                RapidHashKernel.apply(columns, n, ExecContext.serial()),
-                grow_adaptively=True,
-            )
-            while len(self._seen) < self._table.num_keys():
-                self._seen.append(False)
-            for i in range(n):
-                if has_null and not value.is_valid(i):
-                    continue
-                var b = Int(bids.unsafe_get(i))
-                if not self._seen[b]:
-                    self._seen[b] = True
-                    var g = 0 if single else Int(groups.ids.unsafe_get(i))
-                    self._counts[g] += 1
-        else:
-            # `dispatch` and not `apply`, and the reason is a real limit
-            # rather than leftover erasure: `apply` is overloaded per array
-            # *family* and there is no `apply[A: Array]`, so a generic `A`
-            # selects none of them. The narrowing happens once per morsel, not
-            # per row. A generic overload in `hashing.mojo` would remove it.
-            var hv = RapidHashKernel.dispatch(
-                erased, ExecContext.serial()
-            ).values()
-            for i in range(n):
-                if has_null and not value.is_valid(i):
-                    continue
-                var h = UInt64(hv[i])
-                var g = 0 if single else Int(groups.ids.unsafe_get(i))
-                var idx = g * Self._m + Int(h >> (64 - Self._p))
-                var rho = hll_rho[Self._p](h)
-                if rho > self._registers[idx]:
-                    self._registers[idx] = rho
+        # `dispatch` and not `apply`: `apply` is overloaded per array family
+        # and there is no `apply[A: Array]`, so a generic `A` selects none of
+        # them. The narrowing happens once per morsel, not per row.
+        var hv = (
+            HashKernel[Fmix64]
+            .dispatch(input.copy().to_dyn(), ExecContext.serial())
+            .values()
+        )
+        var n = len(value) if single else len(groups.ids)
+        for i in range(n):
+            if has_null and not value.is_valid(i):
+                continue
+            var h = UInt64(hv[i])
+            var g = 0 if single else Int(groups.ids.unsafe_get(i))
+            var idx = g * Self._m + Int(h >> (64 - Self._p))
+            var rho = hll_rho[Self._p](h)
+            if rho > self._registers[idx]:
+                self._registers[idx] = rho
 
     def finish(mut self) raises -> Self.OutArray:
         var out = Int64Builder(self._slots)
-        comptime if Self.exact:
-            for g in range(self._slots):
-                out.append(Scalar[int64.native](self._counts[g]))
-        else:
-            for g in range(self._slots):
-                out.append(
-                    Scalar[int64.native](
-                        hll_estimate[Self._p](self._registers, g * Self._m)
-                    )
+        for g in range(self._slots):
+            out.append(
+                Scalar[int64.native](
+                    hll_estimate[Self._p](self._registers, g * Self._m)
                 )
+            )
         return out.finish()
-
-
-# ---------------------------------------------------------------------------
-# Runtime dtype -> array type
-# ---------------------------------------------------------------------------

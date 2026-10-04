@@ -6,7 +6,7 @@
 Public API
 ----------
 ``hash_join``   — equijoin two StructArrays on positional key columns.
-``HashJoin``    — hash join using SwissHashTable; reusable across morsels.
+``HashJoin``    — hash join over ``JoinHashTable``; reusable across morsels.
 
 Internal types
 --------------
@@ -32,12 +32,10 @@ and returns the same fields in the same order as ``BUILD_LEFT``.
 
 Future join algorithms (see `backlog.md`); operators name the concrete
 algorithm, so a new one is a new struct, not a conformance:
-  RadixHashJoin   — partitioned hash join (SwissHashTable + RadixPartitioner)
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)
 
-The original spec's ``JoinHashTable``, with an intrusive ``_chain_next``
-list, was superseded by ``SwissHashTable`` plus a CSR
-``_offsets``/``_rows`` index.
+``JoinHashTable`` is a ``DictionaryEncoder`` over the build keys plus each
+code's build rows, stored contiguously.
 """
 
 
@@ -45,7 +43,6 @@ from ..arrays import (
     DynArray,
     StructArray,
     Int32Array,
-    UInt64Array,
 )
 from ..buffers import Buffer
 from ..builders import Int32Builder
@@ -58,11 +55,10 @@ from ..dtypes import (
 )
 from ..execution import ExecContext
 from ..errors import InvalidError, NotImplementedError
-from .filter import TakeKernel, filter, take
-from .hashtable import SwissHashTable
-from .partition import RadixPartitioner
-from .hashing import HashKernel
-from ..utils import Hasher, RapidHash64
+from .filter import filter, take
+from .boolean import NotNullKernel
+from .dictionary import DictionaryEncoder
+from ..utils import Hasher, KeyHash
 
 # ---------------------------------------------------------------------------
 # Join kind constants — what rows appear in output
@@ -84,7 +80,7 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
     already cost something:
 
     1. **The column question had four answers.** "Does this kind emit the right
-       side's columns?" was re-derived inline at `output_dtype`, `_assemble`,
+       side's columns?" was re-derived inline at `_output_dtype`, `_assemble`,
        `relations.Join.schema` and `tabular.join`, and they did not agree — the
        first two differed on MARK, so a MARK join built a `StructArray`
        declaring the right side's fields while carrying only the left's. That is
@@ -119,7 +115,7 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
     def emits_left_columns(self) -> Bool:
         """Whether the output carries the left side's columns: false only for
         RIGHT_SEMI and RIGHT_ANTI. With `emits_right_columns` it fixes the
-        output width, which `output_dtype` and `_assemble` must agree on.
+        output width, which `_output_dtype` and `_assemble` must agree on.
         """
         return self != JOIN_RIGHT_SEMI and self != JOIN_RIGHT_ANTI
 
@@ -320,7 +316,7 @@ struct JoinBuildSide(
     A cost decision only: either way a join returns the same rows in the
     caller's column order and field names. That takes two things: `physical`
     restates the kind for `_emit_unmatched`, and `_assemble` and
-    `output_dtype` use this to put the logical left side first.
+    `_output_dtype` use this to put the logical left side first.
 
     Unlike `JoinKind` it has no `@implicit` constructor. It sits beside a bare
     `UInt8 strictness`, and `BUILD_LEFT` and `JOIN_ALL` are both 0, so an
@@ -376,8 +372,8 @@ struct JoinIndex(Copyable, Movable, Sized):
     """Which build row pairs with which probe row, one entry per output row.
 
     A named pair rather than `Tuple[Int32Array, Int32Array]`, which is what this
-    was. The tuple spelling means every consumer writes `pairs.build` and
-    `pairs.probe`, and nothing distinguishes them -- reading the build side as the
+    was. The tuple spelling made every consumer write `pairs[0]` and
+    `pairs[1]`, and nothing distinguished them -- reading the build side as the
     probe side is a silent wrong answer, and `_assemble` gathers the two sides
     from different arrays, so getting them the wrong way round produces a
     plausible-looking result with the columns crossed.
@@ -396,220 +392,247 @@ struct JoinIndex(Copyable, Movable, Sized):
         return len(self.build)
 
 
-def _concat_int32(
-    var parts: List[Optional[Int32Array]],
-) raises -> Int32Array:
-    """Concatenate a list of Int32 index arrays into one.
-
-    Used by the parallel probe path to merge per-partition pair arrays
-    into a single ``JoinIndex``. Direct buffer-level memcpy rather than
-    going through the generic ``concat(DynArray)`` path — the per-
-    partition pair arrays are always valid dense Int32 buffers with
-    ``nulls == 0``, so we can skip bitmap and type-dispatch overhead.
-    """
-    var total = 0
-    for ref p in parts:
-        if p:
-            total += len(p.value())
-    if total == 0:
-        var empty = Int32Builder(capacity=0)
-        return empty.finish()
-
-    var out_buf = Buffer.alloc_uninit[int32.native](total)
-    var out_view = out_buf.view[int32.native](0, total)
-    var write = 0
-    for ref p in parts:
-        if not p:
-            continue
-        ref arr = p.value()
-        var n = len(arr)
-        if n == 0:
-            continue
-        var src = arr.values()
-        out_view.slice(write, n).copy_from(src, n)
-        write += n
-
-    return Int32Array(
-        dtype=int32,
-        length=total,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=out_buf^.to_immutable(),
-    )
-
-
 # ---------------------------------------------------------------------------
-# HashJoin — hash join using SwissHashTable
+# JoinHashTable and HashJoin
 # ---------------------------------------------------------------------------
 
 
-comptime _PARALLEL_THRESHOLD = 100_000
-"""Below this build-side row count the parallel path falls back to serial —
-partitioning overhead dominates below ~100k rows on typical inputs."""
+struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
+    """A hash join's build side: every distinct build key, and the rows
+    holding it.
 
-# The hash → partition → per-partition parallel work → merge skeleton shared by
-# `build_parallel`, `probe_parallel`, and the radix group-by lives in
-# `RadixPartitioner.map_partitions` (partition.mojo); each call site supplies
-# only its per-partition op and its own merge.
+    A ``DictionaryEncoder`` gives each distinct key a code — exactly, so rows
+    sharing a code share their key — and the rows of each code are stored
+    contiguously, so a probe key's build rows are one range::
 
-comptime _PROBE_STRIPE_THRESHOLD = 32_768
-"""Below this *probe-call* row count the probe hashes on the calling thread.
+        _offsets[code] .. _offsets[code + 1]   ->  range in _rows
+        _rows[j]                               ->  build-side row
 
-`ExecContext.parallel(n)` is a forced count, and a forced count is an
-*instruction*: `stripe` splits a 1,000-row loop `n` ways because the caller
-asked for `n` workers. That is the right reading for a caller who sized the
-work, and the wrong one for a kernel splitting whatever batch it was handed —
-so the probe asks `worth_parallel`, which treats a forced count as a *budget*,
-about the rows in this call. Measured: an 8192-row probe hashed across 8
-forced workers costs ~1213 us against ~76 us on the calling thread.
+    **A build whose keys are all distinct has no offsets.** Each code then
+    holds one row, ``_rows[code]``. A join on a key takes this path.
 
-Set to `stripe`'s own default `min_parallel_size` — this is the same crossover,
-just asked about the probe batch rather than about a whole column."""
-
-comptime _DEFAULT_RADIX_BITS = 4
-"""Default radix fanout for ``RadixPartitioner`` (16 partitions).
-
-Was 6 (64 partitions), chosen from a sweep of a **one-shot** 10M INNER join
-where 32 / 64 / 128 all landed within ~1 ms: partitioning is a per-*call* cost,
-and one call over 10M rows amortizes any fanout. The plan layer streams the
-probe side in 8192-row morsels, so it pays that cost ~122 times at 1M rows
-instead of once, and the fanout stops being free.
-
-Re-swept on the morselized shape (build + 8192-row probes, 8 workers, Apple
-Silicon), times for the whole join:
-
-    bits   1M      4M       10M
-    3      20.3    61.7     158.9
-    4      16.8    68.5     181.1
-    6      30.1    93.5     238.9   (serial: 17.4 / 101.8 / 360.5)
-
-3 is faster at 4M and 10M but loses to the serial baseline at 1M; 4 is the
-only setting that beats serial at every size, and at 8 workers it is also the
-principled one — 2 partitions per worker, enough to balance skew without
-paying for 8x oversubscription. Fanout stays a runtime parameter on
-``RadixPartitioner`` and can be tuned per workload."""
-
-
-def _key_struct(source: StructArray, indices: List[Int]) raises -> StructArray:
-    """The key columns under a canonical key dtype: positional names,
-    nullable, no metadata.
-
-    `expect_same_dtype` compares whole struct dtypes, and keys are matched by
-    value, so every field member but the dtype is normalised away. Otherwise a
-    `dept` key could not join a `did` key, nor a required column a nullable
-    one. Marking a required column nullable changes no comparison: the
-    equality kernel reads the arrays' validity, not the flag.
+    A probe looks its keys up in the same encoder, so a candidate *is* a match
+    — there is nothing left to compare — with one exception, which ``=``
+    makes: the encoder holds a NULL key equal to another, and ``=`` matches no
+    NULL at all, so a probe key holding one matches nothing. A build key
+    holding one is encoded like any other and is then never looked up.
     """
-    var selected = source.select(indices)
-    ref st = selected.dtype.as_struct()
-    var fields = List[Field]()
-    for i in range(len(st.fields)):
-        fields.append(Field(String(i), st.fields[i].dtype.copy()))
-    return StructArray(
-        dtype=struct_(fields^),
-        length=selected.length,
-        nulls=selected.null_count(),
-        offset=selected.offset,
-        bitmap=selected.bitmap,
-        children=selected.children.copy(),
-    )
+
+    var _keys: DictionaryEncoder[Self.Hash]
+    var _rows: Int32Array
+    """Build rows, grouped by code."""
+    var _offsets: Buffer[mut=True]
+    """One past each code's range in ``_rows``; empty when every code holds
+    one row."""
+
+    def __init__(
+        out self, keys: List[DynArray], var ctx: ExecContext = ExecContext()
+    ) raises:
+        """Index a build side by its key columns ``keys``."""
+        var types = List[DynType](capacity=len(keys))
+        for ref key in keys:
+            types.append(key.dtype())
+        self._keys = DictionaryEncoder[Self.Hash](types^, ctx^)
+        var num_rows = len(keys[0])
+        self._keys.reserve(num_rows)
+        var placed = self._keys.encode(keys)
+        ref codes = placed.ids
+        var num_codes = len(self._keys)
+        if num_codes == num_rows:
+            # Every row introduced its own code, so the rows that introduced
+            # the codes, in code order, are the rows by code.
+            self._rows = placed.firsts.copy()
+            self._offsets = Buffer.alloc_uninit(0)
+        else:
+            # Several rows share a code: a counting sort by code.
+            var at = List[Int](length=num_codes, fill=0)
+            for i in range(num_rows):
+                at[Int(codes.unsafe_get(i))] += 1
+            self._offsets = Buffer.alloc_uninit[int32.native](num_codes + 1)
+            self._offsets.unsafe_set[int32.native](0, 0)
+            for c in range(num_codes):
+                self._offsets.unsafe_set[int32.native](
+                    c + 1,
+                    self._offsets.unsafe_get[int32.native](c) + Int32(at[c]),
+                )
+                at[c] = Int(self._offsets.unsafe_get[int32.native](c))
+            var rows = Buffer.alloc_uninit[int32.native](max(num_rows, 1))
+            for i in range(num_rows):
+                var c = Int(codes.unsafe_get(i))
+                rows.unsafe_set[int32.native](at[c], Int32(i))
+                at[c] += 1
+            self._rows = Int32Array(
+                length=num_rows,
+                nulls=0,
+                offset=0,
+                bitmap=None,
+                buffer=rows^.to_immutable(),
+            )
+
+    def is_partitioned(self) -> Bool:
+        """Whether the build keys sit on radix-partitioned tables."""
+        return self._keys.is_partitioned()
+
+    def candidates(
+        self,
+        keys: List[DynArray],
+        single_match: Bool = False,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> JoinIndex:
+        """Every ``(build_row, probe_row)`` whose keys are equal under ``=`` —
+        at most one per probe row when ``single_match`` (``JOIN_ANY``,
+        semi-join).
+
+        Two passes over the probe rows, striped over ``ctx``: one counts each
+        stripe's pairs, a prefix sum turns the counts into where each stripe
+        writes, and the other writes them — a large probe expands in parallel
+        into one pair of arrays, with nothing to merge.
+        """
+        var codes = self._keys.lookup(keys)
+        var num_rows = len(codes)
+        for ref key in keys:
+            if key.null_count() != 0:
+                codes = Self._unmatched_where_null(codes, key)
+        var stripes = ctx.stripe_workers(num_rows)
+        var at = List[Int](length=stripes + 1, fill=0)
+
+        @always_inline
+        def count(wid: Int, start: Int, end: Int) {mut at, imm}:
+            var pairs = 0
+            for row in range(start, end):
+                var span = self._span(codes, row, single_match)
+                pairs += span[1] - span[0]
+            at[wid + 1] = pairs
+
+        ctx.stripe(num_rows, count)
+        for w in range(stripes):
+            at[w + 1] += at[w]
+        var total = at[stripes]
+        var left = Buffer.alloc_uninit[int32.native](max(total, 1))
+        var right = Buffer.alloc_uninit[int32.native](max(total, 1))
+        var build_rows = left.view[int32.native](0, total)
+        var probe_rows = right.view[int32.native](0, total)
+
+        @always_inline
+        def write(
+            wid: Int, start: Int, end: Int
+        ) {mut build_rows, mut probe_rows, imm}:
+            var p = at[wid]
+            for row in range(start, end):
+                var span = self._span(codes, row, single_match)
+                for j in range(span[0], span[1]):
+                    build_rows.store[1](p, self._rows.unsafe_get(j))
+                    probe_rows.store[1](p, Int32(row))
+                    p += 1
+
+        ctx.stripe(num_rows, write)
+        return JoinIndex(
+            build=Int32Array(
+                length=total,
+                nulls=0,
+                offset=0,
+                bitmap=None,
+                buffer=left^.to_immutable(),
+            ),
+            probe=Int32Array(
+                length=total,
+                nulls=0,
+                offset=0,
+                bitmap=None,
+                buffer=right^.to_immutable(),
+            ),
+        )
+
+    @staticmethod
+    def _unmatched_where_null(
+        codes: Int32Array, key: DynArray
+    ) raises -> Int32Array:
+        """``codes`` with ``-1`` wherever ``key`` is NULL — ``=`` matches no
+        NULL, not even another, where the encoder's identity does."""
+        var n = len(codes)
+        var valid = NotNullKernel.apply(key)
+        var bits = valid.values()
+        var src = codes.values()
+        var buf = Buffer.alloc_uninit[int32.native](max(n, 1))
+        var out = buf.view[int32.native](0, n)
+        for i in range(n):
+            out.store[1](i, src.load[1](i) if bits.test(i) else Int32(-1))
+        return Int32Array(
+            length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
+        )
+
+    @always_inline
+    def _span(
+        self, codes: Int32Array, row: Int, single_match: Bool
+    ) -> Tuple[Int, Int]:
+        """Where probe ``row``'s build rows sit in ``_rows`` — an empty range
+        when its key has no code (``-1``)."""
+        var code = Int(codes.unsafe_get(row))
+        if code < 0:
+            return (0, 0)
+        if len(self._offsets) == 0:
+            return (code, code + 1)
+        var start = Int(self._offsets.unsafe_get[int32.native](code))
+        if single_match:
+            return (start, start + 1)
+        return (start, Int(self._offsets.unsafe_get[int32.native](code + 1)))
 
 
-struct HashJoin[Hash: Hasher = RapidHash64]:
-    """Hash join using SwissHashTable.
+struct HashJoin[Hash: Hasher = KeyHash]:
+    """Hash join over ``JoinHashTable``.
 
-    Build phase: hash the build side's key columns, insert rows into the hash
-    table. Probe phase: hash the probe side's key columns, look up in the hash
-    table, emit index pairs, verify key equality (filter hash collisions).
+    Build phase: encode the build side's key columns and group its rows by
+    code. Probe phase: look the probe side's keys up — an exact lookup, so
+    every candidate is a match — then add the unmatched rows the join kind
+    asks for and gather the output columns.
 
     Everything here is in build/probe terms. Which of the caller's inputs was
     built is the `JoinBuildSide` passed to `probe`, which restates the
     caller's kind and puts the columns back in the caller's order.
 
-    Supports two execution paths, chosen by ``ctx.worth_parallel``:
+    **The predicate is SQL's ``=``**: the encoder's key identity — NaN equal
+    to NaN, as ``WHERE a.k = b.k`` agrees — less NULL, which matches nothing,
+    not even another NULL (``JoinHashTable``).
 
-    * **Serial** — a single ``SwissHashTable`` over the full build side.
-      Used when the context resolves to one worker, targets a GPU, or the
-      build side is below ``_PARALLEL_THRESHOLD``.
-    * **Partition-parallel** — rows are split by the top bits of their
-      hash into ``2^radix_bits`` independent ``SwissHashTable`` instances,
-      built and probed concurrently on the ``ThreadPool``. No atomics,
-      no locks: each partition is fully independent.
-
-    The public ``build`` / ``probe`` entry points are thin dispatchers over
-    ``build_serial`` / ``build_parallel`` and ``probe_serial`` /
-    ``probe_parallel``. The serial implementation is unchanged from the
-    pre-parallel version; the parallel path reuses the same
-    ``SwissHashTable`` primitive per partition.
+    **One path.** Parallelism belongs to the pieces: the encoder places a large
+    and distinct build side on radix-partitioned tables and stripes a batch
+    big enough to share out, and expanding candidates stripes over
+    ``ExecContext.for_batch``.
     """
 
-    # Global state (shared by both paths)
     var _ctx: ExecContext
     """How this join executes — held whole rather than destructured to a worker
     count. It used to be a bare `_num_threads: Int`, which five internal sites
     then rebuilt into `ExecContext.parallel(n)`; every one of those
     silently dropped the caller's GPU device, since that factory sets
     `device=None`."""
-    var _build_key_indices: List[Int]
-    var _build_type: DynType
-    var _build_data: Optional[StructArray]
-    var _build_rows: Int
+    var _build: StructArray
+    """The build side, whose rows `_table` indexes."""
+    var _table: JoinHashTable[Self.Hash]
 
-    # Serial path state
-    var _table: SwissHashTable[Self.Hash]
-
-    # Parallel path state (populated by build_parallel)
-    var _tables: List[SwissHashTable[Self.Hash]]
-    """One SwissHashTable per partition (parallel path only)."""
-    var _build_partition_keys: List[StructArray]
-    """Per-partition build-side keys, used for equality verification."""
-    var _build_partition_rows: List[Int32Array]
-    """Per-partition original row indices — maps partition-local row
-    numbers back to the original build-side row index after probe."""
-    var _radix_bits: Int
-
-    var _built_parallel: Bool
-    """Which layout `build` produced — the *correctness* constraint.
-
-    `probe_serial` reads `_table`, `probe_parallel` reads `_tables`, and only
-    the matching `build_*` populates either. So the probe path is not a free
-    choice: it is dictated by what build did. This used to be re-derived by
-    asking `worth_parallel` about `_build_rows` a second time and trusting the
-    two calls to agree, which conflated it with the throughput decision below.
-    """
-
-    def __init__(out self, var ctx: ExecContext = ExecContext()):
-        """Create a HashJoin.
+    def __init__(
+        out self,
+        build: StructArray,
+        key_indices: List[Int],
+        var ctx: ExecContext = ExecContext(),
+    ) raises:
+        """The build phase: index ``build`` by the columns at
+        ``key_indices``.
 
         Args:
-            ctx: How to execute. ``ExecContext.serial()`` forces the serial
-                single-table path; ``.parallel(n)`` runs radix-partitioned
-                parallel build + probe across ``n`` workers; ``.parallel()`` /
-                ``.auto()`` picks ``num_physical_cores()``. Builds smaller than
-                ``_PARALLEL_THRESHOLD`` fall back to serial regardless.
+            build: The side to index.
+            key_indices: Its key columns.
+            ctx: How to execute. ``ExecContext.serial()`` keeps every step on
+                the calling thread; ``.parallel(n)`` lets the build place its
+                keys on radix-partitioned tables and each step stripe across
+                ``n`` workers when its input is large enough; ``.parallel()`` /
+                ``.auto()`` picks ``num_physical_cores()``.
         """
+        self._table = JoinHashTable[Self.Hash](
+            Self._key_columns(build, key_indices), ctx.copy()
+        )
+        self._build = build.copy()
         self._ctx = ctx^
-        self._build_key_indices = List[Int]()
-        self._build_type = null
-        self._build_data = None
-        self._build_rows = 0
-        self._table = SwissHashTable[Self.Hash]()
-        self._tables = List[SwissHashTable[Self.Hash]]()
-        self._build_partition_keys = List[StructArray]()
-        self._build_partition_rows = List[Int32Array]()
-        self._radix_bits = _DEFAULT_RADIX_BITS
-        self._built_parallel = False
-
-    # ------------------------------------------------------------------
-    # Public dispatchers — route to serial or parallel implementations.
-    # ------------------------------------------------------------------
-
-    def build(mut self, data: StructArray, key_indices: List[Int]) raises:
-        if not self._ctx.worth_parallel(data.length, _PARALLEL_THRESHOLD):
-            self.build_serial(data, key_indices)
-        else:
-            self.build_parallel(data, key_indices)
 
     def probe(
         self,
@@ -623,223 +646,30 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
 
         `kind` is the caller's, read against its own `(left, right)`, and
         `build_side` says which of those was built. `_emit_unmatched` gets
-        `build_side.physical(kind)`; `_assemble` and `output_dtype` get both.
+        `build_side.physical(kind)`; `_assemble` and `_output_dtype` get both.
         """
-        # Layout, not throughput: `probe_parallel` reads the per-partition
-        # tables that only `build_parallel` populates, and `probe_serial` reads
-        # the single table that only `build_serial` populates. Whichever build
-        # ran decides this, and nothing else may.
-        #
-        # Throughput is a separate question, and asking it here was the bug:
-        # `worth_parallel(self._build_rows, ...)` let one row count answer both,
-        # so a 1M-row build put every 8192-row morsel the plan layer streams
-        # through the partitioned path. The throughput levers live where the
-        # per-call cost actually is — `_DEFAULT_RADIX_BITS` (how much work each
-        # probe call must repeat) and `_probe_ctx` (whether a call is big
-        # enough to stripe) — and both are sized by the probe batch, never by
-        # the build side. Measurement says the partition *fan-out* itself is
-        # not a lever: it beats running the same partitions serially at every
-        # batch size tested, 8192 rows included.
-        if self._built_parallel:
-            return self.probe_parallel(
-                data, key_indices, kind, strictness, build_side
-            )
-        else:
-            return self.probe_serial(
-                data, key_indices, kind, strictness, build_side
-            )
-
-    # ------------------------------------------------------------------
-    # Serial path — one SwissHashTable over the whole build side.
-    # ------------------------------------------------------------------
-
-    def build_serial(
-        mut self, data: StructArray, key_indices: List[Int]
-    ) raises:
-        self._build_type = data.dtype.copy()
-        self._build_rows = data.length
-        self._build_data = data.copy()
-        self._build_key_indices = key_indices.copy()
-        self._built_parallel = False
-        var ctx = self._ctx.copy()
-        self._table.build(_key_struct(data, key_indices), ctx)
-
-    def _probe_ctx(self, probe_rows: Int) -> ExecContext:
-        """The context to spend on a probe call of `probe_rows` rows.
-
-        Splits the two questions a single `ExecContext` otherwise answers at
-        once: *how many workers may this join use* (the caller's budget, held
-        in `self._ctx`) versus *is this particular call big enough to spend
-        them* (a property of the batch, which only the call site knows).
-        `worth_parallel` is the right predicate because it reads a forced
-        thread count as a budget rather than as an instruction.
-        """
-        if self._ctx.worth_parallel(probe_rows, _PROBE_STRIPE_THRESHOLD):
-            return self._ctx.copy()
-        else:
-            return ExecContext.serial()
-
-    def probe_serial(
-        self,
-        data: StructArray,
-        key_indices: List[Int],
-        kind: JoinKind,
-        strictness: UInt8,
-        build_side: JoinBuildSide = BUILD_LEFT,
-    ) raises -> StructArray:
-        var build_keys = _key_struct(
-            self._build_data.value(), self._build_key_indices
-        )
-        var probe_keys = _key_struct(data, key_indices)
-        # Sized by *this call's* probe rows, not by the build side and not by
-        # the raw worker count: `SwissHashTable.probe` spends `ctx` on hashing
-        # the probe keys, and striping 8192 of them across a forced 8 workers
-        # costs ~16x what hashing them on the calling thread does.
-        var pairs = self._table.probe(
-            build_keys,
-            probe_keys,
-            self._build_rows,
+        var keys = Self._key_columns(data, key_indices)
+        var matched = self._table.candidates(
+            keys,
             single_match=strictness == JOIN_ANY,
-            ctx=self._probe_ctx(len(data)),
+            ctx=self._ctx.for_batch(len(data)),
         )
-        # `SwissHashTable.probe` still returns a bare tuple -- it cannot name
-        # `JoinIndex`, since `join` imports `hashtable` and not the other way
-        # round. Named at this boundary instead, which is where the two sides
-        # stop being interchangeable.
-        var verified = JoinIndex(pairs[0].copy(), pairs[1].copy())
         var final = self._emit_unmatched(
-            verified^, len(data), build_side.physical(kind), strictness
+            matched^, len(data), build_side.physical(kind), strictness
         )
         return self._assemble(data, final, kind, build_side)
 
-    # ------------------------------------------------------------------
-    # Parallel path — radix-partitioned, one table per partition.
-    # ------------------------------------------------------------------
-
-    def build_parallel(
-        mut self, data: StructArray, key_indices: List[Int]
-    ) raises:
-        """Radix-partitioned build.
-
-        1. Hash the full build side once (parallel SIMD over key columns).
-        2. Partition rows by the top ``_radix_bits`` of their hash.
-        3. For each partition *in parallel*: gather the partition's keys
-           via ``take``, build an independent ``SwissHashTable`` against
-           the pre-computed hashes, and store per-partition state back
-           on ``self``. No cross-partition synchronization: each worker
-           writes to a distinct index slot.
-        """
-        self._build_type = data.dtype.copy()
-        self._build_rows = data.length
-        self._build_data = data.copy()
-        self._build_key_indices = key_indices.copy()
-
-        var build_keys = _key_struct(data, key_indices)
-
-        # Pre-size one table per partition; each is built *in place* by the
-        # matching worker (avoids moving/copying a SwissHashTable out of a
-        # result), so the op only returns the cheap (keys, rows) per partition.
-        var partitioner = RadixPartitioner(
-            num_bits=self._radix_bits,
-            ctx=self._ctx.copy(),
-        )
-        var p = partitioner.num_partitions()
-        var tables = List[SwissHashTable[Self.Hash]](capacity=p)
-        for _ in range(p):
-            tables.append(SwissHashTable[Self.Hash]())
-
-        def build_partition(
-            i: Int, rows: Int32Array, part_hashes: UInt64Array
-        ) raises {mut tables, imm} -> StructArray:
-            tables[i].build_hashes(part_hashes)
-            return TakeKernel.apply(build_keys, rows)
-
-        var hashes = HashKernel[Self.Hash].apply(build_keys, self._ctx.copy())
-        # The row mapping comes back with the split rather than through the
-        # op's result — it is an input, not something the worker produced.
-        var split = partitioner.map_partitions[StructArray](
-            hashes^, build_partition
-        )
-        ref routed = split[0]
-        ref built = split[1]
-
-        var keys_out = List[StructArray](capacity=p)
-        var rows_out = List[Int32Array](capacity=p)
-        for i in range(len(built)):
-            keys_out.append(built[i].copy())
-            rows_out.append(routed[i].row_indices.copy())
-
-        self._tables = tables^
-        self._build_partition_keys = keys_out^
-        self._build_partition_rows = rows_out^
-        self._built_parallel = True
-
-    def probe_parallel(
-        self,
-        data: StructArray,
-        key_indices: List[Int],
-        kind: JoinKind,
-        strictness: UInt8,
-        build_side: JoinBuildSide = BUILD_LEFT,
-    ) raises -> StructArray:
-        """Radix-partitioned probe.
-
-        1. Hash the full probe side once in parallel.
-        2. Partition probe rows by the same radix bits used at build time.
-        3. For each partition: gather probe-side keys, look up in the
-           matching partition's hash table, remap partition-local row
-           indices to original row indices. Partitions probe concurrently.
-        4. Concatenate per-partition index pairs, then run the shared
-           ``_emit_unmatched`` + ``_assemble`` steps.
-        """
-        var probe_keys = _key_struct(data, key_indices)
-        var probe_n = len(data)
-        var single = strictness == JOIN_ANY
-
-        # Per-partition probe: gather this partition's probe keys, look them up
-        # in the matching build-side table `i` (same radix bits → same
-        # partition), and remap partition-local indices to global row numbers.
-        def probe_partition(
-            i: Int, rows: Int32Array, part_hashes: UInt64Array
-        ) raises {imm} -> JoinIndex:
-            var probe_keys_i = TakeKernel.apply(probe_keys, rows)
-            var pairs = self._tables[i].probe(
-                self._build_partition_keys[i],
-                probe_keys_i,
-                len(self._build_partition_keys[i]),
-                single_match=single,
-                hashes=part_hashes.copy(),
-            )
-            return JoinIndex(
-                TakeKernel.apply(self._build_partition_rows[i], pairs[0]),
-                TakeKernel.apply(rows, pairs[1]),
-            )
-
-        # 1. Hash probe side in parallel; 2-3. partition + parallel probe.
-        var probe_hashes = HashKernel[Self.Hash].apply(
-            probe_keys, self._ctx.copy()
-        )
-        var probe_split = RadixPartitioner(
-            num_bits=self._radix_bits,
-            ctx=self._ctx.copy(),
-        ).map_partitions[JoinIndex](probe_hashes^, probe_partition)
-        ref pairs_per_partition = probe_split[1]
-
-        # 4. Concat per-partition pairs into a single JoinIndex.
-        var p = len(pairs_per_partition)
-        var part_build_idx = List[Optional[Int32Array]](length=p, fill=None)
-        var part_probe_idx = List[Optional[Int32Array]](length=p, fill=None)
-        for i in range(p):
-            part_build_idx[i] = pairs_per_partition[i].build.copy()
-            part_probe_idx[i] = pairs_per_partition[i].probe.copy()
-        var combined_build = _concat_int32(part_build_idx^)
-        var combined_probe = _concat_int32(part_probe_idx^)
-        var verified = JoinIndex(combined_build^, combined_probe^)
-
-        var final = self._emit_unmatched(
-            verified^, probe_n, build_side.physical(kind), strictness
-        )
-        return self._assemble(data, final, kind, build_side)
+    @staticmethod
+    def _key_columns(
+        data: StructArray, indices: List[Int]
+    ) raises -> List[DynArray]:
+        """The key columns, each windowed to ``data``'s slice. Only their
+        dtypes and values matter — a ``dept`` key joins a ``did`` key, and a
+        required column a nullable one."""
+        var keys = List[DynArray](capacity=len(indices))
+        for i in indices:
+            keys.append(data.field(i))
+        return keys^
 
     def _emit_unmatched(
         self,
@@ -850,7 +680,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     ) raises -> JoinIndex:
         """Phase 3: add unmatched rows for outer/semi/anti joins.
 
-        Scans the verified pairs to determine which build/probe rows
+        Scans the matched pairs to determine which build/probe rows
         were matched, then appends unmatched rows as needed.
         INNER: returns pairs unchanged.
         SEMI: emits matched build rows only.
@@ -863,8 +693,8 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         if kind == JOIN_INNER:
             return pairs^
 
-        # Compute which build/probe rows appear in the verified pairs.
-        var matched_build = List[Bool](length=self._build_rows, fill=False)
+        # Compute which build/probe rows appear in the matched pairs.
+        var matched_build = List[Bool](length=self._build.length, fill=False)
         var matched_probe = List[Bool](length=probe_rows, fill=False)
         var n_pairs = len(pairs.build)
         for i in range(n_pairs):
@@ -877,9 +707,9 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
 
         if kind == JOIN_SEMI or kind == JOIN_ANTI:
             var want = kind == JOIN_SEMI
-            var lb = Int32Builder(capacity=self._build_rows)
-            var rb = Int32Builder(capacity=self._build_rows)
-            for i in range(self._build_rows):
+            var lb = Int32Builder(capacity=self._build.length)
+            var rb = Int32Builder(capacity=self._build.length)
+            for i in range(self._build.length):
                 if matched_build[i] == want:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
@@ -899,13 +729,13 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
             return JoinIndex(lb.finish(), rb.finish())
 
         # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
-        var lb = Int32Builder(capacity=n_pairs + self._build_rows)
+        var lb = Int32Builder(capacity=n_pairs + self._build.length)
         var rb = Int32Builder(capacity=n_pairs + probe_rows)
         for i in range(n_pairs):
             lb.append(pairs.build.unsafe_get(i))
             rb.append(pairs.probe.unsafe_get(i))
         if kind.emits_unmatched_left():
-            for i in range(self._build_rows):
+            for i in range(self._build.length):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
@@ -916,23 +746,20 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
                     rb.append(Scalar[int32.native](i))
         return JoinIndex(lb.finish(), rb.finish())
 
-    def build_dtype(self) -> DynType:
-        return self._build_type.copy()
-
     def num_build_rows(self) -> Int:
-        return self._build_rows
+        return self._build.length
 
     def built_parallel(self) -> Bool:
-        """Whether `build` produced the radix-partitioned layout.
+        """Whether the build placed the build side on radix-partitioned tables.
 
-        Exposed so a test can prove it exercised the partitioned probe rather
-        than passing vacuously on the serial one — the two paths are supposed
-        to be indistinguishable in their results, which is exactly what makes
-        an accidental fallback invisible.
+        Exposed so a test can prove it exercised the partitioned lookups rather
+        than passing vacuously on the single table — the two are supposed to
+        be indistinguishable in their results, which is exactly what makes an
+        accidental fallback invisible.
         """
-        return self._built_parallel
+        return self._table.is_partitioned()
 
-    def output_dtype(
+    def _output_dtype(
         self,
         probe: StructArray,
         kind: JoinKind,
@@ -943,14 +770,14 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         """
         if build_side == BUILD_LEFT:
             return Self._joined_dtype(
-                self._build_type.as_struct().fields,
+                self._build.dtype.as_struct().fields,
                 probe.dtype.as_struct().fields,
                 kind,
             )
         else:
             return Self._joined_dtype(
                 probe.dtype.as_struct().fields,
-                self._build_type.as_struct().fields,
+                self._build.dtype.as_struct().fields,
                 kind,
             )
 
@@ -1000,11 +827,9 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     ) raises:
         """One ``take`` per column, appended in order.
 
-        After the fan-out in ``probe_parallel`` has finished
-        there's no outer parallel region, so each per-column ``take``
-        can safely fan its SIMD gather loop across workers internally.
-        We pass this join's own ``ExecContext`` through, and ``take``
-        decides per-column whether it's big enough to stripe (its own grain
+        Each per-column ``take`` may fan its SIMD gather loop across
+        workers: this join's own ``ExecContext`` goes through, and ``take``
+        decides per column whether it is big enough to stripe (its own grain
         threshold inside ``apply``).
         """
         var ctx = self._ctx.copy()
@@ -1024,7 +849,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         `pairs.probe`, so `build_side` only decides which goes first. The row
         count is `len(pairs)`, which holds even when a side has no columns.
         """
-        ref build = self._build_data.value()
+        ref build = self._build
         var out_cols = List[DynArray]()
 
         if kind.emits_left_columns():
@@ -1040,7 +865,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
                 self._gather(build.children, pairs.build, out_cols)
 
         return StructArray(
-            dtype=self.output_dtype(probe, kind, build_side),
+            dtype=self._output_dtype(probe, kind, build_side),
             length=len(pairs),
             nulls=0,
             offset=0,
@@ -1084,12 +909,10 @@ def hash_join(
             result follows the probe side and so does change; the multiset of
             rows does not.
         ctx: How to execute. ``.auto()`` (default) picks
-            ``num_physical_cores()`` workers; ``.serial()`` forces the serial
-            single-table path; ``.parallel(n)`` runs radix-partitioned parallel
-            build + probe across ``n``. Builds smaller than
-            ``_PARALLEL_THRESHOLD`` always fall back to serial regardless.
-            Any GPU device on the context now survives into the join's internal
-            dispatches; it previously did not.
+            ``num_physical_cores()`` workers; ``.serial()`` keeps every step on
+            the calling thread; ``.parallel(n)`` lets each step use ``n``
+            workers when its input is large enough. Any GPU device on the
+            context survives into the join's internal dispatches.
 
     Returns:
         Output StructArray:
@@ -1107,10 +930,9 @@ def hash_join(
             t"hash_join: join kind '{kind}' is not implemented"
         )
 
-    var join = HashJoin(ctx.copy())
     if build_side == BUILD_LEFT:
-        join.build(left, left_on)
+        var join = HashJoin(left, left_on, ctx.copy())
         return join.probe(right, right_on, kind, strictness, build_side)
     else:
-        join.build(right, right_on)
+        var join = HashJoin(right, right_on, ctx.copy())
         return join.probe(left, left_on, kind, strictness, build_side)

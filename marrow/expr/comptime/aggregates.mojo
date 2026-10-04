@@ -44,6 +44,7 @@ from ...kernels.aggregate import (
     FoldKernel,
     AggKernel,
     Dispersion,
+    ApproxDistinctCount,
     DistinctCount,
     Fold,
     Foldable,
@@ -374,16 +375,16 @@ comptime StringMax[A: StringValue] = Aggregate[
 # `StringValue` to a `BinaryLikeArray[A.Type]`, so each family's fluent method
 # supplies the array and no `ArrayType` companion is needed on the node.
 comptime CountDistinct[A: PrimitiveValue] = Aggregate[
-    DistinctCount[True, PrimitiveArray[A.Type]], A
+    DistinctCount[PrimitiveArray[A.Type]], A
 ]
 comptime ApproxCountDistinct[A: PrimitiveValue] = Aggregate[
-    DistinctCount[False, PrimitiveArray[A.Type]], A
+    ApproxDistinctCount[PrimitiveArray[A.Type]], A
 ]
 comptime StringCountDistinct[A: StringValue] = Aggregate[
-    DistinctCount[True, BinaryLikeArray[A.Type]], A
+    DistinctCount[BinaryLikeArray[A.Type]], A
 ]
 comptime StringApproxCountDistinct[A: StringValue] = Aggregate[
-    DistinctCount[False, BinaryLikeArray[A.Type]], A
+    ApproxDistinctCount[BinaryLikeArray[A.Type]], A
 ]
 
 

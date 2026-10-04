@@ -153,8 +153,8 @@ def test_is_in_takes_a_null_in_the_set_as_a_match() raises:
 
 def test_is_in_accepts_a_string_operand() raises:
     """The operand is bound on `ComptimeValue`, not on a family — membership
-    is decided on the 64-bit hash, so one node serves every type
-    `RapidHashKernel` supports."""
+    goes through one `DictionaryEncoder`, so one node serves every type it
+    encodes."""
     var sb = StringBuilder(3)
     sb.append("apple")
     sb.append("pear")

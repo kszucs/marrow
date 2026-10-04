@@ -201,7 +201,7 @@ def test_a_fold_reports_spent_on_a_second_drain() raises:
 
     The driver calls `drain` until it answers `None`. A fold that answered
     `Some` every time would spin `while True: drain()` forever — it is only
-    safe today because `GroupByOperator` happens to call it once, and
+    safe today because `GroupedAggregateOperator` happens to call it once, and
     "happens to" is not a contract.
     """
     var s = col("a", int64).sum().alias("t").to_operator(Schema(), False)
@@ -639,9 +639,10 @@ def test_a_fused_subtree_folds_per_group_under_every_kernel() raises:
 
 
 def test_a_fused_subtree_and_a_buffered_aggregate_share_one_grouping() raises:
-    """A fused fold and a buffered aggregate in the same query: `GroupByOperator`
-    assigns ids once and both read them, so the two operators must agree on the
-    slot count even though only one of them buffers."""
+    """A fused fold and a buffered aggregate in the same query:
+    `GroupedAggregateOperator` assigns ids once and both read them, so the two
+    operators must agree on the slot count even though only one of them
+    buffers."""
     var plan = table(_lines()).aggregate(
         [
             (col("qty", int64) * col("price", int64)).sum().alias("revenue"),

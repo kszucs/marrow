@@ -1,10 +1,11 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for `HashGrouping` — and specifically for its two placement paths.
+"""Tests for group-by placement through `DictionaryEncoder` — its two
+placement paths, and its exactness under hash collisions.
 
 The radix path only engages at `_RADIX_MIN_ROWS` (50k) rows and
-`_RADIX_MIN_GROUPS` (30k) groups with a context that resolves to more than one
+`_RADIX_MIN_DISTINCT` (30k) groups with a context that resolves to more than one
 worker, so **every case here that means to test it has to be that big**. A 5-row parallel context takes the serial path
 and asserts nothing about the code it was written for; that is why the sizes
 below look gratuitous and are not.
@@ -22,14 +23,65 @@ its group in one accumulator, so `mean`, the Welford variance triple and
 An earlier version of this file asserted id-for-id equality, and the
 implementation paid for it with an O(rows) *serial* numbering pass that cost
 more than the parallel insert saved. Do not reinstate that assertion without
-re-reading `_consume_keys_radix`.
+re-reading `HashIndex._insert_radix`.
+
+**Placement tests name `RapidHash64`**, never the build's `KeyHash`: whether
+the radix path engages depends on how many distinct hashes the cardinality
+sample sees, so under `-D MARROW_HASH_BITS` (`pixi run test_collisions`) they
+would be testing the truncation rather than the placement. Exactness under
+collisions is the `test_collisions_*` cases', which choose their hasher.
 """
 
-from std.testing import assert_equal, assert_true
+from std.math import nan
+from std.testing import assert_equal, assert_raises, assert_true
 
-from ...arrays import DynArray, Int32Array, Int64Array, StructArray
-from ...builders import Int32Builder, StringBuilder, Int64Builder
-from ...dtypes import Field, Int32Type, int32, int64, string
+from ...arrays import (
+    DictionaryArray,
+    DynArray,
+    Int32Array,
+    Int64Array,
+    StringViewArray,
+    StructArray,
+)
+from ...buffers import Bitmap
+from ...builders import (
+    Decimal128Builder,
+    Float64Builder,
+    Int8Builder,
+    Int32Builder,
+    LargeStringBuilder,
+    StringBuilder,
+    Int64Builder,
+    ListBuilder,
+    StructBuilder,
+    array,
+)
+from ...dtypes import (
+    Decimal128Type,
+    DynType,
+    Field,
+    Int8Type,
+    Float64Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    LargeStringType,
+    StringType,
+    decimal128,
+    dictionary,
+    field,
+    int8,
+    int16,
+    int32,
+    int64,
+    string,
+    struct_,
+)
+from ...kernels.filter import take
+from ...kernels.cast import decode_dictionary
+from ...kernels.hashing import HashKernel, NULL_HASH_SENTINEL
+from ...kernels.hashtable import SwissHashTable
+from ...utils import Fmix64, Hasher, RapidHash64, TruncatedHash64
 from ...execution import ExecContext
 from ...kernels.aggregate import (
     AggKernel,
@@ -39,8 +91,32 @@ from ...kernels.aggregate import (
     MeanFold,
     SumFold,
 )
-from ...kernels.groupby import HashGrouping
+from ...kernels.dictionary import DictionaryEncoder
 from ...kernels.groupby import Groups
+
+
+def _encoder[
+    H: Hasher = RapidHash64
+](keys: List[DynArray], var ctx: ExecContext) -> DictionaryEncoder[H]:
+    """An encoder over columns of `keys`' types."""
+    var types = List[DynType]()
+    for ref k in keys:
+        types.append(k.dtype())
+    return DictionaryEncoder[H](types^, ctx^)
+
+
+def _int32_encoder(var ctx: ExecContext) -> DictionaryEncoder[RapidHash64]:
+    var types = List[DynType]()
+    types.append(int32)
+    return DictionaryEncoder[RapidHash64](types^, ctx^)
+
+
+def _groups[
+    H: Hasher
+](mut encoder: DictionaryEncoder[H], keys: List[DynArray]) raises -> Groups:
+    """One batch placed: its codes, and how many exist after it."""
+    var placed = encoder.encode(keys)
+    return Groups(placed.ids.copy(), len(encoder))
 
 
 comptime _BIG: Int = 100_000
@@ -129,11 +205,11 @@ def _place(var key: DynArray, n: Int, var ctx: ExecContext) raises -> _Placed:
     """Group one batch of a single key column under `ctx`."""
     var cols = List[DynArray]()
     cols.append(key^)
-    var g = HashGrouping(ctx^)
-    var groups = g.assign(cols, n)
+    var g = _encoder(cols, ctx^)
+    var groups = _groups(g, cols)
     var fields = List[Field]()
     fields.append(Field("k", int32))
-    return _Placed(groups.ids.copy(), groups.num_groups, g.key_columns(fields))
+    return _Placed(groups.ids.copy(), groups.num_groups, g.values())
 
 
 def _assert_same_placement(var a: _Placed, var b: _Placed) raises:
@@ -157,7 +233,7 @@ def _assert_same_placement(var a: _Placed, var b: _Placed) raises:
 
 
 def test_low_cardinality_stays_serial_under_a_parallel_context() raises:
-    """1,000 groups over 100k rows: far under `_RADIX_MIN_GROUPS`, so the
+    """1,000 groups over 100k rows: far under `_RADIX_MIN_DISTINCT`, so the
     cardinality gate keeps placement on the single-table path even though the
     row count and the worker count would both allow radix.
 
@@ -243,13 +319,13 @@ def test_radix_placement_matches_serial_with_string_keys() raises:
 
     var a = List[DynArray]()
     a.append(sb.finish())
-    var ga = HashGrouping(ExecContext.serial())
-    var serial_groups = ga.assign(a, _BIG)
+    var ga = _encoder(a, ExecContext.serial())
+    var serial_groups = _groups(ga, a)
 
     var b = List[DynArray]()
     b.append(sb2.finish())
-    var gb = HashGrouping(ExecContext.parallel(4))
-    var par_groups = gb.assign(b, _BIG)
+    var gb = _encoder(b, ExecContext.parallel(4))
+    var par_groups = _groups(gb, b)
 
     assert_equal(serial_groups.num_groups, 60_000)
     assert_equal(par_groups.num_groups, 60_000)
@@ -274,14 +350,14 @@ def test_radix_placement_matches_serial_with_two_keys() raises:
     var s = List[DynArray]()
     s.append(ka.finish())
     s.append(kb.finish())
-    var gs = HashGrouping(ExecContext.serial())
-    var sg = gs.assign(s, _BIG)
+    var gs = _encoder(s, ExecContext.serial())
+    var sg = _groups(gs, s)
 
     var p = List[DynArray]()
     p.append(ka2.finish())
     p.append(kb2.finish())
-    var gp = HashGrouping(ExecContext.parallel(4))
-    var pg = gp.assign(p, _BIG)
+    var gp = _encoder(p, ExecContext.parallel(4))
+    var pg = _groups(gp, p)
 
     assert_equal(sg.num_groups, pg.num_groups)
     _ = _bijection(sg.ids, pg.ids, sg.num_groups)
@@ -302,13 +378,13 @@ def test_radix_placement_handles_null_keys() raises:
 
     var sc = List[DynArray]()
     sc.append(a.finish())
-    var gs = HashGrouping(ExecContext.serial())
-    var sg = gs.assign(sc, _BIG)
+    var gs = _int32_encoder(ExecContext.serial())
+    var sg = _groups(gs, sc)
 
     var pc = List[DynArray]()
     pc.append(b.finish())
-    var gp = HashGrouping(ExecContext.parallel(4))
-    var pg = gp.assign(pc, _BIG)
+    var gp = _int32_encoder(ExecContext.parallel(4))
+    var pg = _groups(gp, pc)
 
     assert_equal(sg.num_groups, pg.num_groups)
     _ = _bijection(sg.ids, pg.ids, sg.num_groups)
@@ -328,33 +404,33 @@ def test_radix_ids_are_stable_across_batches() raises:
     batches carry identical values, so the ids must come back identical —
     exactly, not merely up to renumbering.
     """
-    var g = HashGrouping(ExecContext.parallel(4))
+    var g = _int32_encoder(ExecContext.parallel(4))
 
     var first = List[DynArray]()
     first.append(_int_keys(_BIG, 50_000))
-    var g1 = g.assign(first, _BIG)
+    var g1 = _groups(g, first)
     assert_equal(g1.num_groups, 50_000)
 
     # Same key values again — no group is new, so the count must not move.
     var second = List[DynArray]()
     second.append(_int_keys(_BIG, 50_000))
-    var g2 = g.assign(second, _BIG)
+    var g2 = _groups(g, second)
     assert_equal(g2.num_groups, 50_000)
     assert_true(g1.ids == g2.ids)
 
     var fields = List[Field]()
     fields.append(Field("k", int32))
-    var cols = g.key_columns(fields)
+    var cols = g.values()
     assert_equal(len(cols[0]), 50_000)
 
 
 def test_radix_second_batch_extends_the_grouping() raises:
     """New keys in a later batch append, they do not renumber."""
-    var g = HashGrouping(ExecContext.parallel(4))
+    var g = _int32_encoder(ExecContext.parallel(4))
 
     var first = List[DynArray]()
     first.append(_int_keys(_BIG, 60_000))
-    var g1 = g.assign(first, _BIG)
+    var g1 = _groups(g, first)
     assert_equal(g1.num_groups, 60_000)
 
     var b = Int32Builder(capacity=_BIG)
@@ -362,7 +438,7 @@ def test_radix_second_batch_extends_the_grouping() raises:
         b.append(Int32(60_000 + ((i * 7919) % 30_000)))
     var second = List[DynArray]()
     second.append(b.finish())
-    var g2 = g.assign(second, _BIG)
+    var g2 = _groups(g, second)
     assert_equal(g2.num_groups, 90_000)
     # Every key in the second batch is new, so all of its ids land past the
     # block the first batch already claimed.
@@ -384,11 +460,11 @@ def test_below_threshold_stays_serial_under_a_parallel_context() raises:
 
 def test_empty_batch_under_a_parallel_context() raises:
     """A zero-row batch must not latch a path or invent a group."""
-    var g = HashGrouping(ExecContext.parallel(4))
+    var g = _int32_encoder(ExecContext.parallel(4))
     var empty = List[DynArray]()
     var b = Int32Builder(0)
     empty.append(b.finish())
-    var got = g.assign(empty, 0)
+    var got = _groups(g, empty)
     assert_equal(got.num_groups, 0)
     assert_equal(len(got.ids), 0)
 
@@ -409,16 +485,16 @@ def test_grouped_sum_agrees_between_paths() raises:
     """
     var sk = List[DynArray]()
     sk.append(_int_keys(_BIG, 50_000))
-    var gs = HashGrouping(ExecContext.serial())
-    var sgroups = gs.assign(sk, _BIG)
+    var gs = _int32_encoder(ExecContext.serial())
+    var sgroups = _groups(gs, sk)
     var ssum = Fold[SumFold, Int32Type].grouped(
         sgroups, _payload(_BIG).as_int32().copy()
     )
 
     var pk = List[DynArray]()
     pk.append(_int_keys(_BIG, 50_000))
-    var gp = HashGrouping(ExecContext.parallel(4))
-    var pgroups = gp.assign(pk, _BIG)
+    var gp = _int32_encoder(ExecContext.parallel(4))
+    var pgroups = _groups(gp, pk)
     var psum = Fold[SumFold, Int32Type].grouped(
         pgroups, _payload(_BIG).as_int32().copy()
     )
@@ -436,16 +512,16 @@ def test_grouped_mean_agrees_between_paths() raises:
     combine — the divisor is the group's whole count on both paths."""
     var sk = List[DynArray]()
     sk.append(_int_keys(_BIG, 60_000))
-    var gs = HashGrouping(ExecContext.serial())
-    var sgroups = gs.assign(sk, _BIG)
+    var gs = _int32_encoder(ExecContext.serial())
+    var sgroups = _groups(gs, sk)
     var smean = Fold[MeanFold, Int32Type].grouped(
         sgroups, _payload(_BIG).as_int32().copy()
     )
 
     var pk = List[DynArray]()
     pk.append(_int_keys(_BIG, 60_000))
-    var gp = HashGrouping(ExecContext.parallel(4))
-    var pgroups = gp.assign(pk, _BIG)
+    var gp = _int32_encoder(ExecContext.parallel(4))
+    var pgroups = _groups(gp, pk)
     var pmean = Fold[MeanFold, Int32Type].grouped(
         pgroups, _payload(_BIG).as_int32().copy()
     )
@@ -477,13 +553,13 @@ def _grouped_pair(card: Int) raises -> Tuple[Groups, Groups]:
     """
     var sk = List[DynArray]()
     sk.append(_int_keys(_BIG, card))
-    var gs = HashGrouping(ExecContext.serial())
-    var sgroups = gs.assign(sk, _BIG)
+    var gs = _int32_encoder(ExecContext.serial())
+    var sgroups = _groups(gs, sk)
 
     var pk = List[DynArray]()
     pk.append(_int_keys(_BIG, card))
-    var gp = HashGrouping(ExecContext.parallel(4))
-    var pgroups = gp.assign(pk, _BIG)
+    var gp = _int32_encoder(ExecContext.parallel(4))
+    var pgroups = _groups(gp, pk)
 
     assert_equal(sgroups.num_groups, pgroups.num_groups)
     assert_true(_any_id_differs(sgroups.ids, pgroups.ids))
@@ -552,11 +628,11 @@ def test_grouped_count_distinct_agrees_between_paths() raises:
     never arises."""
     var pair = _grouped_pair(60_000)
     var payload = _int64_payload(_BIG)
-    var sd = DistinctCount[True, Int64Array].grouped(
-        pair[0], _in[DistinctCount[True, Int64Array]](payload.copy())
+    var sd = DistinctCount[Int64Array].grouped(
+        pair[0], _in[DistinctCount[Int64Array]](payload.copy())
     )
-    var pd = DistinctCount[True, Int64Array].grouped(
-        pair[1], _in[DistinctCount[True, Int64Array]](payload.copy())
+    var pd = DistinctCount[Int64Array].grouped(
+        pair[1], _in[DistinctCount[Int64Array]](payload.copy())
     )
     assert_equal(len(sd), 60_000)
     var fwd = _bijection(pair[0].ids, pair[1].ids, 60_000)
@@ -583,15 +659,15 @@ def _two_batch(
 ) raises -> Tuple[Int32Array, Int32Array, Int]:
     """Push a below-threshold batch and then a qualifying one through a single
     grouper. Returns both batches' ids and the final group count."""
-    var g = HashGrouping(ctx^)
+    var g = _int32_encoder(ctx^)
 
     var first = List[DynArray]()
     first.append(_int_keys(_SMALL, _SMALL_CARD))
-    var g1 = g.assign(first, _SMALL)
+    var g1 = _groups(g, first)
 
     var second = List[DynArray]()
     second.append(_int_keys(_BIG, 50_000))
-    var g2 = g.assign(second, _BIG)
+    var g2 = _groups(g, second)
     return (g1.ids.copy(), g2.ids.copy(), g2.num_groups)
 
 
@@ -627,11 +703,11 @@ def test_migration_preserves_ids_issued_before_the_switch() raises:
     those ids, so a key that came back renumbered would split its own group
     across two slots — with no error anywhere.
     """
-    var g = HashGrouping(ExecContext.parallel(4))
+    var g = _int32_encoder(ExecContext.parallel(4))
 
     var first = List[DynArray]()
     first.append(_int_keys(_SMALL, _SMALL_CARD))
-    var g1 = g.assign(first, _SMALL)
+    var g1 = _groups(g, first)
     assert_equal(g1.num_groups, _SMALL_CARD)
 
     # What id did the serial table give each key value?
@@ -641,7 +717,7 @@ def test_migration_preserves_ids_issued_before_the_switch() raises:
 
     var second = List[DynArray]()
     second.append(_int_keys(_BIG, 50_000))
-    var g2 = g.assign(second, _BIG)
+    var g2 = _groups(g, second)
     assert_equal(g2.num_groups, 50_000)
 
     var seen = 0
@@ -657,19 +733,19 @@ def test_migration_preserves_ids_issued_before_the_switch() raises:
 def test_migration_keeps_one_key_row_per_group() raises:
     """The key columns still carry one row per group, in global id order,
     across the switch — the migration moves ids, not key storage."""
-    var g = HashGrouping(ExecContext.parallel(4))
+    var g = _int32_encoder(ExecContext.parallel(4))
 
     var first = List[DynArray]()
     first.append(_int_keys(_SMALL, _SMALL_CARD))
-    _ = g.assign(first, _SMALL)
+    _ = _groups(g, first)
 
     var second = List[DynArray]()
     second.append(_int_keys(_BIG, 50_000))
-    var g2 = g.assign(second, _BIG)
+    var g2 = _groups(g, second)
 
     var fields = List[Field]()
     fields.append(Field("k", int32))
-    var cols = g.key_columns(fields)
+    var cols = g.values()
     assert_equal(len(cols[0]), 50_000)
 
     # Every key value 0..49,999 appears exactly once.
@@ -688,17 +764,17 @@ def test_empty_batch_after_migration() raises:
     early-out with 64 live tables behind it rather than with none — and must
     leave the group count where the qualifying batch left it.
     """
-    var g = HashGrouping(ExecContext.parallel(4))
+    var g = _int32_encoder(ExecContext.parallel(4))
 
     var first = List[DynArray]()
     first.append(_int_keys(_BIG, 50_000))
-    var g1 = g.assign(first, _BIG)
+    var g1 = _groups(g, first)
     assert_equal(g1.num_groups, 50_000)
 
     var none = List[DynArray]()
     var b = Int32Builder(0)
     none.append(b.finish())
-    var g2 = g.assign(none, 0)
+    var g2 = _groups(g, none)
     assert_equal(len(g2.ids), 0)
     assert_equal(g2.num_groups, 50_000)
 
@@ -711,11 +787,11 @@ def test_three_batches_after_migration_keep_their_ids() raises:
     ids issued after it: both must still resolve, and the first batch's keys
     must answer with the same number all three times.
     """
-    var g = HashGrouping(ExecContext.parallel(4))
+    var g = _int32_encoder(ExecContext.parallel(4))
 
     var first = List[DynArray]()
     first.append(_int_keys(_SMALL, _SMALL_CARD))
-    var g1 = g.assign(first, _SMALL)
+    var g1 = _groups(g, first)
 
     var id_of = List[Int](length=_SMALL_CARD, fill=-1)
     for i in range(_SMALL):
@@ -723,14 +799,14 @@ def test_three_batches_after_migration_keep_their_ids() raises:
 
     var second = List[DynArray]()
     second.append(_int_keys(_BIG, 50_000))
-    var g2 = g.assign(second, _BIG)
+    var g2 = _groups(g, second)
     assert_equal(g2.num_groups, 50_000)
 
     # A third batch over the same key space adds nothing new, so the count must
     # hold and every id must match what the second batch handed out.
     var third = List[DynArray]()
     third.append(_int_keys(_BIG, 50_000))
-    var g3 = g.assign(third, _BIG)
+    var g3 = _groups(g, third)
     assert_equal(g3.num_groups, 50_000)
     assert_true(g2.ids == g3.ids)
 
@@ -739,3 +815,453 @@ def test_three_batches_after_migration_keep_their_ids() raises:
         var key = (i * 7919) % 50_000
         if key < _SMALL_CARD:
             assert_equal(Int(g3.ids.unsafe_get(i)), id_of[key])
+
+
+# ---------------------------------------------------------------------------
+# Exactness under hash collisions
+#
+# Real rapidhash collisions cannot be produced on demand, so these run the
+# grouper under `TruncatedHash64[bits]`, which has only `2**bits` distinct
+# digests: at `bits = 0` every key shares one hash. A grouping that resolved
+# keys by hash alone collapses to a handful of groups; an exact one must answer
+# exactly what it answers under the full hash.
+# ---------------------------------------------------------------------------
+
+
+def _group[
+    H: Hasher
+](batches: List[List[DynArray]], var ctx: ExecContext) raises -> _Placed:
+    """Group every batch through one `DictionaryEncoder[H]`, concatenating the ids.
+    """
+    var g = _encoder[H](batches[0], ctx^)
+    var ids = Int32Builder()
+    for ref batch in batches:
+        var groups = _groups(g, batch)
+        for i in range(len(groups.ids)):
+            ids.append(groups.ids.unsafe_get(i))
+    var fields = List[Field]()
+    for ref col in batches[0]:
+        fields.append(Field("k", col.dtype()))
+    return _Placed(ids.finish(), len(g), g.values())
+
+
+def _assert_same_grouping(var exact: _Placed, var other: _Placed) raises:
+    """The same partition of rows, and the same key row stored per group.
+
+    Keys are compared through their rendering after a `take` into the other
+    numbering: `DynArray.__eq__` is structural, and NaN never equals itself.
+    """
+    assert_equal(other.num_groups, exact.num_groups)
+    var fwd = _bijection(exact.ids, other.ids, exact.num_groups)
+    var order = Int32Builder(capacity=len(fwd))
+    for q in range(len(fwd)):
+        order.append(Int32(fwd[q]))
+    var idx = order.finish()
+    for c in range(len(exact.keys)):
+        assert_equal(
+            String(_decoded(other.keys[c])),
+            String(take(_decoded(exact.keys[c]), idx.copy())),
+        )
+
+
+def _decoded(col: DynArray) raises -> DynArray:
+    """A dictionary key column by value: a `take` permutes its indices, not
+    its entries, so two equal groupings render differently undecoded."""
+    if col.dtype().is_dictionary():
+        return decode_dictionary(col.as_dictionary())
+    return col.copy()
+
+
+def _assert_exact(batches: List[List[DynArray]]) raises:
+    """Every row lands where the full hash puts it, however much collides."""
+    var ctx = ExecContext.serial()
+    _assert_same_grouping(
+        _group[RapidHash64](batches, ctx.copy()),
+        _group[TruncatedHash64[0]](batches, ctx.copy()),
+    )
+    _assert_same_grouping(
+        _group[RapidHash64](batches, ctx.copy()),
+        _group[TruncatedHash64[2]](batches, ctx.copy()),
+    )
+
+
+def _one(var col: DynArray) -> List[List[DynArray]]:
+    var batch = List[DynArray]()
+    batch.append(col^)
+    var batches = List[List[DynArray]]()
+    batches.append(batch^)
+    return batches^
+
+
+def test_collisions_int64_keys() raises:
+    _assert_exact(
+        _one(array[Int64Type]([1, 2, None, 1, 3, 2, None, 0, -1], int64))
+    )
+
+
+def test_collisions_float_keys() raises:
+    """NaN is one group and `-0.0` is `0.0`, as under the full hash."""
+    var n = nan[DType.float64]()
+    var b = Float64Builder()
+    for v in [1.5, n, -0.0, 0.0, n, 2.5, 1.5]:
+        b.append(v)
+    b.append_null()
+    b.append(0.0)
+    b.append_null()
+    _assert_exact(_one(b.finish()))
+
+
+def test_collisions_bool_keys() raises:
+    _assert_exact(_one(array([True, False, None, True, False, None])))
+
+
+def test_collisions_string_keys() raises:
+    """The empty string and NULL are different groups."""
+    _assert_exact(_one(array(["a", "", None, "b", "a", "", None, "ab", "ba"])))
+
+
+def test_collisions_string_view_keys() raises:
+    """The view layout: inline and out-of-line values sharing a four-byte
+    prefix, the empty string and NULL, all colliding."""
+    var values = List[Optional[String]]()
+    for v in [
+        "abcd",
+        "",
+        "abcd-inline",
+        "abcd-a key longer than twelve",
+        "abcd",
+        "abcd-a key longer than twelvf",
+        "abcd-a key longer than twelve",
+        "",
+    ]:
+        values.append(String(v))
+    values.append(None)
+    values.append(String("abcd-inline"))
+    values.append(None)
+    _assert_exact(_one(StringViewArray.from_values(values)))
+
+
+def test_collisions_two_key_columns() raises:
+    var batch = List[DynArray]()
+    batch.append(array[Int16Type]([1, 1, 2, 2, 1, None, None, 1], int16))
+    batch.append(array(["x", "y", "x", "y", "x", "x", None, "y"]))
+    var batches = List[List[DynArray]]()
+    batches.append(batch^)
+    _assert_exact(batches)
+
+
+def test_collisions_list_keys() raises:
+    var lb = ListBuilder(Int32Builder(), capacity=6)
+    var child_any = lb.values()
+    ref child = child_any.as_int32()
+    child.append(1)
+    child.append(2)
+    lb.append_valid()  # [1, 2]
+    child.append(1)
+    lb.append_valid()  # [1]
+    lb.append_null()  # null
+    lb.append_valid()  # []
+    child.append(1)
+    child.append(2)
+    lb.append_valid()  # [1, 2]
+    child.append(2)
+    child.append(1)
+    lb.append_valid()  # [2, 1]
+    _assert_exact(_one(lb.finish().to_dyn()))
+
+
+def test_collisions_struct_keys() raises:
+    var sb = StructBuilder([field("a", int32), field("b", string)])
+    var a = [1, 1, 2, 1]
+    var b = ["x", "y", "x", "x"]
+    for i in range(len(a)):
+        sb.field_builder(0).as_int32().append(Int32(a[i]))
+        sb.field_builder(1).as_string().append(b[i])
+        sb.append_valid()
+    _assert_exact(_one(sb.finish().to_dyn()))
+
+
+def test_collisions_across_batches() raises:
+    """A key colliding with one from an earlier batch still gets its own group,
+    and keeps it when it reappears in a third."""
+    var batches = List[List[DynArray]]()
+    var chunks: List[List[Optional[Int]]] = [
+        [1, 2, 3],
+        [4, 1, 5],
+        [5, 4, 3, 2, 1, 6],
+    ]
+    for ref values in chunks:
+        var batch = List[DynArray]()
+        batch.append(array[Int64Type](values, int64))
+        batches.append(batch^)
+    _assert_exact(batches)
+
+
+def test_collisions_on_the_radix_path() raises:
+    """20 bits leave ~1M digests for 50,000 keys: about 1,200 colliding pairs,
+    yet few enough that the cardinality gate still picks the radix path. A
+    narrower truncation never reaches it — at 16 bits the 4,096-row sample
+    already sees too few distinct hashes."""
+    var batches = _one(_int_keys(_BIG, 50_000))
+    var distinct_hashes = SwissHashTable()
+    _ = distinct_hashes.insert_hashes(
+        HashKernel[TruncatedHash64[20]].dispatch(batches[0][0])
+    )
+    assert_true(len(distinct_hashes) < 50_000)
+
+    var exact = _group[RapidHash64](batches, ExecContext.serial())
+    var radix = _group[TruncatedHash64[20]](batches, ExecContext.parallel(4))
+    assert_true(_any_id_differs(exact.ids, radix.ids))
+    _assert_same_grouping(exact^, radix^)
+
+
+def _keys_as(values: Int32Array, strings: Bool) raises -> DynArray:
+    """The same keys as int32, or as the strings `"key-<n>"`."""
+    if not strings:
+        return values.copy()
+    var b = StringBuilder(len(values))
+    for i in range(len(values)):
+        b.append(String("key-") + String(values.unsafe_get(i)))
+    return b.finish()
+
+
+def _migrating_batches(strings: Bool) raises -> List[List[DynArray]]:
+    """A small first batch that stays serial, then two large ones that move
+    the grouper to the radix path and back over the same keys.
+
+    The first batch is keys 0..4,999: under 20 bits about a dozen of those
+    pairs share a hash, so the serial table already holds colliding groups
+    when the migration re-routes them."""
+    var first = Int32Builder(capacity=5_000)
+    for i in range(5_000):
+        first.append(Int32(i))
+    var batches = List[List[DynArray]]()
+    var b1 = List[DynArray]()
+    b1.append(_keys_as(first.finish(), strings))
+    batches.append(b1^)
+    for _ in range(2):
+        var big = List[DynArray]()
+        big.append(_keys_as(_int_keys(_BIG, 50_000).as_int32().copy(), strings))
+        batches.append(big^)
+    return batches^
+
+
+def _assert_exact_across_migration(strings: Bool) raises:
+    var batches = _migrating_batches(strings)
+    var exact = _group[RapidHash64](batches, ExecContext.serial())
+    var migrated = _group[TruncatedHash64[20]](batches, ExecContext.parallel(4))
+    assert_true(_any_id_differs(exact.ids, migrated.ids))
+    _assert_same_grouping(exact^, migrated^)
+
+
+def test_collisions_across_a_migration_word_keys() raises:
+    _assert_exact_across_migration(strings=False)
+
+
+def test_collisions_across_a_migration_column_keys() raises:
+    _assert_exact_across_migration(strings=True)
+
+
+def test_collisions_on_the_radix_path_column_keys() raises:
+    var batches = _one(
+        _keys_as(_int_keys(_BIG, 50_000).as_int32().copy(), strings=True)
+    )
+    var exact = _group[RapidHash64](batches, ExecContext.serial())
+    var radix = _group[TruncatedHash64[20]](batches, ExecContext.parallel(4))
+    assert_true(_any_id_differs(exact.ids, radix.ids))
+    _assert_same_grouping(exact^, radix^)
+
+
+def _null_hash_batches(null_first: Bool) raises -> List[List[DynArray]]:
+    """NULL and the one int64 value whose hash is `NULL_HASH_SENTINEL`, in
+    either order, then again in a second batch: four groups.
+
+    A word key's hash is injective, so exactly one value shares NULL's — the
+    value built here, by inverting `Fmix64.mix`."""
+    var w = NULL_HASH_SENTINEL
+    w ^= w >> 33
+    w *= 0x9CB4B2F8129337DB
+    w ^= w >> 33
+    w *= 0x4F74430C22A54005
+    w ^= w >> 33
+    assert_equal(Fmix64.mix[1](w)[0], NULL_HASH_SENTINEL)
+    var v = Int(Int64(w))
+    var first: List[Optional[Int]] = [None, v, 1] if null_first else [
+        v,
+        None,
+        1,
+    ]
+    var batches = List[List[DynArray]]()
+    var b1 = List[DynArray]()
+    b1.append(array[Int64Type](first, int64))
+    batches.append(b1^)
+    var b2 = List[DynArray]()
+    b2.append(array[Int64Type]([v, None, 2, v], int64))
+    batches.append(b2^)
+    return batches^
+
+
+def test_word_key_sharing_the_null_hash_is_not_null() raises:
+    """The value sharing NULL's hash stays apart from NULL in either order, on
+    both paths, and across batches."""
+    for null_first in [True, False]:
+        var batches = _null_hash_batches(null_first)
+        for ctx in [ExecContext.serial(), ExecContext.parallel(4)]:
+            var placed = _group[RapidHash64](batches, ctx.copy())
+            assert_equal(placed.num_groups, 4)
+
+
+def test_collisions_dictionary_keys() raises:
+    """Groups by decoded value across batches whose dictionaries differ — "b"
+    sits at index 1 in one and 0 in the other — and emits the key column in
+    its declared dictionary type."""
+    var i1: List[Optional[Int]] = [0, 1, None, 0]
+    var i2: List[Optional[Int]] = [1, 0, 0]
+    var batches = List[List[DynArray]]()
+    var b1 = List[DynArray]()
+    b1.append(
+        DictionaryArray.from_arrays(
+            array[Int32Type](i1, int32), array(["a", "b"])
+        )
+    )
+    batches.append(b1^)
+    var b2 = List[DynArray]()
+    b2.append(
+        DictionaryArray.from_arrays(
+            array[Int32Type](i2, int32), array(["c", "b"])
+        )
+    )
+    batches.append(b2^)
+    _assert_exact(batches)
+
+    var placed = _group[RapidHash64](batches, ExecContext.serial())
+    assert_equal(placed.num_groups, 4)
+    assert_true(placed.keys[0].dtype().is_dictionary())
+    assert_equal(
+        String(_decoded(placed.keys[0])), String(array(["a", "b", None, "c"]))
+    )
+
+
+def test_collisions_long_strings_sharing_a_prefix() raises:
+    """Keys longer than eight bytes that agree on their first eight: the
+    group header cannot tell them apart, so the stored bytes past it must."""
+    _assert_exact(
+        _one(
+            array(
+                [
+                    "abcdefgh-1",
+                    "abcdefgh-2",
+                    "abcdefgh-1",
+                    "abcdefgh-10",
+                    "abcdefgh",
+                    "abcdefgh-2",
+                    "abcdefgh-10",
+                    "abcdefghijklmnopqrstuvwxyz-1",
+                    "abcdefghijklmnopqrstuvwxyz-2",
+                    "abcdefghijklmnopqrstuvwxyz-1",
+                ]
+            )
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dictionary-encoded keys at the edges of their layout
+# ---------------------------------------------------------------------------
+
+
+def _strings_with(prefix: String, n: Int) raises -> DynArray:
+    var b = StringBuilder(n)
+    for i in range(n):
+        b.append(prefix + String(i))
+    return b.finish()
+
+
+def test_dictionary_keys_beyond_their_index_type_raise() raises:
+    """Two batches of 100 distinct `dictionary<int8, string>` keys each: the
+    200 groups cannot be numbered by int8 indices, so emitting the key column
+    in its declared type must fail rather than wrap."""
+    var indices = Int8Builder(100)
+    for i in range(100):
+        indices.append(Int8(i))
+    var codes = indices.finish()
+    var batches = List[List[DynArray]]()
+    for prefix in ["a-", "b-"]:
+        var batch = List[DynArray]()
+        batch.append(
+            DictionaryArray.from_arrays(
+                codes.copy().to_dyn(), _strings_with(String(prefix), 100)
+            )
+        )
+        batches.append(batch^)
+    var encoder = _encoder[RapidHash64](batches[0], ExecContext.serial())
+    for ref batch in batches:
+        _ = _groups(encoder, batch)
+    assert_equal(len(encoder), 200)
+    with assert_raises(contains="int8"):
+        _ = encoder.values()
+
+
+def _struct_key(
+    var a: List[Optional[Int]],
+    var indices: List[Optional[Int]],
+    var entries: List[Optional[String]],
+) raises -> List[DynArray]:
+    """One `struct<a: int32, d: dictionary<int32, string>>` key column."""
+    var children = List[DynArray]()
+    children.append(array[Int32Type](a, int32))
+    children.append(
+        DictionaryArray.from_arrays(
+            array[Int32Type](indices, int32), array(entries)
+        )
+    )
+    var fields = List[Field]()
+    fields.append(field("a", int32))
+    fields.append(field("d", dictionary(int32, string)))
+    var batch = List[DynArray]()
+    batch.append(StructArray.from_arrays(children^, fields))
+    return batch^
+
+
+def test_struct_keys_with_a_dictionary_child_across_merged_chunks() raises:
+    """The stored keys of two batches merge into one chunk, and each batch
+    brought its own dictionary: the merged child must still hold the values
+    its rows had, so a third batch finds the groups it repeats."""
+    var b1 = _struct_key([1, 2], [0, 1], ["x", "y"])
+    var b2 = _struct_key([3, 4], [0, 1], ["z", "w"])
+    var b3 = _struct_key([1, 4, 2], [1, 0, 2], ["w", "x", "y"])
+    var encoder = _encoder[RapidHash64](b1, ExecContext.serial())
+    _ = _groups(encoder, b1)
+    _ = _groups(encoder, b2)
+    var third = _groups(encoder, b3)
+    assert_equal(len(encoder), 4)
+    assert_true(third.ids == array([0, 3, 1], int32))
+    var keys = encoder.values()
+    ref key = keys[0].as_struct()
+    assert_true(key.field("a").as_int32() == array([1, 2, 3, 4], int32))
+    assert_equal(
+        String(decode_dictionary(key.field("d").as_dictionary())),
+        String(array(["x", "y", "z", "w"])),
+    )
+
+
+def test_null_struct_keys_are_one_group_whatever_their_fields_hold() raises:
+    """Rows 1 and 2 are NULL structs over different fields: one key, so one
+    group, and the valid row another."""
+    var children = List[DynArray]()
+    children.append(array([1, 2, 3], int32))
+    var batch = List[DynArray]()
+    batch.append(
+        StructArray(
+            dtype=struct_(Field("a", int32)),
+            length=3,
+            nulls=2,
+            offset=0,
+            bitmap=Bitmap([True, False, False]).to_immutable(),
+            children=children^,
+        )
+    )
+    var encoder = _encoder[RapidHash64](batch, ExecContext.serial())
+    var groups = _groups(encoder, batch)
+    assert_equal(groups.num_groups, 2)
+    assert_true(groups.ids == array([0, 1, 1], int32))

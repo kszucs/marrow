@@ -7,12 +7,13 @@ Splits rows into independent partitions by the top bits of a precomputed hash,
 so per-partition work (hash-table build/probe, grouped aggregation) runs in
 parallel with zero cross-thread synchronization:
 
-  Hash Function  ->  RadixPartitioner  ->  per-partition parallel op  ->  merge
+  Hash Function  ->  RadixPartitioner  ->  per-partition parallel op  ->  collect
 
 ``RadixPartitioner.map_partitions`` is the reusable driver that ties the middle
 two steps together — hash once, split, run a worker per partition on its own
-thread, collect the results — shared by the hash join (build + probe) and the
-radix group-by path.
+thread, collect the results. Its one user is ``HashIndex`` (``hashtable.mojo``),
+whose radix placement every hash consumer reaches: the group-by, the join,
+``is_in`` and ``count_distinct``.
 """
 
 from ..arrays import Int32Array, UInt64Array
@@ -107,9 +108,6 @@ struct Partition(Copyable, Movable):
         self.hashes = copy.hashes.copy()
         self.row_indices = copy.row_indices.copy()
 
-    def num_rows(self) -> Int:
-        return len(self.hashes)
-
 
 struct RadixPartitioner(Movable):
     """Partition rows by the top ``num_bits`` of their hash.
@@ -118,19 +116,16 @@ struct RadixPartitioner(Movable):
     partition is independent, so per-partition hash-table builds and probes
     run in parallel with zero cross-thread synchronization.
 
-    Partition count is ``2^num_bits``.  Default (``num_bits=6`` → 64
-    partitions) is chosen so each partition's hash table tends to fit in
-    L2 cache on typical build sides.
+    Partition count is ``2^num_bits``; the caller picks it
+    (``hashtable.mojo``'s ``_RADIX_BITS``).
 
     Top bits are used for partitioning (``h >> (64 - num_bits)``) while the
     ``SwissHashTable`` probes with low bits (``h & mask``). This split
     keeps the partition router and the per-table probe order independent,
     avoiding double-hashing.
 
-    Parallelism of the partitioning pass itself is deliberately deferred:
-    the scatter loop is a memory-bandwidth-bound pass that's already quick
-    relative to the build phase, and the win from parallel scatter is
-    modest compared to the partition-parallel build/probe it enables.
+    The partitioning pass is striped too: a per-stripe histogram, a prefix
+    sum, and a scatter each stripe writes into its own slots (``partition``).
     """
 
     var num_bits: Int
@@ -146,20 +141,22 @@ struct RadixPartitioner(Movable):
 
     def __init__(
         out self,
-        num_bits: Int = 6,
+        num_bits: Int,
         var ctx: ExecContext = ExecContext(),
     ):
         self.num_bits = num_bits
         self._num_partitions = 1 << num_bits
         self.ctx = ctx^
 
-    def __init__(out self, *, copy: Self):
-        self.num_bits = copy.num_bits
-        self._num_partitions = copy._num_partitions
-        self.ctx = copy.ctx.copy()
-
     def num_partitions(self) -> Int:
         return self._num_partitions
+
+    @staticmethod
+    @always_inline
+    def partition_of(h: UInt64, num_bits: Int) -> Int:
+        """The partition ``h`` routes to among ``2^num_bits``: its top
+        ``num_bits`` — the rule ``partition`` applies to every row."""
+        return Int(h >> UInt64(64 - num_bits))
 
     def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
         """Split ``hashes`` into ``num_partitions()`` partitions by top bits.
@@ -180,7 +177,7 @@ struct RadixPartitioner(Movable):
         """
         var n = len(hashes)
         var p = self._num_partitions
-        var shift = UInt64(64 - self.num_bits)
+        var bits = self.num_bits
         var src = hashes.values()
 
         # The histogram and the scatter both index `write_offsets` by stripe, so
@@ -193,7 +190,7 @@ struct RadixPartitioner(Movable):
         # 1-2. Histogram rows by top-bit partition id + prefix-sum into per-thread
         # write cursors (shared with the radix sort, cf. ``radix_histogram``).
         def bucket_of(i: Int) {imm} -> Int:
-            return Int(UInt64(src.load[1](i)) >> shift)
+            return Self.partition_of(UInt64(src.load[1](i)), bits)
 
         var offsets = radix_histogram(
             n, p, bucket_of, self.ctx, _MIN_PARALLEL_PARTITION_ROWS
@@ -221,7 +218,7 @@ struct RadixPartitioner(Movable):
             var base = t * p
             for i in range(start, end):
                 var h = UInt64(src.load[1](i))
-                var pid = Int(h >> shift)
+                var pid = Self.partition_of(h, bits)
                 var pos = write_offsets[base + pid]
                 row_view.store[1](pos, Int32(i))
                 hash_view.store[1](pos, h)
@@ -286,9 +283,8 @@ struct RadixPartitioner(Movable):
         ``partition`` already allocated, so handing them back costs a refcount
         bump apiece.
 
-        This is the shared skeleton behind every partition-parallel kernel: the
-        hash join builds a table per partition, probes per partition, and the
-        radix group-by places keys per partition.
+        This is the skeleton behind ``HashIndex``'s radix placement: a table
+        filled per partition, and a batch looked up per partition.
         """
         var partitions = self.partition(hashes^)
         var p = len(partitions)

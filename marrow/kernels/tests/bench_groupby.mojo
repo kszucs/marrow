@@ -1,7 +1,8 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmarks for `HashGrouping` — serial versus radix-partitioned placement.
+"""Benchmarks for group-by placement through `DictionaryEncoder` — serial
+versus radix-partitioned.
 
 Run with:
     pixi run -e dev pytest marrow/kernels/tests/bench_groupby.mojo --benchmark
@@ -26,11 +27,12 @@ any delta to placement.
 
 from std.benchmark import BenchMetric, keep
 
-from ...arrays import DynArray, UInt64Array
+from ...arrays import DictionaryArray, DynArray, UInt64Array
 from ...builders import Int32Builder, UInt64Builder, StringBuilder
 from ...dtypes import uint64
 from ...execution import ExecContext
-from ...kernels.groupby import HashGrouping
+from ...kernels.dictionary import DictionaryEncoder
+from ...dtypes import DynType
 from ...kernels.hashtable import SwissHashTable
 from ...utils import RapidHash64
 from ...utils.testing import Benchmark
@@ -54,6 +56,42 @@ def _int_keys(n: Int, card: Int) raises -> List[DynArray]:
     return cols^
 
 
+def _sorted_int_keys(n: Int, card: Int) raises -> List[DynArray]:
+    """`card` distinct keys in runs — clustered input, as a sorted or
+    time-ordered source delivers it."""
+    var b = Int32Builder(capacity=n)
+    for i in range(n):
+        b.append(Int32(i * card // n))
+    var cols = List[DynArray]()
+    cols.append(b.finish())
+    return cols^
+
+
+def _sorted_string_keys(n: Int, card: Int) raises -> List[DynArray]:
+    var b = StringBuilder(n)
+    for i in range(n):
+        b.append(String("key-") + String(i * card // n))
+    var cols = List[DynArray]()
+    cols.append(b.finish())
+    return cols^
+
+
+def _dict_string_keys(n: Int, card: Int) raises -> List[DynArray]:
+    """The `_string_keys` column, dictionary-encoded: `card` strings, and one
+    int32 index per row — what a Parquet string column usually arrives as."""
+    var values = StringBuilder(card)
+    for k in range(card):
+        values.append(String("key-") + String(k))
+    var indices = Int32Builder(capacity=n)
+    for i in range(n):
+        indices.append(Int32((i * 7919) % card))
+    var cols = List[DynArray]()
+    cols.append(
+        DictionaryArray.from_arrays(indices.finish(), values.finish()).to_dyn()
+    )
+    return cols^
+
+
 def _string_keys(n: Int, card: Int) raises -> List[DynArray]:
     var b = StringBuilder(n)
     for i in range(n):
@@ -66,18 +104,23 @@ def _string_keys(n: Int, card: Int) raises -> List[DynArray]:
 def _bench_group(
     mut b: Benchmark, var cols: List[DynArray], n: Int, var ctx: ExecContext
 ) raises:
-    """One grouping per iteration — a fresh grouper, since `assign` accumulates.
+    """One grouping per iteration — a fresh encoder, since `encode`
+    accumulates.
 
     That includes constructing the 64 per-partition tables on the radix path,
     which is real per-query cost and should not be hidden from the measurement.
     """
     b.throughput(BenchMetric.elements, n)
+    var types = List[DynType]()
+    for ref c in cols:
+        types.append(c.dtype())
 
     @always_inline
     def call() raises {imm}:
-        var g = HashGrouping(ctx.copy())
-        var groups = g.assign(cols.copy(), n)
-        keep(groups.num_groups)
+        var g = DictionaryEncoder(types.copy(), ctx.copy())
+        var placed = g.encode(cols)
+        keep(len(placed.ids))
+        keep(len(g))
 
     b.iter(call)
     keep(cols)
@@ -191,10 +234,32 @@ def bench_groupby_string_par8_1m_card10k(mut b: Benchmark) raises:
     _bench_group(b, _string_keys(_N, 10_000), _N, ExecContext.parallel(8))
 
 
+def bench_groupby_dict_string_serial_1m_card10k(mut b: Benchmark) raises:
+    _bench_group(b, _dict_string_keys(_N, 10_000), _N, ExecContext.serial())
+
+
+def bench_groupby_dict_string_par8_1m_card10k(mut b: Benchmark) raises:
+    _bench_group(b, _dict_string_keys(_N, 10_000), _N, ExecContext.parallel(8))
+
+
+# ---------------------------------------------------------------------------
+# Clustered keys — each key arrives in one run, so almost every row repeats
+# the row before it.
+# ---------------------------------------------------------------------------
+
+
+def bench_groupby_sorted_serial_1m_card1k(mut b: Benchmark) raises:
+    _bench_group(b, _sorted_int_keys(_N, 1_000), _N, ExecContext.serial())
+
+
+def bench_groupby_string_sorted_serial_1m_card10k(mut b: Benchmark) raises:
+    _bench_group(b, _sorted_string_keys(_N, 10_000), _N, ExecContext.serial())
+
+
 # ---------------------------------------------------------------------------
 # Calibration sweeps — the two gates, and nothing else.
 #
-# `_RADIX_MIN_ROWS` and `_RADIX_MIN_GROUPS` decide *when* radix placement
+# `_RADIX_MIN_ROWS` and `_RADIX_MIN_DISTINCT` decide *when* radix placement
 # engages. Every row here runs under `ExecContext.auto()`, because what a gate
 # chooses between is two placements under the context a query actually gets —
 # `execute()` passes `auto()`. Not `parallel(8)`: a forced count stripes every
@@ -373,9 +438,9 @@ def bench_groupby_anchor_swiss_insert_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        var t = SwissHashTable[RapidHash64]()
-        _ = t.insert_hashes(hashes, grow_adaptively=True)
-        keep(t.num_keys())
+        var t = SwissHashTable()
+        _ = t.insert_hashes(hashes)
+        keep(len(t))
 
     b.iter(call)
     keep(hashes)

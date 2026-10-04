@@ -70,6 +70,11 @@ from .utils.threads import ThreadPool
 # still links `libmax` / AsyncRT exactly as one built with it on.
 comptime GPU_ENABLED = get_defined_bool["MARROW_GPU", False]()
 
+comptime _STRIPE_MIN_SIZE = 32_768
+"""The default ``min_parallel_size`` of ``wants_parallel``, ``for_batch``,
+``stripe_workers`` and ``stripe``: below it, the thread pool's dispatch costs
+more than the work it would split."""
+
 
 struct ExecContext(
     ConvertibleFromPython, ConvertibleToPython, Copyable, Movable, Writable
@@ -282,7 +287,9 @@ struct ExecContext(
             return self.num_threads
         return self.thread_pool()[].concurrency()
 
-    def wants_parallel(self, n: Int, min_parallel_size: Int = 32768) -> Bool:
+    def wants_parallel(
+        self, n: Int, min_parallel_size: Int = _STRIPE_MIN_SIZE
+    ) -> Bool:
         """Decide whether a CPU kernel of size ``n`` should stripe work.
 
         Strategy contract (see ``num_threads`` doc):
@@ -323,10 +330,9 @@ struct ExecContext(
         ``min_parallel_size`` is deliberately required rather than defaulted.
         There is no meaningful default — the crossover belongs to the algorithm
         being chosen, so each caller owns its own constant
-        (``_RADIX_MIN_ROWS`` in ``kernels/groupby.mojo``,
-        ``_PARALLEL_THRESHOLD`` and ``_PROBE_STRIPE_THRESHOLD`` in
-        ``kernels/join.mojo``, ``_PARALLEL_DISTINCT_MIN_ROWS`` in
-        ``kernels/distinct.mojo``) and documents there whether it was measured.
+        (``_RADIX_MIN_ROWS`` in ``kernels/hashtable.mojo``) and documents
+        there whether it was measured. ``for_batch`` is the exception, because
+        what it chooses is ``stripe`` itself.
 
         Like ``wants_parallel`` this answers False on a GPU context, which the
         three hand-rolled copies of this test did not: they asked
@@ -336,10 +342,29 @@ struct ExecContext(
             return False
         return self.resolved_num_threads() > 1
 
+    def for_batch(
+        self, rows: Int, min_parallel_size: Int = _STRIPE_MIN_SIZE
+    ) -> Self:
+        """The context to spend on one batch of ``rows``: this one when the
+        batch is worth sharing out (``worth_parallel``), the calling thread
+        otherwise.
+
+        For a kernel striping whatever batch it is handed — a join's probe, a
+        morsel's key encoding — where a forced worker count is a budget rather
+        than an instruction: an 8192-row probe hashed across 8 forced workers
+        cost ~1213 us against ~76 us on the calling thread. The default
+        crossover is ``stripe``'s own, asked about the batch rather than about
+        a whole column.
+        """
+        if self.worth_parallel(rows, min_parallel_size):
+            return self.copy()
+        else:
+            return Self.serial()
+
     # --- striped execution ------------------------------------------------
 
     def stripe_workers(
-        self, length: Int, min_parallel_size: Int = 32768
+        self, length: Int, min_parallel_size: Int = _STRIPE_MIN_SIZE
     ) -> Int:
         """How many stripes ``stripe`` will run for this length — 1 when serial.
 
@@ -362,7 +387,7 @@ struct ExecContext(
         self,
         length: Int,
         body: Body,
-        min_parallel_size: Int = 32768,
+        min_parallel_size: Int = _STRIPE_MIN_SIZE,
         align: Int = 1,
     ):
         """Run ``body(wid, start, end)`` over ``[0, length)``, striped or serial.

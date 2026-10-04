@@ -428,9 +428,9 @@ struct RemoveSortBeforeAggregate(Rule):
 
     **The honest caveat.** Floating-point addition is not associative, so
     consuming rows in a different order can change the last bits of a float
-    `sum` or `mean`. That is not a new exposure — `GroupByOperator` already
-    aggregates in parallel across morsels, so the summation order is not
-    guaranteed by the unoptimized plan either. This rule does not introduce
+    `sum` or `mean`. That is not a new exposure — `GroupedAggregateOperator`
+    already aggregates in parallel across morsels, so the summation order is
+    not guaranteed by the unoptimized plan either. This rule does not introduce
     nondeterminism; it removes a sort that never constrained it.
 
     **Not applied when the sort carries a TopN bound**, which drops rows and so
@@ -448,9 +448,7 @@ struct RemoveSortBeforeAggregate(Rule):
         ref sort = input.get[Sort]()
         if sort.limit:
             return node.copy()
-        var out: DynRelation = Aggregate(
-            sort.input[].copy(), agg.keys.copy(), agg.aggs.copy()
-        )
+        var out: DynRelation = agg.with_input(sort.input[].copy())
         return out^
 
 
@@ -686,11 +684,7 @@ struct PushFilterBelowAggregate(Rule):
             if not found:
                 return node.copy()
 
-        var out: DynRelation = Aggregate(
-            f.with_input(agg.input[].copy()),
-            agg.keys.copy(),
-            agg.aggs.copy(),
-        )
+        var out: DynRelation = agg.with_input(f.with_input(agg.input[].copy()))
         return out^
 
 
@@ -1135,9 +1129,7 @@ struct ColumnPruning(Copyable, Movable):
                 below = Self._widened(below^, k.columns())
             for ref g in a.aggs:
                 below = Self._widened(below^, g.columns())
-            var out: DynRelation = Aggregate(
-                Self.apply(a.input[], below), a.keys.copy(), a.aggs.copy()
-            )
+            var out: DynRelation = a.with_input(Self.apply(a.input[], below))
             return out^
 
         if node.isa[Join]():

@@ -23,9 +23,10 @@ bound on `NumericType`.
 That is false — `StringColumn[T]` is a separate leaf and `col(name, string)`
 returns one. What is true is that this gate's recorded baseline was measured
 against the `int64` key, so changing it would silently invalidate the only
-number CI checks for it. The pair earns its keep as a pair: the delta against
-`query_streaming_agg_fused` is what grouping by a string costs over grouping by
-an `int64`, with everything else equal.
+number CI checks for it. The pair earns its keep as a pair: with everything
+else equal, the delta against `query_streaming_agg_fused` is what a string key
+costs over an `int64` one — small, since both encode through
+`DictionaryEncoder`, which links every key type either way.
 
     pixi run bench-size
 """

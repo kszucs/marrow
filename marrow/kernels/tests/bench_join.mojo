@@ -68,7 +68,8 @@ def _make_struct(n: Int, key_stride: Int = 1) raises -> StructArray:
 
 
 def _bench_build(mut b: Benchmark, n: Int) raises:
-    """Measure only HashJoin.build() on ``n`` unique left rows."""
+    """Measure only the build — constructing a HashJoin — on ``n`` unique
+    left rows."""
     var left = _make_struct(n)
     var keys = List[Int]()
     keys.append(0)
@@ -76,8 +77,7 @@ def _bench_build(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        var j = HashJoin()
-        j.build(left, keys)
+        var j = HashJoin(left, keys)
         keep(j.num_build_rows())
 
     b.iter(call)
@@ -96,8 +96,7 @@ def _bench_probe(mut b: Benchmark, build_n: Int, probe_n: Int) raises:
     var right = _make_struct(probe_n)
     var keys = List[Int]()
     keys.append(0)
-    var j = HashJoin()
-    j.build(left, keys)
+    var j = HashJoin(left, keys)
     b.throughput(BenchMetric.elements, probe_n)
 
     @always_inline
@@ -275,8 +274,7 @@ def _bench_probe_morsels(
     var right = _make_struct(probe_n)
     var keys = List[Int]()
     keys.append(0)
-    var j = HashJoin(_ctx_for(threads))
-    j.build(left, keys)
+    var j = HashJoin(left, keys, _ctx_for(threads))
     b.throughput(BenchMetric.elements, probe_n)
 
     @always_inline
@@ -309,8 +307,7 @@ def _bench_probe_single(
     var right = _make_struct(probe_n)
     var keys = List[Int]()
     keys.append(0)
-    var j = HashJoin(_ctx_for(threads))
-    j.build(left, keys)
+    var j = HashJoin(left, keys, _ctx_for(threads))
     b.throughput(BenchMetric.elements, probe_n)
 
     @always_inline

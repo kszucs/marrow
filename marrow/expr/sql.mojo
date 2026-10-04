@@ -41,7 +41,7 @@ Three constructs are desugared rather than given nodes of their own, because
 the sugar has exactly SQL\'s semantics and the node would not:
 
 - `x IN (a, b)` becomes `x = a OR x = b`. That is not a shortcut around
-  `isin`, which decides membership on a 64-bit hash: the chain reproduces
+  `isin`, which decides membership exactly: the chain reproduces
   SQL\'s three-valued rule, under which `x IN (1, NULL)` is NULL rather than
   false. A NULL in the list is lifted out of the chain, since `x = NULL` is
   NULL for every row.

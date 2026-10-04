@@ -478,12 +478,12 @@ def is_in[A: ComptimeValue](var a: A, var value_set: DynArray) -> IsIn[A]:
     """`a IN (...)` — is each of `a`'s values one of `value_set`'s?
 
     The set is a `DynArray` fixed when the plan is built, not an operand: it is
-    the same set on every row, so hashing it belongs to the node. `a` and the
-    set must share a dtype, which `IsInKernel` checks and reports.
+    the same set on every row, encoded again for every batch. `a` and the set
+    must share a dtype, which `IsInKernel` checks and reports.
 
     The operand is bound on `ComptimeValue` and not on a family because
-    membership is decided on the 64-bit hash alone — numeric, string, bool and
-    temporal all funnel through one kernel. That also makes this a breaker:
+    membership is exact through one `DictionaryEncoder` whatever the dtype —
+    numeric, string, bool and temporal all funnel through one kernel. That also makes this a breaker:
     the subtree *under* `a` still fuses, and only the membership test runs over
     a materialised column.
     """

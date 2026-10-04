@@ -36,10 +36,9 @@ through their own submodule rather than through this namespace:
     whole-array fold, and a flat namespace could hold neither. Renaming the
     folds to `MinFold` / `MaxFold` dissolved the collision, so both are now
     re-exported and the workaround is gone.
-  - **The hash and partition machinery** — `groupby`, `join`, `hashtable`,
-    `hashing`, `partition` — and the interval algebra in `bounds`. These are
-    implementation modules that `expr` composes, not kernels a caller applies
-    to an array.
+  - **The hash and partition machinery** — `dictionary`, `join`,
+    `hashtable`, `hashing`, `partition`. These are implementation modules that
+    `expr` composes, not kernels a caller applies to an array.
 
 This used to be neither: the docstring promised direct use of every submodule
 while seven of nineteen were actually re-exported, so `mk.cast` worked and
@@ -60,9 +59,10 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `sort.mojo` — sort and sort_indices
   - `concat.mojo` — concatenation
   - `core.mojo` — the `Kernel` root trait
-  - *not re-exported* — `groupby.mojo` (`Groups`/`HashGrouping`),
-    `join.mojo` / `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the
-    hash machinery group-by, join and `is_in` share)
+  - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
+  - *not re-exported* — `dictionary.mojo` / `join.mojo` / `hashtable.mojo` /
+    `hashing.mojo` / `partition.mojo` (the hash machinery group-by, join and
+    `is_in` share)
 
 `ExecContext` is re-exported here for convenience but lives in
 `marrow/execution.mojo`: it is a thread-count/device policy object that imports

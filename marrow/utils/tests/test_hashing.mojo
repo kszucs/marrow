@@ -30,6 +30,7 @@ from ..hashing import (
     RapidSecret,
     XxHash32,
     XxHash64,
+    Fmix64,
 )
 
 
@@ -696,3 +697,38 @@ def test_mul_wide_paths_agree() raises:
     for i in range(8):
         assert_equal(fast[0][i], portable[0][i])
         assert_equal(fast[1][i], portable[1][i])
+
+
+# ---------------------------------------------------------------------------
+# Fmix64 — a bijection, which is what makes a word key's hash its identity
+# ---------------------------------------------------------------------------
+
+
+def _fmix64_inverse(x: UInt64) -> UInt64:
+    """Undo `Fmix64.mix` step by step: an xor-shift by 33 is its own inverse, and
+    each multiplier's inverse mod 2^64 exists because it is odd."""
+    var k = x
+    k ^= k >> 33
+    k *= 0x9CB4B2F8129337DB  # inverse of 0xC4CEB9FE1A85EC53
+    k ^= k >> 33
+    k *= 0x4F74430C22A54005  # inverse of 0xFF51AFD7ED558CCD
+    k ^= k >> 33
+    return k
+
+
+def test_fmix64_is_a_bijection() raises:
+    """An inverse that recovers every input is a proof of injectivity: no two
+    words can share a hash, so the group-by may resolve a word key by it."""
+    var x = UInt64(0x2545F4914F6CDD1D)
+    for _ in range(100_000):
+        x = x * 6364136223846793005 + 1442695040888963407
+        assert_equal(_fmix64_inverse(Fmix64.mix[1](x)[0]), x)
+    for edge in [UInt64(0), UInt64(1), ~UInt64(0), UInt64(1) << 63]:
+        assert_equal(_fmix64_inverse(Fmix64.mix[1](edge)[0]), edge)
+
+
+def test_fmix64_lanes_match_scalar() raises:
+    var v = SIMD[DType.uint64, 4](1, 2, 3, 0xFFFFFFFF)
+    var h = Fmix64.mix[4](v)
+    for i in range(4):
+        assert_equal(h[i], Fmix64.mix[1](v[i])[0])

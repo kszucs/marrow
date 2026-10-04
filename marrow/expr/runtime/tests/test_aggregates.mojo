@@ -22,7 +22,6 @@ from ....dtypes import StringType
 from ....kernels.aggregate import (
     AggKernel,
     Dispersion,
-    DistinctCount,
     Fold,
     MaxFold,
     MaxOp,

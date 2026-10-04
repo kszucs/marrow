@@ -59,6 +59,7 @@ from .dtypes import (
     Int32Type,
     Int64Type,
     Int8Type,
+    IntegerType,
     LargeBinaryType,
     LargeListType,
     LargeStringType,
@@ -970,7 +971,9 @@ struct BinaryLikeBuilder[T: BinaryLikeType](BytesBuilder):
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets and byte data buffers into immutable Buffers
         var offsets = self._offsets^.to_immutable()
-        self._offsets = Buffer.alloc_zeroed[Self.T.offset](0)
+        # One zero offset: an empty builder's `offsets[0]`, which `extend` and
+        # `append` read before writing.
+        self._offsets = Buffer.alloc_zeroed[Self.T.offset](1)
         var values = self._values^.to_immutable()
         self._values = Buffer.alloc_zeroed(0)
         # construct the immutable result array
@@ -1459,7 +1462,9 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets buffer and recursively finish the child builder
         var offsets = self._offsets^.to_immutable()
-        self._offsets = Buffer.alloc_zeroed[Self.T.offset](0)
+        # One zero offset, as an empty builder starts with — see
+        # `BinaryLikeBuilder.finish`.
+        self._offsets = Buffer.alloc_zeroed[Self.T.offset](1)
         var values = self._child.finish()
         # construct the immutable result array
         var result = ListLikeArray[Self.T](
@@ -1819,12 +1824,14 @@ struct StructBuilder(Builder):
 struct DictionaryBuilder(Builder):
     """Builder for dictionary-encoded arrays.
 
-    Wraps an indices builder (for any integer type) and a fixed dictionary
-    values array. Call ``append(index)`` to add index values; call ``finish()``
-    to produce a ``DictionaryArray``.
+    Wraps an indices builder (for any integer type) and a dictionary values
+    array. Call ``append(index)`` to add index values; call ``finish()`` to
+    produce a ``DictionaryArray``.
 
     Equivalent to PyArrow's pattern of maintaining a pre-built dictionary and
-    appending integer indices.
+    appending integer indices. ``extend`` is what grows the dictionary: an
+    array carrying another dictionary has its entries appended and its
+    indices shifted past the ones already there.
     """
 
     comptime ArrayType = DictionaryArray
@@ -1885,12 +1892,83 @@ struct DictionaryBuilder(Builder):
             )
 
     def extend(mut self, arr: DynArray) raises:
+        """Append ``arr``'s values, each still the entry its index named.
+
+        An empty builder adopts ``arr``'s dictionary. Otherwise ``arr``'s
+        entries are appended to this builder's dictionary and its indices
+        shifted past the entries already there. Entries are not deduplicated,
+        so appending two slices of one array repeats its dictionary.
+
+        Raises when the dictionary outgrows the index type.
+        """
+        # Deduplicating would compare the two dictionaries, which links array
+        # equality for every type into every binary that extends a builder.
         if not arr.dtype().is_dictionary():
             raise TypeError(
                 t"DictionaryBuilder.extend: expected DictionaryArray, got: "
                 t"{arr.dtype()}"
             )
-        self._indices.extend(arr.as_dictionary().indices())
+        ref src = arr.as_dictionary()
+        var entries = src.dictionary()
+        var shift = len(self._values)
+        if shift == 0 and self._indices.length() == 0:
+            self._values = entries^
+            self._indices.extend(src.indices())
+        else:
+            var merged = DynBuilder(
+                self._dtype.as_dictionary().value_type(), shift + len(entries)
+            )
+            merged.extend(self._values)
+            merged.extend(entries)
+            self._values = merged.finish()
+            self._extend_shifted(src.indices(), shift)
+
+    def _extend_shifted(mut self, indices: DynArray, shift: Int) raises:
+        """Append ``indices``, each plus ``shift``, raising first when the
+        dictionary has outgrown the index type. A NULL index stays NULL."""
+        # Appended as they are and shifted in place: a typed append loop per
+        # index type is far larger, and every binary that extends a builder
+        # links this.
+        ref t = self._dtype.as_dictionary().index_type()
+        var bits = 8 * t.byte_width()
+        var limit = Int.MAX
+        if t.is_signed_integer():
+            limit = (1 << (bits - 1)) - 1
+        elif bits < 63:
+            limit = (1 << bits) - 1
+        if len(self._values) - 1 > limit:
+            raise InvalidError(
+                t"DictionaryBuilder.extend: {len(self._values)} dictionary"
+                t" entries do not fit its index type"
+            )
+        var start = self._indices.length()
+        self._indices.extend(indices)
+        var end = self._indices.length()
+        if t.is_int8():
+            Self._shift(self._indices.as_int8(), start, end, shift)
+        elif t.is_int16():
+            Self._shift(self._indices.as_int16(), start, end, shift)
+        elif t.is_int32():
+            Self._shift(self._indices.as_int32(), start, end, shift)
+        elif t.is_int64():
+            Self._shift(self._indices.as_int64(), start, end, shift)
+        elif t.is_uint8():
+            Self._shift(self._indices.as_uint8(), start, end, shift)
+        elif t.is_uint16():
+            Self._shift(self._indices.as_uint16(), start, end, shift)
+        elif t.is_uint32():
+            Self._shift(self._indices.as_uint32(), start, end, shift)
+        else:
+            Self._shift(self._indices.as_uint64(), start, end, shift)
+
+    @staticmethod
+    def _shift[
+        T: IntegerType
+    ](mut indices: PrimitiveBuilder[T], start: Int, end: Int, shift: Int):
+        """Add ``shift`` to ``indices[start:end]``."""
+        var by = Scalar[T.native](shift)
+        for i in range(start, end):
+            indices.unsafe_set(i, indices.unsafe_get(i) + by)
 
     def finish(
         mut self, *, shrink_to_fit: Bool = True
@@ -2341,10 +2419,22 @@ def arange[T: NumericType](start: Int, end: Int) raises -> PrimitiveArray[T]:
     comptime assert (
         T.native != DType.bool
     ), "arange() only supports numeric types"
-    var b = PrimitiveBuilder[T](T(), end - start)
-    for i in range(start, end):
-        b.append(Scalar[T.native](i))
-    return b.finish()
+    # Written straight into the buffer: a builder append per element costs
+    # ~1.5 ns here, which made a million-row index cost as much as hashing a
+    # million strings.
+    var n = max(end - start, 0)
+    var buf = Buffer.alloc_uninit[T.native](n)
+    var out = buf.view[T.native](0, n)
+    for i in range(n):
+        out.store[1](i, Scalar[T.native](start + i))
+    return PrimitiveArray[T](
+        dtype=T(),
+        length=n,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=buf^.to_immutable(),
+    )
 
 
 def array(dtype: DynType) raises -> DynArray:

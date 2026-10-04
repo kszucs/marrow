@@ -3057,6 +3057,12 @@ struct ChunkedArray(Copyable, Movable, Writable):
             self.chunks[i].write_to(writer)
         writer.write("])")
 
+    def append(mut self, var chunk: DynArray):
+        """Add ``chunk``, of this array's ``dtype``, at the end."""
+        debug_assert(chunk.dtype() == self.dtype, "chunk of another dtype")
+        self.length += len(chunk)
+        self.chunks.append(chunk^)
+
     def chunk(self, index: Int) -> ref[self.chunks[index]] DynArray:
         """Returns the chunk at the given index.
 
@@ -3688,13 +3694,13 @@ def dispatch_array[
         completely different operation in a different layer.
 
         The counterpart of the `dispatch` static every value kernel exposes
-        (`RapidHashKernel.dispatch`, `kernels/hashing.mojo`). Those
+        (`HashKernel.dispatch`, `kernels/hashing.mojo`). Those
         narrow an erased *array* and run immediately, because they are stateless.
         An aggregate is a state machine that must exist before its first morsel, so
         this narrows a *dtype* instead and hands back whatever the caller builds at
         that type — an accumulator, or an operator holding one.
 
-    Its motivating callers are `ValidCount[A]` and `DistinctCount[exact, A]`,
+    Its motivating callers are `ValidCount[A]` and `DistinctCount[A]`,
         which it is what lets be typed at all. Both are dtype-generic in what they *compute* — a cardinality is an
         int64 whatever was counted — but not in how they *read*: a valid count
         wants a validity bitmap and a distinct count wants to hash values, and both

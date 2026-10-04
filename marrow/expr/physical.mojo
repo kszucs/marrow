@@ -54,12 +54,12 @@ from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter, take
 from ..kernels.groupby import Groups
-from ..kernels.groupby import HashGrouping
+from ..kernels.dictionary import DictionaryEncoder
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..io import ByteSource, DynSource
 from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
-from ..utils import RapidHash64
+from ..utils import KeyHash
 from .bindings import Bindings
 from .logical import DynValue, Multiplicity, WindowExpr
 from .index import Index, page_selections
@@ -637,7 +637,23 @@ struct ProjectOperator(Operator):
         return None
 
 
-struct GroupByOperator(Operator):
+# Appends rather than returning a `DynOperator`: this type is a field of
+# `Aggregate`, so it is spelled into the symbol name of everything instantiated
+# over `DynRelation`, and a `DynOperator`'s spelling exceeds `ld`'s symbol
+# length limit. A `Pipeline` spells as a pointer and two integers.
+comptime AggregateLowering = def(
+    mut Pipeline,
+    var List[DynOperator],
+    var List[DynOperator],
+    var Schema,
+    var ExecContext,
+) thin
+"""Appends an `Aggregate`'s grouping stage, over its lowered keys and folds, to
+a pipeline — `GroupedAggregateOperator.append_to`, or
+`UngroupedAggregateOperator.append_to` when there are no keys."""
+
+
+struct GroupedAggregateOperator(Operator):
     """Blocking: fold every pushed morsel, then emit one row per group.
 
     The shape the push interface exists for — `push` answers `None` all the way
@@ -652,7 +668,7 @@ struct GroupByOperator(Operator):
     `BufferedAggregateOperator` evaluates its operand to a column per morsel
     and hands that to the kernel. None of the three buffers rows — every
     `AggKernel` is streaming, so all of them keep O(groups) state — and this
-    stage keeps only the grouper's key builders, which grow with the number of
+    stage keeps only the encoder's key values, which grow with the number of
     *groups* too. That was not always so: a `count_distinct` used to hold its
     whole input column, and the docstring here recorded it as the price of a
     non-scalar accumulator long after `DistinctCount` became incremental.
@@ -663,24 +679,22 @@ struct GroupByOperator(Operator):
     and concatenating N morsels' id arrays end to end is a valid assignment
     over the concatenated input rather than N unrelated numberings.
 
-    A fold that answers `None` from `drain` would have its slot filled with a
-    null column typed from this stage's own output schema, the only place that
-    type is still known. No aggregate operator does — all three answer `Some`
-    from their first `drain`, seeding one slot when the query has no keys — so
-    the branch is a guard against a future `Operator` in this position rather
-    than a path any query takes.
+    A fold that answers `None` from `drain` has its slot filled with a null
+    column typed from this stage's output schema — see `_emit_folds`.
 
     `HAVING` needs no node of its own: a `FilterOperator` above this stage sees
     the aggregate's *output* batch, which is exactly what the flush cascade in
     `Pipeline.collect` delivers.
+
+    **There is always a key.** A query without one is a single implicit group
+    and lowers to `UngroupedAggregateOperator`, which has no encoder to build.
     """
 
     var _keys: List[DynOperator]
     var _folds: List[DynOperator]
     var _schema: Schema
-    var _grouping: HashGrouping
-    var _keyless: Bool
-    var _num_groups: Int
+    var _encoder: DictionaryEncoder[KeyHash]
+    """Group keys to group ids: a group id is the code of its key."""
     var _emitted: Bool
 
     def __init__(
@@ -690,29 +704,19 @@ struct GroupByOperator(Operator):
         var schema: Schema,
         var ctx: ExecContext,
     ):
-        self._keyless = len(keys) == 0
+        # The output schema is keys then aggregates, so the key types are its
+        # first `len(keys)` fields.
+        var key_types = List[DynType](capacity=len(keys))
+        for i in range(len(keys)):
+            key_types.append(schema.fields[i].dtype.copy())
         self._keys = keys^
         self._folds = folds^
         self._schema = schema^
-        # The grouping gets the caller's context: it is what selects radix
+        # The encoder gets the caller's context: it is what selects radix
         # placement over the single-table path, and what stripes the key
-        # hashing. The operator keeps no copy of its own — it has no striped
-        # work, and a write-only field plus a comment explaining why it is
-        # write-only is more to maintain than no field.
-        self._grouping = HashGrouping(ctx^)
-        # One implicit group when there are no keys — including over an input
-        # that yields nothing, where `sum` must still answer one null rather
-        # than no rows.
-        self._num_groups = 1 if self._keyless else 0
+        # hashing.
+        self._encoder = DictionaryEncoder[KeyHash](key_types^, ctx^)
         self._emitted = False
-
-    def _key_fields(self) -> List[Field]:
-        """The output schema is keys then aggregates, so the group keys are its
-        first `len(self._keys)` fields."""
-        var fields = List[Field](capacity=len(self._keys))
-        for i in range(len(self._keys)):
-            fields.append(self._schema.fields[i].copy())
-        return fields^
 
     def _key_columns(mut self, morsel: Morsel) raises -> List[DynArray]:
         """The key expressions, evaluated against this morsel.
@@ -736,31 +740,13 @@ struct GroupByOperator(Operator):
         This is why placement belongs to the operator rather than to each fold:
         N aggregates over one `GROUP BY` hash the keys once between them, where
         N folds each owning a grouping would hash N times.
-
-        Placement is a runtime choice here and a comptime one inside the fold,
-        and that split is measured. Parameterising *this* operator on a
-        grouping trait instantiated it once per conformer for **+24,432
-        bytes** and bought nothing: its branch runs once per batch, while the
-        14.6x register-fold win lives one level down, in the split between
-        `RegisterAggregateOperator` and `ScatteredAggregateOperator`. That
-        measurement is also why the trait is gone — the one place a future
-        conformer would have plugged in had already been tried and rejected.
         """
+        ref batch = morsel.batch
+        var placed = self._encoder.encode(self._key_columns(morsel))
+        var groups = Groups(placed.ids.copy(), len(self._encoder))
+        var forwarded = Morsel(batch.copy(), groups^)
         # Indexed rather than `for ref`: a fold is move-only, and iterating a
         # `List` by reference requires `Copyable`.
-        if self._keyless:
-            # The morsel already carries the trivial one-slot assignment, so
-            # there is nothing to compute and nothing to rebuild.
-            for i in range(len(self._folds)):
-                _ = self._folds[i].push(morsel)
-            return None
-
-        ref batch = morsel.batch
-        var groups = self._grouping.assign(
-            self._key_columns(morsel), len(batch)
-        )
-        self._num_groups = groups.num_groups
-        var forwarded = Morsel(batch.copy(), groups^)
         for i in range(len(self._folds)):
             _ = self._folds[i].push(forwarded)
         return None
@@ -769,25 +755,99 @@ struct GroupByOperator(Operator):
         if self._emitted:
             return None
         self._emitted = True
-        var cols = List[DynArray]()
-        if not self._keyless:
-            cols = self._grouping.key_columns(self._key_fields())
+        var num_groups = len(self._encoder)
+        return _emit_folds(
+            self._folds, self._encoder.values(), self._schema, num_groups
+        )
+
+    @staticmethod
+    def append_to(
+        mut pipe: Pipeline,
+        var keys: List[DynOperator],
+        var folds: List[DynOperator],
+        var schema: Schema,
+        var ctx: ExecContext,
+    ):
+        """Append this operator over `keys` and `folds` to `pipe` — the
+        `AggregateLowering` a plan's `Aggregate` points at, so the plan names
+        its encoder by the operator it builds."""
+        pipe.append(Self(keys^, folds^, schema^, ctx^))
+
+
+struct UngroupedAggregateOperator(Operator):
+    """Blocking: fold every pushed morsel into one implicit group, then emit
+    its one row — `SELECT sum(x) FROM t`, the aggregate without a key.
+
+    Separate from `GroupedAggregateOperator` because it has nothing to place:
+    the morsel already carries the one-slot assignment (`Morsel.ungrouped`), so
+    it goes to every fold as it is, and there is no encoder to build.
+
+    One row even over an input that yields nothing — `sum` of nothing is one
+    NULL, not no rows.
+    """
+
+    var _folds: List[DynOperator]
+    var _schema: Schema
+    var _emitted: Bool
+
+    def __init__(out self, var folds: List[DynOperator], var schema: Schema):
+        self._folds = folds^
+        self._schema = schema^
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        # Indexed rather than `for ref`: a fold is move-only, and iterating a
+        # `List` by reference requires `Copyable`.
         for i in range(len(self._folds)):
-            var col = self._folds[i].drain()
-            if col:
-                cols.append(col.value().to_array(self._num_groups))
-            else:
-                # The output schema is keys then aggregates, so aggregate `i`
-                # is field `len(self._keys) + i`. Appending nothing instead
-                # would hand `_struct_of` fewer children than its dtype has
-                # fields — a batch that runs and mis-indexes.
-                cols.append(
-                    nulls(
-                        self._num_groups,
-                        self._schema.fields[len(self._keys) + i].dtype,
-                    )
-                )
-        return Datum(_struct_of(self._schema, cols^, self._num_groups).to_dyn())
+            _ = self._folds[i].push(morsel)
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        return _emit_folds(self._folds, List[DynArray](), self._schema, 1)
+
+    @staticmethod
+    def append_to(
+        mut pipe: Pipeline,
+        var keys: List[DynOperator],
+        var folds: List[DynOperator],
+        var schema: Schema,
+        var ctx: ExecContext,
+    ):
+        """Append this operator over `folds` to `pipe` — the
+        `AggregateLowering` of an `Aggregate` without keys, so `keys` is
+        empty."""
+        debug_assert(len(keys) == 0, "an ungrouped aggregate has no keys")
+        pipe.append(Self(folds^, schema^))
+
+
+def _emit_folds(
+    mut folds: List[DynOperator],
+    var columns: List[DynArray],
+    schema: Schema,
+    rows: Int,
+) raises -> Datum:
+    """The aggregate stage's one batch: the key `columns`, then every fold's
+    answer, `rows` long.
+
+    A fold answering `None` gets a null column typed from `schema`, the only
+    place that type is still known. The output schema is keys then
+    aggregates, so aggregate `i` is field `len(columns) + i`; appending
+    nothing instead would hand `_struct_of` fewer children than its dtype has
+    fields — a batch that runs and mis-indexes. No aggregate operator answers
+    `None` today, so the branch guards a future `Operator` in this position.
+    """
+    var num_keys = len(columns)
+    # Indexed rather than `for ref`: a fold is move-only.
+    for i in range(len(folds)):
+        var col = folds[i].drain()
+        if col:
+            columns.append(col.value().to_array(rows))
+        else:
+            columns.append(nulls(rows, schema.fields[num_keys + i].dtype))
+    return Datum(_struct_of(schema, columns^, rows).to_dyn())
 
 
 struct LimitOperator(Operator):
@@ -940,7 +1000,7 @@ struct WindowOperator(Operator):
     `PARTITION BY k ORDER BY v` is the ordering `[k, v]`, so one
     `SortIndices.multi` answers both questions, and `kernels/window.mojo` reads
     partition and peer boundaries straight off the result. Hash-partitioning
-    first and sorting each bucket would need `HashGrouping`, a gather per
+    first and sorting each bucket would need a `DictionaryEncoder`, a gather per
     bucket, and a second null convention to keep consistent with `GROUP BY`'s
     — three moving parts to express what the sort already expresses.
 
@@ -1318,7 +1378,7 @@ struct JoinOperator(Operator):
     side was described with the wrong columns entirely."""
 
     var _ctx: ExecContext
-    var _index: Optional[HashJoin[RapidHash64]]
+    var _index: Optional[HashJoin[KeyHash]]
     var _buffered: List[StructArray]
     var _emitted: Bool
 
@@ -1375,9 +1435,9 @@ struct JoinOperator(Operator):
             else:
                 break
         var side = _concat_batches(parts, self._build_schema.copy(), self._ctx)
-        var index = HashJoin[RapidHash64](self._ctx.copy())
-        index.build(side.copy(), self._build_keys)
-        self._index = index^
+        self._index = HashJoin[KeyHash](
+            side, self._build_keys, self._ctx.copy()
+        )
 
     def _probe(mut self, batch: StructArray) raises -> StructArray:
         var result = self._index.value().probe(
@@ -1448,7 +1508,8 @@ struct UnionOperator(Operator):
     Streaming on both sides: `push` passes a left morsel straight through, and
     `drain` pulls the right side's pipeline one batch per call, the resumable
     shape `Pipeline.drain` expects. Deduplication, for a bare `UNION`, is a
-    keys-only `GroupByOperator` stacked above this one, not a mode of it.
+    keys-only `GroupedAggregateOperator` stacked above this one, not a mode of
+    it.
     """
 
     var _other: DynOperator
@@ -1478,18 +1539,18 @@ struct MultisetOperator[M: Multiplicity](Operator):
 
     Blocking on both sides: whether a row survives depends on how often it
     occurs on each, and neither count is final until its side is exhausted.
-    One `HashGrouping` numbers the distinct rows of both sides — the left
-    side's first, as they are pushed, then the right side's at `drain` — and
-    `M.copies` turns each group's two counts into the copies it keeps.
+    One `DictionaryEncoder` numbers the distinct rows of both sides — the
+    left side's first, as they are pushed, then the right side's at `drain` —
+    and `M.copies` turns each code's two counts into the copies it keeps.
 
-    The grouping is what makes NULL equal to itself, which set relations
+    The encoder is what makes NULL equal to itself, which set relations
     require and a join key never allows.
     """
 
     var _other: DynOperator
     var _all: Bool
     var _schema: Schema
-    var _grouping: HashGrouping
+    var _encoder: DictionaryEncoder[KeyHash]
     var _left: List[Int]
     """How many rows of the left side fell into each group."""
     var _right: List[Int]
@@ -1503,22 +1564,25 @@ struct MultisetOperator[M: Multiplicity](Operator):
         var schema: Schema,
         var ctx: ExecContext,
     ):
+        var types = List[DynType](capacity=len(schema.fields))
+        for ref field in schema.fields:
+            types.append(field.dtype.copy())
         self._other = other^
         self._all = all
         self._schema = schema^
-        self._grouping = HashGrouping(ctx.copy())
+        self._encoder = DictionaryEncoder[KeyHash](types^, ctx.copy())
         self._left = List[Int]()
         self._right = List[Int]()
         self._ctx = ctx^
         self._emitted = False
 
     def _count(mut self, batch: StructArray, left: Bool) raises:
-        """Assign `batch`'s rows to groups and count them for one side."""
+        """Encode `batch`'s rows and count each code for one side."""
         var n = len(batch)
-        var groups = self._grouping.assign(batch.flatten(), n)
-        self._left.resize(groups.num_groups, 0)
-        self._right.resize(groups.num_groups, 0)
-        var ids = groups.ids.values()
+        var placed = self._encoder.encode(batch.flatten())
+        self._left.resize(len(self._encoder), 0)
+        self._right.resize(len(self._encoder), 0)
+        var ids = placed.ids.values()
         for i in range(n):
             var g = Int(ids[i])
             if left:
@@ -1548,7 +1612,7 @@ struct MultisetOperator[M: Multiplicity](Operator):
                 which.append(Int32(g))
         var indices = which.finish()
         if len(indices) > 0:
-            var keys = self._grouping.key_columns(self._schema.fields)
+            var keys = self._encoder.values()
             var distinct = _struct_of(self._schema, keys^, len(self._left))
             return Datum(take(distinct^.to_dyn(), indices, self._ctx))
         else:

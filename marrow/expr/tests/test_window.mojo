@@ -187,7 +187,8 @@ def test_two_nans_in_the_order_key_are_peers() raises:
     `ORDER BY` compares with `IS NOT DISTINCT FROM`, so the two NaNs are one
     peer group and both rank 3. marrow answered 3, 4: `_encode_sort_key` sorts
     them adjacent and `equal` then said they differ, because it is IEEE and
-    the sort is not. `mark_changes` asks `equal_nan_safe` for that reason.
+    the sort is not. `mark_changes` asks `KeyCompare`, under which NaN is NaN,
+    for that reason.
     DuckDB 1.5.5 was measured 2026-09-22 and agrees.
 
     `dense_rank` is asserted alongside because it is a separate accumulator in
@@ -195,7 +196,7 @@ def test_two_nans_in_the_order_key_are_peers() raises:
     answer identically, and a split peer group would move both.
 
     A mixed-sign pair is asserted alongside, because it takes *both* halves to
-    work: `equal_nan_safe` alone left `-nan` and `+nan` at opposite ends of the
+    work: a NaN-safe comparison alone left `-nan` and `+nan` at opposite ends of the
     partition, where `mark_changes` — which compares adjacent rows — never
     handed them to it. `_encode_sort_key` folding the NaN sign is what brings
     them together.

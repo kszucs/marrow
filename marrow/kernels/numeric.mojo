@@ -35,9 +35,7 @@ null positions hold the comparison of the underlying values — undefined per th
 Arrow spec, but branch-free.
 
 The six comparison kernels carry a `nan_safe` parameter, because marrow needs
-two answers about NaN — see `EqKernel`. It also overloads `apply` for `StructArray`: row
-equality is every child column agreeing, which is how the hash table verifies
-key rows.
+two answers about NaN — see `EqKernel`.
 """
 
 import std.math as math
@@ -48,7 +46,6 @@ from ..arrays import (
     BytesArray,
     DynArray,
     BoolArray,
-    StructArray,
 )
 from ..buffers import Buffer, Bitmap
 from ..views import apply
@@ -60,7 +57,7 @@ from ..dtypes import (
     bool_ as bool_dt,
 )
 from .core import Kernel
-from .boolean import AndKernel, NotKernel, XorKernel
+from .boolean import NotKernel, XorKernel
 from .string import StringEqKernel
 from ..execution import ExecContext, GPU_ENABLED
 
@@ -660,28 +657,20 @@ trait NumericCompareKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-def equal[
-    nan_safe: Bool = False
-](
+def equal(
     left: DynArray,
     right: DynArray,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> BoolArray:
-    """Equality over any comparable dtype, picking the kernel family.
-
-    `nan_safe` selects which equality — see `EqKernel`. The default is the
-    user's `=`; `equal[nan_safe=True]` is key identity, which `mark_changes`
-    and the hash join's key verification ask for. It reaches only the floating
-    arm, because nothing else has a NaN.
+    """The user's `=` over any comparable dtype, picking the kernel family: a
+    NULL on either side gives NULL, and a NaN equals nothing. Key identity,
+    where both are equal to themselves, is `KeyCompare` (`hashing.mojo`).
 
     Fixed-width and variable-width equality are separate kernels — SIMD over
     fixed-width lanes versus an elementwise walk — and `NumericCompareKernel`
-    deliberately knows nothing about the latter. Two callers nonetheless need
-    equality as a *primitive over an arbitrary dtype* rather than as an operator
-    they are interpreting: hash-join row verification, where a key row is an
-    arbitrary schema, and `nullif`, which is defined for any dtype with an
-    equality. This names that once instead of open-coding the same two-line
-    branch at each.
+    deliberately knows nothing about the latter. `nullif` nonetheless needs
+    equality as a *primitive over an arbitrary dtype* rather than as an
+    operator it is interpreting, and this names that once.
 
     The split is `primitive` vs everything else: what decides the kernel is
     whether the payload is fixed-width, and every byte string -- `binary` as
@@ -712,18 +701,6 @@ def equal[
             XorKernel.apply(left.as_bool().copy(), right.as_bool().copy(), ctx),
             ctx,
         )
-    elif nan_safe and left.dtype().is_floating_point():
-        # `dispatch_floating`, not the kernel's own `dispatch`: only a float has
-        # a NaN, so `dispatch_primitive` would link ~25 arms of `_binary_cmp` to
-        # serve three. It buys nothing in `libmarrow.so`, which links the wide
-        # ladder anyway for the runtime lane, and everything in an AOT binary
-        # whose only total comparison is a window peer scan.
-        def total[T: FloatingType](d: T) raises {imm} -> BoolArray:
-            return EqKernel[nan_safe=True].apply(
-                left.as_primitive[T](), right.as_primitive[T](), ctx
-            )
-
-        return left.dtype().dispatch_floating(total)
     elif left.dtype().is_primitive():
         return EqKernel.dispatch(left, right, ctx).as_bool().copy()
     else:
@@ -733,9 +710,8 @@ def equal[
         # numeric arm and `dispatch_primitive` raised "dtype is not primitive"
         # -- joining on a `binary` key was impossible while the same join on
         # `string` worked. Anything else (a nested key) raises in the dispatch.
-        # `apply` through a local leaf, not `StringEqKernel.dispatch`: the
-        # erased result's round trip measured +22 KB of `__text` on the join
-        # gate, which verifies every key row through here.
+        # `apply` through a local leaf, not `StringEqKernel.dispatch`, which
+        # round-trips the result through an erased array.
         def leaf[A: BytesArray](arr: A) raises {imm} -> BoolArray:
             return StringEqKernel.apply(arr, right.as_type[A]())
 
@@ -748,8 +724,8 @@ struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):
     The parameter exists because marrow needs both answers and they differ on
     exactly one input. The default is the user's `=`: `EqKernel` is
     `pyarrow.compute.equal`, so a NaN equals nothing, itself included.
-    `EqKernel[nan_safe=True]` is the *key identity* `HashKernel` already uses,
-    for a caller pairing equality with a hash or a sort — see `equal`.
+    `EqKernel[nan_safe=True]` is the NaN half of key identity: `KeyCompare`
+    (`hashing.mojo`) compares fixed-width keys with its `core`.
 
     Not IEEE `totalOrder`, which is a bitwise compare: that separates `-0.0`
     from `0.0` and one NaN payload from another, where both parameterizations
@@ -775,32 +751,6 @@ struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):
             return a.eq(b) | (math.isnan(a) & math.isnan(b))
         else:
             return a.eq(b)
-
-    @staticmethod
-    def apply(
-        left: StructArray,
-        right: StructArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> BoolArray:
-        """Row equality: element ``i`` is True iff every child column agrees.
-
-        This is the comparison the hash table verifies key rows with. A key row
-        is an arbitrary schema, so the children span dtype families and each one
-        goes through `equal` rather than this kernel's own numeric
-        `dispatch`."""
-        Self.expect_same_dtype(left.dtype, right.dtype)
-        var mask = equal[Self.nan_safe](
-            left.children[0].copy(), right.children[0].copy(), ctx
-        )
-        for k in range(1, len(left.children)):
-            mask = AndKernel.apply(
-                mask,
-                equal[Self.nan_safe](
-                    left.children[k].copy(), right.children[k].copy(), ctx
-                ),
-                ctx,
-            )
-        return mask^
 
 
 struct NeKernel[nan_safe: Bool = False](NumericCompareKernel):

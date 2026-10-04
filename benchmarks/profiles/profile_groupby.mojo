@@ -4,18 +4,18 @@
 """Single-shot profiling driver for the radix-partitioned parallel group-by.
 
 Groups a 10M-row int32 column over 5M distinct keys in a loop, so a sampling
-profiler can attribute time across the six phases `_consume_keys_radix` runs:
-key hashing, the radix histogram, the scatter, the 64 per-partition
-`SwissHashTable` inserts, the id write-back, and the closing `take` + builder
-extend that materialises the new group keys.
+profiler can attribute time across the phases of `DictionaryEncoder.encode` on
+the radix path: key hashing; the radix histogram, the scatter, the 64
+per-partition `SwissHashTable` inserts and the id write-back
+(`HashIndex._insert_radix`); and the `take` that keeps the new group keys.
 
     pixi run profile benchmarks/profiles/profile_groupby.mojo --sample --no-open
 
 Like `profile_join.mojo` this avoids the benchmark harness entirely — no
 warmup, no calibration, no pytest — so the trace holds only grouping work and
-the AsyncRT pool it dispatches through.
+marrow's `ThreadPool`, which it dispatches through.
 
-A fresh `HashGrouping` per iteration is deliberate: `assign` accumulates, and
+A fresh `DictionaryEncoder` per iteration is deliberate: `encode` accumulates, and
 constructing the 64 per-partition tables is real per-query cost that the
 benchmark also pays.
 
@@ -32,7 +32,8 @@ from std.os.env import getenv
 from marrow.arrays import DynArray
 from marrow.builders import Int32Builder
 from marrow.execution import ExecContext
-from marrow.kernels.groupby import HashGrouping
+from marrow.kernels.dictionary import DictionaryEncoder
+from marrow.dtypes import DynType
 
 
 def _parse_int(name: String, default: Int) -> Int:
@@ -76,11 +77,14 @@ def main() raises:
     # Build the keys once, outside the sampled region.
     var cols = _int_keys(n, card)
 
+    var types = List[DynType]()
+    for ref c in cols:
+        types.append(c.dtype())
     for _ in range(iters):
         var ctx = ExecContext(num_threads=threads)
-        var g = HashGrouping(ctx^)
-        var groups = g.assign(cols.copy(), n)
-        keep(groups.num_groups)
+        var g = DictionaryEncoder(types.copy(), ctx^)
+        var placed = g.encode(cols)
+        keep(len(placed.ids))
 
     keep(cols)
     print("profile_groupby: done")

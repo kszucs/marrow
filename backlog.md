@@ -72,16 +72,7 @@ all.
 
 ### 1.2 Known-wrong answers
 
-**`GROUP BY` is probabilistic, not exact.** `SwissHashTable` resolves a key
-by its 64-bit rapidhash alone, so two distinct keys whose hashes collide land
-in one group and `key_columns` reports whichever arrived first. The
-probability is roughly `n²/2⁶⁴` in the number of distinct keys — negligible at
-a million, a coin-flip near four billion — and the radix-partitioned path
-routes on the same hash, so both paths collide identically. The join does
-*not* have this defect: `HashJoin` verifies key equality after a hash match
-and filters collisions out, so the fix has a precedent in the tree — compare
-the keys on a match, as the join does. Until then the behaviour is recorded
-only in `kernels/groupby.mojo`'s module docstring.
+None known.
 
 ### 1.3 Latent compiler hazards
 
@@ -154,8 +145,19 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
   `trim(chars)` (`StringArgKernel.dispatch`). Each builds a new string per
   row anyway. The measures (`char_length`, `ascii`, `position`) read views
   natively.
-- **No prefix fast path in the hash join's key equality.** Sort orders on an
-  8-byte key read from the view, but `equal` compares the bytes of every pair.
+- **No header fast path for a string key in the offsets layout.** A
+  `string_view` key is compared on its view's length and four-byte prefix
+  before its bytes (`KeyCompare`, `kernels/hashing.mojo`); a plain `string`
+  key compares bytes on every row, which put plain-string grouping at ~1.7x
+  the old hash-only grouper (1M rows, 10k groups). A prototype kept a 16-byte
+  header per group — length plus the first eight bytes — and checked it
+  first: 10.7 -> 6.6 ms serial (-39%) and 9.9 -> 5.9 ms on 8 threads (-41%).
+  Give plain strings a header in the view's shape — 4-byte length plus 12
+  inline bytes, which also decides 9-12-byte keys. **The header decides alone
+  only when it holds the whole key** (<= 12 bytes); a longer key that matches
+  it still compares every remaining byte, as DuckDB's `string_t` and
+  DataFusion's `ByteViewGroupValueBuilder` do.
+  `test_collisions_long_strings_sharing_a_prefix` pins that case.
 - **A written view column reads back as `string`** unless the reader passes
   `binary_type=binary_view` or declares the column a view in its schema: the
   writer does not store `ARROW:schema`.
@@ -166,9 +168,9 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
   `test_parity.mojo` across four axes; it went with the previous expression
   package and has no replacement. The invariant is currently unenforced.
 - **Group-by is covered at the kernel, not through the engine.**
-  `kernels/tests/test_groupby.mojo` (23 cases) pins both placement paths
-  directly on `HashGrouping`, but nothing drives the radix path through
-  `GroupByOperator`: every group-by case in `expr/tests`, `golden/` and
+  `kernels/tests/test_groupby.mojo` (39 cases) pins both placement paths
+  directly on `DictionaryEncoder`, but nothing drives the radix path through
+  `GroupedAggregateOperator`: every group-by case in `expr/tests`, `golden/` and
   `python/marrow/tests` is far under the 50,000-row gate, so the engine's
   wiring to the parallel path is untested end to end.
 - **`mojo-regex` and `morrow` resolve only from git.** `pixi.toml` takes
@@ -750,8 +752,9 @@ them.
 **What exists.** Data parallelism *inside* kernels only — `ExecContext`'s
 `stripe`, `run` and `fan_out` over marrow's own `ThreadPool`
 (`utils/threads.mojo`), called from `partition.mojo`, `views.mojo`,
-`groupby.mojo`, `sort.mojo`, `filter.mojo` and the Parquet and OpenDAL readers.
-**Group-by placement is parallel**, as of the radix-partitioned `HashGrouping`
+`hashtable.mojo`, `hashing.mojo`, `join.mojo`, `sort.mojo`, `filter.mojo` and
+the Parquet and OpenDAL readers.
+**Group-by placement is parallel**, as of the radix-partitioned `HashIndex`
 — one `SwissHashTable` per partition of the key hash's top 6 bits, so no
 aggregate state is ever split and no merge step exists. Aggregate *accumulation*
 is still serial, and deliberately: a thread-local partial would need a `merge`
@@ -895,13 +898,11 @@ It is the shared primitive behind fast multi-column sort, sort-merge join, and
 hash group-by keys.
 
 marrow instead does column-oriented LSD multi-key sort — one stable pass per
-key, re-gathering each key column per pass — and
-routes join keys through `StructArray` with per-column hashing
-(`_key_struct` in `kernels/join.mojo`); group-by does not, and takes its keys
-as a `List[DynArray]` (`HashGrouping.assign`). Both
-work and neither is wrong, but this is the structural reason a future
-sort-merge join has no cheap path and why multi-key sort re-gathers. Worth
-naming as a design decision rather than discovering it under a benchmark.
+key, re-gathering each key column per pass — and hashes join and group-by keys
+a column at a time, as a struct array of the key columns
+(`DictionaryEncoder.batch`). That works and is not wrong, but it is the structural reason a future sort-merge
+join has no cheap path and why multi-key sort re-gathers. Worth naming as a
+design decision rather than discovering it under a benchmark.
 
 #### 2.8 UDFs
 
@@ -996,6 +997,58 @@ at parity — a point the project already holds as an architectural invariant
 enforce, since `test_parity.mojo` was deleted with the old package and has no
 replacement.
 
+**The comptime lane boxes, and should not.** Keys and aggregates become
+`DynValue`s the moment they enter a `List[DynValue]`, and the plan is an erased
+`DynRelation`, so `Aggregate` lowers to `GroupedAggregateOperator`, which hands
+`DictionaryEncoder` the key columns, made one array that it dispatches on by
+the key's *runtime* dtype. Only key evaluation and the folds are specialised. Exact
+grouping made that visible: +231 KB (+14.9%) on `query_streaming_agg_fused`,
+and the same on `query_expr2_agg_fused` and `query_decimal_agg_fused`. A
+symbol diff of the first, which groups by one `string` key: ~70 KB was
+`KeyCompare` for every key type, of which only the string leaf runs; ~55 KB
+the dictionary-key encode and emit paths, which never run there; ~47 KB the
+stored key values; ~60 KB the encoder, the hash index and the operator.
+
+**Typed grouping was built and removed.** `aggregate(aggs, by=key)` encoded
+one comptime key through a store over its own type (`PrimitiveKeys[T]`,
+`BytesKeys[T]`), and the three fused gates measured 1,178,528 / 1,182,104 /
+1,184,088 bytes of `__text`, about 34% under the erased encoder. It covered
+one shape only — a group-by over a single primitive or byte-string key, in a
+program that links `DictionaryEncoder` nowhere else (no join, `DISTINCT`,
+`is_in` or `count_distinct`) — and needed one store per value family, so one
+erased path replaced it. Typed keys worth having are one general design: a
+store over a pack of key types, for every consumer of keys. Expect the
+variadic-pack forwarding and reflected-field-type limits (CLAUDE.md,
+"Associated types, traits, reflection") to shape it. Also open:
+
+- **The aggregates are still boxed** (`List[DynValue]`), each lowered through
+  its own trampoline to a typed fold, and `DistinctCount` encodes through a
+  `DictionaryEncoder` — a grouped count's key is the `(group, value)` pair —
+  so a comptime `count_distinct` still links the erased encoder.
+- **`is_in` encodes its value set on every batch**, in both lanes:
+  `IsInKernel` builds a `DictionaryEncoder` per call and both nodes call it
+  per batch. The set is a plan constant, but a value has nowhere to keep
+  state between batches — the slot `EvalOperator`'s docstring names for "an
+  `IsIn` hash set" was never built — and the runtime lane only learns the
+  set's dtype, unified with the operand's, when a batch arrives. Encoding it
+  once is a per-execution state for values, in both lanes.
+- **`DictionaryBuilder.extend` rebuilds the dictionary on each
+  differently-encoded input**, so `concat` over N chunks with N dictionaries
+  copies it N times, and slices sharing one dictionary repeat it. One pass
+  over all the inputs, as arrow-rs's `concat_dictionaries`, would not; it
+  needs `concat` to see the whole list rather than the builder one array at a
+  time. The merge itself costs every size gate ~24 KB, because every binary
+  that can extend a builder links the dictionary arm; raising on a second
+  dictionary instead measured +13 KB of the same.
+- **`DynRelation`'s symbol names are half of `ld`'s limit.** Mojo writes a
+  generic type's full layout into its symbols, so `query_cli`'s longest is
+  543,714 characters at the parent commit; `ld` asserts above about a million
+  (*"name.size() <= maxLength"*). A field on a relation node whose type spells
+  a `DynOperator` by value doubled it and broke the link — see
+  `AggregateLowering`. Every relation field counts against this.
+
+The same erasure applies to the lane's filters, projections and joins.
+
 **A parameter's command-line spelling stops at numeric, bool and string.**
 `738146e8` made a plan's `param()`s its options, and `ParamSpec.parse` is
 `None` for every other family — so a temporal or decimal parameter raises
@@ -1063,8 +1116,9 @@ implementation, CPU-only, SIMD-group matching with pipelined probing:
 Hash Function  →  Partitioner  →  SwissHashTable  →  Operator (join / groupby)
 ```
 
-Entry points: `insert_hashes`, `build_hashes`, `probe_hashes`, plus
-`insert`/`build`/`probe` wrappers. `RadixPartitioner` splits rows across
+Entry points: `insert_hashes`, `find_hashes`, `find_one` and `insert_new`,
+under `HashIndex` (radix placement), `DictionaryEncoder` (exact codes) and
+`JoinHashTable` (the join's rows per code). `RadixPartitioner` splits rows across
 partitions by hash before they reach the table, presumably to bound
 per-partition working-set size for cache locality — the same reason a GPU
 version would want partitioning too, probably per-threadblock rather than
@@ -1094,7 +1148,7 @@ Not "add match_any to hashtable.mojo" — it's:
    deserves its own design doc rather than a todo item, if the answer is yes.
 2. If yes: prototype a minimal GPU probe kernel (even a toy one, independent
    of `SwissHashTable`) using `warp.match_any()` for intra-warp key dedup,
-   and benchmark it against the existing CPU `SwissHashTable::probe_hashes`
+   and benchmark it against the existing CPU `JoinHashTable.candidates`
    on a skewed-key workload, since that's the specific case where this
    would pay off — a uniform-key workload probably won't show a difference.
 3. Only then decide whether it's worth integrating into

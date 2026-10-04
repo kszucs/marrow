@@ -3,20 +3,16 @@
 
 """Distinct-count kernels — exact and approximate (HyperLogLog).
 
-``count_distinct`` is exact to the same 64-bit-hash basis the group-by hash
-table dedups on (collision probability ~n^2/2^64). ``approx_count_distinct``
-trades exactness for a fixed-size sketch: a HyperLogLog whose top ``p`` hash
-bits pick a register and whose remaining bits' leading-zero run (``rho``) is
-folded in as a per-register max, matching ``pyarrow.compute.approx_count_distinct``.
+``count_distinct`` is exact: it is the size of a ``DictionaryEncoder``'s
+dictionary. ``approx_count_distinct`` trades exactness for a fixed-size sketch:
+a HyperLogLog whose top ``p`` hash bits pick a register and whose remaining
+bits' leading-zero run (``rho``) is folded in as a per-register max, matching
+``pyarrow.compute.approx_count_distinct``.
 
-Both come in a whole-array form (returns an ``int64`` scalar) and a **grouped**
-form (``*_grouped(gids, value, num_groups)`` → one ``int64`` per group), the
-latter backing the ``count_distinct`` / ``approx_count_distinct`` aggregates:
-
-- exact grouped dedups ``(group_id, value)`` pairs in a single ``SwissHashTable``
-  (the join's table) and bumps a per-group counter on each newly-seen pair — one
-  pass, no per-group set.
-- approx grouped keeps one HyperLogLog sketch per group in a flat register array.
+Both are whole-array, returning an ``int64`` scalar. The grouped forms behind
+the ``count_distinct`` / ``approx_count_distinct`` aggregates are
+``DistinctCount`` and ``ApproxDistinctCount`` in ``aggregate.mojo``; the
+latter shares the HyperLogLog primitives here.
 
 Both exclude nulls — SQL ``COUNT(DISTINCT x)`` semantics, PyArrow's ``only_valid``.
 """
@@ -24,21 +20,13 @@ Both exclude nulls — SQL ``COUNT(DISTINCT x)`` semantics, PyArrow's ``only_val
 import std.math as math
 from std.bit import count_leading_zeros
 
-from ..arrays import DynArray, Int32Array, Int64Array, UInt64Array, StructArray
-from ..builders import Int64Builder
-from ..dtypes import Field, int32, struct_
+from ..arrays import DynArray
+from ..dtypes import DynType
 from ..scalars import Int64Scalar
 from ..execution import ExecContext
-from .groupby import Groups
-from .hashing import RapidHashKernel
-from ..utils import RapidHash64
-from .hashtable import SwissHashTable
-from .partition import RadixPartitioner
-
-
-comptime _PARALLEL_DISTINCT_MIN_ROWS = 200_000
-"""Below this the serial hash-set dedup wins — radix partition + thread dispatch
-overhead would dominate."""
+from .dictionary import DictionaryEncoder
+from .hashing import HashKernel
+from ..utils import Fmix64
 
 
 # ---------------------------------------------------------------------------
@@ -96,45 +84,23 @@ them itself. The sketch is the shared thing; the loop over morsels is not."""
 def count_distinct(
     array: DynArray, ctx: ExecContext = ExecContext.serial()
 ) raises -> Int64Scalar:
-    """Exact count of distinct non-null values.
+    """Exact count of distinct non-null values (SQL ``COUNT(DISTINCT x)``,
+    PyArrow's ``only_valid``).
 
-    Dedups the per-row hashes through the same ``SwissHashTable`` the group-by
-    uses, so it is exact to that 64-bit-hash basis (collision probability
-    ~n^2/2^64 — the same basis group-by itself dedups on). Nulls are excluded
-    (SQL ``COUNT(DISTINCT x)`` / PyArrow ``only_valid``): every null hashes to a
-    single sentinel bucket, subtracted off when the array has any null.
-
-    At scale with a parallel ``ctx`` the dedup is radix-partition-parallel: a
-    value hashes to exactly one partition, so distinct values are split disjointly
-    and the total is the *sum* of per-partition distinct counts — no merge, the
-    whole-array analogue of the grouped radix path.
+    The size of a ``DictionaryEncoder``'s dictionary over the column — exact,
+    and partition-parallel under a parallel ``ctx``, since the encoder places a
+    large and distinct column on radix-partitioned tables. NULL is one key to
+    the encoder, so it is taken off when present.
     """
-    var hashes = RapidHashKernel.dispatch(array, ctx)
-    var n: Int
-    if not ctx.worth_parallel(len(array), _PARALLEL_DISTINCT_MIN_ROWS):
-        var table = SwissHashTable[RapidHash64]()
-        _ = table.insert_hashes(hashes, grow_adaptively=True)
-        n = table.num_keys()
-    else:
-
-        def count_partition(
-            _pi: Int, _rows: Int32Array, part_hashes: UInt64Array
-        ) raises {imm} -> Int:
-            var table = SwissHashTable[RapidHash64]()
-            _ = table.insert_hashes(part_hashes, grow_adaptively=True)
-            return table.num_keys()
-
-        var split = RadixPartitioner(num_bits=6, ctx=ctx.copy()).map_partitions[
-            Int
-        ](hashes^, count_partition)
-        ref counts = split[1]
-        n = 0
-        for i in range(len(counts)):
-            n += counts[i]
+    var types = List[DynType]()
+    types.append(array.dtype())
+    var encoder = DictionaryEncoder(types^, ctx.copy())
+    var columns = List[DynArray]()
+    columns.append(array.copy())
+    _ = encoder.encode(columns)
+    var n = len(encoder)
     if array.null_count() > 0:
-        n -= (
-            1  # the single sentinel bucket every null collapsed into (one part)
-        )
+        n -= 1
     return Int64Scalar(Int64(n))
 
 
@@ -151,7 +117,7 @@ def approx_count_distinct(
     comptime m = 1 << p
     var registers = List[UInt8](length=m, fill=0)
 
-    var hv = RapidHashKernel.dispatch(array, ctx).values()
+    var hv = HashKernel[Fmix64].dispatch(array, ctx).values()
     var n = len(array)
     var has_null = array.null_count() > 0
 
@@ -165,8 +131,3 @@ def approx_count_distinct(
             registers[idx] = rho
 
     return Int64Scalar(hll_estimate[p](registers, 0))
-
-
-# ---------------------------------------------------------------------------
-# Grouped — one distinct-count per group id (driven by `DistinctCount`)
-# ---------------------------------------------------------------------------

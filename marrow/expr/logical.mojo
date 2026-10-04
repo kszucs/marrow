@@ -84,7 +84,9 @@ from .runtime.values import column
 from .physical import (
     Datum,
     Evaluable,
-    GroupByOperator,
+    AggregateLowering,
+    GroupedAggregateOperator,
+    UngroupedAggregateOperator,
     BatchSourceOperator,
     DynOperator,
     LimitOperator,
@@ -1591,17 +1593,29 @@ struct DynRelation(Copyable, Movable, Writable):
         end."""
         return Sort(self.copy(), keys^, ascending^, nulls_first)
 
-    def aggregate(
-        self,
-        var aggs: List[DynValue],
-        var keys: List[DynValue] = List[DynValue](),
-    ) raises -> DynRelation:
-        """`SELECT <keys>, <aggs> ... GROUP BY <keys>`.
+    def aggregate(self, var aggs: List[DynValue]) raises -> DynRelation:
+        """`SELECT <aggs> ...` — a whole-table aggregate, one implicit group.
 
-        `keys` defaults to empty, which is a whole-table aggregate rather than
-        a special node — `sum(x)` with no `GROUP BY` is one implicit group.
-        Aggregates come first because they are the part a caller always
-        supplies.
+        Not a special node: the `Aggregate` a key list builds, with no keys.
+        """
+        # Its own overload: the key-list one names a key encoder, which a plan
+        # that never groups should not link.
+        return Aggregate(
+            self.copy(),
+            List[DynValue](),
+            aggs^,
+            lowering=UngroupedAggregateOperator.append_to,
+        )
+
+    def aggregate(
+        self, var aggs: List[DynValue], var keys: List[DynValue]
+    ) raises -> DynRelation:
+        """`SELECT <keys>, <aggs> ... GROUP BY <keys>`. Aggregates come first
+        because they are the part a caller always supplies; an empty `keys` is
+        the whole-table aggregate.
+
+        The keys are encoded by `DictionaryEncoder`, which dispatches on each
+        key's runtime dtype.
         """
         return Aggregate(self.copy(), keys^, aggs^)
 
@@ -1634,7 +1648,7 @@ struct DynRelation(Copyable, Movable, Writable):
 
         An aggregate keyed by every column with no aggregates, the plan SQL's
         `SELECT DISTINCT` has always built; there is no `Distinct` node
-        because it would lower to exactly that `GroupByOperator`.
+        because it would lower to exactly that `GroupedAggregateOperator`.
         """
         var keys = List[DynValue]()
         for ref name in self.schema().names():
@@ -2106,15 +2120,26 @@ struct Aggregate(Relation, Writable):
     An empty `keys` is **not** a different node: it is `SELECT sum(x) FROM t`,
     one implicit group. The only thing it changes is which fold each aggregate
     starts, and that is decided here, at plan-build time, because it is known
-    here. `to_state(grouped)` compiles two loops out of one struct and running
-    the grouped one over a single group measured 14.6x worse — a runtime
-    branch could not have made that choice.
+    here. `Value.to_operator(grouped)` picks one of two loops compiled out of
+    one struct, and running the grouped one over a single group measured 14.6x
+    worse — a runtime branch could not have made that choice.
+
+    **Whether the keys are encoded is fixed when the node is built**, the way
+    `DynRelation` fixes its lowering and `Datum` its broadcast: `lowering`
+    appends a `GroupedAggregateOperator`, which encodes the keys with a
+    `DictionaryEncoder`, or an `UngroupedAggregateOperator` when there are
+    none, so a plan that never groups builds no encoder. Everything else — the
+    schema, `HAVING` above it, the optimizer's rules — reads the keys as the
+    values they are.
     """
 
     var input: ArcPointer[DynRelation]
     var keys: List[DynValue]
     var aggs: List[DynValue]
     var _schema: Schema
+    var _lowering: AggregateLowering
+    """The grouping stage over the lowered keys and folds — see the struct
+    docstring."""
 
     def __init__(
         out self,
@@ -2122,6 +2147,32 @@ struct Aggregate(Relation, Writable):
         var keys: List[DynValue],
         var aggs: List[DynValue],
     ) raises:
+        """Keys of any types, encoded by `DictionaryEncoder` — or none, one
+        implicit group."""
+        if len(keys) == 0:
+            self = Self(
+                input^,
+                keys^,
+                aggs^,
+                lowering=UngroupedAggregateOperator.append_to,
+            )
+        else:
+            self = Self(
+                input^,
+                keys^,
+                aggs^,
+                lowering=GroupedAggregateOperator.append_to,
+            )
+
+    def __init__(
+        out self,
+        var input: DynRelation,
+        var keys: List[DynValue],
+        var aggs: List[DynValue],
+        *,
+        lowering: AggregateLowering,
+    ) raises:
+        """Keys encoded by the operator `lowering` appends."""
         for ref k in keys:
             reject_aggregate(
                 k,
@@ -2133,6 +2184,15 @@ struct Aggregate(Relation, Writable):
         self.input = ArcPointer(input^)
         self.keys = keys^
         self.aggs = aggs^
+        self._lowering = lowering
+
+    def with_input(self, var input: DynRelation) raises -> Aggregate:
+        """This aggregate over `input` instead — keys, aggregates and encoder
+        unchanged. How a rewrite moves a node without dropping the encoder its
+        verb chose."""
+        return Aggregate(
+            input^, self.keys.copy(), self.aggs.copy(), lowering=self._lowering
+        )
 
     @staticmethod
     def _output_schema(
@@ -2161,7 +2221,7 @@ struct Aggregate(Relation, Writable):
     def traverse[
         F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
-        return Aggregate(f(self.input[]), self.keys.copy(), self.aggs.copy())
+        return self.with_input(f(self.input[]))
 
     def estimate(self) raises -> Estimate:
         """One row per distinct key combination; exactly one when there are no
@@ -2219,9 +2279,7 @@ struct Aggregate(Relation, Writable):
         var keys = List[DynOperator](capacity=len(self.keys))
         for ref k in self.keys:
             keys.append(k.to_operator(self.input[].schema(), False, bindings))
-        pipe.append(
-            GroupByOperator(keys^, folds^, self._schema.copy(), ctx.copy())
-        )
+        self._lowering(pipe, keys^, folds^, self._schema.copy(), ctx.copy())
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
@@ -2999,9 +3057,8 @@ struct Multiset[M: Multiplicity](Relation, Writable):
     **NULL is equal to itself here**, the opposite of `=` and of a join key:
     `EXCEPT` removes a NULL row the right side also has. That is why this is
     hash grouping, whose keys compare NULLs equal, rather than a semi or anti
-    join, whose keys never match a NULL. Grouping compares key *hashes*, so
-    it inherits their collision caveat (`kernels/groupby.mojo`), as
-    `distinct()` does.
+    join, whose keys never match a NULL. Grouping is exact
+    (`kernels/dictionary.mojo`), as `distinct()` is.
 
     Blocking on both sides: a row's count on either is final only when that
     side is exhausted.

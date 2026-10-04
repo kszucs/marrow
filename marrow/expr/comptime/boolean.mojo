@@ -350,9 +350,10 @@ struct IsIn[A: ComptimeValue](BoolValue, ColumnBound, Unnamed):
     """`a IN (...)` — is each of `a`'s values one of `value_set`'s?
 
     The operand is bound on `ComptimeValue` rather than on a family, for the
-    reason `NullPredicate`'s is: `IsInKernel` decides membership on the 64-bit
-    hash alone, so it takes a `DynArray` and every type `RapidHashKernel`
-    supports funnels through one implementation. There is no typed leaf to
+    reason `NullPredicate`'s is: `IsInKernel` encodes the set with a
+    `DictionaryEncoder` and looks every value up in it, so it takes a
+    `DynArray` and every type the encoder supports funnels through one
+    implementation. There is no typed leaf to
     fuse into and there is not meant to be one — a per-lane formulation would
     have to re-hash the set on every row.
 
@@ -394,7 +395,8 @@ struct IsIn[A: ComptimeValue](BoolValue, ColumnBound, Unnamed):
     # -- BoolValue ----------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        """Hash the set into a probe table, then run the column through it.
+        """Encode the set, then look the column up in it — per batch: the
+        node holds no state between batches to keep the encoded set in.
 
         `dispatch` rather than `apply`, so a set whose dtype disagrees with the
         operand's raises here and names both — the check `IsInKernel` owns.

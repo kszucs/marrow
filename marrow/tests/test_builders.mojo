@@ -751,6 +751,18 @@ def test_primitive_builder_finish_shrinks_data_buffer() raises:
     assert_equal(len(frozen.buffer), 64)
 
 
+def test_string_builder_reused_after_finish() raises:
+    """`finish` resets the builder for reuse, so an empty `extend` and an
+    `append` after it start from offset 0 again."""
+    var b = StringBuilder()
+    b.append("a")
+    _ = b.finish()
+    b.extend(StringArray.from_values(List[Optional[String]]()))
+    b.append("bc")
+    var again = b.finish()
+    assert_true(again == StringArray.from_values([String("bc")]))
+
+
 def test_string_builder_finish_shrinks_offsets_buffer() raises:
     """Finish() shrinks the offsets buffer to (length+1) uint32 entries."""
     var b = StringBuilder(128)
@@ -761,6 +773,21 @@ def test_string_builder_finish_shrinks_offsets_buffer() raises:
     assert_equal(frozen.length, 2)
     # 3 uint32 offsets = 12 bytes → 64-byte aligned = 64 bytes
     assert_equal(len(frozen.offsets), 64)
+
+
+def test_list_builder_reused_after_finish() raises:
+    """`finish` resets the builder for reuse, offsets starting at 0 again."""
+    var b = ListBuilder(Int32Builder())
+    var child = b.values()
+    child.as_int32().append(1)
+    b.append_valid()
+    _ = b.finish()
+    child.as_int32().append(2)
+    child.as_int32().append(3)
+    b.append_valid()
+    var again = b.finish()
+    assert_equal(again.length, 1)
+    assert_true(again.values().as_int32() == array([2, 3], int32))
 
 
 def test_list_builder_finish_shrinks_offsets_buffer() raises:

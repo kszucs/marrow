@@ -33,6 +33,7 @@ from ..aggregate import (
     AggKernel,
     Dispersion,
     SumFold,
+    ApproxDistinctCount,
     DistinctCount,
     MaxFold,
     MaxOp,
@@ -102,9 +103,9 @@ def test_agg_groups_assignment_is_not_single() raises:
 def test_agg_count_distinct_one_slot_numeric() raises:
     """The path that silently answers `[0]` if the `is_single` branch is
     missing — `count_distinct_grouped` loops over ids there are none of."""
-    var out = DistinctCount[True, Int64Array].grouped(
+    var out = DistinctCount[Int64Array].grouped(
         Groups.single(5),
-        _in[DistinctCount[True, Int64Array]](
+        _in[DistinctCount[Int64Array]](
             array([10, 20, 10, 30, 20], int64).to_dyn()
         ),
     )
@@ -112,49 +113,43 @@ def test_agg_count_distinct_one_slot_numeric() raises:
 
 
 def test_agg_count_distinct_one_slot_string() raises:
-    var out = DistinctCount[True, StringArray].grouped(
+    var out = DistinctCount[StringArray].grouped(
         Groups.single(5),
-        _in[DistinctCount[True, StringArray]](
-            _strings(["a", "b", "a", "c", "b"])
-        ),
+        _in[DistinctCount[StringArray]](_strings(["a", "b", "a", "c", "b"])),
     )
     assert_true(out == array([3], int64))
 
 
 def test_agg_count_distinct_grouped_string() raises:
     """Group 0 sees a, b, a; group 1 sees c, c."""
-    var out = DistinctCount[True, StringArray].grouped(
+    var out = DistinctCount[StringArray].grouped(
         Groups(_ids([0, 0, 0, 1, 1]), 2),
-        _in[DistinctCount[True, StringArray]](
-            _strings(["a", "b", "a", "c", "c"])
-        ),
+        _in[DistinctCount[StringArray]](_strings(["a", "b", "a", "c", "c"])),
     )
     assert_true(out == array([2, 1], int64))
 
 
 def test_agg_count_distinct_grouped_numeric() raises:
-    var out = DistinctCount[True, Int64Array].grouped(
+    var out = DistinctCount[Int64Array].grouped(
         Groups(_ids([0, 1, 0, 1, 0]), 2),
-        _in[DistinctCount[True, Int64Array]](
-            array([7, 5, 7, 6, 8], int64).to_dyn()
-        ),
+        _in[DistinctCount[Int64Array]](array([7, 5, 7, 6, 8], int64).to_dyn()),
     )
     assert_true(out == array([2, 2], int64))
 
 
 def test_agg_count_distinct_excludes_nulls_at_one_slot() raises:
     """SQL `COUNT(DISTINCT x)` / PyArrow `only_valid`: a null is not a value."""
-    var out = DistinctCount[True, StringArray].grouped(
+    var out = DistinctCount[StringArray].grouped(
         Groups.single(4),
-        _in[DistinctCount[True, StringArray]](_strings(["a", None, "a", "b"])),
+        _in[DistinctCount[StringArray]](_strings(["a", None, "a", "b"])),
     )
     assert_true(out == array([2], int64))
 
 
 def test_agg_count_distinct_excludes_nulls_when_grouped() raises:
-    var out = DistinctCount[True, StringArray].grouped(
+    var out = DistinctCount[StringArray].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
-        _in[DistinctCount[True, StringArray]](_strings(["a", None, None, "b"])),
+        _in[DistinctCount[StringArray]](_strings(["a", None, None, "b"])),
     )
     assert_true(out == array([1, 1], int64))
 
@@ -162,9 +157,9 @@ def test_agg_count_distinct_excludes_nulls_when_grouped() raises:
 def test_agg_approx_count_distinct_one_slot() raises:
     """A HyperLogLog is exact at these cardinalities — linear counting takes
     over well below the register count."""
-    var out = DistinctCount[False, Int64Array].grouped(
+    var out = ApproxDistinctCount[Int64Array].grouped(
         Groups.single(5),
-        _in[DistinctCount[False, Int64Array]](
+        _in[ApproxDistinctCount[Int64Array]](
             array([10, 20, 10, 30, 20], int64).to_dyn()
         ),
     )
@@ -172,9 +167,9 @@ def test_agg_approx_count_distinct_one_slot() raises:
 
 
 def test_agg_approx_count_distinct_grouped() raises:
-    var out = DistinctCount[False, StringArray].grouped(
+    var out = ApproxDistinctCount[StringArray].grouped(
         Groups(_ids([0, 0, 0, 1, 1]), 2),
-        _in[DistinctCount[False, StringArray]](
+        _in[ApproxDistinctCount[StringArray]](
             _strings(["a", "b", "a", "c", "c"])
         ),
     )
@@ -307,13 +302,11 @@ def test_agg_out_dtype_agrees_with_the_column_produced() raises:
 
     comptime StringMin = LexicalExtremum[MinOp, StringArray]
     assert_true(
-        DistinctCount[True, StringArray].dtype(string_dtype)
-        == DistinctCount[True]
-        .grouped(
+        DistinctCount[StringArray].dtype(string_dtype)
+        == DistinctCount.grouped(
             Groups.single(3),
-            _in[DistinctCount[True, StringArray]](strings.copy()),
-        )
-        .type()
+            _in[DistinctCount[StringArray]](strings.copy()),
+        ).type()
     )
     assert_true(
         StringMin.dtype(string_dtype)
@@ -336,14 +329,14 @@ def test_agg_out_dtype_agrees_with_the_column_produced() raises:
 def test_agg_erased_face_answers_the_same() raises:
     """`Agg.grouped` is what the runtime lane holds — the same static
     method behind a thin pointer, so it must answer identically."""
-    var fold = DistinctCount[True, StringArray].grouped
+    var fold = DistinctCount[StringArray].grouped
     var erased = fold(
         Groups.single(3),
-        _in[DistinctCount[True, StringArray]](_strings(["a", "b", "a"])),
+        _in[DistinctCount[StringArray]](_strings(["a", "b", "a"])),
     )
-    var direct = DistinctCount[True, StringArray].grouped(
+    var direct = DistinctCount[StringArray].grouped(
         Groups.single(3),
-        _in[DistinctCount[True, StringArray]](_strings(["a", "b", "a"])),
+        _in[DistinctCount[StringArray]](_strings(["a", "b", "a"])),
     )
     assert_true(erased == direct)
 

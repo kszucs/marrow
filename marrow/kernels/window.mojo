@@ -35,13 +35,14 @@ from ..arrays import (
     Int32Array,
     Int64Array,
 )
-from ..builders import Float64Builder, Int32Builder, Int64Builder
-from ..dtypes import DynType, float64, int64
+from ..buffers import Bitmap
+from ..builders import Float64Builder, Int32Builder, Int64Builder, arange
+from ..dtypes import DynType, Int32Type, float64, int64
 from ..execution import ExecContext
 from ..errors import InvalidError
 from .core import Kernel
 from .filter import TakeKernel
-from .numeric import equal
+from .hashing import KeyCompare
 
 
 struct WindowExtents(Copyable, Movable, Sized):
@@ -159,43 +160,24 @@ def mark_changes(key: DynArray, mut flags: List[Bool], ctx: ExecContext) raises:
     ORs into `flags`, so a caller marks a whole key list by calling this once
     per column: a compound key changes wherever *any* of its columns does.
 
-    **Neither null nor NaN is distinct from itself here**, which is
-    `IS NOT DISTINCT FROM` and not `=`. That is what `PARTITION BY` and
-    `ORDER BY` both mean — the same rule `GROUP BY` uses, where all nulls land
-    in one group — and the two halves are corrected in different places
-    because they need different machinery, not because one is more
-    caller-specific than the other. The join wants the NaN half too, and
-    not the null half.
-
-    Null is corrected here, in the three-way split below: `equal` propagates
-    null, so a null-versus-null comparison answers *null* rather than true,
-    and reading that as "not equal" would give every null row its own
-    partition. It stays here because it needs no per-dtype arm at all —
-    validity is on `DynArray`, so there is nothing for a kernel to dispatch.
-
-    NaN is corrected in the comparison, by asking `equal[nan_safe=True]` rather than
-    `equal`, because it *is* per-dtype: only a float has a NaN, and the test is
-    a SIMD op on the lane. See that function for what the split cost and what
-    it still does not reach.
+    "Differs" is `IS DISTINCT FROM`, not `=`: neither null nor NaN is distinct
+    from itself here. That is what `PARTITION BY` and `ORDER BY` both mean —
+    the same key identity `GROUP BY` groups by — so it is the same kernel,
+    `KeyCompare`, comparing each row with the one before it. Nested keys
+    compare structurally for the same reason.
     """
     var n = len(key)
     if n < 2:
         return
-    var eq = equal[nan_safe=True](key.slice(1, n - 1), key.slice(0, n - 1), ctx)
-    var values = eq.values()
+    var same = Bitmap.alloc_zeroed(n - 1)
+    same.set_range(0, n - 1, True)
+    var rows = arange[Int32Type](0, n - 1)
+    KeyCompare.apply(
+        key.slice(1, n - 1), rows, key.slice(0, n - 1), rows, same, ctx
+    )
     for j in range(1, n):
-        if flags[j]:
-            continue
-        var cur = key.is_valid(j)
-        var prev = key.is_valid(j - 1)
-        if cur != prev:
-            # Exactly one side is null: distinct, and `equal` said null.
+        if not same.test(j - 1):
             flags[j] = True
-        elif cur:
-            # Both non-null, so `equal` is non-null too and decides.
-            if not values.test(j - 1):
-                flags[j] = True
-        # Both null: not distinct. Leave the flag as it was.
 
 
 trait WindowFunction:

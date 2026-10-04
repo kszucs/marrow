@@ -34,12 +34,7 @@ from ...dtypes import (
     Int32Type,
     Int64Type,
 )
-from ...kernels.hashing import (
-    AHashKernel,
-    HashKernel,
-    RapidHashKernel,
-    XxHashKernel,
-)
+from ...kernels.hashing import HashKernel, RapidHashKernel
 from ...utils import AHash64, Hasher, RapidHash64, XxHash64
 from ...utils.testing import Benchmark
 

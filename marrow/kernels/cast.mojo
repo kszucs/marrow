@@ -22,6 +22,9 @@ directly by the AOT expression layer):
   and ``StringToDecimalKernel`` / ``DecimalToStringKernel`` for decimals, which
   keep every digit the scale declares.
 - ``NullCastKernel`` — an all-null array of the target type.
+- ``decode_dictionary`` / ``normalized_indices`` — a dictionary array's values
+  and its int32 indices, through the typed leaves alone, for the kernels that
+  read dictionary columns (hashing, sorting) without linking ``cast``.
 
 Every kernel conforms to ``CastKernel`` and so exposes the **same**
 ``dispatch(array, to, safe, ctx)``, resolving the runtime dtypes of its family
@@ -47,7 +50,9 @@ from ..arrays import (
     BinaryViewLikeArray,
     BytesArray,
     BoolArray,
+    DictionaryArray,
     FixedSizeBinaryArray,
+    Int32Array,
     PrimitiveArray,
     TimestampArray,
 )
@@ -1932,9 +1937,49 @@ struct StructCastKernel(CastKernel):
         )
 
 
+def normalized_indices(array: DictionaryArray) raises -> Int32Array:
+    """A dictionary array's indices as int32, whatever integer type stores
+    them — the index type `take` gathers by. A NULL index stays NULL."""
+    # Not `cast`: it dispatches over every type family, so naming it here
+    # links the whole cast kernel into every binary that hashes or sorts a
+    # column, since those decode dictionaries.
+    var indices = array.indices()
+    var dt = indices.dtype()
+    if dt == int32:
+        return indices.as_int32().copy()
+
+    def widen[T: IntegerType](d: T) raises {imm} -> Int32Array:
+        ref src = indices.as_primitive[T]()
+        var n = len(src)
+        var vals = src.values()
+        var buf = Buffer.alloc_uninit[DType.int32](src.offset + n)
+        var out = buf.view[DType.int32](src.offset, n)
+        for i in range(n):
+            out.store[1](i, Int32(Int(vals.load[1](i))))
+        return Int32Array(
+            length=n,
+            nulls=src.null_count(),
+            offset=src.offset,
+            bitmap=src.bitmap,
+            buffer=buf^.to_immutable(),
+        )
+
+    return dt.dispatch_integer(widen)
+
+
+def decode_dictionary(
+    array: DictionaryArray, ctx: ExecContext = ExecContext.serial()
+) raises -> DynArray:
+    """A dictionary array's values, one per row: its dictionary gathered by its
+    indices, a NULL index giving a NULL value. What hashing, comparing and
+    sorting a dictionary-encoded column read, and the first half of
+    `DictionaryCastKernel`."""
+    return take(array.dictionary(), normalized_indices(array), ctx)
+
+
 struct DictionaryCastKernel(CastKernel):
-    """Decode a dictionary array — gather its values by index (``take``) — then
-    cast the decoded values to the target type when it differs."""
+    """Decode a dictionary array (``decode_dictionary``), then cast the decoded
+    values to the target type when it differs."""
 
     comptime name = "dictionary_cast"
 
@@ -1945,9 +1990,7 @@ struct DictionaryCastKernel(CastKernel):
         safe: Bool = True,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        ref d = array.as_dictionary()
-        var indices = cast(d.indices(), int32, False, ctx).as_int32().copy()
-        var decoded = take(d.dictionary().copy(), indices, ctx)
+        var decoded = decode_dictionary(array.as_dictionary(), ctx)
         if decoded.dtype() == to:
             return decoded^
         return cast(decoded, to, safe, ctx)

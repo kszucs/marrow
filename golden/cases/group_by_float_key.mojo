@@ -10,8 +10,8 @@ def plan() raises -> DynRelation:
 
     Float group keys, which the hash kernel used to collapse: it widened a
     lane with `cast[uint64]()`, a *numeric* conversion, so every value in
-    (-1, 1) truncated to 0 — and grouping buckets on the hash alone, so -1.25
-    and 0.5 were one group. `RapidHashKernel` now hashes the bit pattern, with
+    (-1, 1) truncated to 0 — and grouping bucketed on the hash alone, so -1.25
+    and 0.5 were one group. `HashKernel` now hashes the bit pattern, with
     `-0.0` and NaN canonicalised first so that "same number" and "same bits"
     cannot disagree.
 

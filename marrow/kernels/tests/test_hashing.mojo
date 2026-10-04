@@ -34,9 +34,12 @@ from ...dtypes import (
     Float64Type,
 )
 from ...arrays import StructArray
+from ...buffers import Bitmap
 from ...dtypes import Field, struct_
 from ...kernels.aggregate import Fold, SumFold
-from ...kernels.groupby import HashGrouping
+from ...kernels.dictionary import DictionaryEncoder
+from ...kernels.groupby import Groups
+from ...dtypes import DynType
 
 from ...arrays import UInt64Array, Int64Array
 from ...builders import Int64Builder
@@ -256,6 +259,27 @@ def test_hash_dispatch_struct() raises:
     assert_equal(h[0], h[2])
 
 
+def test_hash_struct_null_rows_hash_to_the_sentinel() raises:
+    """A NULL struct is one key whatever its fields hold, so it hashes to the
+    sentinel — rows 1 and 2 are NULL over different fields."""
+    var a: DynArray = array([1, 2, 3], int32)
+    var b: DynArray = array([10, 20, 30], int32)
+    var sa = StructArray(
+        dtype=struct_(
+            Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
+        ),
+        length=3,
+        nulls=2,
+        offset=0,
+        bitmap=Bitmap([True, False, False]).to_immutable(),
+        children=_children(a, b),
+    )
+    var h = RapidHashKernel.apply(sa)
+    assert_true(h[0].value() != Scalar[uint64.native](NULL_HASH_SENTINEL))
+    assert_equal(h[1].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
+    assert_equal(h[2].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
+
+
 # ---------------------------------------------------------------------------
 # hash_ — temporal, large_string, decimal, dictionary
 #
@@ -370,9 +394,9 @@ def test_hash_dictionary_with_narrow_indices() raises:
 
     Arrow allows any integer type as a dictionary index. The int32 case above
     takes a fast path that returns the indices as-is; every other width goes
-    through the widening in `_indices_as_int32`, which replaced the `cast` call
-    that used to make `kernels.cast` reachable from every hashing binary (Q4.7).
-    Without this the widening branch has no coverage at all.
+    through the widening in `normalized_indices`, which replaced the `cast`
+    call that used to make `kernels.cast` reachable from every hashing binary
+    (Q4.7). Without this the widening branch has no coverage at all.
     """
     var values = StringBuilder(2)
     values.append("red")
@@ -420,16 +444,19 @@ def test_hash_dictionary_with_null_index() raises:
 
 
 def _summed(var key: DynArray, var vals: DynArray) raises -> Int64Array:
-    """Group `key` through `HashGrouping` and sum `vals` per slot.
+    """Group `key` through a `DictionaryEncoder` and sum `vals` per slot.
 
     The subject is the *hash dispatch* for the key's dtype: a layout the hash
     kernel cannot narrow assigns every row its own slot (or collides them all),
     so the per-group sums are what makes a dispatch gap visible.
     """
+    var types = List[DynType]()
+    types.append(key.dtype())
     var keys = List[DynArray]()
     keys.append(key^)
-    var g = HashGrouping()
-    var groups = g.assign(keys, len(vals))
+    var encoder = DictionaryEncoder(types^)
+    var placed = encoder.encode(keys)
+    var groups = Groups(placed.ids.copy(), len(encoder))
     return Fold[SumFold, Int32Type].grouped(groups, vals.as_int32().copy())
 
 

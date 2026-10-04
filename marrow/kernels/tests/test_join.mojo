@@ -3,10 +3,12 @@
 
 """Tests for the hash join kernel."""
 
+from std.sys import get_defined_int
 from std.testing import assert_equal, assert_true, assert_false
 
 from ...arrays import (
     DynArray,
+    Int32Array,
     PrimitiveArray,
     StringArray,
     StructArray,
@@ -24,7 +26,6 @@ from ...builders import (
 from ...dtypes import (
     int32,
     int64,
-    uint64,
     float64,
     string,
     Field,
@@ -39,8 +40,10 @@ from ...dtypes import (
 )
 from ...schema import Schema
 from ...tabular import record_batch, RecordBatch
-from ...utils import Hasher
+from ...utils import Hasher, KeyHash, TruncatedHash64
 from ...kernels.join import (
+    JoinHashTable,
+    JoinIndex,
     hash_join,
     HashJoin,
     JOIN_INNER,
@@ -80,6 +83,21 @@ def _int32_struct(col0: List[Int], col1: List[Int]) raises -> StructArray:
     cols.append(a.finish().to_dyn())
     cols.append(b.finish().to_dyn())
     return record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+
+comptime _HASHES_COLLIDE = get_defined_int["MARROW_HASH_BITS", 64]() < 64
+"""Whether this build forces key hashes to collide (`pixi run
+test_collisions`). At most `2**MARROW_HASH_BITS` distinct hashes then exist —
+too few for `HashIndex`'s radix gate, so no build takes the partitioned
+layout."""
+
+
+def _expect_partitioned(built_parallel: Bool, what: String) raises:
+    """Assert a build took the partitioned layout, so a test comparing layouts
+    does not compare the single table against itself — except when hashes are
+    forced to collide, where that layout is unreachable by design."""
+    comptime if not _HASHES_COLLIDE:
+        assert_true(built_parallel, what)
 
 
 def _left_on() -> List[Int]:
@@ -552,29 +570,6 @@ def test_output_schema_column_name_collision() raises:
 # ---------------------------------------------------------------------------
 
 
-struct ConstantHash(Hasher):
-    """Degenerate hash: every value maps to the same digest.
-
-    Forces every key into one bucket — without key-equality verification an
-    inner join would emit N x M rows. It is a `Hasher` rather than a function
-    because `HashJoin` takes the algorithm as a type; writing one is the
-    smallest demonstration that the parameter is genuinely open.
-    """
-
-    comptime name = StaticString("constant")
-
-    @staticmethod
-    def hash(data: Span[UInt8, _], seed: UInt64 = 0) -> UInt64:
-        return 42
-
-    @staticmethod
-    @always_inline
-    def hash_lanes[
-        byte_width: Int, W: Int
-    ](values: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
-        return SIMD[DType.uint64, W](42)
-
-
 def test_collision_inner_join() raises:
     """With all hashes colliding, key equality filters to correct matches."""
     from ...kernels.join import HashJoin
@@ -601,9 +596,8 @@ def test_collision_inner_join() raises:
     rv.append(300)
     var right = _int32_struct(rk, rv)
 
-    # Use degenerate hash — all keys hash to 42.
-    var join = HashJoin[ConstantHash]()
-    join.build(left, _left_on())
+    # `TruncatedHash64[0]` hashes every key to one digest.
+    var join = HashJoin[TruncatedHash64[0]](left, _left_on())
     var result = join.probe(right, _right_on(), JOIN_INNER, JOIN_ALL)
 
     # Only k=2 and k=3 match → 2 result rows.
@@ -631,8 +625,7 @@ def test_collision_left_join() raises:
     rv.append(200)
     var right = _int32_struct(rk, rv)
 
-    var join = HashJoin[ConstantHash]()
-    join.build(left, _left_on())
+    var join = HashJoin[TruncatedHash64[0]](left, _left_on())
     var result = join.probe(right, _right_on(), JOIN_LEFT, JOIN_ALL)
 
     # k=1 unmatched (left), k=2 matched → 2 result rows.
@@ -674,8 +667,9 @@ def _run_inner(
 def test_parallel_inner_matches_serial() raises:
     """Inner join results are equivalent between serial and parallel paths.
 
-    Uses 200k rows to exceed ``_PARALLEL_THRESHOLD``; every probe row has
-    exactly one match so both paths produce the same number of pairs.
+    Uses 200k distinct keys, enough for the build side's ``HashIndex`` to
+    place them on partitioned tables; every probe row has exactly one match so
+    both paths produce the same number of pairs.
     """
     var n = 200_000
     var left = _dense_struct(n)
@@ -687,6 +681,40 @@ def test_parallel_inner_matches_serial() raises:
     # Row count must match; per-row ordering may differ across paths.
     assert_equal(len(serial), len(parallel))
     assert_equal(len(serial), n)
+
+
+def test_partitioned_join_with_duplicate_build_keys() raises:
+    """Every build key held twice, on the partitioned layout: each key's rows
+    are grouped by an id the radix placement handed out, and every probe row
+    must still find both of its build rows."""
+    var n = 150_000
+    var ks = List[Int](capacity=2 * n)
+    var vs = List[Int](capacity=2 * n)
+    for i in range(n):
+        ks.append(i)
+        vs.append(i)
+        ks.append(i)
+        vs.append(-i)
+    var left = _int32_struct(ks, vs)
+    var right = _dense_struct(n)
+
+    var j = HashJoin(left, _left_on(), ExecContext.parallel(4))
+    _expect_partitioned(
+        j.built_parallel(),
+        "expected the partitioned layout at 150k distinct keys / 4 workers",
+    )
+    var partitioned = j.probe(right, _right_on(), JOIN_INNER, JOIN_ALL)
+    var single = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        JOIN_INNER,
+        JOIN_ALL,
+        ctx=ExecContext.serial(),
+    )
+    assert_equal(len(partitioned), 2 * n)
+    assert_equal(_join_fingerprint(partitioned), _join_fingerprint(single))
 
 
 def test_parallel_inner_no_matches() raises:
@@ -784,14 +812,13 @@ def test_join_serial_and_parallel_contexts_agree() raises:
 
 
 def test_hash_join_struct_default_is_serial() raises:
-    """`HashJoin()` built with no argument stays on the serial path.
+    """A `HashJoin` built without a context stays on the serial path.
 
-    `expr/execution.mojo` and `bench_join` both construct it that way, and its
-    old `num_threads=1` default meant serial — unlike the free function's.
+    `bench_join` constructs it that way, and its old `num_threads=1` default
+    meant serial — unlike the free function's.
     """
-    var join = HashJoin(ExecContext())
     var left = _dense_struct(20_000)
-    join.build(left, _left_on())
+    var join = HashJoin(left, _left_on())
     var out = join.probe(
         _dense_struct(20_000), _right_on(), JOIN_INNER, JOIN_ALL
     )
@@ -803,7 +830,7 @@ def test_hash_join_struct_default_is_serial() raises:
 # answer, on the kind itself.
 #
 # It used to be re-derived at four sites with three different memberships:
-# `output_dtype` said MARK emits right columns, `_assemble` said it does not,
+# `_output_dtype` said MARK emits right columns, `_assemble` said it does not,
 # `relations.mojo` agreed with the first, and `tabular.mojo` re-parsed strings.
 # A `StructArray` whose dtype declares more fields than it has children is
 # corrupt, and nothing checked.
@@ -875,9 +902,7 @@ def test_join_kind_writes_its_name() raises:
 # ---------------------------------------------------------------------------
 # hash_join — binary / large_binary keys
 #
-# `SwissHashTable.probe` verifies hash-collision candidates with
-# `EqKernel.apply(StructArray, StructArray)`, which routes each key column
-# through `equal`. That picked its kernel family with
+# Key equality once picked its kernel family with
 # `is_string() or is_large_string()`, so a `binary` key column fell through to
 # the numeric arm and `dispatch_primitive` raised — joining on `binary` was
 # impossible while the identical join on `string` worked.
@@ -976,8 +1001,7 @@ def _probe_in_morsels(
     Returns the concatenated per-morsel fingerprints, so a divergence is
     localized to the morsel that caused it.
     """
-    var j = HashJoin(ctx^)
-    j.build(left, _left_on())
+    var j = HashJoin(left, _left_on(), ctx^)
     var out = String("parallel=") + String(j.built_parallel())
     var off = 0
     while off < len(right):
@@ -992,17 +1016,16 @@ def _probe_in_morsels(
 def _assert_join_paths_agree(kind: JoinKind, morsel: Int) raises:
     """Same join, same data, both layouts — results must be identical.
 
-    `n` sits above `_PARALLEL_THRESHOLD` (100k) so the parallel context takes
-    the partitioned build, and the key offset overlaps the two sides by half
-    so LEFT/SEMI/ANTI all see matched *and* unmatched rows.
+    `n` distinct keys clear `HashIndex`'s radix gate, so the parallel context
+    takes the partitioned build, and the key offset overlaps the two sides by
+    half so LEFT/SEMI/ANTI all see matched *and* unmatched rows.
     """
     var n = 150_000
     var left = _join_side(n, 0, 10)
     var right = _join_side(n, n // 2, 100)
 
-    var par = HashJoin(ExecContext.parallel(4))
-    par.build(left, _left_on())
-    assert_true(
+    var par = HashJoin(left, _left_on(), ExecContext.parallel(4))
+    _expect_partitioned(
         par.built_parallel(),
         (
             "expected the partitioned layout at 150k rows / 4 workers — without"
@@ -1039,8 +1062,8 @@ def test_join_paths_agree_anti_morsels() raises:
 
 
 def test_join_paths_agree_inner_single_probe() raises:
-    """One probe call above `_PROBE_STRIPE_THRESHOLD`, so the probe stripes
-    rather than taking the small-batch serial hashing path."""
+    """One probe call above `ExecContext.for_batch`'s crossover, so the probe
+    stripes rather than taking the small-batch serial hashing path."""
     _assert_join_paths_agree(JOIN_INNER, 150_000)
 
 
@@ -1052,9 +1075,9 @@ def test_join_paths_agree_left_single_probe() raises:
 # NULL join keys — a NULL matches nothing, not even another NULL
 #
 # SQL's rule, and Arrow C++'s default `JoinKeyCmp::EQ`: Acero routes a null-keyed
-# row straight to no-match. marrow drops the pair at the equality verification in
-# `SwissHashTable.probe`, which every candidate pair passes through — so these
-# cases pin the *behaviour* of each join kind rather than the mechanism.
+# row straight to no-match. marrow sends a NULL key straight to no code in
+# `JoinHashTable.candidates` — so these cases pin the *behaviour* of each join
+# kind rather than the mechanism.
 #
 # Fingerprints are `_join_fingerprint`: row count, then `sum:null_count` per
 # column. A NULL landing in the wrong row moves a null count without moving a
@@ -1198,8 +1221,8 @@ def test_multi_key_join_null_in_one_column() raises:
 def test_parallel_inner_join_drops_null_keys() raises:
     """The partitioned layout drops NULL keys too.
 
-    It verifies through the same `SwissHashTable.probe` as the serial one, but
-    nothing else in this file probes the partitioned path with NULL keys — and
+    It looks keys up through the same encoder as the serial one, but nothing
+    else in this file probes the partitioned path with NULL keys — and
     every NULL key hashes to one sentinel, so they all land in one partition.
 
     `n` is 120k rather than the 150k the other parallel cases use, and the
@@ -1226,9 +1249,8 @@ def test_parallel_inner_join_drops_null_keys() raises:
     cols.append(vb.finish().to_dyn())
     var side = record_batch(cols^, names=["k", "v"]).to_struct_array()
 
-    var joiner = HashJoin(ExecContext.parallel(4))
-    joiner.build(side, _left_on())
-    assert_true(
+    var joiner = HashJoin(side, _left_on(), ExecContext.parallel(4))
+    _expect_partitioned(
         joiner.built_parallel(),
         (
             "expected the partitioned layout at 120k rows / 4 workers — without"
@@ -1415,12 +1437,12 @@ def test_build_side_agrees_for_every_kind() raises:
 # The same claim over a composite key
 #
 # Every case above joins on `_left_on()` / `_right_on()`, which are one column
-# each. A single-member key struct cannot distinguish a per-struct rule from a
-# per-member one, and `_key_struct` — which normalises the key struct's field
-# names, nullability and metadata before `expect_same_dtype` compares the whole
-# dtype — is a per-struct rule. So is the build side: swapping it exchanges the
-# two key structs, and a normalisation that got a member's *position* wrong
-# would still match a one-column key.
+# each, and a one-column key cannot tell a rule that holds for every member
+# from one that holds for the first. The join hands the encoder its key
+# columns, never a struct carrying their field names, nullability and
+# metadata, so only each column's dtype is compared. So is the build side:
+# swapping it exchanges the two key lists, and a rule that got a member's
+# *position* wrong would still match a one-column key.
 # ---------------------------------------------------------------------------
 def _both_keys() -> List[Int]:
     var out = List[Int]()
@@ -1539,11 +1561,10 @@ def test_build_side_agrees_on_a_multi_column_key() raises:
 def test_join_multi_member_keys_may_differ_in_nullability() raises:
     """A *two-column* key whose members disagree with the other side's.
 
-    `expect_same_dtype` compares the whole key struct, and a struct dtype
-    carries every field's name, nullability and metadata — so a composite key
-    is where `_key_struct`'s normalisation has to hold for each member rather
-    than merely for the one. The single-column case beside this one is passed
-    by a fix that normalises only the first field.
+    Only each key column's dtype is compared, never its field's name,
+    nullability or metadata — and a composite key is where that has to hold
+    for each member rather than merely for the first. The single-column case
+    beside this one passes even when only the first member is right.
     """
     var meta = Dict[String, String]()
     meta["source"] = "warehouse"
@@ -1574,8 +1595,8 @@ def test_join_multi_member_keys_may_differ_in_nullability() raises:
 
     var out = hash_join(left, right, _both_keys(), _both_keys())
     assert_equal(len(out), 2)
-    # The members survive into the output unnormalised, for both key columns —
-    # `_key_struct` normalises only the copy it hands the equality kernel.
+    # The members survive into the output as declared, for both key columns —
+    # the join compares the key columns' dtypes and never rewrites a field.
     ref fields = out.dtype.as_struct().fields
     assert_false(fields[0].nullable)
     assert_equal(fields[0].metadata["source"], "warehouse")
@@ -1607,19 +1628,17 @@ def test_build_side_suffixes_the_logical_right_side() raises:
 def test_build_side_agrees_on_the_partitioned_path() raises:
     """The same claim on the radix-partitioned build and probe.
 
-    `probe_parallel` assembles from concatenated per-partition pairs and is a
-    second wiring of `build_side` — sized above `_PARALLEL_THRESHOLD` so the
-    partitioned layout is the one under test rather than a silent fallback to
-    the serial path the cases above already cover.
+    Sized to clear `HashIndex`'s radix gate, so the partitioned layout is the
+    one under test rather than a silent fallback to the single table the cases
+    above already cover.
     """
     var n = 150_000
     var left = _join_side(n, 0, 10)
     var right = _join_side(n, n // 2, 100)
     var ctx = ExecContext.parallel(4)
 
-    var probe = HashJoin(ctx.copy())
-    probe.build(left, _left_on())
-    assert_true(
+    var probe = HashJoin(left, _left_on(), ctx.copy())
+    _expect_partitioned(
         probe.built_parallel(),
         (
             "expected the partitioned layout at 150k rows / 4 workers —"
@@ -1733,7 +1752,7 @@ def test_right_semi_is_a_mirrored_semi_over_swapped_inputs() raises:
 # ---------------------------------------------------------------------------
 # a Field has four members, and a join used to carry one and a half
 #
-# `output_dtype` built every renamed field as `Field(name, dtype)`, taking the
+# `_output_dtype` built every renamed field as `Field(name, dtype)`, taking the
 # defaults for `nullable` and `metadata` — so a colliding right-hand column
 # came out nullable with its metadata gone. `RecordBatch.join` reads its result
 # schema straight off this dtype, so the loss is user-visible and not internal.
@@ -1920,3 +1939,106 @@ def test_inner_join_string_view_keys() raises:
     )
     var result = hash_join(left, right, _left_on(), _right_on())
     assert_equal(len(result), 3)
+
+
+# ---------------------------------------------------------------------------
+# JoinHashTable — the build side's rows, grouped by exact key
+# ---------------------------------------------------------------------------
+
+
+def _uint64_keys(*values: Int) raises -> List[DynArray]:
+    var b = UInt64Builder(capacity=len(values))
+    for i in range(len(values)):
+        b.append(UInt64(values[i]))
+    var keys = List[DynArray]()
+    keys.append(b.finish())
+    return keys^
+
+
+def _range_keys(n: Int) raises -> List[DynArray]:
+    var b = UInt64Builder(capacity=n)
+    for i in range(n):
+        b.append(UInt64(i))
+    var keys = List[DynArray]()
+    keys.append(b.finish())
+    return keys^
+
+
+def _join_pairs[
+    H: Hasher = KeyHash
+](
+    build: List[DynArray], probe: List[DynArray], single_match: Bool = False
+) raises -> JoinIndex:
+    return JoinHashTable[H](build).candidates(probe, single_match)
+
+
+def test_join_table_empty_sides() raises:
+    assert_equal(len(_join_pairs(_range_keys(0), _uint64_keys(1, 2))), 0)
+    assert_equal(len(_join_pairs(_uint64_keys(1, 2), _range_keys(0))), 0)
+
+
+def test_join_table_matches() raises:
+    """1:1, none, and partial matches, in probe order."""
+    var all = _join_pairs(_uint64_keys(10, 20, 30), _uint64_keys(10, 20, 30))
+    assert_equal(len(all), 3)
+    for i in range(3):
+        assert_equal(Int(all.build.unsafe_get(i)), i)
+        assert_equal(Int(all.probe.unsafe_get(i)), i)
+    assert_equal(
+        len(_join_pairs(_uint64_keys(10, 20), _uint64_keys(40, 50))), 0
+    )
+    assert_equal(
+        len(_join_pairs(_uint64_keys(10, 20, 30), _uint64_keys(20, 40, 10))),
+        2,
+    )
+
+
+def test_join_table_duplicate_build_keys() raises:
+    """A build key held twice matches once per build row, unless one match
+    per probe row is asked for."""
+    var build = _uint64_keys(10, 20, 10)
+    assert_equal(len(_join_pairs(build, _uint64_keys(10))), 2)
+    assert_equal(
+        len(_join_pairs(build, _uint64_keys(10), single_match=True)), 1
+    )
+
+
+def test_join_table_single_match_is_exact_under_collisions() raises:
+    """Every key shares one hash, and the key held first is not the one asked
+    for: a single match must still be the row holding the probe's key, not the
+    first row its hash reaches."""
+    var build = _uint64_keys(10, 20, 20)
+    var pairs = _join_pairs[TruncatedHash64[0]](
+        build, _uint64_keys(20, 30, 10), single_match=True
+    )
+    assert_equal(len(pairs), 2)
+    assert_equal(Int(pairs.build.unsafe_get(0)), 1)
+    assert_equal(Int(pairs.probe.unsafe_get(0)), 0)
+    assert_equal(Int(pairs.build.unsafe_get(1)), 0)
+    assert_equal(Int(pairs.probe.unsafe_get(1)), 2)
+
+
+def test_join_table_null_keys_match_nothing() raises:
+    """`=` matches no NULL: a NULL probe key finds no build row, not even
+    the build's own NULL, which the encoder holds as a key like any other."""
+    var b = UInt64Builder(capacity=3)
+    b.append(UInt64(10))
+    b.append_null()
+    b.append(UInt64(20))
+    var build = List[DynArray]()
+    build.append(b.finish())
+    var p = UInt64Builder(capacity=3)
+    p.append_null()
+    p.append(UInt64(20))
+    p.append_null()
+    var probe = List[DynArray]()
+    probe.append(p.finish())
+    var pairs = _join_pairs(build, probe)
+    assert_equal(len(pairs), 1)
+    assert_equal(Int(pairs.build.unsafe_get(0)), 2)
+    assert_equal(Int(pairs.probe.unsafe_get(0)), 1)
+
+
+def test_join_table_large() raises:
+    var keys = _range_keys(1_000_000)
+    assert_equal(len(_join_pairs(keys, keys)), 1_000_000)

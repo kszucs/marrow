@@ -49,7 +49,7 @@ def test_context_auto_consults_the_threshold() raises:
 
 def test_context_default_is_serial() raises:
     """The default constructor is the serial context — relied on by every
-    kernel whose `ctx` argument defaults, and by `HashJoin()`."""
+    kernel whose `ctx` argument defaults, and by `HashJoin`'s."""
     var ctx = ExecContext()
     assert_equal(ctx.resolved_num_threads(), 1)
     assert_false(ctx.is_gpu())

@@ -134,7 +134,7 @@ struct _ValueProbe(Copyable, Movable, Value, Writable):
 
 
 def test_dyn_operator_destroys_its_operator() raises:
-    """The one that matters most in practice: `GroupByOperator` holds a
+    """The one that matters most in practice: `GroupedAggregateOperator` holds a
     `List[DynOperator]`, so every aggregate's state is behind this box."""
     var deaths = _tally()
     var boxed = DynOperator(_OpProbe(deaths.copy()))

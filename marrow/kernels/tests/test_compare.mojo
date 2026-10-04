@@ -9,7 +9,19 @@ from std.testing import (
     assert_raises,
 )
 
-from ...arrays import PrimitiveArray, DynArray
+from ...arrays import (
+    DictionaryArray,
+    DynArray,
+    FixedSizeListArray,
+    Int32Array,
+    PrimitiveArray,
+    StringViewArray,
+)
+from ...buffers import Bitmap
+from ...builders import Int32Builder, ListBuilder, StructBuilder
+from ...dtypes import field, int32, string
+from ...execution import ExecContext
+from ...kernels.hashing import KeyCompare
 from ...builders import (
     array,
     PrimitiveBuilder,
@@ -77,12 +89,12 @@ def test_equal_true_and_false() raises:
 
 
 def test_equal_is_ieee_on_nan_and_nan_safe_is_not() raises:
-    """The two answers marrow has to have, side by side — see `equal[nan_safe=True]`
-    for which consumer needs which, and why `=` stays IEEE.
+    """The two answers marrow has to have, side by side — see `EqKernel` for
+    which consumer needs which, and why `=` stays IEEE.
 
     `-0.0 == 0.0` is asserted true under *both* so that a later change cannot
-    quietly make `equal[nan_safe=True]` a bit comparison, which would answer false here
-    and still pass every NaN assertion.
+    quietly make `EqKernel[nan_safe=True]` a bit comparison, which would answer
+    false here and still pass every NaN assertion.
     """
     var q = nan[DType.float64]()
     var a = array([q, q, 0.0, 1.0], float64)
@@ -94,7 +106,7 @@ def test_equal_is_ieee_on_nan_and_nan_safe_is_not() raises:
     assert_true(ieee[2].value())
     assert_true(ieee[3].value())
 
-    var total = equal[nan_safe=True](a.copy().to_dyn(), b.copy().to_dyn())
+    var total = EqKernel[nan_safe=True].apply[Float64Type](a, b)
     assert_true(total[0].value())
     assert_false(total[1].value())
     assert_true(total[2].value())
@@ -155,9 +167,9 @@ def test_nan_safe_equality_leaves_nulls_alone() raises:
     """Null in, null out — the same rule `equal` follows, and deliberately.
 
     Whether two nulls are the same key is the *caller's* question and the
-    answers differ — `mark_changes` says they are, a filter's `=` says
-    unknown — so `equal[nan_safe=True]` corrects only NaN and leaves the validity for
-    the caller to read. Pinned because the correction is now inside the SIMD
+    answers differ — `KeyCompare` says they are, a filter's `=` says unknown —
+    so `EqKernel[nan_safe=True]` corrects only NaN and leaves the validity for
+    the caller to read. Pinned because the correction is inside the SIMD
     `core`, where a `select` over the validity instead of a lane op would be
     an easy and invisible way to lose it.
     """
@@ -170,24 +182,12 @@ def test_nan_safe_equality_leaves_nulls_alone() raises:
     b.append_null()
     b.append(inf[DType.float64]())
 
-    var total = equal[nan_safe=True](a.finish().to_dyn(), b.finish().to_dyn())
+    var total = EqKernel[nan_safe=True].apply[Float64Type](
+        a.finish(), b.finish()
+    )
     assert_equal(total.null_count(), 2)
     assert_true(total.is_null(0))
     assert_true(total.is_null(1))
-    assert_true(total[2].value())
-
-
-def test_nan_safe_equality_is_plain_equality_off_the_float_families() raises:
-    """Nothing but a float has a NaN, so nothing but a float pays for one.
-
-    Pins the `is_floating_point()` guard rather than the answer: without it an
-    integer column would reach `dispatch_floating` and raise.
-    """
-    var a = array([1, 2, 3], int64)
-    var b = array([1, 0, 3], int64)
-    var total = equal[nan_safe=True](a.copy().to_dyn(), b.copy().to_dyn())
-    assert_true(total[0].value())
-    assert_false(total[1].value())
     assert_true(total[2].value())
 
 
@@ -524,9 +524,9 @@ def test_erased_compare_accepts_decimal128() raises:
 # ---------------------------------------------------------------------------
 # equal — the "equality over an arbitrary dtype" primitive
 #
-# Hash-join row verification and `nullif` are built on this. It used to pick
-# its kernel family with `is_string() or is_large_string()`, so `binary` fell
-# into the numeric arm and `dispatch_primitive` raised. The family test is
+# `nullif` is built on this. It used to pick its kernel family with
+# `is_string() or is_large_string()`, so `binary` fell into the numeric arm and
+# `dispatch_primitive` raised. The family test is
 # `is_binary_like()` now: what selects the kernel is whether the payload is
 # variable-width, not whether it is text.
 # ---------------------------------------------------------------------------
@@ -602,3 +602,199 @@ def test_equal_numeric_still_dispatches() raises:
     assert_true(r[0].value())
     assert_false(r[1].value())
     assert_true(r[2].value())
+
+
+# ---------------------------------------------------------------------------
+# KeyCompare — key equality (IS NOT DISTINCT FROM), indexed on both sides
+# ---------------------------------------------------------------------------
+
+
+def _i64(values: List[Optional[Int]]) raises -> DynArray:
+    return array[Int64Type](values, int64)
+
+
+def _i32(values: List[Optional[Int]]) raises -> DynArray:
+    return array[Int32Type](values, int32)
+
+
+def _idx(values: List[Int]) raises -> Int32Array:
+    var b = Int32Builder(capacity=len(values))
+    for v in values:
+        b.append(Int32(v))
+    return b.finish()
+
+
+def _same_keys(
+    left: DynArray,
+    li: List[Int],
+    right: DynArray,
+    ri: List[Int],
+    ctx: ExecContext = ExecContext.serial(),
+) raises -> List[Bool]:
+    var n = len(li)
+    var same = Bitmap.alloc_zeroed(n)
+    same.set_range(0, n, True)
+    KeyCompare.apply(left, _idx(li), right, _idx(ri), same, ctx)
+    var out = List[Bool]()
+    for i in range(n):
+        out.append(same.test(i))
+    return out^
+
+
+def test_key_compare_nulls_are_one_value() raises:
+    """NULL matches NULL and nothing else — unlike `=`, which answers NULL."""
+    var a = _i64([1, None, 3, None])
+    var got = _same_keys(a, [1, 1, 0, 2], a, [3, 0, 0, 2])
+    assert_true(got == [True, False, True, True])
+
+
+def test_key_compare_nan_and_signed_zero() raises:
+    """One NaN, and `-0.0` is `0.0` — the identity the key hash hashes by."""
+    var b = Float64Builder()
+    for v in [nan[DType.float64](), nan[DType.float64](), -0.0, 0.0, 1.0]:
+        b.append(v)
+    var a: DynArray = b.finish()
+    var got = _same_keys(a, [0, 2, 0, 4], a, [1, 3, 4, 4])
+    assert_true(got == [True, True, False, True])
+
+
+def test_key_compare_strings() raises:
+    """Length first, then bytes; the empty string is not NULL."""
+    var a: DynArray = array(["ab", "", None, "abc", "ab", ""])
+    var got = _same_keys(a, [0, 1, 2, 0, 1], a, [4, 5, 2, 3, 2])
+    assert_true(got == [True, True, True, False, False])
+
+
+def test_key_compare_sliced_inputs() raises:
+    """Indices are relative to each array's own offset."""
+    var a = _i64([9, 9, 1, 2, 3])
+    var b = _i64([1, 2, 3])
+    var got = _same_keys(a.slice(2, 3), [0, 1, 2], b, [0, 2, 2])
+    assert_true(got == [True, False, True])
+
+
+def test_key_compare_lists_compare_elements() raises:
+    """`[1, 2]` vs `[1, 2]`, `[2, 1]`, `[1]`, `[]` and NULL."""
+    var lb = ListBuilder(Int32Builder(), capacity=5)
+    var child_any = lb.values()
+    ref child = child_any.as_int32()
+    child.append(1)
+    child.append(2)
+    lb.append_valid()  # [1, 2]
+    child.append(2)
+    child.append(1)
+    lb.append_valid()  # [2, 1]
+    child.append(1)
+    lb.append_valid()  # [1]
+    lb.append_valid()  # []
+    lb.append_null()  # null
+    child.append(1)
+    child.append(2)
+    lb.append_valid()  # [1, 2]
+    var a: DynArray = lb.finish().to_dyn()
+    var got = _same_keys(a, [0, 0, 0, 0, 0, 3, 4], a, [5, 1, 2, 3, 4, 3, 4])
+    assert_true(got == [True, False, False, False, False, True, True])
+
+
+def test_key_compare_list_of_strings_is_not_concatenation() raises:
+    """`["ab", "c"]` and `["a", "bc"]` are different keys."""
+    var lb = ListBuilder(StringBuilder(), capacity=2)
+    var child_any = lb.values()
+    ref child = child_any.as_string()
+    child.append("ab")
+    child.append("c")
+    lb.append_valid()
+    child.append("a")
+    child.append("bc")
+    lb.append_valid()
+    var a: DynArray = lb.finish().to_dyn()
+    assert_true(_same_keys(a, [0], a, [1]) == [False])
+
+
+def test_key_compare_fixed_size_lists() raises:
+    """`[1, 2]` against `[1, 2]`, `[2, 1]` and NULL, read through a slice so
+    the array's offset reaches the element positions: the first row, `[9, 9]`,
+    is sliced off and would match nothing if the offset were dropped."""
+    var values: DynArray = array([9, 9, 1, 2, 2, 1, 0, 0, 1, 2], int32)
+    # PyArrow's mask convention: True marks a NULL row.
+    var fsl = FixedSizeListArray.from_arrays(
+        values^, 2, array([False, False, False, True, False])
+    )
+    var a: DynArray = fsl.slice(1)  # [1, 2], [2, 1], NULL, [1, 2]
+    var got = _same_keys(a, [0, 0, 2, 2, 0], a, [3, 1, 2, 0, 0])
+    assert_true(got == [True, False, True, False, True])
+
+
+def test_key_compare_string_views() raises:
+    """Inline (at most twelve bytes) and out-of-line views, two long keys of
+    one length and prefix that differ only in their last byte, and NULL, read
+    through a slice so the array's offset reaches every view."""
+    var values = List[Optional[String]]()
+    values.append(String("zzzz"))  # sliced off
+    values.append(String("abcd"))
+    values.append(String("abcd-a key longer than twelve"))
+    values.append(String("abcd-a key longer than twelvf"))
+    values.append(None)
+    values.append(String("abcd-a key longer than twelve"))
+    values.append(String("abcd"))
+    var a: DynArray = StringViewArray.from_values(values).slice(1)
+    var got = _same_keys(a, [0, 1, 1, 3, 3, 0], a, [5, 4, 2, 3, 0, 1])
+    assert_true(got == [True, True, False, True, False, False])
+
+
+def test_key_compare_structs() raises:
+    """Field by field; a NULL struct is one value whatever its fields hold."""
+    var sb = StructBuilder([field("a", int32), field("b", string)])
+    var a_vals = [1, 1, 2, 1]
+    var b_vals = ["x", "y", "x", "x"]
+    for i in range(4):
+        sb.field_builder(0).as_int32().append(Int32(a_vals[i]))
+        sb.field_builder(1).as_string().append(b_vals[i])
+        sb.append_valid()
+    sb.field_builder(0).as_int32().append(7)
+    sb.field_builder(1).as_string().append("z")
+    sb.append_null()
+    sb.field_builder(0).as_int32().append(8)
+    sb.field_builder(1).as_string().append("w")
+    sb.append_null()
+    var s: DynArray = sb.finish().to_dyn()
+    var got = _same_keys(s, [0, 0, 0, 4, 4], s, [3, 1, 2, 5, 0])
+    assert_true(got == [True, False, False, True, False])
+
+
+def test_key_compare_dictionaries_by_value() raises:
+    """Two dictionaries, one value: equal by what the indices decode to."""
+    var left: DynArray = DictionaryArray.from_arrays(
+        _i32([0, 1]), array(["a", "b"])
+    )
+    var right: DynArray = DictionaryArray.from_arrays(
+        _i32([1, 0]), array(["b", "a"])
+    )
+    var got = _same_keys(left, [0, 1, 0], right, [0, 1, 1])
+    assert_true(got == [True, True, False])
+
+
+def test_key_compare_skips_rows_already_distinct() raises:
+    """A cleared bit stays cleared: columns AND into one bitmap."""
+    var a = _i64([1, 1])
+    var same = Bitmap.alloc_zeroed(1)
+    KeyCompare.apply(a, _idx([0]), a, _idx([1]), same)
+    assert_false(same.test(0))
+
+
+def test_key_compare_striped_matches_serial() raises:
+    """Stripes are 64-row aligned, so parallel workers never share a byte of
+    the result; the answer is the serial one."""
+    var n = 10_000
+    var b = Int64Builder(capacity=n)
+    for i in range(n):
+        b.append(Int64(i % 97))
+    var a: DynArray = b.finish()
+    var li = List[Int]()
+    var ri = List[Int]()
+    for i in range(n):
+        li.append(i)
+        ri.append((i * 7) % n)
+    var serial = _same_keys(a, li, a, ri)
+    var striped = _same_keys(a, li, a, ri, ExecContext.parallel(4))
+    assert_true(serial == striped)

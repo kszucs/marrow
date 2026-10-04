@@ -282,7 +282,7 @@ trait ComptimeValue(Evaluable, Value):
     # These used to be two defaults on this trait, on the argument that "a
     # cardinality is an int64 whatever was counted, so there is no per-family
     # variation to express". That is true of the *answer* and false of the
-    # *access*: `DistinctCount[exact, A]` hashes an `A`, and a hash is faster
+    # *access*: `DistinctCount[A]` hashes an `A`, and a hash is faster
     # typed. Each family knows the array its values evaluate to — a
     # `PrimitiveValue` to `PrimitiveArray[Self.Type]`, a `StringValue` to
     # `BinaryLikeArray[Self.Type]` — so the method belongs where that is known.
