@@ -13,6 +13,7 @@ from std.os.path import join
 from ...utils.testing import ScratchDir
 from ...parquet import read_table
 from ...parquet.codecs import Rle, Compression
+from ...errors import CorruptError, DynError
 from ...utils import CompressionLibs
 
 
@@ -320,10 +321,66 @@ def _roundtrip(codec: Compression) raises:
     var libs = CompressionLibs()
     var data = _sample()
     var packed = codec.compress(libs, Span(data))
-    var restored = codec.decompress(libs, Span(packed), len(data))
-    assert_equal(len(restored), len(data))
-    for i in range(len(data)):
-        assert_equal(restored[i], data[i])
+    var restored: List[UInt8] = [7]
+    codec.decompress_into(libs, Span(packed), len(data), restored)
+    assert_true(restored[1:] == data[:], "appended after what was there")
+    assert_equal(restored[0], 7)
+
+
+def test_codecs_library_implementations() raises:
+    """LZ4, LZ4_RAW and ZSTD in Mojo and through liblz4 and libzstd: each
+    decodes what the other wrote."""
+    var data = _sample()
+    for codec in [Compression.ZSTD, Compression.LZ4, Compression.LZ4_RAW]:
+        for written in [True, False]:
+            var writer = CompressionLibs(native=written)
+            var packed = codec.compress(writer, Span(data))
+            for read_native in [True, False]:
+                var reader = CompressionLibs(native=read_native)
+                var restored = List[UInt8]()
+                codec.decompress_into(reader, Span(packed), len(data), restored)
+                assert_true(
+                    restored == data,
+                    String(
+                        t"codec {codec.code}: native writer {written}, native"
+                        t" reader {read_native}"
+                    ),
+                )
+
+
+def test_codecs_needs_libs() raises:
+    """Only a codec a library runs opens the libraries: LZ4, LZ4_RAW and
+    ZSTD when they are not run in Mojo; Snappy, GZIP and Brotli always."""
+    assert_false(Compression.UNCOMPRESSED.needs_libs(False))
+    for codec in [Compression.ZSTD, Compression.LZ4, Compression.LZ4_RAW]:
+        assert_false(codec.needs_libs(True))
+        assert_true(codec.needs_libs(False))
+    for codec in [Compression.SNAPPY, Compression.GZIP, Compression.BROTLI]:
+        assert_true(codec.needs_libs(True))
+
+
+def test_decompress_refuses_sizes_the_page_cannot_hold() raises:
+    """A page header's uncompressed size is checked against what the
+    compressed bytes can decode to before it is allocated: as is for
+    UNCOMPRESSED, and LZ4's and ZSTD's own bounds."""
+    var libs = CompressionLibs()
+    var data = _sample()
+    for codec in [
+        Compression.UNCOMPRESSED,
+        Compression.ZSTD,
+        Compression.LZ4,
+        Compression.LZ4_RAW,
+    ]:
+        var packed = codec.compress(libs, Span(data))
+        var most = codec.max_decompressed_length(len(packed))
+        for size in [most + 1, 1 << 60]:
+            var refused = False
+            try:
+                var dst = List[UInt8]()
+                codec.decompress_into(libs, Span(packed), size, dst)
+            except e:
+                refused = DynError(e).isa[CorruptError]()
+            assert_true(refused, String(t"codec {codec.code}: {size} accepted"))
 
 
 def test_uncompressed_roundtrip() raises:

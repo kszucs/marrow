@@ -3,26 +3,25 @@
 
 """System-library loading for the block compression codecs.
 
-The codecs are not reimplemented here; the standard C libraries (`libzstd`,
-`libsnappy`, `liblz4`, `libz`, `libbrotli`) are `dlopen`-ed at runtime and their
-block APIs called directly — the same approach arrow-rs and duckdb take, just
-without a link-time dependency. `CompressionLibs` is the primitive block calls
-plus the per-call scratch they need; the handles themselves live in the
-`Codecs` set below, one process-global for all six. Snappy also has a Mojo
-implementation, `marrow.utils.snappy`, which Parquet does not use yet.
+The standard C libraries (`libsnappy`, `libz`, `libbrotli`) are `dlopen`-ed
+at runtime and their block APIs called directly -- the same approach arrow-rs
+and duckdb take, just without a link-time dependency. `CompressionLibs` is the
+primitive block calls plus the per-call scratch they need; the handles
+themselves live in the `Codecs` set below, one process-global for all six.
+
+LZ4 and Zstandard run in Mojo by default, `marrow.utils.lz4` and
+`marrow.utils.zstd`; a reader or writer created with `native_codecs=False`
+runs them through `liblz4` and `libzstd` instead, the calls below, and the
+tests check the Mojo codecs against the same libraries. Snappy also has a
+Mojo implementation, `marrow.utils.snappy`, which Parquet does not use yet.
 
 **Nothing here is Parquet-specific**, which is why it lives in `marrow.utils`
 rather than in `marrow.parquet` where it started (as a second module named
-`utils`). The format-specific half — the Parquet `CompressionCodec` codes and
-the legacy Hadoop LZ4 frame tolerance — is `Compression` in
-`marrow.parquet.codecs`, which dispatches onto this.
-
-The other consumer is Arrow IPC, which currently *refuses* compressed bodies
-(`ipc.mojo`, "reading compressed IPC bodies (LZ4_FRAME / ZSTD) is not
-supported"). These bindings are what that needs.
+`utils`). The format-specific half -- the Parquet `CompressionCodec` codes --
+is `Compression` in `marrow.parquet.codecs`, which dispatches onto this.
 """
 
-from ..errors import CorruptError, InternalError
+from ..errors import CorruptError, InternalError, InvalidError
 from .dylib import LibSet, LibSpec, c_bytes
 from std.memory import unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
@@ -73,12 +72,17 @@ struct CompressionLibs(Movable):
     The `dlopen` handles are **not** here — they are the `Codecs` set above,
     shared by every instance. What an instance owns is the reused size
     out-param snappy needs, which is not safe to share, so a Parquet read
-    still holds one of these per worker."""
+    still holds one of these per worker -- and which implementation runs
+    LZ4 and Zstandard."""
 
     var _sz: List[UInt]  # reusable size out-param for snappy
+    var native: Bool
+    """Whether LZ4 and Zstandard run in Mojo, the default, or through
+    `liblz4` and `libzstd` -- `lz4_*` and `zstd_*` below."""
 
-    def __init__(out self):
+    def __init__(out self, native: Bool = True):
         self._sz = [UInt(0)]
+        self.native = native
 
     @staticmethod
     def preload() raises:
@@ -86,30 +90,19 @@ struct CompressionLibs(Movable):
 
         `_Global` vends its pointer without locking and says nothing about
         racing *creation*, so the first touch must not be several workers at
-        once. `ParquetFile.read` calls this before dispatching whenever the
-        chunks it is about to decode are compressed; after it returns, every
-        worker's `Codecs.handle[...]()` is a pure read.
+        once. `ParquetFile.read` calls this before dispatching whenever a
+        chunk it is about to decode needs a library
+        (`Compression.needs_libs`); after it returns, every worker's
+        `Codecs.handle[...]()` is a pure read.
 
-        All six open together, because the caller knows only that *something*
-        ahead is compressed, not which codec. A missing one is not an error
-        here -- each `Dylib` records its own failure and re-raises it at the
-        call that needs it.
+        All six open together, because the caller knows only that
+        *something* ahead needs one, not which. A missing one is not an
+        error here -- each `Dylib` records its own failure and re-raises it
+        at the call that needs it.
         """
         Codecs.preload()
 
     # --- decompress: write exactly `out_size` bytes to `dst` ---
-
-    def zstd_decompress(
-        mut self,
-        src: Span[UInt8, _],
-        dst: Pointer[UInt8, _],
-        out_size: Int,
-    ) raises:
-        var n = Codecs.handle["zstd"]().call["ZSTD_decompress", Int](
-            dst, out_size, src.unsafe_ptr(), len(src)
-        )
-        if n != out_size:
-            raise CorruptError("zstd: decompressed size mismatch")
 
     def snappy_decompress(
         mut self,
@@ -123,18 +116,6 @@ struct CompressionLibs(Movable):
         )
         if status != 0 or Int(self._sz[0]) != out_size:
             raise CorruptError("snappy: decompress failed")
-
-    def lz4_raw_decompress(
-        mut self,
-        src: Span[UInt8, _],
-        dst: Pointer[UInt8, _],
-        out_size: Int,
-    ) raises:
-        var n = Codecs.handle["lz4"]().call["LZ4_decompress_safe", Int32](
-            src.unsafe_ptr(), dst, Int32(len(src)), Int32(out_size)
-        )
-        if Int(n) != out_size:
-            raise CorruptError("lz4: decompressed size mismatch")
 
     def gzip_decompress(
         mut self,
@@ -195,6 +176,152 @@ struct CompressionLibs(Movable):
         if Int(rc) != 1 or produced != out_size:
             raise CorruptError("brotli: decompress failed")
 
+    # --- LZ4 and Zstandard through their libraries, when not `native` ---
+
+    @staticmethod
+    def zstd_decompress[
+        o: Origin[mut=True]
+    ](src: Span[UInt8, _], dst: Span[UInt8, o]) raises:
+        """`ZSTD_decompress`: the frames in `src` into exactly `dst`."""
+        var n = Codecs.handle["zstd"]().call["ZSTD_decompress", Int](
+            dst.unsafe_ptr(), len(dst), src.unsafe_ptr(), len(src)
+        )
+        if n != len(dst):
+            raise CorruptError(
+                "zstd: libzstd could not decode the expected size"
+            )
+
+    @staticmethod
+    def zstd_compress(src: Span[UInt8, _], mut dst: List[UInt8]) raises:
+        """Append `ZSTD_compress`'s level-1 frame for `src` to `dst` -- what
+        `Zstd.compress` writes, with libzstd 1.5.7 byte for byte."""
+        var z = Codecs.handle["zstd"]()
+        var bound = z.call["ZSTD_compressBound", Int](len(src))
+        var at = len(dst)
+        dst.resize(unsafe_uninit_length=at + bound)
+        var n = z.call["ZSTD_compress", Int](
+            dst.unsafe_ptr().unsafe_offset(at),
+            bound,
+            src.unsafe_ptr(),
+            len(src),
+            Int32(1),
+        )
+        if z.call["ZSTD_isError", UInt32](n) != 0:
+            dst.shrink(at)
+            raise InternalError("zstd: libzstd could not compress")
+        dst.shrink(at + n)
+
+    @staticmethod
+    def lz4_decompress_block[
+        o: Origin[mut=True]
+    ](src: Span[UInt8, _], dst: Span[UInt8, o]) raises:
+        """`LZ4_decompress_safe`: the block `src` into exactly `dst`."""
+        if len(src) > Self._LZ4_MAX_INPUT or len(dst) > Int(Int32.MAX):
+            raise InvalidError("lz4: liblz4 decodes blocks of under 2 GiB")
+        var n = Codecs.handle["lz4"]().call["LZ4_decompress_safe", Int32](
+            src.unsafe_ptr(), dst.unsafe_ptr(), Int32(len(src)), Int32(len(dst))
+        )
+        if Int(n) != len(dst):
+            raise CorruptError("lz4: liblz4 could not decode the expected size")
+
+    @staticmethod
+    def lz4_compress_block(src: Span[UInt8, _], mut dst: List[UInt8]) raises:
+        """Append `LZ4_compress_default`'s block for `src` to `dst` -- what
+        `Lz4.compress_block` writes, with liblz4 1.10.0 byte for byte."""
+        if len(src) > Self._LZ4_MAX_INPUT:
+            raise InvalidError(
+                t"lz4: {len(src)} bytes is over the block format's"
+                t" {Self._LZ4_MAX_INPUT}"
+            )
+        var l = Codecs.handle["lz4"]()
+        var bound = Int(l.call["LZ4_compressBound", Int32](Int32(len(src))))
+        var at = len(dst)
+        dst.resize(unsafe_uninit_length=at + bound)
+        var n = l.call["LZ4_compress_default", Int32](
+            src.unsafe_ptr(),
+            dst.unsafe_ptr().unsafe_offset(at),
+            Int32(len(src)),
+            Int32(bound),
+        )
+        if n <= 0:
+            dst.shrink(at)
+            raise InternalError("lz4: liblz4 could not compress")
+        dst.shrink(at + Int(n))
+
+    @staticmethod
+    def lz4_decompress_frame[
+        o: Origin[mut=True]
+    ](src: Span[UInt8, _], dst: Span[UInt8, o]) raises:
+        """`LZ4F_decompress`: the one frame `src` into exactly `dst`, called
+        until it reports the frame's end."""
+        var l = Codecs.handle["lz4"]()
+        var ctx = unsafe_alloc[Int](1)
+        var sizes = unsafe_alloc[UInt](2)  # out capacity, in available
+        # LZ4F_VERSION
+        var rc = l.call["LZ4F_createDecompressionContext", Int](
+            ctx, UInt32(100)
+        )
+        if l.call["LZ4F_isError", UInt32](rc) != 0:
+            ctx.unsafe_free()
+            sizes.unsafe_free()
+            raise InternalError("lz4: liblz4 could not make a frame decoder")
+        var dctx = ctx[unsafe_offset=0]
+        var ip = 0
+        var op = 0
+        var done = False
+        var failed = False
+        while not done and not failed:
+            sizes[unsafe_offset=0] = UInt(len(dst) - op)
+            sizes[unsafe_offset=1] = UInt(len(src) - ip)
+            var hint = l.call["LZ4F_decompress", Int](
+                dctx,
+                dst.unsafe_ptr().unsafe_offset(op),
+                sizes,
+                src.unsafe_ptr().unsafe_offset(ip),
+                sizes.unsafe_offset(1),
+                0,
+            )
+            var wrote = Int(sizes[unsafe_offset=0])
+            var read = Int(sizes[unsafe_offset=1])
+            op += wrote
+            ip += read
+            # An error, or no progress short of the end: the input ran out.
+            failed = l.call["LZ4F_isError", UInt32](hint) != 0 or (
+                hint != 0 and wrote == 0 and read == 0
+            )
+            done = hint == 0
+        _ = l.call["LZ4F_freeDecompressionContext", Int](dctx)
+        ctx.unsafe_free()
+        sizes.unsafe_free()
+        if failed or ip != len(src) or op != len(dst):
+            raise CorruptError(
+                "lz4: liblz4 could not decode one frame of the expected size"
+            )
+
+    @staticmethod
+    def lz4_compress_frame(src: Span[UInt8, _], mut dst: List[UInt8]) raises:
+        """Append `LZ4F_compressFrame`'s frame for `src`, with the default
+        preferences Arrow C++ passes, to `dst` -- what `Lz4.compress_frame`
+        writes, with liblz4 1.10.0 byte for byte."""
+        var l = Codecs.handle["lz4"]()
+        var bound = l.call["LZ4F_compressFrameBound", Int](len(src), 0)
+        var at = len(dst)
+        dst.resize(unsafe_uninit_length=at + bound)
+        var n = l.call["LZ4F_compressFrame", Int](
+            dst.unsafe_ptr().unsafe_offset(at),
+            bound,
+            src.unsafe_ptr(),
+            len(src),
+            0,
+        )
+        if l.call["LZ4F_isError", UInt32](n) != 0:
+            dst.shrink(at)
+            raise InternalError("lz4: liblz4 could not compress a frame")
+        dst.shrink(at + n)
+
+    comptime _LZ4_MAX_INPUT = 0x7E000000
+    """liblz4's `LZ4_MAX_INPUT_SIZE`."""
+
     # --- compress: return the codec's output bytes ---
 
     @staticmethod
@@ -205,15 +332,6 @@ struct CompressionLibs(Movable):
         var out = c_bytes(dst, n)
         dst.unsafe_free()
         return out^
-
-    def zstd_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var z = Codecs.handle["zstd"]()
-        var bound = z.call["ZSTD_compressBound", Int](len(src))
-        var dst = unsafe_alloc[UInt8](bound)
-        var n = z.call["ZSTD_compress", Int](
-            dst, bound, src.unsafe_ptr(), len(src), Int32(1)
-        )
-        return Self._take(dst, n)
 
     def snappy_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
         var s = Codecs.handle["snappy"]()
@@ -227,18 +345,6 @@ struct CompressionLibs(Movable):
         var produced = Int(sz[unsafe_offset=0])
         sz.unsafe_free()
         return Self._take(dst, produced)
-
-    def lz4_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var l = Codecs.handle["lz4"]()
-        var bound = Int(l.call["LZ4_compressBound", Int32](Int32(len(src))))
-        var dst = unsafe_alloc[UInt8](bound)
-        var n = l.call["LZ4_compress_default", Int32](
-            src.unsafe_ptr(), dst, Int32(len(src)), Int32(bound)
-        )
-        if n == 0:
-            dst.unsafe_free()
-            raise InternalError("lz4: compression failed")
-        return Self._take(dst, Int(n))
 
     def gzip_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
         var z = Codecs.handle["z"]()

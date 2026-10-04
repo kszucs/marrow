@@ -118,18 +118,28 @@ def _marrow_roundtrip(want: PythonObject, codec: Compression) raises:
         _assert_equiv(_to_pyarrow(read_table(path)), want)
 
 
+def _marrow_reads_file(path: String) raises:
+    """Marrow and PyArrow agree on a file neither of them wrote."""
+    var pq = Python.import_module("pyarrow.parquet")
+    _assert_equiv(_to_pyarrow(read_table(path)), pq.read_table(path))
+
+
 def _all_shapes(want: PythonObject) raises:
     """Full matrix for types the writer supports."""
     _marrow_reads_pyarrow(want, "none")
     _marrow_reads_pyarrow(want, "snappy")
     _marrow_reads_pyarrow(want, "zstd")
+    _marrow_reads_pyarrow(want, "lz4")
     _pyarrow_reads_marrow(want, Compression.UNCOMPRESSED)
     _pyarrow_reads_marrow(want, Compression.SNAPPY)
     _pyarrow_reads_marrow(want, Compression.ZSTD)
     _pyarrow_reads_marrow(want, Compression.LZ4_RAW)
+    _pyarrow_reads_marrow(want, Compression.LZ4)
     _marrow_roundtrip(want, Compression.UNCOMPRESSED)
     _marrow_roundtrip(want, Compression.SNAPPY)
+    _marrow_roundtrip(want, Compression.ZSTD)
     _marrow_roundtrip(want, Compression.LZ4_RAW)
+    _marrow_roundtrip(want, Compression.LZ4)
 
 
 def _read_only(want: PythonObject) raises:
@@ -215,6 +225,91 @@ def test_interop_empty() raises:
         )
     )
     _all_shapes(t)
+
+
+def test_interop_parquet_testing_lz4() raises:
+    """The LZ4 files from apache/parquet-testing: code-5 pages Hadoop-framed by
+    parquet-mr and unframed by early Parquet C++, and LZ4_RAW pages."""
+    for name in [
+        "hadoop_lz4_compressed",
+        "non_hadoop_lz4_compressed",
+        "lz4_raw_compressed",
+    ]:
+        _marrow_reads_file("marrow/parquet/tests/data/" + name + ".parquet")
+
+
+def test_interop_zstd_levels() raises:
+    """ZSTD pages pyarrow writes from its fastest level to its strongest."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(40000)
+    var t = pa.table(
+        Python.dict(
+            a=pa.array(idx * 7 % 1000),
+            b=pa.array((idx % 251).astype("float64") / 3),
+            c=pa.array(np.char.add("row-", (idx % 977).astype("str"))),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_zstd_levels.parquet")
+        for level in [-1, 1, 3, 9, 19, 22]:
+            pq.write_table(t, path, compression="zstd", compression_level=level)
+            _marrow_reads_file(path)
+
+
+def test_interop_library_codecs() raises:
+    """LZ4, LZ4_RAW and ZSTD pages through liblz4 and libzstd instead of the
+    Mojo codecs, in v1 and v2 pages: whichever wrote them, either reads them
+    and pyarrow agrees; and pyarrow's and parquet-testing's pages read
+    through the libraries too."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(40000)
+    var t = pa.table(
+        Python.dict(
+            a=pa.array(idx * 7 % 1000),
+            b=pa.array((idx % 251).astype("float64") / 3),
+            c=pa.array(np.char.add("row-", (idx % 977).astype("str"))),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_library_codecs.parquet")
+        for codec in [Compression.ZSTD, Compression.LZ4, Compression.LZ4_RAW]:
+            for version in [1, 2]:
+                for written in [True, False]:
+                    write_table(
+                        _to_marrow(t),
+                        path,
+                        compression=codec,
+                        version=version,
+                        native_codecs=written,
+                    )
+                    _assert_equiv(pq.read_table(path), t)
+                    for read_native in [True, False]:
+                        _assert_equiv(
+                            _to_pyarrow(
+                                read_table(path, native_codecs=read_native)
+                            ),
+                            t,
+                        )
+        for name in ["zstd", "lz4"]:
+            pq.write_table(t, path, compression=name)
+            _assert_equiv(
+                _to_pyarrow(read_table(path, native_codecs=False)),
+                pq.read_table(path),
+            )
+    for name in [
+        "hadoop_lz4_compressed",
+        "non_hadoop_lz4_compressed",
+        "lz4_raw_compressed",
+    ]:
+        var file = "marrow/parquet/tests/data/" + name + ".parquet"
+        _assert_equiv(
+            _to_pyarrow(read_table(file, native_codecs=False)),
+            pq.read_table(file),
+        )
 
 
 def test_interop_dictionary_read() raises:

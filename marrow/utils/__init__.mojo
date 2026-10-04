@@ -14,7 +14,7 @@ out on its own:
 | `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`; `XxHash32` |
-| `compression` | `CompressionLibs` — `dlopen`ed zstd / snappy / lz4 / zlib / brotli |
+| `compression` | `CompressionLibs` — `dlopen`ed snappy / zlib / brotli, and libzstd / liblz4 where chosen over the Mojo codecs |
 | `snappy` | `Snappy` — Snappy raw-block compression, in Mojo |
 | `lz4` | `Lz4` — LZ4 block, frame and Hadoop-framed compression, in Mojo |
 | `zstd` | `Zstd` — Zstandard, writing libzstd's level-1 frames, in Mojo |

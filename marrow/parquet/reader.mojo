@@ -343,6 +343,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
             return rebind[
                 Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
             ](comp)
+        self.scratch.clear()
         codec.decompress_into(codecs, comp, uncompressed_size, self.scratch)
         return rebind[Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]](
             Span(self.scratch)
@@ -477,7 +478,8 @@ struct PageReader[o: Origin[mut=False]](Movable):
             )
         elif ph.type == PageType.DATA_V2:
             # v2 keeps the (uncompressed) levels ahead of the (maybe compressed)
-            # values; assemble both into scratch, then view it.
+            # values; assemble both into scratch, the values decoded straight
+            # after the levels, then view it.
             ref dph2 = ph.data_page_header_v2.value()
             var lvl_len = (
                 dph2.repetition_levels_byte_length
@@ -486,14 +488,11 @@ struct PageReader[o: Origin[mut=False]](Movable):
             self.scratch.clear()
             self.scratch.extend(comp[0:lvl_len])
             if dph2.is_compressed:
-                self.scratch.extend(
-                    Span(
-                        Compression(self.meta.codec).decompress(
-                            codecs,
-                            comp[lvl_len:],
-                            ph.uncompressed_page_size - lvl_len,
-                        )
-                    )
+                Compression(self.meta.codec).decompress_into(
+                    codecs,
+                    comp[lvl_len:],
+                    ph.uncompressed_page_size - lvl_len,
+                    self.scratch,
                 )
             else:
                 self.scratch.extend(comp[lvl_len:])
@@ -2566,7 +2565,8 @@ struct ChunkRead(Copyable, Movable):
     """The chunk's offset in the file."""
     var ranges: List[Tuple[Int, Int]]
     """Chunk-relative `(offset, length)` of each byte range to fetch."""
-    var compressed: Bool
+    var needs_libs: Bool
+    """Whether the chunk's codec is a `dlopen`ed library."""
 
     def __init__(
         out self,
@@ -2576,13 +2576,16 @@ struct ChunkRead(Copyable, Movable):
         num_rows: Int,
         var selection: Optional[RowSelection],
         var locs: OffsetIndex,
+        native_codecs: Bool,
     ) raises:
         var start, length = cc.meta_data.byte_range()
         self.row_group = row_group
         self.leaf = leaf
         self.num_rows = num_rows
         self.start = start
-        self.compressed = cc.meta_data.codec != 0
+        self.needs_libs = Compression(cc.meta_data.codec).needs_libs(
+            native_codecs
+        )
         # **Only as far into the chunk as the selection reaches.** The
         # offset index says where the page holding the last selected row
         # ends; nothing after it will be decoded, so nothing after it is
@@ -2622,8 +2625,9 @@ struct ReadPlan(Movable):
     var chunks: List[ChunkRead]
     var ranges: List[Tuple[Int, Int]]
     """Every chunk's file-absolute byte ranges, in chunk order."""
-    var compressed: Bool
-    """Whether any chunk needs a codec -- which decides whether to open them."""
+    var needs_libs: Bool
+    """Whether any chunk's codec is a `dlopen`ed library -- which decides
+    whether to open them."""
     var _first: List[Int]
     """Chunk `t`'s ranges start at `ranges[_first[t]]`."""
 
@@ -2634,7 +2638,7 @@ struct ReadPlan(Movable):
         self.row_groups = row_groups^
         self.chunks = List[ChunkRead]()
         self.ranges = List[Tuple[Int, Int]]()
-        self.compressed = False
+        self.needs_libs = False
         self._first = List[Int]()
 
     def add(mut self, var chunk: ChunkRead):
@@ -2642,7 +2646,7 @@ struct ReadPlan(Movable):
         self._first.append(len(self.ranges))
         for ref r in chunk.ranges:
             self.ranges.append((chunk.start + r[0], r[1]))
-        self.compressed = self.compressed or chunk.compressed
+        self.needs_libs = self.needs_libs or chunk.needs_libs
         self.chunks.append(chunk^)
 
     def segments(
@@ -2696,13 +2700,19 @@ struct ParquetFile[
     `leaves` narrows which leaf kinds the decoder is compiled for. The default
     compiles all of them and is what the dynamic lane uses; an AOT query that
     knows its schema can pass a narrower set and not link the builders for
-    types it will never see (see `LeafSet`)."""
+    types it will never see (see `LeafSet`).
+
+    LZ4 and ZSTD pages decode in Mojo; `native_codecs=False` decodes them
+    with liblz4 and libzstd instead."""
 
     var _source: Self.S
     var _meta: FileMetaData
     var _mapping: SchemaMapping
     var _codecs: ArcPointer[List[CompressionLibs]]
     """Reusable per-worker codec handles — see the pool comment in `read`."""
+    var _native_codecs: Bool
+    """Whether LZ4 and ZSTD pages decode in Mojo, the default, or through
+    liblz4 and libzstd -- `CompressionLibs.native`."""
 
     def __init__(
         out self: ParquetFile[BufferSource, Self.leaves],
@@ -2710,6 +2720,7 @@ struct ParquetFile[
         *,
         binary_type: dt.DynType = dt.binary,
         schema: Optional[Schema] = None,
+        native_codecs: Bool = True,
     ) raises:
         """Open a local file as a memory map (S == BufferSource).
 
@@ -2724,6 +2735,7 @@ struct ParquetFile[
             self._meta, binary_type, schema
         )
         self._codecs = ArcPointer(List[CompressionLibs]())
+        self._native_codecs = native_codecs
 
     def __init__(
         out self,
@@ -2731,6 +2743,7 @@ struct ParquetFile[
         *,
         binary_type: dt.DynType = dt.binary,
         schema: Optional[Schema] = None,
+        native_codecs: Bool = True,
     ) raises:
         # Read from any byte source; everything downstream goes through it.
         self._source = source^
@@ -2739,6 +2752,7 @@ struct ParquetFile[
             self._meta, binary_type, schema
         )
         self._codecs = ArcPointer(List[CompressionLibs]())
+        self._native_codecs = native_codecs
 
     def _read_at(
         ref self, offset: Int, length: Int
@@ -2837,14 +2851,15 @@ struct ParquetFile[
         # `self` and `ColumnReader` requires an immutable one.
         var codecs = self._codecs
         while len(codecs[]) < nt:
-            codecs[].append(CompressionLibs())
+            codecs[].append(CompressionLibs(native=self._native_codecs))
         # Open the compression libraries here, on the calling thread, if any
-        # chunk about to be decoded is compressed. `_Global` vends its pointer
+        # chunk about to be decoded uses one. `_Global` vends its pointer
         # without locking and promises nothing about racing *creation*, so the
         # first touch must not be several workers at once; after this every
         # worker's use of the handle set is a pure read. Guarded rather than
-        # unconditional so an all-uncompressed file still `dlopen`s nothing.
-        if plan.compressed:
+        # unconditional so a file of uncompressed, LZ4, LZ4_RAW or ZSTD pages
+        # `dlopen`s nothing.
+        if plan.needs_libs:
             CompressionLibs.preload()
 
         # --- plan, then fetch, then decode -------------------------------
@@ -2964,6 +2979,7 @@ struct ParquetFile[
                         rg.num_rows,
                         sel^,
                         locs^,
+                        self._native_codecs,
                     )
                 )
         return plan^
@@ -3154,6 +3170,7 @@ def read_table[
     options: StorageOptions = StorageOptions(),
     ctx: ExecContext = ExecContext.auto(),
     binary_type: dt.DynType = dt.binary,
+    native_codecs: Bool = True,
 ) raises -> Table:
     """Read a Parquet file into a Marrow `Table` — a convenience wrapper over
     `ParquetFile(uri).read(...)` (mirrors `pyarrow.parquet.read_table`).
@@ -3172,9 +3189,14 @@ def read_table[
 
     `leaves` narrows which leaf kinds the decoder is compiled for; the default
     compiles all of them. An AOT program that knows its schema can cut the
-    decode ladder it links — see `LeafSet`."""
+    decode ladder it links — see `LeafSet`.
+
+    LZ4 and ZSTD pages decode in Mojo; `native_codecs=False` decodes them
+    with liblz4 and libzstd instead."""
     var pf = ParquetFile[DynSource, leaves](
-        DynSource.open(uri, options), binary_type=binary_type
+        DynSource.open(uri, options),
+        binary_type=binary_type,
+        native_codecs=native_codecs,
     )
     return pf.read(columns, row_groups, row_selections, ctx)
 

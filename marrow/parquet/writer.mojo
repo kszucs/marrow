@@ -866,10 +866,11 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
         write_bloom_filter: Bool = False,
         write_page_checksum: Bool = False,
         var content_defined_chunking: Optional[ContentDefinedChunking] = None,
+        native_codecs: Bool = True,
     ):
         self.out = BufferedSink(sink^)
         FileMetaData.write_magic(self.out.buffer())  # file header magic
-        self.codecs = CompressionLibs()
+        self.codecs = CompressionLibs(native=native_codecs)
         self.compression = compression
         self.version = version
         self.use_dictionary = use_dictionary
@@ -1109,6 +1110,7 @@ def write_table(
     write_page_checksum: Bool = False,
     var content_defined_chunking: Optional[ContentDefinedChunking] = None,
     options: StorageOptions = StorageOptions(),
+    native_codecs: Bool = True,
 ) raises:
     """Write a Marrow `Table` to a Parquet file at `uri`.
 
@@ -1148,6 +1150,10 @@ def write_table(
     before encoding has no counterpart for. With a large `max_chunk_size` and
     wide values, marrow will therefore write larger pages than Arrow C++ would
     for the same data.
+
+    LZ4 and ZSTD pages are compressed in Mojo; `native_codecs=False`
+    compresses them with liblz4 and libzstd instead -- the same bytes, with
+    liblz4 1.10.0 and libzstd 1.5.7.
     """
     var writer = FileWriter(
         DynSink.open(uri, options),
@@ -1159,5 +1165,6 @@ def write_table(
         write_bloom_filter,
         write_page_checksum,
         content_defined_chunking^,
+        native_codecs,
     )
     writer.write(table)

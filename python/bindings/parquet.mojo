@@ -36,17 +36,23 @@ def _codec(name: String) raises -> Compression:
 
 
 def parquet_read_table(
-    path: PythonObject, columns: PythonObject, binary_type: PythonObject
+    path: PythonObject,
+    columns: PythonObject,
+    binary_type: PythonObject,
+    native_codecs: PythonObject,
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
-    var bt = DynType(py=binary_type)
-    if columns.__is__(builtins.None):
-        return _read_table(String(py=path), binary_type=bt).to_python_object()
-    var cols = List[String]()
-    for i in range(Int(py=columns.__len__())):
-        cols.append(String(py=columns[i]))
+    var cols: Optional[List[String]] = None
+    if not columns.__is__(builtins.None):
+        var names = List[String]()
+        for i in range(Int(py=columns.__len__())):
+            names.append(String(py=columns[i]))
+        cols = names^
     return _read_table(
-        String(py=path), columns=cols^, binary_type=bt
+        String(py=path),
+        columns=cols^,
+        binary_type=DynType(py=binary_type),
+        native_codecs=Bool(py=native_codecs),
     ).to_python_object()
 
 
@@ -59,6 +65,7 @@ def parquet_write_table(
     cdc_min: PythonObject,
     cdc_max: PythonObject,
     cdc_norm: PythonObject,
+    native_codecs: PythonObject,
 ) raises -> PythonObject:
     var t = Table(py=table)
     var chunking: Optional[ContentDefinedChunking] = None
@@ -72,6 +79,7 @@ def parquet_write_table(
         _codec(String(py=compression)),
         Int(py=version),
         content_defined_chunking=chunking^,
+        native_codecs=Bool(py=native_codecs),
     )
     return Python.evaluate("None")
 

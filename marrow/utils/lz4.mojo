@@ -47,6 +47,9 @@ takes exactly one frame; dictionaries and the legacy format are refused.
 compressed size and one block. `compress_hadoop` writes one per page, as Arrow
 C++ does; `decompress_hadoop_into` reads a run of them, falling back to a
 plain block as Arrow C++ does for pages from before Parquet C++ framed them.
+Both frame either block implementation -- this module's, or with `native`
+off liblz4's through `CompressionLibs` -- so the framing rules are kept once
+for a reader that chose the library.
 """
 
 from std.bit import byte_swap
@@ -54,6 +57,7 @@ from std.bit import byte_swap
 from ..errors import CorruptError, DynError, InvalidError, NotImplementedError
 from ..views import BufferView
 from .byteorder import LittleEndian
+from .compression import CompressionLibs
 from .hashing import XxHash32
 from .lz77 import LzCopy, match_length
 
@@ -561,33 +565,54 @@ struct Lz4:
             )
 
     @staticmethod
-    def compress_hadoop(
-        src: Span[mut=False, UInt8, _], mut dst: List[UInt8]
-    ) raises InvalidError:
+    def compress_hadoop[
+        native: Bool = True
+    ](src: Span[mut=False, UInt8, _], mut dst: List[UInt8]) raises DynError:
         """Append `src` to `dst` as one Hadoop frame: a big-endian u32
         decompressed size, a big-endian u32 compressed size, then the block --
-        what Arrow C++ writes for Parquet's `LZ4` codec."""
+        what Arrow C++ writes for Parquet's `LZ4` codec. Without `native`, the
+        block is liblz4's."""
         var at = len(dst)
         LittleEndian.append[DType.uint64](dst, 0)  # both sizes, below
-        Self.compress_block(src, dst)
+        comptime if native:
+            Self.compress_block(src, dst)
+        else:
+            try:
+                CompressionLibs.lz4_compress_block(src, dst)
+            except e:
+                raise DynError(e)
         var size = len(dst) - at - 8
         LittleEndian.write[DType.uint32](dst, at, byte_swap(UInt32(len(src))))
         LittleEndian.write[DType.uint32](dst, at + 4, byte_swap(UInt32(size)))
 
     @staticmethod
     def decompress_hadoop_into[
-        o: Origin[mut=True]
-    ](src: Span[UInt8, _], dst: Span[UInt8, o]) raises CorruptError:
+        o: Origin[mut=True], //, native: Bool = True
+    ](src: Span[UInt8, _], dst: Span[UInt8, o]) raises DynError:
         """Decompress `src` into exactly `dst` as Arrow C++ reads Parquet's
         `LZ4` codec: a run of Hadoop frames, or, when `src` does not parse as
         one, a plain block -- what Parquet C++ wrote before it adopted the
-        Hadoop framing."""
-        if not Self._hadoop_frames_into(src, dst):
+        Hadoop framing. Without `native`, liblz4 decodes the blocks."""
+        if not Self._hadoop_frames_into[native](src, dst):
+            Self._block_into[native](src, dst)
+
+    @staticmethod
+    def _block_into[
+        o: Origin[mut=True], //, native: Bool
+    ](src: Span[UInt8, _], dst: Span[UInt8, o]) raises DynError:
+        """The block `src` into exactly `dst`: `decompress_block_into`, or
+        without `native` liblz4's -- so the framing rules hold for both."""
+        comptime if native:
             Self.decompress_block_into(src, dst)
+        else:
+            try:
+                CompressionLibs.lz4_decompress_block(src, dst)
+            except e:
+                raise DynError(e)
 
     @staticmethod
     def _hadoop_frames_into[
-        o: Origin[mut=True]
+        o: Origin[mut=True], //, native: Bool
     ](src: Span[UInt8, _], dst: Span[UInt8, o]) -> Bool:
         """Whether `src` is a run of Hadoop frames that decodes to exactly
         `dst` -- Arrow C++'s `TryDecompressHadoop`. A frame here is one block;
@@ -604,7 +629,7 @@ struct Lz4:
             if size > len(src) - ip or raw > len(dst) - op:
                 return False
             try:
-                Self.decompress_block_into(
+                Self._block_into[native](
                     src[ip : ip + size], dst[op : op + raw]
                 )
             except:

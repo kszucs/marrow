@@ -235,6 +235,13 @@ Apache Arrow -- Apache-2.0
 
 --------------------------------------------------------------------------------
 
+Apache Parquet testing data -- Apache-2.0
+    marrow/parquet/tests/data/{hadoop_lz4_compressed,non_hadoop_lz4_compressed,
+    lz4_raw_compressed}.parquet, copied unchanged from its `data/` directory.
+    https://github.com/apache/parquet-testing
+
+--------------------------------------------------------------------------------
+
 Apache OpenDAL -- Apache-2.0
     marrow/io/opendal.mojo: the C ABI declarations, transcribed from
     `bindings/c/include/opendal.h` at v0.59.0.

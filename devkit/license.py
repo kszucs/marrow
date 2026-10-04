@@ -115,6 +115,7 @@ EXEMPT = {
     ".gitkeep",
     ".json",
     ".lock",
+    ".parquet",
     ".png",
     ".python-version",
     ".svg",

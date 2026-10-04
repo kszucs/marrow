@@ -13,8 +13,8 @@ right one, so the flat and nested reader paths share one decoder per layout:
 - `DeltaBinaryPacked` — the block/miniblock zigzag-delta integer codec.
 - `Plain` · `Dictionary` · `ByteStreamSplit` · `DeltaLengthByteArray` ·
   `DeltaByteArray` — the data-page value codecs `Encoding` dispatches to.
-- `Compression` — the page compression codec (dispatches onto `CompressionLibs`
-  in `marrow.utils.compression`).
+- `Compression` — the page compression codec (dispatches onto `Lz4`, `Zstd`
+  and `CompressionLibs` in `marrow.utils.compression`).
 
 RLE / bit-packed hybrid wire format (per the Parquet spec): a sequence of runs,
 each introduced by a ULEB128 header. `header & 1` selects the run kind:
@@ -28,7 +28,7 @@ from std.bit import byte_swap
 from std.sys import size_of
 
 from ..buffers import bulk_copy
-from ..errors import NotImplementedError
+from ..errors import CorruptError, NotImplementedError
 from ..buffers import Buffer
 from ..arrays import (
     DynArray,
@@ -39,7 +39,7 @@ from ..arrays import (
     FixedSizeBinaryArray,
 )
 from .. import dtypes as dt
-from ..utils import CompressionLibs, LittleEndian
+from ..utils import CompressionLibs, LittleEndian, Lz4, Zstd
 
 
 struct Zigzag:
@@ -1081,8 +1081,9 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
 @fieldwise_init
 struct Compression(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `CompressionCodec` value: the codec identity plus the
-    `compress` / `decompress` operations, dispatched onto a `CompressionLibs`
-    handle pool (the `dlopen` bindings in `utils/compression.mojo`).
+    `compress` / `decompress` operations, dispatched onto `Lz4` and `Zstd` and
+    onto a `CompressionLibs` handle pool (the `dlopen` bindings in
+    `utils/compression.mojo`) for the rest.
 
     Enum values:
         0 UNCOMPRESSED  1 SNAPPY  2 GZIP  4 BROTLI  5 LZ4  6 ZSTD  7 LZ4_RAW
@@ -1098,16 +1099,46 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
     comptime ZSTD = Self(6)
     comptime LZ4_RAW = Self(7)
 
+    def needs_libs(self, native: Bool) -> Bool:
+        """Whether decompressing this codec may call into a `dlopen`ed
+        library: all but UNCOMPRESSED and -- when `native`, as
+        `CompressionLibs.native` says -- the codecs in Mojo, LZ4, LZ4_RAW and
+        ZSTD. A codec not named here answers True, so one wired up later
+        opens the libraries first rather than racing to."""
+        if self == Self.UNCOMPRESSED:
+            return False
+        elif self == Self.LZ4 or self == Self.LZ4_RAW or self == Self.ZSTD:
+            return not native
+        else:
+            return True
+
+    def max_decompressed_length(self, n: Int) -> Int:
+        """The most `n` bytes of this codec decode to, where it is known:
+        `n` stored as is, and LZ4's and ZSTD's own bounds. The library
+        codecs answer `Int.MAX`; their decoders check the length they are
+        given against their input themselves."""
+        if self == Self.UNCOMPRESSED:
+            return n
+        elif self == Self.ZSTD:
+            return Zstd.max_decompressed_length(n)
+        elif self == Self.LZ4 or self == Self.LZ4_RAW:
+            return Lz4.max_decompressed_length(n)
+        else:
+            return Int.MAX
+
     def decompress_into(
         self,
         mut libs: CompressionLibs,
         src: Span[UInt8, _],
         out_size: Int,
-        mut scratch: List[UInt8],
+        mut dst: List[UInt8],
     ) raises:
-        """Decompress `src` into `scratch` (resized, reused across pages)."""
-        scratch.resize(unsafe_uninit_length=out_size)
-        self._decompress_to(libs, src, out_size, scratch.unsafe_ptr())
+        """Append `src` decompressed, `out_size` bytes, to `dst` -- a page's
+        reused scratch, after its levels for a v2 page."""
+        self._check_size(src, out_size)
+        var at = len(dst)
+        dst.resize(unsafe_uninit_length=at + out_size)
+        self._decompress_to(libs, src, Span(dst)[at:])
 
     def decompress_owned(
         self,
@@ -1117,11 +1148,20 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
     ) raises -> Buffer[mut=False]:
         """Decompress `src` into a buffer of its own, for a decoder that keeps
         pointing into the page after the reader has moved on."""
+        self._check_size(src, out_size)
         var out = Buffer.alloc_uninit[DType.uint8](out_size)
         self._decompress_to(
-            libs, src, out_size, out.view[DType.uint8]().unsafe_ptr()
+            libs, src, out.view[DType.uint8]().as_span()[:out_size]
         )
         return out^.to_immutable()
+
+    def _check_size(self, src: Span[UInt8, _], out_size: Int) raises:
+        """`out_size` comes from the page header: refuse one `src` cannot
+        decode to before anything is allocated for it."""
+        if out_size < 0 or out_size > self.max_decompressed_length(len(src)):
+            raise CorruptError(
+                t"parquet: {len(src)} compressed bytes cannot hold {out_size}"
+            )
 
     def _decompress_to[
         o: Origin[mut=True]
@@ -1129,24 +1169,30 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
         self,
         mut libs: CompressionLibs,
         src: Span[UInt8, _],
-        out_size: Int,
-        ptr: Pointer[UInt8, o],
+        dst: Span[UInt8, o],
     ) raises:
+        """Decompress `src` into exactly `dst`."""
+        var out_size = len(dst)
+        var ptr = dst.unsafe_ptr()
         if self == Self.UNCOMPRESSED:
             bulk_copy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
         elif self == Self.ZSTD:
-            libs.zstd_decompress(src, ptr, out_size)
+            if libs.native:
+                Zstd.decompress_into(src, dst)
+            else:
+                CompressionLibs.zstd_decompress(src, dst)
         elif self == Self.SNAPPY:
             libs.snappy_decompress(src, ptr, out_size)
         elif self == Self.LZ4_RAW:
-            libs.lz4_raw_decompress(src, ptr, out_size)
+            if libs.native:
+                Lz4.decompress_block_into(src, dst)
+            else:
+                CompressionLibs.lz4_decompress_block(src, dst)
         elif self == Self.LZ4:
-            # Deprecated LZ4 (code 5): modern writers (PyArrow) emit a plain LZ4
-            # block, but tolerate the legacy Hadoop frame ([be u32 decompressed
-            # size][be u32 compressed size] prefix) by stripping it when present.
-            libs.lz4_raw_decompress(
-                Self._strip_lz4_frame(src, out_size), ptr, out_size
-            )
+            if libs.native:
+                Lz4.decompress_hadoop_into(src, dst)
+            else:
+                Lz4.decompress_hadoop_into[native=False](src, dst)
         elif self == Self.GZIP:
             libs.gzip_decompress(src, ptr, out_size)
         elif self == Self.BROTLI:
@@ -1156,61 +1202,37 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
                 t"parquet: unsupported compression codec {self.code}"
             )
 
-    @staticmethod
-    def _strip_lz4_frame[
-        o: Origin[mut=False]
-    ](src: Span[UInt8, o], out_size: Int) -> Span[UInt8, o]:
-        """Strip the legacy Hadoop LZ4 8-byte frame header when present: a
-        big-endian u32 decompressed size (== `out_size`) then a big-endian u32
-        compressed size (== the remaining bytes). A plain LZ4 block is returned
-        unchanged."""
-        if len(src) >= 8:
-            var dlen = (
-                (Int(src[0]) << 24)
-                | (Int(src[1]) << 16)
-                | (Int(src[2]) << 8)
-                | Int(src[3])
-            )
-            var clen = (
-                (Int(src[4]) << 24)
-                | (Int(src[5]) << 16)
-                | (Int(src[6]) << 8)
-                | Int(src[7])
-            )
-            if dlen == out_size and clen == len(src) - 8:
-                return src[8:]
-        return src
-
-    def decompress(
-        self, mut libs: CompressionLibs, src: Span[UInt8, _], out_size: Int
-    ) raises -> List[UInt8]:
-        """Decompress `src` into a fresh `out_size`-byte list."""
-        var dst = List[UInt8]()
-        self.decompress_into(libs, src, out_size, dst)
-        return dst^
-
     def compress(
         self, mut libs: CompressionLibs, src: Span[UInt8, _]
     ) raises -> List[UInt8]:
         """Compress `src`, returning the codec's output bytes. Writers emit
         UNCOMPRESSED, SNAPPY, ZSTD, GZIP, BROTLI, LZ4, or LZ4_RAW."""
+        var out = List[UInt8]()
         if self == Self.UNCOMPRESSED:
-            var out = List[UInt8]()
             out.extend(src)
-            return out^
         elif self == Self.ZSTD:
-            return libs.zstd_compress(src)
+            if libs.native:
+                Zstd.compress(src, out)
+            else:
+                CompressionLibs.zstd_compress(src, out)
         elif self == Self.SNAPPY:
-            return libs.snappy_compress(src)
-        elif self == Self.LZ4_RAW or self == Self.LZ4:
-            # Both emit a plain LZ4 block; code 5 readers accept it (see the
-            # Hadoop-frame tolerance in `_strip_lz4_frame`).
-            return libs.lz4_compress(src)
+            out = libs.snappy_compress(src)
+        elif self == Self.LZ4_RAW:
+            if libs.native:
+                Lz4.compress_block(src, out)
+            else:
+                CompressionLibs.lz4_compress_block(src, out)
+        elif self == Self.LZ4:
+            if libs.native:
+                Lz4.compress_hadoop(src, out)
+            else:
+                Lz4.compress_hadoop[native=False](src, out)
         elif self == Self.GZIP:
-            return libs.gzip_compress(src)
+            out = libs.gzip_compress(src)
         elif self == Self.BROTLI:
-            return libs.brotli_compress(src)
+            out = libs.brotli_compress(src)
         else:
             raise NotImplementedError(
                 t"parquet: unsupported compression codec {self.code}"
             )
+        return out^

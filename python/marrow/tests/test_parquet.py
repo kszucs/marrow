@@ -56,6 +56,24 @@ def test_pyarrow_reads_marrow(tmp_path, compression):
     _assert_equiv(pq.read_table(out), want)
 
 
+@pytest.mark.parametrize("compression", ["zstd", "lz4"])
+@pytest.mark.parametrize("native_codecs", [True, False])
+def test_library_codecs(tmp_path, compression, native_codecs):
+    """LZ4 and ZSTD pages written in Mojo or through liblz4 and libzstd,
+    and read back either way."""
+    want = _sample()
+    src = tmp_path / "src.parquet"
+    pq.write_table(want, src)
+    out = tmp_path / "out.parquet"
+    mpq.write_table(
+        mpq.read_table(src), out, compression=compression, native_codecs=native_codecs
+    )
+    _assert_equiv(pq.read_table(out), want)
+    for read_native in [True, False]:
+        got = _to_pa(mpq.read_table(out, native_codecs=read_native))
+        _assert_equiv(got, want)
+
+
 def test_read_returns_marrow_table(tmp_path):
     p = tmp_path / "t.parquet"
     pq.write_table(_sample(), p)

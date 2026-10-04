@@ -93,6 +93,8 @@ def _lib_compress[
 comptime _BLOCK = 0
 comptime _FRAME = 1
 comptime _HADOOP = 2
+comptime _HADOOP_LIBRARY = 3
+"""Hadoop frames whose blocks liblz4 decodes."""
 
 
 def _decode[form: Int](src: List[UInt8], mut buf: List[UInt8], n: Int) raises:
@@ -101,8 +103,10 @@ def _decode[form: Int](src: List[UInt8], mut buf: List[UInt8], n: Int) raises:
         Lz4.decompress_block_into(Span(src), Span(buf)[:n])
     elif form == _FRAME:
         Lz4.decompress_frame_into(Span(src), Span(buf)[:n])
-    else:
+    elif form == _HADOOP:
         Lz4.decompress_hadoop_into(Span(src), Span(buf)[:n])
+    else:
+        Lz4.decompress_hadoop_into[native=False](Span(src), Span(buf)[:n])
 
 
 def _expect[
@@ -643,16 +647,32 @@ def test_utils_lz4_frame_checks_what_it_declares() raises:
 # ---------------------------------------------------------------------------
 
 
-def _hadoop(data: List[UInt8], cuts: List[Int] = []) raises -> List[UInt8]:
-    """`data` as Hadoop frames, a new one at each of `cuts`."""
+def _hadoop[
+    native: Bool = True
+](data: List[UInt8], cuts: List[Int] = []) raises -> List[UInt8]:
+    """`data` as Hadoop frames, a new one at each of `cuts` -- their blocks
+    liblz4's without `native`."""
     var out = List[UInt8]()
     var bounds = cuts.copy()
     bounds.append(len(data))
     var pos = 0
     for end in bounds:
-        Lz4.compress_hadoop(Span(data)[pos:end], out)
+        Lz4.compress_hadoop[native](Span(data)[pos:end], out)
         pos = end
     return out^
+
+
+def _expect_hadoop(src: List[UInt8], want: List[UInt8], what: String) raises:
+    """`_expect` for Hadoop frames, their blocks decoded by `Lz4` and by
+    liblz4."""
+    _expect[_HADOOP](src, want, what)
+    _expect[_HADOOP_LIBRARY](src, want, what + " (liblz4)")
+
+
+def _rejects_hadoop(src: List[UInt8], n: Int, what: String) raises:
+    """`_rejects` for Hadoop frames, by `Lz4` and by liblz4."""
+    _rejects[_HADOOP](src, n, what)
+    _rejects[_HADOOP_LIBRARY](src, n, what + " (liblz4)")
 
 
 def _be32(data: List[UInt8], pos: Int) -> Int:
@@ -669,7 +689,8 @@ def test_utils_lz4_hadoop_roundtrip() raises:
         var src = _hadoop(all[i])
         assert_equal(_be32(src, 0), len(all[i]))
         assert_equal(_be32(src, 4), len(src) - 8)
-        _expect[_HADOOP](src, all[i], String(t"input {i}"))
+        _expect_hadoop(src, all[i], String(t"input {i}"))
+        _expect_hadoop(_hadoop[False](all[i]), all[i], String(t"liblz4 {i}"))
 
 
 def test_utils_lz4_hadoop_reads_what_writers_wrote() raises:
@@ -677,21 +698,21 @@ def test_utils_lz4_hadoop_reads_what_writers_wrote() raises:
     size; a plain block, as Parquet C++ wrote before it framed them; and an
     empty page either way."""
     var data = words(300_000, seed=53)
-    _expect[_HADOOP](_hadoop(data, [100_000, 250_000]), data, "three frames")
-    _expect[_HADOOP](_hadoop(data, [0, 300_000]), data, "empty frames")
-    _expect[_HADOOP](_compress(data), data, "plain block")
-    _expect[_HADOOP](_hadoop([]), [], "empty frame")
-    _expect[_HADOOP](_compress([]), [], "empty block")
+    _expect_hadoop(_hadoop(data, [100_000, 250_000]), data, "three frames")
+    _expect_hadoop(_hadoop(data, [0, 300_000]), data, "empty frames")
+    _expect_hadoop(_compress(data), data, "plain block")
+    _expect_hadoop(_hadoop([]), [], "empty frame")
+    _expect_hadoop(_compress([]), [], "empty block")
 
 
 def test_utils_lz4_hadoop_rejects() raises:
     var data = words(10_000, seed=59)
     var n = len(data)
     var src = _hadoop(data, [4_000])
-    _rejects[_HADOOP](src, n - 1, "short destination")
-    _rejects[_HADOOP](src, n + 1, "long destination")
+    _rejects_hadoop(src, n - 1, "short destination")
+    _rejects_hadoop(src, n + 1, "long destination")
     var sizes = src.copy()
     sizes[3] ^= 1  # the first frame's decompressed size
-    _rejects[_HADOOP](sizes, n, "frame size")
+    _rejects_hadoop(sizes, n, "frame size")
     for cut in range(1, len(src), 61):
-        _rejects[_HADOOP](List[UInt8](Span(src)[:cut]), n, String(t"cut {cut}"))
+        _rejects_hadoop(List[UInt8](Span(src)[:cut]), n, String(t"cut {cut}"))

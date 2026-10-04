@@ -17,7 +17,7 @@ from . import types
 from .tabular import Table
 
 
-def read_table(source, columns=None, binary_type=None):
+def read_table(source, columns=None, binary_type=None, native_codecs=True):
     """Read a Parquet file into a marrow :class:`Table`.
 
     Parameters
@@ -31,10 +31,15 @@ def read_table(source, columns=None, binary_type=None):
         Read Parquet binary columns as this type: ``binary()`` (the default)
         or ``binary_view()``. Columns annotated as strings read as the
         matching string type, e.g. ``string_view()``.
+    native_codecs : bool, default True
+        Decode LZ4 and ZSTD pages in Mojo; ``False`` decodes them with
+        liblz4 and libzstd instead.
     """
     cols = list(columns) if columns is not None else None
     bt = binary_type if binary_type is not None else types.binary()
-    return Table.wrap(_ma.parquet_read_table(str(source), cols, unwrap(bt)))
+    return Table.wrap(
+        _ma.parquet_read_table(str(source), cols, unwrap(bt), native_codecs)
+    )
 
 
 _PAGE_VERSIONS = {"1.0": 1, "2.0": 2, 1: 1, 2: 2}
@@ -52,6 +57,7 @@ def write_table(
     compression="snappy",
     data_page_version="1.0",
     use_content_defined_chunking=False,
+    native_codecs=True,
 ):
     """Write a table to a Parquet file.
 
@@ -83,6 +89,10 @@ def write_table(
         that picks page boundaries before encoding has no counterpart for
         it. With a large ``max_chunk_size`` and wide values, marrow will
         therefore write larger pages than Arrow C++ would for the same data.
+    native_codecs : bool, default True
+        Compress LZ4 and ZSTD pages in Mojo; ``False`` compresses them with
+        liblz4 and libzstd instead -- the same bytes, with liblz4 1.10.0 and
+        libzstd 1.5.7.
     """
     try:
         version = _PAGE_VERSIONS[data_page_version]
@@ -126,4 +136,5 @@ def write_table(
         cdc_min_chunk_size,
         cdc_max_chunk_size,
         cdc_norm_level,
+        native_codecs,
     )
