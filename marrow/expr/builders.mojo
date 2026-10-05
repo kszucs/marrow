@@ -73,9 +73,10 @@ from .logical import (
     InMemoryTable,
     IpcScan,
     JsonScan,
+    Nothing,
     ParquetScan,
     ScanPath,
-    WindowExpr,
+    WindowCall,
 )
 
 from .runtime.values import RuntimeValue, column, literal
@@ -813,53 +814,53 @@ def count_star() -> (
 #
 # Free functions rather than methods, because they read no column: `RANK()`
 # answers from the ordering alone, so there is no receiver to hang them on.
-# The four that *do* read a column — `lag`, `lead`, `first_value`,
-# `last_value` — are `Value` trait defaults instead, and an aggregate reaches
-# a frame through `Value.over`.
+# The five that *do* read a column — `lag`, `lead`, `first_value`,
+# `nth_value`, `last_value` — are `Value` trait defaults instead. Each answers
+# a call, which `.over(...)` places in a window.
 
 
-def row_number() raises -> WindowExpr:
+def row_number() -> WindowCall[RowNumber]:
     """`ROW_NUMBER()` — a distinct position per row within the partition.
 
     Insensitive to ties, so a non-total `ORDER BY` leaves it deterministic
     only up to the sort's stability. `rank` and `dense_rank` are the two that
     answer equally for tied rows.
     """
-    return WindowExpr.of[RowNumber](None)
+    return WindowCall(RowNumber(), Nothing())
 
 
-def rank() raises -> WindowExpr:
+def rank() -> WindowCall[Rank]:
     """`RANK()` — tied rows share the first position of their tie, and the
     next distinct row skips the gap: `1, 2, 2, 2, 5`."""
-    return WindowExpr.of[Rank](None)
+    return WindowCall(Rank(), Nothing())
 
 
-def dense_rank() raises -> WindowExpr:
+def dense_rank() -> WindowCall[DenseRank]:
     """`DENSE_RANK()` — tied rows share a position and nothing is skipped:
     `1, 2, 2, 2, 3`. The only difference from `rank` is the gap."""
-    return WindowExpr.of[DenseRank](None)
+    return WindowCall(DenseRank(), Nothing())
 
 
-def percent_rank() raises -> WindowExpr:
+def percent_rank() -> WindowCall[PercentRank]:
     """`PERCENT_RANK()` — `(rank - 1) / (rows - 1)`, from 0 to 1 inclusive.
 
     Built on `rank`, so tied rows share a value and gaps carry through. A
     one-row partition answers 0 rather than dividing by zero.
     """
-    return WindowExpr.of[PercentRank](None)
+    return WindowCall(PercentRank(), Nothing())
 
 
-def cume_dist() raises -> WindowExpr:
+def cume_dist() -> WindowCall[CumeDist]:
     """`CUME_DIST()` — the fraction of the partition at or before this row's
     *peer group*, from just above 0 to 1.
 
     Counts through the whole peer group, not to this row, so tied rows share a
     value and the final group is always exactly 1.
     """
-    return WindowExpr.of[CumeDist](None)
+    return WindowCall(CumeDist(), Nothing())
 
 
-def ntile(buckets: Int) raises -> WindowExpr:
+def ntile(buckets: Int) raises -> WindowCall[NTile]:
     """`NTILE(n)` — the partition split into `buckets` as evenly as it divides.
 
     A plain `Int` and not an expression: the bucket count is a constant of the
@@ -867,4 +868,4 @@ def ntile(buckets: Int) raises -> WindowExpr:
     column to hold. The remainder goes to the earliest buckets, so 10 rows in
     3 buckets is 4, 3, 3.
     """
-    return WindowExpr.of[NTile](None, buckets)
+    return WindowCall(NTile(buckets), Nothing())

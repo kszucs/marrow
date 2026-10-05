@@ -49,7 +49,7 @@ from ..scalars import ArrowScalar, DynScalar, NullScalar
 from std.builtin.rebind import downcast
 from std.utils import Variant
 from ..builders import Int32Builder, nulls
-from ..dtypes import Field, field, struct_
+from ..dtypes import Field, field, null, struct_
 from ..kernels.aggregate import AggKernel, Windowable
 from ..kernels.conditional import case_when
 from ..kernels.concat import concat
@@ -71,10 +71,10 @@ from ..json import (
 from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
 from ..utils import KeyHash
 from .bindings import Bindings
-from .logical import DynValue, Multiplicity, WindowExpr
+from .logical import DynValue, Multiplicity, Value, WindowSpec
 from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
-from ..kernels.window import WindowExtents, WindowFrame, mark_changes
+from ..kernels.window import WindowExtents, WindowFrame, WindowKernel
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 
@@ -1008,7 +1008,7 @@ struct WindowOperator(Operator):
 
     **The partitioning is a prefix of the sort key, not a second mechanism.**
     `PARTITION BY k ORDER BY v` is the ordering `[k, v]`, so one
-    `SortIndices.multi` answers both questions, and `kernels/window.mojo` reads
+    `SortIndices.multi` answers both questions, and `WindowExtents` reads
     partition and peer boundaries straight off the result. Hash-partitioning
     first and sorting each bucket would need a `DictionaryEncoder`, a gather per
     bucket, and a second null convention to keep consistent with `GROUP BY`'s
@@ -1023,10 +1023,8 @@ struct WindowOperator(Operator):
     getting right here rather than relying on the consumer.
     """
 
-    var _names: List[String]
-    var _exprs: List[WindowExpr]
-    """Every expression on this node shares one window spec — `with_columns`
-    stacks a separate node per distinct spec, so one sort serves them all."""
+    var _values: List[DynValue]
+    """Window values; those sharing a spec share one sort."""
 
     var _input_schema: Schema
     var _output_schema: Schema
@@ -1037,15 +1035,13 @@ struct WindowOperator(Operator):
 
     def __init__(
         out self,
-        var names: List[String],
-        var exprs: List[WindowExpr],
+        var values: List[DynValue],
         var input_schema: Schema,
         var output_schema: Schema,
         var bindings: Bindings,
         var ctx: ExecContext,
     ):
-        self._names = names^
-        self._exprs = exprs^
+        self._values = values^
         self._input_schema = input_schema^
         self._output_schema = output_schema^
         self._bindings = bindings^
@@ -1074,37 +1070,57 @@ struct WindowOperator(Operator):
         )
         var n = len(whole)
 
+        var columns = List[DynArray]()
+        for i in range(len(self._input_schema.fields)):
+            columns.append(whole.field(i))
+        # One sort per distinct spec, in first-seen order; `order[k]` is the
+        # value `computed[k]` answers.
+        var computed = List[DynArray](capacity=len(self._values))
+        var order = List[Int](capacity=len(self._values))
+        for i in range(len(self._values)):
+            var seen = False
+            for ref j in order:
+                if j == i:
+                    seen = True
+            if not seen:
+                var spec = self._values[i].window_spec()
+                var same = List[Int]()
+                for j in range(i, len(self._values)):
+                    if self._values[j].window_spec() == spec:
+                        same.append(j)
+                computed.extend(self._compute(spec, same, whole))
+                order.extend(same^)
+        for i in range(len(self._values)):
+            for k in range(len(order)):
+                if order[k] == i:
+                    columns.append(computed[k].copy())
+        return Datum(_struct_of(self._output_schema, columns^, n).to_dyn())
+
+    def _compute(
+        self, spec: WindowSpec, which: List[Int], whole: StructArray
+    ) raises -> List[DynArray]:
+        """The columns of the values at `which`, all over `spec`, from one
+        sort — each back in input order."""
+        var n = len(whole)
         # -- one ordering answers both questions ----------------------------
-        var num_partition = len(self._exprs[0].partition_by)
         var keys = List[DynArray]()
         var ascending = List[Bool]()
-        for ref k in self._exprs[0].partition_by:
+        for ref k in spec.partition_by:
             keys.append(self._eval(k, whole))
             # Direction is irrelevant to a partition: it groups equal rows,
             # and every order puts equal rows together.
             ascending.append(True)
-        for i in range(len(self._exprs[0].order_by)):
-            keys.append(self._eval(self._exprs[0].order_by[i], whole))
-            ascending.append(self._exprs[0].ascending[i])
+        for i in range(len(spec.order_by)):
+            keys.append(self._eval(spec.order_by[i], whole))
+            ascending.append(spec.ascending[i])
+        var perm = self._permutation(keys, ascending, spec.nulls_first, n)
 
-        var perm = self._permutation(
-            keys, ascending, self._exprs[0].nulls_first, n
-        )
-
-        # -- boundaries ------------------------------------------------------
         var sorted_keys = List[DynArray](capacity=len(keys))
         for ref k in keys:
             sorted_keys.append(take(k.copy(), perm, self._ctx))
-
-        var new_partition = List[Bool](length=n, fill=False)
-        if n > 0:
-            new_partition[0] = True
-        for i in range(num_partition):
-            mark_changes(sorted_keys[i], new_partition, self._ctx)
-        var new_peer = new_partition.copy()
-        for i in range(num_partition, len(sorted_keys)):
-            mark_changes(sorted_keys[i], new_peer, self._ctx)
-        var extents = WindowExtents(new_partition^, new_peer^)
+        var extents = WindowExtents.of_sorted(
+            sorted_keys, len(spec.partition_by), self._ctx
+        )
 
         # -- the sorted batch, and the way back ------------------------------
         var sorted_columns = List[DynArray]()
@@ -1113,15 +1129,17 @@ struct WindowOperator(Operator):
         var sorted_batch = _struct_of(self._input_schema, sorted_columns^, n)
         var inverse = self._inverse(perm, n)
 
-        # -- one column per expression ---------------------------------------
-        var columns = List[DynArray]()
-        for i in range(len(self._input_schema.fields)):
-            columns.append(whole.field(i))
-        for ref e in self._exprs:
-            var computed = self._compute(e, extents, sorted_batch)
-            columns.append(take(computed^, inverse, self._ctx))
-
-        return Datum(_struct_of(self._output_schema, columns^, n).to_dyn())
+        var out = List[DynArray](capacity=len(which))
+        for ref i in which:
+            var column = self._values[i].window_column(
+                sorted_batch,
+                extents,
+                self._input_schema,
+                self._bindings,
+                self._ctx,
+            )
+            out.append(take(column^, inverse, self._ctx))
+        return out^
 
     def _permutation(
         self,
@@ -1169,44 +1187,6 @@ struct WindowOperator(Operator):
         for i in range(n):
             out.append(Int32(positions[i]))
         return out.finish()
-
-    def _compute(
-        self,
-        expr: WindowExpr,
-        extents: WindowExtents,
-        sorted_batch: StructArray,
-    ) raises -> DynArray:
-        """One window expression's column, in **sorted** order."""
-        # **Two branches, not eight.** Which window function this is lives in
-        # `WindowExpr`'s slot, instantiated where the verb named it, so the
-        # bodies of the ones this binary never writes are not linked. The
-        # aggregate is the one kind with no slot: its argument is an ordinary
-        # aggregate `Value`, evaluated over each frame by its own kernel.
-        if expr.is_aggregate():
-            return self._framed_aggregate(expr, extents, sorted_batch)
-
-        # The ranking functions read no column; the rest gather one.
-        var argument: Optional[DynArray] = None
-        if not expr.fixed_dtype:
-            argument = self._eval(expr.argument.value(), sorted_batch)
-        return expr.compute.value()(
-            extents, argument^, expr.offset, expr.frame, self._ctx
-        )
-
-    def _framed_aggregate(
-        self,
-        expr: WindowExpr,
-        extents: WindowExtents,
-        sorted_batch: StructArray,
-    ) raises -> DynArray:
-        """An aggregate over every row's frame, through the frame operator the
-        aggregate lowers to (`Value.to_window`): one pass when its kernel
-        combines partial results, one aggregate per distinct frame when it
-        does not."""
-        var op = expr.argument.value().to_window(
-            self._input_schema, self._bindings, expr.frame
-        )
-        return op.run(sorted_batch, extents, self._ctx)
 
 
 struct BatchSourceOperator(Operator):
@@ -1858,66 +1838,58 @@ def compact_to_admitted(
     column = filter(column, keep^)
 
 
-trait FrameOperator(Deinitable, Movable):
-    """Answers one window aggregate over every frame of a sorted batch.
+trait FrameEvaluator(Deinitable, Movable):
+    """Computes one window function over every frame of a sorted batch.
 
-    What `Value.to_window` lowers to, the window counterpart of `Operator`.
-    The frame spec is fixed when it is built; the extents come from the sort the
-    window ran, so one `run` over the sorted batch answers the whole column.
+    What `WindowFunction.to_evaluator` builds — the window counterpart of
+    `Operator`. Built for one frame spec; the extents describe the partitions
+    and peer groups of the batch it runs over, so one `run` answers the whole
+    column, in sorted order.
     """
 
     def run(
-        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
     ) raises -> DynArray:
         ...
 
 
-struct DynFrameOperator(Movable):
-    """A `FrameOperator`, erased — the window counterpart of `DynOperator`,
-    and erased the same way."""
+struct CallEvaluator[K: WindowKernel](FrameEvaluator):
+    """A window kernel over a sorted batch: evaluate the operand, if the
+    kernel reads one, then hand it to `K.compute`."""
 
-    var _data: ArcPointer[NoneType]
-    var _virt_run: def(
-        ArcPointer[NoneType], StructArray, WindowExtents, ExecContext
-    ) thin raises -> DynArray
-    var _virt_drop: def(var ArcPointer[NoneType]) thin
-    """Erasure forgets the pointee's destructor; this carries it. See
-    `DynOperator._virt_drop`."""
+    var _kernel: Self.K
+    var _argument: Optional[DynOperator]
+    """The operand, lowered — absent for a kernel that reads none."""
+    var _frame: WindowFrame
 
-    @staticmethod
-    def _run_tramp[
-        O: FrameOperator
-    ](
-        ptr: ArcPointer[NoneType],
-        batch: StructArray,
-        extents: WindowExtents,
-        ctx: ExecContext,
-    ) raises -> DynArray:
-        return rebind[ArcPointer[O]](ptr)[].run(batch, extents, ctx)
-
-    @staticmethod
-    def _drop_tramp[O: FrameOperator](var ptr: ArcPointer[NoneType]):
-        var typed = rebind[ArcPointer[O]](ptr)
-        _ = ptr^
-        _ = typed^
-
-    @implicit
-    def __init__[O: FrameOperator](out self, var value: O):
-        var ptr = ArcPointer[O](value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_run = Self._run_tramp[O]
-        self._virt_drop = Self._drop_tramp[O]
-
-    def __deinit__(deinit self):
-        self._virt_drop(self._data^)
+    def __init__(
+        out self,
+        var kernel: Self.K,
+        var argument: Optional[DynOperator],
+        frame: WindowFrame,
+    ):
+        self._kernel = kernel^
+        self._argument = argument^
+        self._frame = frame
 
     def run(
-        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
     ) raises -> DynArray:
-        return self._virt_run(self._data, batch, extents, ctx)
+        var n = len(sorted)
+        var argument: DynArray
+        if self._argument:
+            argument = (
+                self._argument.value()
+                .push(Morsel.ungrouped(sorted.copy()))
+                .value()
+                .to_array(n)
+            )
+        else:
+            argument = nulls(n, null)
+        return self._kernel.compute(extents, argument, self._frame, ctx)
 
 
-struct WindowedAggregateOperator[Agg: AggKernel, A: Evaluable](FrameOperator):
+struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
     """A `Windowable` aggregate over every frame: evaluate the operand to a
     column, mask it by the `FILTER`, answer each frame through `Agg.over`.
 
@@ -1945,14 +1917,14 @@ struct WindowedAggregateOperator[Agg: AggKernel, A: Evaluable](FrameOperator):
         self._frame = frame
 
     def run(
-        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
     ) raises -> DynArray:
         comptime F = downcast[Self.Agg, Windowable]
-        var n = len(batch)
-        var operand = self._input.evaluate(batch, self._bindings).to_array(n)
+        var n = len(sorted)
+        var operand = self._input.evaluate(sorted, self._bindings).to_array(n)
         if self._where:
             var admitted = self._where.value().push(
-                Morsel.ungrouped(batch.copy())
+                Morsel.ungrouped(sorted.copy())
             )
             operand = case_when(
                 [admitted.value().to_array(n).as_bool().copy()], [operand^]
@@ -1962,10 +1934,10 @@ struct WindowedAggregateOperator[Agg: AggKernel, A: Evaluable](FrameOperator):
         ).to_dyn()
 
 
-struct PerFrameOperator(FrameOperator):
+struct PerFrameEvaluator[V: Value](FrameEvaluator):
     """An aggregate evaluated once per distinct frame, through its own
-    operator — what an aggregate with no `Windowable.over` lowers to, and what
-    makes every aggregate a window aggregate at once.
+    operator — what an aggregate with no `Windowable.over` evaluates through,
+    and what makes every aggregate a window aggregate at once.
 
     A frame equal to the previous row's is not re-evaluated: under `RANGE`
     that is every row of a peer group, and under `ROWS` every row whose frame
@@ -1983,14 +1955,14 @@ struct PerFrameOperator(FrameOperator):
     wide the input is.
     """
 
-    var _aggregate: DynValue
+    var _aggregate: Self.V
     var _schema: Schema
     var _bindings: Bindings
     var _frame: WindowFrame
 
     def __init__(
         out self,
-        var aggregate: DynValue,
+        var aggregate: Self.V,
         var schema: Schema,
         var bindings: Bindings,
         frame: WindowFrame,
@@ -2001,7 +1973,7 @@ struct PerFrameOperator(FrameOperator):
         self._frame = frame
 
     def run(
-        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
     ) raises -> DynArray:
         var n = len(extents)
         var dtype = self._aggregate.dtype(self._schema)
@@ -2013,7 +1985,7 @@ struct PerFrameOperator(FrameOperator):
             var i = self._schema.get_field_index(name)
             if i >= 0:
                 reads.append(i)
-        var input = batch.select(reads)
+        var input = sorted.select(reads)
         var input_schema = schema(input.dtype.as_struct().fields.copy())
         var answers = List[DynArray]()
         var which = Int32Builder(n)

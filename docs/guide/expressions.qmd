@@ -86,6 +86,12 @@ Attach a window to any aggregate or ranking function with `.over(...)`:
 `lag`, `lead`, `first_value`, `nth_value` and `last_value` are methods on a
 value. A window preserves **input order**, not sorted order.
 
+A window function needs `.over(...)` before it is a column. Window values and
+per-row values may share one `with_columns`: the per-row ones are added first,
+so a window can order by a column the same call computes. Each window value
+gets its own `Window` node and its own sort; `optimize[AllRules]()` merges the
+ones over the same window, so they share one.
+
 ## The optimizer
 
 `execute()` alone optimizes nothing. The rewriter is a comptime parameter, so a

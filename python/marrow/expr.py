@@ -59,6 +59,7 @@ __all__ = [
     "Aggregate",
     "Column",
     "Window",
+    "WindowFunction",
     "array_contains",
     "array_length",
     "case_when",
@@ -334,34 +335,34 @@ class Column(_Wrapper):
 
     def lag(self, offset=1):
         """``LAG(x, offset)`` — this column read `offset` rows earlier."""
-        return Window.wrap(self._binding.lag(offset))
+        return WindowFunction("lag", self, offset)
 
     def lead(self, offset=1):
         """``LEAD(x, offset)`` — this column read `offset` rows later."""
-        return Window.wrap(self._binding.lead(offset))
+        return WindowFunction("lead", self, offset)
 
     def first_value(self):
         """``FIRST_VALUE(x)`` — this column at the frame's first row."""
-        return Window.wrap(self._binding.first_value())
+        return WindowFunction("first_value", self)
 
     def last_value(self):
         """``LAST_VALUE(x)`` — this column at the frame's last row.
 
         Under the default frame that is the *current* row, not the partition's
         last: the frame ends at the current row. Everyone expects otherwise."""
-        return Window.wrap(self._binding.last_value())
+        return WindowFunction("last_value", self)
 
     def nth_value(self, n):
         """``NTH_VALUE(x, n)`` — this column at the frame's `n`-th row,
         1-based."""
-        return Window.wrap(self._binding.nth_value(n))
+        return WindowFunction("nth_value", self, n)
 
     def over(self, *args, **kwargs):
         """Always an error — only an aggregate can be windowed.
 
-        Present so the mistake reports what to do instead. `Value.over` raises
-        the same way in Mojo: a per-row value has nothing to do with a frame,
-        and a silent column of copies is a worse answer than a diagnostic."""
+        Present so the mistake reports what to do instead. In Mojo a per-row
+        value has no `over` at all: it has nothing to do with a frame, and a
+        silent column of copies is a worse answer than a diagnostic."""
         raise TypeError(
             f"over: {self.render()!r} is a per-row value, not an aggregate; "
             f"aggregate first, then window the result — e.g. "
@@ -527,8 +528,10 @@ class Aggregate(_Wrapper):
         Only an aggregate may be windowed: a per-row value has nothing to do
         with a frame, and `col("v").over(...)` is a mistake worth a diagnostic
         rather than a silent column of copies."""
-        return _over(
-            self._binding, partition_by, order_by, ascending, nulls_first, rows
+        return Window.wrap(
+            self._binding.over(
+                *_window(partition_by, order_by, ascending, nulls_first, rows)
+            )
         )
 
     def __str__(self):
@@ -538,14 +541,19 @@ class Aggregate(_Wrapper):
         return f"<marrow.Aggregate: {self.render()}>"
 
 
-class Window(_Wrapper):
-    """A window function and the window it runs in — the Python face of
-    ``WindowExpr``.
+class WindowFunction:
+    """A call to a window function, before it has a window.
 
     Built by :func:`row_number` and friends, or by a column verb like
-    :meth:`Column.lag`, then placed in a window with :meth:`over`. Consumed by
-    ``LazyTable.with_columns``, which routes a `Window` to the plan's windowed
-    overload."""
+    :meth:`Column.lag`, and placed in a window with :meth:`over`, which is
+    what turns it into a :class:`Window`. Plain Python: the Mojo side resolves
+    `kind` to its kernel only at :meth:`over`, so nothing crosses the binding
+    before it can run."""
+
+    def __init__(self, kind, argument=None, param=0):
+        self._kind = kind
+        self._argument = argument
+        self._param = param
 
     def over(
         self,
@@ -562,22 +570,32 @@ class Window(_Wrapper):
         as ``(preceding, following)``; without it the default ``RANGE`` frame
         applies, and the two agree only when the order key has no duplicates.
         """
-        return _over(
-            self._binding, partition_by, order_by, ascending, nulls_first, rows
+        argument = self._argument._binding if self._argument is not None else None
+        return Window.wrap(
+            _ma.window_over(
+                self._kind,
+                argument,
+                int(self._param),
+                *_window(partition_by, order_by, ascending, nulls_first, rows),
+            )
         )
 
+    def __repr__(self):
+        return f"<marrow.WindowFunction: {self._kind}>"
+
+
+class Window(_Wrapper):
+    """A window function together with the window it runs in.
+
+    Built by :meth:`WindowFunction.over` or :meth:`Aggregate.over`; consumed
+    by ``LazyTable.with_columns`` like any other expression."""
+
     def referenced_columns(self):
-        """Every column name this window function reads."""
+        """Every column name this window value reads."""
         return self._binding.referenced_columns()
 
     def render(self):
-        """This window function and its window, as text.
-
-        `WindowExpr.spec()` is deliberately *not* exposed: it renders the
-        window alone as an identity key for grouping — `with_columns` stacks
-        one `Window` node per distinct spec — and reads as
-        ``"p=k,|o=va,|n=True"``. That is an internal discriminant, not a
-        clause a caller should be shown."""
+        """This window value as text — ``"lag(v, 1) over( order v asc ...)"``."""
         return self._binding.render()
 
     def __str__(self):
@@ -587,16 +605,14 @@ class Window(_Wrapper):
         return f"<marrow.Window: {self.render()}>"
 
 
-def _over(binding, partition_by, order_by, ascending, nulls_first, rows):
-    """`over` for both `Aggregate` and `Window` — one marshalling rule."""
-    return Window.wrap(
-        binding.over(
-            [_key(k) for k in partition_by],
-            [_key(k) for k in order_by],
-            [bool(a) for a in ascending],
-            bool(nulls_first),
-            tuple(rows) if rows is not None else None,
-        )
+def _window(partition_by, order_by, ascending, nulls_first, rows):
+    """The window clause's arguments, marshalled — one rule for every `over`."""
+    return (
+        [_key(k) for k in partition_by],
+        [_key(k) for k in order_by],
+        [bool(a) for a in ascending],
+        bool(nulls_first),
+        tuple(rows) if rows is not None else None,
     )
 
 
@@ -730,33 +746,33 @@ def _expr_or_column(value):
 
 def row_number():
     """``ROW_NUMBER()`` — a distinct position per row within the partition."""
-    return Window.wrap(_ma.window_row_number())
+    return WindowFunction("row_number")
 
 
 def rank():
     """``RANK()`` — ties share the first position and the next row skips the
     gap: ``1, 2, 2, 2, 5``."""
-    return Window.wrap(_ma.window_rank())
+    return WindowFunction("rank")
 
 
 def dense_rank():
     """``DENSE_RANK()`` — ties share a position and nothing is skipped:
     ``1, 2, 2, 2, 3``."""
-    return Window.wrap(_ma.window_dense_rank())
+    return WindowFunction("dense_rank")
 
 
 def percent_rank():
     """``PERCENT_RANK()`` — ``(rank - 1) / (rows - 1)``, 0 to 1 inclusive."""
-    return Window.wrap(_ma.window_percent_rank())
+    return WindowFunction("percent_rank")
 
 
 def cume_dist():
     """``CUME_DIST()`` — the fraction of the partition at or before this row's
     peer group."""
-    return Window.wrap(_ma.window_cume_dist())
+    return WindowFunction("cume_dist")
 
 
 def ntile(buckets):
     """``NTILE(n)`` — the partition split into `buckets` as evenly as it
     divides."""
-    return Window.wrap(_ma.window_ntile(buckets))
+    return WindowFunction("ntile", param=buckets)

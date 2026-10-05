@@ -68,18 +68,19 @@ Soundness is by construction, not by review:
   that exploit ordering (`TopN`, `PushLimitBelowProject`) each state the
   argument at their definition.
 
-  **The third case is why `Window` is deliberately absent from this file.**
+  **The third case is why only one rule reads a `Window`.**
   `WindowOperator._permutation` returns the identity when a window names no
   keys, so `ROW_NUMBER() OVER ()` reads its answer off input row order — and
   an ordered window is **not** safe either, because that permutation is
   `stable=True`, so input order still decides ties. `row_number`, `lag`,
   `lead`, `first_value` and `last_value` all change answer if tie order
-  changes, and `RemoveRedundantSort` trades tie order away by design. No rule can reach a
-  `Window` today — the node is not imported here, so no `isa[Window]()`
-  exists — and `test_optimizer.mojo::test_no_rule_rewrites_a_plan_containing_a_window`
-  pins that. Adding one means proving the rule preserves the order a window
-  below it may be reading. SQL calls `ROW_NUMBER() OVER ()` nondeterministic,
-  so this is an invariant to keep rather than a wrong answer to fix.
+  changes, and `RemoveRedundantSort` trades tie order away by design. So no
+  rule moves a node into a window's input: `MergeWindows` folds stacked
+  windows together without moving a row, no other rule matches a `Window`, and
+  `test_optimizer.mojo::test_no_rule_moves_a_node_into_a_window` pins that.
+  A rule that does would have to prove it preserves the order a window below
+  it may be reading. SQL calls `ROW_NUMBER() OVER ()` nondeterministic, so
+  this is an invariant to keep rather than a wrong answer to fix.
 """
 
 from ..kernels.join import (
@@ -112,6 +113,7 @@ from .logical import (
     Project,
     Sort,
     Union,
+    Window,
 )
 
 
@@ -872,6 +874,47 @@ struct TopN(Rule):
 
 
 # ---------------------------------------------------------------------------
+# Rules — sharing a sort
+# ---------------------------------------------------------------------------
+struct MergeWindows(Rule):
+    """`Window(Window(x))` -> one `Window`, when the outer reads nothing the
+    inner adds.
+
+    `with_columns` builds a `Window` per window value, and each one sorts. A
+    node sorts once per distinct spec among its values, so folding stacked
+    nodes together is what lets `rank()` and `dense_rank()` over one ordering
+    share a sort. Bottom-up and to a fixpoint, a whole chain of independent
+    window values folds into one node.
+
+    **Sound because a window leaves its rows in input order**, so both nodes
+    saw the same rows in the same order, and an outer value that reads none of
+    the inner's columns computes the same answer beside them. The merged node
+    appends the inner's columns, then the outer's — the order they had.
+    """
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Window]():
+            return node.copy()
+        ref outer = node.get[Window]()
+        var input = outer.input[].copy()
+        if not input.isa[Window]():
+            return node.copy()
+        ref inner = input.get[Window]()
+        for ref v in outer.values:
+            for ref c in v.columns():
+                for ref n in inner.names:
+                    if c == n:
+                        return node.copy()
+        var names = inner.names.copy()
+        names.extend(outer.names.copy())
+        var values = inner.values.copy()
+        values.extend(outer.values.copy())
+        var out: DynRelation = Window(inner.input[].copy(), names^, values^)
+        return out^
+
+
+# ---------------------------------------------------------------------------
 # Rules — cost-based
 # ---------------------------------------------------------------------------
 struct SelectBuildSide(Rule):
@@ -1326,6 +1369,7 @@ struct AllRules(RuleSet):
         out = PushFilterBelowAggregate.apply(out)
         out = PushLimitBelowProject.apply(out)
         out = TopN.apply(out)
+        out = MergeWindows.apply(out)
         # The cost-based rules run last: they read cardinalities, and every
         # rule above moves rows. Reassociation goes first so that build sides
         # are chosen for the final shape; either order reaches the same plan.

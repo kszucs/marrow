@@ -55,7 +55,7 @@ References:
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
-from marrow.errors import InvalidError
+from marrow.errors import InvalidError, KeyError
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType
 from marrow.scalars import DynScalar, Int64Scalar
@@ -69,7 +69,7 @@ from marrow.expr.builders import (
     rank as _rank,
     row_number as _row_number,
 )
-from marrow.expr.logical import DynValue, WindowExpr
+from marrow.expr.logical import DynValue
 from marrow.expr.runtime.aggregates import RuntimeAggregate
 from marrow.expr.runtime.values import (
     RuntimeValue,
@@ -139,18 +139,16 @@ struct Agg(Copyable, Movable, Writable):
 
 
 struct Window(Copyable, Movable, Writable):
-    """The Python type ``Window`` — a `WindowExpr` under an explicit
-    `write_repr_to`.
+    """The Python type ``Window`` — a window value (a `DynValue` boxing an
+    `Over`) under an explicit `write_repr_to`.
 
-    Boxed for the same reason `Plan` is: `WindowExpr` holds its function as an
-    `Optional[fn]` slot -- which is what keeps an unnamed window function out
-    of an AOT binary -- and a derived `repr` cannot see through a function
-    pointer."""
+    Boxed for the same reason `Plan` is: a `DynValue` holds its value behind
+    function pointers, and a derived `repr` cannot see through one."""
 
-    var value: WindowExpr
+    var value: DynValue
 
     @implicit
-    def __init__(out self, var value: WindowExpr):
+    def __init__(out self, var value: DynValue):
         self.value = value^
 
     def write_to[W: Writer](self, mut writer: W):
@@ -187,27 +185,33 @@ def wrap_agg(var value: RuntimeAggregate) raises -> PythonObject:
     return PythonObject(alloc=box^)
 
 
-def unwrap_window(py: PythonObject) raises -> WindowExpr:
-    """The `WindowExpr` inside a Python ``Window``."""
+def unwrap_window(py: PythonObject) raises -> DynValue:
+    """The window value inside a Python ``Window``."""
     return py.downcast_value_ptr[Window]()[].value.copy()
 
 
-def wrap_window(var value: WindowExpr) raises -> PythonObject:
+def wrap_window(var value: DynValue) raises -> PythonObject:
     """A Python ``Window`` holding `value`."""
     var box = Window(value^)
     return PythonObject(alloc=box^)
 
 
 def boxed(obj: PythonObject) raises -> DynValue:
-    """One expression: a bound ``Expr``, or a ``str`` naming a column.
+    """One expression: a bound ``Expr`` or ``Window``, or a ``str`` naming a
+    column.
 
     Lives here rather than in `plan.mojo` because both modules need it and
     `plan.mojo` already imports this one -- the "a bare string means
-    `col(name)`" convention should have exactly one authority."""
+    `col(name)`" convention should have exactly one authority. A ``Window``
+    is accepted wherever an ``Expr`` is, so a window value in a per-row
+    position reaches the plan's own guard and its diagnostic."""
     var builtins = Python.import_module("builtins")
     if Bool(py=builtins.isinstance(obj, builtins.str)):
         return DynValue(_column(String(py=obj)))
-    return DynValue(unwrap(obj))
+    try:
+        return unwrap_window(obj)
+    except:
+        return DynValue(unwrap(obj))
 
 
 def boxed_list(obj: PythonObject) raises -> List[DynValue]:
@@ -440,61 +444,59 @@ def expr_aggregate(
 # Window functions
 # ---------------------------------------------------------------------------
 #
-# The ranking verbs read no column, so they are module functions in both lanes.
-# Everything else is a method on what it reads: `lag`/`lead`/`first_value`/
-# `last_value`/`nth_value` on an expression, and `over` on an aggregate --
-# `Value.over` raises unless its receiver aggregates, because a per-row value
-# has nothing to do with a frame.
+# A window function is a Mojo *type* per kernel, so a call cannot cross into
+# Python before it has a window: `marrow.expr.WindowFunction` holds the call
+# as a kind name, and `window_over` resolves the name to its kernel here, the
+# way `RuntimeAggregate` resolves an aggregate's.
 
 
-def window_row_number() raises -> PythonObject:
-    return wrap_window(_row_number())
-
-
-def window_rank() raises -> PythonObject:
-    return wrap_window(_rank())
-
-
-def window_dense_rank() raises -> PythonObject:
-    return wrap_window(_dense_rank())
-
-
-def window_percent_rank() raises -> PythonObject:
-    return wrap_window(_percent_rank())
-
-
-def window_cume_dist() raises -> PythonObject:
-    return wrap_window(_cume_dist())
-
-
-def window_ntile(buckets: PythonObject) raises -> PythonObject:
-    return wrap_window(_ntile(Int(py=buckets)))
-
-
-def _expr_lag(
-    py_self: PythonObject, offset: PythonObject
+def window_over(
+    kind: PythonObject,
+    argument: PythonObject,
+    param: PythonObject,
+    partition_by: PythonObject,
+    order_by: PythonObject,
+    ascending: PythonObject,
+    nulls_first: PythonObject,
+    rows: PythonObject,
 ) raises -> PythonObject:
-    return wrap_window(unwrap(py_self).lag(Int(py=offset)))
-
-
-def _expr_lead(
-    py_self: PythonObject, offset: PythonObject
-) raises -> PythonObject:
-    return wrap_window(unwrap(py_self).lead(Int(py=offset)))
-
-
-def _expr_first_value(py_self: PythonObject) raises -> PythonObject:
-    return wrap_window(unwrap(py_self).first_value())
-
-
-def _expr_last_value(py_self: PythonObject) raises -> PythonObject:
-    return wrap_window(unwrap(py_self).last_value())
-
-
-def _expr_nth_value(
-    py_self: PythonObject, n: PythonObject
-) raises -> PythonObject:
-    return wrap_window(unwrap(py_self).nth_value(Int(py=n)))
+    """`kind(argument, param) OVER (...)`. `argument` is an ``Expr`` for the
+    kernels that read one and ignored by the rest, as `param` is by the
+    kernels that take none."""
+    var name = String(py=kind)
+    var p = boxed_list(partition_by)
+    var o = boxed_list(order_by)
+    var a = bool_list(ascending)
+    var nf = Bool(py=nulls_first)
+    var r = _rows(rows)
+    var value: DynValue
+    if name == "row_number":
+        value = _row_number().over(p^, o^, a^, nf, r^)
+    elif name == "rank":
+        value = _rank().over(p^, o^, a^, nf, r^)
+    elif name == "dense_rank":
+        value = _dense_rank().over(p^, o^, a^, nf, r^)
+    elif name == "percent_rank":
+        value = _percent_rank().over(p^, o^, a^, nf, r^)
+    elif name == "cume_dist":
+        value = _cume_dist().over(p^, o^, a^, nf, r^)
+    elif name == "ntile":
+        value = _ntile(Int(py=param)).over(p^, o^, a^, nf, r^)
+    elif name == "lag":
+        value = unwrap(argument).lag(Int(py=param)).over(p^, o^, a^, nf, r^)
+    elif name == "lead":
+        value = unwrap(argument).lead(Int(py=param)).over(p^, o^, a^, nf, r^)
+    elif name == "first_value":
+        value = unwrap(argument).first_value().over(p^, o^, a^, nf, r^)
+    elif name == "last_value":
+        value = unwrap(argument).last_value().over(p^, o^, a^, nf, r^)
+    elif name == "nth_value":
+        value = (
+            unwrap(argument).nth_value(Int(py=param)).over(p^, o^, a^, nf, r^)
+        )
+    else:
+        raise KeyError(t"unknown window function '{name}'")
+    return wrap_window(value^)
 
 
 def _agg_over(
@@ -508,26 +510,6 @@ def _agg_over(
     """`SUM(x) OVER (...)` — the aggregate evaluated over each frame."""
     return wrap_window(
         unwrap_agg(py_self).over(
-            boxed_list(partition_by),
-            boxed_list(order_by),
-            bool_list(ascending),
-            Bool(py=nulls_first),
-            _rows(rows),
-        )
-    )
-
-
-def _window_over(
-    py_self: PythonObject,
-    partition_by: PythonObject,
-    order_by: PythonObject,
-    ascending: PythonObject,
-    nulls_first: PythonObject,
-    rows: PythonObject,
-) raises -> PythonObject:
-    """The window this function runs in. Returns a copy with it replaced."""
-    return wrap_window(
-        unwrap_window(py_self).over(
             boxed_list(partition_by),
             boxed_list(order_by),
             bool_list(ascending),
@@ -627,11 +609,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_expr_str]("render")
         .def_method[_expr_name]("name")
         .def_method[_expr_tag]("tag")
-        .def_method[_expr_lag]("lag")
-        .def_method[_expr_lead]("lead")
-        .def_method[_expr_first_value]("first_value")
-        .def_method[_expr_last_value]("last_value")
-        .def_method[_expr_nth_value]("nth_value")
         .def_method[_expr_referenced_columns]("referenced_columns")
         .def_method[_expr_str]("__str__")
         .def_method[_expr_repr]("__repr__")
@@ -652,19 +629,13 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     # reallocates the module builder's type list.
     _ = (
         mb.add_type[Window]("Window")
-        .def_method[_window_over]("over")
         .def_method[_window_referenced_columns]("referenced_columns")
         .def_method[_window_str]("render")
         .def_method[_window_str]("__str__")
         .def_method[_window_repr]("__repr__")
     )
 
-    mb.def_function[window_row_number]("window_row_number")
-    mb.def_function[window_rank]("window_rank")
-    mb.def_function[window_dense_rank]("window_dense_rank")
-    mb.def_function[window_percent_rank]("window_percent_rank")
-    mb.def_function[window_cume_dist]("window_cume_dist")
-    mb.def_function[window_ntile]("window_ntile")
+    mb.def_function[window_over]("window_over")
     mb.def_function[expr_call]("expr_call")
     mb.def_function[expr_verbs]("expr_verbs")
     mb.def_function[agg_verbs]("agg_verbs")

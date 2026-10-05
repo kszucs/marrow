@@ -732,7 +732,11 @@ Three standing constraints:
   cast target — resolve a runtime dtype with `dispatch_*` and box each arm), or
   it does not depend on the type at all (a column read by name).
   `DynColumn`/`DynLiteral`/`DynCast` were all added and all removed for this
-  reason. The comptime nodes bind on `ComptimeValue`, so a runtime operand
+  reason. **`FieldRef` is the deliberate exception**: the relational verbs
+  (`select`, `drop`, `rename`, `with_columns`, `distinct`, `MergeWindows`)
+  keep a column with a reference to its resolved schema `Field`, which reads
+  the column and links no lane. A runtime `col(name)` there would link the
+  runtime lane's interpreter into every AOT binary that keeps a column. The comptime nodes bind on `ComptimeValue`, so a runtime operand
   inside one would discard the fusion the lane exists for: **a plan mixes lanes
   at the box, never inside a node.**
 - **The comptime lane is faster than the runtime lane on every query in

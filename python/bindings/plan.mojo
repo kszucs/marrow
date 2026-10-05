@@ -51,9 +51,7 @@ from expressions import (
     boxed_list as _boxed_list,
     unwrap as _unwrap_expr,
     unwrap_agg as _unwrap_agg,
-    unwrap_window as _unwrap_window,
 )
-from marrow.expr.logical import WindowExpr
 from marrow.kernels.join import JoinKind
 from marrow.io import DynSource
 from marrow.parquet import ParquetFile
@@ -254,25 +252,11 @@ def _plan_with_columns(
     """Add or replace computed columns, keeping every other column.
 
     `project`'s usable half — see `DynRelation.with_columns` for the
-    append-or-replace rule and why replacement happens in place."""
+    append-or-replace rule, why replacement happens in place, and where the
+    window values among `values` go."""
     return _wrap(
         _plan(py_self).with_columns(_string_list(names), _boxed_list(values))
     )
-
-
-def _plan_with_window_columns(
-    py_self: PythonObject, names: PythonObject, exprs: PythonObject
-) raises -> PythonObject:
-    """`SELECT *, <window functions> AS <names>`.
-
-    A separate entry point rather than a branch inside `with_columns`, because
-    the two are separate overloads on `DynRelation` for a reason: a
-    `List[WindowExpr]` cannot convert to a `List[DynValue]`, so the plan layer
-    cannot confuse them and neither can this."""
-    var out = List[WindowExpr]()
-    for i in range(Int(py=exprs.__len__())):
-        out.append(_unwrap_window(exprs[i]))
-    return _wrap(_plan(py_self).with_columns(_string_list(names), out^))
 
 
 def _plan_drop(
@@ -523,7 +507,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_select]("select")
         .def_method[_plan_project]("project")
         .def_method[_plan_with_columns]("with_columns")
-        .def_method[_plan_with_window_columns]("with_window_columns")
         .def_method[_plan_drop]("drop")
         .def_method[_plan_rename]("rename")
         .def_method[_plan_filter]("filter")

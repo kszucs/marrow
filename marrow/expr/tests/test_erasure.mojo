@@ -26,7 +26,7 @@ looking like an oversight.
 """
 
 from std.memory import ArcPointer
-from std.testing import assert_equal, assert_false
+from std.testing import assert_equal, assert_false, assert_true
 from ...dtypes import DynType, int64
 from ...execution import ExecContext
 from ...kernels.groupby import Groups
@@ -43,6 +43,7 @@ from ..logical import (
     Value,
 )
 from ..bindings import Bindings
+from ..builders import col, row_number
 from ...arrays import BoolArray
 from ...builders import BoolBuilder
 from ..index import Index
@@ -189,6 +190,23 @@ def test_dyn_value_masks_through_the_box() raises:
     var answer = boxed.mask(Index(chunks=1))
     assert_equal(len(answer), 1)
     assert_false(answer[0].value(), "the box must reach the probe's override")
+
+
+def test_dyn_value_reaches_a_window_value_through_the_box() raises:
+    """The window slots are wired by the boxed type: a window value answers
+    through them, and every other value raises rather than linking window
+    code."""
+    var windowed: DynValue = row_number().over(order_by=[col("a", int64)])
+    assert_true(windowed.windowed())
+    assert_equal(String(windowed.window_spec()), " order col(a) asc")
+    var plain = DynValue(_ValueProbe(_tally()))
+    assert_false(plain.windowed())
+    var raised = False
+    try:
+        _ = plain.window_spec()
+    except:
+        raised = True
+    assert_true(raised, "a value with no window has no spec")
 
 
 def test_erased_copies_share_one_destruction() raises:

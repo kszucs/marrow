@@ -51,6 +51,8 @@ from ...arrays import (
     Array,
     BinaryLikeArray,
     BinaryViewLikeArray,
+    DynArray,
+    StructArray,
     dispatch_array,
 )
 from ...dtypes import (
@@ -97,13 +99,13 @@ from ...kernels.aggregate import (
     ValidCount,
     Windowable,
 )
-from ...kernels.window import WindowFrame
+from ...kernels.window import WindowExtents, WindowFrame
 from ...schema import Schema
 from ..logical import (
-    DynValue,
     References,
     Shape,
     Value,
+    WindowFunction,
     reject_non_boolean_filter,
 )
 from .values import RuntimeValue
@@ -115,9 +117,9 @@ from std.memory import ArcPointer
 from ...kernels.groupby import Groups
 from ..physical import (
     BufferedAggregateOperator,
-    DynFrameOperator,
-    PerFrameOperator,
-    WindowedAggregateOperator,
+    ColumnEvaluator,
+    FrameEvaluator,
+    PerFrameEvaluator,
     Datum,
     DynOperator,
     Morsel,
@@ -293,7 +295,7 @@ def _lower_filter(
         return None
 
 
-struct RuntimeAggregate(Value):
+struct RuntimeAggregate(Value, WindowFunction):
     """An aggregate resolved by name, over erased operands.
 
     The runtime lane's aggregate node, and the counterpart of
@@ -500,37 +502,23 @@ struct RuntimeAggregate(Value):
 
         return resolve_aggregate(self._name, d, job)
 
-    def to_window(
-        self,
-        schema: Schema,
-        bindings: Bindings,
-        frame: WindowFrame,
-    ) raises -> DynFrameOperator:
-        """Resolve the name against the operand's dtype — the ladder
-        `to_operator` uses — and lower to a `WindowedAggregateOperator` when
-        the kernel it resolves to is `Windowable`, to one aggregate per
-        distinct frame otherwise."""
-        var d = self._input.dtype(schema)
+    comptime Evaluator = RuntimeAggregateEvaluator
+
+    def to_evaluator(
+        self, schema: Schema, bindings: Bindings, frame: WindowFrame
+    ) raises -> Self.Evaluator:
+        """The window counterpart of `to_operator`, the `FILTER` predicate
+        checked the same way."""
         if self._where:
             reject_non_boolean_filter(self._where.value().dtype(schema))
-
-        def job[Agg: AggKernel]() raises {imm} -> DynFrameOperator:
-            comptime if conforms_to(Agg, Windowable):
-                return WindowedAggregateOperator[Agg, RuntimeValue](
-                    self._input.copy(),
-                    _lower_filter(self._where, schema, bindings),
-                    bindings.copy(),
-                    frame,
-                )
-            else:
-                return PerFrameOperator(
-                    DynValue(self.copy()),
-                    schema.copy(),
-                    bindings.copy(),
-                    frame,
-                )
-
-        return resolve_aggregate(self._name, d, job)
+        return RuntimeAggregateEvaluator(
+            self._input.copy(),
+            self._name.copy(),
+            self._where.copy(),
+            schema.copy(),
+            bindings.copy(),
+            frame,
+        )
 
     def alias(self, var name: String) raises -> Self:
         """Rename this aggregate. Changes **only** `_alias`, so the resolver
@@ -558,3 +546,62 @@ struct RuntimeAggregate(Value):
         writer.write(self._name, "(", self._input, ")")
         if self._where:
             writer.write(" filter (", self._where.value(), ")")
+
+
+struct RuntimeAggregateEvaluator(FrameEvaluator):
+    """A `RuntimeAggregate` over every frame of a window: resolve the name
+    against the operand's dtype — the ladder `to_operator` uses — then
+    evaluate through `ColumnEvaluator` when the kernel is `Windowable`, once
+    per distinct frame through `PerFrameEvaluator` when it is not."""
+
+    var _input: RuntimeValue
+    var _name: String
+    var _where: Optional[RuntimeValue]
+    var _schema: Schema
+    var _bindings: Bindings
+    var _frame: WindowFrame
+
+    def __init__(
+        out self,
+        var input: RuntimeValue,
+        var name: String,
+        var predicate: Optional[RuntimeValue],
+        var schema: Schema,
+        var bindings: Bindings,
+        frame: WindowFrame,
+    ):
+        self._input = input^
+        self._name = name^
+        self._where = predicate^
+        self._schema = schema^
+        self._bindings = bindings^
+        self._frame = frame
+
+    def run(
+        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+    ) raises -> DynArray:
+        var d = self._input.dtype(self._schema)
+
+        def job[Agg: AggKernel]() raises {imm} -> DynArray:
+            comptime if conforms_to(Agg, Windowable):
+                var column = ColumnEvaluator[Agg, RuntimeValue](
+                    self._input.copy(),
+                    _lower_filter(self._where, self._schema, self._bindings),
+                    self._bindings.copy(),
+                    self._frame,
+                )
+                return column.run(sorted, extents, ctx)
+            else:
+                var per_frame = PerFrameEvaluator(
+                    RuntimeAggregate(
+                        self._input.copy(),
+                        self._name.copy(),
+                        self._where.copy(),
+                    ),
+                    self._schema.copy(),
+                    self._bindings.copy(),
+                    self._frame,
+                )
+                return per_frame.run(sorted, extents, ctx)
+
+        return resolve_aggregate(self._name, d, job)

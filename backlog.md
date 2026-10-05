@@ -31,7 +31,7 @@ all of them.
 | 2 | **Declared error types** — every raise site raises an `ArrowError` kind, but ~1,800 signatures still declare bare `raises` | A bare frame keeps only an error's text, so a caller recovers the kind by parsing it (`DynError(e)`) instead of catching a type, and Python gets it through the same parse. Migrate bottom-up: a function declares its kind (`raises CorruptError`) or `DynError` once nothing it calls raises a bare `Error`; dispatch ladders forward `raises E`. It also pays back a size cost: a kind raised in a bare frame is converted to `Error` inline at the site, which put +21 KB (+1.5%) on `query_streaming_agg_fused` and `query_expr2_agg_fused`, mostly in the `dispatch_*` and `DynBuilder._dispatch_mut` ladders | **L** | — |
 | 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
 | 4 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
-| 5 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowExpr.spec()` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
+| 5 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowSpec.__eq__` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
 | 6 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
 | 7 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
 | 8 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | — |
@@ -663,7 +663,7 @@ An aggregate with a `Windowable.over` (`kernels/aggregate.mojo`) runs over all
 its frames in one pass: a running fold while the frame's start holds still, a
 `SegmentTree` query otherwise, as DuckDB's `WindowSegmentTree` does. `Fold`
 (`sum`, `product`, `min`, `max`, `mean`, `count`) and `ValidCount` conform. The
-other three do not, so `WindowOperator._per_frame` runs their operator once per
+other three do not, so `PerFrameEvaluator` runs their operator once per
 distinct frame, and a cumulative `variance` over 100k distinct keys is
 quadratic.
 
@@ -828,8 +828,8 @@ Parquet in it.
 elimination, and aggregate pushdown.
 
 **Rendering is the blocker for the first two, not equality.** Comparing two
-boxed expressions needs no new slot — `WindowExpr.spec()` (`logical.mojo`)
-already does it by comparing `String(k)`, because `DynValue` exposes `write`
+boxed expressions needs no new slot — `WindowSpec.__eq__` (`logical.mojo`)
+already does it by comparing renderings, because `DynValue` exposes `write`
 and `write` is non-raising, so a rule can call it. That makes it exactly as
 sound as the rendering, and the rendering is not faithful: `BinaryLiteral`
 prints `lit(<N bytes>)` and never its value, so two different blobs compare

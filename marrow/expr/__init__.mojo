@@ -63,6 +63,7 @@ from .logical import (
     Limit,
     Multiplicity,
     Multiset,
+    Over,
     ParquetScan,
     Project,
     References,
@@ -73,8 +74,11 @@ from .logical import (
     Union,
     Value,
     Window,
-    WindowExpr,
+    WindowCall,
     WindowFrame,
+    WindowFunction,
+    WindowSpec,
+    WindowValue,
 )
 from .physical import (
     Datum,

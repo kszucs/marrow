@@ -25,7 +25,7 @@ from ...utils.testing import ScratchDir
 from ...builders import array, nulls
 from ...dtypes import float64, int64, string
 from ...tabular import RecordBatch, record_batch
-from ..logical import Value, WindowExpr
+from ..logical import DynValue, Over, WindowFunction
 from ..optimizer import AllRules
 from ..builders import (
     col,
@@ -188,18 +188,18 @@ def test_two_nans_in_the_order_key_are_peers() raises:
     `ORDER BY` compares with `IS NOT DISTINCT FROM`, so the two NaNs are one
     peer group and both rank 3. marrow answered 3, 4: `_encode_sort_key` sorts
     them adjacent and `equal` then said they differ, because it is IEEE and
-    the sort is not. `mark_changes` asks `KeyCompare`, under which NaN is NaN,
-    for that reason.
+    the sort is not. `WindowExtents.of_sorted` asks `KeyCompare`, under which
+    NaN is NaN, for that reason.
     DuckDB 1.5.5 was measured 2026-09-22 and agrees.
 
-    `dense_rank` is asserted alongside because it is a separate accumulator in
-    `WindowOperator`, not because it is more sensitive — in this shape the two
-    answer identically, and a split peer group would move both.
+    `dense_rank` is asserted alongside because it is a separate kernel, not
+    because it is more sensitive — in this shape the two answer identically,
+    and a split peer group would move both.
 
     A mixed-sign pair is asserted alongside, because it takes *both* halves to
-    work: a NaN-safe comparison alone left `-nan` and `+nan` at opposite ends of the
-    partition, where `mark_changes` — which compares adjacent rows — never
-    handed them to it. `_encode_sort_key` folding the NaN sign is what brings
+    work: a NaN-safe comparison alone left `-nan` and `+nan` at opposite ends of
+    the partition, where `WindowExtents.of_sorted` — which compares adjacent
+    rows — never handed them to it. `_encode_sort_key` folding the NaN sign is what brings
     them together.
     """
     var q = nan[DType.float64]()
@@ -440,29 +440,48 @@ def test_a_sum_over_an_all_null_frame_is_null() raises:
 # ---------------------------------------------------------------------------
 # What the surface refuses
 # ---------------------------------------------------------------------------
-def test_a_non_aggregate_cannot_take_a_frame() raises:
-    """`col("v", int64).over(...)` is a mistake, and it gets a diagnostic.
+def test_a_window_value_is_refused_where_a_value_per_row_is_needed() raises:
+    """A window value has no answer until its partition is read, so every
+    position evaluated once per row refuses it at plan time — a filter
+    (`QUALIFY` is a filter over a column `with_columns` added), a projection,
+    a sort key, a grouping key, an aggregate, and another window's key.
 
-    A per-row value has no frame, so evaluating one would either broadcast a
-    copy or silently pick a row. Both are worse than raising.
+    `col("v", int64).over(...)` is not here: a per-row value has no `.over`,
+    so that mistake does not compile.
     """
     var b = record_batch([array([1, 2], int64).copy()], names=["v"])
-    var raised = False
-    try:
-        _ = table(b^).with_columns(
-            ["x"], [col("v", int64).over(order_by=[col("v", int64)])]
-        )
-    except:
-        raised = True
-    assert_true(raised)
+    var rn: DynValue = row_number().over(order_by=[col("v", int64)])
+    var attempts = 0
+    var refused = 0
+    for position in range(6):
+        attempts += 1
+        try:
+            if position == 0:
+                _ = table(b.copy()).filter(rn.copy())
+            elif position == 1:
+                _ = table(b.copy()).project(["x"], [rn.copy()])
+            elif position == 2:
+                _ = table(b.copy()).sort_by([rn.copy()], [True])
+            elif position == 3:
+                _ = table(b.copy()).aggregate(
+                    [col("v", int64).sum()], [rn.copy()]
+                )
+            elif position == 4:
+                _ = table(b.copy()).aggregate([rn.copy()])
+            else:
+                _ = rank().over(order_by=[rn.copy()])
+        except e:
+            assert_true("window function" in String(e), String(e))
+            refused += 1
+    assert_true(refused == attempts)
 
 
 def test_a_window_column_cannot_shadow_an_existing_one() raises:
     """`Window` appends, so a repeated name would duplicate rather than replace.
 
-    The `DynValue` overload of `with_columns` replaces in place because a
-    `Project` names every output column anyway; this one raises instead, since
-    a duplicated name makes every later read by name ambiguous.
+    A per-row value replaces in place because a `Project` names every output
+    column anyway; a window value raises instead, since a duplicated name
+    makes every later read by name ambiguous.
     """
     var b = record_batch([array([1, 2], int64).copy()], names=["v"])
     var raised = False
@@ -703,9 +722,9 @@ def _partitioned_with_nulls() raises -> RecordBatch:
     )
 
 
-def _sliding[V: Value](aggregate: V) raises -> WindowExpr:
-    """`aggregate OVER (PARTITION BY k ORDER BY o ROWS 1 PRECEDING)`."""
-    return aggregate.over(
+def _sliding[F: WindowFunction](function: F) raises -> Over[F]:
+    """`function OVER (PARTITION BY k ORDER BY o ROWS 1 PRECEDING)`."""
+    return function.over(
         partition_by=[col("k", string)],
         order_by=[col("o", int64)],
         rows=(-1, 0),
@@ -808,8 +827,8 @@ def test_an_aggregate_without_over_is_evaluated_per_frame() raises:
 
 
 def test_a_windowed_filter_must_be_boolean() raises:
-    """A window aggregate lowers through `to_window`, not `to_operator`, so
-    it must reject a non-boolean `FILTER` there too, in both lanes, or
+    """A window aggregate lowers through `to_evaluator`, not `to_operator`,
+    so it must reject a non-boolean `FILTER` there too, in both lanes, or
     narrowing the predicate to a `BoolArray` aborts the process."""
     var b = record_batch([array([1, 2, 3], int64).copy()], names=["v"])
     var plans = [

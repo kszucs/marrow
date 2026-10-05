@@ -67,11 +67,11 @@ from ...buffers import Bitmap
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import (
-    DynValue,
     Nothing,
     References,
     Shape,
     Value,
+    WindowFunction,
     is_filled,
     reject_non_boolean_filter,
 )
@@ -83,10 +83,9 @@ from ...kernels.window import WindowExtents, WindowFrame
 from ...arrays import DynArray
 from ..physical import (
     BufferedAggregateOperator,
-    DynFrameOperator,
-    FrameOperator,
-    PerFrameOperator,
-    WindowedAggregateOperator,
+    ColumnEvaluator,
+    FrameEvaluator,
+    PerFrameEvaluator,
     Evaluable,
     Datum,
     EvalOperator,
@@ -103,7 +102,7 @@ struct Aggregate[
     Agg: AggKernel,
     A: Evaluable & Value,
     P: Evaluable & Value = Nothing,
-](Value):
+](Value, WindowFunction):
     """One aggregate: its operand, its `FILTER` predicate, and both ways of
     running.
 
@@ -220,6 +219,13 @@ struct Aggregate[
     def name(self) -> String:
         return self._alias.copy()
 
+    def references(self, mut into: References):
+        """The operand's reads, then the predicate's. Written out because
+        `WindowFunction` requires it, which leaves `Value`'s derived walk
+        unreachable here."""
+        self._input.references(into)
+        self._where.references(into)
+
     def dtype(self, schema: Schema) raises -> DynType:
         """Through `Agg.dtype`, from the *operand's* dtype.
 
@@ -301,39 +307,22 @@ struct Aggregate[
                 self._input.dtype(schema),
             )
 
-    def to_window(
-        self,
-        schema: Schema,
-        bindings: Bindings,
-        frame: WindowFrame,
-    ) raises -> DynFrameOperator:
-        """The window counterpart of `to_operator`, the machine chosen the
-        same way: a fused aggregate folds its frames straight from the
-        operand's lanes, any other `Windowable` one evaluates its operand to a
-        column first, and the rest run one aggregate per distinct frame."""
+    comptime Evaluator = AggregateEvaluator[Self.Agg, Self.A, Self.P]
+
+    def to_evaluator(
+        self, schema: Schema, bindings: Bindings, frame: WindowFrame
+    ) raises -> Self.Evaluator:
+        """The window counterpart of `to_operator`. The `FILTER` predicate is
+        checked here, at plan time, as `to_operator` checks it."""
         comptime if Self.filters:
             reject_non_boolean_filter(self._where.dtype(schema))
-        comptime if Self.fuses:
-            return WindowedFoldOperator[Self.Agg, Self.A, Self.P](
-                self._input.copy(),
-                self._where.copy(),
-                bindings.copy(),
-                self._input.dtype(schema),
-                frame,
-            )
-        elif conforms_to(Self.Agg, Windowable):
-            var predicate: Optional[DynOperator] = None
-            comptime if Self.filters:
-                predicate = Optional(
-                    self._where.to_operator(schema, False, bindings.copy())
-                )
-            return WindowedAggregateOperator[Self.Agg, Self.A](
-                self._input.copy(), predicate^, bindings.copy(), frame
-            )
-        else:
-            return PerFrameOperator(
-                DynValue(self.copy()), schema.copy(), bindings.copy(), frame
-            )
+        return AggregateEvaluator[Self.Agg, Self.A, Self.P](
+            self._input.copy(),
+            self._where.copy(),
+            schema.copy(),
+            bindings.copy(),
+            frame,
+        )
 
     def alias(self, var name: String) -> Self:
         """Rename this aggregate. `col("x", int64).sum().alias("total")`.
@@ -633,9 +622,82 @@ struct ScatteredAggregateOperator[
         return _emit_fold(self._state, 0)
 
 
-struct WindowedFoldOperator[
-    Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing
-](FrameOperator):
+struct AggregateEvaluator[
+    Agg: AggKernel, A: Evaluable & Value, P: Evaluable & Value
+](FrameEvaluator):
+    """An `Aggregate` over every frame of a window, the machine chosen the way
+    `Aggregate.to_operator` chooses one: a fused aggregate folds its frames
+    straight from the operand's lanes (`FoldEvaluator`), any other
+    `Windowable` one evaluates its operand to a column first
+    (`ColumnEvaluator`), and the rest run once per distinct frame
+    (`PerFrameEvaluator`).
+
+    One type for the three, because `Aggregate.Evaluator` must name a single
+    type whatever the branch; the branch is taken in `run`, at compile time.
+    """
+
+    var _input: Self.A
+    var _where: Self.P
+    var _schema: Schema
+    var _bindings: Bindings
+    var _frame: WindowFrame
+
+    def __init__(
+        out self,
+        var input: Self.A,
+        var predicate: Self.P,
+        var schema: Schema,
+        var bindings: Bindings,
+        frame: WindowFrame,
+    ):
+        self._input = input^
+        self._where = predicate^
+        self._schema = schema^
+        self._bindings = bindings^
+        self._frame = frame
+
+    def run(
+        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+    ) raises -> DynArray:
+        comptime if Aggregate[Self.Agg, Self.A, Self.P].fuses:
+            var fold = FoldEvaluator[Self.Agg, Self.A, Self.P](
+                self._input.copy(),
+                self._where.copy(),
+                self._bindings.copy(),
+                self._input.dtype(self._schema),
+                self._frame,
+            )
+            return fold.run(sorted, extents, ctx)
+        elif conforms_to(Self.Agg, Windowable):
+            var predicate: Optional[DynOperator] = None
+            comptime if is_filled[Self.P]:
+                predicate = Optional(
+                    self._where.to_operator(
+                        self._schema, False, self._bindings.copy()
+                    )
+                )
+            var column = ColumnEvaluator[Self.Agg, Self.A](
+                self._input.copy(),
+                predicate^,
+                self._bindings.copy(),
+                self._frame,
+            )
+            return column.run(sorted, extents, ctx)
+        else:
+            var per_frame = PerFrameEvaluator(
+                Aggregate[Self.Agg, Self.A, Self.P](
+                    self._input.copy(), self._where.copy()
+                ),
+                self._schema.copy(),
+                self._bindings.copy(),
+                self._frame,
+            )
+            return per_frame.run(sorted, extents, ctx)
+
+
+struct FoldEvaluator[Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing](
+    FrameEvaluator
+):
     """A fused fold over every window frame of one batch: the frame leaves
     come straight from the operand's lanes — `bind` once, `lane[1]` per row,
     `FILTER` as a validity mask — with no intermediate column, and
@@ -667,11 +729,11 @@ struct WindowedFoldOperator[
         self._frame = frame
 
     def run(
-        mut self, batch: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
     ) raises -> DynArray:
         comptime Leaf = FoldPartial[Self.Agg.Lane, Self.Agg.Acc]
-        var n = len(batch)
-        var bound = self._input.bind(batch, self._bindings)
+        var n = len(sorted)
+        var bound = self._input.bind(sorted, self._bindings)
         var leaves = List[Leaf](capacity=n)
         for i in range(n):
             leaves.append(
@@ -680,7 +742,7 @@ struct WindowedFoldOperator[
         var valid: Optional[Bitmap[mut=False]]
         comptime if Self.filters:
             valid = _admitted_validity(
-                self._input, bound, self._where, batch, self._bindings
+                self._input, bound, self._where, sorted, self._bindings
             )
         else:
             valid = self._input.validity(bound)

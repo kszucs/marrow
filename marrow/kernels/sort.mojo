@@ -111,8 +111,9 @@ def _encode_sort_key[
     **Every NaN is folded onto one bit pattern first**, exactly as
     `HashKernel._floating_lanes` does, so `sort` and `hash` answer the same
     question about NaN identity. The flip is otherwise sign-dependent and splits
-    them, which `mark_changes` cannot recover from: it compares *adjacent* rows,
-    so NaNs that never land together are never handed to a comparison at all.
+    them, which `WindowExtents.of_sorted` cannot recover from: it compares
+    *adjacent* rows, so NaNs that never land together are never handed to a
+    comparison at all.
     `test_sort_indices_puts_both_nan_signs_last` has the worked example.
     """
     comptime native = T.native

@@ -593,13 +593,23 @@ def test_windowing_a_per_row_value_says_what_to_do_instead(windowed):
         col("v").over(order_by=[col("v")])
 
 
-def test_windows_and_ordinary_expressions_cannot_share_a_call(windowed):
-    """They are two different plan nodes, and which ran first would change the
-    answer."""
-    with pytest.raises(TypeError, match="not both in one call"):
-        windowed.with_columns(
-            a=col("v") + 1, rn=ma.row_number().over(order_by=[col("v")])
-        )
+def test_a_window_may_read_a_column_added_in_the_same_call(windowed):
+    """Per-row values are added first and window values after, so the window
+    can order by a column the same call computes."""
+    out = windowed.with_columns(
+        neg=col("v") * -1, rn=ma.row_number().over(order_by=[col("neg")])
+    )
+    assert [(x["neg"], x["rn"]) for x in rows(out)] == [
+        (-1, 4),
+        (-2, 3),
+        (-3, 2),
+        (-4, 1),
+    ]
+
+
+def test_a_window_function_renders_its_parameters(windowed):
+    assert "lag(v, 2)" in col("v").lag(2).over(order_by=[col("v")]).render()
+    assert "ntile(4)" in ma.ntile(4).over(order_by=[col("v")]).render()
 
 
 def test_window_renders_readably(windowed):

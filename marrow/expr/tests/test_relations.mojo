@@ -626,7 +626,7 @@ def test_sorting_on_an_aggregate_raises() raises:
     `Filter` and `Project` grew the guard; `Sort` and `Aggregate`'s keys did
     not, so this reached `SortOperator`, which calls `.value()` on the `None`
     an aggregate answers from `push`. Four positions need the check and two
-    had it — which is why it now lives in one `reject_aggregate` rather than
+    had it — which is why it now lives in one `require_per_row` rather than
     being copied per node.
     """
     var raised = False

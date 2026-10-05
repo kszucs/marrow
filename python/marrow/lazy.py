@@ -34,7 +34,7 @@ an alias for ``sort_by`` (which is what `DynRelation` calls it).
 
 from . import libmarrow as _ma
 from ._wrapper import _Wrapper, unwrap
-from .expr import Aggregate, Column, Window, col
+from .expr import Aggregate, Column, col
 from .tabular import RecordBatch
 from .types import Schema
 
@@ -225,25 +225,14 @@ class LazyTable(_Wrapper):
         parallel lists. The output name is always written, never derived from
         the expression.
 
-        **Window functions go to a different plan node.** `DynRelation` has
-        two `with_columns` overloads and they are deliberately disjoint: a
-        `List[WindowExpr]` cannot convert to a `List[DynValue]`, so the plan
-        layer cannot confuse a windowed projection with an ordinary one. The
-        values are all-or-nothing here for the same reason — mixing the two in
-        one call would have to split into two nodes, and which one ran first
-        would change the answer.
+        **Window values come after the per-row ones**, each in a window node
+        of its own, so a window may read a column added in the same call but
+        not the reverse, and a window column cannot replace an existing one.
         """
         names, values = _projection(positional, named, "with_columns")
-        windows = [isinstance(v, Window) for v in values]
-        bindings = [unwrap(v) for v in values]
-        if any(windows):
-            if not all(windows):
-                raise TypeError(
-                    "with_columns: pass window functions or ordinary "
-                    "expressions, not both in one call — chain two calls"
-                )
-            return LazyTable.wrap(self._binding.with_window_columns(names, bindings))
-        return LazyTable.wrap(self._binding.with_columns(names, bindings))
+        return LazyTable.wrap(
+            self._binding.with_columns(names, [unwrap(v) for v in values])
+        )
 
     # ibis spells `with_columns` as `mutate`. Both work.
     mutate = with_columns
@@ -278,7 +267,7 @@ class LazyTable(_Wrapper):
         if aggs is None and keys is None and _is_aggregate_list(args):
             # `aggregate([col("v").sum()], ["k"])` -- the plan node's order.
             # Unambiguous: `by` names grouping keys, and an aggregate can never
-            # be one (`reject_aggregate` refuses it at the node).
+            # be one (`require_per_row` refuses it at the node).
             aggs = args[0]
             keys = args[1] if len(args) > 1 else ()
             args = ()
@@ -539,7 +528,7 @@ def _is_aggregate_list(args):
     """`aggregate(aggs, keys)` — a first argument that is a list of aggregates.
 
     `by` names grouping keys, and an aggregate can never be one: `Aggregate`
-    in the key position is what `reject_aggregate` refuses at the plan node.
+    in the key position is what `require_per_row` refuses at the plan node.
     So a non-empty list of `Aggregate` unambiguously means the plan's order."""
     return (
         len(args) in (1, 2)

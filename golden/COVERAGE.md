@@ -202,8 +202,7 @@ and `window_qualify` filters on a window function's output.
 `NTILE`, `PERCENT_RANK`, `CUME_DIST` and `NTH_VALUE` are implemented but have
 no case here — 11 of SQL's 12 window functions exist, and the corpus asks
 about seven of them. Not implemented: `RANGE` frames with explicit numeric
-bounds, and `EXCLUDE`. All seven cases keep `-- skip python` — the window
-surface is Mojo-only.
+bounds, and `EXCLUDE`. All seven cases run in both lanes.
 
 ## Recorded as unsupported
 

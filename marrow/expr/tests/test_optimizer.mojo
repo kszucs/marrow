@@ -22,7 +22,16 @@ from ...dtypes import field, int64, string
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
 from ...scalars import BoolScalar, Int64Scalar
-from ..builders import col, count_star, lit, row_number, scan, table
+from ..builders import (
+    col,
+    count_star,
+    dense_rank,
+    lit,
+    rank,
+    row_number,
+    scan,
+    table,
+)
 from ..runtime.values import and_, column, gt, literal, not_
 from ...kernels.join import (
     JOIN_ANTI,
@@ -880,21 +889,22 @@ def test_optimizer_reaches_a_fixpoint_with_splitting_and_pushdown() raises:
 
 
 # ---------------------------------------------------------------------------
-# Window — the node no rule knows about
+# Window — the node only MergeWindows reads
 # ---------------------------------------------------------------------------
-def test_no_rule_rewrites_a_plan_containing_a_window() raises:
-    """A `Window` is inert to every rule, and that must stay true by test.
+def test_no_rule_moves_a_node_into_a_window() raises:
+    """No rule moves a node into a `Window`'s input, and that must stay true
+    by test.
 
-    Today it holds for a reason that is invisible from here: `Window` is not
-    in `optimizer.mojo`'s import list, so no `isa[Window]()` exists and no
-    rule can *match* one. Rules still fire *inside* a window's subtree —
+    `MergeWindows` is the one rule that matches a `Window`, and it folds
+    stacked windows together without moving a row, so a lone window is inert
+    to it. Rules still fire *inside* a window's subtree —
     `Optimizer._rewritten_children` walks through `Window.traverse` — and
     `ColumnPruning` is the pass that actually stops, by falling through every
-    `isa` to `return node.copy()`. That is a real guarantee and a fragile one — a
-    future rule that imports the node and pattern-matches a `Filter` above it
-    would push a predicate below a window, which computes over its whole
-    partition and would then compute over a pruned one. Wrong numbers, no
-    error, and `precompile` cannot see it because nothing fails to compile.
+    `isa` to `return node.copy()`. A future rule that pattern-matched a
+    `Filter` above a window would push a predicate below it, and a window
+    computes over its whole partition: it would then compute over a pruned
+    one. Wrong numbers, no error, and `precompile` cannot see it because
+    nothing fails to compile.
 
     Both shapes are asserted: a filter above a window, which is the `QUALIFY`
     plan the golden corpus exercises, and a limit above one, which `TopN` and
@@ -928,6 +938,65 @@ def test_no_rule_rewrites_a_plan_containing_a_window() raises:
     # after the paren, so adjacency is expressible.
     assert_equal(
         _occurrences(optimized, "Window(InMemoryTable(3 rows)"), 1, optimized
+    )
+
+
+def _ties() raises -> RecordBatch:
+    """`a` ties once, so `rank` and `dense_rank` differ."""
+    return record_batch(
+        [
+            array([3, 1, 4, 1], int64).copy(),
+            array([10, 20, 30, 40], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+
+
+def test_merge_windows_folds_independent_windows_into_one_node() raises:
+    """`with_columns` builds a `Window` per value; independent values fold
+    into one node, which sorts once per distinct window — twice here, not
+    three times — and neither the answers nor the column order change."""
+    var plan = table(_ties()).with_columns(
+        ["r", "lg", "d"],
+        [
+            rank().over(order_by=[col("a", int64)]),
+            col("b", int64).lag().over(order_by=[col("b", int64)]),
+            dense_rank().over(order_by=[col("a", int64)]),
+        ],
+    )
+    _fires(plan)
+    var optimized = plan.optimize[AllRules]()
+    var rendered = String(optimized)
+    assert_equal(_occurrences(rendered, "Window("), 1, rendered)
+    assert_equal(
+        String(optimized.optimize[AllRules]()), rendered, "not idempotent"
+    )
+    _check(
+        plan,
+        [
+            [3, 1, 4, 1],
+            [10, 20, 30, 40],
+            [3, 1, 4, 1],
+            [_NULL, 10, 20, 30],
+            [2, 1, 3, 1],
+        ],
+    )
+
+
+def test_merge_windows_keeps_a_value_above_the_column_it_reads() raises:
+    """`lag(rn)` reads `rn`, so it cannot be computed beside it."""
+    var plan = (
+        table(_ties())
+        .with_columns(["rn"], [row_number().over(order_by=[col("a", int64)])])
+        .with_columns(
+            ["prev"],
+            [col("rn", int64).lag().over(order_by=[col("a", int64)])],
+        )
+    )
+    _inert(plan)
+    _check(
+        plan,
+        [[3, 1, 4, 1], [10, 20, 30, 40], [3, 1, 4, 2], [2, _NULL, 3, 1]],
     )
 
 

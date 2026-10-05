@@ -536,9 +536,9 @@ def test_sort_indices_puts_both_nan_signs_last() raises:
 
     `_encode_sort_key`'s flip is sign-dependent, so before it folded the NaN
     sign this answered `-nan, -inf, 1.0, inf, nan` — the two NaNs at opposite
-    ends. DuckDB puts both last. It is not cosmetic: `mark_changes` compares
-    adjacent rows, so NaNs that never land together were never handed to
-    `equal_nan_safe` and `rank` split them into peer groups no comparison
+    ends. DuckDB puts both last. It is not cosmetic: `WindowExtents.of_sorted`
+    compares adjacent rows, so NaNs that never land together were never handed
+    to `equal_nan_safe` and `rank` split them into peer groups no comparison
     could merge.
     """
     var b = Float64Builder(capacity=5)

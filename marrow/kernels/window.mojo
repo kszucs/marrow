@@ -181,6 +181,56 @@ struct WindowExtents(Copyable, Movable, Sized):
             self.partition_end[j] = p_end
             self.peer_end[j] = g_end
 
+    @staticmethod
+    def of_sorted(
+        sorted_keys: List[DynArray], partition_keys: Int, ctx: ExecContext
+    ) raises -> WindowExtents:
+        """The extents of a batch already sorted by `sorted_keys`, whose first
+        `partition_keys` columns are the `PARTITION BY` keys and the rest the
+        `ORDER BY` keys.
+
+        A row starts a partition where any partition key changes, and a peer
+        group where any key at all does — the `ORDER BY` keys are compared
+        after the `PARTITION BY` ones, so a partition boundary is always a peer
+        boundary too.
+        """
+        var n = len(sorted_keys[0]) if len(sorted_keys) > 0 else 0
+        var new_partition = List[Bool](length=n, fill=False)
+        if n > 0:
+            new_partition[0] = True
+        for i in range(partition_keys):
+            Self._mark_changes(sorted_keys[i], new_partition, ctx)
+        var new_peer = new_partition.copy()
+        for i in range(partition_keys, len(sorted_keys)):
+            Self._mark_changes(sorted_keys[i], new_peer, ctx)
+        return WindowExtents(new_partition^, new_peer^)
+
+    @staticmethod
+    def _mark_changes(
+        key: DynArray, mut flags: List[Bool], ctx: ExecContext
+    ) raises:
+        """Set `flags[j]` where sorted `key` differs between rows `j-1` and
+        `j`.
+
+        ORs into `flags`, so a compound key changes wherever *any* of its
+        columns does. "Differs" is `IS DISTINCT FROM`, not `=`: neither null
+        nor NaN is distinct from itself here. That is what `PARTITION BY` and
+        `ORDER BY` both mean — the same key identity `GROUP BY` groups by — so
+        it is the same kernel, `KeyCompare`, comparing each row with the one
+        before it. Nested keys compare structurally for the same reason.
+        """
+        var n = len(key)
+        if n >= 2:
+            var same = Bitmap.alloc_zeroed(n - 1)
+            same.set_range(0, n - 1, True)
+            var rows = arange[Int32Type](0, n - 1)
+            KeyCompare.apply(
+                key.slice(1, n - 1), rows, key.slice(0, n - 1), rows, same, ctx
+            )
+            for j in range(1, n):
+                if not same.test(j - 1):
+                    flags[j] = True
+
     def __len__(self) -> Int:
         return len(self.partition_start)
 
@@ -208,42 +258,22 @@ struct WindowExtents(Copyable, Movable, Sized):
         return (self.partition_start[j], self.peer_end[j])
 
 
-def mark_changes(key: DynArray, mut flags: List[Bool], ctx: ExecContext) raises:
-    """Set `flags[j]` where sorted `key` differs between rows `j-1` and `j`.
+trait WindowKernel(Copyable, Deinitable, Movable):
+    """A non-aggregate window function: a ranking, distribution, offset or
+    frame-edge kernel over a sorted partition.
 
-    ORs into `flags`, so a caller marks a whole key list by calling this once
-    per column: a compound key changes wherever *any* of its columns does.
+    A kernel carries its own parameters as fields — `lag`'s offset,
+    `ntile`'s bucket count, `nth_value`'s `n` — validated when it is built, so
+    a plan cannot hold one that will fail at execution.
 
-    "Differs" is `IS DISTINCT FROM`, not `=`: neither null nor NaN is distinct
-    from itself here. That is what `PARTITION BY` and `ORDER BY` both mean —
-    the same key identity `GROUP BY` groups by — so it is the same kernel,
-    `KeyCompare`, comparing each row with the one before it. Nested keys
-    compare structurally for the same reason.
-    """
-    var n = len(key)
-    if n < 2:
-        return
-    var same = Bitmap.alloc_zeroed(n - 1)
-    same.set_range(0, n - 1, True)
-    var rows = arange[Int32Type](0, n - 1)
-    KeyCompare.apply(
-        key.slice(1, n - 1), rows, key.slice(0, n - 1), rows, same, ctx
-    )
-    for j in range(1, n):
-        if not same.test(j - 1):
-            flags[j] = True
+    `argument` is the operand column, already evaluated over the sorted batch;
+    a kernel that reads none (`reads_argument()` is `False`) is handed a
+    column of nulls and ignores it.
 
-
-trait WindowFunction:
-    """One window function, as a type.
-
-    `argument` is the operand column, already evaluated by the caller — the
-    ranking functions ignore it and take no argument at all.
-
-    `name` and `ranks` are **methods rather than `comptime` members**: a
-    `comptime name: T` requirement does not resolve reliably as `F.name` off
-    an externally-bound parameter (CLAUDE.md, "Associated types"), and both are
-    read exactly that way, through the `F` a verb names.
+    `name`, `reads_argument` and `dtype` are **static methods rather than
+    `comptime` members**: a `comptime` requirement does not resolve reliably
+    off an externally bound parameter (CLAUDE.md, "Associated types"), and all
+    three are read through the `K` a `WindowCall` names.
     """
 
     @staticmethod
@@ -252,33 +282,34 @@ trait WindowFunction:
         ...
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        """This function's output type, or `None` for "the argument's".
-
-        **Also says whether the function takes an argument**, because the two
-        are the same fact: a function answering from position alone has no
-        operand to take a type from, so it must state one; a function reading a
-        column answers in that column's type. All nine agree, and a separate
-        flag would be a second place to get it wrong.
-
-        It does have to be a type and not a flag: `percent_rank` and
-        `cume_dist` read no column, like `row_number`, but answer `float64`
-        rather than `int64`.
-        """
+    def reads_argument() -> Bool:
+        """Whether the kernel reads an operand column."""
         ...
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        """The output type, given the operand's — fixed for the kernels that
+        read none, the operand's own for the gathers."""
+        ...
+
+    def params(self) -> List[Int]:
+        """The parameters a plan renders after the operand, e.g. `[2]` for
+        `lag(v, 2)`."""
+        ...
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
+        """This kernel's column over the sorted batch the extents describe."""
         ...
 
 
-struct RowNumber(WindowFunction):
+@fieldwise_init
+struct RowNumber(WindowKernel):
     """`ROW_NUMBER()` — position within the partition, ties broken by order."""
 
     @staticmethod
@@ -286,14 +317,20 @@ struct RowNumber(WindowFunction):
         return String("row_number")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return int64.to_dyn()
+    def reads_argument() -> Bool:
+        return False
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return int64.to_dyn()
+
+    def params(self) -> List[Int]:
+        return List[Int]()
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
@@ -303,7 +340,8 @@ struct RowNumber(WindowFunction):
         return out.finish().to_dyn()
 
 
-struct Rank(WindowFunction):
+@fieldwise_init
+struct Rank(WindowKernel):
     """`RANK()` — the peer group's first position, so ties leave gaps."""
 
     @staticmethod
@@ -311,14 +349,20 @@ struct Rank(WindowFunction):
         return String("rank")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return int64.to_dyn()
+    def reads_argument() -> Bool:
+        return False
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return int64.to_dyn()
+
+    def params(self) -> List[Int]:
+        return List[Int]()
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
@@ -330,7 +374,8 @@ struct Rank(WindowFunction):
         return out.finish().to_dyn()
 
 
-struct DenseRank(WindowFunction):
+@fieldwise_init
+struct DenseRank(WindowKernel):
     """`DENSE_RANK()` — the peer group's ordinal, so ties leave no gap."""
 
     @staticmethod
@@ -338,14 +383,20 @@ struct DenseRank(WindowFunction):
         return String("dense_rank")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return int64.to_dyn()
+    def reads_argument() -> Bool:
+        return False
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return int64.to_dyn()
+
+    def params(self) -> List[Int]:
+        return List[Int]()
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
@@ -355,33 +406,46 @@ struct DenseRank(WindowFunction):
         return out.finish().to_dyn()
 
 
-struct Offset[lead: Bool](WindowFunction):
-    """`LAG` and `LEAD` — the same gather, opposite directions.
+struct Offset[lead: Bool](WindowKernel):
+    """`LAG(v, n)` and `LEAD(v, n)` — the same gather, opposite directions.
 
-    One body rather than two because `LAG(v, n)` *is* `LEAD(v, -n)`; the verb
-    negates at construction and this parameter carries only which name the
-    caller wrote, so a plan renders the function they asked for.
+    One body rather than two because `LAG(v, n)` *is* `LEAD(v, -n)`; the
+    parameter carries which one the caller wrote, so a plan renders the
+    function they asked for with the offset they wrote.
     """
+
+    var offset: Int
+    """Rows to read away from the current one, in this kernel's direction."""
+
+    def __init__(out self, offset: Int):
+        self.offset = offset
 
     @staticmethod
     def name() -> String:
         return String("lead") if Self.lead else String("lag")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return None
+    def reads_argument() -> Bool:
+        return True
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return argument.copy()
+
+    def params(self) -> List[Int]:
+        return [self.offset]
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
+        var step = self.offset if Self.lead else -self.offset
         var idx = Int32Builder(len(extents))
         for j in range(len(extents)):
-            var src = j + offset
+            var src = j + step
             if (
                 src < extents.partition_start[j]
                 or src >= extents.partition_end[j]
@@ -389,10 +453,11 @@ struct Offset[lead: Bool](WindowFunction):
                 idx.append_null()
             else:
                 idx.append(Int32(src))
-        return TakeKernel.dispatch(argument.value().copy(), idx.finish(), ctx)
+        return TakeKernel.dispatch(argument.copy(), idx.finish(), ctx)
 
 
-struct Edge[first: Bool](WindowFunction):
+@fieldwise_init
+struct Edge[first: Bool](WindowKernel):
     """`FIRST_VALUE` and `LAST_VALUE` — the two ends of the frame.
 
     The end is a **comptime parameter**, the shape `Pad[left]` uses in
@@ -406,14 +471,20 @@ struct Edge[first: Bool](WindowFunction):
         return String("first_value") if Self.first else String("last_value")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return None
+    def reads_argument() -> Bool:
+        return True
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return argument.copy()
+
+    def params(self) -> List[Int]:
+        return List[Int]()
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
@@ -426,7 +497,7 @@ struct Edge[first: Bool](WindowFunction):
                 idx.append(Int32(start))
             else:
                 idx.append(Int32(stop - 1))
-        return TakeKernel.dispatch(argument.value().copy(), idx.finish(), ctx)
+        return TakeKernel.dispatch(argument.copy(), idx.finish(), ctx)
 
 
 comptime Lag = Offset[False]
@@ -435,7 +506,8 @@ comptime FirstValue = Edge[True]
 comptime LastValue = Edge[False]
 
 
-struct PercentRank(WindowFunction):
+@fieldwise_init
+struct PercentRank(WindowKernel):
     """`PERCENT_RANK()` — `(rank - 1) / (rows - 1)`, `float64`."""
 
     @staticmethod
@@ -443,14 +515,20 @@ struct PercentRank(WindowFunction):
         return String("percent_rank")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return float64.to_dyn()
+    def reads_argument() -> Bool:
+        return False
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return float64.to_dyn()
+
+    def params(self) -> List[Int]:
+        return List[Int]()
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
@@ -463,7 +541,8 @@ struct PercentRank(WindowFunction):
         return out.finish().to_dyn()
 
 
-struct CumeDist(WindowFunction):
+@fieldwise_init
+struct CumeDist(WindowKernel):
     """`CUME_DIST()` — rows through this peer group over partition rows."""
 
     @staticmethod
@@ -471,14 +550,20 @@ struct CumeDist(WindowFunction):
         return String("cume_dist")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return float64.to_dyn()
+    def reads_argument() -> Bool:
+        return False
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return float64.to_dyn()
+
+    def params(self) -> List[Int]:
+        return List[Int]()
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
@@ -490,43 +575,48 @@ struct CumeDist(WindowFunction):
         return out.finish().to_dyn()
 
 
-struct NTile(WindowFunction):
-    """`NTILE(n)` — the partition in `n` buckets, the count carried in
-    `offset`.
+struct NTile(WindowKernel):
+    """`NTILE(n)` — the partition in `n` buckets."""
 
-    The bucket count rides the `offset` slot rather than being an operand: it
-    is a constant of the *window*, not a column, so there is nothing per-row
-    for an argument to hold. `lag`'s distance uses that slot for the same
-    reason.
-    """
+    var buckets: Int
+    """How many buckets; positive, checked when the kernel is built."""
+
+    def __init__(out self, buckets: Int) raises:
+        if buckets < 1:
+            raise InvalidError(
+                t"ntile: bucket count must be positive, got {buckets}"
+            )
+        self.buckets = buckets
 
     @staticmethod
     def name() -> String:
         return String("ntile")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return int64.to_dyn()
+    def reads_argument() -> Bool:
+        return False
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return int64.to_dyn()
+
+    def params(self) -> List[Int]:
+        return [self.buckets]
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        if offset < 1:
-            raise InvalidError(
-                t"ntile: bucket count must be positive, got {offset}"
-            )
         var out = Int64Builder(len(extents))
         for j in range(len(extents)):
             var lo = extents.partition_start[j]
             var rows = extents.partition_end[j] - lo
             var i = j - lo
-            var small = rows // offset
-            var extra = rows % offset
+            var small = rows // self.buckets
+            var extra = rows % self.buckets
             if small == 0:
                 out.append(Int64(i + 1))
             elif i < extra * (small + 1):
@@ -537,38 +627,50 @@ struct NTile(WindowFunction):
         return out.finish().to_dyn()
 
 
-struct NthValue(WindowFunction):
-    """`NTH_VALUE(v, n)` — the `n`-th row of the frame, `n` in `offset`.
+struct NthValue(WindowKernel):
+    """`NTH_VALUE(v, n)` — the `n`-th row of the frame, 1-based.
 
     `FIRST_VALUE` is `NTH_VALUE(v, 1)` and answers through `Edge` instead,
     because a frame's first row is an edge the extents already name; an
     arbitrary `n` has to be counted from that edge.
     """
 
+    var n: Int
+    """Which row of the frame, 1-based; positive, checked when built."""
+
+    def __init__(out self, n: Int) raises:
+        if n < 1:
+            raise InvalidError(t"nth_value: n must be positive, got {n}")
+        self.n = n
+
     @staticmethod
     def name() -> String:
         return String("nth_value")
 
     @staticmethod
-    def fixed_dtype() -> Optional[DynType]:
-        return None
+    def reads_argument() -> Bool:
+        return True
 
     @staticmethod
+    def dtype(argument: DynType) -> DynType:
+        return argument.copy()
+
+    def params(self) -> List[Int]:
+        return [self.n]
+
     def compute(
+        self,
         extents: WindowExtents,
-        argument: Optional[DynArray],
-        offset: Int,
+        argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        if offset < 1:
-            raise InvalidError(t"nth_value: n must be positive, got {offset}")
         var idx = Int32Builder(len(extents))
         for j in range(len(extents)):
             var lo, hi = extents.frame(j, frame)
-            var at = lo + offset - 1
+            var at = lo + self.n - 1
             if at < hi:
                 idx.append(Int32(at))
             else:
                 idx.append_null()
-        return TakeKernel.dispatch(argument.value().copy(), idx.finish(), ctx)
+        return TakeKernel.dispatch(argument.copy(), idx.finish(), ctx)
