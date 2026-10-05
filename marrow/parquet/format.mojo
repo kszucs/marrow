@@ -61,6 +61,11 @@ struct FieldHeader(Copyable, Movable):
         self.last = 0
 
 
+comptime MAX_SKIP_DEPTH = 64
+"""How many levels of nested values `ThriftCompactReader.skip` follows,
+Thrift's own default recursion limit."""
+
+
 struct ThriftCompactReader[o: Origin[mut=False]](Movable):
     """Reads Thrift Compact Protocol values from an immutable byte span.
 
@@ -116,7 +121,7 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
     def read_bytes(mut self) raises CorruptError -> Span[UInt8, Self.o]:
         """Read a length-prefixed byte string as a zero-copy sub-span."""
         var n = Int(self.read_varint())
-        if self.pos + n > len(self.data):
+        if n < 0 or n > len(self.data) - self.pos:
             raise CorruptError("thrift: byte string exceeds input")
         var start = self.pos
         self.pos += n
@@ -179,10 +184,21 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
         var size = Int(b >> 4)
         if size == 15:
             size = Int(self.read_varint())
+        # Every element takes at least one byte, so a size past the bytes
+        # left is corrupt -- and refusing it here keeps a forged size from
+        # spinning a reader's loop.
+        if size < 0 or size > len(self.data) - self.pos:
+            raise CorruptError(t"thrift: list of {size} elements exceeds input")
         return (elem_type, size)
 
-    def skip(mut self, field_type: UInt8) raises CorruptError:
-        """Recursively skip a value of the given type (forward compat)."""
+    def skip(mut self, field_type: UInt8, depth: Int = 0) raises CorruptError:
+        """Recursively skip a value of the given type (forward compat).
+
+        A value nesting more than `MAX_SKIP_DEPTH` levels is refused rather
+        than recursed into.
+        """
+        if depth >= MAX_SKIP_DEPTH:
+            raise CorruptError("thrift: values nest too deeply")
         if field_type == TC_BOOL_TRUE or field_type == TC_BOOL_FALSE:
             pass
         elif field_type == TC_BYTE:
@@ -200,22 +216,37 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
         elif field_type == TC_LIST or field_type == TC_SET:
             var elem_type, size = self.read_list_header()
             for _ in range(size):
-                self.skip(elem_type)
+                self._skip_element(elem_type, depth)
         elif field_type == TC_MAP:
             var size = Int(self.read_varint())
+            if size < 0 or size > len(self.data) - self.pos:
+                raise CorruptError(
+                    t"thrift: map of {size} entries exceeds input"
+                )
             if size > 0:
                 var kv = self._u8()
                 var ktype = kv >> 4
                 var vtype = kv & 0x0F
                 for _ in range(size):
-                    self.skip(ktype)
-                    self.skip(vtype)
+                    self._skip_element(ktype, depth)
+                    self._skip_element(vtype, depth)
         elif field_type == TC_STRUCT:
             var f = FieldHeader()
             while self.next_field(f):
-                self.skip(f.type)
+                self.skip(f.type, depth + 1)
         else:
             raise CorruptError(t"thrift: unknown field type {field_type}")
+
+    def _skip_element(
+        mut self, elem_type: UInt8, depth: Int
+    ) raises CorruptError:
+        """Skip one list, set or map element. A boolean *element* is a byte
+        of its own, where a boolean *field* lives in its header's type nibble.
+        """
+        if elem_type == TC_BOOL_TRUE or elem_type == TC_BOOL_FALSE:
+            _ = self._u8()
+        else:
+            self.skip(elem_type, depth + 1)
 
 
 struct ThriftCompactWriter(Movable):
@@ -778,9 +809,58 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
 
         So a page occupies `header_length + compressed_page_size` bytes, and
         that sum is now spelled at every call site.
+
+        The header is checked against `data`, which must hold the page whole:
+        a size or count that is negative, a body that runs past `data`, or v2
+        levels that run past the body raise `CorruptError`.
         """
         var r = ThriftCompactReader(data, pos)
         var ph = Self.read(r)
+        if ph.type == PageType.DATA and not ph.data_page_header:
+            raise CorruptError("parquet: data page without its header")
+        elif ph.type == PageType.DATA_V2 and not ph.data_page_header_v2:
+            raise CorruptError("parquet: data page v2 without its header")
+        elif ph.type == PageType.DICTIONARY and not ph.dictionary_page_header:
+            raise CorruptError("parquet: dictionary page without its header")
+        if ph.compressed_page_size < 0 or ph.uncompressed_page_size < 0:
+            raise CorruptError("parquet: page header with a negative size")
+        if ph.compressed_page_size > len(data) - r.pos:
+            raise CorruptError(
+                t"parquet: page body of {ph.compressed_page_size} bytes runs"
+                t" past its column chunk"
+            )
+        var num_values = 0
+        if ph.data_page_header:
+            num_values = ph.data_page_header.value().num_values
+        elif ph.dictionary_page_header:
+            num_values = ph.dictionary_page_header.value().num_values
+        elif ph.data_page_header_v2:
+            ref v2 = ph.data_page_header_v2.value()
+            num_values = v2.num_values
+            var rep_len = v2.repetition_levels_byte_length
+            var def_len = v2.definition_levels_byte_length
+            if rep_len < 0 or def_len < 0:
+                raise CorruptError(
+                    "parquet: data page v2 with a negative level length"
+                )
+            if (
+                rep_len + def_len > ph.compressed_page_size
+                or rep_len + def_len > ph.uncompressed_page_size
+            ):
+                raise CorruptError(
+                    "parquet: data page v2 levels run past the page body"
+                )
+            if v2.num_nulls < 0 or v2.num_nulls > v2.num_values:
+                raise CorruptError(
+                    t"parquet: data page v2 with {v2.num_nulls} nulls in"
+                    t" {v2.num_values} values"
+                )
+            if v2.num_rows < 0:
+                raise CorruptError(
+                    "parquet: data page v2 with a negative row count"
+                )
+        if num_values < 0:
+            raise CorruptError("parquet: page with a negative value count")
         return (ph^, r.pos - pos)
 
     @staticmethod

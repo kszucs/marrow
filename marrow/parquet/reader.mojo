@@ -370,19 +370,15 @@ struct PageReader[o: Origin[mut=False]](Movable):
         var cursor = 0
         var leveled = self.leaf.max_rep >= 1
         if leveled:
-            var l = LittleEndian.u32(body, cursor)
-            cursor += 4
+            var levels = _v1_levels(body, cursor)
+            cursor += 4 + len(levels)
             reps = Rle.decode(
-                body[cursor : cursor + l],
-                Rle.bit_width(self.leaf.max_rep),
-                num_values,
+                levels, Rle.bit_width(self.leaf.max_rep), num_values
             )
-            cursor += l
         if self.leaf.max_def >= 1:
             var bw = Rle.bit_width(self.leaf.max_def)
-            var l = LittleEndian.u32(body, cursor)
-            cursor += 4
-            var levels = body[cursor : cursor + l]
+            var levels = _v1_levels(body, cursor)
+            cursor += 4 + len(levels)
             if leveled:
                 # nested columns need the full def levels to rebuild offsets
                 defs = Rle.decode(levels, bw, num_values)
@@ -399,7 +395,6 @@ struct PageReader[o: Origin[mut=False]](Movable):
                 )
                 if num_present != num_values:
                     defs = Rle.decode(levels, bw, num_values)
-            cursor += l
         return Page(
             body=body,
             num_values=num_values,
@@ -521,11 +516,20 @@ struct PageReader[o: Origin[mut=False]](Movable):
                     Rle.bit_width(self.leaf.max_def),
                     dph2.num_values,
                 )
+            # Present values are the levels at max_def. The header's
+            # `num_nulls` is no substitute under a list: writers disagree on
+            # whether an empty or null list counts as a null.
+            var num_present = dph2.num_values - dph2.num_nulls
+            if len(defs) > 0:
+                num_present = 0
+                for d in defs:
+                    if Int(d) == self.leaf.max_def:
+                        num_present += 1
             self.produced += dph2.num_values
             return Page(
                 body=body,
                 num_values=dph2.num_values,
-                num_present=dph2.num_values - dph2.num_nulls,
+                num_present=num_present,
                 value_offset=lvl_len,
                 encoding=dph2.encoding,
                 rep_levels=reps^,
@@ -585,6 +589,22 @@ struct PageReader[o: Origin[mut=False]](Movable):
             raise NotImplementedError("parquet: skip_next on a non-data page")
         self.produced += nv
         return nv
+
+
+def _v1_levels[
+    o: Origin[mut=False]
+](body: Span[UInt8, o], cursor: Int) raises CorruptError -> Span[UInt8, o]:
+    """The level stream at `cursor` of a v1 data page body: a 4-byte
+    little-endian length, then that many bytes of RLE."""
+    if cursor + 4 > len(body):
+        raise CorruptError("parquet: data page ends inside a level length")
+    var length = LittleEndian.u32(body, cursor)
+    if length > len(body) - cursor - 4:
+        raise CorruptError(
+            t"parquet: data page levels of {length} bytes run past the page"
+            t" body"
+        )
+    return body[cursor + 4 : cursor + 4 + length]
 
 
 # ---------------------------------------------------------------------------

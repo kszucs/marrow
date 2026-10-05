@@ -88,6 +88,11 @@ comptime NODE_STRUCT: Int = 1
 comptime NODE_LIST: Int = 2
 comptime NODE_MAP: Int = 3
 
+# Arrow C++'s `kDefaultSchemaDepthLimit`, with depth counted as it counts it.
+comptime MAX_SCHEMA_DEPTH: Int = 100
+"""How deep a schema element may sit, the root at depth 1. Reading recurses
+once per level."""
+
 
 struct NodeGeom(Copyable, Movable):
     """Dremel geometry for a schema node, in absolute definition/repetition
@@ -253,7 +258,8 @@ struct SchemaNode(Copyable, Movable):
                 any_null = any_null or is_null
             if r <= geom.rep_level and d >= geom.child_def:
                 child_idx += 1
-        offsets.append(Int32(child_idx))
+        if started:
+            offsets.append(Int32(child_idx))  # close the last instance
 
         var offsets_arr = offsets.finish()
         var mask_opt: Optional[BoolArray] = None
@@ -561,7 +567,9 @@ struct SchemaMapping(Movable):
         binary_type: dt.DynType = dt.binary,
         declared: Optional[Schema] = None,
     ) raises -> SchemaMapping:
-        """Parse a footer's schema for reading.
+        """Parse a footer's schema for reading, and check the footer's row
+        groups against it: each must hold one column chunk per leaf, and no
+        negative row count.
 
         `binary_type` is the Arrow type `BYTE_ARRAY` leaves read as --
         `binary`, `large_binary` or `binary_view` -- and a leaf annotated
@@ -591,18 +599,41 @@ struct SchemaMapping(Movable):
             List[SchemaNode](),
             binary_type.copy(),
         )
+        if len(m.elements) == 0:
+            raise CorruptError("parquet: schema has no root element")
+        var num_children = m.elements[0].num_children
+        if num_children < 0:
+            raise CorruptError(
+                "parquet: schema root has a negative number of children"
+            )
         var idx = 1  # schema[0] is the root group
         var fields = List[dt.Field]()
-        for _ in range(meta.schema[0].num_children):
+        for _ in range(num_children):
             var want = Optional[dt.DynType](None)
             if declared:
-                ref name = meta.schema[idx].name
+                var name = m._element(idx).name
                 for ref f in declared.value().fields:
                     if f.name == name:
                         want = f.dtype.copy()
-            var node = m._parse_node(idx, 0, 0, declared=want^)
+            var node = m._parse_node(idx, 0, 0, depth=2, declared=want^)
             fields.append(node.field.copy())
             m.nodes.append(node^)
+        if idx != len(m.elements):
+            raise CorruptError(
+                t"parquet: schema has {len(m.elements)} elements, its groups"
+                t" declare {idx}"
+            )
+        for i in range(len(meta.row_groups)):
+            ref rg = meta.row_groups[i]
+            if rg.num_rows < 0:
+                raise CorruptError(
+                    t"parquet: row group {i} has {rg.num_rows} rows"
+                )
+            if len(rg.columns) != len(m.leaves):
+                raise CorruptError(
+                    t"parquet: row group {i} has {len(rg.columns)} column"
+                    t" chunks, the schema {len(m.leaves)} leaf columns"
+                )
         # File-level key/value metadata (incl. PyArrow's ARROW:schema) rides on
         # the schema, mirroring pyarrow's `read_table(...).schema.metadata`.
         var md = Dict[String, String]()
@@ -896,11 +927,22 @@ struct SchemaMapping(Movable):
             ),
         )
 
+    def _element(self, idx: Int) raises CorruptError -> SchemaElement:
+        """The schema element at `idx`, or a `CorruptError` when a group
+        declares more children than the schema holds."""
+        if idx >= len(self.elements):
+            raise CorruptError(
+                t"parquet: schema has {len(self.elements)} elements, its"
+                t" groups declare more"
+            )
+        return self.elements[idx].copy()
+
     def _parse_node(
         mut self,
         mut idx: Int,
         def_base: Int,
         rep_base: Int,
+        depth: Int,
         slot_def: Int = 0,
         under_optional: Bool = False,
         declared: Optional[dt.DynType] = None,
@@ -915,9 +957,22 @@ struct SchemaMapping(Movable):
         slot exists — bumped past each enclosing list's repeated group so leaves
         under nested lists read the right present/absent slots. `under_optional`
         marks that a nullable struct ancestor exists, so flat leaves must keep
-        their def levels for the struct-null reconstruction."""
-        var el = self.elements[idx].copy()
+        their def levels for the struct-null reconstruction.
+
+        `depth` is the element's depth, the root at 1 and the repeated group a
+        list or map steps over counted too; past `MAX_SCHEMA_DEPTH` the schema
+        is refused rather than recursed into."""
+        if depth > MAX_SCHEMA_DEPTH:
+            raise CorruptError(
+                t"parquet: schema nests deeper than {MAX_SCHEMA_DEPTH} levels"
+            )
+        var el = self._element(idx)
         idx += 1
+        if el.num_children < 0:
+            raise CorruptError(
+                t"parquet: schema element '{el.name}' has a negative number of"
+                t" children"
+            )
         var rep = el.repetition_type
         var d = def_base + (1 if rep == Repetition.OPTIONAL else 0)
         var r = rep_base + (1 if rep == Repetition.REPEATED else 0)
@@ -955,7 +1010,7 @@ struct SchemaMapping(Movable):
             # reconstructs exactly like list<struct<key,value>> — the same Dremel
             # geometry — and only the final array type (MapArray) differs. Skip
             # the repeated key_value group and parse key + value at d+1 / r+1.
-            var kv = self.elements[idx].copy()
+            var kv = self._element(idx)
             if kv.num_children != 2:
                 raise CorruptError(
                     t"parquet: map 'key_value' group must have exactly a key "
@@ -972,6 +1027,7 @@ struct SchemaMapping(Movable):
                 idx,
                 d + 1,
                 r + 1,
+                depth + 2,
                 slot_def=d + 1,
                 under_optional=under_optional,
                 declared=want_key^,
@@ -980,6 +1036,7 @@ struct SchemaMapping(Movable):
                 idx,
                 d + 1,
                 r + 1,
+                depth + 2,
                 slot_def=d + 1,
                 under_optional=under_optional,
                 declared=want_item^,
@@ -994,7 +1051,14 @@ struct SchemaMapping(Movable):
         ):
             # LIST = optional group(LIST) { repeated group { <element> } }. Skip
             # the repeated middle group (adds one def + one rep level) and parse
-            # the element as this list's single child.
+            # the element as this list's single child. A repeated field that is
+            # the element itself, or a group of several, is the legacy
+            # two-level form.
+            if self._element(idx).num_children != 1:
+                raise NotImplementedError(
+                    t"parquet: two-level list encoding (column '{el.name}')"
+                    t" is not supported"
+                )
             idx += 1
             var want = Optional[dt.DynType](None)
             if declared and declared.value().is_list():
@@ -1005,6 +1069,7 @@ struct SchemaMapping(Movable):
                 idx,
                 d + 1,
                 r + 1,
+                depth + 2,
                 slot_def=d + 1,
                 under_optional=under_optional,
                 declared=want^,
@@ -1020,7 +1085,7 @@ struct SchemaMapping(Movable):
         for _ in range(el.num_children):
             var want = Optional[dt.DynType](None)
             if declared and declared.value().is_struct():
-                ref name = self.elements[idx].name
+                var name = self._element(idx).name
                 for ref f in declared.value().as_struct().fields:
                     if f.name == name:
                         want = f.dtype.copy()
@@ -1028,6 +1093,7 @@ struct SchemaMapping(Movable):
                 idx,
                 d,
                 r,
+                depth + 1,
                 slot_def=slot_def,
                 under_optional=child_optional,
                 declared=want^,

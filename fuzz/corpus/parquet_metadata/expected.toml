@@ -13,6 +13,20 @@ verdict = "accept"
 verdict = "reject"
 
 ["b8-schema-children.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B8"
-match = "marrow/parquet/schema.mojo:596"
+
+["b-pr1-thrift-bytes-length.parquet"]
+verdict = "reject"
+bug = "B-PR1"
+note = "a byte-string length varint past Int's range reads as negative"
+
+["b-pr2-thrift-list-size.parquet"]
+verdict = "reject"
+bug = "B-PR2"
+note = "a list size far past the bytes left spun the reader's loop: a timeout"
+
+["b-pr3-thrift-skip-depth.parquet"]
+verdict = "reject"
+bug = "B-PR3"
+note = "an unknown field nesting 20,000 structs: skip recursed until the stack overflowed"

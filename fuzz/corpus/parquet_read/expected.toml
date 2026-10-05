@@ -48,9 +48,8 @@ note = "a page index over small pages"
 verdict = "reject"
 
 ["b8-schema-children.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B8"
-match = "marrow/parquet/schema.mojo:596"
 
 ["b9-dictionary-page-short.parquet"]
 verdict = "crash"
@@ -63,14 +62,12 @@ bug = "B10"
 note = "plain builds stop at a Bitmap bounds assertion, ASAN at the value write"
 
 ["b11-row-group-columns.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B11"
-match = "marrow/parquet/reader.mojo:2980"
 
 ["b12-page-header-missing.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B12"
-match = "Optional.value()"
 
 ["b13-rle-run-truncated.parquet"]
 verdict = "crash"
@@ -78,11 +75,55 @@ bug = "B13"
 match = "marrow/parquet/codecs.mojo:66"
 
 ["b14-page-size-negative.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B14"
-match = "marrow/parquet/reader.mojo:427"
 
 ["b15-levels-length.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B15"
-match = "marrow/parquet/reader.mojo:385"
+
+["b-pr4-row-group-rows-negative.parquet"]
+verdict = "reject"
+bug = "B-PR4"
+note = "a negative RowGroup.num_rows sized the leaf builders' buffers"
+
+["b-pr6-fixed-dictionary-short.parquet"]
+verdict = "crash"
+bug = "B-PR6"
+sanitizer = "address"
+note = "a fixed-width dictionary page with fewer bytes than num_values: PrimitiveLeafBuilder.consume copies past the page"
+
+["b-pr7-dictionary-index-bytes.parquet"]
+verdict = "crash"
+bug = "B-PR7"
+match = "marrow/parquet/reader.mojo:921"
+note = "a dictionary index past a byte-array dictionary: ByteArrayLeafBuilder._place_dictionary slices past it"
+
+["b-pr8-dictionary-index-gather.parquet"]
+verdict = "crash"
+bug = "B-PR8"
+note = "more values than rows, as B10, but on the dictionary fast path: Rle.gather writes past the values buffer (ASAN); a plain build stops at a Bitmap bounds assertion"
+
+["b-pr9-dictionary-bit-width.parquet"]
+verdict = "crash"
+bug = "B-PR9"
+match = "marrow/parquet/codecs.mojo:89"
+note = "a dictionary-index bit width over 32 reaches Rle unchecked from PrimitiveLeafBuilder.consume"
+
+["b-pr10-levels-count-overread.parquet"]
+verdict = "crash"
+bug = "B-PR10"
+match = "marrow/utils/byteorder.mojo:186"
+note = "Rle.count_matches reads past the v1 definition levels it is given"
+
+["b-pr11-plain-byte-array-length.parquet"]
+verdict = "crash"
+bug = "B-PR11"
+match = "marrow/parquet/reader.mojo:890"
+note = "a PLAIN byte-array value whose 4-byte length runs past the page"
+
+["b-pr12-rle-boolean-length.parquet"]
+verdict = "crash"
+bug = "B-PR12"
+match = "marrow/parquet/codecs.mojo:1033"
+note = "an RLE boolean page whose 4-byte length runs past the values"

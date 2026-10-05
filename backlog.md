@@ -99,13 +99,6 @@ around the pinned inputs. Line numbers are as of `2c28f9bb`.
 - **Parquet write of any `large_list` column aborts** — `get: wrong variant
   type`. `parquet/schema.mojo:309` and `:428` read the column with
   `as_list()`, which holds only `ListArray`. (`test_parquet_write_large_list`)
-- **Parquet read of a v2 page under a list over-reads the page.**
-  `parquet/reader.mojo:529` takes the present-value count from the header's
-  `num_nulls`; PyArrow's count leaves empty and null lists out, so for
-  `list<struct<decimal128(9,2)>>` holding `[]` marrow decodes a value past the
-  end (`codecs.mojo:504` / `reader.mojo:1824` asserts). The v1 path counts
-  `def == max_def` instead (`reader.mojo:388`). Primitive leaves read past the
-  values silently. (`test_parquet_read_v2_page_under_empty_list`)
 
 **Silently wrong data:**
 
@@ -124,9 +117,6 @@ around the pinned inputs. Line numbers are as of `2c28f9bb`.
 - **Parquet: dictionary encoding merges `0.0` and `-0.0`** — `Dict` keyed by
   float value (`parquet/codecs.mojo:622`), so the later sign is lost.
   (`test_parquet_write_keeps_signed_zero`)
-- **Parquet: a zero-row list or map column reads back as one empty list** —
-  `_fold_list_offsets` appends the closing offset unconditionally
-  (`parquet/schema.mojo:256`). (`test_parquet_read_zero_row_list`)
 - **IPC file writer reuses the first batch's dictionary for every batch**
   (`ipc.mojo:2234` skips a written id without comparing); later batches decode
   against the wrong dictionary. PyArrow refuses the replacement; the stream
@@ -680,15 +670,18 @@ read past it, but there is no reproducer for that yet.
 | B5 | `ipc.mojo:701` `_FlatbufReader` | nested tables recurse without a depth limit: stack overflow |
 | B6 | `ipc.mojo:2291` `read_array` | builds `ArrayData` without checking any buffer against `length` -- values, offsets and their contents, the validity bitmap -- so formatting the result reads past the allocation (`arrays.mojo:1146`, `:3348`, `views.mojo:908`, `buffers.mojo:858`); one input gets as far as reading a struct child's buffer as device memory (`buffers.mojo:904`) |
 | B7 | `ipc.mojo:2194` `read_array` | a positive `null_count` with an empty validity buffer keeps the count and drops the bitmap; `PrimitiveArray.slice` then unwraps the absent bitmap (`arrays.mojo:805`) |
-| B8 | `parquet/schema.mojo:596` `SchemaMapping.from_parquet` | trusts `schema[0]` exists and its `num_children` fits the schema list. 12 bytes reproduce it, and it is what almost every Parquet mutation hits first -- the `parquet_metadata` and `parquet_page_index` sessions found nothing else |
 | B9 | `parquet/codecs.mojo:741` `Dictionary.byte_offsets` | a byte-array dictionary page holding fewer values than `num_values` reads past the page (`utils/byteorder.mojo:75`) |
 | B10 | `parquet/reader.mojo:733` `PrimitiveLeafBuilder._scatter` | a page with more values than the chunk has rows **writes** past the values buffer (ASAN: heap-buffer-overflow, WRITE of size 8) |
-| B11 | `parquet/reader.mojo:2980` | a row group with fewer column chunks than the schema has leaves |
-| B12 | `parquet/reader.mojo:483` `PageReader.next` | a `DATA_PAGE_V2` page without its `data_page_header_v2` unwraps an empty `Optional` |
 | B13 | `parquet/codecs.mojo:66` `Rle._run_value` | a truncated RLE run header reads past the data |
-| B14 | `parquet/reader.mojo:427` | a negative `compressed_page_size` slices with start past end |
-| B15 | `parquet/reader.mojo:385` | a v1 page's definition-level length is not checked against the page body |
 | B16 | `utils/snappy.mojo` | a literal whose 4-byte length is `0xFFFFFFFF`: libsnappy wraps it to 0 and accepts, the native decoder refuses -- a parity gap, not a memory bug |
+| B-PR6 | `parquet/reader.mojo` `PrimitiveLeafBuilder.consume` | a fixed-width dictionary page with fewer bytes than `num_values` is copied past the page (ASAN only) |
+| B-PR7 | `parquet/reader.mojo:921` `ByteArrayLeafBuilder._place_dictionary` | a dictionary index past a byte-array dictionary slices past it |
+| B-PR8 | `parquet/codecs.mojo` `Rle.gather` | more values than rows, as B10, on the dictionary fast path: writes past the values buffer (ASAN) |
+| B-PR9 | `parquet/codecs.mojo:89` `Rle` | a dictionary-index bit width over 32 reaches the decoder unchecked |
+| B-PR10 | `utils/byteorder.mojo:186` `Rle.count_matches` | reads past the v1 definition levels it is given |
+| B-PR11 | `parquet/reader.mojo:890` | a PLAIN byte-array value whose 4-byte length runs past the page |
+| B-PR12 | `parquet/codecs.mojo:1033` | an RLE boolean page whose 4-byte length runs past the values |
+| B-PR13 | `parquet/reader.mojo` leaf builders | a huge positive `RowGroup.num_rows` is preallocated up front and aborts (an allocation, not corruption); the builders should grow as pages arrive |
 
 B6 and B7 are one fix in spirit: `read_array` should validate what it builds,
 which is what Arrow C++'s `ValidateFull` and arrow-rs's `ArrayData::validate`

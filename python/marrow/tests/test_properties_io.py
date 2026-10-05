@@ -452,12 +452,6 @@ def test_ipc_file_dictionary_replacement(tmp_path):
     assert got == [["x", "x"], ["y", "z"]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="parquet read of a zero-row list or map column returns one empty "
-    "list: the offsets fold in parquet/schema.mojo closes an instance that was "
-    "never opened",
-)
 @pytest.mark.parametrize(
     "dtype",
     [pa.list_(pa.int32()), pa.map_(pa.string(), pa.int32())],
@@ -483,13 +477,6 @@ def test_parquet_write_null_struct_over_list(tmp_path):
     assert pq.read_table(path).column("c").to_pylist() == arr.to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="parquet read of a v2 data page under a list trusts the header's "
-    "num_nulls for the present-value count; PyArrow's count leaves out empty "
-    "and null lists, so marrow decodes a value past the page's end and aborts",
-)
 @pytest.mark.parametrize(
     "dtype",
     [

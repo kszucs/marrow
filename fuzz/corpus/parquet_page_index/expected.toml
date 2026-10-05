@@ -15,6 +15,5 @@ verdict = "accept"
 note = "no page index at all"
 
 ["b8-schema-children.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B8"
-match = "marrow/parquet/schema.mojo:596"
