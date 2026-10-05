@@ -31,31 +31,31 @@ bug = "B1"
 note = "a buffer length of terabytes; fixed: refused by the same body check (392829c4)"
 
 ["b2-node-count.arrow"]
-verdict = "crash"
+verdict = "reject"
 bug = "B2"
-match = "marrow/ipc.mojo:2179"
+note = "fixed: running out of field nodes or buffers raises"
 
 ["b2-buffer-count.arrow"]
-verdict = "crash"
+verdict = "reject"
 bug = "B2"
-match = "marrow/ipc.mojo:2190"
+note = "fixed: running out of field nodes or buffers raises"
 
 ["b3-utf8-field-name.arrow"]
-verdict = "crash"
+verdict = "reject"
 bug = "B3"
-match = "not valid UTF"
+note = "fixed: flatbuffer strings are validated as UTF-8"
 
 ["b4-dictionary-type.arrow"]
-verdict = "crash"
+verdict = "reject"
 bug = "B4"
-match = "as_type: wrong type"
+note = "fixed: a DictionaryEncoding that does not read is refused, not ignored"
 
 ["b6-buffer-short.arrow"]
-verdict = "crash"
+verdict = "reject"
 bug = "B6"
-match = "out of bounds for length"
+note = "fixed: B3 stopped swallowing errors under a field, and its metadata is malformed too, so it is refused there; B6 itself is pinned in test_ipc.mojo"
 
 ["b7-nulls-without-bitmap.arrow"]
-verdict = "crash"
+verdict = "reject"
 bug = "B7"
-match = "Optional.value()"
+note = "fixed: the reader validates every array it builds"

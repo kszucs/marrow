@@ -40,7 +40,6 @@ from .errors import (
 from .arrays import (
     ArrayData,
     BinaryViewArray,
-    DictionaryArray,
     DynArray,
     Int32Array,
     NullArray,
@@ -78,6 +77,8 @@ comptime _HEADER_DICTIONARY_BATCH: UInt8 = 2
 comptime _HEADER_RECORD_BATCH: UInt8 = 3
 comptime _METADATA_VERSION_V5: Int16 = 4
 comptime _ENDIANNESS_LITTLE: Int16 = 0
+# How deeply schema fields may nest.
+comptime _MAX_NESTING_DEPTH = 64
 comptime _TYPE_NULL: UInt8 = 1
 comptime _TYPE_INT: UInt8 = 2
 comptime _TYPE_FLOATING_POINT: UInt8 = 3
@@ -325,7 +326,9 @@ struct _FieldIpcInfo(Copyable, Movable):
         the matched node's children, so that nested dicts inside the value type
         can still be resolved during decoding.
         """
-        if ipc_info.dict_id == target_id:
+        # Every node that is not a dictionary carries -1, which a dictionary
+        # batch may name too.
+        if ipc_info.dict_id == target_id and dtype.is_dictionary():
             ref d = dtype.as_dictionary()
             var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
             return _DictLookup(d.value_type().copy(), vt_ipc^)
@@ -614,6 +617,10 @@ struct _FlatbufReader(Movable):
     def __init__(out self, var buf: List[UInt8]):
         self._buf = buf^
 
+    def size(self) -> Int:
+        """The buffer's length in bytes."""
+        return len(self._buf)
+
     def root(self) raises -> UInt32:
         return LittleEndian.checked[DType.uint32](self._buf, 0)
 
@@ -690,10 +697,14 @@ struct _FlatbufReader(Movable):
         var length = Int(LittleEndian.checked[DType.uint32](self._buf, str_pos))
         if str_pos + 4 + length > len(self._buf):
             raise CorruptError("flatbuffers: string extends beyond buffer")
-        var bytes = List[UInt8](capacity=length)
-        for i in range(length):
-            bytes.append(self._buf[str_pos + 4 + i])
-        return String(unsafe_from_utf8=bytes^)
+        try:
+            return String(
+                from_utf8=Span(self._buf)[str_pos + 4 : str_pos + 4 + length]
+            )
+        except:
+            raise CorruptError(
+                t"flatbuffers: the string at {str_pos} is not valid UTF-8"
+            )
 
     def read_vector(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
@@ -1465,10 +1476,8 @@ struct _IpcDecoder(Movable):
         var schema_pos = self._r.read_table(msg_pos, 2)
         var fields = self._decode_schema_fields(schema_pos, out_ipc)
         var metadata = Dict[String, String]()
-        try:
+        if self._r.has_field(schema_pos, 2):
             metadata = self._read_kv_vec(schema_pos, 2)
-        except:
-            pass
         return Schema(fields=fields^, metadata=metadata^)
 
     def decode_dict_batch(
@@ -1532,12 +1541,18 @@ struct _IpcDecoder(Movable):
             native_codecs,
             dict_values,
         )
+        var length = Int(self._r.read_i64(rb_pos, 0, 0))
         var columns = List[DynArray]()
         for i in range(len(schema.fields)):
             var ipc = (
                 ipc_infos[i].copy() if i < len(ipc_infos) else _FieldIpcInfo()
             )
             columns.append(batch_dec.read_array(schema.fields[i].dtype, ipc))
+            if columns[i].length() != length:
+                raise CorruptError(
+                    t"ipc: column {i} holds {columns[i].length()} values in a"
+                    t" batch of {length} rows"
+                )
         return RecordBatch(schema=schema, columns=columns^)
 
     def read_footer(
@@ -1550,10 +1565,8 @@ struct _IpcDecoder(Movable):
         var schema_pos = self._r.read_table(footer_pos, 1)
         var fields = self._decode_schema_fields(schema_pos, out_ipc)
         var metadata = Dict[String, String]()
-        try:
+        if self._r.has_field(schema_pos, 2):
             metadata = self._read_kv_vec(schema_pos, 2)
-        except:
-            pass
         var dv = self._r.read_vector(footer_pos, 2)
         var nd = Int(self._r.vector_len(dv))
         for i in range(nd):
@@ -1584,9 +1597,10 @@ struct _IpcDecoder(Movable):
         var fields = List[dt.Field]()
         var fields_vec = self._r.read_vector(schema_pos, 1)
         var n = Int(self._r.vector_len(fields_vec))
+        var budget = self._r.size() // 4
         for i in range(n):
             var fp = self._r.vec_offset(fields_vec, UInt32(i))
-            fields.append(self._read_field(fp, out_ipc))
+            fields.append(self._read_field(fp, out_ipc, budget, 0))
         return fields^
 
     def _read_record_batch_meta(
@@ -1644,28 +1658,45 @@ struct _IpcDecoder(Movable):
         return compression
 
     def _read_field(
-        self, fp: UInt32, mut out_ipc: List[_FieldIpcInfo]
+        self,
+        fp: UInt32,
+        mut out_ipc: List[_FieldIpcInfo],
+        mut budget: Int,
+        depth: Int,
     ) raises -> dt.Field:
+        # Child offsets may point back at an enclosing table, or several at
+        # one table, so both the nesting and the number of fields read are
+        # bounded rather than trusted. A tree of fields spends at least one
+        # 4-byte offset per field, which is what `budget` counts down.
+        if depth >= _MAX_NESTING_DEPTH:
+            raise CorruptError(
+                t"ipc: fields nested deeper than {_MAX_NESTING_DEPTH} levels"
+            )
+        budget -= 1
+        if budget < 0:
+            raise CorruptError(
+                "ipc: the schema names more fields than its metadata can hold"
+            )
         var name = self._r.read_string(fp, 0)
         var nullable = self._r.read_bool(fp, 1, False)
         var type_type = self._r.read_u8(fp, 2, 0)
 
         var children = List[dt.Field]()
         var child_ipc = List[_FieldIpcInfo]()
-        try:
+        # Absent for a leaf. A present but malformed one, or a child that does
+        # not read, is corrupt rather than empty.
+        if self._r.has_field(fp, 5):
             var children_vec = self._r.read_vector(fp, 5)
             var n = Int(self._r.vector_len(children_vec))
             for i in range(n):
                 var child_pos = self._r.vec_offset(children_vec, UInt32(i))
-                children.append(self._read_field(child_pos, child_ipc))
-        except:
-            pass  # absent children vector is normal for leaf types
+                children.append(
+                    self._read_field(child_pos, child_ipc, budget, depth + 1)
+                )
 
         var metadata = Dict[String, String]()
-        try:
+        if self._r.has_field(fp, 6):
             metadata = self._read_kv_vec(fp, 6)
-        except:
-            pass
 
         var dtype: dt.DynType
         if type_type == _TYPE_NULL:
@@ -1733,6 +1764,13 @@ struct _IpcDecoder(Movable):
             var keys_sorted = self._r.read_bool(tp, 0, False)
             if len(children) == 0:
                 raise CorruptError("map Field must have 1 child, got 0")
+            # `MapType` reads its key and item out of a two-field struct.
+            ref entries = children[0].dtype
+            if not entries.is_struct() or len(entries.as_struct().fields) != 2:
+                raise CorruptError(
+                    t"map Field must hold a struct of key and value, got"
+                    t" {entries}"
+                )
             dtype = dt.MapType(children[0].copy(), keys_sorted).to_dyn()
         elif type_type == _TYPE_LIST:
             if len(children) == 0:
@@ -1799,15 +1837,24 @@ struct _IpcDecoder(Movable):
                 t"_IpcDecoder: unsupported type_type: {Int(type_type)}"
             )
 
-        # Check for DictionaryEncoding at slot 4 — wraps the value type in DictionaryType.
+        # DictionaryEncoding, slot 4, wraps the value type in DictionaryType.
         # The dict_id is stored in _FieldIpcInfo rather than on the type itself.
         var own_dict_id = -1
-        try:
+        if self._r.has_field(fp, 4):
             var de_pos = self._r.read_table(fp, 4)
             own_dict_id = Int(self._r.read_i64(de_pos, 0, 0))
-            var idx_tp = self._r.read_table(de_pos, 1)
-            var idx_bw = Int(self._r.read_i32(idx_tp, 0, 32))
-            var idx_signed = self._r.read_bool(idx_tp, 1, False)
+            if own_dict_id < 0:
+                # The readers index their dictionaries by id.
+                raise NotImplementedError(
+                    t"ipc: negative dictionary id {own_dict_id}"
+                )
+            # Without an index type the indices are signed 32-bit.
+            var idx_bw = 32
+            var idx_signed = True
+            if self._r.has_field(de_pos, 1):
+                var idx_tp = self._r.read_table(de_pos, 1)
+                idx_bw = Int(self._r.read_i32(idx_tp, 0, 32))
+                idx_signed = self._r.read_bool(idx_tp, 1, False)
             var ordered = self._r.read_bool(de_pos, 2, False)
             var index_dtype: dt.DynType
             if idx_signed:
@@ -1829,8 +1876,6 @@ struct _IpcDecoder(Movable):
                 else:
                     index_dtype = dt.uint64
             dtype = dt.dictionary(index_dtype^, dtype.copy(), ordered).to_dyn()
-        except:
-            pass  # no DictionaryEncoding at slot 4
 
         out_ipc.append(_FieldIpcInfo(own_dict_id, child_ipc^))
         return dt.Field(name, dtype^, nullable, metadata^)
@@ -2176,6 +2221,11 @@ struct _BatchDecoder(Movable):
     def read_array(
         mut self, dtype: dt.DynType, ipc_info: _FieldIpcInfo
     ) raises -> DynArray:
+        if self.node_idx >= len(self.nodes):
+            raise CorruptError(
+                t"ipc: the batch has {len(self.nodes)} field nodes, fewer than"
+                t" its schema needs"
+            )
         var node = self.nodes[self.node_idx]
         self.node_idx += 1
 
@@ -2185,10 +2235,11 @@ struct _BatchDecoder(Movable):
         # Null type: FieldNode is consumed but no body buffers — neither validity
         # nor data — per Arrow spec.
         if dtype.is_null():
+            if length < 0:
+                raise CorruptError(t"ipc: a null column of length {length}")
             return NullArray(length)
 
-        var validity_buf = self.bufs[self.buf_idx]
-        self.buf_idx += 1
+        var validity_buf = self._next_buffer()
 
         var bitmap: Optional[Bitmap[mut=False]] = None
         if null_count > 0 and validity_buf.length > 0:
@@ -2198,10 +2249,13 @@ struct _BatchDecoder(Movable):
                 self._body_buffer(off, n_bytes), length=length
             )
 
+        var layout = dtype.layout()
         var data_buffers = List[Buffer[mut=False]]()
+        for _ in range(layout.num_buffers()):
+            self._consume_buffer(data_buffers)
         var children = List[ArrayData]()
 
-        # Dictionary: consume index buffer then reconstruct from dict_values lookup.
+        # Dictionary: the indices are read; the values come from dict_values.
         # The dict_id comes from ipc_info (not the logical type) so that the type
         # system remains free of IPC metadata.
         if dtype.is_dictionary():
@@ -2211,81 +2265,35 @@ struct _BatchDecoder(Movable):
                 raise CorruptError(
                     t"_BatchDecoder: no values for dict_id {dict_id}"
                 )
-            var indices = self._consume_primitive_array(
-                d.index_type().copy(), length, null_count, bitmap^
-            )
             var values = self.dict_values[dict_id].copy()
-            return DictionaryArray.from_arrays(
-                indices^, values^, d.ordered
-            ).to_dyn()
-
-        # How many data buffers this type owns is a property of the type, not
-        # of this codec. The ladder here used to re-derive it and got `map`
-        # wrong -- it fell through every arm and so consumed *zero* buffers,
-        # silently shifting every buffer read after it.
-        for _ in range(dtype.num_buffers()):
-            self._consume_buffer(data_buffers)
-        if dtype.is_string_view() or dtype.is_binary_view():
-            # The views buffer is counted above; the data buffers after it are
-            # counted per node, in `variadicBufferCounts`.
-            if self.variadic_idx >= len(self.variadic_counts):
+            # Fields sharing an id may declare different value types.
+            if values.dtype() != d.value_type():
                 raise CorruptError(
-                    t"_BatchDecoder: {dtype} column without a variadic count"
+                    t"_BatchDecoder: dictionary {dict_id} holds"
+                    t" {values.dtype()} values, the field declares"
+                    t" {d.value_type()}"
                 )
-            var n_data = Int(self.variadic_counts[self.variadic_idx])
-            self.variadic_idx += 1
-            for _ in range(n_data):
-                self._consume_buffer(data_buffers)
-
-        if dtype.is_map():
-            var child_ipc = (
-                ipc_info.children[0].copy() if len(ipc_info.children)
-                > 0 else _FieldIpcInfo()
-            )
-            children.append(
-                self.read_array(
-                    dtype.as_map().entries[].dtype.copy(), child_ipc
-                ).to_data()
-            )
-        elif dtype.is_list():
-            var child_ipc = (
-                ipc_info.children[0].copy() if len(ipc_info.children)
-                > 0 else _FieldIpcInfo()
-            )
-            children.append(
-                self.read_array(
-                    dtype.as_list().value_type(), child_ipc
-                ).to_data()
-            )
-        elif dtype.is_large_list():
-            var child_ipc = (
-                ipc_info.children[0].copy() if len(ipc_info.children)
-                > 0 else _FieldIpcInfo()
-            )
-            children.append(
-                self.read_array(
-                    dtype.as_large_list().value_type(), child_ipc
-                ).to_data()
-            )
-        elif dtype.is_fixed_size_list():
-            var child_ipc = (
-                ipc_info.children[0].copy() if len(ipc_info.children)
-                > 0 else _FieldIpcInfo()
-            )
-            children.append(
-                self.read_array(
-                    dtype.as_fixed_size_list().value_type(), child_ipc
-                ).to_data()
-            )
-        elif dtype.is_struct():
-            ref st = dtype.as_struct()
-            for i in range(len(st.fields)):
+            children.append(values.to_data())
+        else:
+            if layout.kind == dt.ArrayLayout.VIEW:
+                # The data buffers after the views are counted per node, in
+                # `variadicBufferCounts`.
+                if self.variadic_idx >= len(self.variadic_counts):
+                    raise CorruptError(
+                        t"_BatchDecoder: {dtype} column without a variadic"
+                        t" count"
+                    )
+                var n_data = Int(self.variadic_counts[self.variadic_idx])
+                self.variadic_idx += 1
+                for _ in range(n_data):
+                    self._consume_buffer(data_buffers)
+            for i in range(layout.num_children):
                 var child_ipc = (
                     ipc_info.children[i].copy() if i
                     < len(ipc_info.children) else _FieldIpcInfo()
                 )
                 children.append(
-                    self.read_array(st.fields[i].dtype, child_ipc).to_data()
+                    self.read_array(dtype.child_type(i), child_ipc).to_data()
                 )
 
         var ad = ArrayData(
@@ -2297,6 +2305,11 @@ struct _BatchDecoder(Movable):
             buffers=data_buffers^,
             children=children^,
         )
+        # Each child was validated when it was read.
+        try:
+            ad.validate_full()
+        except e:
+            raise CorruptError(t"ipc: {e.message()}")
         return DynArray.from_data(ad)
 
     def _body_buffer(
@@ -2315,34 +2328,21 @@ struct _BatchDecoder(Movable):
         buf.view(0, n_bytes).copy_from(BufferView(src), n_bytes)
         return buf^.to_immutable()
 
-    def _consume_buffer(mut self, mut out: List[Buffer[mut=False]]) raises:
+    def _next_buffer(mut self) raises CorruptError -> _BodyBuffer:
+        """The next buffer the message describes; raises when it has run out."""
+        if self.buf_idx >= len(self.bufs):
+            raise CorruptError(
+                t"ipc: the batch has {len(self.bufs)} buffers, fewer than its"
+                t" schema needs"
+            )
         var bb = self.bufs[self.buf_idx]
         self.buf_idx += 1
+        return bb
+
+    def _consume_buffer(mut self, mut out: List[Buffer[mut=False]]) raises:
+        var bb = self._next_buffer()
         out.append(
             self._body_buffer(Int(bb.offset) + self.body_offset, Int(bb.length))
-        )
-
-    def _consume_primitive_array(
-        mut self,
-        dtype: dt.DynType,
-        length: Int,
-        nulls: Int,
-        var bitmap: Optional[Bitmap[mut=False]],
-    ) raises -> DynArray:
-        """Read the next body buffer and build a primitive DynArray of the given dtype.
-        """
-        var bufs = List[Buffer[mut=False]]()
-        self._consume_buffer(bufs)
-        return DynArray.from_data(
-            ArrayData(
-                dtype=dtype.copy(),
-                length=length,
-                nulls=nulls,
-                offset=0,
-                bitmap=bitmap,
-                buffers=bufs^,
-                children=List[ArrayData](),
-            )
         )
 
 

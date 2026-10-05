@@ -1642,6 +1642,108 @@ def test_array_data_eq_recurses_into_children() raises:
 
 
 # ---------------------------------------------------------------------------
+# ArrayData validation — a layout checked against its dtype's layout()
+# ---------------------------------------------------------------------------
+
+
+def _invalid(data: ArrayData, full: Bool = False) -> Bool:
+    try:
+        if full:
+            data.validate_full()
+        else:
+            data.validate()
+    except:
+        return True
+    return False
+
+
+def test_validate_accepts_built_layouts() raises:
+    var strings: StringArray = ["ab", "c"]
+    strings.to_data().validate_full()
+    strings.slice(1, 1).to_data().validate_full()
+    array([1, None, 3], int32).to_data().validate_full()
+    array([True, None, False]).to_data().validate_full()
+    var views: StringViewArray = ["short", "a value longer than twelve"]
+    views.to_data().validate_full()
+    var values: DynArray = strings^.to_dyn()
+    var indices: DynArray = array([1, None, 0], int32)
+    DictionaryArray.from_arrays(indices^, values^).to_data().validate_full()
+
+
+def test_validate_rejects_short_buffers() raises:
+    var data = arange[Int64Type](0, 1000).to_data()
+    data.length = 2000
+    assert_true(_invalid(data))
+
+    data = arange[Int64Type](0, 1000).to_data()
+    data.nulls = 1
+    assert_true(_invalid(data))  # nulls without a bitmap
+    data.bitmap = array([1, None], int64).to_data().bitmap
+    assert_true(_invalid(data))  # a bitmap shorter than 1000 bits
+
+    var strings: StringArray = ["ab", "c"]
+    data = strings.to_data()
+    data.buffers[0] = array([0, 2, 99], int32).to_data().buffers[0]
+    assert_true(_invalid(data))  # last offset past the data
+
+
+def test_validate_rejects_counts_and_lengths() raises:
+    var data = arange[Int64Type](0, 10).to_data()
+    data.buffers.append(data.buffers[0])
+    assert_true(_invalid(data))  # two buffers for one
+
+    data = arange[Int64Type](0, 10).to_data()
+    data.length = -1
+    assert_true(_invalid(data))
+    data.length = 1
+    data.offset = Int.MAX
+    assert_true(_invalid(data))  # offset + length overflows
+
+    var child = arange[Int64Type](0, 4).to_data()
+    var lists = ArrayData(
+        dtype=list_(int64),
+        length=2,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffers=[array([0, 2, 4], int32).to_data().buffers[0]],
+        children=[child.copy()],
+    )
+    lists.validate_full()
+    lists.buffers[0] = array([0, 2, 5], int32).to_data().buffers[0]
+    assert_true(_invalid(lists))  # last offset past the child
+    lists.children = []
+    assert_true(_invalid(lists))  # no child
+
+    var structs = ArrayData(
+        dtype=struct_(Field("a", int64)),
+        length=5,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffers=[],
+        children=[child^],
+    )
+    assert_true(_invalid(structs))  # a child of 4 under a parent of 5
+    structs.length = 4
+    structs.validate()
+
+
+def test_validate_full_reads_values() raises:
+    var strings: StringArray = ["ab", "c", "d"]
+    var data = strings.to_data()
+    data.buffers[0] = array([0, 2, 1, 3], int32).to_data().buffers[0]
+    assert_false(_invalid(data))
+    assert_true(_invalid(data, full=True))  # offsets decrease
+
+    var values: DynArray = strings^.to_dyn()
+    var indices: DynArray = array([0, 3], int32)
+    data = DictionaryArray.from_arrays(indices^, values^).to_data()
+    assert_false(_invalid(data))
+    assert_true(_invalid(data, full=True))  # index 3 of 3 values
+
+
+# ---------------------------------------------------------------------------
 # DynArray equality — the erased path that used to deadlock the compiler
 # ---------------------------------------------------------------------------
 

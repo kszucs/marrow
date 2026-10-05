@@ -59,12 +59,7 @@ def _dtype_str(py_self: PythonObject) raises -> PythonObject:
 
 
 def _dtype_byte_width(py_self: PythonObject) raises -> PythonObject:
-    """Bytes per value for a fixed-width type, as PyArrow spells it.
-
-    `num_buffers` is deliberately *not* exposed alongside it: marrow counts
-    data buffers only, where Arrow C++ and arrow-rs put validity at
-    `buffers[0]`, so the number is one lower than a PyArrow reader expects and
-    means something a Python caller has no use for."""
+    """Bytes per value for a fixed-width type, as PyArrow spells it."""
     return PythonObject(py_self.downcast_value_ptr[dt.DynType]()[].byte_width())
 
 

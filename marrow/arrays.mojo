@@ -36,6 +36,7 @@ paths.  It is NOT stored inside DynArray.
 """
 
 
+from std.math import ceildiv
 from std.memory import OwnedPointer
 from std.bit import byte_swap
 
@@ -58,6 +59,7 @@ from .views import BufferView, BitmapView
 from std.builtin.rebind import downcast
 from std.os import abort
 from .dtypes import (
+    ArrayLayout,
     DynType,
     BinaryLikeType,
     StringLikeType,
@@ -277,14 +279,17 @@ struct ArrayData(Copyable, Equatable, Movable):
         Interface importer. There a wrong count reads past the end of somebody
         else's allocation, so it must be checked in release builds too.
         """
+
         # A view layout has a variable number of data buffers after its views,
-        # so its count is a minimum; every other layout's is exact.
-        var want = dtype.num_buffers()
-        var fits: Bool
-        if dtype.is_string_view() or dtype.is_binary_view():
-            fits = len(buffers) >= want
-        else:
-            fits = len(buffers) == want
+        # so its count is a minimum; every other layout's is exact. A closure,
+        # so release builds never compute the layout.
+        def fits() {imm} -> Bool:
+            var layout = dtype.layout()
+            var n = len(buffers)
+            return n == layout.num_buffers() or (
+                layout.kind == ArrayLayout.VIEW and n > layout.num_buffers()
+            )
+
         debug_assert(fits, "ArrayData: buffer count does not match dtype")
         self.dtype = dtype^
         self.length = length
@@ -346,55 +351,153 @@ struct ArrayData(Copyable, Equatable, Movable):
     def __ne__(self, other: Self) -> Bool:
         return not (self == other)
 
-    def validate(self) raises:
-        """Raise if this layout does not match what its dtype describes.
+    def validate(self) raises InvalidError:
+        """Raise unless this node is safe to read: it has the buffers and
+        children its dtype's `layout()` describes, each long enough for
+        `offset + length` values, and any nulls come with a validity bitmap.
 
-        The **raising** counterpart of the `debug_assert` in `__init__`. The
-        constructor's check is compiled out of release builds; this one is not,
-        which is what a boundary taking foreign memory needs.
-
-        Cost of always-on validation, measured 2026-08-05 and accepted
-        deliberately: `query_streaming` __text 1,309,032 -> 1,325,672, **+1.27%**
-        of the AOT size gate. The split is +8,832 for replacing
-        `@fieldwise_init` with an explicit constructor at all -- `DynType` is
-        dispatched over a 37-member variant, and per-arm work in such a method
-        costs ~8 KB, the lever B12 found -- and +7,808 for the check itself,
-        which `-O3` does not eliminate and `@no_inline` on `num_buffers()`
-        recovers only 128 bytes of.
-
-        Both references decline this trade: arrow-rs pairs a validating
-        `ArrayData::try_new` with an `unsafe new_unchecked` that hot paths use,
-        and Arrow C++ leaves `ValidateFull` opt-in. marrow takes the safety over
-        the 1.27% because an unvalidated layout is a read past the end of an
-        allocation, not a Mojo error.
-
-        Only the buffer count so far, which is the one structural fact
-        `DynType` now states. Worth having because `ArrayData` is the shape
-        *external* data arrives in — the C Data Interface hands over a producer's
-        buffer array and marrow trusts it — and a wrong count there is read past
-        the end of somebody else's memory, not a Mojo error.
-
-        This is what both references use their `layout()` for: Arrow C++ in
-        `array/validate.cc`, arrow-rs in `ArrayData`'s own validation. Neither
-        drives its codecs from it.
-
-        Not checked yet: child count against the dtype's own arity. That wants a
-        `num_children()` alongside this, and it is the check that would catch a
-        struct whose declared fields outnumber its children — the shape of B6.
+        O(1), and this node only: a reader validates each child as it builds
+        it. A view array's views are checked by its typed constructor.
         """
-        var want = self.dtype.num_buffers()
-        if self.dtype.is_string_view() or self.dtype.is_binary_view():
-            # Views plus a variable number of data buffers: `want` is the
-            # minimum, and the typed constructor checks each view.
-            if len(self.buffers) < want:
-                raise InvalidError(
-                    t"ArrayData: {self.dtype} needs a views buffer"
-                )
-        elif len(self.buffers) != want:
+        var layout = self.dtype.layout()
+        var want = layout.num_buffers()
+        var n = len(self.buffers)
+        if n < want or (n > want and layout.kind != ArrayLayout.VIEW):
             raise InvalidError(
-                t"ArrayData: {self.dtype} owns {want} data buffer(s), got "
-                t"{len(self.buffers)}"
+                t"ArrayData: {self.dtype} owns {want} data buffer(s), got {n}"
             )
+        if len(self.children) != layout.num_children:
+            raise InvalidError(
+                t"ArrayData: {self.dtype} needs {layout.num_children}"
+                t" children, got {len(self.children)}"
+            )
+        if (
+            self.length < 0
+            or self.offset < 0
+            or self.offset >= Int.MAX - self.length
+        ):
+            raise InvalidError(
+                t"ArrayData: length {self.length} at offset {self.offset}"
+            )
+        if layout.width < 0:
+            raise InvalidError(t"ArrayData: {self.dtype} has a negative width")
+        # Sizes are compared by division, so a length read from a file cannot
+        # overflow a product into a pass.
+        var end = self.offset + self.length
+        if layout.kind != ArrayLayout.NULL:
+            if self.nulls < 0 or self.nulls > self.length:
+                raise InvalidError(
+                    t"ArrayData: {self.nulls} nulls in {self.length} values"
+                )
+            if self.bitmap:
+                if self.bitmap.value().byte_count() < ceildiv(end, 8):
+                    raise InvalidError(
+                        t"ArrayData: the validity bitmap is shorter than"
+                        t" {end} bits"
+                    )
+            elif self.nulls > 0:
+                raise InvalidError(
+                    t"ArrayData: {self.nulls} nulls but no validity bitmap"
+                )
+
+        if layout.kind == ArrayLayout.BITMAP:
+            self._expect(ceildiv(end, 8), 1)
+        elif (
+            layout.kind == ArrayLayout.BINARY or layout.kind == ArrayLayout.LIST
+        ):
+            # An empty array may omit its offsets.
+            if self.length > 0 or len(self.buffers[0]) > 0:
+                self._expect(end + 1, layout.width)
+                var limit = (
+                    len(self.buffers[1]) if layout.kind
+                    == ArrayLayout.BINARY else self.children[0].length
+                )
+                var first = self._offset(0, layout.width)
+                var last = self._offset(self.length, layout.width)
+                if first < 0 or last < first or last > limit:
+                    raise InvalidError(
+                        t"ArrayData: {self.dtype} offsets run from {first} to"
+                        t" {last}, outside 0..{limit}"
+                    )
+        elif layout.kind == ArrayLayout.NESTED:
+            for i in range(len(self.children)):
+                var held = self.children[i].length
+                if layout.width > 0 and end > held // layout.width:
+                    raise InvalidError(
+                        t"ArrayData: {self.dtype} child {i} is shorter than its"
+                        t" parent: {held} values, fewer than {end} x"
+                        t" {layout.width}"
+                    )
+        elif layout.kind != ArrayLayout.NULL:
+            self._expect(end, layout.width)
+
+    def validate_full(self) raises InvalidError:
+        """`validate`, then the checks that read every value: offsets never
+        decrease, and every valid dictionary index names a value."""
+        self.validate()
+        var layout = self.dtype.layout()
+        if layout.kind == ArrayLayout.BINARY or layout.kind == ArrayLayout.LIST:
+            var bad = (
+                self._first_decrease[DType.int32]() if layout.width
+                == 4 else self._first_decrease[DType.int64]()
+            )
+            if bad >= 0:
+                raise InvalidError(
+                    t"ArrayData: {self.dtype} offset {bad} decreases"
+                )
+        elif layout.kind == ArrayLayout.DICTIONARY:
+            var n_values = self.children[0].length
+
+            # The index type decides signedness, which the layout does not.
+            def first_bad[T: IntegerType](d: T) raises {imm} -> Int:
+                var indices = self.buffers[0].view[T.native](self.offset)
+                var valid = self.validity()
+                for i in range(self.length):
+                    var index = Int(indices[i])
+                    if (index < 0 or index >= n_values) and (
+                        not valid or valid.value().test(i)
+                    ):
+                        return i
+                return -1
+
+            var bad: Int
+            try:
+                bad = (
+                    self.dtype.as_dictionary()
+                    .index_type()
+                    .dispatch_integer(first_bad)
+                )
+            except:
+                raise InvalidError(
+                    t"ArrayData: {self.dtype} has no integer indices"
+                )
+            if bad >= 0:
+                raise InvalidError(
+                    t"ArrayData: dictionary index at {bad} is outside"
+                    t" 0..{n_values}"
+                )
+
+    def _expect(self, count: Int, width: Int) raises InvalidError:
+        """Raise unless buffer 0 holds `count` values of `width` bytes."""
+        if width > 0 and count > len(self.buffers[0]) // width:
+            raise InvalidError(
+                t"ArrayData: {self.dtype} needs {count} values of {width}"
+                t" bytes, got {len(self.buffers[0])} bytes"
+            )
+
+    def _offset(self, i: Int, width: Int) -> Int:
+        """Offset `i`, read from buffer 0's `width`-byte offsets."""
+        if width == 4:
+            return Int(self.buffers[0].view[DType.int32](self.offset)[i])
+        return Int(self.buffers[0].view[DType.int64](self.offset)[i])
+
+    def _first_decrease[T: DType](self) -> Int:
+        """The first position whose offset is below the one before, or -1."""
+        var offsets = self.buffers[0].view[T](self.offset)
+        for i in range(self.length):
+            if offsets[i + 1] < offsets[i]:
+                return i + 1
+        return -1
 
     # Explicit (empty) destructor so this self-referential struct
     # (`children: List[ArrayData]`) is Deinitable; fields are still

@@ -653,23 +653,14 @@ seconds of a session starting. Each has a reproducer under `fuzz/corpus/` whose
 `expected.toml` says `crash`; `pytest fuzz` fails when one of them stops
 crashing, so fixing a bug includes moving its verdict to `reject`. An entry
 marked `sanitizer = "address"` is one only `pixi run -e asan fuzz-replay-asan`
-can judge: B6's string over-read is the one left. A reproducer must crash the
-same way on every platform, so none relies on a wild read faulting -- glibc's
-heap has mapped memory where macOS's has none. B1 (an IPC buffer outside the
-body) and B17 (an uncompressed page copying more than it holds) were fixed
-before the corpus landed, and so was B6's short-bitmap reproducer, whose
-bitmap length is negative; those stay as `reject` entries. `read_array` still
-checks no bitmap against `length`, so a short one of positive length should
-read past it, but there is no reproducer for that yet.
+can judge. A reproducer must crash the same way on every platform, so none
+relies on a wild read faulting -- glibc's heap has mapped memory where macOS's
+has none. The IPC reader's bugs (B1-B7, B18) and B17 (an uncompressed page
+copying more than it holds) are fixed; their reproducers stay as `reject`
+entries.
 
 | Bug | Where | What the input does |
 |---|---|---|
-| B2 | `ipc.mojo:2179`, `:2190`, `:2319` `read_array` / `_consume_buffer` | more field nodes or buffers consumed than the message carries |
-| B3 | `ipc.mojo:696` `_FlatbufReader.read_string` | `String(unsafe_from_utf8=)` without validation; aborts in `_read_field` (`:1649`) and `_read_kv_vec` (`:1458`) |
-| B4 | `dtypes.mojo:1456` `as_type` | a dictionary or child whose declared type disagrees with the schema reaches `as_type` as the wrong member |
-| B5 | `ipc.mojo:701` `_FlatbufReader` | nested tables recurse without a depth limit: stack overflow |
-| B6 | `ipc.mojo:2291` `read_array` | builds `ArrayData` without checking any buffer against `length` -- values, offsets and their contents, the validity bitmap -- so formatting the result reads past the allocation (`arrays.mojo:1146`, `:3348`, `views.mojo:908`, `buffers.mojo:858`); one input gets as far as reading a struct child's buffer as device memory (`buffers.mojo:904`) |
-| B7 | `ipc.mojo:2194` `read_array` | a positive `null_count` with an empty validity buffer keeps the count and drops the bitmap; `PrimitiveArray.slice` then unwraps the absent bitmap (`arrays.mojo:805`) |
 | B9 | `parquet/codecs.mojo:741` `Dictionary.byte_offsets` | a byte-array dictionary page holding fewer values than `num_values` reads past the page (`utils/byteorder.mojo:75`) |
 | B10 | `parquet/reader.mojo:733` `PrimitiveLeafBuilder._scatter` | a page with more values than the chunk has rows **writes** past the values buffer (ASAN: heap-buffer-overflow, WRITE of size 8) |
 | B13 | `parquet/codecs.mojo:66` `Rle._run_value` | a truncated RLE run header reads past the data |
@@ -683,11 +674,8 @@ read past it, but there is no reproducer for that yet.
 | B-PR12 | `parquet/codecs.mojo:1033` | an RLE boolean page whose 4-byte length runs past the values |
 | B-PR13 | `parquet/reader.mojo` leaf builders | a huge positive `RowGroup.num_rows` is preallocated up front and aborts (an allocation, not corruption); the builders should grow as pages arrive |
 
-B6 and B7 are one fix in spirit: `read_array` should validate what it builds,
-which is what Arrow C++'s `ValidateFull` and arrow-rs's `ArrayData::validate`
-do on IPC read; `ArrayData.validate` checks only the buffer count today. B8
-masks the rest of the Parquet footer and page index: fuzz those two targets
-again once it is fixed.
+B8, B11, B12, B14, B15 and the footer's Thrift bugs (B-PR1 to B-PR4) are
+fixed; their reproducers stay as `reject` entries.
 
 ## 2. Missing capabilities, in detail
 

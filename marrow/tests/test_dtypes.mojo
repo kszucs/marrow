@@ -525,39 +525,43 @@ def test_time_unit_string() raises:
 
 
 # ---------------------------------------------------------------------------
-# num_buffers — the one structural fact the codecs kept re-deriving.
-#
-# Counts *data* buffers only. Unlike Arrow C++ and arrow-rs, where `buffers[0]`
-# is the validity bitmap, marrow's `ArrayData` carries `bitmap` as its own field
-# — so these numbers are one lower than the references' throughout, and there is
-# no BITMAP buffer kind to model.
-#
-# This is deliberately just a count. Both references also carry a per-buffer
-# `BufferSpec` (kind + byte width), but neither drives its IPC or C-ABI codec
-# from it — see the A3 card. The count is what marrow's IPC buffer walk actually
-# asks for.
+# layout — the buffers and children a type's arrays hold. Data buffers only:
+# `ArrayData` keeps validity in its own field, so these counts are one lower
+# than Arrow C++'s and arrow-rs's.
 # ---------------------------------------------------------------------------
 
 
-def test_num_buffers_fixed_width_types() raises:
-    """One values buffer, whatever the width — bool included, whose values are
-    bit-packed rather than byte-addressed."""
-    assert_equal(DynType(dt.bool_).num_buffers(), 1)
-    assert_equal(DynType(Int8Type()).num_buffers(), 1)
-    assert_equal(DynType(Int64Type()).num_buffers(), 1)
-    assert_equal(DynType(Float64Type()).num_buffers(), 1)
-    assert_equal(DynType(dt.date32()).num_buffers(), 1)
-    assert_equal(DynType(dt.timestamp(dt.second)).num_buffers(), 1)
-    assert_equal(DynType(dt.decimal128(10, 2)).num_buffers(), 1)
-    assert_equal(DynType(dt.fixed_size_binary_(4)).num_buffers(), 1)
+def test_layout_fixed_width_types() raises:
+    """One values buffer: bit-packed for bool, `width` bytes per value
+    otherwise."""
+    var bits = DynType(bool_).layout()
+    assert_true(bits == ArrayLayout(ArrayLayout.BITMAP))
+    assert_equal(bits.num_buffers(), 1)
+    var types: List[DynType] = [
+        int8,
+        int64,
+        float64,
+        date32(),
+        timestamp(second),
+        decimal128(10, 2),
+        fixed_size_binary_(4),
+    ]
+    var widths = [1, 8, 8, 4, 8, 16, 4]
+    for i in range(len(types)):
+        var layout = types[i].layout()
+        assert_true(layout == ArrayLayout(ArrayLayout.FIXED_WIDTH, widths[i]))
+        assert_equal(layout.num_buffers(), 1)
 
 
-def test_num_buffers_variable_width_types() raises:
+def test_layout_variable_width_types() raises:
     """Offsets plus data, for all four binary-like types."""
-    assert_equal(DynType(StringType()).num_buffers(), 2)
-    assert_equal(DynType(dt.large_string).num_buffers(), 2)
-    assert_equal(DynType(dt.binary).num_buffers(), 2)
-    assert_equal(DynType(dt.large_binary).num_buffers(), 2)
+    var narrow = ArrayLayout(ArrayLayout.BINARY, 4)
+    var wide = ArrayLayout(ArrayLayout.BINARY, 8)
+    assert_true(DynType(string).layout() == narrow)
+    assert_true(DynType(binary).layout() == narrow)
+    assert_true(DynType(large_string).layout() == wide)
+    assert_true(DynType(large_binary).layout() == wide)
+    assert_equal(narrow.num_buffers(), 2)
 
 
 def test_view_types() raises:
@@ -574,41 +578,39 @@ def test_view_types() raises:
     assert_true(sv != DynType(dt.string))
     assert_equal(String(sv), "string_view")
     assert_equal(String(bv), "binary_view")
-    assert_equal(sv.num_buffers(), 1)
+    assert_true(sv.layout() == ArrayLayout(ArrayLayout.VIEW, 16))
+    assert_equal(sv.layout().num_buffers(), 1)
 
 
-def test_num_buffers_nested_types() raises:
-    """A list owns its offsets; a struct and a fixed-size list own nothing —
-    their data lives entirely in their children."""
-    assert_equal(DynType(list_(DynType(Int32Type()))).num_buffers(), 1)
-    assert_equal(DynType(dt.large_list_(DynType(Int32Type()))).num_buffers(), 1)
-    assert_equal(
-        DynType(fixed_size_list_(DynType(Int32Type()), 3)).num_buffers(), 0
+def test_layout_nested_types() raises:
+    """A list or map owns its offsets into its one child; a struct and a
+    fixed-size list own nothing, their data lives entirely in their
+    children."""
+    var narrow = ArrayLayout(ArrayLayout.LIST, 4, 1)
+    assert_true(DynType(list_(int32)).layout() == narrow)
+    assert_true(DynType(map_(string, int32)).layout() == narrow)
+    assert_equal(narrow.num_buffers(), 1)
+    assert_true(
+        DynType(large_list_(int32)).layout()
+        == ArrayLayout(ArrayLayout.LIST, 8, 1)
     )
-    assert_equal(
-        DynType(struct_(Field("a", DynType(Int32Type())))).num_buffers(), 0
-    )
+    var fsl = DynType(fixed_size_list_(int32, 3)).layout()
+    assert_true(fsl == ArrayLayout(ArrayLayout.NESTED, 3, 1))
+    assert_equal(fsl.num_buffers(), 0)
+    var st = DynType(struct_(Field("a", int32), Field("b", string)))
+    assert_true(st.layout() == ArrayLayout(ArrayLayout.NESTED, 1, 2))
+    assert_true(st.child_type(1) == DynType(string))
+    var null = DynType(NullType()).layout()
+    assert_true(null == ArrayLayout(ArrayLayout.NULL))
+    assert_equal(null.num_buffers(), 0)
 
 
-def test_num_buffers_null_owns_nothing() raises:
-    assert_equal(DynType(NullType()).num_buffers(), 0)
-
-
-def test_num_buffers_dictionary_follows_its_index_type() raises:
-    """A dictionary array stores indices; the values live in a separate
-    dictionary. arrow-rs resolves this the same way — `layout(key_type)`."""
-    var d = DynType(dt.dictionary(DynType(Int32Type()), DynType(StringType())))
-    assert_equal(d.num_buffers(), 1)
-
-
-def test_num_buffers_map_owns_its_offsets() raises:
-    """`map` is a list of structs, so it owns an offsets buffer like any list.
-
-    Worth pinning: `map` is absent from IPC's buffer-consuming ladder entirely
-    (see V0), so it silently read as owning zero buffers there.
-    """
-    var m = DynType(map_(DynType(StringType()), DynType(Int32Type())))
-    assert_equal(m.num_buffers(), 1)
+def test_layout_dictionary_follows_its_index_type() raises:
+    """A dictionary array stores indices; its values are its one child."""
+    var d = DynType(dictionary(int16, string))
+    assert_true(d.layout() == ArrayLayout(ArrayLayout.DICTIONARY, 2, 1))
+    assert_equal(d.layout().num_buffers(), 1)
+    assert_true(d.child_type(0) == DynType(string))
 
 
 def test_dispatch_binaryview() raises:

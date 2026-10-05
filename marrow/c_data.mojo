@@ -20,6 +20,7 @@ import std.math as math
 
 from max.gpu.host import DeviceContext
 from .dtypes import (
+    ArrayLayout,
     DynType,
     Field,
     FixedSizeBinaryType,
@@ -71,7 +72,6 @@ from .arrays import (
     DynArray,
     ArrayData,
     BinaryViewArray,
-    StringViewArray,
 )
 from .schema import Schema
 from .tabular import RecordBatch, Table
@@ -1066,7 +1066,7 @@ struct CArrowArray(Copyable, Movable):
 
     def _check_layout(self, dtype: DynType) raises InvalidError:
         """Raise unless the lengths are in range and the buffer count is the
-        one `dtype`'s layout has: validity plus `num_buffers()` data buffers.
+        one `dtype`'s layout has: validity plus its data buffers.
 
         A view array carries any number of data buffers plus a trailing sizes
         buffer, and a null array none (one in Arrow C++'s legacy export)."""
@@ -1081,12 +1081,13 @@ struct CArrowArray(Copyable, Movable):
             raise InvalidError("c_data: length + offset overflows")
         if self.null_count < -1:
             raise InvalidError(t"c_data: negative null_count {self.null_count}")
+        var layout = dtype.layout()
         var n = Int(self.n_buffers)
-        var want = 1 + dtype.num_buffers()
+        var want = 1 + layout.num_buffers()
         var ok: Bool
-        if dtype.is_null():
+        if layout.kind == ArrayLayout.NULL:
             ok = n == 0 or n == 1
-        elif dtype.is_string_view() or dtype.is_binary_view():
+        elif layout.kind == ArrayLayout.VIEW:
             want += 1
             ok = n >= want
         else:
@@ -1124,16 +1125,9 @@ struct CArrowArray(Copyable, Movable):
         describes, each a live struct behind a non-null pointer.
 
         A dictionary's values ride in `dictionary`, not in `children`."""
-        var expected = 0
-        if dtype.is_struct():
-            expected = len(dtype.as_struct().fields)
-        elif (
-            dtype.is_list()
-            or dtype.is_large_list()
-            or dtype.is_fixed_size_list()
-            or dtype.is_map()
-        ):
-            expected = 1
+        var expected = (
+            0 if dtype.is_dictionary() else dtype.layout().num_children
+        )
         var n = Int(self.n_children)
         if n != expected:
             raise InvalidError(
@@ -1172,18 +1166,19 @@ struct CArrowArray(Copyable, Movable):
         bumps the ref-count).  The C release callback fires automatically once
         the last buffer is dropped.
 
-        Buffer sizes are dtype-dependent (same as Arrow C++ and arrow-rs).
-        Typed array construction is delegated to DynArray.from_data().
+        Buffer sizes come from the dtype's layout, and the result is checked
+        by `ArrayData.validate`. Typed array construction is delegated to
+        DynArray.from_data().
         """
         # Buffer sizes must cover all elements including the offset, because the
         # raw C buffers start at element 0 regardless of the logical array offset.
         var length = self.length + self.offset
 
-        # Each branch below indexes `self.buffers` and `self.children` by
+        # What follows indexes `self.buffers` and `self.children` by
         # position, so the counts the producer declared are checked first —
         # otherwise a short pointer array is an out-of-bounds read rather than
-        # an error. The counts come from `DynType.num_buffers()`, the one
-        # place that states a layout's buffers.
+        # an error. The counts come from `DynType.layout()`, the one place
+        # that states them.
         self._check_layout(dtype)
         self._check_children(dtype)
         # Null arrays carry no buffers — `self.buffers` itself may be a null
@@ -1200,66 +1195,35 @@ struct CArrowArray(Copyable, Movable):
                 length=Int(length),
             )
 
-        var buffers = List[Buffer[]](capacity=2)  # worst case for string
-        var children = List[ArrayData](capacity=Int(self.n_children))
-
-        if dtype.is_null():
-            pass  # no buffers, no children
-        elif dtype.is_bool():
-            buffers.append(
-                self._buffer(
-                    1,
-                    math.ceildiv(Int(length), 8),
-                    1,
-                    owner,
-                )
-            )
-        elif dtype.is_primitive():
-            buffers.append(
-                self._buffer(
-                    1,
-                    Int(length),
-                    dtype.byte_width(),
-                    owner,
-                )
-            )
-        elif dtype.is_string() or dtype.is_binary():
-            var offsets = self._buffer(
-                1,
-                Int(length) + 1,
-                size_of[DType.int32](),
-                owner,
-            )
-            var n = Int(offsets.unsafe_get[DType.int32](Int(length)))
-            if n < 0:
+        # The C ABI does not say how long a buffer is, so each one's size is
+        # what the layout needs for `length` values; `validate` below checks
+        # what the values themselves must satisfy.
+        var layout = dtype.layout()
+        var n = Int(length)
+        var buffers = List[Buffer[]](capacity=Int(self.n_buffers))
+        if layout.kind == ArrayLayout.BITMAP:
+            buffers.append(self._buffer(1, math.ceildiv(n, 8), 1, owner))
+        elif (
+            layout.kind == ArrayLayout.BINARY or layout.kind == ArrayLayout.LIST
+        ):
+            buffers.append(self._buffer(1, n + 1, layout.width, owner))
+        elif layout.num_buffers() > 0:
+            buffers.append(self._buffer(1, n, layout.width, owner))
+        if layout.kind == ArrayLayout.BINARY:
+            # The data is as long as the last offset says.
+            var last: Int
+            if layout.width == 4:
+                last = Int(buffers[0].unsafe_get[DType.int32](n))
+            else:
+                last = Int(buffers[0].unsafe_get[DType.int64](n))
+            if last < 0:
                 raise InvalidError("c_data: negative last offset")
-            buffers.append(offsets^)
-            buffers.append(self._buffer(2, n, 1, owner))
-        elif dtype.is_large_string() or dtype.is_large_binary():
-            var offsets = self._buffer(
-                1,
-                Int(length) + 1,
-                size_of[DType.int64](),
-                owner,
-            )
-            var n = Int(offsets.unsafe_get[DType.int64](Int(length)))
-            if n < 0:
-                raise InvalidError("c_data: negative last offset")
-            buffers.append(offsets^)
-            buffers.append(self._buffer(2, n, 1, owner))
-        elif dtype.is_string_view() or dtype.is_binary_view():
-            # Validity, views, the variadic data buffers, then one int64 per
+            buffers.append(self._buffer(2, last, 1, owner))
+        elif layout.kind == ArrayLayout.VIEW:
+            # After the views, the variadic data buffers, then one int64 per
             # data buffer giving its byte length -- the only place a consumer
             # learns how long each data buffer is.
             var n_data = Int(self.n_buffers) - 3
-            buffers.append(
-                self._buffer(
-                    1,
-                    Int(length),
-                    StringViewArray.VIEW_SIZE,
-                    owner,
-                )
-            )
             var sizes = self._buffer(
                 Int(self.n_buffers) - 1,
                 n_data,
@@ -1273,96 +1237,13 @@ struct CArrowArray(Copyable, Movable):
                         t"c_data: data buffer {i} has negative size {size}"
                     )
                 buffers.append(self._buffer(2 + i, size, 1, owner))
-        elif dtype.is_list():
-            buffers.append(
-                self._buffer(
-                    1,
-                    Int(length) + 1,
-                    size_of[DType.int32](),
-                    owner,
-                )
-            )
-            children.append(
-                self.children[unsafe_offset=0][].to_data(
-                    dtype.as_list().value_type(), owner
-                )
-            )
-        elif dtype.is_large_list():
-            buffers.append(
-                self._buffer(
-                    1,
-                    Int(length) + 1,
-                    size_of[DType.int64](),
-                    owner,
-                )
-            )
-            children.append(
-                self.children[unsafe_offset=0][].to_data(
-                    dtype.as_large_list().value_type(), owner
-                )
-            )
-        elif dtype.is_fixed_size_binary():
-            buffers.append(
-                self._buffer(
-                    1,
-                    Int(length),
-                    dtype.as_fixed_size_binary().byte_width,
-                    owner,
-                )
-            )
-        elif dtype.is_fixed_size_list():
-            ref fsl = dtype.as_fixed_size_list()
-            children.append(
-                self.children[unsafe_offset=0][].to_data(
-                    fsl.value_type(), owner
-                )
-            )
-            # Divided rather than multiplied, so a huge length cannot wrap.
-            if fsl.size > 0 and children[0].length // fsl.size < Int(length):
-                raise InvalidError(
-                    t"c_data: {dtype} child holds {children[0].length} values, "
-                    t"fewer than {Int(length)} lists need"
-                )
-        elif dtype.is_struct():
-            ref st = dtype.as_struct()
-            for i in range(len(st.fields)):
-                children.append(
-                    self.children[unsafe_offset=i][].to_data(
-                        st.fields[i].dtype, owner
-                    )
-                )
-                if children[i].length < Int(length):
-                    raise InvalidError(
-                        t"c_data: struct child {i} is shorter than its parent"
-                    )
-        elif dtype.is_map():
-            # Same physical layout as a list: an int32 offsets buffer plus one
-            # child = the entries struct (synthesized from the map's key/value).
-            buffers.append(
-                self._buffer(
-                    1,
-                    Int(length) + 1,
-                    size_of[DType.int32](),
-                    owner,
-                )
-            )
-            var entries_dt = dtype.as_map().entries_field().dtype.copy()
-            children.append(
-                self.children[unsafe_offset=0][].to_data(entries_dt, owner)
-            )
-        elif dtype.is_dictionary():
-            ref dt = dtype.as_dictionary()
-            buffers.append(
-                self._buffer(
-                    1,
-                    Int(length),
-                    dt.index_type().byte_width(),
-                    owner,
-                )
-            )
-            children.append(self.dictionary[].to_data(dt.value_type(), owner))
-        else:
-            raise NotImplementedError(t"to_data: unsupported dtype: {dtype}")
+
+        var children = List[ArrayData](capacity=layout.num_children)
+        for i in range(layout.num_children):
+            var child = self.dictionary
+            if not dtype.is_dictionary():
+                child = self.children[unsafe_offset=i]
+            children.append(child[].to_data(dtype.child_type(i), owner))
 
         # The C Data Interface allows -1 for "not computed", and PyArrow emits
         # it. Passing it through makes `null_count()` answer -1; derive it from
@@ -1391,8 +1272,8 @@ struct CArrowArray(Copyable, Movable):
             buffers=buffers^,
             children=children^,
         )
-        # These buffers are a foreign producer's memory and their count came
-        # from the ladder above; a mismatch here is a read past the end of
+        # These buffers are a foreign producer's memory: an offset past its
+        # data or a child shorter than its parent is a read past the end of
         # somebody else's allocation rather than a Mojo error.
         data.validate()
         return data^

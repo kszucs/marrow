@@ -14,6 +14,7 @@ from ..utils.testing import ScratchDir
 from ..dtypes import *
 from ..arrays import DynArray, DictionaryArray
 from ..builders import (
+    DynBuilder,
     MapBuilder,
     array,
     BoolBuilder,
@@ -43,7 +44,7 @@ from ..io import ByteSource, Fetched, BufferSource
 from ..schema import Schema
 from ..tabular import RecordBatch, record_batch
 from ..c_data import CArrowArrayStream
-from ..errors import CorruptError
+from ..errors import ArrowError, CorruptError, DynError, NotImplementedError
 from ..ipc import (
     BodyCompression,
     read_ipc_file,
@@ -1022,7 +1023,7 @@ def test_delta_dictionary_batch_appends_not_replaces() raises:
 # something else, or not at all.
 #
 # The buffer walk needed no work: a map owns one offsets buffer like any list,
-# which `DynType.num_buffers()` already answers.
+# which `DynType.layout()` already answers.
 # ---------------------------------------------------------------------------
 
 
@@ -1367,3 +1368,386 @@ def test_view_sliced_roundtrip() raises:
             got[i].value(),
             expected[i].value(),
         )
+
+
+# ---------------------------------------------------------------------------
+# Malformed streams: a valid stream with one field corrupted
+# ---------------------------------------------------------------------------
+#
+# Each test writes a stream, walks its flatbuffer metadata to the one field the
+# reader must not trust, and overwrites it. Positions are offsets into the
+# whole stream; a flatbuffer offset is relative to where it is stored, so
+# following one needs no base.
+
+
+def _stream_bytes(batch: RecordBatch) raises -> List[UInt8]:
+    var out = List[UInt8]()
+    with ScratchDir() as dir:
+        var path = join(dir, "malformed.arrows")
+        write_ipc_stream(path, [batch.copy()])
+        out = _file_bytes(path)
+    return out^
+
+
+def _u16(b: List[UInt8], pos: Int) -> Int:
+    return Int(b[pos]) | Int(b[pos + 1]) << 8
+
+
+def _u32(b: List[UInt8], pos: Int) -> Int:
+    return _u16(b, pos) | _u16(b, pos + 2) << 16
+
+
+def _put(mut b: List[UInt8], pos: Int, value: Int, width: Int = 4):
+    """Store `value` little-endian in `width` bytes at `pos`."""
+    for i in range(width):
+        b[pos + i] = UInt8((value >> (8 * i)) & 0xFF)
+
+
+def _follow(b: List[UInt8], pos: Int) -> Int:
+    """Where the offset stored at `pos` points: a table, vector or string."""
+    return pos + _u32(b, pos)
+
+
+def _vtable(b: List[UInt8], table: Int) -> Int:
+    """Where the vtable of the table at `table` is: a signed offset back."""
+    var soffset = _u32(b, table)
+    if soffset >= 1 << 31:
+        soffset -= 1 << 32
+    return table - soffset
+
+
+def _slot(b: List[UInt8], table: Int, slot: Int) raises -> Int:
+    """The position of field `slot` of the table at `table`."""
+    var vtable = _vtable(b, table)
+    var at = 4 + 2 * slot
+    var voffset = _u16(b, vtable + at) if at < _u16(b, vtable) else 0
+    assert_true(voffset != 0, String(t"slot {slot} is absent"))
+    return table + voffset
+
+
+def _entry(b: List[UInt8], vector: Int, i: Int) -> Int:
+    """The table at entry `i` of the vector of offsets at `vector`."""
+    return _follow(b, vector + 4 + 4 * i)
+
+
+def _message(b: List[UInt8], index: Int) raises -> Int:
+    """Where the stream's `index`-th message starts: its continuation marker,
+    metadata length, metadata, then body."""
+    var pos = 0
+    for _ in range(index):
+        var message = _follow(b, pos + 8)
+        pos += 8 + _u32(b, pos + 4) + _u32(b, _slot(b, message, 3))
+    return pos
+
+
+def _header(b: List[UInt8], index: Int) raises -> Int:
+    """The header table -- Schema, DictionaryBatch or RecordBatch -- of the
+    stream's `index`-th message."""
+    return _follow(b, _slot(b, _follow(b, _message(b, index) + 8), 2))
+
+
+def _body(b: List[UInt8], index: Int) raises -> Int:
+    """Where the body of the stream's `index`-th message starts."""
+    var pos = _message(b, index)
+    return pos + 8 + _u32(b, pos + 4)
+
+
+def _buffer(b: List[UInt8], index: Int, i: Int) raises -> Int:
+    """The `i`-th Buffer struct -- offset into the body, then length -- of
+    the stream's `index`-th message, a record or dictionary batch."""
+    return _follow(b, _slot(b, _header(b, index), 2)) + 4 + 16 * i
+
+
+def _schema_field(b: List[UInt8], i: Int) raises -> Int:
+    """The Field table of the schema's `i`-th top-level field."""
+    return _entry(b, _follow(b, _slot(b, _header(b, 0), 1)), i)
+
+
+def _child_field(b: List[UInt8], field: Int, i: Int) raises -> Int:
+    """The Field table of a Field's `i`-th child."""
+    return _entry(b, _follow(b, _slot(b, field, 5)), i)
+
+
+def _read_every_value(b: List[UInt8]) raises:
+    """Read the stream and format every column, as the fuzz harness does."""
+    var reader = RecordBatchStreamReader(BufferSource(Span(b)))
+    for batch in reader.read_all():
+        for i in range(batch.num_columns()):
+            _ = String(batch.column(i))
+
+
+def _refused[E: ArrowError](b: List[UInt8]) -> Bool:
+    """Whether reading the stream raises an `E`."""
+    try:
+        _read_every_value(b)
+    except e:
+        return DynError(e).isa[E]()
+    return False
+
+
+def test_ipc_refuses_batch_with_too_few_field_nodes() raises:
+    """A batch carrying fewer field nodes than its schema has fields is
+    refused rather than indexed past its node list."""
+    var b = _stream_bytes(_mk_batch())
+    _read_every_value(b)
+    var nodes = _follow(b, _slot(b, _header(b, 1), 1))
+    assert_equal(_u32(b, nodes), 2)
+    _put(b, nodes, 1)
+    assert_true(_refused[CorruptError](b))
+
+
+def test_ipc_refuses_batch_with_too_few_buffers() raises:
+    """Likewise a batch carrying fewer buffers than its fields own."""
+    var b = _stream_bytes(_mk_batch())
+    var buffers = _follow(b, _slot(b, _header(b, 1), 2))
+    assert_equal(_u32(b, buffers), 4)  # validity and values, per column
+    _put(b, buffers, 3)
+    assert_true(_refused[CorruptError](b))
+
+
+def _metadata_batch() raises -> RecordBatch:
+    """A column `point: struct<x: int32>`, with metadata on the schema and on
+    the field."""
+    var children: List[Field] = [field("x", int32)]
+    var sb = StructBuilder(children.copy(), capacity=1)
+    sb.field_builder(0).as_int32().append(Int32(1))
+    sb.append_valid()
+    var point = field("point", struct_(children^))
+    point.metadata["unit"] = "cm"
+    var columns: List[DynArray] = [sb.finish()]
+    var schema = Schema(fields=[point^], metadata={"origin": "test"})
+    return RecordBatch(schema=schema^, columns=columns^)
+
+
+def test_ipc_refuses_strings_not_utf8() raises:
+    """Every flatbuffer string is checked as UTF-8 -- a field's name, a
+    child's, and metadata on the schema and on a field -- and each one that
+    is not is refused, rather than aborting or being dropped."""
+    var valid = _stream_bytes(_metadata_batch())
+    _read_every_value(valid)
+    var point = _schema_field(valid, 0)
+    var schema_kv = _entry(
+        valid, _follow(valid, _slot(valid, _header(valid, 0), 2)), 0
+    )
+    var field_kv = _entry(valid, _follow(valid, _slot(valid, point, 6)), 0)
+    var names: List[String] = [
+        "field name",
+        "child name",
+        "schema metadata value",
+        "field metadata key",
+    ]
+    var strings: List[Int] = [
+        _follow(valid, _slot(valid, point, 0)),
+        _follow(valid, _slot(valid, _child_field(valid, point, 0), 0)),
+        _follow(valid, _slot(valid, schema_kv, 1)),
+        _follow(valid, _slot(valid, field_kv, 0)),
+    ]
+    var accepted = List[String]()
+    for i in range(len(strings)):
+        var b = valid.copy()
+        b[strings[i] + 4] = 0xFF  # never valid in UTF-8
+        if not _refused[CorruptError](b):
+            accepted.append(names[i])
+    assert_true(len(accepted) == 0, String(", ").join(accepted))
+
+
+def _empty_batch(dtype: DynType) raises -> RecordBatch:
+    """A zero-row batch with one column `a` of `dtype`."""
+    var builder = DynBuilder(dtype)
+    return _single_col_batch(builder.finish(), field("a", dtype.copy()))
+
+
+def _nested_lists(levels: Int) -> DynType:
+    """A type `levels` fields deep: lists down to an int32."""
+    var dtype: DynType = int32
+    for _ in range(levels - 1):
+        dtype = list_(dtype^).to_dyn()
+    return dtype^
+
+
+def test_ipc_nesting_limit() raises:
+    """Fields nest 64 deep, as Arrow C++ allows, and no deeper."""
+    _read_every_value(_stream_bytes(_empty_batch(_nested_lists(64))))
+    var b = _stream_bytes(_empty_batch(_nested_lists(65)))
+    assert_true(_refused[CorruptError](b))
+
+
+def test_ipc_refuses_fields_that_contain_themselves() raises:
+    """A child offset pointing back at its own field makes a cycle, not a
+    tree. It is refused at the nesting limit, for a list and for a struct,
+    rather than recursing until the stack overflows."""
+    var types: List[DynType] = [
+        list_(int32).to_dyn(),
+        struct_([field("x", int32)]).to_dyn(),
+    ]
+    for dtype in types:
+        var b = _stream_bytes(_empty_batch(dtype))
+        _read_every_value(b)
+        var a = _schema_field(b, 0)
+        var entry = _follow(b, _slot(b, a, 5)) + 4
+        _put(b, entry, (a - entry) & 0xFFFFFFFF)  # offsets wrap at 32 bits
+        assert_true(_refused[CorruptError](b), String(dtype))
+
+
+def _dictionary_batch() raises -> RecordBatch:
+    """Columns `a: dictionary<int32, string>` and `b: dictionary<int32,
+    int64>`, written as dictionaries 0 and 1."""
+    var words: DynArray = array(["x", "y"])
+    var numbers: DynArray = array([7, 8], int64)
+    var a: DynArray = DictionaryArray.from_arrays(array([1, 0], int32), words^)
+    var b: DynArray = DictionaryArray.from_arrays(
+        array([0, 1], int32), numbers^
+    )
+    return record_batch([a^, b^], names=["a", "b"])
+
+
+def _dictionary_id(b: List[UInt8], field: Int) raises -> Int:
+    """The position of a Field's dictionary id."""
+    return _slot(b, _follow(b, _slot(b, field, 4)), 0)
+
+
+def test_ipc_refuses_fields_sharing_a_dictionary_of_another_type() raises:
+    """Two fields naming one dictionary id must agree on its value type; a
+    column is never built over values of a type its field does not declare.
+    """
+    var b = _stream_bytes(_dictionary_batch())
+    _read_every_value(b)
+    _put(b, _dictionary_id(b, _schema_field(b, 1)), 0, width=8)
+    assert_true(_refused[CorruptError](b))
+
+
+def test_ipc_dictionary_batch_naming_no_dictionary() raises:
+    """A dictionary batch whose id is -1 -- what every field that is not a
+    dictionary carries internally -- matches no field. The column whose
+    dictionary it replaced then has none, which is refused."""
+    var b = _stream_bytes(_dictionary_batch())
+    for message in [1, 2]:
+        _put(b, _slot(b, _header(b, message), 0), -1, width=8)
+    assert_true(_refused[CorruptError](b))
+
+
+def test_ipc_refuses_negative_dictionary_ids() raises:
+    """The readers keep dictionaries by id, so a negative one is refused
+    when the schema is read rather than used as an index."""
+    var b = _stream_bytes(_dictionary_batch())
+    _put(b, _dictionary_id(b, _schema_field(b, 0)), -2, width=8)
+    _put(b, _dictionary_id(b, _schema_field(b, 1)), -3, width=8)
+    for message in [1, 2]:
+        var id = _slot(b, _header(b, message), 0)
+        _put(b, id, -2 - _u32(b, id), width=8)  # 0 -> -2, 1 -> -3
+    assert_true(_refused[NotImplementedError](b))
+
+
+def test_ipc_dictionary_without_index_type_reads_int32() raises:
+    """A DictionaryEncoding may omit its index type, which then means signed
+    32-bit indices; the field is still a dictionary."""
+    var b = _stream_bytes(_dictionary_batch())
+    var encoding = _follow(b, _slot(b, _schema_field(b, 0), 4))
+    _put(b, _vtable(b, encoding) + 6, 0, width=2)  # slot 1, indexType: absent
+    var reader = RecordBatchStreamReader(BufferSource(Span(b)))
+    var batches = reader.read_all()
+    assert_true(
+        batches[0].schema.fields[0].dtype == dictionary(int32, string).to_dyn()
+    )
+
+
+def test_ipc_refuses_arrays_their_buffers_cannot_hold() raises:
+    """Every array the reader builds is validated against its buffers before
+    anything reads it. Each corruption below is refused; none is read past.
+    """
+    var accepted = List[String]()
+
+    var ints = Int32Builder()
+    for i in range(100):
+        if i % 10 == 0:
+            ints.append_null()
+        else:
+            ints.append(Int32(i))
+    var valid = _stream_bytes(
+        _single_col_batch(ints.finish(), field("a", int32))
+    )
+    _read_every_value(valid)
+    var b = valid.copy()
+    _put(b, _buffer(b, 1, 1) + 8, 4, width=8)
+    if not _refused[CorruptError](b):
+        accepted.append("values buffer of 4 bytes for 100 int32s")
+    b = valid.copy()
+    _put(b, _buffer(b, 1, 0) + 8, 0, width=8)
+    if not _refused[CorruptError](b):
+        accepted.append("nulls without a validity bitmap")
+    b = valid.copy()
+    _put(b, _slot(b, _header(b, 1), 0), 101, width=8)
+    if not _refused[CorruptError](b):
+        accepted.append("a column shorter than its batch")
+
+    var strings: DynArray = array(["ab", "c", "d"])
+    valid = _stream_bytes(_single_col_batch(strings, field("s", string)))
+    _read_every_value(valid)
+    var offsets = _body(valid, 1) + _u32(valid, _buffer(valid, 1, 1))
+    assert_equal(_u32(valid, offsets + 12), 4)  # offsets 0, 2, 3, 4
+    b = valid.copy()
+    _put(b, offsets + 12, 1000)
+    if not _refused[CorruptError](b):
+        accepted.append("an offset past the string data")
+    b = valid.copy()
+    _put(b, offsets + 8, 1)
+    if not _refused[CorruptError](b):
+        accepted.append("decreasing offsets")
+
+    valid = _stream_bytes(_dictionary_batch())
+    _read_every_value(valid)
+    b = valid.copy()
+    _put(b, _body(b, 3) + _u32(b, _buffer(b, 3, 1)), 2)
+    if not _refused[CorruptError](b):
+        accepted.append("a dictionary index past its two values")
+
+    assert_true(len(accepted) == 0, String(", ").join(accepted))
+
+
+def test_ipc_reads_pyarrow_slices_and_empty_batches() raises:
+    """Validation refuses nothing pyarrow writes: a batch sliced from the
+    middle of a table and an empty one, with large and view columns beside
+    nested, dictionary and null-bearing ones, compressed or not."""
+    var pa = Python.import_module("pyarrow")
+    var pc = Python.import_module("pyarrow.compute")
+    var table = _compressed_table()
+    var words = table.column("words")
+    table = table.append_column("large", pc.cast(words, pa.large_string()))
+    table = table.append_column("view", pc.cast(words, pa.string_view()))
+    table = table.append_column(
+        "large_lists", pc.cast(table.column("lists"), pa.large_list(pa.int64()))
+    )
+    var whole = table.combine_chunks().to_batches()[0]
+    for codec in [Python.none(), PythonObject("zstd")]:
+        for part in [whole.slice(1001, 2500), whole.slice(17, 0)]:
+            var path = _tmp_path(suffix=".arrows")
+            var opts = pa.ipc.IpcWriteOptions(compression=codec)
+            var writer = pa.ipc.new_stream(path, part.schema, options=opts)
+            writer.write_batch(part)
+            writer.close()
+            var got = read_ipc_stream(path)
+            assert_equal(len(got), 1)
+            assert_equal(got[0].num_rows(), Int(py=part.num_rows))
+            var want = pa.Table.from_batches(Python.list(part))
+            assert_true(Bool(_pyarrow_of(got^).equals(want)), String(codec))
+
+
+def test_ipc_refuses_map_entries_that_are_not_key_value_structs() raises:
+    """A map's one child must be a struct of a key and a value; a Field that
+    says otherwise is refused when the schema is read."""
+    var valid = _stream_bytes(_empty_batch(map_(string, int32).to_dyn()))
+    _read_every_value(valid)
+    var entries = _child_field(valid, _schema_field(valid, 0), 0)
+    var accepted = List[String]()
+    var b = valid.copy()
+    assert_equal(Int(b[_slot(b, entries, 2)]), 13)  # Type.Struct_
+    b[_slot(b, entries, 2)] = 2  # Type.Int
+    if not _refused[CorruptError](b):
+        accepted.append("int entries")
+    b = valid.copy()
+    var children = _follow(b, _slot(b, entries, 5))
+    assert_equal(_u32(b, children), 2)
+    _put(b, children, 1)
+    if not _refused[CorruptError](b):
+        accepted.append("entries without a value")
+    assert_true(len(accepted) == 0, String(", ").join(accepted))
