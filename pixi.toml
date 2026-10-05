@@ -103,6 +103,12 @@ pytest-xdist = ">=3,<4"
 # hand. There is no equivalent package for rapidhash; see that file for how it
 # is pinned instead.
 python-xxhash = ">=3.7.0,<4"
+# Avro oracle for `python/marrow/tests/test_avro.py`: every file marrow writes
+# is read back by an independent implementation, and files it writes are read
+# by marrow, so a mistake mirrored in marrow's encoder and decoder cannot pass.
+fastavro = ">=1.12,<2"
+# fastavro's snappy codec; its zstandard one uses Python's `compression.zstd`.
+cramjam = ">=2.11,<3"
 
 [feature.dev.pypi-dependencies]
 # PyPI wheel is used instead of conda-forge: the conda-forge libarrow bundles

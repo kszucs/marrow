@@ -222,7 +222,12 @@ Apache Arrow -- Apache-2.0
     `parquet/src/arrow/arrow_reader/selection/ranges.rs`.
     python/marrow/tests/test_arrays.py: ported from PyArrow's
     `python/pyarrow/tests/test_convert_builtin.py`.
-    https://github.com/apache/arrow, https://github.com/apache/arrow-rs
+    marrow/avro/tests/data/*.avro, all but `manifest-list-v2-1.avro`: copied
+    from the arrow-testing repository's `data/avro/`, with the values
+    marrow/avro/tests/test_file.mojo expects of them taken from Arrow Rust's
+    `arrow-avro/src/reader/mod.rs`.
+    https://github.com/apache/arrow, https://github.com/apache/arrow-rs,
+    https://github.com/apache/arrow-testing
 
     The part of both repositories' NOTICE that pertains to this code,
     reproduced as section 4(d) of the Apache License requires:
@@ -258,6 +263,21 @@ Apache OpenDAL -- Apache-2.0
     Its NOTICE, reproduced as section 4(d) of the Apache License requires:
 
         Apache OpenDAL
+        Copyright 2023-2026 The Apache Software Foundation
+
+        This product includes software developed at
+        The Apache Software Foundation (http://www.apache.org/).
+
+--------------------------------------------------------------------------------
+
+Apache Iceberg Rust -- Apache-2.0
+    marrow/avro/tests/data/manifest-list-v2-1.avro: an Iceberg manifest list,
+    copied from `crates/iceberg/testdata/manifests_lists/`.
+    https://github.com/apache/iceberg-rust
+
+    Its NOTICE, reproduced as section 4(d) of the Apache License requires:
+
+        Apache Iceberg Rust
         Copyright 2023-2026 The Apache Software Foundation
 
         This product includes software developed at

@@ -94,8 +94,7 @@ from .dtypes import (
     int32,
     int64,
     int8,
-    large_list_,
-    list_,
+    field,
     null,
     struct_,
     uint16,
@@ -279,11 +278,13 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         elif dtype.is_binary_view():
             self = BinaryViewBuilder(capacity)
         elif dtype.is_list():
-            var child = DynBuilder(dtype.as_list().value_type())
-            self = ListBuilder(child^, capacity)
+            ref item = dtype.as_list().value_field()
+            self = ListBuilder(item.copy(), DynBuilder(item.dtype), capacity)
         elif dtype.is_large_list():
-            var child = DynBuilder(dtype.as_large_list().value_type())
-            self = LargeListBuilder(child^, capacity)
+            ref item = dtype.as_large_list().value_field()
+            self = LargeListBuilder(
+                item.copy(), DynBuilder(item.dtype), capacity
+            )
         elif dtype.is_fixed_size_list():
             ref fsl = dtype.as_fixed_size_list()
             var child = DynBuilder(fsl.value_type())
@@ -1330,14 +1331,23 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
     var _child: DynBuilder
 
     def __init__(out self, var child: DynBuilder, capacity: Int = 0):
+        """A list of `child`'s values, under the default nullable `item`
+        element field."""
+        var item = field("item", child.dtype())
+        self = Self(item^, child^, capacity)
+
+    def __init__(
+        out self, var item: Field, var child: DynBuilder, capacity: Int = 0
+    ):
+        """A list whose element field is `item` -- its name, nullability and
+        metadata -- with values appended to `child`."""
         var offsets = Buffer.alloc_zeroed[Self.T.offset](capacity + 1)
         offsets.unsafe_set[Self.T.offset](0, 0)
-        var child_dtype = child.dtype().copy()
         var list_dtype: DynType
         comptime if Self.T.offset == DType.int32:
-            list_dtype = list_(child_dtype^)
+            list_dtype = ListType(item^)
         else:
-            list_dtype = large_list_(child_dtype^)
+            list_dtype = LargeListType(item^)
         self._dtype = list_dtype^
         self._length = 0
         self._capacity = capacity
@@ -1736,10 +1746,15 @@ struct StructBuilder(Builder):
         return self._children[index]
 
     def append_null(mut self) raises:
+        """A null row, and a null in every field under it, so the fields stay
+        as long as the struct. `unsafe_append_null` marks the row alone."""
+        # Arrow C++'s `StructBuilder::AppendNull` pads its children the same.
         if self._length >= self._capacity:
             var new_cap = max(self._capacity * 2, self._length + 1)
             self._bitmap.resize(new_cap)
             self._capacity = new_cap
+        for ref child in self._children:
+            child.append_null()
         self.unsafe_append_null()
 
     def append_valid(mut self) raises:
@@ -1858,6 +1873,18 @@ struct DictionaryBuilder(Builder):
             indices_builder.dtype(), values.dtype(), ordered
         )
         self._indices = indices_builder^
+        self._values = values^
+
+    def set_dictionary(mut self, var values: DynArray) raises:
+        """Replace the dictionary the indices point into -- for a caller that
+        knows it only after the builder exists, as `DynBuilder(dtype)` builds
+        one with an empty dictionary."""
+        if values.dtype() != self._dtype.as_dictionary().value_type():
+            raise TypeError(
+                t"DictionaryBuilder.set_dictionary: expected"
+                t" {self._dtype.as_dictionary().value_type()} values, got"
+                t" {values.dtype()}"
+            )
         self._values = values^
 
     def length(self) -> Int:

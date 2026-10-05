@@ -945,3 +945,22 @@ def test_binary_builder_extend_accepts_cross_offset_width() raises:
     assert_equal(out.length, 2)
     assert_equal(out[0].to_string(), "wide")
     assert_equal(out[1].to_string(), "er")
+
+
+def test_dyn_builder_keeps_list_element_field() raises:
+    """The element field -- name, nullability, metadata -- survives building."""
+    var md = Dict[String, String]()
+    md["field_id"] = "7"
+    var dtype: DynType = ListType(Field("element", int32.to_dyn(), False, md^))
+    var b = DynBuilder(dtype)
+    b.as_list().values().as_int32().append(1)
+    b.as_list().append_valid()
+    assert_true(b.finish().dtype() == dtype)
+
+
+def test_dictionary_builder_set_dictionary() raises:
+    var b = DynBuilder(dictionary(int32.to_dyn(), string.to_dyn()))
+    b.as_dictionary().set_dictionary(array(["x", "y"]))
+    b.as_dictionary().append(1)
+    var d = b.finish().as_dictionary().copy()
+    assert_true(d.dictionary().as_string() == array(["x", "y"]))

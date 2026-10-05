@@ -788,15 +788,7 @@ struct _Slot(Movable):
         required."""
         if not self.nullable:
             raise cur.missing(self.path, absent)
-        self._pad_null()
-
-    def _pad_null(mut self) raises:
-        """A null here, and in every child of a struct: `StructBuilder` leaves
-        its children to the caller."""
         self.builder.append_null()
-        if self.json_type == JsonType.STRUCT:
-            for i in range(len(self.children)):
-                self.children[i]._pad_null()
 
     def append_value(mut self, mut cur: JsonCursor) raises:
         """The value at the cursor, into this column."""

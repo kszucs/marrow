@@ -51,7 +51,7 @@ from ..dtypes import (
 
 from ..utils import CompressionLibs
 from .codecs import Encoding, Rle, Plain, Dictionary, Compression
-from ..utils import Epoch, LittleEndian, Crc32
+from ..utils import BigEndian, Epoch, LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from ..io import (
     FOOTER_READ_SIZE,
@@ -1183,7 +1183,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
 
     def _decode_be(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.native]:
         """Big-endian, sign-extended from `width` bytes to the native width."""
-        return Plain.decode_be_flba[Self.native](span, off, self.width)
+        return BigEndian.signed[Self.native](span[off : off + self.width])
 
     def _place(
         mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
@@ -1759,8 +1759,8 @@ struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
     def handle_dict(mut self, pg: Page) raises:
         for i in range(pg.num_values):
             self.dict.append(
-                Plain.decode_be_flba[Self.T.native](
-                    pg.body, i * self.width, self.width
+                BigEndian.signed[Self.T.native](
+                    pg.body[i * self.width : i * self.width + self.width]
                 )
             )
 
@@ -1774,8 +1774,8 @@ struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
         elif pg.is_plain():
             for i in range(pg.num_present):
                 self.present.append(
-                    Plain.decode_be_flba[Self.T.native](
-                        vspan, i * self.width, self.width
+                    BigEndian.signed[Self.T.native](
+                        vspan[i * self.width : i * self.width + self.width]
                     )
                 )
         else:
@@ -1784,8 +1784,10 @@ struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
             )
             for i in range(pg.num_present):
                 self.present.append(
-                    Plain.decode_be_flba[Self.T.native](
-                        Span(bytes), i * self.width, self.width
+                    BigEndian.signed[Self.T.native](
+                        Span(bytes)[
+                            i * self.width : i * self.width + self.width
+                        ]
                     )
                 )
 

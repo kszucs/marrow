@@ -15,6 +15,7 @@ touches OpenDAL, which is what lets marrow work with no `libopendal_c` present.
 from std.collections.string import Codepoint
 from std.os import getenv
 from ..errors import DynError, InvalidError, NotImplementedError
+from .hex import hex_digit
 
 
 struct Uri(Copyable, Movable, Writable):
@@ -200,8 +201,8 @@ def _percent_decode(s: StringSlice) raises DynError -> String:
         # encodes as two UTF-8 bytes, so decoding `%C3%A9` through it yields
         # four bytes of mojibake instead of the two that spell "é" -- and the
         # read goes to a different object, or nowhere.
-        var hi = _hex(b[i + 1]) if i + 2 < len(b) else -1
-        var lo = _hex(b[i + 2]) if i + 2 < len(b) else -1
+        var hi = hex_digit(b[i + 1]) if i + 2 < len(b) else -1
+        var lo = hex_digit(b[i + 2]) if i + 2 < len(b) else -1
         if b[i] == UInt8(ord("%")) and hi >= 0 and lo >= 0:
             out.append(UInt8(hi * 16 + lo))
             i += 3
@@ -212,18 +213,6 @@ def _percent_decode(s: StringSlice) raises DynError -> String:
     # speaks to, and refusing one that is not UTF-8 would make a nameable
     # object unreadable.
     return String(StringSlice(unsafe_from_utf8=Span(out)))
-
-
-def _hex(c: UInt8) -> Int:
-    """The value of one hex digit, or -1 if it is not one."""
-    var v = Int(c)
-    if v >= ord("0") and v <= ord("9"):
-        return v - ord("0")
-    if v >= ord("a") and v <= ord("f"):
-        return v - ord("a") + 10
-    if v >= ord("A") and v <= ord("F"):
-        return v - ord("A") + 10
-    return -1
 
 
 @fieldwise_init

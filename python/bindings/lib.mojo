@@ -14,6 +14,7 @@ from schema import add_to_module as add_schema
 from tabular import add_to_module as add_tabular
 from ipc import add_to_module as add_ipc
 from parquet import add_to_module as add_parquet
+from avro import add_to_module as add_avro
 from json import add_to_module as add_json
 from expressions import add_to_module as add_expressions
 from plan import add_to_module as add_plan
@@ -31,6 +32,7 @@ def PyInit_libmarrow() abi("C") -> PythonObject:
         add_tabular(m)
         add_ipc(m)
         add_parquet(m)
+        add_avro(m)
         add_json(m)
         add_expressions(m)
         add_plan(m)

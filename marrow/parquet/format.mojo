@@ -18,8 +18,8 @@ types (`PhysicalType`, `Encoding`, …) rather than bare integer constants.
 from std.memory import bitcast
 
 from ..errors import CorruptError
-from .codecs import Encoding, Zigzag
-from ..utils import LittleEndian
+from .codecs import Encoding
+from ..utils import LittleEndian, Zigzag
 
 
 # ---------------------------------------------------------------------------

@@ -113,6 +113,7 @@ PLACEMENTS = {
 EXEMPT = {
     ".arrow",
     ".arrow_file",
+    ".avro",
     ".gitkeep",
     ".json",
     ".lock",

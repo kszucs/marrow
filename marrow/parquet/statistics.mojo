@@ -19,7 +19,7 @@ from ..arrays import (
     PrimitiveArray,
     BytesArray,
 )
-from ..utils import LittleEndian
+from ..utils import BigEndian, LittleEndian
 from ..scalars import (
     PrimitiveScalar,
     DynScalar,
@@ -360,7 +360,7 @@ struct Statistics:
                     if len(b) == 0 or len(b) > flba_width[T]:
                         return None
                     return PrimitiveScalar[T](
-                        Plain.decode_be_flba[T.native](s, 0, len(b)), witness
+                        BigEndian.signed[T.native](s[: len(b)]), witness
                     ).to_dyn()
                 else:
                     if len(b) != size_of[Scalar[physical_type[T]]]():

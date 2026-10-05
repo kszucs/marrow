@@ -1,10 +1,10 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Little-endian byte, bit and varint primitives.
+"""Byte, bit and varint primitives.
 
-The low-level serialization helpers shared by the Arrow IPC (FlatBuffers) and
-Parquet (Thrift / page) codecs. Fixed-width scalars are read and written as
+The low-level serialization helpers shared by the Arrow IPC (FlatBuffers),
+Parquet (Thrift / page) and Avro codecs. Fixed-width scalars are read and written as
 little-endian bytes independent of the host byte order: the
 `from_bytes[big_endian=False]` read and the shift/mask write both assemble LE
 bytes numerically, so no host byteswap is needed.
@@ -195,3 +195,60 @@ struct LittleEndian:
             if a[i] != b[i]:
                 return a[i] < b[i]
         return len(a) < len(b)
+
+
+struct Zigzag:
+    """Signed <-> unsigned mapping so small-magnitude signed integers stay small
+    as varints — shared by Parquet's delta codecs and Thrift Compact Protocol,
+    and by Avro's `int` and `long`. Stateless; a namespace of static methods."""
+
+    @staticmethod
+    @always_inline
+    def encode(v: Int64) -> UInt64:
+        return UInt64((v << 1) ^ (v >> 63))
+
+    @staticmethod
+    @always_inline
+    def decode(u: UInt64) -> Int64:
+        return Int64(u >> 1) ^ -Int64(u & 1)
+
+
+struct BigEndian:
+    """The few big-endian reads and writes marrow's formats need: Parquet's and
+    Avro's two's-complement decimals, and Avro's snappy checksum trailer."""
+
+    @staticmethod
+    def u32(data: Span[UInt8, _], pos: Int) -> UInt32:
+        """The 4 bytes at `pos` as a big-endian `UInt32`; the caller has
+        checked the range."""
+        return byte_swap(LittleEndian.fixed[DType.uint32](data, pos))
+
+    @staticmethod
+    def put_u32(mut out: List[UInt8], v: UInt32):
+        """Append `v` as 4 big-endian bytes."""
+        LittleEndian.append[DType.uint32](out, byte_swap(v))
+
+    @staticmethod
+    def signed[T: DType](data: Span[UInt8, _]) -> Scalar[T]:
+        """A big-endian two's-complement integer of `len(data)` bytes,
+        sign-extended to `T`. `len(data)` must not exceed `T`'s width."""
+        comptime FULL = size_of[Scalar[T]]()
+        debug_assert(len(data) <= FULL, "BigEndian.signed: too wide")
+        var arr = Array[UInt8, FULL](fill=0)
+        if len(data) > 0 and (data[0] & 0x80) != 0:
+            for i in range(FULL):
+                arr[i] = 0xFF
+        for i in range(len(data)):
+            arr[FULL - len(data) + i] = data[i]
+        # Not `SIMD.from_bytes`: it dereferences the byte array at the native
+        # type's alignment, which for an `int128`/`int256` decimal is an aligned
+        # SSE load that faults on x86-64. `fixed` reads little-endian, so a
+        # swap turns the big-endian bytes into the value on either host.
+        return byte_swap(LittleEndian.fixed[T](arr, 0))
+
+    @staticmethod
+    def put_signed[T: DType](mut out: List[UInt8], v: Scalar[T], width: Int):
+        """Append the low `width` bytes of `v`, most significant first -- the
+        inverse of `signed` when `v` fits in `width` bytes."""
+        var bytes = v.as_bytes[big_endian=True]()
+        out.extend(Span(bytes)[size_of[Scalar[T]]() - width :])

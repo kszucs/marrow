@@ -10,7 +10,7 @@ Two surfaces, told apart by the entry point:
   :class:`~marrow.lazy.LazyTable`. Nothing runs until `collect()`.
 
 This module is re-exports. The implementations live next door: `types`,
-`arrays`, `tabular`, `expr`, `lazy`, `compute`, `parquet`, `ipc`,
+`arrays`, `tabular`, `expr`, `lazy`, `compute`, `parquet`, `avro`, `ipc`,
 `threads`.
 """
 

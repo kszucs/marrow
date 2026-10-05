@@ -10,9 +10,10 @@ out on its own:
 | module | what |
 |---|---|
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
-| `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
+| `byteorder` | `LittleEndian`, `BigEndian`, `Zigzag` — byte, bit and LEB128-varint reads/writes |
 | `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
+| `hex` | `hex_digit` — one hexadecimal digit's value |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32` |
 | `compression` | `CompressionLibs` — `dlopen`ed snappy / zlib / brotli, and libzstd / liblz4 where chosen over the Mojo codecs |
 | `snappy` | `Snappy` — Snappy raw-block compression, in Mojo |
@@ -40,12 +41,13 @@ whether there is a device.
 """
 
 from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
-from .byteorder import LittleEndian
+from .byteorder import BigEndian, LittleEndian, Zigzag
 from .checksum import Crc32, Crc32c
 from .compression import CompressionLibs
 from .datetime import CivilDate, Epoch, floor_div
 from .dylib import Dylib, LibSpec
 from .uri import StorageOptions, Uri
+from .hex import hex_digit
 from .hashing import (
     AHash64,
     Hasher,

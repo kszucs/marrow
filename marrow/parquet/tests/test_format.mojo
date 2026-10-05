@@ -11,6 +11,7 @@ from std.os.path import join
 from ...utils.testing import ScratchDir
 from ...parquet.reader import ParquetFile, read_page_index
 from ...io import BufferSource
+from ...utils import Zigzag
 from ...parquet.format import (
     Encoding,
     FileMetaData,
@@ -19,7 +20,6 @@ from ...parquet.format import (
     Repetition,
     ThriftCompactReader,
     ThriftCompactWriter,
-    Zigzag,
     TC_I32,
     TC_I64,
     TC_BINARY,

@@ -24,7 +24,6 @@ each introduced by a ULEB128 header. `header & 1` selects the run kind:
                       LSB-first, `bit_width` bits each.
 """
 
-from std.bit import byte_swap
 from std.sys import size_of
 
 from ..buffers import bulk_copy
@@ -39,23 +38,7 @@ from ..arrays import (
     FixedSizeBinaryArray,
 )
 from .. import dtypes as dt
-from ..utils import CompressionLibs, LittleEndian, Lz4, Zstd
-
-
-struct Zigzag:
-    """Signed <-> unsigned mapping so small-magnitude signed integers stay small
-    as varints — shared by the delta codecs and the Thrift Compact Protocol.
-    Stateless; a namespace of static methods."""
-
-    @staticmethod
-    @always_inline
-    def encode(v: Int64) -> UInt64:
-        return UInt64((v << 1) ^ (v >> 63))
-
-    @staticmethod
-    @always_inline
-    def decode(u: UInt64) -> Int64:
-        return Int64(u >> 1) ^ -Int64(u & 1)
+from ..utils import CompressionLibs, LittleEndian, Lz4, Zigzag, Zstd
 
 
 struct Rle:
@@ -491,26 +474,6 @@ struct Plain:
     primitives, bit-packed for booleans, 4-byte-length-prefixed for byte arrays.
     Encode takes a present-value Arrow array; decode returns the present values.
     """
-
-    @staticmethod
-    def decode_be_flba[
-        native: DType
-    ](span: Span[UInt8, _], off: Int, width: Int) -> Scalar[native]:
-        """Decode a big-endian two's-complement FIXED_LEN_BYTE_ARRAY value at
-        `off`, sign-extended from `width` bytes to the native width — the DECIMAL
-        FLBA decode shared by the flat, leveled, and statistics read paths."""
-        comptime FULL = size_of[Scalar[native]]()
-        var arr = Array[UInt8, FULL](fill=0)
-        if (span[off] & 0x80) != 0:  # negative -> sign-extend with 0xFF
-            for i in range(FULL):
-                arr[i] = 0xFF
-        for i in range(width):
-            arr[FULL - width + i] = span[off + i]
-        # Not `SIMD.from_bytes`: it dereferences the byte array at the native
-        # type's alignment, which for an `int128`/`int256` decimal is an aligned
-        # SSE load that faults on x86-64. `fixed` reads little-endian, so a
-        # swap turns the big-endian bytes into the value on either host.
-        return byte_swap(LittleEndian.fixed[native](arr, 0))
 
     @staticmethod
     def encode_primitive[

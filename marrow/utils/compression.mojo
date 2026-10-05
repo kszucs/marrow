@@ -13,18 +13,25 @@ LZ4 and Zstandard run in Mojo by default, `marrow.utils.lz4` and
 `marrow.utils.zstd`; a reader or writer created with `native_codecs=False`
 runs them through `liblz4` and `libzstd` instead, the calls below, and the
 tests check the Mojo codecs against the same libraries. Snappy also has a
-Mojo implementation, `marrow.utils.snappy`, which Parquet does not use yet.
+Mojo implementation, `marrow.utils.snappy`, which Avro uses and Parquet does
+not yet.
 
 **Nothing here is Parquet-specific**, which is why it lives in `marrow.utils`
 rather than in `marrow.parquet` where it started (as a second module named
 `utils`). The format-specific half -- the Parquet `CompressionCodec` codes --
 is `Compression` in `marrow.parquet.codecs`, which dispatches onto this.
+
+Avro is the second consumer. Its blocks record no uncompressed size, which is
+what `deflate_decompress` and `zstd_decompress_unsized` are for: they grow
+their output rather than fill an exact one.
 """
 
 from ..errors import CorruptError, InternalError, InvalidError
 from .dylib import LibSet, LibSpec, c_bytes
 from std.memory import unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
+
+comptime _Opaque = OpaquePointer[MutUntrackedOrigin]
 
 comptime Codecs = LibSet[
     "MARROW_CODECS",
@@ -61,6 +68,63 @@ One global for the set, not one each -- six cost `query_cli` ~16 KB of
 uncompressed Parquet opens nothing, because nothing touches this until a codec
 method runs.
 """
+
+
+struct _ZStream(Movable):
+    """A zlib `z_stream`, driven directly: 112 bytes on LP64, of which marrow
+    touches next_in @0, avail_in @8, next_out @24, avail_out @32 and
+    total_out @40. Zeroed, so zalloc/zfree/opaque select zlib's defaults."""
+
+    var _p: Pointer[UInt64, MutUntrackedOrigin]
+
+    def __init__(out self):
+        self._p = unsafe_alloc[UInt64](16)
+        unsafe_memset_zero(self._p.unsafe_bitcast[UInt8](), 128)
+
+    def __deinit__(deinit self):
+        self._p.unsafe_free()
+
+    def ptr(self) -> Pointer[UInt8, MutUntrackedOrigin]:
+        return self._p.unsafe_bitcast[UInt8]()
+
+    def set_input(self, src: Pointer[UInt8, _], n: Int):
+        self._p[unsafe_offset=0] = UInt64(Int(src))
+        self.ptr().unsafe_offset(8).unsafe_bitcast[UInt32]()[
+            unsafe_offset=0
+        ] = UInt32(n)
+
+    def set_output(self, dst: Pointer[UInt8, _], n: Int):
+        self._p[unsafe_offset=3] = UInt64(Int(dst))
+        self.ptr().unsafe_offset(32).unsafe_bitcast[UInt32]()[
+            unsafe_offset=0
+        ] = UInt32(n)
+
+    def avail_in(self) -> Int:
+        return Int(
+            self.ptr()
+            .unsafe_offset(8)
+            .unsafe_bitcast[UInt32]()[unsafe_offset=0]
+        )
+
+    def avail_out(self) -> Int:
+        return Int(
+            self.ptr()
+            .unsafe_offset(32)
+            .unsafe_bitcast[UInt32]()[unsafe_offset=0]
+        )
+
+    def total_out(self) -> Int:
+        return Int(self._p[unsafe_offset=5])
+
+
+comptime _Z_OK = 0
+comptime _Z_STREAM_END = 1
+comptime _Z_BUF_ERROR = -5
+comptime _Z_FINISH = 4
+comptime _GZIP_WINDOW = 31
+"""windowBits 15 plus 16: a gzip header and trailer."""
+comptime _RAW_WINDOW = -15
+"""windowBits -15: raw RFC 1951 deflate, no header or checksum."""
 
 
 struct CompressionLibs(Movable):
@@ -124,38 +188,110 @@ struct CompressionLibs(Movable):
         out_size: Int,
     ) raises:
         var z = Codecs.handle["z"]()
-        # z_stream is 112 bytes on LP64; drive it directly. Fields we set:
-        # next_in @0, avail_in @8, next_out @24, avail_out @32; total_out @40.
-        var strm = unsafe_alloc[UInt64](16)
-        var sp = strm.unsafe_bitcast[UInt8]()
-        unsafe_memset_zero(sp, 128)
-        strm[unsafe_offset=0] = UInt64(Int(src.unsafe_ptr()))
-        (sp.unsafe_offset(8)).unsafe_bitcast[UInt32]()[
-            unsafe_offset=0
-        ] = UInt32(len(src))
-        strm[unsafe_offset=3] = UInt64(Int(dst))
-        (sp.unsafe_offset(32)).unsafe_bitcast[UInt32]()[
-            unsafe_offset=0
-        ] = UInt32(out_size)
-
-        var version = z.call[
-            "zlibVersion", Pointer[UInt8, MutUntrackedOrigin]
-        ]()
-        # windowBits 31 = 15 | 16 → gzip; stream_size = sizeof(z_stream) = 112
-        var rc = z.call["inflateInit2_", Int32](
-            sp, Int32(31), version, Int32(112)
-        )
-        if Int(rc) != 0:
-            strm.unsafe_free()
-            raise InternalError("gzip: inflateInit2 failed")
-        var st = z.call["inflate", Int32](sp, Int32(4))  # Z_FINISH
-        var produced = Int(strm[unsafe_offset=5])  # total_out
-        _ = z.call["inflateEnd", Int32](sp)
-        strm.unsafe_free()
-        if Int(st) != 1:  # Z_STREAM_END
+        var strm = _ZStream()
+        strm.set_input(src.unsafe_ptr(), len(src))
+        strm.set_output(dst, out_size)
+        Self._inflate_init(strm, _GZIP_WINDOW)
+        var st = z.call["inflate", Int32](strm.ptr(), Int32(_Z_FINISH))
+        var produced = strm.total_out()
+        _ = z.call["inflateEnd", Int32](strm.ptr())
+        if Int(st) != _Z_STREAM_END:
             raise CorruptError("gzip: inflate failed")
         if produced != out_size:
             raise CorruptError("gzip: decompressed size mismatch")
+
+    @staticmethod
+    def deflate_decompress(src: Span[UInt8, _]) raises -> List[UInt8]:
+        """Inflate a raw RFC 1951 stream whose decompressed size is not known
+        up front -- Avro's `deflate` blocks record none -- growing the output
+        until the stream ends."""
+        var z = Codecs.handle["z"]()
+        var strm = _ZStream()
+        strm.set_input(src.unsafe_ptr(), len(src))
+        Self._inflate_init(strm, _RAW_WINDOW)
+        var out = List[UInt8](unsafe_uninit_length=max(64, 4 * len(src)))
+        var failure = String()
+        while True:
+            var done = strm.total_out()
+            strm.set_output(
+                out.unsafe_ptr().unsafe_offset(done), len(out) - done
+            )
+            var st = Int(z.call["inflate", Int32](strm.ptr(), Int32(0)))
+            if st == _Z_STREAM_END:
+                break
+            if st != _Z_OK and st != _Z_BUF_ERROR:
+                failure = String(t"deflate: inflate failed ({st})")
+                break
+            if strm.avail_out() == 0:
+                out.resize(unsafe_uninit_length=2 * len(out))
+            elif strm.avail_in() == 0:
+                failure = "deflate: truncated stream"
+                break
+        _ = z.call["inflateEnd", Int32](strm.ptr())
+        if failure:
+            raise CorruptError(failure)
+        out.resize(unsafe_uninit_length=strm.total_out())
+        return out^
+
+    @staticmethod
+    def _inflate_init(strm: _ZStream, window_bits: Int) raises:
+        var z = Codecs.handle["z"]()
+        var version = z.call[
+            "zlibVersion", Pointer[UInt8, MutUntrackedOrigin]
+        ]()
+        var rc = z.call["inflateInit2_", Int32](
+            strm.ptr(), Int32(window_bits), version, Int32(112)
+        )
+        if Int(rc) != _Z_OK:
+            raise InternalError("zlib: inflateInit2 failed")
+
+    @staticmethod
+    def zstd_decompress_unsized(src: Span[UInt8, _]) raises -> List[UInt8]:
+        """Decompress zstd frames whose content size may be absent -- Avro's
+        `zstandard` blocks record none, and a streaming writer may leave it out
+        of the frame -- through the streaming API, growing the output. A frame
+        that does declare its size sizes the first allocation, within reason:
+        the declaration is the input's word, not a promise."""
+        var z = Codecs.handle["zstd"]()
+        var declared = z.call["ZSTD_getFrameContentSize", UInt64](
+            src.unsafe_ptr(), len(src)
+        )
+        var hint = 4 * len(src)
+        if declared < UInt64(0) - 2:  # neither UNKNOWN (-1) nor ERROR (-2)
+            hint = min(Int(declared), 64 * len(src))
+        var out = List[UInt8](unsafe_uninit_length=max(64, hint))
+        # ZSTD_inBuffer {src, size, pos} then ZSTD_outBuffer {dst, size, pos}.
+        var bufs = unsafe_alloc[UInt64](6)
+        bufs[unsafe_offset=0] = UInt64(Int(src.unsafe_ptr()))
+        bufs[unsafe_offset=1] = UInt64(len(src))
+        bufs[unsafe_offset=2] = 0
+        bufs[unsafe_offset=5] = 0
+        var dctx = z.call["ZSTD_createDCtx", _Opaque]()
+        var failure = String()
+        while True:
+            bufs[unsafe_offset=3] = UInt64(Int(out.unsafe_ptr()))
+            bufs[unsafe_offset=4] = UInt64(len(out))
+            var rc = z.call["ZSTD_decompressStream", UInt](
+                dctx, bufs.unsafe_offset(3), bufs
+            )
+            if z.call["ZSTD_isError", UInt32](rc) != 0:
+                failure = "zstd: decompress failed"
+                break
+            var consumed = Int(bufs[unsafe_offset=2]) == len(src)
+            if consumed and rc == 0:
+                break
+            if Int(bufs[unsafe_offset=5]) == len(out):
+                out.resize(unsafe_uninit_length=2 * len(out))
+            elif consumed:
+                failure = "zstd: truncated frame"
+                break
+        var produced = Int(bufs[unsafe_offset=5])
+        _ = z.call["ZSTD_freeDCtx", UInt](dctx)
+        bufs.unsafe_free()
+        if failure:
+            raise CorruptError(failure)
+        out.resize(unsafe_uninit_length=produced)
+        return out^
 
     def brotli_decompress(
         mut self,
@@ -347,54 +483,46 @@ struct CompressionLibs(Movable):
         return Self._take(dst, produced)
 
     def gzip_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        var z = Codecs.handle["z"]()
-        # gzip worst-case: deflate expansion (~len/1000 + 12) plus the 18-byte
-        # gzip header/trailer; pad generously.
-        var bound = len(src) + len(src) // 1000 + 128
-        var dst = unsafe_alloc[UInt8](bound)
-        # z_stream is 112 bytes on LP64; same field layout as gzip_decompress.
-        var strm = unsafe_alloc[UInt64](16)
-        var sp = strm.unsafe_bitcast[UInt8]()
-        unsafe_memset_zero(sp, 128)
-        strm[unsafe_offset=0] = UInt64(Int(src.unsafe_ptr()))  # next_in @0
-        (sp.unsafe_offset(8)).unsafe_bitcast[UInt32]()[
-            unsafe_offset=0
-        ] = UInt32(
-            len(src)
-        )  # avail_in @8
-        strm[unsafe_offset=3] = UInt64(Int(dst))  # next_out @24
-        (sp.unsafe_offset(32)).unsafe_bitcast[UInt32]()[
-            unsafe_offset=0
-        ] = UInt32(
-            bound
-        )  # avail_out @32
+        return Self._deflate(src, _GZIP_WINDOW)
 
+    @staticmethod
+    def deflate_compress(src: Span[UInt8, _]) raises -> List[UInt8]:
+        """Raw RFC 1951 deflate -- Avro's `deflate` codec."""
+        return Self._deflate(src, _RAW_WINDOW)
+
+    @staticmethod
+    def _deflate(src: Span[UInt8, _], window_bits: Int) raises -> List[UInt8]:
+        var z = Codecs.handle["z"]()
+        var strm = _ZStream()
         var version = z.call[
             "zlibVersion", Pointer[UInt8, MutUntrackedOrigin]
         ]()
-        # level 6, method Z_DEFLATED(8), windowBits 31 = gzip, memLevel 8,
-        # strategy Z_DEFAULT_STRATEGY(0), stream_size = sizeof(z_stream) = 112.
+        # level 6, method Z_DEFLATED(8), memLevel 8, strategy
+        # Z_DEFAULT_STRATEGY(0), stream_size = sizeof(z_stream) = 112.
         var rc = z.call["deflateInit2_", Int32](
-            sp,
+            strm.ptr(),
             Int32(6),
             Int32(8),
-            Int32(31),
+            Int32(window_bits),
             Int32(8),
             Int32(0),
             version,
             Int32(112),
         )
-        if Int(rc) != 0:
-            strm.unsafe_free()
+        if Int(rc) != _Z_OK:
+            raise InternalError("zlib: deflateInit2 failed")
+        var bound = Int(
+            z.call["deflateBound", UInt](strm.ptr(), UInt(len(src)))
+        )
+        var dst = unsafe_alloc[UInt8](bound)
+        strm.set_input(src.unsafe_ptr(), len(src))
+        strm.set_output(dst, bound)
+        var st = z.call["deflate", Int32](strm.ptr(), Int32(_Z_FINISH))
+        var produced = strm.total_out()
+        _ = z.call["deflateEnd", Int32](strm.ptr())
+        if Int(st) != _Z_STREAM_END:
             dst.unsafe_free()
-            raise InternalError("gzip: deflateInit2 failed")
-        var st = z.call["deflate", Int32](sp, Int32(4))  # Z_FINISH
-        var produced = Int(strm[unsafe_offset=5])  # total_out @40
-        _ = z.call["deflateEnd", Int32](sp)
-        strm.unsafe_free()
-        if Int(st) != 1:  # Z_STREAM_END
-            dst.unsafe_free()
-            raise InternalError("gzip: deflate failed")
+            raise InternalError("zlib: deflate failed")
         return Self._take(dst, produced)
 
     def brotli_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:

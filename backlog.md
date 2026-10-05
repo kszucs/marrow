@@ -967,6 +967,29 @@ differentiator hiding inside a table-stakes item.
 - **No `__dataframe__` protocol**, though
   the PyCapsule/C Stream path marrow already has is the better-supported
   modern route.
+- **Avro, and Iceberg on top of it.** `marrow/avro/` reads and writes object
+  container files (`read_avro`, `write_avro`, `AvroFile`, `AvroWriter`;
+  Python's `marrow.avro`) with the `null`, `deflate`, `snappy` and
+  `zstandard` codecs, and carries Iceberg's `field-id` / `element-id` /
+  `key-id` / `value-id` as `field_id` field metadata. What it does not do:
+  - **No Avro schema resolution.** A file is read with the writer's schema
+    only. Iceberg does not need it -- it projects by field id -- but a
+    generic consumer evolving an Avro schema would.
+  - **Unions of several non-null branches** are refused: marrow has no union
+    layout (§ Known Limitations in CLAUDE.md).
+  - **`bzip2` and `xz`** raise `NotImplementedError`; neither library is in
+    the `Codecs` set.
+  - **Blocks decode serially.** They are independent once the sync markers
+    are found, so `AvroFile.read` could fan them out over `ctx`; it also reads
+    the whole data region in one `read_at`, which is right for manifests and
+    wrong for a multi-gigabyte file on an object store.
+  - **No `AvroScan`** in `marrow.expr`, and `AvroFile` does not implement
+    `BatchReader`, so a plan cannot scan Avro.
+  - **The Iceberg layer itself** -- the manifest-list / manifest model,
+    field-id projection and evolution over the decoded tables, and
+    `Index.from_iceberg_manifest` beside `Index.from_parquet`
+    (`marrow/expr/index.mojo`) -- is unwritten. So are field ids on the
+    *Parquet* reader, which Iceberg's data files need the same way.
 
 #### 2.10 Operability
 
