@@ -214,6 +214,16 @@ class Repo:
         return self.root / "benchmarks"
 
     @property
+    def fuzz_dir(self):
+        """The fuzz harnesses and their committed regression corpus."""
+        return self.root / "fuzz"
+
+    @property
+    def fuzz_work_dir(self):
+        """Untracked fuzzing state: binaries, seeds, growing corpora, crashes."""
+        return self.root / ".fuzz"
+
+    @property
     def footprint_dir(self):
         """Where the binary-size gate programs live."""
         return self.benchmarks_dir / "binary_size"
@@ -539,6 +549,7 @@ class BuildOptions:
     debug_info_language: str = ""
     link_libm: bool = False
     defines: tuple = ()
+    asan_attributes: bool = False
 
     @classmethod
     def for_tests(cls, *, gpu=False, asan=False, tsan=False, defines=()):
@@ -591,6 +602,41 @@ class BuildOptions:
         """
         return cls(opt="-O1", debug="-g", debug_info_language="C")
 
+    @classmethod
+    def for_fuzzing(cls):
+        """Bitcode for clang to instrument and link against libFuzzer.
+
+        `-D ASSERT=all` is the oracle: the bounds checks are most of what turns
+        a bad input into a crash.  `asan_attributes` marks every function
+        `sanitize_address`; clang's pass instruments only functions so marked,
+        and Mojo's bitcode carries no such mark otherwise.  `fuzz/` is on the
+        include path because the generated entry point lives elsewhere.
+        """
+        return cls(
+            opt="-O1",
+            debug="-g",
+            asserts=True,
+            include=(".", "fuzz"),
+            asan_attributes=True,
+        )
+
+    @classmethod
+    def for_fuzz_replay(cls, *, asan=False):
+        """The harnesses behind a plain `main()`, to replay committed inputs.
+
+        With `asan`, the build links the AddressSanitizer runtime, and Mojo's
+        own `main` moves its heap onto the allocator ASAN replaces -- what
+        replaying an input that only a sanitizer catches needs.
+        """
+        return cls(
+            opt="-O1",
+            debug="-g",
+            asserts=True,
+            asan=asan,
+            include=(".", "fuzz"),
+            link_libm=True,
+        )
+
     @property
     def sanitizer(self):
         """The sanitizer this build links -- "asan", "tsan" or "" -- which
@@ -627,6 +673,10 @@ class BuildOptions:
                     "Install libcompiler-rt via conda-forge."
                 )
             flags += asan_runtime.flags()
+        if self.asan_attributes:
+            # Only meaningful with `--emit llvm-bitcode`: nothing is linked,
+            # so no runtime is needed -- clang supplies it.
+            flags += ["--sanitize", "address"]
         if self.tsan:
             # `MARROW_TSAN` makes `TestSuite.run` swap Mojo's own allocator,
             # which TSAN does not intercept, for libc's: otherwise a block freed
@@ -685,6 +735,23 @@ class MojoToolchain:
                 source,
                 "--emit",
                 "shared-lib",
+                "-o",
+                out,
+            ],
+            label,
+        )
+
+    def emit_bitcode(self, source, out, options, label):
+        """LLVM bitcode for another toolchain to finish, as fuzzing needs."""
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        return self._runner.run(
+            [
+                self._exe,
+                "build",
+                *options.flags(self._asan),
+                source,
+                "--emit",
+                "llvm-bitcode",
                 "-o",
                 out,
             ],

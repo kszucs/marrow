@@ -179,6 +179,10 @@ test = { cmd = "pytest -v" }
 # `libmarrow.so` is built without defines. Three runs, not one: together they
 # are one compilation unit that can outlast the harness's 30-minute timeout.
 test_collisions = { cmd = "pytest --mojo -v --define MARROW_HASH_BITS=6 marrow/kernels/tests && pytest --mojo -v --define MARROW_HASH_BITS=6 marrow/expr/tests && pytest --mojo -v --define MARROW_HASH_BITS=6 golden" }
+# Compiles every fuzz harness and replays the committed corpus against its
+# recorded verdicts; `fuzz-replay-asan` in `asan` also runs the entries only a
+# sanitizer catches. Fuzzing itself is the `fuzz` environment's.
+fuzz-replay = { cmd = "pytest -v fuzz" }
 # One selection = one compilation unit, so there is nothing for xdist to
 # parallelise across: splitting by file would rebuild the same unit per worker.
 # Narrow the selection instead (a directory, a file) — that shrinks the unit.
@@ -257,6 +261,33 @@ test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
 # The thread pool, and `ExecContext` dispatching through it, under ASAN with
 # LeakSanitizer: any memory still allocated at exit fails the run.
 test_threads_asan = { cmd = "pytest --mojo --asan --leaks -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo" }
+# The fuzz corpus replayed under ASAN, entries marked `sanitizer` included.
+fuzz-replay-asan = { cmd = "pytest -v --asan fuzz" }
+
+# Fuzz — coverage-guided fuzzing with libFuzzer. `mojo build` has no coverage
+# flag, so a harness is emitted as LLVM bitcode and clang instruments and links
+# it. That clang has to read the bitcode Mojo writes, so it tracks Mojo's LLVM
+# rather than the `asan` pin above -- and so lives in its own solve group,
+# which keeps the two compiler-rt lines from constraining each other.
+[feature.fuzz.dependencies]
+clang = ">=23"
+compiler-rt = ">=23"
+
+# conda-forge's clang links against its own sysroot, which defaults to glibc
+# 2.28; the Mojo runtime libraries need symbols from 2.34. Not newer: a fuzzer
+# linked against a newer sysroot than the host's glibc does not start.
+[feature.fuzz.target.linux-64.dependencies]
+sysroot_linux-64 = "2.34.*"
+
+[feature.fuzz.target.linux-aarch64.dependencies]
+sysroot_linux-aarch64 = "2.34.*"
+
+[feature.fuzz.tasks]
+# `pixi run -e fuzz fuzz-run ipc_stream --time 120`; `devkit fuzz --help` has
+# the rest. The replay of the committed corpus needs none of this -- it is a
+# plain `mojo build` and runs in `dev`, as `pytest fuzz`.
+fuzz-build = { cmd = "python -m devkit fuzz build" }
+fuzz-run = { cmd = "python -m devkit fuzz run" }
 
 # Bench — benchmark dependencies and tasks (polars/duckdb for comparison benches).
 [feature.bench.dependencies]
@@ -277,8 +308,8 @@ bench-engines = { cmd = "pytest --benchmark --python --competition -v" }
 ruff = ">=0.14.14,<0.15"
 
 [feature.format.tasks]
-fmt_mojo = { cmd = "mojo format marrow python benchmarks golden/cases golden/helpers.mojo" }
-fmt_python = { cmd = "ruff format devkit python conftest.py benchmarks golden" }
+fmt_mojo = { cmd = "mojo format marrow python benchmarks fuzz golden/cases golden/helpers.mojo" }
+fmt_python = { cmd = "ruff format devkit python conftest.py benchmarks fuzz golden" }
 # Adds the Apache-2.0 header wherever it is missing, so `fmt_check` -- the lint
 # job -- fails on a file committed without one.
 fmt_license = { cmd = "python -m devkit license fix" }
@@ -388,6 +419,7 @@ default = { features = ["dev", "format"], solve-group = "default" }
 dev = { features = ["dev", "format"], solve-group = "default" }
 asan = { features = ["dev", "asan"], solve-group = "default" }
 bench = { features = ["dev", "bench"], solve-group = "default" }
+fuzz = { features = ["dev", "fuzz"], solve-group = "fuzz" }
 format = { features = ["format"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }

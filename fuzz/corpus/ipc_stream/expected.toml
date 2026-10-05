@@ -1,0 +1,82 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+#
+# What replaying each input must do -- see devkit/fuzzing.py. Bug ids are the
+# fuzzing entry in backlog.md; a `crash` entry whose bug is fixed fails the
+# replay until its verdict here moves to `accept` or `reject`.
+
+["all.arrows"]
+verdict = "accept"
+note = "every layout the reader decodes, with nulls, over several batches"
+
+["dictionary.arrows"]
+verdict = "accept"
+
+["empty.arrows"]
+verdict = "accept"
+
+["truncated.arrows"]
+verdict = "reject"
+
+["b1-body-range.arrows"]
+verdict = "reject"
+bug = "B1"
+note = "fixed: `_body_buffer` refuses a buffer outside the body (392829c4)"
+
+["b1-body-alloc.arrows"]
+verdict = "reject"
+bug = "B1"
+note = "a buffer length of terabytes; fixed: refused by the same body check (392829c4)"
+
+["b2-node-count.arrows"]
+verdict = "crash"
+bug = "B2"
+match = "marrow/ipc.mojo:2179"
+
+["b2-buffer-count.arrows"]
+verdict = "crash"
+bug = "B2"
+match = "marrow/ipc.mojo:2190"
+
+["b3-utf8-field-name.arrows"]
+verdict = "crash"
+bug = "B3"
+match = "not valid UTF"
+
+["b4-dictionary-type.arrows"]
+verdict = "crash"
+bug = "B4"
+match = "as_type: wrong type"
+
+["b5-flatbuffer-recursion.arrows"]
+verdict = "crash"
+bug = "B5"
+note = "stack overflow: a plain build dies on SIGSEGV with no message to match"
+
+["b6-buffer-short.arrows"]
+verdict = "crash"
+bug = "B6"
+match = "out of bounds for length"
+
+["b6-list-offsets-wild.arrows"]
+verdict = "crash"
+bug = "B6"
+match = "Buffer index 1000000 out of bounds"
+note = "list offsets far past the child: a bounds assertion, where wild string offsets would read whatever memory lies there"
+
+["b6-string-offsets-overread.arrows"]
+verdict = "crash"
+bug = "B6"
+sanitizer = "address"
+match = "heap-buffer-overflow"
+note = "the last string runs 4 KiB past the input; unchecked, so only ASAN sees it"
+
+["b6-bitmap-short.arrows"]
+verdict = "reject"
+bug = "B6"
+note = "its short validity bitmap has a negative length, which `_body_buffer` refuses (392829c4); a short bitmap of positive length is still B6"
+
+["b7-nulls-without-bitmap.arrows"]
+verdict = "crash"
+bug = "B7"
+match = "Optional.value()"

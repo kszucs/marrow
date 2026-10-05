@@ -1,0 +1,34 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+#
+# What replaying each input must do -- see devkit/fuzzing.py. File names
+# start with the Parquet codec code; the first byte selects it (fuzz/codecs.mojo).
+
+["0-text.bin"]
+verdict = "accept"
+
+["1-text.bin"]
+verdict = "accept"
+
+["2-text.bin"]
+verdict = "accept"
+
+["4-text.bin"]
+verdict = "accept"
+
+["5-text.bin"]
+verdict = "accept"
+
+["6-text.bin"]
+verdict = "accept"
+
+["7-text.bin"]
+verdict = "accept"
+
+["zstd-garbage.bin"]
+verdict = "reject"
+
+["b17-uncompressed-overread.bin"]
+verdict = "reject"
+bug = "B17"
+note = "an uncompressed page declaring 16 bytes and holding 1; fixed: `Compression._check_size` refuses it before the copy (aac60c15)"

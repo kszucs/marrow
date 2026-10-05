@@ -560,6 +560,47 @@ nothing to fuse in a breaker, the per-row work is already typed kernels, and
 `lag`/`lead`/`first_value`/`last_value` reduce to one `take`. The accumulator
 is an algorithmic change that happens to want comptime as its mechanism.
 
+### 1.14 Readers that crash on malformed input — the fuzzing findings
+
+**Epic: every reader must answer a malformed file with an `ArrowError`, never
+an abort or a read past an allocation.** libFuzzer finds the bugs below within
+seconds of a session starting. Each has a reproducer under `fuzz/corpus/` whose
+`expected.toml` says `crash`; `pytest fuzz` fails when one of them stops
+crashing, so fixing a bug includes moving its verdict to `reject`. An entry
+marked `sanitizer = "address"` is one only `pixi run -e asan fuzz-replay-asan`
+can judge: B6's string over-read is the one left. A reproducer must crash the
+same way on every platform, so none relies on a wild read faulting -- glibc's
+heap has mapped memory where macOS's has none. B1 (an IPC buffer outside the
+body) and B17 (an uncompressed page copying more than it holds) were fixed
+before the corpus landed, and so was B6's short-bitmap reproducer, whose
+bitmap length is negative; those stay as `reject` entries. `read_array` still
+checks no bitmap against `length`, so a short one of positive length should
+read past it, but there is no reproducer for that yet.
+
+| Bug | Where | What the input does |
+|---|---|---|
+| B2 | `ipc.mojo:2179`, `:2190`, `:2319` `read_array` / `_consume_buffer` | more field nodes or buffers consumed than the message carries |
+| B3 | `ipc.mojo:696` `_FlatbufReader.read_string` | `String(unsafe_from_utf8=)` without validation; aborts in `_read_field` (`:1649`) and `_read_kv_vec` (`:1458`) |
+| B4 | `dtypes.mojo:1456` `as_type` | a dictionary or child whose declared type disagrees with the schema reaches `as_type` as the wrong member |
+| B5 | `ipc.mojo:701` `_FlatbufReader` | nested tables recurse without a depth limit: stack overflow |
+| B6 | `ipc.mojo:2291` `read_array` | builds `ArrayData` without checking any buffer against `length` -- values, offsets and their contents, the validity bitmap -- so formatting the result reads past the allocation (`arrays.mojo:1146`, `:3348`, `views.mojo:908`, `buffers.mojo:858`); one input gets as far as reading a struct child's buffer as device memory (`buffers.mojo:904`) |
+| B7 | `ipc.mojo:2194` `read_array` | a positive `null_count` with an empty validity buffer keeps the count and drops the bitmap; `PrimitiveArray.slice` then unwraps the absent bitmap (`arrays.mojo:805`) |
+| B8 | `parquet/schema.mojo:596` `SchemaMapping.from_parquet` | trusts `schema[0]` exists and its `num_children` fits the schema list. 12 bytes reproduce it, and it is what almost every Parquet mutation hits first -- the `parquet_metadata` and `parquet_page_index` sessions found nothing else |
+| B9 | `parquet/codecs.mojo:741` `Dictionary.byte_offsets` | a byte-array dictionary page holding fewer values than `num_values` reads past the page (`utils/byteorder.mojo:75`) |
+| B10 | `parquet/reader.mojo:733` `PrimitiveLeafBuilder._scatter` | a page with more values than the chunk has rows **writes** past the values buffer (ASAN: heap-buffer-overflow, WRITE of size 8) |
+| B11 | `parquet/reader.mojo:2980` | a row group with fewer column chunks than the schema has leaves |
+| B12 | `parquet/reader.mojo:483` `PageReader.next` | a `DATA_PAGE_V2` page without its `data_page_header_v2` unwraps an empty `Optional` |
+| B13 | `parquet/codecs.mojo:66` `Rle._run_value` | a truncated RLE run header reads past the data |
+| B14 | `parquet/reader.mojo:427` | a negative `compressed_page_size` slices with start past end |
+| B15 | `parquet/reader.mojo:385` | a v1 page's definition-level length is not checked against the page body |
+| B16 | `utils/snappy.mojo` | a literal whose 4-byte length is `0xFFFFFFFF`: libsnappy wraps it to 0 and accepts, the native decoder refuses -- a parity gap, not a memory bug |
+
+B6 and B7 are one fix in spirit: `read_array` should validate what it builds,
+which is what Arrow C++'s `ValidateFull` and arrow-rs's `ArrayData::validate`
+do on IPC read; `ArrayData.validate` checks only the buffer count today. B8
+masks the rest of the Parquet footer and page index: fuzz those two targets
+again once it is fixed.
+
 ## 2. Missing capabilities, in detail
 
 The tiering is by *user impact*, and it

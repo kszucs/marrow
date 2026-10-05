@@ -109,11 +109,14 @@ PLACEMENTS = {
 #: `.theme` files, which are JSON carrying their own `license` field),
 #: binaries, lockfiles, the licence texts themselves, images -- the logos are
 #: drawn by `docs/assets/logo.py`, which does carry it -- and files a tool
-#: reads whole.
+#: reads whole -- the fuzz corpus's inputs among them, which are Arrow, Parquet
+#: and raw codec bytes.
 EXEMPT = {
     ".arrow",
     ".arrow_file",
+    ".arrows",
     ".avro",
+    ".bin",
     ".gitkeep",
     ".json",
     ".lock",

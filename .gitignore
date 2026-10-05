@@ -190,6 +190,8 @@ package/
 .test_runners/
 .precompile/
 .benchmarks/
+# Fuzzing state: binaries, seeds, growing corpora, crashes (`devkit fuzz`).
+.fuzz/
 
 # Benchmark scratch output (transformed into results/ by run_benchmarks.sh)
 .benchmarks/

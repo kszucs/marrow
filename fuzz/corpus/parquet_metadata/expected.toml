@@ -1,0 +1,18 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+#
+# What replaying each input must do -- see devkit/fuzzing.py.
+
+["none.parquet"]
+verdict = "accept"
+
+["index.parquet"]
+verdict = "accept"
+
+["truncated.parquet"]
+verdict = "reject"
+
+["b8-schema-children.parquet"]
+verdict = "crash"
+bug = "B8"
+match = "marrow/parquet/schema.mojo:596"

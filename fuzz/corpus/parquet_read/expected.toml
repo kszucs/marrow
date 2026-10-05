@@ -1,0 +1,88 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+#
+# What replaying each input must do -- see devkit/fuzzing.py. Bug ids are the
+# fuzzing entry in backlog.md; a `crash` entry whose bug is fixed fails the
+# replay until its verdict here moves to `accept` or `reject`.
+
+["none.parquet"]
+verdict = "accept"
+note = "primitives, booleans, strings, lists, structs and dictionaries, with nulls"
+
+["snappy.parquet"]
+verdict = "accept"
+
+["zstd.parquet"]
+verdict = "accept"
+
+["gzip.parquet"]
+verdict = "accept"
+
+["brotli.parquet"]
+verdict = "accept"
+
+["lz4.parquet"]
+verdict = "accept"
+
+["v2.parquet"]
+verdict = "accept"
+note = "data page v2, zstd"
+
+["plain.parquet"]
+verdict = "accept"
+note = "no dictionary encoding"
+
+["delta.parquet"]
+verdict = "accept"
+note = "DELTA_BINARY_PACKED, BYTE_STREAM_SPLIT, DELTA_BYTE_ARRAY, a page index"
+
+["delta-length.parquet"]
+verdict = "accept"
+note = "DELTA_LENGTH_BYTE_ARRAY"
+
+["index.parquet"]
+verdict = "accept"
+note = "a page index over small pages"
+
+["truncated.parquet"]
+verdict = "reject"
+
+["b8-schema-children.parquet"]
+verdict = "crash"
+bug = "B8"
+match = "marrow/parquet/schema.mojo:596"
+
+["b9-dictionary-page-short.parquet"]
+verdict = "crash"
+bug = "B9"
+match = "LittleEndian"
+
+["b10-page-values-overflow.parquet"]
+verdict = "crash"
+bug = "B10"
+note = "plain builds stop at a Bitmap bounds assertion, ASAN at the value write"
+
+["b11-row-group-columns.parquet"]
+verdict = "crash"
+bug = "B11"
+match = "marrow/parquet/reader.mojo:2980"
+
+["b12-page-header-missing.parquet"]
+verdict = "crash"
+bug = "B12"
+match = "Optional.value()"
+
+["b13-rle-run-truncated.parquet"]
+verdict = "crash"
+bug = "B13"
+match = "marrow/parquet/codecs.mojo:66"
+
+["b14-page-size-negative.parquet"]
+verdict = "crash"
+bug = "B14"
+match = "marrow/parquet/reader.mojo:427"
+
+["b15-levels-length.parquet"]
+verdict = "crash"
+bug = "B15"
+match = "marrow/parquet/reader.mojo:385"

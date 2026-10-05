@@ -108,6 +108,8 @@ jobs:
           # The `asan` job below runs the same Mojo selections; keep them in step.
           run marrow/tests
           run marrow/parquet/tests marrow/utils/tests
+          # Compiles every fuzz harness and replays the committed corpus.
+          run fuzz
           run marrow/expr/comptime/tests
           run marrow/kernels/tests
           run marrow/expr/tests/test_optimizer.mojo

@@ -391,7 +391,9 @@ def test_toolchain_version_is_best_effort():
     """A probe, not a build: no runner, and no raise when there is no compiler."""
     from devkit.mojo import MojoToolchain
 
-    assert MojoToolchain(None, executable="echo").version() == "--version"
+    # Not `echo`: GNU's answers `--version` with its own banner.
+    python = MojoToolchain(None, executable=sys.executable).version()
+    assert python.startswith("Python 3.")
     assert MojoToolchain(None, executable="no-such-mojo").version() == ""
 
 

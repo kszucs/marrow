@@ -1,0 +1,61 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+#
+# What replaying each input must do -- see devkit/fuzzing.py. Bug ids are the
+# fuzzing entry in backlog.md; a `crash` entry whose bug is fixed fails the
+# replay until its verdict here moves to `accept` or `reject`. The file reader
+# shares the stream reader's batch decoder, so these are the same bugs reached
+# through the footer.
+
+["all.arrow"]
+verdict = "accept"
+note = "every layout the reader decodes, with nulls, over several batches"
+
+["dictionary.arrow"]
+verdict = "accept"
+
+["empty.arrow"]
+verdict = "accept"
+
+["truncated.arrow"]
+verdict = "reject"
+
+["b1-body-range.arrow"]
+verdict = "reject"
+bug = "B1"
+note = "fixed: `_body_buffer` refuses a buffer outside the body (392829c4)"
+
+["b1-body-alloc.arrow"]
+verdict = "reject"
+bug = "B1"
+note = "a buffer length of terabytes; fixed: refused by the same body check (392829c4)"
+
+["b2-node-count.arrow"]
+verdict = "crash"
+bug = "B2"
+match = "marrow/ipc.mojo:2179"
+
+["b2-buffer-count.arrow"]
+verdict = "crash"
+bug = "B2"
+match = "marrow/ipc.mojo:2190"
+
+["b3-utf8-field-name.arrow"]
+verdict = "crash"
+bug = "B3"
+match = "not valid UTF"
+
+["b4-dictionary-type.arrow"]
+verdict = "crash"
+bug = "B4"
+match = "as_type: wrong type"
+
+["b6-buffer-short.arrow"]
+verdict = "crash"
+bug = "B6"
+match = "out of bounds for length"
+
+["b7-nulls-without-bitmap.arrow"]
+verdict = "crash"
+bug = "B7"
+match = "Optional.value()"

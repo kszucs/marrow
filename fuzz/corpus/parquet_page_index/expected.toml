@@ -1,0 +1,20 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+#
+# What replaying each input must do -- see devkit/fuzzing.py.
+
+["index.parquet"]
+verdict = "accept"
+note = "a page index over small pages"
+
+["delta.parquet"]
+verdict = "accept"
+
+["none.parquet"]
+verdict = "accept"
+note = "no page index at all"
+
+["b8-schema-children.parquet"]
+verdict = "crash"
+bug = "B8"
+match = "marrow/parquet/schema.mojo:596"

@@ -465,6 +465,240 @@ def docs_check(ctx):
 
 
 # ---------------------------------------------------------------------------
+# fuzz
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def fuzz():
+    """Coverage-guided fuzzing with libFuzzer, and the corpus replay.
+
+    `build`, `run`, `triage` and `minimize` need a clang that reads Mojo's
+    bitcode: run them in the `fuzz` environment. `replay` and `check` need
+    only Mojo.
+    """
+
+
+def _fuzzer(ctx):
+    from .fuzzing import Clang, Fuzzer
+
+    runner = ctx.runner(ConsoleProgress())
+    clang = Clang.locate(runner)
+    if clang is None:
+        ctx.fail(
+            "no clang found; run this in the `fuzz` pixi environment "
+            "(`pixi run -e fuzz devkit fuzz ...`)"
+        )
+    return Fuzzer(ctx.repo, ctx.toolchain, clang, runner)
+
+
+def _target(ctx, name):
+    from .fuzzing import Targets
+
+    try:
+        return Targets(ctx.repo).resolve(name)
+    except ValueError as error:
+        ctx.fail(str(error))
+
+
+@fuzz.command("list")
+@pass_context
+def fuzz_list(ctx):
+    """List the fuzz targets."""
+    from .fuzzing import Targets
+
+    for name in Targets(ctx.repo).names():
+        click.echo(name)
+
+
+@fuzz.command("build")
+@click.argument("target")
+@pass_context
+def fuzz_build(ctx, target):
+    """Build TARGET into a libFuzzer binary under .fuzz/TARGET/."""
+    from .fuzzing import BitcodeVersionError
+
+    name = _target(ctx, target)
+    try:
+        binary = _fuzzer(ctx).build(name)
+    except (BitcodeVersionError, RuntimeError) as error:
+        ctx.fail(str(error))
+    click.echo(f"built {binary.relative_to(ctx.repo.root)}")
+
+
+@fuzz.command("seed")
+@click.argument("target")
+@pass_context
+def fuzz_seed(ctx, target):
+    """Write TARGET's seed corpus, generated with pyarrow."""
+    directory, count = _fuzzer(ctx).seed(_target(ctx, target))
+    click.echo(f"wrote {count} seeds to {directory.relative_to(ctx.repo.root)}")
+
+
+@fuzz.command("run", context_settings={"ignore_unknown_options": True})
+@click.argument("target")
+@click.option("--time", "seconds", default=120, show_default=True, help="Seconds.")
+@click.option(
+    "--jobs",
+    default=0,
+    show_default=True,
+    help="Fork mode with N workers: keeps going past crashes.",
+)
+@click.option("--max-len", default=1 << 16, show_default=True, help="Input bytes.")
+@click.option("--no-build", is_flag=True, help="Reuse the existing binary.")
+@click.argument("libfuzzer_args", nargs=-1, type=click.UNPROCESSED)
+@pass_context
+def fuzz_run(ctx, target, seconds, jobs, max_len, no_build, libfuzzer_args):
+    """Fuzz TARGET; extra arguments go to libFuzzer.
+
+    Crashes land in .fuzz/TARGET/artifacts/; `devkit fuzz triage TARGET`
+    buckets them.
+    """
+    from .fuzzing import BitcodeVersionError, RunOptions, executions
+
+    name = _target(ctx, target)
+    fuzzer = _fuzzer(ctx)
+    if not no_build:
+        try:
+            fuzzer.build(name)
+        except (BitcodeVersionError, RuntimeError) as error:
+            ctx.fail(str(error))
+    options = RunOptions(seconds=seconds, jobs=jobs, max_len=max_len)
+    result = fuzzer.run(name, options, libfuzzer_args)
+    tail = [
+        line for line in result.stderr.splitlines() if line.startswith(("#", "stat::"))
+    ]
+    for line in tail[-5:]:
+        click.echo(line)
+    runs = executions(result.stderr)
+    if runs:
+        click.echo(
+            f"{runs} executions in {result.elapsed:.0f}s "
+            f"({runs / max(result.elapsed, 1):.0f}/s)"
+        )
+    crashes = sorted((ctx.repo.fuzz_work_dir / name / "artifacts").glob("*"))
+    click.echo(f"{len(crashes)} artifact(s) in .fuzz/{name}/artifacts/")
+
+
+@fuzz.command("triage")
+@click.argument("target")
+@click.option(
+    "--limit", default=0, show_default=True, help="Only the N smallest artifacts."
+)
+@pass_context
+def fuzz_triage(ctx, target, limit):
+    """Bucket TARGET's crash artifacts by signature: failure and marrow frame."""
+    from .fuzzing import triage
+
+    name = _target(ctx, target)
+    binary = _fuzzer(ctx).binary(name)
+    if not binary.exists():
+        ctx.fail(f"{binary} is not built; run `devkit fuzz build {name}`")
+    artifacts = [
+        path
+        for path in (ctx.repo.fuzz_work_dir / name / "artifacts").glob("*")
+        if path.name.startswith(("crash-", "oom-", "timeout-", "leak-"))
+    ]
+    buckets = triage(binary, artifacts, limit)
+    for key, crashes in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
+        click.echo(f"{len(crashes):5d}  {key}")
+        click.echo(f"       smallest: {crashes[0].relative_to(ctx.repo.root)}")
+
+
+@fuzz.command("minimize")
+@click.argument("target")
+@click.argument("crash", type=click.Path(exists=True, dir_okay=False))
+@click.option("-o", "--out", required=True, type=click.Path(), help="Where to write.")
+@click.option("--runs", default=10000, show_default=True)
+@pass_context
+def fuzz_minimize(ctx, target, crash, out, runs):
+    """Shrink CRASH to the smallest input that still crashes TARGET.
+
+    libFuzzer keeps any crash, not the same one, so the two signatures are
+    printed: when they differ, the minimized input reproduces another bug.
+    """
+    from .fuzzing import signature
+
+    name = _target(ctx, target)
+    fuzzer = _fuzzer(ctx)
+    result = fuzzer.minimize(name, crash, out, runs)
+    if not Path(out).exists():
+        ctx.fail(result.failure("minimization produced nothing"))
+    before = signature(fuzzer.execute(name, [crash]).output)
+    after = signature(fuzzer.execute(name, [out]).output)
+    click.echo(
+        f"{Path(crash).stat().st_size} -> {Path(out).stat().st_size} bytes: {out}"
+    )
+    click.echo(f"before: {before}\nafter:  {after}")
+    if before != after:
+        click.echo("the signature changed: keep the original instead", err=True)
+
+
+def _replay(ctx, asan=False):
+    from .fuzzing import Replay
+
+    if asan and AsanRuntime.locate() is None:
+        ctx.fail("--asan needs the ASAN runtime: use the `asan` environment")
+    toolchain = ctx.asan_toolchain if asan else ctx.toolchain
+    replay = Replay(ctx.repo, toolchain, asan=asan)
+    result = replay.build()
+    if toolchain.reports_errors(result):
+        ctx.fail(result.failure("the fuzz harnesses do not compile"))
+    return replay
+
+
+_asan_replay = click.option(
+    "--asan", is_flag=True, help="Link the ASAN runtime (the `asan` environment)."
+)
+
+
+@fuzz.command("check")
+@_asan_replay
+@pass_context
+def fuzz_check(ctx, asan):
+    """Compile every harness under fuzz/, which precompile does not reach."""
+    _replay(ctx, asan)
+    click.echo("every fuzz harness compiles")
+
+
+@fuzz.command("replay")
+@click.argument("targets", nargs=-1)
+@_asan_replay
+@pass_context
+def fuzz_replay(ctx, targets, asan):
+    """Replay the committed corpus and check each entry's expected verdict.
+
+    Entries marked `sanitizer = "address"` are judged only with --asan.
+    """
+    from .fuzzing import Expectations, Targets, judge
+
+    names = [_target(ctx, name) for name in targets] or Targets(ctx.repo).names()
+    problems = []
+    for name in names:
+        problems += Expectations.load(Targets(ctx.repo).corpus(name)).problems()
+    replay = _replay(ctx, asan)
+    counts = {"ok": 0, "FAIL": 0, "skip": 0}
+    for name, entry in replay.entries(names):
+        if entry.skip_reason(asan) is not None:
+            status = "skip"
+        else:
+            problem = judge(entry, replay.run(name, entry))
+            status = "ok" if problem is None else "FAIL"
+            if problem is not None:
+                problems.append(problem)
+        counts[status] += 1
+        click.echo(f"{status:4} {name}/{entry.name}")
+    for problem in problems:
+        click.echo(problem, err=True)
+    click.echo(
+        f"{counts['ok']} as expected, {counts['FAIL']} not, "
+        f"{counts['skip']} need --asan"
+    )
+    if problems:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # license
 # ---------------------------------------------------------------------------
 

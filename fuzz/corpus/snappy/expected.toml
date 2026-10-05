@@ -1,0 +1,24 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+#
+# What replaying each input must do -- see devkit/fuzzing.py. The harness
+# swallows a rejection both decoders agree on, so a corrupt block that both
+# refuse is `accept` here: what fails is a disagreement or a crash.
+
+["text.bin"]
+verdict = "accept"
+
+["runs.bin"]
+verdict = "accept"
+
+["empty.bin"]
+verdict = "accept"
+
+["truncated.bin"]
+verdict = "accept"
+note = "declares 2 bytes and holds a cut-off literal tag: both decoders refuse it"
+
+["b16-literal-length-wraps.bin"]
+verdict = "crash"
+bug = "B16"
+match = "native rejected a block libsnappy accepted"
