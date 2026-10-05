@@ -109,6 +109,9 @@ python-xxhash = ">=3.7.0,<4"
 fastavro = ">=1.12,<2"
 # fastavro's snappy codec; its zstandard one uses Python's `compression.zstd`.
 cramjam = ">=2.11,<3"
+# Property-based differential tests against PyArrow:
+# `python/marrow/tests/test_properties_*.py`.
+hypothesis = ">=6,<7"
 
 [feature.dev.pypi-dependencies]
 # PyPI wheel is used instead of conda-forge: the conda-forge libarrow bundles

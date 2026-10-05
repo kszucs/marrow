@@ -74,6 +74,124 @@ all.
 
 None known.
 
+### 1.2b Found by the differential property tests (2026-10-04)
+
+`python/marrow/tests/test_properties_{compute,io,cdata}.py` run marrow against
+PyArrow under Hypothesis. Every item below is a strict `xfail` there with its
+minimal input, so fixing one flips its test; the properties themselves step
+around the pinned inputs. Line numbers are as of `2c28f9bb`.
+
+**Process crashes** (each reproduced in a child process):
+
+- **Parquet write of any `large_list` column aborts** — `get: wrong variant
+  type`. `parquet/schema.mojo:309` and `:428` read the column with
+  `as_list()`, which holds only `ListArray`. (`test_parquet_write_large_list`)
+- **Parquet read of a v2 page under a list over-reads the page.**
+  `parquet/reader.mojo:529` takes the present-value count from the header's
+  `num_nulls`; PyArrow's count leaves empty and null lists out, so for
+  `list<struct<decimal128(9,2)>>` holding `[]` marrow decodes a value past the
+  end (`codecs.mojo:504` / `reader.mojo:1824` asserts). The v1 path counts
+  `def == max_def` instead (`reader.mojo:388`). Primitive leaves read past the
+  values silently. (`test_parquet_read_v2_page_under_empty_list`)
+- **C Data import trusts the producer's pointers** (`c_data.mojo`,
+  `CArrowArray.to_data` from `:975`): a NULL data/offsets buffer with
+  `length > 0`, a NULL `children` with `n_children > 0`, and a NULL
+  `dictionary` under a dictionary schema (`:1156`) all segfault; struct
+  children are matched to schema fields by the *array's* `n_children`
+  (`:1128`), so a short schema aborts out of bounds; format `w:-1` parses to a
+  negative width (`:744`) and aborts in `alloc`. An already-released
+  `ArrowArray` is accepted by `from_pycapsule` (`:1317`) and dropping it calls
+  the NULL release (`_release_imported_array`, `:868`).
+  (`test_malformed_import_does_not_crash[...]`)
+
+**Silently wrong data:**
+
+- **Parquet: a column whose values are all equal is unreadable by PyArrow** —
+  every one-row column, among others. A one-entry dictionary gets index width
+  0 (`parquet/writer.mojo:606`) and `Rle.encode` then emits no run at all
+  (`parquet/codecs.mojo:321`); PyArrow wants a run header even at width 0.
+  marrow reads its own file back. (`test_parquet_write_single_valued_column`)
+- **Parquet: `timestamp[s]` is written under a nanosecond annotation and
+  `time32[s]` under a millisecond one**, values unscaled — 1 s reads back as
+  1 ns / 1 ms, in marrow and PyArrow alike (`parquet/schema.mojo:1123`, `:1097`).
+  (`test_parquet_write_seconds_unit`)
+- **Parquet: a null struct holding a list is written as a present struct with
+  an empty list** — writer side, both readers agree. Suspected in the struct
+  arm of `_shred_elem` (`parquet/schema.mojo:401`). (`test_parquet_write_null_struct_over_list`)
+- **Parquet: dictionary encoding merges `0.0` and `-0.0`** — `Dict` keyed by
+  float value (`parquet/codecs.mojo:622`), so the later sign is lost.
+  (`test_parquet_write_keeps_signed_zero`)
+- **Parquet: a zero-row list or map column reads back as one empty list** —
+  `_fold_list_offsets` appends the closing offset unconditionally
+  (`parquet/schema.mojo:256`). (`test_parquet_read_zero_row_list`)
+- **IPC file writer reuses the first batch's dictionary for every batch**
+  (`ipc.mojo:2234` skips a written id without comparing); later batches decode
+  against the wrong dictionary. PyArrow refuses the replacement; the stream
+  writer is fine. (`test_ipc_file_dictionary_replacement`)
+- **IPC read of PyArrow's `float16` gives `float64`** with garbage values: an
+  absent `FloatingPoint.precision` defaults to DOUBLE (`ipc.mojo:1566`), but
+  the flatbuffer default PyArrow omits is HALF. (`test_ipc_read_float16`)
+- **`cast(safe=True)` misses out-of-range integers.** The check is a
+  round trip (`kernels/cast.mojo:164`), which a sign change survives: int8
+  `-1` -> uint8/uint16 is 255/65535, uint8 `200` -> int8 is -56. For float ->
+  int it depends on what an out-of-range `fptosi` returns: float64 `128.0` ->
+  int8 gives -128, float64 `2**63` -> int64 saturates, float16 `inf` -> int32
+  saturates. (`test_cast_sign_change_is_checked`,
+  `test_cast_float_to_int_out_of_range`)
+- **`cast` string -> integer wraps** — `'128'` -> int8 is -128 even with
+  `safe=True`: `Scalar[native](atol(s))` truncates (`kernels/cast.mojo:1006`).
+  (`test_cast_string_to_integer_out_of_range`)
+- **Temporal casts only rescale the tick** (`TemporalCastKernel`,
+  `kernels/cast.mojo:763`): timestamp -> date64 keeps the time of day,
+  timestamp -> time does not reduce to a day (-1 s -> -1000 ms), timestamp ->
+  date32 with `safe=True` raises where PyArrow drops the time of day, and an
+  unsafe downscale floors a negative tick where Arrow truncates
+  (`kernels/cast.mojo:954`). (`test_cast_timestamp_*`)
+- **`cast` float -> decimal rounds** — `round(x * 10**scale)` in float64
+  (`kernels/cast.mojo:557`), so an exact `14411518807587.0` -> decimal128(20,4)
+  gains `.0016`. (`test_cast_float_to_decimal_is_exact`)
+- **`sum`/`product` of unsigned integers accumulate as int64**
+  (`kernels/aggregate.mojo:323`); PyArrow answers uint64, so a total past
+  `2**63` comes back negative. (`test_unsigned_sum_is_uint64`)
+- **`min`/`max` start from `±MAX_FINITE`** (`kernels/aggregate.mojo:372`,
+  `:386`): all-NaN input answers ±FLT_MAX instead of NaN, `min([inf])` answers
+  FLT_MAX. (`test_min_max_identity`)
+- **`take` answers null for an out-of-bounds or negative index** instead of
+  raising (`kernels/filter.mojo:1224`). (`test_take_out_of_bounds_raises`)
+- **`divide` INT_MIN / -1** wraps to INT_MIN (`kernels/numeric.mojo:298`);
+  PyArrow answers 0. Signed overflow in `sdiv` is undefined in LLVM and
+  x86-64's `idiv` faults on it, so this may be a crash there (measured only on
+  arm64). (`test_divide_int_min_by_minus_one`)
+- **`sort_indices` is not stable from 32 elements on** — `stable` defaults to
+  False (`kernels/sort.mojo:416`) and PDQsort takes over. Its float key orders
+  NaN as the largest value (`:112`), where PyArrow keeps NaN beside the nulls,
+  and orders `-0.0` before `0.0`, so `sort_by` lets the sign of zero decide
+  instead of the next key. (`test_sort_indices_is_stable`,
+  `test_sort_indices_nan_placement`, `test_sort_by_signed_zero_ties`)
+
+**Divergences from PyArrow's defaults:**
+
+- `RecordBatch.sort_by` puts nulls first by default
+  (`python/bindings/tabular.mojo:397`); PyArrow puts them at the end.
+- `compute.any`/`all` answer False/True for empty or all-null input
+  (`kernels/aggregate.mojo:574`, `:612`); PyArrow's `min_count=1` answers null.
+- `upper` and `capitalize` apply the full case mapping, `'ß'` -> `'SS'`
+  (`kernels/string.mojo:226`, `:283`); PyArrow maps one code point to one
+  (`'ẞ'`), and `capitalize` should give the titlecase `'Ss'` either way.
+
+**C Data validation gaps** (imported, where Arrow C++ refuses): `null_count >
+0` with a NULL validity buffer (the null reads as a value, `c_data.mojo:1002`),
+a negative `length` or `offset`, a released `ArrowSchema` (`:610`), struct
+`n_children` that disagrees between schema and array, and `+s` laid over an
+int32 export.
+
+Not bugs, recorded so nobody re-derives them: `count_distinct` counts `0.0`
+and `-0.0` once (hashing canonicalises on purpose, `kernels/hashing.mojo:163`);
+float and timestamp -> string formatting differs from PyArrow's; unparseable
+strings cast to null under `safe=False` where PyArrow raises; int -> decimal
+checks values where PyArrow refuses by precision; decimal -> float is closer
+to the nearest float than PyArrow's.
+
 ### 1.3 Latent compiler hazards
 
 **More `t"…{dtype}"` sites under `marrow/kernels/`.** A t-string
