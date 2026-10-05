@@ -136,6 +136,10 @@ def _list():
     return pa.array([[1, 2], None, []], pa.list_(pa.int32()))
 
 
+def _fixed_size_list():
+    return pa.array([[1, 2], None, [5, 6]], pa.list_(pa.int32(), 2))
+
+
 def _dictionary():
     return pa.array(["x", None, "y", "x"]).dictionary_encode()
 
@@ -161,11 +165,19 @@ def _null_buffer(index):
     return mutate
 
 
+def _null_buffers(e):
+    e.array.buffers = e.ffi.NULL
+
+
 def _released(which):
     def mutate(e):
         getattr(e, which).release = e.ffi.NULL
 
     return mutate
+
+
+def _null_format(e):
+    e.schema.format = e.ffi.NULL
 
 
 def _drop_schema_children(e):
@@ -186,6 +198,10 @@ def _drop_array_dictionary(e):
 
 def _null_child_format(e):
     e.schema.children[0].format = e.new("char[]", b"zz")
+
+
+def _release_child(e):
+    e.array.children[0].release = e.ffi.NULL
 
 
 def _child_length(e):
@@ -217,8 +233,17 @@ CASES = {
     "format_decimal_garbage": (_ints, _set_format(b"d:abc"), "raise"),
     "format_fixed_binary_negative": (_ints, _set_format(b"w:-1"), "raise"),
     "format_timestamp_bad_unit": (_ints, _set_format(b"tsx:"), "raise"),
+    "format_null": (_ints, _null_format, "raise"),
+    "format_decimal_bad_bit_width": (_ints, _set_format(b"d:5,2,100"), "raise"),
+    "format_decimal_zero_precision": (_ints, _set_format(b"d:0,2"), "raise"),
+    "format_decimal_precision_too_wide": (_ints, _set_format(b"d:10,2,32"), "raise"),
+    "format_fixed_list_negative": (_list, _set_format(b"+w:-1"), "raise"),
+    "format_map_over_list_child": (_list, _set_format(b"+m"), "raise"),
     "n_buffers_too_few": (_ints, _set_array("n_buffers", 1), "raise"),
     "n_buffers_zero": (_ints, _set_array("n_buffers", 0), "raise"),
+    "n_buffers_too_many": (_ints, _set_array("n_buffers", 3), "raise"),
+    "buffers_null": (_ints, _null_buffers, "raise"),
+    "null_count_below_unknown": (_ints, _set_array("null_count", -2), "raise"),
     "length_negative": (_ints, _set_array("length", -1), "raise"),
     "offset_negative": (_ints, _set_array("offset", -1), "raise"),
     "null_count_above_length": (_ints, _set_array("null_count", 10), "either"),
@@ -230,10 +255,12 @@ CASES = {
     "struct_schema_n_children_zero": (_struct, _drop_schema_children, "raise"),
     "struct_array_children_null": (_struct, _null_array_children, "raise"),
     "struct_child_bad_format": (_struct, _null_child_format, "raise"),
-    "struct_child_too_short": (_struct, _child_length, "either"),
+    "struct_child_too_short": (_struct, _child_length, "raise"),
+    "struct_child_released": (_struct, _release_child, "raise"),
+    "fixed_size_list_child_too_short": (_fixed_size_list, _child_length, "raise"),
     "list_schema_n_children_zero": (_list, _drop_schema_children, "raise"),
     "list_array_children_null": (_list, _null_array_children, "raise"),
-    "dictionary_schema_missing": (_dictionary, _drop_schema_dictionary, "either"),
+    "dictionary_schema_missing": (_dictionary, _drop_schema_dictionary, "raise"),
     "dictionary_array_missing": (_dictionary, _drop_array_dictionary, "raise"),
     "schema_released": (_ints, _released("schema"), "raise"),
     "array_released": (_ints, _released("array"), "raise"),
@@ -310,66 +337,36 @@ def outcomes():
     return _run_all(sorted(CASES))
 
 
-_NULL_BUFFER = (
-    "a NULL buffer pointer with length > 0 is dereferenced instead of refused "
-    "(c_data.mojo CArrowArray.to_data)"
-)
-_NULL_CHILDREN = (
-    "a NULL children pointer with n_children > 0 is dereferenced instead of "
-    "refused (c_data.mojo CArrowArray.to_data)"
-)
-
-# Imports that kill the process instead of raising.
-_CRASHES = {
-    "array_released": "a released ArrowArray (release == NULL) is imported, and "
-    "dropping it calls the NULL release (c_data.mojo _release_imported_array)",
-    "data_null_with_length": _NULL_BUFFER,
-    "string_offsets_null": _NULL_BUFFER,
-    "string_data_null": _NULL_BUFFER,
-    "struct_array_children_null": _NULL_CHILDREN,
-    "list_array_children_null": _NULL_CHILDREN,
-    "dictionary_array_missing": "a NULL ArrowArray.dictionary under a dictionary "
-    "schema is dereferenced (c_data.mojo CArrowArray.to_data)",
-    "format_fixed_binary_negative": "format 'w:-1' parses to a negative width "
-    "and aborts in alloc (c_data.mojo CArrowSchema.to_dtype)",
-    "struct_schema_n_children_zero": "the array's children are matched to schema "
-    "fields by the array's n_children: an out-of-bounds field index aborts "
-    "(c_data.mojo CArrowArray.to_data)",
-}
-
-# Malformed exports marrow imports without complaint.
-_WRONG_OUTCOME = {
-    "validity_null_with_nulls": "null_count > 0 with a NULL validity buffer "
-    "imports, and the null slot reads as a value",
-    "schema_released": "a released ArrowSchema (release == NULL) is imported",
-    "struct_array_n_children_zero": "a struct array with no children under a "
-    "two-field schema imports as a struct with no fields",
-    "format_struct_without_children": "'+s' over an int32 export (two buffers, "
-    "no children) imports as a struct with no fields",
-    "list_schema_n_children_zero": "a list schema with no child imports",
-    "length_negative": "a negative length imports; only reading it raises",
-    "offset_negative": "a negative offset imports; only reading it raises",
-}
-
-
-def _param(name):
-    marks = []
-    if name in _CRASHES:
-        marks.append(pytest.mark.xfail(strict=True, reason=_CRASHES[name]))
-    elif name in _WRONG_OUTCOME:
-        marks.append(pytest.mark.xfail(strict=True, reason=_WRONG_OUTCOME[name]))
-    return pytest.param(name, marks=marks, id=name)
-
-
-@pytest.mark.parametrize("name", [_param(n) for n in sorted(CASES)])
+@pytest.mark.parametrize("name", sorted(CASES))
 def test_malformed_import_does_not_crash(outcomes, name):
     outcome = outcomes[name]
     assert not outcome.startswith("crash"), outcome
     expected = CASES[name][2]
     if expected == "raise":
         assert outcome.startswith("raise"), f"imported a malformed export: {outcome}"
+        # A marrow error kind, not the TypeError meant for a non-producer or
+        # the untagged ArrowException a stray stdlib error becomes.
+        assert outcome in ("raise ArrowInvalid", "raise ArrowNotImplementedError"), (
+            outcome
+        )
     elif expected == "import":
         assert outcome == "import", outcome
+
+
+def test_malformed_import_raises_the_importer_kind(outcomes):
+    """A malformed export raises the kind the importer chose, not the
+    TypeError meant for an object that is no Arrow producer at all."""
+    assert outcomes["n_buffers_too_few"] == "raise ArrowInvalid"
+    assert outcomes["format_unknown"] == "raise ArrowNotImplementedError"
+
+
+def test_import_of_a_non_producer_is_a_type_error():
+    # The public functions read a non-producer as a Python sequence first, so
+    # the binding is called directly.
+    from marrow import libmarrow
+
+    with pytest.raises(TypeError, match="cannot convert"):
+        libmarrow.concat([object()], None)
 
 
 if __name__ == "__main__":

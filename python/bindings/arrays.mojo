@@ -1109,11 +1109,10 @@ def infer_type(obj: PythonObject) raises -> PythonObject:
 def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var type_given = not type.__is__(builtins.None)
-    if not type_given:
-        try:
-            return DynArray(py=obj).to_python_object()
-        except:
-            pass
+    # An Arrow producer is imported, and an import error is the answer rather
+    # than a cue to read the object as a Python sequence.
+    if not type_given and Bool(py=builtins.hasattr(obj, "__arrow_c_array__")):
+        return DynArray(py=obj).to_python_object()
 
     var dtype: dt.DynType
     var has_nulls = True

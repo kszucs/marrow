@@ -3251,17 +3251,21 @@ struct DynArray(
             return
         except:
             pass
-        # Fall back to the Arrow C Data Interface for foreign objects.
+        # Fall back to the Arrow C Data Interface for foreign objects. Only a
+        # missing protocol is a TypeError: a failing producer or a malformed
+        # export raises its own kind.
+        var export: PythonObject
         try:
-            var caps = py.__arrow_c_array__(Python.none())
-            var c_schema = CArrowSchema.from_pycapsule(caps[0])
-            var c_array = CArrowArray.from_pycapsule(caps[1])
-            self = c_array^.to_array(c_schema.to_dtype())
+            export = py.__arrow_c_array__
         except:
             raise TypeError(
                 t"cannot convert Python object of type '"
                 t"{py.__class__.__name__}' to DynArray"
             )
+        var caps = export(Python.none())
+        var c_schema = CArrowSchema.from_pycapsule(caps[0])
+        var c_array = CArrowArray.from_pycapsule(caps[1])
+        self = c_array^.to_array(c_schema.to_dtype())
 
     # --- dispatch-based methods ---
 

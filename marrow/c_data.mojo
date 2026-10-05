@@ -168,6 +168,8 @@ def _decode_c_metadata(
         count=4,
     )
     head += 4
+    if n_pairs < 0:
+        raise InvalidError("c_data: negative metadata pair count")
     for _ in range(Int(n_pairs)):
         var k_len = Int32(0)
         unsafe_memcpy(
@@ -176,6 +178,8 @@ def _decode_c_metadata(
             count=4,
         )
         head += 4
+        if k_len < 0:
+            raise InvalidError("c_data: negative metadata key length")
         var k = String(
             from_utf8=Span[Byte](
                 unsafe_ptr=p.unsafe_offset(head), length=Int(k_len)
@@ -189,6 +193,8 @@ def _decode_c_metadata(
             count=4,
         )
         head += 4
+        if v_len < 0:
+            raise InvalidError("c_data: negative metadata value length")
         var v = String(
             from_utf8=Span[Byte](
                 unsafe_ptr=p.unsafe_offset(head), length=Int(v_len)
@@ -197,6 +203,14 @@ def _decode_c_metadata(
         head += Int(v_len)
         result[k^] = v^
     return result^
+
+
+def _format_int(fmt: StringSlice, text: StringSlice) raises InvalidError -> Int:
+    """Parse one integer parameter of format string `fmt`."""
+    try:
+        return Int(String(text))
+    except:
+        raise InvalidError(t"c_data: malformed format string '{fmt}'")
 
 
 def _release_schema_capsule(capsule: PyObjectPtr) abi("C"):
@@ -621,6 +635,8 @@ struct CArrowSchema(Copyable, Movable):
         var src = cpy.PyCapsule_GetPointer(
             capsule._obj_ptr, "arrow_schema"
         ).unsafe_bitcast[CArrowSchema]()
+        if src[].is_released():
+            raise InvalidError("c_data: cannot import a released ArrowSchema")
         var schema = src[].copy()
         src[].mark_released()
         return schema^
@@ -648,10 +664,46 @@ struct CArrowSchema(Copyable, Movable):
             )
         )
 
+    def _check_children(
+        self, fmt: StringSlice, expected: Int
+    ) raises InvalidError:
+        """Raise unless this schema has `expected` children (any number when
+        negative), each a live struct behind a non-null pointer."""
+        var n = Int(self.n_children)
+        if n < 0:
+            raise InvalidError(t"c_data: ArrowSchema has {n} children")
+        if expected >= 0 and n != expected:
+            raise InvalidError(
+                t"c_data: format '{fmt}' takes {expected} child schema(s), "
+                t"ArrowSchema has {n}"
+            )
+        if n > 0 and Int(self.children) == 0:
+            raise InvalidError(
+                t"c_data: ArrowSchema has {n} children but a NULL children "
+                t"pointer"
+            )
+        for i in range(n):
+            var child = self.children[unsafe_offset=i]
+            if Int(child) == 0 or child[].is_released():
+                raise InvalidError(
+                    t"c_data: child schema {i} of '{fmt}' is NULL or released"
+                )
+
     def to_dtype(self) raises -> DynType:
+        if Int(self.format) == 0:
+            raise InvalidError("c_data: ArrowSchema has a NULL format string")
         var fmt = StringSlice(
             unsafe_from_utf8=CStringSpan(unsafe_from_ptr=self.format.as_imm())
         )
+        # Only nested formats carry children: the list-likes and the map
+        # exactly one, `+s` any number, and so does a nested format marrow
+        # does not read, which is refused below as not implemented.
+        var n_children = 0
+        if fmt == "+l" or fmt == "+L" or fmt == "+m" or fmt.startswith("+w:"):
+            n_children = 1
+        elif fmt.startswith("+"):
+            n_children = -1
+        self._check_children(fmt, n_children)
         # Dictionary type: non-null `dictionary` field signals dictionary encoding.
         # The format string is the index type's format (e.g. "i" for int32).
         # Must be checked before the regular format string dispatch.
@@ -661,6 +713,10 @@ struct CArrowSchema(Copyable, Movable):
             ]
             != 0
         ):
+            if self.dictionary[].is_released():
+                raise InvalidError(
+                    "c_data: the dictionary ArrowSchema is released"
+                )
             var index_type: DynType
             if fmt == "c":
                 index_type = int8
@@ -736,12 +792,16 @@ struct CArrowSchema(Copyable, Movable):
                 self.children[unsafe_offset=0][].to_field()
             ).to_dyn()
         elif fmt.startswith("+w:"):
-            var size = Int(String(fmt).removeprefix("+w:"))
+            var size = _format_int(fmt, String(fmt).removeprefix("+w:"))
+            if size < 0:
+                raise InvalidError(t"c_data: negative list size in '{fmt}'")
             return FixedSizeListType(
                 self.children[unsafe_offset=0][].to_field(), size
             ).to_dyn()
         elif fmt.startswith("w:"):
-            var width = Int(String(fmt).removeprefix("w:"))
+            var width = _format_int(fmt, String(fmt).removeprefix("w:"))
+            if width < 0:
+                raise InvalidError(t"c_data: negative byte width in '{fmt}'")
             return FixedSizeBinaryType(width).to_dyn()
         elif fmt == "tdD":
             return date32()
@@ -795,16 +855,45 @@ struct CArrowSchema(Copyable, Movable):
             # it directly, preserving its field names and nullability. keys_sorted
             # rides the schema flags.
             var entries = self.children[unsafe_offset=0][].to_field()
+            if (
+                not entries.dtype.is_struct()
+                or len(entries.dtype.as_struct().fields) != 2
+            ):
+                raise InvalidError(
+                    t"c_data: a map's child must be a two-field struct, got "
+                    t"{entries.dtype}"
+                )
             var sorted = Bool(self.flags & ARROW_FLAG_MAP_KEYS_SORTED)
             return MapType(entries^, sorted).to_dyn()
         elif fmt.startswith("d:"):
             var rest = String(fmt).removeprefix("d:")
             var parts = rest.split(",")
-            var precision = Int(parts[0])
-            var scale = Int(parts[1])
+            if len(parts) != 2 and len(parts) != 3:
+                raise InvalidError(t"c_data: malformed decimal format '{fmt}'")
+            var precision = _format_int(fmt, parts[0])
+            var scale = _format_int(fmt, parts[1])
             var bit_width = 128  # default for legacy format without bitwidth
             if len(parts) == 3:
-                bit_width = Int(parts[2])
+                bit_width = _format_int(fmt, parts[2])
+            # The largest precision each width holds, as Arrow C++'s
+            # `Decimal*Type::Make` checks it.
+            var max_precision: Int
+            if bit_width == 32:
+                max_precision = 9
+            elif bit_width == 64:
+                max_precision = 18
+            elif bit_width == 128:
+                max_precision = 38
+            elif bit_width == 256:
+                max_precision = 76
+            else:
+                raise InvalidError(
+                    t"c_data: unsupported decimal bit width in '{fmt}'"
+                )
+            if precision < 1 or precision > max_precision:
+                raise InvalidError(
+                    t"c_data: decimal precision out of range in '{fmt}'"
+                )
             if bit_width == 32:
                 return decimal32(precision, scale)
             elif bit_width == 64:
@@ -817,21 +906,32 @@ struct CArrowSchema(Copyable, Movable):
             raise NotImplementedError(t"Unknown format: {fmt}")
 
     def to_field(self) raises -> Field:
-        var name = StringSlice(
-            unsafe_from_utf8=CStringSpan(unsafe_from_ptr=self.name.as_imm())
-        )
+        # The spec makes the name optional; Arrow C++ reads NULL as "".
+        var name = String()
+        if Int(self.name) != 0:
+            name = String(
+                StringSlice(
+                    unsafe_from_utf8=CStringSpan(
+                        unsafe_from_ptr=self.name.as_imm()
+                    )
+                )
+            )
         var dtype = self.to_dtype()
         var nullable = self.flags & ARROW_FLAG_NULLABLE
         var metadata = _decode_c_metadata(self.metadata)
-        return Field(String(name), dtype^, nullable != 0, metadata^)
+        return Field(name^, dtype^, nullable != 0, metadata^)
 
     def to_schema(self) raises -> Schema:
         """Build a Schema from this top-level struct CArrowSchema."""
-        var fields = List[Field]()
-        for i in range(self.n_children):
-            fields.append(self.children[unsafe_offset=i][].to_field())
+        var dtype = self.to_dtype()
+        if not dtype.is_struct():
+            raise InvalidError(
+                t"c_data: a schema must describe a struct, got {dtype}"
+            )
         var metadata = _decode_c_metadata(self.metadata)
-        return Schema(fields=fields^, metadata=metadata^)
+        return Schema(
+            fields=dtype.as_struct().fields.copy(), metadata=metadata^
+        )
 
 
 def _release_array_capsule(capsule: PyObjectPtr) abi("C"):
@@ -964,13 +1064,104 @@ struct CArrowArray(Copyable, Movable):
                 Pointer(to=self).unsafe_origin_cast[MutUntrackedOrigin]()
             )
 
-    def _need_buffers(self, n: Int, dtype: DynType) raises:
-        """Check the producer declared at least `n` buffers before indexing."""
-        if Int(self.n_buffers) < n:
+    def _check_layout(self, dtype: DynType) raises InvalidError:
+        """Raise unless the lengths are in range and the buffer count is the
+        one `dtype`'s layout has: validity plus `num_buffers()` data buffers.
+
+        A view array carries any number of data buffers plus a trailing sizes
+        buffer, and a null array none (one in Arrow C++'s legacy export)."""
+        if self.length < 0 or self.offset < 0:
             raise InvalidError(
-                t"c_data: producer declared {Int(self.n_buffers)} buffers for "
-                t"{dtype}; this layout needs {n}"
+                t"c_data: negative length ({self.length}) or offset "
+                t"({self.offset})"
             )
+        # Strictly below, so the offsets buffer's `length + offset + 1`
+        # entries are countable too.
+        if self.length >= Int64.MAX - self.offset:
+            raise InvalidError("c_data: length + offset overflows")
+        if self.null_count < -1:
+            raise InvalidError(t"c_data: negative null_count {self.null_count}")
+        var n = Int(self.n_buffers)
+        var want = 1 + dtype.num_buffers()
+        var ok: Bool
+        if dtype.is_null():
+            ok = n == 0 or n == 1
+        elif dtype.is_string_view() or dtype.is_binary_view():
+            want += 1
+            ok = n >= want
+        else:
+            ok = n == want
+        if not ok:
+            raise InvalidError(
+                t"c_data: {dtype} takes {want} buffers, ArrowArray has {n}"
+            )
+        if n > 0 and Int(self.buffers) == 0:
+            raise InvalidError(
+                t"c_data: ArrowArray has {n} buffers but a NULL buffers pointer"
+            )
+
+    def _buffer(
+        self, i: Int, count: Int, width: Int, owner: ArcPointer[Allocation]
+    ) raises InvalidError -> Buffer[]:
+        """Buffer `i`, holding `count` values of `width` bytes. The spec lets a
+        producer pass NULL only for a buffer that holds no bytes, or for
+        validity with no nulls.
+        """
+        if width != 0 and count > Int.MAX // width:
+            raise InvalidError(
+                t"c_data: buffer {i} of {count} x {width} bytes overflows"
+            )
+        var size = count * width
+        var ptr = self.buffers[unsafe_offset=i]
+        if Int(ptr) == 0 and size != 0:
+            raise InvalidError(
+                t"c_data: buffer {i} is NULL but must hold {size} bytes"
+            )
+        return Buffer.from_foreign(ptr, size, owner)
+
+    def _check_children(self, dtype: DynType) raises InvalidError:
+        """Raise unless the children and dictionary are the ones `dtype`
+        describes, each a live struct behind a non-null pointer.
+
+        A dictionary's values ride in `dictionary`, not in `children`."""
+        var expected = 0
+        if dtype.is_struct():
+            expected = len(dtype.as_struct().fields)
+        elif (
+            dtype.is_list()
+            or dtype.is_large_list()
+            or dtype.is_fixed_size_list()
+            or dtype.is_map()
+        ):
+            expected = 1
+        var n = Int(self.n_children)
+        if n != expected:
+            raise InvalidError(
+                t"c_data: {dtype} takes {expected} child array(s), ArrowArray "
+                t"has {n}"
+            )
+        if n > 0 and Int(self.children) == 0:
+            raise InvalidError(
+                t"c_data: ArrowArray has {n} children but a NULL children "
+                t"pointer"
+            )
+        for i in range(n):
+            var child = self.children[unsafe_offset=i]
+            if Int(child) == 0 or child[].is_released():
+                raise InvalidError(
+                    t"c_data: child array {i} of {dtype} is NULL or released"
+                )
+        var has_dictionary = Int(self.dictionary) != 0
+        if dtype.is_dictionary() and not has_dictionary:
+            raise InvalidError(
+                t"c_data: a {dtype} ArrowArray has a NULL dictionary"
+            )
+        if has_dictionary and not dtype.is_dictionary():
+            raise InvalidError(
+                t"c_data: a {dtype} ArrowArray must not carry a dictionary"
+            )
+        if has_dictionary and self.dictionary[].is_released():
+            raise InvalidError("c_data: the dictionary ArrowArray is released")
 
     def to_data(
         self, dtype: DynType, owner: ArcPointer[Allocation]
@@ -988,22 +1179,22 @@ struct CArrowArray(Copyable, Movable):
         # raw C buffers start at element 0 regardless of the logical array offset.
         var length = self.length + self.offset
 
-        # Each branch below indexes `self.buffers` by position, so the count
-        # the producer declared has to be checked first — otherwise a producer
-        # supplying fewer buffers than the layout implies is an out-of-bounds
-        # read of the pointer array rather than an error. The required count is
-        # asserted where it is used rather than in one table up front, so this
-        # does not become a second place that encodes layout.
+        # Each branch below indexes `self.buffers` and `self.children` by
+        # position, so the counts the producer declared are checked first —
+        # otherwise a short pointer array is an out-of-bounds read rather than
+        # an error. The counts come from `DynType.num_buffers()`, the one
+        # place that states a layout's buffers.
+        self._check_layout(dtype)
+        self._check_children(dtype)
         # Null arrays carry no buffers — `self.buffers` itself may be a null
         # pointer — so skip the validity read for them.
         var bitmap: Optional[Bitmap[]] = None
-        if not dtype.is_null():
-            self._need_buffers(1, dtype)
         if not dtype.is_null() and Int(self.buffers[unsafe_offset=0]) != 0:
             bitmap = Bitmap(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=0],
+                self._buffer(
+                    0,
                     math.ceildiv(Int(length), 8),
+                    1,
                     owner,
                 ),
                 length=Int(length),
@@ -1015,78 +1206,79 @@ struct CArrowArray(Copyable, Movable):
         if dtype.is_null():
             pass  # no buffers, no children
         elif dtype.is_bool():
-            self._need_buffers(2, dtype)
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
+                self._buffer(
+                    1,
                     math.ceildiv(Int(length), 8),
+                    1,
                     owner,
                 )
             )
         elif dtype.is_primitive():
-            self._need_buffers(2, dtype)
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
-                    Int(length) * dtype.byte_width(),
+                self._buffer(
+                    1,
+                    Int(length),
+                    dtype.byte_width(),
                     owner,
                 )
             )
         elif dtype.is_string() or dtype.is_binary():
-            self._need_buffers(3, dtype)
-            var offsets = Buffer.from_foreign(
-                self.buffers[unsafe_offset=1],
-                (Int(length) + 1) * size_of[DType.int32](),
+            var offsets = self._buffer(
+                1,
+                Int(length) + 1,
+                size_of[DType.int32](),
                 owner,
             )
             var n = Int(offsets.unsafe_get[DType.int32](Int(length)))
+            if n < 0:
+                raise InvalidError("c_data: negative last offset")
             buffers.append(offsets^)
-            buffers.append(
-                Buffer.from_foreign(self.buffers[unsafe_offset=2], n, owner)
-            )
+            buffers.append(self._buffer(2, n, 1, owner))
         elif dtype.is_large_string() or dtype.is_large_binary():
-            self._need_buffers(3, dtype)
-            var offsets = Buffer.from_foreign(
-                self.buffers[unsafe_offset=1],
-                (Int(length) + 1) * size_of[DType.int64](),
+            var offsets = self._buffer(
+                1,
+                Int(length) + 1,
+                size_of[DType.int64](),
                 owner,
             )
             var n = Int(offsets.unsafe_get[DType.int64](Int(length)))
+            if n < 0:
+                raise InvalidError("c_data: negative last offset")
             buffers.append(offsets^)
-            buffers.append(
-                Buffer.from_foreign(self.buffers[unsafe_offset=2], n, owner)
-            )
+            buffers.append(self._buffer(2, n, 1, owner))
         elif dtype.is_string_view() or dtype.is_binary_view():
             # Validity, views, the variadic data buffers, then one int64 per
             # data buffer giving its byte length -- the only place a consumer
             # learns how long each data buffer is.
-            self._need_buffers(3, dtype)
             var n_data = Int(self.n_buffers) - 3
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
-                    Int(length) * StringViewArray.VIEW_SIZE,
+                self._buffer(
+                    1,
+                    Int(length),
+                    StringViewArray.VIEW_SIZE,
                     owner,
                 )
             )
-            var sizes = Buffer.from_foreign(
-                self.buffers[unsafe_offset=Int(self.n_buffers) - 1],
-                n_data * size_of[DType.int64](),
+            var sizes = self._buffer(
+                Int(self.n_buffers) - 1,
+                n_data,
+                size_of[DType.int64](),
                 owner,
             )
             for i in range(n_data):
-                buffers.append(
-                    Buffer.from_foreign(
-                        self.buffers[unsafe_offset=2 + i],
-                        Int(sizes.unsafe_get[DType.int64](i)),
-                        owner,
+                var size = Int(sizes.unsafe_get[DType.int64](i))
+                if size < 0:
+                    raise InvalidError(
+                        t"c_data: data buffer {i} has negative size {size}"
                     )
-                )
+                buffers.append(self._buffer(2 + i, size, 1, owner))
         elif dtype.is_list():
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
-                    (Int(length) + 1) * size_of[DType.int32](),
+                self._buffer(
+                    1,
+                    Int(length) + 1,
+                    size_of[DType.int32](),
                     owner,
                 )
             )
@@ -1097,9 +1289,10 @@ struct CArrowArray(Copyable, Movable):
             )
         elif dtype.is_large_list():
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
-                    (Int(length) + 1) * size_of[DType.int64](),
+                self._buffer(
+                    1,
+                    Int(length) + 1,
+                    size_of[DType.int64](),
                     owner,
                 )
             )
@@ -1110,33 +1303,46 @@ struct CArrowArray(Copyable, Movable):
             )
         elif dtype.is_fixed_size_binary():
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
-                    Int(length) * dtype.as_fixed_size_binary().byte_width,
+                self._buffer(
+                    1,
+                    Int(length),
+                    dtype.as_fixed_size_binary().byte_width,
                     owner,
                 )
             )
         elif dtype.is_fixed_size_list():
+            ref fsl = dtype.as_fixed_size_list()
             children.append(
                 self.children[unsafe_offset=0][].to_data(
-                    dtype.as_fixed_size_list().value_type(), owner
+                    fsl.value_type(), owner
                 )
             )
+            # Divided rather than multiplied, so a huge length cannot wrap.
+            if fsl.size > 0 and children[0].length // fsl.size < Int(length):
+                raise InvalidError(
+                    t"c_data: {dtype} child holds {children[0].length} values, "
+                    t"fewer than {Int(length)} lists need"
+                )
         elif dtype.is_struct():
             ref st = dtype.as_struct()
-            for i in range(Int(self.n_children)):
+            for i in range(len(st.fields)):
                 children.append(
                     self.children[unsafe_offset=i][].to_data(
                         st.fields[i].dtype, owner
                     )
                 )
+                if children[i].length < Int(length):
+                    raise InvalidError(
+                        t"c_data: struct child {i} is shorter than its parent"
+                    )
         elif dtype.is_map():
             # Same physical layout as a list: an int32 offsets buffer plus one
             # child = the entries struct (synthesized from the map's key/value).
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
-                    (Int(length) + 1) * size_of[DType.int32](),
+                self._buffer(
+                    1,
+                    Int(length) + 1,
+                    size_of[DType.int32](),
                     owner,
                 )
             )
@@ -1147,9 +1353,10 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_dictionary():
             ref dt = dtype.as_dictionary()
             buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[unsafe_offset=1],
-                    Int(length) * dt.index_type().byte_width(),
+                self._buffer(
+                    1,
+                    Int(length),
+                    dt.index_type().byte_width(),
                     owner,
                 )
             )
@@ -1170,6 +1377,10 @@ struct CArrowArray(Copyable, Movable):
                 )
             else:
                 nulls = 0
+        elif nulls > 0 and not bitmap and not dtype.is_null():
+            raise InvalidError(
+                t"c_data: null_count is {nulls} but the validity buffer is NULL"
+            )
 
         var data = ArrayData(
             dtype=dtype.copy(),
@@ -1324,6 +1535,8 @@ struct CArrowArray(Copyable, Movable):
         var src = cpy.PyCapsule_GetPointer(
             capsule._obj_ptr, "arrow_array"
         ).unsafe_bitcast[CArrowArray]()
+        if src[].is_released():
+            raise InvalidError("c_data: cannot import a released ArrowArray")
         var array = src[].copy()
         src[].mark_released()
         return array^

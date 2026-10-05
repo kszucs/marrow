@@ -93,16 +93,6 @@ around the pinned inputs. Line numbers are as of `2c28f9bb`.
   end (`codecs.mojo:504` / `reader.mojo:1824` asserts). The v1 path counts
   `def == max_def` instead (`reader.mojo:388`). Primitive leaves read past the
   values silently. (`test_parquet_read_v2_page_under_empty_list`)
-- **C Data import trusts the producer's pointers** (`c_data.mojo`,
-  `CArrowArray.to_data` from `:975`): a NULL data/offsets buffer with
-  `length > 0`, a NULL `children` with `n_children > 0`, and a NULL
-  `dictionary` under a dictionary schema (`:1156`) all segfault; struct
-  children are matched to schema fields by the *array's* `n_children`
-  (`:1128`), so a short schema aborts out of bounds; format `w:-1` parses to a
-  negative width (`:744`) and aborts in `alloc`. An already-released
-  `ArrowArray` is accepted by `from_pycapsule` (`:1317`) and dropping it calls
-  the NULL release (`_release_imported_array`, `:868`).
-  (`test_malformed_import_does_not_crash[...]`)
 
 **Silently wrong data:**
 
@@ -178,12 +168,6 @@ around the pinned inputs. Line numbers are as of `2c28f9bb`.
 - `upper` and `capitalize` apply the full case mapping, `'ß'` -> `'SS'`
   (`kernels/string.mojo:226`, `:283`); PyArrow maps one code point to one
   (`'ẞ'`), and `capitalize` should give the titlecase `'Ss'` either way.
-
-**C Data validation gaps** (imported, where Arrow C++ refuses): `null_count >
-0` with a NULL validity buffer (the null reads as a value, `c_data.mojo:1002`),
-a negative `length` or `offset`, a released `ArrowSchema` (`:610`), struct
-`n_children` that disagrees between schema and array, and `+s` laid over an
-int32 export.
 
 Not bugs, recorded so nobody re-derives them: `count_distinct` counts `0.0`
 and `-0.0` once (hashing canonicalises on purpose, `kernels/hashing.mojo:163`);

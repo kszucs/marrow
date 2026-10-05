@@ -8,9 +8,11 @@ from std.testing import (
     assert_raises,
 )
 from std.python import Python, PythonObject
+from std.memory import ArcPointer
 from std.memory.alloc import unsafe_alloc
 from ..c_data import *
 from ..tabular import Table
+from ..buffers import Allocation
 from ..arrays import (
     DynArray,
     BoolArray,
@@ -23,8 +25,10 @@ from ..builders import (
     StringBuilder,
     StringViewBuilder,
     BoolBuilder,
+    array,
 )
 from ..dtypes import *
+from ..utils.dylib import CStr, alloc_c_string
 
 
 def c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
@@ -1326,3 +1330,235 @@ def test_string_view_c_data_roundtrip() raises:
     var arr = b.finish()
     var back = CArrowArray.from_array(arr.copy().to_dyn()).to_array(string_view)
     assert_true(back.as_string_view() == arr)
+
+
+def test_import_refuses_a_released_schema() raises:
+    var capsule = CArrowSchema.from_dtype(int32).to_pycapsule()
+    _ = CArrowSchema.from_pycapsule(capsule)  # takes it, marking it released
+    with assert_raises(contains="released ArrowSchema"):
+        _ = CArrowSchema.from_pycapsule(capsule)
+
+
+def test_import_refuses_a_released_array() raises:
+    var capsule = CArrowArray.from_array(array([1, 2], int32)).to_pycapsule()
+    _ = CArrowArray.from_pycapsule(capsule)  # takes it, marking it released
+    with assert_raises(contains="released ArrowArray"):
+        _ = CArrowArray.from_pycapsule(capsule)
+
+
+def _schema_with_format(dtype: DynType, format: String) raises -> CArrowSchema:
+    """`dtype`'s exported schema with its format string swapped for `format`;
+    the schema's release frees the swapped-in string."""
+    var schema = CArrowSchema.from_dtype(dtype)
+    schema.format.unsafe_free()
+    schema.format = alloc_c_string(format)
+    return schema^
+
+
+def test_import_refuses_malformed_format_parameters() raises:
+    var leaves: List[String] = [
+        "w:-1",
+        "d:abc",
+        "d:5,2,100",
+        "d:0,2",
+        "d:10,2,32",
+        "d:5,2,128,1",
+    ]
+    for fmt in leaves:
+        with assert_raises(contains="InvalidError"):
+            _ = _schema_with_format(int32, fmt).to_dtype()
+    with assert_raises(contains="negative list size"):
+        _ = _schema_with_format(list_(int32), "+w:-1").to_dtype()
+    assert_equal(
+        _schema_with_format(int32, "d:9,2,32").to_dtype(), decimal32(9, 2)
+    )
+    assert_equal(
+        _schema_with_format(int32, "d:38,2").to_dtype(), decimal128(38, 2)
+    )
+
+
+def test_import_refuses_a_null_format() raises:
+    var schema = CArrowSchema.from_dtype(int32)
+    var format = schema.format
+    schema.format = CStr(unsafe_from_address=Int(0))
+    with assert_raises(contains="NULL format"):
+        _ = schema.to_dtype()
+    schema.format = format
+
+
+def test_import_reads_a_null_name_as_empty() raises:
+    # An exported dtype carries no name; the spec makes it optional.
+    assert_equal(CArrowSchema.from_dtype(int32).to_field().name, "")
+
+
+def test_import_refuses_wrong_schema_children() raises:
+    var pair: DynType = struct_([field("a", int32), field("b", int32)])
+    with assert_raises(contains="takes 1 child schema"):
+        _ = _schema_with_format(int32, "+l").to_dtype()
+    with assert_raises(contains="takes 0 child schema"):
+        _ = _schema_with_format(pair, "i").to_dtype()
+    with assert_raises(contains="two-field struct"):
+        _ = _schema_with_format(list_(int32), "+m").to_dtype()
+    var schema = CArrowSchema.from_dtype(pair)
+    ref child = schema.children[unsafe_offset=1][]
+    var release = child.release
+    child.mark_released()
+    with assert_raises(contains="NULL or released"):
+        _ = schema.to_dtype()
+    child.release = release
+
+
+def test_import_of_an_unsupported_nested_format_is_not_implemented() raises:
+    # A union is legal Arrow that marrow does not read: not a malformed export.
+    var pair: DynType = struct_([field("a", int32), field("b", int32)])
+    with assert_raises(contains="NotImplementedError"):
+        _ = _schema_with_format(pair, "+ud:0,1").to_dtype()
+
+
+def test_import_refuses_a_non_struct_schema() raises:
+    with assert_raises(contains="must describe a struct"):
+        _ = CArrowSchema.from_dtype(int32).to_schema()
+
+
+def _pyarrow(source: String) raises -> PythonObject:
+    """The PyArrow object the expression `pa.<source>` builds."""
+    return Python.evaluate(
+        String("(lambda pa: pa.", source, ")(__import__('pyarrow'))")
+    )
+
+
+def _no_owner() -> ArcPointer[Allocation]:
+    """An owner that releases nothing: the test keeps the struct, and restores
+    what it corrupted before dropping it."""
+    return ArcPointer(Allocation(None, None, None, None))
+
+
+def test_import_refuses_wrong_array_children() raises:
+    var py = _pyarrow("array([{'a': 1, 'b': 'x'}, None])")
+    var dtype = c_schema_from_pyobj(py.type).to_dtype()
+    var arr = c_array_from_pyobj(py)
+    arr.n_children = 0
+    with assert_raises(contains="takes 2 child array"):
+        _ = arr.to_data(dtype, _no_owner())
+    arr.n_children = 2
+    var children = arr.children
+    arr.children = type_of(children)(unsafe_from_address=Int(0))
+    with assert_raises(contains="NULL children pointer"):
+        _ = arr.to_data(dtype, _no_owner())
+    arr.children = children
+    ref child = arr.children[unsafe_offset=0][]
+    var release = child.release
+    child.mark_released()
+    with assert_raises(contains="NULL or released"):
+        _ = arr.to_data(dtype, _no_owner())
+    child.release = release
+
+
+def test_import_refuses_short_struct_and_fixed_size_list_children() raises:
+    var py = _pyarrow("array([{'a': 1, 'b': 'x'}, None])")
+    var dtype = c_schema_from_pyobj(py.type).to_dtype()
+    var arr = c_array_from_pyobj(py)
+    arr.children[unsafe_offset=0][].length = 1
+    with assert_raises(contains="shorter than its parent"):
+        _ = arr.to_data(dtype, _no_owner())
+    arr.children[unsafe_offset=0][].length = 2
+
+    var py_fsl = _pyarrow(
+        "array([[1, 2], None, [5, 6]], pa.list_(pa.int32(), 2))"
+    )
+    var fsl_dtype = c_schema_from_pyobj(py_fsl.type).to_dtype()
+    var fsl = c_array_from_pyobj(py_fsl)
+    fsl.children[unsafe_offset=0][].length = 5
+    with assert_raises(contains="fewer than"):
+        _ = fsl.to_data(fsl_dtype, _no_owner())
+    fsl.children[unsafe_offset=0][].length = 6
+
+
+def test_import_refuses_a_missing_or_unexpected_dictionary() raises:
+    var py = _pyarrow("array(['x', None, 'y', 'x']).dictionary_encode()")
+    var dtype = c_schema_from_pyobj(py.type).to_dtype()
+    var arr = c_array_from_pyobj(py)
+    var dictionary = arr.dictionary
+    arr.dictionary = type_of(dictionary)(unsafe_from_address=Int(0))
+    with assert_raises(contains="NULL dictionary"):
+        _ = arr.to_data(dtype, _no_owner())
+    arr.dictionary = dictionary
+    # The same dictionary under its index type alone.
+    with assert_raises(contains="must not carry a dictionary"):
+        _ = arr.to_data(int32, _no_owner())
+
+
+def test_import_refuses_null_buffers() raises:
+    var ints = CArrowArray.from_array(array([1, None, 3], int32))
+    var values = ints.buffers[unsafe_offset=1]
+    ints.buffers[unsafe_offset=1] = type_of(values)(unsafe_from_address=Int(0))
+    with assert_raises(contains="buffer 1 is NULL"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.buffers[unsafe_offset=1] = values
+    var validity = ints.buffers[unsafe_offset=0]
+    ints.buffers[unsafe_offset=0] = type_of(validity)(
+        unsafe_from_address=Int(0)
+    )
+    with assert_raises(contains="validity buffer is NULL"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.buffers[unsafe_offset=0] = validity
+    var buffers = ints.buffers
+    ints.buffers = type_of(buffers)(unsafe_from_address=Int(0))
+    with assert_raises(contains="NULL buffers pointer"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.buffers = buffers
+
+    var strings = CArrowArray.from_array(array(["a", None, "ccc"]))
+    for i in range(1, 3):
+        var buffer = strings.buffers[unsafe_offset=i]
+        strings.buffers[unsafe_offset=i] = type_of(buffer)(
+            unsafe_from_address=Int(0)
+        )
+        with assert_raises(contains="is NULL"):
+            _ = strings.to_data(string, _no_owner())
+        strings.buffers[unsafe_offset=i] = buffer
+
+
+def test_import_refuses_a_wrong_buffer_count() raises:
+    var ints = CArrowArray.from_array(array([1, 2, 3], int32))
+    ints.n_buffers = 3
+    with assert_raises(contains="takes 2 buffers"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.n_buffers = 2
+    # A struct laid over an int32 export: validity only, no children.
+    var empty: DynType = struct_(List[Field]())
+    with assert_raises(contains="takes 1 buffers"):
+        _ = ints.to_data(empty, _no_owner())
+
+
+def test_import_refuses_bad_lengths() raises:
+    var ints = CArrowArray.from_array(array([1, 2, 3], int32))
+    ints.length = -1
+    with assert_raises(contains="negative length"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.length = 3
+    ints.offset = -1
+    with assert_raises(contains="negative length"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.offset = 1
+    ints.length = Int64.MAX
+    with assert_raises(contains="overflows"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.offset = 0
+    ints.length = 3
+    ints.null_count = -2
+    with assert_raises(contains="negative null_count"):
+        _ = ints.to_data(int32, _no_owner())
+
+
+def test_import_refuses_a_buffer_size_that_overflows() raises:
+    # 2^62 int32 values need 2^64 bytes, which wraps to 0 and would let a
+    # NULL data buffer through.
+    var ints = CArrowArray.from_array(array([1, 2, 3], int32))
+    var values = ints.buffers[unsafe_offset=1]
+    ints.buffers[unsafe_offset=1] = type_of(values)(unsafe_from_address=Int(0))
+    ints.length = Int64(1) << 62
+    with assert_raises(contains="overflow"):
+        _ = ints.to_data(int32, _no_owner())
+    ints.length = 3
+    ints.buffers[unsafe_offset=1] = values
