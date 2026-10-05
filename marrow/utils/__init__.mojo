@@ -11,7 +11,8 @@ out on its own:
 |---|---|
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
 | `byteorder` | `LittleEndian`, `BigEndian`, `Zigzag` — byte, bit and LEB128-varint reads/writes |
-| `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
+| `decimal` | `float_to_decimal` — the exact unscaled decimal of a double |
+| `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
 | `hex` | `hex_digit` — one hexadecimal digit's value |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32` |
@@ -45,7 +46,14 @@ from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
 from .byteorder import BigEndian, LittleEndian, Zigzag
 from .checksum import Crc32, Crc32c
 from .compression import CompressionLibs
-from .datetime import CivilDate, Epoch, floor_div
+from .decimal import float_to_decimal
+from .datetime import (
+    CivilDate,
+    Epoch,
+    floor_div,
+    split_days,
+    truncate_div,
+)
 from .dylib import Dylib, LibSpec
 from .segment_tree import Monoid, SegmentTree
 from .uri import StorageOptions, Uri

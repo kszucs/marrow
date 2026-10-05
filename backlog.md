@@ -134,25 +134,6 @@ around the pinned inputs. Line numbers are as of `2c28f9bb`.
 - **IPC read of PyArrow's `float16` gives `float64`** with garbage values: an
   absent `FloatingPoint.precision` defaults to DOUBLE (`ipc.mojo:1566`), but
   the flatbuffer default PyArrow omits is HALF. (`test_ipc_read_float16`)
-- **`cast(safe=True)` misses out-of-range integers.** The check is a
-  round trip (`kernels/cast.mojo:164`), which a sign change survives: int8
-  `-1` -> uint8/uint16 is 255/65535, uint8 `200` -> int8 is -56. For float ->
-  int it depends on what an out-of-range `fptosi` returns: float64 `128.0` ->
-  int8 gives -128, float64 `2**63` -> int64 saturates, float16 `inf` -> int32
-  saturates. (`test_cast_sign_change_is_checked`,
-  `test_cast_float_to_int_out_of_range`)
-- **`cast` string -> integer wraps** — `'128'` -> int8 is -128 even with
-  `safe=True`: `Scalar[native](atol(s))` truncates (`kernels/cast.mojo:1006`).
-  (`test_cast_string_to_integer_out_of_range`)
-- **Temporal casts only rescale the tick** (`TemporalCastKernel`,
-  `kernels/cast.mojo:763`): timestamp -> date64 keeps the time of day,
-  timestamp -> time does not reduce to a day (-1 s -> -1000 ms), timestamp ->
-  date32 with `safe=True` raises where PyArrow drops the time of day, and an
-  unsafe downscale floors a negative tick where Arrow truncates
-  (`kernels/cast.mojo:954`). (`test_cast_timestamp_*`)
-- **`cast` float -> decimal rounds** — `round(x * 10**scale)` in float64
-  (`kernels/cast.mojo:557`), so an exact `14411518807587.0` -> decimal128(20,4)
-  gains `.0016`. (`test_cast_float_to_decimal_is_exact`)
 - **`sum`/`product` of unsigned integers accumulate as int64**
   (`kernels/aggregate.mojo:323`); PyArrow answers uint64, so a total past
   `2**63` comes back negative. (`test_unsigned_sum_is_uint64`)

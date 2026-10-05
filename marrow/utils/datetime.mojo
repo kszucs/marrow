@@ -38,6 +38,34 @@ def floor_div(a: Int, b: Int) -> Int:
     return q
 
 
+@always_inline
+def split_days[
+    W: Int
+](ticks: SIMD[DType.int64, W], per_day: Int64) -> Tuple[
+    SIMD[DType.int64, W], SIMD[DType.int64, W]
+]:
+    """Ticks since the epoch, `per_day` of them to a day, as the day they fall
+    in and the ticks into that day.
+
+    The day is floored, so the time of day is never negative: one second
+    before the epoch is 23:59:59 on 1969-12-31.
+    """
+    var days = ticks // per_day
+    return (days, ticks - days * per_day)
+
+
+@always_inline
+def truncate_div[
+    W: Int
+](ticks: SIMD[DType.int64, W], divisor: Int64) -> SIMD[DType.int64, W]:
+    """Ticks divided by a positive `divisor`, truncated toward zero, which is
+    how Arrow converts a tick to a coarser unit: -1500 ms is -1 s, not -2.
+    """
+    var q = ticks // divisor
+    var r = ticks - q * divisor
+    return q + (r.ne(0) & ticks.lt(0)).cast[DType.int64]()
+
+
 struct Epoch:
     """Unix-epoch constants. A namespace, never instantiated.
 

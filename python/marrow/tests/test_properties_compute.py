@@ -481,50 +481,18 @@ def cast_inputs(draw):
 def _known_cast_divergence(src, dst, safe):
     """The pairs left out of the property: pinned at the bottom of the file
     unless the comment says why they are not a bug."""
-    integers = pa.types.is_integer(src) and pa.types.is_integer(dst)
-    sign_change = integers and (
-        # signed -> unsigned of equal or greater width, unsigned -> signed of
-        # equal width: the pairs where the range check is missing.
-        (
-            pa.types.is_signed_integer(src)
-            and pa.types.is_unsigned_integer(dst)
-            and dst.bit_width >= src.bit_width
-        )
-        or (
-            pa.types.is_unsigned_integer(src)
-            and pa.types.is_signed_integer(dst)
-            and dst.bit_width == src.bit_width
-        )
-    )
     # PyArrow does not check int -> float16 precision (2049 becomes 2048.0)
     # where it does for float32 and float64; marrow checks all three.
     to_half = safe and pa.types.is_integer(src) and pa.types.is_float16(dst)
-    timestamp_to_date = pa.types.is_timestamp(src) and (
-        pa.types.is_date64(dst) or (safe and pa.types.is_date32(dst))
-    )
+    # Unsafe, a string that fails to parse is null in marrow; PyArrow raises.
     string_to_number = pa.types.is_string(src) or pa.types.is_large_string(src)
-    string_to_number = string_to_number and (pa.types.is_integer(dst) or not safe)
-    truncating_downscale = (
-        not safe
-        and pa.types.is_timestamp(src)
-        and pa.types.is_timestamp(dst)
-        and _UNITS.index(dst.unit) < _UNITS.index(src.unit)
-    )
-    timestamp_to_time = pa.types.is_timestamp(src) and pa.types.is_time(dst)
+    string_to_number = string_to_number and not safe
     # Float and temporal formatting is a representation choice ("0.0"
     # against "0", or a timestamp with or without its fractional digits).
     float_to_string = (pa.types.is_floating(src) or pa.types.is_temporal(src)) and (
         pa.types.is_string(dst) or pa.types.is_large_string(dst)
     )
-    return (
-        (safe and sign_change)
-        or to_half
-        or float_to_string
-        or timestamp_to_date
-        or timestamp_to_time
-        or string_to_number
-        or truncating_downscale
-    )
+    return to_half or float_to_string or string_to_number
 
 
 _UNITS = ["s", "ms", "us", "ns"]
@@ -541,19 +509,28 @@ def test_cast_matches_pyarrow(inputs):
     arr, dst, safe = inputs
     if _known_cast_divergence(arr.type, dst, safe):
         return  # pinned below
+    if pa.types.is_timestamp(arr.type) and (
+        pa.types.is_date(dst) or pa.types.is_time(dst)
+    ):
+        # PyArrow counts the days in an int32 and overflows past 2**31 of
+        # them (timestamp[s] 86400 * 2**31 -> time64 is garbage); marrow does
+        # not, so only timestamps within that range compare.
+        per_day = 86400 * 10 ** (3 * _UNITS.index(arr.type.unit))
+        ticks = arr.view(pa.int64()).to_pylist()
+        if not all(t is None or abs(t) < per_day * 2**31 for t in ticks):
+            return
     if pa.types.is_floating(arr.type) and pa.types.is_integer(dst):
-        # Unsafe: out of range (or NaN) is undefined behaviour in PyArrow's
-        # float -> int, so only in-range values compare. Safe: marrow misses
-        # some out-of-range values (pinned below), so those are left out too.
         low, high = -(2.0 ** (dst.bit_width - 1)), 2.0 ** (dst.bit_width - 1)
         if pa.types.is_unsigned_integer(dst):
             low, high = 0.0, 2.0**dst.bit_width
         if not all(v is None or low <= v < high for v in arr.to_pylist()):
-            return
-    if pa.types.is_floating(arr.type) and pa.types.is_decimal(dst):
-        # Past 2**53 the scaled value is rounded: pinned below.
-        limit = 2.0**53 / 10**dst.scale
-        if not all(v is None or not abs(v) >= limit for v in arr.to_pylist()):
+            # Unsafe, out of range (or NaN) is undefined behaviour in PyArrow.
+            # Safe, PyArrow's round trip waves through a float that converts
+            # to the saturated bound (2**63 -> int64 gives INT64_MAX); marrow
+            # refuses every value out of range.
+            if safe:
+                with pytest.raises(ma.ArrowInvalid):
+                    mc.cast(ma.array(arr), dst, safe=True)
             return
     want = reference(pc.cast, arr, dst, safe=safe)
     assume(want is not None)
@@ -561,20 +538,6 @@ def test_cast_matches_pyarrow(inputs):
     if isinstance(want, Exception) and "Precision is not great enough" in str(want):
         # PyArrow refuses int -> decimal by the types alone; marrow checks the
         # values, which is the more permissive and not a wrong answer.
-        return
-    if (
-        isinstance(want, Exception)
-        and pa.types.is_integer(arr.type)
-        and pa.types.is_floating(dst)
-    ):
-        # PyArrow refuses any integer past 2**53 (2**24 for float32); marrow
-        # refuses only the ones the float cannot hold exactly, so a success
-        # must be exact.
-        try:
-            got = to_pa(mc.cast(m, dst, safe=safe))
-        except ma.ArrowInvalid:
-            return
-        assert got.to_pylist() == arr.to_pylist()
         return
     if isinstance(want, Exception):
         with pytest.raises(ma.ArrowException):
@@ -883,12 +846,6 @@ def test_sort_indices_is_stable(n):
     assert to_pa(mc.sort_indices(ma.array(arr))).to_pylist() == list(range(n))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast(safe=True) from signed to an unsigned integer at least as wide, "
-    "or from unsigned to the signed integer of the same width, wraps instead of "
-    "raising",
-)
 @pytest.mark.parametrize(
     "value, src, dst",
     [
@@ -919,11 +876,6 @@ def test_case_mapping_sharp_s(verb):
     assert got.to_pylist() == _UNARY_STRINGS[verb](arr).to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast timestamp -> date64 rescales to milliseconds without flooring "
-    "to midnight, so the date64 keeps its time of day",
-)
 @pytest.mark.parametrize("safe", [False, True])
 def test_cast_timestamp_to_date64_floors_to_midnight(safe):
     arr = pa.array([1], pa.timestamp("s"))
@@ -931,22 +883,12 @@ def test_cast_timestamp_to_date64_floors_to_midnight(safe):
     assert got.view(pa.int64()).to_pylist() == [0]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast(safe=True) timestamp -> date32 raises when the time of day is "
-    "nonzero; PyArrow drops the time of day",
-)
 def test_cast_timestamp_to_date32_safe():
     arr = pa.array([1], pa.timestamp("s"))
     got = to_pa(mc.cast(ma.array(arr), pa.date32(), safe=True))
     assert got.to_pylist() == pc.cast(arr, pa.date32()).to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast(safe=True) string -> integer wraps a parsed value that does not "
-    "fit the target ('128' -> int8 gives -128)",
-)
 @pytest.mark.parametrize(
     "text, dst", [("128", pa.int8()), ("-1", pa.uint8()), ("300", pa.uint8())]
 )
@@ -955,23 +897,12 @@ def test_cast_string_to_integer_out_of_range(text, dst):
         mc.cast(ma.array(pa.array([text])), dst, safe=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast(safe=False) to a coarser timestamp unit floors a negative tick "
-    "(-1 ms -> -1 s); PyArrow truncates toward zero (0 s)",
-)
 def test_cast_timestamp_downscale_truncates():
     arr = pa.array([-1], pa.timestamp("ms"))
     got = to_pa(mc.cast(ma.array(arr), pa.timestamp("s"), safe=False))
     assert got.view(pa.int64()).to_pylist() == [0]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast timestamp -> time rescales the whole tick instead of taking the "
-    "time of day: -1 s gives -1000 ms and 2,091,084 s gives 2,091,084,000 ms, "
-    "both outside a day (and safe=True raises an overflow for the second)",
-)
 @pytest.mark.parametrize("tick", [-1, 2_091_084])
 def test_cast_timestamp_to_time_of_day(tick):
     arr = pa.array([tick], pa.timestamp("s"))
@@ -981,12 +912,6 @@ def test_cast_timestamp_to_time_of_day(tick):
     assert got.view(pa.int32()).to_pylist() == want.view(pa.int32()).to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast float -> decimal scales in floating point, so a double that is "
-    "an exact integer comes back with a rounding error once value * 10**scale "
-    "passes 2**53",
-)
 def test_cast_float_to_decimal_is_exact():
     arr = pa.array([14411518807587.0])
     got = to_pa(mc.cast(ma.array(arr), pa.decimal128(20, 4), safe=False))
@@ -1004,12 +929,6 @@ def test_unsigned_sum_is_uint64(verb):
     assert aggregate(arr, verb) == getattr(pc, verb)(arr).as_py()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cast(safe=True) float -> int misses out-of-range values: float64 -> "
-    "8/16-bit integers and float16 -> any integer wrap, and float64 2**63 -> int64 "
-    "and float16 inf -> int32 saturate",
-)
 @pytest.mark.parametrize(
     "value, src, dst",
     [
@@ -1017,6 +936,8 @@ def test_unsigned_sum_is_uint64(verb):
         (40000.0, pa.float64(), pa.int16()),
         (256.0, pa.float64(), pa.uint8()),
         (2.0**63, pa.float64(), pa.int64()),
+        (2.0**31, pa.float32(), pa.int32()),
+        (2.0**64, pa.float64(), pa.uint64()),
         (128.0, pa.float16(), pa.int8()),
         (math.inf, pa.float16(), pa.int32()),
     ],

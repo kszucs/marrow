@@ -21,6 +21,8 @@ from ..datetime import (
     Epoch,
     floor_div,
     Iso8601,
+    split_days,
+    truncate_div,
 )
 
 
@@ -284,3 +286,33 @@ def test_iso8601_write_pads_small_years() raises:
     var ticks = CivilDate(33, 1, 2).to_days() * Epoch.SECONDS_PER_DAY
     assert_equal(_written[0](ticks), "0033-01-02 00:00:00")
     assert_equal(_iso[0](_written[0](ticks)).value(), ticks)
+
+
+def test_split_days_floors_to_the_day() raises:
+    var ticks = SIMD[DType.int64, 4](0, 86_399, 86_400, -1)
+    var parts = split_days[4](ticks, 86_400)
+    assert_equal(parts[0], SIMD[DType.int64, 4](0, 0, 1, -1))
+    assert_equal(parts[1], SIMD[DType.int64, 4](0, 86_399, 0, 86_399))
+
+
+def test_split_days_in_milliseconds() raises:
+    var ticks = SIMD[DType.int64, 2](-86_400_001, 86_400_000 * 3 + 7)
+    var parts = split_days[2](ticks, Epoch.MILLIS_PER_DAY)
+    assert_equal(parts[0], SIMD[DType.int64, 2](-2, 3))
+    assert_equal(parts[1], SIMD[DType.int64, 2](86_399_999, 7))
+
+
+def test_truncate_div_rounds_toward_zero() raises:
+    var ticks = SIMD[DType.int64, 8](0, 999, 1000, 1500, -1, -999, -1000, -1500)
+    assert_equal(
+        truncate_div[8](ticks, 1000),
+        SIMD[DType.int64, 8](0, 0, 1, 1, 0, 0, -1, -1),
+    )
+
+
+def test_truncate_div_at_the_int64_bounds() raises:
+    var ticks = SIMD[DType.int64, 2](Int64.MIN, Int64.MAX)
+    assert_equal(
+        truncate_div[2](ticks, 1_000_000_000),
+        SIMD[DType.int64, 2](-9_223_372_036, 9_223_372_036),
+    )

@@ -18,7 +18,7 @@ directly by the AOT expression layer):
 - ``NumToBoolKernel`` / ``BoolToNumKernel`` — bit-pack (``x != 0``) / bit-unpack (``True→1``).
 - ``TemporalCastKernel`` — relabel to the underlying integer, or unit-scale it.
 - ``StringToNumKernel`` / ``NumToStringKernel`` / ``StringToBoolKernel`` / ``BoolToStringKernel`` —
-  per-element ``atol``/``atof`` parse or format (variable-length, builder-based),
+  per-element parse or format (variable-length, builder-based),
   and ``StringToDecimalKernel`` / ``DecimalToStringKernel`` for decimals, which
   keep every digit the scale declares.
 - ``NullCastKernel`` — an all-null array of the target type.
@@ -41,6 +41,8 @@ arm did not accept. ``CastKernel``'s docstring has the detail.
 
 from std.collections.string import atol, atof, StringSlice
 from std.collections.string._utf8 import _is_valid_utf8
+from std.math import trunc
+from std.memory import bitcast
 from std.sys import bit_width_of, simd_width_of
 
 from ..arrays import (
@@ -86,7 +88,14 @@ from ..dtypes import (
 )
 from .core import Kernel
 from .temporal import WallClock, ticks_per_second
-from ..utils import CivilDate, floor_div
+from ..utils import (
+    CivilDate,
+    Epoch,
+    float_to_decimal,
+    floor_div,
+    split_days,
+    truncate_div,
+)
 from ..execution import ExecContext, GPU_ENABLED
 from ..errors import InternalError, InvalidError, NotImplementedError, TypeError
 from .filter import take
@@ -156,18 +165,58 @@ struct NumericCastKernel(CastKernel):
     def core_checked[
         In: DType, Out: DType, W: Int
     ](a: SIMD[In, W]) -> Tuple[SIMD[Out, W], SIMD[DType.bool, W]]:
-        """Checked cast — returns ``(out, bad)`` where ``bad`` marks lanes that
-        don't round-trip. Casts forward **once** and reuses ``out`` for the
-        back-cast, so the safe path does no redundant work.
+        """Checked cast — returns ``(out, bad)`` where ``bad`` marks the lanes
+        whose value ``Out`` cannot hold. Each check reads ``a``, never ``out``:
+        an out-of-range conversion is undefined, so a round trip through it
+        proves nothing, and a sign change survives one (int8 -1 → uint8 255 →
+        int8 -1).
 
-        `~eq`, not `ne`: Mojo's `SIMD.ne` lowers to an *ordered* compare, so it
-        answers False whenever either operand is a NaN — and `needs_check` says
-        True for every float→int pair, which is exactly where a NaN arrives. A
-        NaN round-trips to garbage and must be flagged; `ne` waved it through,
-        so a `safe=True` float→int cast silently produced whatever `fptosi`
-        gave it where `pyarrow` raises `ArrowInvalid`."""
+        Integer → float accepts ``|a| <= 2^(mantissa + 1)``, Arrow C++'s
+        bound, which also rejects large integers that happen to be
+        representable."""
         var out = a.cast[Out]()
-        return (out, ~out.cast[In]().eq(a))
+        comptime if In.is_floating_point():
+            # A fraction, NaN, an infinity, or a value outside [MIN, MAX].
+            # Clamping into [MIN, top], `top` the largest float below MAX + 1,
+            # leaves exactly the in-range values unchanged, so one integrality
+            # compare against the input tests all of it. It is a negated `eq`
+            # because a NaN fails every ordered compare, `ne` included. The
+            # bounds are powers of two, exact in any float wide enough to hold
+            # them; float16 compares in float32, where 2^31 is not infinity.
+            comptime C = DType.float32 if bit_width_of[In]() < 32 else In
+            comptime lo = Scalar[Out].MIN.cast[C]()
+            comptime hi = (Scalar[Out].MAX // 2 + 1).cast[C]() * 2
+            comptime top = bitcast[C, 1](hi.to_bits() - 1)
+            var x = a.cast[C]()
+            return (out, ~trunc(x.clamp(lo, top)).eq(x))
+        elif Out.is_floating_point():
+            comptime digits = DType.mantissa_width[Out]() + 1
+            comptime if bit_width_of[In]() <= digits:
+                return (out, SIMD[DType.bool, W](fill=False))
+            else:
+                comptime limit = Scalar[In](1) << Scalar[In](digits)
+                comptime if In.is_signed():
+                    return (out, a.gt(limit) | a.lt(-limit))
+                else:
+                    return (out, a.gt(limit))
+        else:
+            # Compared in `In`, testing only the bounds `In` can exceed, so
+            # each is one compare.
+            comptime in_bits = bit_width_of[In]() - Int(In.is_signed())
+            comptime out_bits = bit_width_of[Out]() - Int(Out.is_signed())
+            comptime narrower = out_bits < in_bits
+            comptime MIN = Scalar[Out].MIN.cast[In]()
+            comptime MAX = Scalar[Out].MAX.cast[In]()
+            comptime if In.is_signed() and not Out.is_signed() and narrower:
+                return (out, a.lt(0) | a.gt(MAX))
+            elif In.is_signed() and not Out.is_signed():
+                return (out, a.lt(0))
+            elif In.is_signed() and narrower:
+                return (out, a.lt(MIN) | a.gt(MAX))
+            elif narrower:
+                return (out, a.gt(MAX))
+            else:
+                return (out, SIMD[DType.bool, W](fill=False))
 
     @staticmethod
     def needs_check[In: DType, Out: DType]() -> Bool:
@@ -531,10 +580,15 @@ struct DecimalToIntKernel(CastKernel):
 
 
 struct FloatToDecimalKernel(CastKernel):
-    """Float → decimal: multiply by 10^scale in float64 and round.
+    """Float → decimal: the decimal nearest ``x * 10^scale``, ties to even.
 
-    float16/32 ↔ int128/256 has no direct compiler-rt path (`__fixhfti` /
-    `__floattihf`), so float64 is the intermediary for every source width."""
+    The product is formed exactly from the float's bits, so an integral double
+    stays integral at any scale. Two cases follow Arrow C++ instead, which
+    computes them in floating point: a decimal32 target, scaled in the
+    source's own float type, and a negative scale, scaled in float64.
+
+    Out of range — or NaN, or an infinity — raises under ``safe`` and is 0
+    otherwise, as in Arrow C++."""
 
     comptime name = "float_to_decimal"
 
@@ -551,21 +605,37 @@ struct FloatToDecimalKernel(CastKernel):
             def on_to[T: DecimalType](d: T) raises {imm} -> DynArray:
                 comptime FromN = F.native
                 comptime ToN = T.native
-                var f = pow(Float64(10), d.scale())
-                # int128/256 do not round-trip through float64 exactly, so this
-                # bound is approximate at the last few ULPs. It guards against a
-                # value being out by orders of magnitude, not a precision claim.
-                var lo = Scalar[ToN].MIN.cast[DType.float64]()
-                var hi = Scalar[ToN].MAX.cast[DType.float64]()
+                # float16 has no float16 kernel in Arrow; it scales as float32.
+                comptime C = DType.float64 if FromN == DType.float64 else DType.float32
+                var scale = d.scale()
+                var precision = d.precision()
+                var approx = ToN == DType.int32 or scale < 0
+                var f = pow(Scalar[C](10), scale)
+                var f64 = pow(Float64(10), scale)
+                var digits = pow(Float64(10), precision)
 
                 def to_dec(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
-                    var scaled = round(x.cast[DType.float64]() * f)
-                    # NaN fails both comparisons, which is the intent.
-                    if safe and not (scaled >= lo and scaled <= hi):
-                        raise InvalidError(
-                            t"decimal_cast: value out of range for {to}"
+                    if approx:
+                        var scaled: Float64
+                        comptime if ToN == DType.int32:
+                            scaled = round(x.cast[C]() * f).cast[
+                                DType.float64
+                            ]()
+                        else:
+                            scaled = round(x.cast[DType.float64]() * f64)
+                        if abs(scaled) < digits:
+                            return scaled.cast[ToN]()
+                    else:
+                        var v = float_to_decimal(
+                            x.cast[DType.float64](), scale, precision
                         )
-                    return scaled.cast[ToN]()
+                        if v:
+                            return v.value().cast[ToN]()
+                    if safe:
+                        raise InvalidError(
+                            t"decimal_cast: cannot convert {x} to {to}"
+                        )
+                    return Scalar[ToN](0)
 
                 return _map_decimal[FromN, ToN](data, to, to_dec)
 
@@ -789,6 +859,10 @@ struct TemporalCastKernel(CastKernel):
                     t"cast: cannot reinterpret {src} as {to} (width mismatch)"
                 )
             return Self._reinterpret(data, to)
+        if src.is_timestamp() and (
+            to.is_date32() or to.is_date64() or to.is_time32() or to.is_time64()
+        ):
+            return Self._from_timestamp(array, to, safe, ctx)
         var ns_from = Self.ns_per_tick(src)
         var ns_to = Self.ns_per_tick(to)
         if ns_from == ns_to and same_width:
@@ -907,6 +981,97 @@ struct TemporalCastKernel(CastKernel):
                 )
             dst.store[1](i, out)
 
+    @staticmethod
+    def _from_timestamp(
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
+    ) raises -> DynArray:
+        """Timestamp → date or time: the day each wall-clock time falls in, or
+        its time of day. The day is floored, so a pre-epoch instant keeps a
+        non-negative time of day (-1 s is 23:59:59 the day before). A zoned
+        timestamp is read in its zone.
+
+        Under ``safe`` a coarser time unit raises on a sub-tick remainder;
+        dropping the time of day for a date is the conversion itself and never
+        raises."""
+        var src = array.dtype()
+        var local = WallClock.localise(array)
+        var data = local.to_data()
+        var ns_from = Self.ns_per_tick(src)
+        var per_day = Int64(Epoch.NANOS_PER_DAY) // ns_from
+        if to.is_date32():
+            return Self._day_part[DType.int32](
+                data, to, per_day, False, 1, 1, ctx
+            )
+        if to.is_date64():
+            return Self._day_part[DType.int64](
+                data, to, per_day, False, Epoch.MILLIS_PER_DAY, 1, ctx
+            )
+        var ns_to = Self.ns_per_tick(to)
+        var mul = ns_from // ns_to if ns_from > ns_to else Int64(1)
+        var div = ns_to // ns_from if ns_to > ns_from else Int64(1)
+        if safe and div > 1:
+            # `per_day` is a multiple of `div`, so the time of day has a
+            # remainder exactly when the tick does.
+            var n = data.length
+            var ticks = data.buffers[0].view[DType.int64](data.offset, n)
+            var validity = Optional[BitmapView[origin_of(data.bitmap._value)]](
+                None
+            )
+            if data.bitmap and data.nulls > 0:
+                validity = data.bitmap.value().view(data.offset, n)
+            for i in range(n):
+                if validity and not validity.value()[i]:
+                    continue
+                var x = ticks.load[1](i)
+                if x % div != 0:
+                    raise Self.error[InvalidError](
+                        t"casting {src} to {to} would lose data: tick {x}"
+                    )
+        if to.is_time32():
+            return Self._day_part[DType.int32](
+                data, to, per_day, True, mul, div, ctx
+            )
+        return Self._day_part[DType.int64](
+            data, to, per_day, True, mul, div, ctx
+        )
+
+    @staticmethod
+    def _day_part[
+        DstN: DType
+    ](
+        data: ArrayData,
+        to: DynType,
+        per_day: Int64,
+        time_of_day: Bool,
+        mul: Int64,
+        div: Int64,
+        ctx: ExecContext,
+    ) raises -> DynArray:
+        """Keep the day or the time of day of each int64 tick, rescaled by
+        ``mul / div`` into ``DstN``."""
+        var length = data.length
+        var buf = Buffer.alloc_uninit[DstN](length)
+        var src = data.buffers[0].view[DType.int64](data.offset, length)
+
+        @always_inline
+        def split[W: Int](x: SIMD[DType.int64, W]) {imm} -> SIMD[DstN, W]:
+            var parts = split_days[W](x, per_day)
+            var v = parts[1] if time_of_day else parts[0]
+            return truncate_div[W](v * mul, div).cast[DstN]()
+
+        apply[DType.int64, DstN](src, buf.view[DstN](0, length), split, ctx)
+        return DynArray.from_data(
+            ArrayData(
+                dtype=to.copy(),
+                length=length,
+                nulls=data.nulls,
+                offset=0,
+                bitmap=_rebased_validity(data.bitmap, data.offset, length),
+                buffers=[buf.to_immutable()],
+                children=[],
+            )
+        )
+
     # TODO: remove this
     @staticmethod
     def _reinterpret(data: ArrayData, to: DynType) raises -> DynArray:
@@ -956,7 +1121,9 @@ struct TemporalCastKernel(CastKernel):
             @always_inline
             def scale[W: Int](v: SIMD[SrcN, W]) {imm} -> SIMD[DstN, W]:
                 var x = v.cast[DType.int64]()
-                return ((x * factor) if up else (x // factor)).cast[DstN]()
+                if up:
+                    return (x * factor).cast[DstN]()
+                return truncate_div[W](x, factor).cast[DstN]()
 
             apply[SrcN, DstN](src, buf.view[DstN](0, length), scale, ctx)
         return DynArray.from_data(
@@ -1010,7 +1177,24 @@ struct StringToNumKernel(CastKernel):
         comptime if native.is_floating_point():
             return atof(s).cast[native]()
         else:
-            return Scalar[native](atol(s))
+            var v: Int
+            try:
+                v = atol(s)
+            except:
+                raise InvalidError(t"cast: cannot parse '{s}' as {native}")
+            # `atol` answers an `Int`: a 64-bit target needs no upper bound.
+            var fits: Bool
+            comptime if native.is_unsigned() and bit_width_of[native]() == 64:
+                fits = v >= 0
+            elif bit_width_of[native]() == 64:
+                fits = True
+            else:
+                fits = v >= Int(Scalar[native].MIN) and v <= Int(
+                    Scalar[native].MAX
+                )
+            if not fits:
+                raise InvalidError(t"cast: '{s}' is out of range for {native}")
+            return Scalar[native](v)
 
     @staticmethod
     def apply[
