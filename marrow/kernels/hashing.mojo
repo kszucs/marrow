@@ -51,6 +51,7 @@ from ..arrays import (
     BinaryLikeArray,
     BinaryViewLikeArray,
     BytesArray,
+    FixedSizeBinaryArray,
     PrimitiveArray,
     StructArray,
     ListLikeArray,
@@ -60,7 +61,7 @@ from ..arrays import (
     UInt64Array,
     Int32Array,
 )
-from ..builders import UInt64Builder, Int32Builder
+from ..builders import UInt64Builder, Int32Builder, arange
 from ..buffers import Bitmap, Buffer
 from ..views import BufferView, apply
 from .cast import decode_dictionary
@@ -72,6 +73,7 @@ from ..errors import InvalidError, TypeError
 from ..dtypes import (
     BinaryLikeType,
     BinaryViewLikeType,
+    Int32Type,
     IntegerType,
     PrimitiveType,
     ListLikeType,
@@ -631,13 +633,26 @@ struct KeyCompare(Kernel):
     are indexed**, so comparing a batch
     against stored keys by id copies neither.
 
-    It compares the types ``HashKernel`` hashes — a key it cannot hash never
-    reaches it. The fixed-width and binary leaves stripe over ``ctx`` in
+    It compares every type ``HashKernel`` hashes, plus null and fixed-size
+    binary. The fixed-width and binary leaves stripe over ``ctx`` in
     64-row-aligned stripes, so no two workers write one byte of ``equal``; the
     nested leaves compare their children through the same entry point.
     """
 
     comptime name = "key_compare"
+
+    @staticmethod
+    def equals(left: DynArray, right: DynArray) raises -> Bool:
+        """Whether two arrays of one dtype and length hold the same key at
+        every row, whatever their offsets and validity bitmaps."""
+        var n = len(left)
+        if left.dtype() != right.dtype() or n != len(right):
+            return False
+        var equal = Bitmap.alloc_zeroed(n)
+        equal.set_range(0, n, True)
+        var rows = arange[Int32Type](0, n)
+        Self.apply(left, rows, right, rows, equal)
+        return equal.view().all_set()
 
     @staticmethod
     def apply(
@@ -657,7 +672,10 @@ struct KeyCompare(Kernel):
             )
         var dt = left.dtype()
         Self.expect_same_dtype(dt, right.dtype())
-        if dt.is_bool():
+        if dt.is_null():
+            # Every row is NULL on both sides, and NULL is one key.
+            pass
+        elif dt.is_bool():
             Self.apply(
                 left.as_bool(), left_rows, right.as_bool(), right_rows, equal
             )
@@ -700,6 +718,15 @@ struct KeyCompare(Kernel):
                 )
 
             dt.dispatch_binaryview(viewlike)
+        elif dt.is_fixed_size_binary():
+            Self.apply(
+                left.as_fixed_size_binary(),
+                left_rows,
+                right.as_fixed_size_binary(),
+                right_rows,
+                equal,
+                ctx,
+            )
         elif dt.is_dictionary():
             # By decoded value: two arrays of one column may carry different
             # dictionaries, and the hash is taken over decoded values too.
@@ -897,6 +924,40 @@ struct KeyCompare(Kernel):
                         or left.unsafe_get(UInt(a)) != right.unsafe_get(UInt(b))
                     ):
                         equal.unsafe_clear(i)
+
+        ctx.stripe(len(left_rows), body, align=64)
+
+    @staticmethod
+    def apply(
+        left: FixedSizeBinaryArray,
+        left_rows: Int32Array,
+        right: FixedSizeBinaryArray,
+        right_rows: Int32Array,
+        mut equal: Bitmap[mut=True],
+        ctx: ExecContext,
+    ):
+        """Fixed-width bytes: no lengths to compare, only the bytes."""
+        var li = left_rows.values()
+        var ri = right_rows.values()
+        var width = left.byte_width
+        var lb = left.buffer.view[DType.uint8]()
+        var rb = right.buffer.view[DType.uint8]()
+
+        def body(wid: Int, start: Int, end: Int) {mut equal, imm}:
+            for i in range(start, end):
+                if equal.unsafe_test(i):
+                    var a = Int(li.load[1](i))
+                    var b = Int(ri.load[1](i))
+                    var valid = left.is_valid(a)
+                    if valid != right.is_valid(b):
+                        equal.unsafe_clear(i)
+                    elif valid:
+                        var x = (left.offset + a) * width
+                        var y = (right.offset + b) * width
+                        for k in range(width):
+                            if lb.load[1](x + k) != rb.load[1](y + k):
+                                equal.unsafe_clear(i)
+                                break
 
         ctx.stripe(len(left_rows), body, align=64)
 

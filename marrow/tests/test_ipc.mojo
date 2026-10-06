@@ -9,6 +9,7 @@ correctness in both directions.
 """
 
 from std.testing import assert_equal, assert_true, assert_false
+from std.utils.numerics import nan
 from std.python import Python, PythonObject
 from ..utils.testing import ScratchDir
 from ..dtypes import *
@@ -16,6 +17,7 @@ from ..arrays import DynArray, DictionaryArray
 from ..builders import (
     DynBuilder,
     MapBuilder,
+    arange,
     array,
     BoolBuilder,
     Int8Builder,
@@ -34,6 +36,7 @@ from ..builders import (
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    FixedSizeBinaryBuilder,
 )
 from std.memory import ArcPointer
 from std.os.path import join
@@ -44,7 +47,14 @@ from ..io import ByteSource, Fetched, BufferSource
 from ..schema import Schema
 from ..tabular import RecordBatch, record_batch
 from ..c_data import CArrowArrayStream
-from ..errors import ArrowError, CorruptError, DynError, NotImplementedError
+from ..kernels.hashing import KeyCompare
+from ..errors import (
+    ArrowError,
+    CorruptError,
+    DynError,
+    InvalidError,
+    NotImplementedError,
+)
 from ..ipc import (
     BodyCompression,
     read_ipc_file,
@@ -708,6 +718,96 @@ def test_stream_dictionary_roundtrip() raises:
     assert_true(read_back[0].schema.fields[0].dtype.is_dictionary())
     var got = DictionaryArray(read_back[0].columns[0].to_data())
     assert_true(got == expected)
+
+
+def _dict_batch(var values: DynArray) raises -> RecordBatch:
+    """One dictionary column indexing each entry of `values` once."""
+    var indices = arange[Int32Type](0, len(values))
+    var d: DynArray = DictionaryArray.from_arrays(indices^, values^)
+    return record_batch([d^], names=["d"])
+
+
+def _write_file(batches: List[RecordBatch]) raises -> List[RecordBatch]:
+    """Write `batches` to an IPC file and read them back."""
+    var path = _tmp_path()
+    write_ipc_file(path, batches)
+    return read_ipc_file(path)
+
+
+def _dictionaries() raises -> List[DynArray]:
+    """Strings, floats holding a NaN and a null, and fixed-size binary."""
+    var fsb = FixedSizeBinaryBuilder(2)
+    fsb.append("ab".as_bytes())
+    fsb.append_null()
+    fsb.append("cd".as_bytes())
+    var out = List[DynArray]()
+    out.append(array(["cat", "dog"]))
+    out.append(array([1.5, nan[DType.float64](), None], float64))
+    out.append(fsb.finish())
+    return out^
+
+
+def test_file_dictionary_equal_across_batches() raises:
+    """A later batch whose dictionary is a separately built copy of the one
+    already written is accepted, and both batches read back as written."""
+    var firsts = _dictionaries()
+    var seconds = _dictionaries()
+    for k in range(len(firsts)):
+        var written: List[RecordBatch] = [
+            _dict_batch(firsts[k].copy()),
+            _dict_batch(seconds[k].copy()),
+        ]
+        var read = _write_file(written)
+        assert_equal(len(read), 2)
+        for i in range(2):
+            assert_true(
+                KeyCompare.equals(read[i].columns[0], written[i].columns[0])
+            )
+
+
+def test_file_dictionary_replacement_refused() raises:
+    """The IPC file format holds one dictionary per field, so a batch whose
+    dictionary differs from the written one -- other values, one extending
+    it, a value where it had a null -- is an `InvalidError` rather than a file
+    decoding against the wrong values."""
+    var q = nan[DType.float64]()
+    var firsts: List[DynArray] = [
+        array(["cat", "dog"]),
+        array(["cat", "dog"]),
+        array([1.5, q, None], float64),
+    ]
+    var seconds: List[DynArray] = [
+        array(["dog", "fish"]),
+        array(["cat", "dog", "fish"]),
+        array([1.5, q, 2.0], float64),
+    ]
+    for k in range(len(firsts)):
+        var refused = False
+        try:
+            _ = _write_file(
+                [_dict_batch(firsts[k].copy()), _dict_batch(seconds[k].copy())]
+            )
+        except e:
+            refused = DynError(e).isa[InvalidError]()
+        assert_true(refused, String("dictionary replacement ", k, " accepted"))
+
+
+def test_stream_dictionary_replacement_roundtrip() raises:
+    """The stream format allows a dictionary to be replaced between batches,
+    and the stream writer resends each batch's dictionary, so both batches
+    decode against their own values."""
+    var path = _tmp_path(".arrows")
+    var written: List[RecordBatch] = [
+        _dict_batch(array(["cat", "dog"])),
+        _dict_batch(array(["fish", "owl", "yak"])),
+    ]
+    write_ipc_stream(path, written)
+    var read = read_ipc_stream(path)
+    assert_equal(len(read), 2)
+    for i in range(2):
+        assert_true(
+            KeyCompare.equals(read[i].columns[0], written[i].columns[0])
+        )
 
 
 def test_marrow_reads_pyarrow_dictionary() raises:

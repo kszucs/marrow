@@ -96,13 +96,6 @@ around the pinned inputs. Line numbers are as of `2c28f9bb`.
 
 **Silently wrong data:**
 
-- **IPC file writer reuses the first batch's dictionary for every batch**
-  (`ipc.mojo:2234` skips a written id without comparing); later batches decode
-  against the wrong dictionary. PyArrow refuses the replacement; the stream
-  writer is fine. (`test_ipc_file_dictionary_replacement`)
-- **IPC read of PyArrow's `float16` gives `float64`** with garbage values: an
-  absent `FloatingPoint.precision` defaults to DOUBLE (`ipc.mojo:1566`), but
-  the flatbuffer default PyArrow omits is HALF. (`test_ipc_read_float16`)
 - **`sum`/`product` of unsigned integers accumulate as int64**
   (`kernels/aggregate.mojo:323`); PyArrow answers uint64, so a total past
   `2**63` comes back negative. (`test_unsigned_sum_is_uint64`)

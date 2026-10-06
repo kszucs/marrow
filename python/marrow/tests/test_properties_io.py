@@ -263,8 +263,6 @@ def test_ipc_marrow_writes_pyarrow_reads(tmp_path, batches, fmt):
 
 @given(batch_lists(), st.sampled_from(sorted(_FORMATS)))
 def test_ipc_pyarrow_writes_marrow_reads(tmp_path, batches, fmt):
-    # float16 reads back as float64: pinned below.
-    assume(not any(_contains(f.type, pa.types.is_float16) for f in batches[0].schema))
     _, read, new, _ = _FORMATS[fmt]
     path = str(tmp_path / "t.arrow")
     with pa.OSFile(path, "wb") as sink, new(sink, batches[0].schema) as writer:
@@ -351,11 +349,6 @@ def test_parquet_write_seconds_overflow(tmp_path):
         mpq.write_table(ma.table(table), tmp_path / "ma.parquet")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="IPC file writer writes each dictionary once and silently encodes "
-    "later batches against the first batch's dictionary; PyArrow raises",
-)
 def test_ipc_file_dictionary_replacement(tmp_path):
     b1 = pa.record_batch({"c": pa.array(["x", "x"]).dictionary_encode()})
     b2 = pa.record_batch({"c": pa.array(["y", "z"]).dictionary_encode()})
@@ -435,12 +428,6 @@ def test_parquet_write_keeps_signed_zero(tmp_path):
     assert [math.copysign(1, v) for v in got] == [1.0, -1.0, 1.0]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="IPC read of a float16 field written by PyArrow yields float64: the "
-    "reader defaults an absent FloatingPoint.precision to DOUBLE, but the "
-    "flatbuffer default PyArrow omits is HALF",
-)
 @pytest.mark.parametrize("fmt", sorted(_FORMATS))
 def test_ipc_read_float16(tmp_path, fmt):
     _, read, new, _ = _FORMATS[fmt]

@@ -14,11 +14,17 @@ from ...arrays import (
     DynArray,
     FixedSizeListArray,
     Int32Array,
+    NullArray,
     PrimitiveArray,
     StringViewArray,
 )
 from ...buffers import Bitmap
-from ...builders import Int32Builder, ListBuilder, StructBuilder
+from ...builders import (
+    FixedSizeBinaryBuilder,
+    Int32Builder,
+    ListBuilder,
+    StructBuilder,
+)
 from ...dtypes import field, int32, string
 from ...execution import ExecContext
 from ...kernels.hashing import KeyCompare
@@ -37,6 +43,7 @@ from ...dtypes import (
     Float64Type,
     Int32Type,
     large_string,
+    string_view,
     date32,
     duration,
     second,
@@ -772,6 +779,79 @@ def test_key_compare_dictionaries_by_value() raises:
     )
     var got = _same_keys(left, [0, 1, 0], right, [0, 1, 1])
     assert_true(got == [True, True, False])
+
+
+def _fsb(values: List[Optional[String]]) raises -> DynArray:
+    var b = FixedSizeBinaryBuilder(2)
+    for v in values:
+        if v:
+            b.append(v.value().as_bytes())
+        else:
+            b.append_null()
+    return b.finish()
+
+
+def test_key_compare_fixed_size_binary() raises:
+    """Bytes compared at the width, NULL one value, read through a slice so
+    the array's offset reaches the byte positions."""
+    var a = _fsb(["zz", "ab", None, "ac", "ab"]).slice(1)
+    var got = _same_keys(a, [0, 0, 1, 1], a, [3, 2, 1, 0])
+    assert_true(got == [True, False, True, False])
+
+
+def test_key_compare_null_arrays() raises:
+    """Every row of a null array is NULL, and NULL is one value."""
+    var a: DynArray = NullArray(length=3)
+    assert_true(_same_keys(a, [0, 1, 2], a, [2, 0, 1]) == [True, True, True])
+
+
+def test_key_compare_equals_by_key() raises:
+    """Whole arrays by key: NaN equals NaN, `-0.0` equals `0.0` and NULL
+    equals NULL, but a value does not equal NULL."""
+    var q = nan[DType.float64]()
+    var a: DynArray = array([q, -0.0, None], float64)
+    assert_true(KeyCompare.equals(a, array([q, 0.0, None], float64)))
+    assert_false(KeyCompare.equals(array([q, 0.0, 0.0], float64), a))
+
+
+def test_key_compare_equals_ignores_layout() raises:
+    """Offsets, bytes outside the window and an all-valid validity bitmap do
+    not matter; only the values do."""
+    assert_true(KeyCompare.equals(_i64([None, 7, 1, 2]).slice(2), _i64([1, 2])))
+    assert_false(
+        KeyCompare.equals(_i64([None, 7, 1, 2]).slice(1), _i64([1, 2, 3]))
+    )
+    assert_true(
+        KeyCompare.equals(
+            array(["x", "cat", "dog"]).slice(1), array(["cat", "dog"])
+        )
+    )
+    assert_false(
+        KeyCompare.equals(array(["cat", "dog"]), array(["cat", "dot"]))
+    )
+    assert_true(KeyCompare.equals(_i64([]), _i64([])))
+
+
+def test_key_compare_equals_fixed_size_binary_and_null() raises:
+    """Separately built copies are equal; a changed byte or a value where the
+    other has NULL is not. Null arrays are equal at one length."""
+    var a = _fsb(["ab", None, "cd"])
+    assert_true(KeyCompare.equals(a, _fsb(["ab", None, "cd"])))
+    assert_true(KeyCompare.equals(_fsb(["zz", "ab", None, "cd"]).slice(1), a))
+    assert_false(KeyCompare.equals(a, _fsb(["ab", None, "ce"])))
+    assert_false(KeyCompare.equals(a, _fsb(["ab", "cd", "cd"])))
+    assert_true(KeyCompare.equals(NullArray(length=3), NullArray(length=3)))
+    assert_false(KeyCompare.equals(NullArray(length=3), NullArray(length=2)))
+
+
+def test_key_compare_equals_needs_one_dtype() raises:
+    """The dtype is part of the value: the same text as `string`,
+    `large_string` and `string_view`, or the same ints as int32 and int64,
+    are not equal, and that is an answer rather than an error."""
+    var s: DynArray = array(["cat", "dog"])
+    assert_false(KeyCompare.equals(s, cast(s, large_string)))
+    assert_false(KeyCompare.equals(s, cast(s, string_view)))
+    assert_false(KeyCompare.equals(_i32([1, 2]), _i64([1, 2])))
 
 
 def test_key_compare_skips_rows_already_distinct() raises:

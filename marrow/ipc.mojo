@@ -63,6 +63,7 @@ from .schema import Schema
 from .tabular import RecordBatch
 from .builders import Int32Builder
 from .kernels.concat import concat as _concat
+from .kernels.hashing import KeyCompare
 from .kernels.filter import take as _take
 from .utils import CompressionLibs, LittleEndian, Lz4, Zstd
 from . import dtypes as dt
@@ -1740,7 +1741,7 @@ struct _IpcDecoder(Movable):
                     dtype = dt.uint64
         elif type_type == _TYPE_FLOATING_POINT:
             var tp = self._r.read_table(fp, 3)
-            var prec = self._r.read_u16(tp, 0, _PRECISION_DOUBLE)
+            var prec = self._r.read_u16(tp, 0, _PRECISION_HALF)
             if prec == _PRECISION_HALF:
                 dtype = dt.float16
             elif prec == _PRECISION_SINGLE:
@@ -2369,7 +2370,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
     var _dict_blocks: List[_Block]
     var _blocks: List[_Block]
     var _enc: _BatchEncoder
-    var _dicts_written: List[Bool]
+    var _dicts: List[DynArray]
     var _closed: Bool
 
     def __init__(
@@ -2399,7 +2400,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
         self._dict_blocks = List[_Block]()
         self._blocks = List[_Block]()
         self._enc = _BatchEncoder(compression, native_codecs)
-        self._dicts_written = List[Bool]()
+        self._dicts = []
         self._closed = False
 
         for b in _magic():
@@ -2412,25 +2413,30 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
     def write_batch(mut self, batch: RecordBatch) raises:
         if self._closed:
             raise InvalidError("RecordBatchFileWriter: writer is closed")
-        # Collect all (dict_id, values) pairs in DFS inner-first order.
-        # In FILE format each dict_id is written exactly once.
+        # Collect all (dict_id, values) pairs in DFS inner-first order; ids
+        # are dense, so `_dicts[id]` is what was written for an id. The FILE
+        # format holds one dictionary per id and this writer emits no deltas,
+        # so a later batch must carry the same dictionary.
         var pairs = List[_DictPair]()
         var next_id = 0
         for col in batch.columns:
             _BatchEncoder.collect_dict_pairs(col.to_data(), pairs, next_id)
-        for j in range(len(pairs)):
-            var did = pairs[j].dict_id
-            while len(self._dicts_written) <= did:
-                self._dicts_written.append(False)
-            if self._dicts_written[did]:
+        for ref pair in pairs:
+            var did = pair.dict_id
+            if did < len(self._dicts):
+                if not KeyCompare.equals(self._dicts[did], pair.values):
+                    raise InvalidError(
+                        t"RecordBatchFileWriter: dictionary {did} differs from"
+                        t" the one already written"
+                    )
                 continue
             var dict_blk_start = Int64(self._out.tell())
-            var eb = self._enc.encode_dict_message(Int64(did), pairs[j].values)
+            var eb = self._enc.encode_dict_message(Int64(did), pair.values)
             self._out.write(Span(eb.msg))
             self._dict_blocks.append(
                 _Block(dict_blk_start, eb.metadata_length, eb.body_length)
             )
-            self._dicts_written[did] = True
+            self._dicts.append(pair.values.copy())
         var blk_start = Int64(self._out.tell())
         var eb = self._enc.encode(batch)
         self._out.write(Span(eb.msg))
