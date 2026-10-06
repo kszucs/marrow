@@ -131,7 +131,10 @@ class ConsoleProgress:
     points at a temp file and every terminal looks non-interactive.
     """
 
-    def __init__(self):
+    def __init__(self, live=True):
+        # Only one live line can own a terminal, so commands running side by
+        # side each take the plain start/finish pair instead.
+        self._live = live
         self._console = None
         self._progress = None
         self._usage = None
@@ -149,7 +152,7 @@ class ConsoleProgress:
         self._usage = _Usage()
         if stream is None:
             return
-        if stream.isatty():
+        if self._live and stream.isatty():
             # Start on a line of our own -- pytest is mid-way through writing
             # its per-file progress line, and appending to it reads as garbage.
             self._console.print()

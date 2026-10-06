@@ -189,6 +189,27 @@ def test_naming_a_gate_keeps_the_ratio_baseline(tmp_path):
     assert gates.resolve([]) == ["query_join", "query_streaming"]
 
 
+def test_runtime_gates_are_built_only_when_asked(tmp_path):
+    """They are the slowest builds and carry no floor; naming one still works."""
+    gates = gate_dir(tmp_path, "query_streaming", *Gates.RUNTIME)
+    assert gates.resolve([]) == ["query_streaming"]
+    assert gates.resolve([], runtime=True) == gates.available()
+    assert gates.resolve(["query_runtime"]) == ["query_runtime", "query_streaming"]
+
+
+def test_every_runtime_gate_names_a_real_program():
+    """A renamed program would otherwise silently rejoin the default sweep."""
+    gates = Gates(Repo(Path(__file__).parents[2]), None, None)
+    assert Gates.RUNTIME <= set(gates.available())
+
+
+def test_no_runtime_gate_has_a_floor():
+    """The CI gate builds what `baseline.json` records, and only AOT is held."""
+    gates = Gates(Repo(Path(__file__).parents[2]), None, None)
+    recorded = Baseline(gates.directory / "baseline.json")
+    assert not Gates.RUNTIME & set(recorded.gates)
+
+
 def test_an_unknown_gate_is_rejected_by_name(tmp_path):
     """A typo must not silently measure the baseline alone."""
     gates = gate_dir(tmp_path, "query_streaming")
@@ -271,6 +292,12 @@ def test_updating_rewrites_only_the_gates(tmp_path):
     assert after["_comment"] == "why these numbers are what they are"
 
 
+def test_floors_outside_the_named_gates_are_not_compared(tmp_path):
+    """A base commit's measurements may record a gate this checkout dropped."""
+    recorded = baseline(tmp_path, {"kept": 1_000, "dropped": 1_000})
+    assert [row[0] for row in recorded.check({"kept": 1_000}, ["kept"])] == ["kept"]
+
+
 def test_growth_exactly_at_the_threshold_is_not_a_regression(tmp_path):
     """The threshold is the largest tolerated growth, not the smallest rejected."""
     recorded = baseline(tmp_path, {"a": 1_000_000}, threshold=0.5)
@@ -328,10 +355,38 @@ def test_a_failed_build_leaves_no_stale_binary(tmp_path):
                 argv=(), returncode=1, stdout="", stderr="boom", elapsed=0.0
             )
 
-    gates = Gates(Repo(tmp_path), FailingToolchain(), None)
+    gates = Gates(Repo(tmp_path), FailingToolchain, None)
     assert gates.build_all(["query_x"]) == ["query_x"]
     assert not (directory / "query_x").exists()
     assert not (directory / "query_x_stripped").exists()
+
+
+def test_parallel_builds_report_exactly_the_failed_gates(tmp_path):
+    """Builds overlap, but the failure list keeps the sweep's order."""
+    from devkit.mojo import CommandResult
+
+    class Toolchain:
+        def build(self, source, out, options, label):
+            if Path(source).stem.startswith("bad"):
+                return CommandResult(
+                    argv=(), returncode=1, stdout="", stderr="boom", elapsed=0.0
+                )
+            Path(out).write_bytes(b"binary")
+            return CommandResult(
+                argv=(), returncode=0, stdout="", stderr="", elapsed=0.0
+            )
+
+    class Runner:
+        def run(self, argv, label):
+            return CommandResult(
+                argv=(), returncode=0, stdout="", stderr="", elapsed=0.0
+            )
+
+    names = ["bad_a", "good_a", "bad_b", "good_b", "bad_c"]
+    gate_dir(tmp_path, *names)
+    gates = Gates(Repo(tmp_path), Toolchain, Runner())
+    assert gates.build_all(names, jobs=4) == ["bad_a", "bad_b", "bad_c"]
+    assert (gates.directory / "good_b_stripped").exists()
 
 
 def test_marrow_compile_builds_a_query_the_way_the_gate_builds_one():

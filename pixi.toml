@@ -74,9 +74,9 @@ testing_data = { cmd = "git submodule update --init testing || echo 'testing/ no
 profile = "python -m devkit profile"
 package = "python -m devkit build package"
 publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
-# Builds the same SELECT/WHERE query via the comptime (AOT), hybrid, and
-# runtime (type-erased) relational layers, strips each, and compares sizes +
-# symbol counts -- see benchmarks/binary_size/README.md.
+# Builds the AOT gate programs, strips each, and compares sizes + symbol
+# counts; `--runtime` adds the runtime-lane gates -- see
+# benchmarks/binary_size/README.md.
 bench-size = { cmd = "python -m devkit bench size compare" }
 # The CI gate: build the recorded gates and fail if any grew past its
 # baseline `__text` size. `--update` re-records after an intentional change.

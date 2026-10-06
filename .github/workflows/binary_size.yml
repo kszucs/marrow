@@ -23,8 +23,8 @@ jobs:
   binary-size:
     name: binary size (macos, arm64)
     runs-on: macos-latest
-    # A cache miss on the base measurement means building the gates twice, at
-    # roughly 20 minutes a pass.
+    # A cache miss on the base measurement means building the gates twice.
+    # Two builds at a time: each peaks near 2 GB on a 7 GB runner.
     timeout-minutes: 90
     env:
       FORCE_COLOR: "1"
@@ -73,7 +73,7 @@ jobs:
       run: |
         git worktree add ../base "${{ steps.base.outputs.sha }}"
         pixi run -e dev python -m devkit bench size check \
-          --repo ../base --out base-size.json --measure-only
+          --repo ../base --out base-size.json --measure-only --jobs 2
 
     - name: Cache the base measurement
       if: steps.base-cache.outputs.cache-hit != 'true'
@@ -85,7 +85,7 @@ jobs:
     - name: Check binary-size gate
       run: |
         pixi run -e dev python -m devkit bench size check \
-          --baseline base-size.json --out head-size.json
+          --baseline base-size.json --out head-size.json --jobs 2
 
     - if: ${{ !cancelled() }}
       uses: ./.github/actions/mojo-cache

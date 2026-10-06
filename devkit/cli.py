@@ -10,6 +10,7 @@ inside the command that needs them, because the `dev` environment has neither.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -230,38 +231,60 @@ def size():
     """Measure the AOT lane's binary size."""
 
 
-def _gates(ctx):
+def _gates(ctx, jobs=1):
     """The gate programs, with a silent runner for nm/size/strip.
 
     Those are sub-second and there are hundreds of them; a progress display per
     call would bury the tables they exist to produce.  The *builds* still go
-    through the toolchain's own display.
+    through the toolchain's own display -- a plain line per build when several
+    run at once.
     """
     from .footprint import Gates
 
-    return Gates(
-        ctx.repo, ctx.toolchain, ProcessRunner(ctx.repo.root, SilentProgress())
-    )
+    def toolchain():
+        if jobs == 1:
+            return ctx.toolchain
+        return MojoToolchain(ctx.runner(ConsoleProgress(live=False)))
+
+    return Gates(ctx.repo, toolchain, ProcessRunner(ctx.repo.root, SilentProgress()))
+
+
+#: An AOT gate build peaks near 2 GB and keeps about one core busy.
+_jobs_option = click.option(
+    "--jobs",
+    "-j",
+    type=click.IntRange(min=1),
+    default=lambda: max(1, min(4, (os.cpu_count() or 1) // 2)),
+    show_default="half the cores, at most 4",
+    help="Gate programs to build at once.",
+)
 
 
 @size.command("compare")
 @click.argument("gates_wanted", metavar="[GATES]...", nargs=-1)
+@click.option(
+    "--runtime",
+    is_flag=True,
+    help="Also build the runtime-lane gates, the slowest builds by far.",
+)
+@_jobs_option
 @pass_context
-def size_compare(ctx, gates_wanted):
-    """Build every gate and report sizes, ratios and per-module symbol counts.
+def size_compare(ctx, gates_wanted, runtime, jobs):
+    """Build every AOT gate and report sizes, ratios and per-module symbol counts.
 
     Naming gates measures only those; the ratio baseline is always included.
-    A full sweep is every program in the gate directory, at -O3.
+    A full sweep is every AOT program in the gate directory, at -O3, plus the
+    runtime-lane programs with --runtime.
     """
     from .footprint import Report
 
-    gates = _gates(ctx)
+    gates = _gates(ctx, jobs)
     try:
-        names = gates.resolve(gates_wanted)
+        names = gates.resolve(gates_wanted, runtime)
     except ValueError as error:
         ctx.fail(str(error))
 
-    failed = gates.build_all(names)
+    failed = gates.build_all(names, jobs)
     measured = [name for name in names if name not in failed]
     Report().comparison(
         [gates.measure(name) for name in measured],
@@ -297,8 +320,9 @@ def size_compare(ctx, gates_wanted):
     is_flag=True,
     help="Measure and write --out, without comparing.",
 )
+@_jobs_option
 @pass_context
-def size_check(ctx, update, repo_path, baseline_path, out_path, measure_only):
+def size_check(ctx, update, repo_path, baseline_path, out_path, measure_only, jobs):
     """Fail if any recorded gate grew past its baseline `__text` size.
 
     The committed floor is a developer-machine record and is what a local run
@@ -314,7 +338,7 @@ def size_check(ctx, update, repo_path, baseline_path, out_path, measure_only):
     """
     from .footprint import Baseline, Report
 
-    gates = _gates(ctx)
+    gates = _gates(ctx, jobs)
     # The gate *list* always comes from this checkout: a gate this commit adds
     # is absent from the commit it descends from, and has nothing to compare to
     # yet rather than being a failure.
@@ -322,10 +346,10 @@ def size_check(ctx, update, repo_path, baseline_path, out_path, measure_only):
     names = list(reference.gates)
 
     if repo_path:
-        gates = _gates(Context(repo=Repo(repo_path), quiet=ctx.quiet))
+        gates = _gates(Context(repo=Repo(repo_path), quiet=ctx.quiet), jobs)
         names = [name for name in names if gates.source(name).exists()]
 
-    failed = gates.build_all(names)
+    failed = gates.build_all(names, jobs)
     if failed:
         ctx.fail(f"{', '.join(failed)} did not build")
 
@@ -343,7 +367,7 @@ def size_check(ctx, update, repo_path, baseline_path, out_path, measure_only):
     against = reference
     if baseline_path:
         against = Baseline(baseline_path, threshold_pct=reference.threshold_pct)
-    if Report().gate(against.check(measured), against.threshold_pct):
+    if Report().gate(against.check(measured, names), against.threshold_pct):
         sys.exit(1)
 
 

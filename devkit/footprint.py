@@ -20,6 +20,7 @@ import functools
 import json
 import shutil
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -209,7 +210,13 @@ class Gates:
     #: so it is named here; which gates *exist* is not, so they are discovered.
     BASELINE = "query_streaming"
 
+    #: Gates over the runtime lane, which has already accepted an interpreter
+    #: and is not held to a size floor.  They are also the slowest builds by
+    #: far, so a sweep measures them only when asked.
+    RUNTIME = frozenset({"query_dynvalue", "query_runtime", "query_streaming_agg"})
+
     def __init__(self, repo, toolchain, runner):
+        """*toolchain* makes a fresh toolchain per build, so builds can overlap."""
         self.directory = repo.footprint_dir
         self._toolchain = toolchain
         self._runner = runner
@@ -219,11 +226,15 @@ class Gates:
         """Whichever programs are in the gate directory, in report order."""
         return sorted(path.stem for path in self.directory.glob("*.mojo"))
 
-    def resolve(self, wanted):
-        """Narrow to *wanted*, always keeping the ratio baseline."""
+    def resolve(self, wanted, runtime=False):
+        """Narrow to *wanted*, always keeping the ratio baseline.
+
+        With nothing named, every AOT gate -- and the runtime-lane gates too
+        when *runtime* is set.  A runtime gate named explicitly is always built.
+        """
         available = self.available()
         if not wanted:
-            return available
+            return [name for name in available if runtime or name not in self.RUNTIME]
         unknown = set(wanted) - set(available)
         if unknown:
             raise ValueError(f"unknown gate(s): {', '.join(sorted(unknown))}")
@@ -250,16 +261,14 @@ class Gates:
 
     def build(self, name):
         """Build one gate at -O3 and leave a stripped copy beside it."""
-        # Anything read from the previous artefact is stale once it is gone.
-        self.binary.cache_clear()
-        self.stripped.cache_clear()
-        binary, stripped = self.binary(name), self.stripped(name)
+        binary = MachO(self.directory / name, self._runner)
+        stripped = MachO(self.directory / f"{name}_stripped", self._runner)
         # Remove the previous run's artifacts first: `mojo build` leaves them in
         # place when it fails, so measuring without this reports a stale
         # binary's size as if the failed build had succeeded.
         binary.path.unlink(missing_ok=True)
         stripped.path.unlink(missing_ok=True)
-        result = self._toolchain.build(
+        result = self._toolchain().build(
             self.source(name),
             binary.path,
             BuildOptions.for_size_gate(),
@@ -269,20 +278,26 @@ class Gates:
             raise RuntimeError(result.output)
         binary.strip_to(stripped.path)
 
-    def build_all(self, names):
-        """Build every gate; return the names that failed.
+    def build_all(self, names, jobs=1):
+        """Build every gate, *jobs* at a time; return the names that failed.
 
         One broken gate must not blind the rest of the sweep -- it used to abort
         on the first failure, so a single program left behind by an API change
         hid the numbers for every gate after it.  Callers still fail overall.
         """
-        failed = []
-        for name in names:
+        # Anything read from a previous artefact is stale once it is rebuilt.
+        self.binary.cache_clear()
+        self.stripped.cache_clear()
+
+        def built(name):
             try:
                 self.build(name)
+                return True
             except RuntimeError:
-                failed.append(name)
-        return failed
+                return False
+
+        with ThreadPoolExecutor(jobs) as pool:
+            return [name for name, ok in zip(names, pool.map(built, names)) if not ok]
 
     def measure(self, name):
         binary, stripped = self.binary(name), self.stripped(name)
@@ -333,10 +348,16 @@ class Baseline:
     def gates(self):
         return self._data["gates"]
 
-    def check(self, measured):
-        """`[(name, floor, measured, delta, pct, regressed)]`, in record order."""
+    def check(self, measured, names=None):
+        """`[(name, floor, measured, delta, pct, regressed)]`, in record order.
+
+        *names* narrows the floors compared: a base commit's measurements may
+        record gates this checkout no longer enforces.
+        """
         rows = []
         for name, floor in self.gates.items():
+            if names is not None and name not in names:
+                continue
             text = measured.get(name)
             if text is None:
                 # `size -m` printed no `__text` line, or the gate was never
