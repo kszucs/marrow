@@ -29,13 +29,13 @@ so each part gets tables of its own.
 """
 
 from ...views import BufferView
-from ..byteorder import LittleEndian
 from ..lz77 import LzCopy, match_length
 from .bits import BitWriter
 from .fse import MAX_WEIGHT, Alphabet, Distribution, FseEncoder
 from .headers import BLOCK_MAX, BlockHeader, LiteralsHeader, SequencesHeader
 from .huffman import HuffmanEncoder
 from .matcher import FastMatcher, SeqStore
+from ...codecs.byteorder import LittleEndian
 
 
 @always_inline

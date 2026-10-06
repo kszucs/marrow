@@ -30,19 +30,13 @@ from ..io import (
 from ..io.core import FOOTER_READ_SIZE
 from ..schema import Schema
 from ..tabular import RecordBatch, Table
-from ..utils import (
-    BigEndian,
-    CompressionLibs,
-    Crc32,
-    LittleEndian,
-    Snappy,
-    Zstd,
-)
+from ..utils import CompressionLibs, Crc32, Snappy, Zstd
 from .binary import AvroBytes, AvroCursor
 from .decoder import RecordDecoder
 from .encoder import RecordEncoder
 from .mapping import from_arrow, to_arrow
 from .schema import AvroSchema
+from ..codecs import BigEndian, LittleEndian
 
 comptime MAGIC = "Obj\x01"
 comptime SCHEMA_KEY = "avro.schema"
@@ -113,7 +107,7 @@ struct AvroCodec(Equatable, ImplicitlyCopyable, Movable, Writable):
             var body = src[: len(src) - 4]
             var out = List[UInt8]()
             Snappy.decompress(body, out)
-            var expected = BigEndian.u32(src, len(src) - 4)
+            var expected = BigEndian.fixed[DType.uint32](src, len(src) - 4)
             if Crc32.compute(out) != expected:
                 raise CorruptError("avro: snappy block checksum mismatch")
             return out^
@@ -132,7 +126,7 @@ struct AvroCodec(Equatable, ImplicitlyCopyable, Movable, Writable):
         elif self == Self.SNAPPY:
             var out = List[UInt8]()
             Snappy.compress(src, out)
-            BigEndian.put_u32(out, Crc32.compute(src))
+            BigEndian.append[DType.uint32](out, Crc32.compute(src))
             return out^
         raise self._unsupported()
 

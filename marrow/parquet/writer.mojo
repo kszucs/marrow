@@ -38,17 +38,21 @@ from .gearhash import gearhash_table
 
 
 from .codecs import (
-    Rle,
-    Plain,
+    ByteStreamSplitValues,
     Compression,
-    Dictionary,
+    DictionaryValues,
     Encoding,
+    PlainValues,
+    present_bytes,
+)
+from ..codecs import (
+    Bits,
     DeltaBinaryPacked,
     DeltaByteArray,
     DeltaLengthByteArray,
-    ByteStreamSplit,
+    Hybrid,
 )
-from ..utils import LittleEndian, Crc32
+from ..utils import Crc32
 from ..utils import CompressionLibs
 from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import (
@@ -73,6 +77,7 @@ from .format import (
     ColumnIndex,
     PageLocation,
 )
+from ..codecs import LittleEndian
 
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
 # A data page is flushed at whichever comes first: ~1 MiB of encoded value bytes
@@ -115,17 +120,19 @@ struct ColumnWriter(Movable):
         self.write_crc = write_crc
 
     def _encode_values(self, col: DynArray, mut body: List[UInt8]) raises:
-        """Dispatch on the leaf's Arrow type to the right `Plain` encoder (the
+        """Dispatch on the leaf's Arrow type to the right `PlainValues` encoder (the
         writer's mirror of the reader's decode dispatch)."""
         ref vt = self.leaf.dtype
         if vt == dt.bool_:
-            Plain.encode_bool(col.as_bool(), body)
+            PlainValues.encode_bool(col.as_bool(), body)
         elif vt.is_fixed_size_binary():
-            Plain.encode_fixed_size_binary(col.as_fixed_size_binary(), body)
+            PlainValues.encode_fixed_size_binary(
+                col.as_fixed_size_binary(), body
+            )
         elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
 
             def encode_bytes[A: BytesArray](arr: A) raises {mut body, imm}:
-                Plain.encode_bytes(arr, body)
+                PlainValues.encode_bytes(arr, body)
 
             col.dispatch_bytes(encode_bytes)
         elif has_plain_physical(vt):
@@ -133,7 +140,7 @@ struct ColumnWriter(Movable):
             def encode_fixed[
                 T: dt.PrimitiveType
             ](witness: T) raises {mut body, imm}:
-                Plain.encode_primitive[
+                PlainValues.encode_primitive[
                     phys=physical_type[T], big_endian=is_wide_decimal[T]
                 ](col.as_primitive[T](), body)
 
@@ -282,12 +289,13 @@ struct ColumnWriter(Movable):
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def _ints[
-        store: NumericType
-    ](arr: PrimitiveArray[store], mut out: List[Int64]) raises:
+    def _present[
+        store: NumericType, T: DType
+    ](arr: PrimitiveArray[store], mut out: List[Scalar[T]]) raises:
+        """The present values of `arr`, as `T`."""
         for i in range(arr.length):
             if arr.is_valid(i):
-                out.append(Int64(arr[i].value()))
+                out.append(arr[i].value().cast[T]())
 
     @staticmethod
     def can_delta(dtype: dt.DynType, encoding: Encoding) -> Bool:
@@ -327,11 +335,11 @@ struct ColumnWriter(Movable):
         """BYTE_STREAM_SPLIT-encode the present float values."""
         ref vt = self.leaf.dtype
         if vt == dt.float32:
-            ByteStreamSplit.encode[dt.Float32Type, DType.float32](
+            ByteStreamSplitValues.encode[dt.Float32Type, DType.float32](
                 col.as_float32(), out
             )
         elif vt == dt.float64:
-            ByteStreamSplit.encode[dt.Float64Type, DType.float64](
+            ByteStreamSplitValues.encode[dt.Float64Type, DType.float64](
                 col.as_float64(), out
             )
         else:
@@ -344,29 +352,37 @@ struct ColumnWriter(Movable):
     ](self, arr: A, mut out: List[UInt8]) raises:
         """Delta-encode a byte-array column per `self.encoding` (DELTA_BYTE_ARRAY
         or DELTA_LENGTH_BYTE_ARRAY)."""
+        var offsets = List[Int32]()
+        var data = List[UInt8]()
+        present_bytes(arr, offsets, data)
         if self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY:
-            DeltaLengthByteArray.encode(arr, out)
+            DeltaLengthByteArray.encode(Span(offsets), Span(data), out)
         else:  # DELTA_BYTE_ARRAY
-            DeltaByteArray.encode(arr, out)
+            DeltaByteArray.encode(Span(offsets), Span(data), out)
 
     def _encode_delta(self, col: DynArray, mut out: List[UInt8]) raises:
         """Delta-encode the present values per `self.encoding`."""
-        var ints = List[Int64]()
         ref vt = self.leaf.dtype
         if self.encoding == Encoding.DELTA_BINARY_PACKED:
-            if vt == dt.int32:
-                Self._ints(col.as_int32(), ints)
-            elif vt == dt.int64:
-                Self._ints(col.as_int64(), ints)
+            # In the physical type: INT32 for the narrower integers too, so
+            # the differences wrap as every other writer's do.
+            var int32s = List[Int32]()
+            if vt == dt.int64:
+                var int64s = List[Int64]()
+                Self._present(col.as_int64(), int64s)
+                DeltaBinaryPacked.encode_blocks(Span(int64s), out)
+            elif vt == dt.int32:
+                Self._present(col.as_int32(), int32s)
             elif vt == dt.int8:
-                Self._ints(col.as_int8(), ints)
+                Self._present(col.as_int8(), int32s)
             elif vt == dt.int16:
-                Self._ints(col.as_int16(), ints)
+                Self._present(col.as_int16(), int32s)
             else:
                 raise InternalError(
                     t"parquet: cannot DELTA_BINARY_PACKED type {vt}"
                 )
-            out.extend(Span(DeltaBinaryPacked.encode(ints)))
+            if vt != dt.int64:
+                DeltaBinaryPacked.encode_blocks(Span(int32s), out)
         else:  # a byte-string column -- see `can_delta`
 
             def delta_bytes[A: BytesArray](arr: A) raises {mut out, imm}:
@@ -513,10 +529,10 @@ struct ColumnWriter(Movable):
         else:
             var body = List[UInt8]()
             if self.leaf.max_rep >= 1:
-                LittleEndian.put_u32(body, len(rep_bytes))
+                LittleEndian.append[DType.uint32](body, UInt32(len(rep_bytes)))
                 body.extend(Span(rep_bytes))
             if self.leaf.max_def >= 1:
-                LittleEndian.put_u32(body, len(def_bytes))
+                LittleEndian.append[DType.uint32](body, UInt32(len(def_bytes)))
                 body.extend(Span(def_bytes))
             body.extend(Span(value_bytes))
             uncompressed_size = len(body)
@@ -595,7 +611,7 @@ struct ColumnWriter(Movable):
         var chunk_distinct = -1
         if encoding == Encoding.RLE_DICTIONARY:
             var dict_body = List[UInt8]()
-            var num_dict = Dictionary.encode(
+            var num_dict = DictionaryValues.encode(
                 self.leaf.dtype, values, dict_body, indices
             )
             if len(dict_body) > _DICT_PAGE_LIMIT:
@@ -605,7 +621,7 @@ struct ColumnWriter(Movable):
             else:
                 chunk_distinct = num_dict
                 if num_dict > 0:  # one bit even for a one-entry dictionary
-                    dict_width = max(1, Rle.bit_width(num_dict - 1))
+                    dict_width = max(1, Bits.width(UInt64(num_dict - 1)))
                 var d = self._write_dict_page(dict_body^, num_dict, out, codecs)
                 dict_page_offset = d[0]
                 total_uncompressed += d[1]
@@ -679,24 +695,23 @@ struct ColumnWriter(Movable):
             var rep_bytes = List[UInt8]()
             var def_bytes = List[UInt8]()
             if max_rep >= 1:
-                rep_bytes = Rle.encode(
-                    Self._sub(reps, i0, i), Rle.bit_width(max_rep)
+                var page_reps = Self._sub(reps, i0, i)
+                Hybrid.encode_runs(
+                    Span(page_reps), Bits.width(UInt64(max_rep)), rep_bytes
                 )
             if max_def >= 1:
-                def_bytes = Rle.encode(
-                    Self._sub(defs, i0, i), Rle.bit_width(max_def)
+                var page_defs = Self._sub(defs, i0, i)
+                Hybrid.encode_runs(
+                    Span(page_defs), Bits.width(UInt64(max_def)), def_bytes
                 )
 
             # value bytes for this page
             var value_bytes = List[UInt8]()
             if encoding == Encoding.RLE_DICTIONARY:
                 value_bytes.append(UInt8(dict_width))
-                value_bytes.extend(
-                    Span(
-                        Rle.encode_bitpacked(
-                            Self._sub(indices, p0, p), dict_width
-                        )
-                    )
+                var page_indices = Self._sub(indices, p0, p)
+                Hybrid.encode_packed(
+                    Span(page_indices), dict_width, value_bytes
                 )
             else:
                 var page_vals = values.slice(e0, e - e0)

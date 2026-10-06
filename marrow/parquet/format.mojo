@@ -19,7 +19,7 @@ from std.memory import bitcast
 
 from ..errors import CorruptError
 from .codecs import Encoding
-from ..utils import LittleEndian, Zigzag
+from ..codecs import Leb128, Zigzag
 
 
 # ---------------------------------------------------------------------------
@@ -96,17 +96,17 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
     def read_varint(mut self) raises CorruptError -> UInt64:
         """Read an unsigned LEB128 varint, advancing `pos`."""
         var value: UInt64
-        value, self.pos = LittleEndian.varint(self.data, self.pos)
+        value, self.pos = Leb128.read(self.data, self.pos)
         return value
 
     def read_i16(mut self) raises CorruptError -> Int16:
-        return Int16(Zigzag.decode(self.read_varint()))
+        return Int16(Zigzag.decode_value[DType.int64](self.read_varint()))
 
     def read_i32(mut self) raises CorruptError -> Int32:
-        return Int32(Zigzag.decode(self.read_varint()))
+        return Int32(Zigzag.decode_value[DType.int64](self.read_varint()))
 
     def read_i64(mut self) raises CorruptError -> Int64:
-        return Zigzag.decode(self.read_varint())
+        return Zigzag.decode_value[DType.int64](self.read_varint())
 
     def read_byte(mut self) raises CorruptError -> Int8:
         return Int8(self._u8())
@@ -258,16 +258,16 @@ struct ThriftCompactWriter(Movable):
         self.buf = List[UInt8]()
 
     def write_varint(mut self, var v: UInt64):
-        LittleEndian.put_varint(self.buf, v)
+        Leb128.write(self.buf, v)
 
     def write_i16(mut self, v: Int16):
-        self.write_varint(Zigzag.encode(Int64(v)))
+        self.write_varint(Zigzag.encode_value(Int64(v)))
 
     def write_i32(mut self, v: Int32):
-        self.write_varint(Zigzag.encode(Int64(v)))
+        self.write_varint(Zigzag.encode_value(Int64(v)))
 
     def write_i64(mut self, v: Int64):
-        self.write_varint(Zigzag.encode(v))
+        self.write_varint(Zigzag.encode_value(v))
 
     def write_double(mut self, v: Float64):
         var bits = UInt64(v.to_bits())

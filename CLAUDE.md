@@ -427,7 +427,7 @@ Rules:
 - Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for
   computation. No naked pointer arithmetic in kernel or array code.
 - **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`,
-  `c_data.mojo`, `utils/byteorder.mojo` and the layers that hand raw pointers
+  `c_data.mojo`, `codecs/byteorder.mojo` and the layers that hand raw pointers
   to a `dlopen`ed C library** — `utils/dylib.mojo` (the shared marshalling
   primitives), `utils/compression.mojo` with `parquet/reader.mojo` and
   `parquet/codecs.mojo` for the page codecs, and `io/opendal.mojo` for the
@@ -800,7 +800,8 @@ marrow/
 ├── execution.mojo        # ExecContext — threads, device, `stripe`, GPU_ENABLED
 ├── errors.mojo           # ArrowError + ErrorKind — the error taxonomy
 ├── io/                   # core (ByteSource/ByteSink), local, opendal, dispatch
-├── utils/                # byteorder, checksum, hashing, compression, datetime,
+├── codecs/               # byte order, value codecs, Cascade, Fused
+├── utils/                # checksum, hashing, compression, datetime,
 │                         #   dylib, uri, threads (ThreadPool, Thread, Mutex)
 │   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/

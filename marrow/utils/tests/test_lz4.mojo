@@ -28,7 +28,6 @@ from std.pathlib import Path
 from std.sys import stderr
 from std.testing import assert_equal, assert_true
 
-from ..byteorder import LittleEndian
 from ..compression import Codecs
 from ...errors import CorruptError, NotImplementedError
 from ..hashing import XxHash32
@@ -48,6 +47,7 @@ from .codec_data import (
     small_ints,
     words,
 )
+from ...codecs.byteorder import LittleEndian
 
 
 # ---------------------------------------------------------------------------

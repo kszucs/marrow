@@ -634,19 +634,12 @@ entries.
 
 | Bug | Where | What the input does |
 |---|---|---|
-| B9 | `parquet/codecs.mojo:741` `Dictionary.byte_offsets` | a byte-array dictionary page holding fewer values than `num_values` reads past the page (`utils/byteorder.mojo:75`) |
 | B10 | `parquet/reader.mojo:733` `PrimitiveLeafBuilder._scatter` | a page with more values than the chunk has rows **writes** past the values buffer (ASAN: heap-buffer-overflow, WRITE of size 8) |
-| B13 | `parquet/codecs.mojo:66` `Rle._run_value` | a truncated RLE run header reads past the data |
 | B16 | `utils/snappy.mojo` | a literal whose 4-byte length is `0xFFFFFFFF`: libsnappy wraps it to 0 and accepts, the native decoder refuses -- a parity gap, not a memory bug |
 | B-PR6 | `parquet/reader.mojo` `PrimitiveLeafBuilder.consume` | a fixed-width dictionary page with fewer bytes than `num_values` is copied past the page (ASAN only) |
-| B-PR7 | `parquet/reader.mojo:925` `ByteArrayLeafBuilder._place_dictionary` | a dictionary index past a byte-array dictionary slices past it |
-| B-PR8 | `parquet/codecs.mojo` `Rle.gather` | more values than rows, as B10, on the dictionary fast path: writes past the values buffer (ASAN) |
-| B-PR9 | `parquet/codecs.mojo:89` `Rle` | a dictionary-index bit width over 32 reaches the decoder unchecked |
-| B-PR10 | `utils/byteorder.mojo:186` `Rle.count_matches` | reads past the v1 definition levels it is given |
-| B-PR12 | `parquet/codecs.mojo:1056` | an RLE boolean page whose 4-byte length runs past the values |
 | B-PR13 | `parquet/reader.mojo` leaf builders | a huge positive `RowGroup.num_rows` is preallocated up front and aborts (an allocation, not corruption); the builders should grow as pages arrive |
 
-B8, B11, B12, B14, B15, B-PR11 and the footer's Thrift bugs (B-PR1 to
+B8, B9, B11-B15, B-PR7 to B-PR12 and the footer's Thrift bugs (B-PR1 to
 B-PR4) are fixed; their reproducers stay as `reject` entries.
 
 ## 2. Missing capabilities, in detail
@@ -1079,6 +1072,22 @@ differentiator hiding inside a table-stakes item.
     `Index.from_iceberg_manifest` beside `Index.from_parquet`
     (`marrow/expr/index.mojo`) -- is unwritten. So are field ids on the
     *Parquet* reader, which Iceberg's data files need the same way.
+- **Codec chains, beyond the first twelve.** `marrow/codecs/` chains
+  transforms (`Delta`, `Zigzag`, `Xor`) into at most one packer (`BitPack`,
+  `Varint`, `ByteStreamSplit`, `Constant`, `Rle`, `Dictionary`, `Frequency`,
+  `Hybrid`, `DeltaBinaryPacked`), at run time (`Cascade`) or compiled
+  (`Fused`), streaming a block at a time into one self-describing stream; byte strings take the
+  `BinaryCodec`s Parquet's byte-array pages use. What is missing:
+  - **More codecs**: patched FOR and floating-point codecs (ALP, Chimp,
+    pseudodecimal). Each is a `Transform` or a `Packer` and an arm in
+    `cascade.mojo`.
+  - **One dictionary builder.** `codecs.Dictionary`, Parquet's dictionary
+    pages and `kernels.DictionaryEncoder` each map values to dense codes.
+  - **A sampling picker**, as BtrBlocks has: trial encodes of a sample, the
+    smallest chain kept. The stream records each codec, so decoding needs no
+    change.
+  - **A consumer.** Nothing but Parquet's kernels uses the chains; a
+    marrow-native column format or spill format would.
 
 #### 2.10 Operability
 

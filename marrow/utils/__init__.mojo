@@ -3,14 +3,13 @@
 
 """Format-agnostic primitives shared across marrow.
 
-Each submodule is a self-contained block that depends on nothing in marrow — no
-arrays, no dtypes, no execution context — so it can be read, tested and lifted
-out on its own:
+Each submodule is a self-contained block that depends on nothing in marrow
+but its errors and `marrow.codecs`' byte order -- no arrays, no dtypes, no
+execution context -- so it can be read, tested and lifted out on its own:
 
 | module | what |
 |---|---|
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
-| `byteorder` | `LittleEndian`, `BigEndian`, `Zigzag` — byte, bit and LEB128-varint reads/writes |
 | `decimal` | `float_to_decimal` — the exact unscaled decimal of a double |
 | `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
@@ -25,7 +24,7 @@ out on its own:
 | `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
 | `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
 
-The names are re-exported here, so `from ..utils import LittleEndian` is the
+The names are re-exported here, so `from ..utils import Crc32` is the
 import everywhere; the submodule split is about where the code *lives*, not
 about making callers spell out a path.
 
@@ -43,7 +42,6 @@ whether there is a device.
 """
 
 from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
-from .byteorder import BigEndian, LittleEndian, Zigzag
 from .checksum import Crc32, Crc32c
 from .compression import CompressionLibs
 from .decimal import float_to_decimal

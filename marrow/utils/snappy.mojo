@@ -110,9 +110,10 @@ from std.sys.intrinsics import unlikely
 
 from ..errors import CorruptError, InvalidError
 from ..views import BufferView
-from .byteorder import LittleEndian
 from .checksum import Crc32c
 from .lz77 import LzCopy
+from ..codecs.byteorder import LittleEndian
+from ..codecs.byteorder import Leb128
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +750,7 @@ struct Snappy:
         var v: UInt64
         var end: Int
         try:
-            v, end = LittleEndian.varint(src, 0)
+            v, end = Leb128.read(src, 0)
         except e:
             raise CorruptError(t"snappy: length preamble: {e.message()}")
         if end > 5 or v > 0xFFFFFFFF:
@@ -771,7 +772,7 @@ struct Snappy:
         var start = len(dst)
         var end = start + Self.max_compressed_length(n)
         dst.reserve(end)
-        LittleEndian.put_varint(dst, UInt64(n))
+        Leb128.write(dst, UInt64(n))
         var header = len(dst) - start
         dst.resize(unsafe_uninit_length=end)
         var out = _Emitter(Span(dst)[start:], header)

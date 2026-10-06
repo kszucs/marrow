@@ -27,8 +27,8 @@ from std.bit import log2_floor
 from std.builtin.globals import global_constant
 
 from ...errors import CorruptError
-from ..byteorder import LittleEndian
 from .bits import BitWriter
+from ...codecs.bitpack import BitPack
 
 
 comptime MAX_WEIGHT = 11
@@ -455,8 +455,7 @@ struct Distribution(Movable):
     def _take(src: Span[UInt8, _], mut pos: Int, n: Int) -> Int:
         """`n` bits at bit `pos` of a forward stream; past its end they read
         as zero, and the reader checks `pos` once at the end."""
-        var word = LittleEndian.partial[DType.uint32](src, pos >> 3)
-        var v = Int(word >> UInt32(pos & 7)) & ((1 << n) - 1)
+        var v = Int(BitPack.get(src, pos, n))
         pos += n
         return v
 

@@ -53,7 +53,6 @@ from .arrays import (
     StructArray,
 )
 from .buffers import Bitmap, Buffer
-from .utils.byteorder import LittleEndian
 from .builders import (
     BinaryLikeBuilder,
     BinaryViewLikeBuilder,
@@ -109,6 +108,7 @@ from .dtypes import (
     null,
     string,
 )
+from .codecs import LittleEndian
 
 # ---------------------------------------------------------------------------
 # ArrowScalar trait

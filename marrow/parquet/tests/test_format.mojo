@@ -13,7 +13,6 @@ from ...parquet.reader import ParquetFile, read_page_index
 from ...io import BufferSource
 from ...errors import ArrowError, CorruptError, DynError, NotImplementedError
 from ...parquet.schema import MAX_SCHEMA_DEPTH, SchemaMapping
-from ...utils import Zigzag
 from ...parquet.format import (
     MAX_SKIP_DEPTH,
     Encoding,
@@ -34,6 +33,7 @@ from ...parquet.format import (
     TC_STOP,
     TC_BOOL_TRUE,
 )
+from ...codecs import Zigzag
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +43,9 @@ from ...parquet.format import (
 
 def test_zigzag_roundtrip() raises:
     for v in [Int64(0), 1, -1, 2, -2, 63, -64, 2147483647, -2147483648]:
-        assert_equal(Zigzag.decode(Zigzag.encode(v)), v)
+        assert_equal(
+            Zigzag.decode_value[DType.int64](Zigzag.encode_value(v)), v
+        )
 
 
 def test_varint_roundtrip() raises:

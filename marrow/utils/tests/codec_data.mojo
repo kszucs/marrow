@@ -9,10 +9,10 @@ pyarrow, and the codecs' command-line tools."""
 from std.python import Python, PythonObject
 from std.testing import assert_equal
 
-from ..byteorder import LittleEndian
 from ..compression import Codecs
 from ..lz4 import Lz4
 from ..testing import Rng
+from ...codecs.byteorder import LittleEndian
 
 
 # ---------------------------------------------------------------------------

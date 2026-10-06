@@ -24,7 +24,7 @@ from ...parquet import (
 )
 from ...parquet.format import ColumnMetaData, PhysicalType
 from ...parquet.schema import LeafColumn
-from ...parquet.statistics import Statistics
+from ...parquet.statistics import Statistics, bytes_less
 from ...tabular import Table
 from ...c_data import CArrowArrayStream
 
@@ -565,3 +565,28 @@ def test_string_bound_high_byte_ordering() raises:
         assert_equal(cs.max.value().as_string().to_string(), "é")
         assert_true(String("z") < String("é"))
         assert_true(StringSlice("z") < StringSlice("é"))
+
+
+def test_bytes_less_is_unsigned_lexicographic() raises:
+    """BYTE_ARRAY ordering: unsigned bytes, and a prefix sorts first."""
+    var a: List[UInt8] = [1, 2, 3]
+    var b: List[UInt8] = [1, 2, 4]
+    var a_again: List[UInt8] = [1, 2, 3]
+    assert_true(bytes_less(Span(a), Span(b)))
+    assert_false(bytes_less(Span(b), Span(a)))
+    assert_false(bytes_less(Span(a), Span(a_again)))
+
+    var short: List[UInt8] = [1, 2]
+    assert_true(bytes_less(Span(short), Span(a)))
+    assert_false(bytes_less(Span(a), Span(short)))
+
+    # 0x80 must compare above 0x7F, i.e. unsigned rather than signed
+    var high: List[UInt8] = [0x80]
+    var low: List[UInt8] = [0x7F]
+    assert_true(bytes_less(Span(low), Span(high)))
+    assert_false(bytes_less(Span(high), Span(low)))
+
+    var empty = List[UInt8]()
+    var empty_again = List[UInt8]()
+    assert_true(bytes_less(Span(empty), Span(low)))
+    assert_false(bytes_less(Span(empty), Span(empty_again)))

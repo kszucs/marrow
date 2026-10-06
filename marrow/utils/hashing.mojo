@@ -38,7 +38,7 @@ consuming `finish` inside hot loops, for no gain — `AHasher` and `Fnv1a` are
 different algorithms and neither can replace XXH64, which the Parquet spec
 mandates.
 
-Each is a namespace of static methods, and this module depends on `.byteorder`
+Each is a namespace of static methods, and this module depends on byte order
 alone — no arrays, no dtypes — so each algorithm can be read and checked against
 its reference vectors without the array layer in scope.
 
@@ -66,8 +66,7 @@ from std.bit import pop_count, rotate_bits_left
 from std.sys import get_defined_int
 from std.sys.info import is_gpu
 from std.hashlib._ahash import AHasher
-
-from .byteorder import LittleEndian
+from ..codecs.byteorder import LittleEndian
 
 
 @always_inline

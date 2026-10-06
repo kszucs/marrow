@@ -13,7 +13,7 @@ ends exactly at its first bit.
 from std.bit import count_leading_zeros
 
 from ...errors import CorruptError
-from ..byteorder import LittleEndian
+from ...codecs.byteorder import LittleEndian
 
 
 struct BitReader[m: Bool, //, o: Origin[mut=m]](TrivialRegisterPassable):

@@ -12,11 +12,11 @@ concatenated, with skippable frames among them.
 """
 
 from ...errors import CorruptError, DynError
-from ..byteorder import LittleEndian
 from ..hashing import XxHash64
 from .block import BlockDecoder
 from .encoder import BlockEncoder
 from .headers import BLOCK_MAX, BlockHeader, FrameHeader
+from ...codecs.byteorder import LittleEndian
 
 
 struct Zstd:

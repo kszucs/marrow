@@ -23,7 +23,6 @@ from std.sys import size_of
 from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
-from std.math import iota
 from std.memory import bitcast
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
@@ -37,45 +36,7 @@ from max.gpu.host import get_gpu_target
 from .errors import InvalidError, NotImplementedError
 from .buffers import Buffer, Bitmap, bulk_copy
 from .execution import ExecContext
-
-
-def _packed_uint_dtype[W: Int]() -> DType:
-    """Map a bool SIMD width to the unsigned integer DType that fits W bits."""
-    comptime assert W >= 8 and W % 8 == 0, "W must be a multiple of 8"
-    if W == 8:
-        return DType.uint8
-    elif W == 16:
-        return DType.uint16
-    elif W == 32:
-        return DType.uint32
-    else:
-        return DType.uint64
-
-
-@always_inline
-def _pack_bools[
-    W: Int
-](mask: SIMD[DType.bool, W]) -> SIMD[_packed_uint_dtype[W](), W]:
-    """Portable bit-pack: pack W bools into W-bit lanes.
-
-    Each lane ``i`` becomes ``mask[i].cast[UintW]() << i``.  The caller
-    uses ``.reduce_or()`` (for a single scalar result) or stores the
-    per-lane shifted values directly.
-
-    **Faster than `std.memory.pack_bits` here, and that is measured.**
-    `pack_bits` is a single `pop.bitcast` from `<W x i1>`, which looks
-    strictly better and is what an x86 `pmovmskb` compiles to. ARM has no
-    mask-move instruction, so the bitcast lowers to a worse sequence than
-    this one: swapping to it cost **+12-15% on all 18 `bench_pack_bools_*`
-    cases** (w8/w32/w64 x 1k..100m, Apple Silicon, 2026-08-16) with no case
-    improving. Do not "simplify" this to `pack_bits` without re-measuring on
-    the target you care about.
-
-    W must be 8, 16, 32, or 64.
-    """
-    comptime T = _packed_uint_dtype[W]()
-    var bits = mask.cast[T]()
-    return bits << iota[T, W]()
+from .codecs.bits import Bits
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +101,18 @@ struct BufferView[
         """A view of `span`'s elements."""
         self._data = span.unsafe_ptr()
         self._length = len(span)
+
+    @staticmethod
+    def from_bytes(
+        bytes: Span[UInt8, Self.origin]
+    ) -> BufferView[Self.T, Self.origin]:
+        """`bytes` read as `T` elements, as many as fit whole -- a page body,
+        say, holding values in their native layout. Reads are unaligned, as
+        a byte span promises no alignment."""
+        return BufferView[Self.T, Self.origin](
+            ptr=bytes.unsafe_ptr().unsafe_bitcast[Scalar[Self.T]](),
+            length=len(bytes) // size_of[Scalar[Self.T]](),
+        )
 
     # --- Sized ---
 
@@ -916,10 +889,11 @@ struct BitmapView[
 
         Each lane j is True iff bit (index + j) is set. ``_offset`` is applied.
 
-        The 4-byte `UInt32` is loaded unconditionally, so near the end of a
-        bitmap the window is **slid backwards** to finish on the view's last
-        live byte, and the distance it slid is added to the shift. Without
-        that, a load addressed at the final byte reads 3 bytes past it — and a
+        The window -- 4 bytes for up to 25 lanes, 8 beyond -- is loaded
+        unconditionally, so near the end of a bitmap it is **slid backwards**
+        to finish on the view's last live byte, and the distance it slid is
+        added to the shift. Without
+        that, a load addressed at the final byte reads past it — and a
         buffer whose byte extent is already a multiple of 64 has no padding at
         all (`Buffer._aligned_size` rounds *up* to 64), so those bytes are
         outside the allocation. 512 bits is the smallest case; a nullable
@@ -938,27 +912,35 @@ struct BitmapView[
         take a logical element index and return W elements. Reach for
         `load_bytes` only for whole-byte bitmap arithmetic.
         """
+        # The window: 32 bits while the lanes fit beside a sub-byte shift of
+        # up to 7, 64 bits past that, and for more than 57 lanes the byte
+        # after the window too.
+        comptime D = DType.uint32 if W <= 25 else DType.uint64
+        comptime N = size_of[Scalar[D]]()
         var abs_pos = self._offset + index
-        # `max(..., 0)` covers a view spanning fewer than 4 bytes, where there
-        # is nothing to slide back to. A marrow-owned allocation is at least 64
-        # bytes, so the load stays inside it; an imported FOREIGN buffer that
-        # small carries no such guarantee, and never did.
-        var base = min(
-            abs_pos >> 3, max(self._byte_extent() - size_of[UInt32](), 0)
-        )
+        # `max(..., 0)` covers a view spanning fewer than `N` bytes, where
+        # there is nothing to slide back to. A marrow-owned allocation is at
+        # least 64 bytes, so the load stays inside it; an imported FOREIGN
+        # buffer that small carries no such guarantee, and never did.
+        var base = min(abs_pos >> 3, max(self._byte_extent() - N, 0))
         var shift = abs_pos - (base << 3)
-        self._check_byte_read_range(base, size_of[UInt32]())
+        self._check_byte_read_range(base, N)
 
         var bits = (
             (self._data.unsafe_offset(base))
-            .unsafe_bitcast[UInt32]()
+            .unsafe_bitcast[Scalar[D]]()
             .unsafe_load[alignment=1]()
         )
-        bits >>= UInt32(shift)
+        bits >>= Scalar[D](shift)
+        comptime if W > 57:
+            # Not slid back, so `shift` is under 8 and the byte after the
+            # window holds lanes `64 - shift` and up.
+            if shift > 0 and base + N < self._byte_extent():
+                bits |= Scalar[D](self._data[unsafe_offset=base + N]) << Scalar[
+                    D
+                ](64 - shift)
 
-        return (
-            (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
-        ).cast[DType.bool]()
+        return Bits.unpack_lanes[D, W, 1](bits).cast[DType.bool]()
 
     @always_inline
     def load_bits[T: DType](self, index: Int) -> Scalar[T]:
@@ -1048,7 +1030,7 @@ struct BitmapView[
     ](self, bit_index: Int, val: SIMD[DType.bool, W],) where Self.mut:
         """Bit-pack W bools and store into the bitmap at ``bit_index``.
 
-        - W divisible by 8: single _pack_bools + bitcast store.
+        - W divisible by 8: single `Bits.pack_bools` + bitcast store.
         - W < 8: set/clear individual bits.
         """
         comptime assert (
@@ -1067,11 +1049,10 @@ struct BitmapView[
                 self._offset,
             )
             self._check_byte_range(bit_index >> 3, W // 8)
-            var packed = _pack_bools(val).reduce_or()
             var dst = self._data.unsafe_mut_cast[True]().unsafe_offset(
                 (bit_index >> 3)
             )
-            dst.unsafe_store(bitcast[DType.uint8, W // 8](packed))
+            dst.unsafe_store(Bits.pack_bools[W](val))
         else:
             var abs_pos = self._offset + bit_index
             var out = self._data.unsafe_mut_cast[True]()

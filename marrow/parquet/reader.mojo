@@ -19,7 +19,8 @@ from std.sys import size_of
 
 from ..errors import CorruptError, IndexError, InvalidError, NotImplementedError
 from ..arrays import ArrayData, BinaryViewLikeArray, DynArray
-from ..buffers import Buffer, Bitmap, bulk_copy
+from ..buffers import Buffer, Bitmap
+from ..views import BufferView
 from ..execution import ExecContext
 from ..builders import (
     BinaryBuilder,
@@ -49,9 +50,10 @@ from ..dtypes import (
     TemporalType,
 )
 
+from ..codecs import Bits, Hybrid
 from ..utils import CompressionLibs
-from .codecs import Encoding, Rle, Plain, Dictionary, Compression
-from ..utils import BigEndian, Epoch, LittleEndian, Crc32
+from .codecs import Compression, DictionaryValues, Encoding
+from ..utils import Epoch, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from ..io import (
     FOOTER_READ_SIZE,
@@ -81,6 +83,7 @@ from .format import (
     PageType,
     PhysicalType,
 )
+from ..codecs import BigEndian, LittleEndian
 
 
 # ---------------------------------------------------------------------------
@@ -372,16 +375,21 @@ struct PageReader[o: Origin[mut=False]](Movable):
         if leveled:
             var levels = _v1_levels(body, cursor)
             cursor += 4 + len(levels)
-            reps = Rle.decode(
-                levels, Rle.bit_width(self.leaf.max_rep), num_values
+            reps = List[Int32]()
+            _ = Hybrid.decode_runs(
+                levels,
+                Bits.width(UInt64(self.leaf.max_rep)),
+                num_values,
+                reps,
             )
         if self.leaf.max_def >= 1:
-            var bw = Rle.bit_width(self.leaf.max_def)
+            var bw = Bits.width(UInt64(self.leaf.max_def))
             var levels = _v1_levels(body, cursor)
             cursor += 4 + len(levels)
             if leveled:
                 # nested columns need the full def levels to rebuild offsets
-                defs = Rle.decode(levels, bw, num_values)
+                defs = List[Int32]()
+                _ = Hybrid.decode_runs(levels, bw, num_values, defs)
                 var present = 0
                 for d in defs:
                     if Int(d) == self.leaf.max_def:
@@ -390,11 +398,12 @@ struct PageReader[o: Origin[mut=False]](Movable):
             else:
                 # flat: count present in O(1) for the all-present run; only
                 # materialize the level list when there are actually nulls.
-                num_present = Rle.count_matches(
-                    levels, bw, num_values, Int32(self.leaf.max_def)
+                num_present = Hybrid.count_matches(
+                    levels, bw, num_values, UInt64(self.leaf.max_def)
                 )
                 if num_present != num_values:
-                    defs = Rle.decode(levels, bw, num_values)
+                    defs = List[Int32]()
+                    _ = Hybrid.decode_runs(levels, bw, num_values, defs)
         return Page(
             body=body,
             num_values=num_values,
@@ -501,20 +510,24 @@ struct PageReader[o: Origin[mut=False]](Movable):
                 self.leaf.max_rep >= 1
                 and dph2.repetition_levels_byte_length > 0
             ):
-                reps = Rle.decode(
+                reps = List[Int32]()
+                _ = Hybrid.decode_runs(
                     body[0 : dph2.repetition_levels_byte_length],
-                    Rle.bit_width(self.leaf.max_rep),
+                    Bits.width(UInt64(self.leaf.max_rep)),
                     dph2.num_values,
+                    reps,
                 )
             var cursor = dph2.repetition_levels_byte_length
             if (
                 self.leaf.max_def >= 1
                 and dph2.definition_levels_byte_length > 0
             ):
-                defs = Rle.decode(
+                defs = List[Int32]()
+                _ = Hybrid.decode_runs(
                     body[cursor : cursor + dph2.definition_levels_byte_length],
-                    Rle.bit_width(self.leaf.max_def),
+                    Bits.width(UInt64(self.leaf.max_def)),
                     dph2.num_values,
+                    defs,
                 )
             # Present values are the levels at max_def. The header's
             # `num_nulls` is no substitute under a list: writers disagree on
@@ -598,7 +611,7 @@ def _v1_levels[
     little-endian length, then that many bytes of RLE."""
     if cursor + 4 > len(body):
         raise CorruptError("parquet: data page ends inside a level length")
-    var length = LittleEndian.u32(body, cursor)
+    var length = Int(LittleEndian.fixed[DType.uint32](body, cursor))
     if length > len(body) - cursor - 4:
         raise CorruptError(
             t"parquet: data page levels of {length} bytes run past the page"
@@ -671,6 +684,14 @@ trait LeafBuilder(Deinitable, Movable):
         ...
 
 
+@no_inline
+def _short_page() raises:
+    """One raise for every leaf builder's check that a page holds the values
+    its header counts: the check is copied into each value type's builder,
+    the error once."""
+    raise CorruptError("parquet: a page holds fewer values than it says")
+
+
 struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
     LeafBuilder
 ):
@@ -719,7 +740,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
     def _scatter(
         mut self,
         page: Page,
-        present: Pointer[Scalar[Self.store_dt], _],
+        present: BufferView[Self.store_dt, _],
         runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """Place `page.num_present` contiguous decoded values into the output
@@ -728,12 +749,11 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         the validity bitmap. With `runs`, only the rows they select are placed
         (the page-boundary partial-page path). Every encoding funnels its decoded
         present values through here."""
-        var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if not runs and page.all_present():
-            bulk_copy(
-                dest=vptr.unsafe_offset(self.wpos),
-                src=present,
-                count=page.num_present,
+            if page.num_present > len(present):
+                _short_page()
+            self.values.view[Self.store_dt](self.wpos).copy_from(
+                present, page.num_present
             )
             if self.has_bitmap:
                 self.bitmap.set_range(self.wpos, page.num_present, True)
@@ -744,15 +764,15 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         def place(
             present_here: Bool, selected: Bool, vi: Int
         ) raises {mut self, imm}:
-            # Derived here, not captured: `vptr` traces to `self.values`, so a
-            # captured copy would alias the mut capture of `self`.
-            var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
+            # Derived here, not captured: the view traces to `self.values`, so
+            # a captured copy would alias the mut capture of `self`.
+            var out = self.values.view[Self.store_dt]()
             if selected:
                 if present_here:
-                    vptr[unsafe_offset=self.wpos] = present[unsafe_offset=vi]
+                    out.unsafe_set(self.wpos, present[vi])
                     self.bitmap.set(self.wpos)
                 else:
-                    vptr[unsafe_offset=self.wpos] = 0
+                    out.unsafe_set(self.wpos, 0)
                     self.null_count += 1
                 self.wpos += 1
 
@@ -762,14 +782,11 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         comptime PW = size_of[Scalar[Self.phys_dt]]()
         if page.dictionary:
             comptime if Self.SAME:
-                self.dict.resize(unsafe_uninit_length=page.num_values)
-                bulk_copy(
-                    dest=self.dict.unsafe_ptr(),
-                    src=page.body.unsafe_ptr().unsafe_bitcast[
-                        Scalar[Self.store_dt]
-                    ](),
-                    count=page.num_values,
-                )
+                var stored = BufferView[Self.store_dt].from_bytes(page.body)
+                if page.num_values > len(stored):
+                    _short_page()
+                self.dict.clear()
+                self.dict.extend(stored.as_span()[: page.num_values])
             else:
                 var span = page.body
                 for i in range(page.num_values):
@@ -780,12 +797,10 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         if page.is_plain() and Self.SAME:
             # fast path: PLAIN stores only present values, contiguous and already
             # the store width — scatter straight from the page (no copy).
-            self._scatter(
-                page, vspan.unsafe_ptr().unsafe_bitcast[Scalar[Self.store_dt]]()
-            )
+            self._scatter(page, BufferView[Self.store_dt].from_bytes(vspan))
         elif page.is_dictionary() and page.all_present():
             # fast path: fused index-decode + gather straight to the output.
-            Rle.gather[Self.store_dt](
+            DictionaryValues.gather[Self.store_dt](
                 vspan[1:],
                 Int(vspan[0]),
                 page.num_values,
@@ -801,7 +816,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             page.encoding.decode_primitive[Self.store_dt, Self.phys_dt](
                 page.values(), page.num_present, self.dict, present
             )
-            self._scatter(page, present.unsafe_ptr())
+            self._scatter(page, BufferView(Span(present)))
 
     def consume_selected(
         mut self, var page: Page, runs: List[Tuple[Int, Int]]
@@ -814,7 +829,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         page.encoding.decode_primitive[Self.store_dt, Self.phys_dt](
             page.values(), page.num_present, self.dict, present
         )
-        self._scatter(page, present.unsafe_ptr(), runs.copy())
+        self._scatter(page, BufferView(Span(present)), runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         return _finish_primitive(
@@ -850,7 +865,8 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
     def _scatter_values(
         mut self,
         page: Page,
-        values: List[List[UInt8]],
+        offsets: List[Int32],
+        data: List[UInt8],
         runs: Optional[List[Tuple[Int, Int]]] = None,
     ) raises:
         """Append the decoded present values honoring definition levels — the
@@ -862,7 +878,9 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
         ) raises {mut self, imm}:
             if selected:
                 if present_here:
-                    self._append(Span(values[vi]))
+                    self._append(
+                        Span(data)[Int(offsets[vi]) : Int(offsets[vi + 1])]
+                    )
                 else:
                     self.builder.append_null()
 
@@ -884,7 +902,7 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
             present_here: Bool, selected: Bool, vi: Int
         ) raises {mut self, mut bpos, imm}:
             if present_here:
-                var n = LittleEndian.u32(vspan, bpos)
+                var n = Int(LittleEndian.fixed[DType.uint32](vspan, bpos))
                 bpos += 4
                 if bpos + Int(n) > len(vspan):
                     raise CorruptError(
@@ -906,10 +924,16 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
     ) raises:
         """Dictionary indices, each value copied straight out of the
         dictionary page's bytes -- once, into storage sized up front."""
-        var indices = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+        var indices = List[Int32]()
+        _ = Hybrid.decode_runs(
+            vspan[1:], Int(vspan[0]), page.num_present, indices
+        )
         var total = 0
         for i in range(len(indices)):
-            total += self.dict_len[Int(indices[i])]
+            var idx = Int(indices[i])
+            if idx < 0 or idx >= len(self.dict_len):
+                raise CorruptError("parquet: dictionary index out of range")
+            total += self.dict_len[idx]
         self.builder.reserve(page.num_values)
         self.builder.reserve_bytes(total)
 
@@ -934,7 +958,7 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
-            Dictionary.decode_page_bytes(
+            DictionaryValues.decode_page_bytes(
                 page.body,
                 page.num_values,
                 self.dict_body,
@@ -954,14 +978,18 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
             self._place_dictionary(page, vspan)
         else:
             # dictionary and DELTA_* share one decoder with the nested path.
-            var values = page.encoding.decode_bytes(
+            var offsets: List[Int32] = [0]
+            var data = List[UInt8]()
+            page.encoding.decode_bytes(
                 page.values(),
                 page.num_present,
                 self.dict_body,
                 self.dict_off,
                 self.dict_len,
+                offsets,
+                data,
             )
-            self._scatter_values(page, values)
+            self._scatter_values(page, offsets, data)
 
     def consume_selected(
         mut self, var page: Page, runs: List[Tuple[Int, Int]]
@@ -972,14 +1000,18 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
         elif page.encoding.is_dictionary():
             self._place_dictionary(page, vspan, runs.copy())
         else:
-            var values = page.encoding.decode_bytes(
+            var offsets: List[Int32] = [0]
+            var data = List[UInt8]()
+            page.encoding.decode_bytes(
                 page.values(),
                 page.num_present,
                 self.dict_body,
                 self.dict_off,
                 self.dict_len,
+                offsets,
+                data,
             )
-            self._scatter_values(page, values, runs.copy())
+            self._scatter_values(page, offsets, data, runs.copy())
 
     def finish(deinit self) raises -> DynArray:
         var b = self.builder^
@@ -1035,7 +1067,7 @@ struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
             # The dictionary's bytes, out of the page once per chunk.
             self.dict_bytes = Self._owned(page.body)
             self.dict_buffer = -1
-            Dictionary.byte_offsets(
+            DictionaryValues.byte_offsets(
                 page.body, page.num_values, self.dict_off, self.dict_len
             )
             return
@@ -1055,7 +1087,7 @@ struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
                 present_here: Bool, selected: Bool, vi: Int
             ) raises {mut self, mut at, mut base, mut bpos, imm}:
                 if present_here:
-                    var n = LittleEndian.u32(vspan, bpos)
+                    var n = Int(LittleEndian.fixed[DType.uint32](vspan, bpos))
                     bpos += 4
                     if selected:
                         if at < 0 and n > Self.INLINE_SIZE:
@@ -1077,7 +1109,10 @@ struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
 
             page.scatter(self.max_def, runs, place_plain)
         elif page.encoding.is_dictionary():
-            var indices = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+            var indices = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), page.num_present, indices
+            )
 
             def place_dict(
                 present_here: Bool, selected: Bool, vi: Int
@@ -1101,12 +1136,16 @@ struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
 
             page.scatter(self.max_def, runs, place_dict)
         else:
-            var values = page.encoding.decode_bytes(
+            var offsets: List[Int32] = [0]
+            var data = List[UInt8]()
+            page.encoding.decode_bytes(
                 vspan,
                 page.num_present,
                 List[UInt8](),
                 self.dict_off,
                 self.dict_len,
+                offsets,
+                data,
             )
 
             def place_copied(
@@ -1115,7 +1154,11 @@ struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
                 if selected:
                     if present_here:
                         self.builder.append(
-                            StringSlice(unsafe_from_utf8=Span(values[vi]))
+                            StringSlice(
+                                unsafe_from_utf8=Span(data)[
+                                    Int(offsets[vi]) : Int(offsets[vi + 1])
+                                ]
+                            )
                         )
                     else:
                         self.builder.append_null()
@@ -1220,7 +1263,10 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         var decoded = List[UInt8]()
         var use_decoded = False
         if is_dict:
-            idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+            idx = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), page.num_present, idx
+            )
         elif not page.is_plain():
             decoded = page.encoding.decode_flba(
                 vspan, page.num_present, self.width
@@ -1288,7 +1334,10 @@ struct Int96LeafBuilder(LeafBuilder):
         var idx = List[Int32]()
         var is_dict = page.is_dictionary()
         if is_dict:
-            idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+            idx = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), page.num_present, idx
+            )
         elif not page.is_plain():
             raise NotImplementedError("parquet: unsupported INT96 encoding")
 
@@ -1349,7 +1398,10 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
         var decoded = List[UInt8]()
         var use_decoded = False
         if is_dict:
-            idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+            idx = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), page.num_present, idx
+            )
         elif not page.is_plain():
             decoded = page.encoding.decode_flba(
                 vspan, page.num_present, self.width
@@ -1680,7 +1732,7 @@ struct _PrimitiveSink[T: NumericType, phys: DType](LeveledSink, Movable):
     var builder: PrimitiveBuilder[Self.T]
 
     def handle_dict(mut self, pg: Page) raises:
-        Dictionary.decode_page_primitive[Self.T.native, Self.phys](
+        DictionaryValues.decode_page_primitive[Self.T.native, Self.phys](
             pg.body, pg.num_values, self.dict
         )
 
@@ -1702,32 +1754,38 @@ struct _BytesSink[B: BytesBuilder](LeveledSink, Movable):
     var dict_body: List[UInt8]
     var dict_off: List[Int]
     var dict_len: List[Int]
-    var values: List[List[UInt8]]
+    var value_offsets: List[Int32]
+    var value_data: List[UInt8]
     var indices: List[Int32]
     """A dictionary-encoded page's indices; the values are read out of the
     dictionary as they are placed, never materialised per row."""
     var builder: Self.B
 
     def handle_dict(mut self, pg: Page) raises:
-        Dictionary.decode_page_bytes(
+        DictionaryValues.decode_page_bytes(
             pg.body, pg.num_values, self.dict_body, self.dict_off, self.dict_len
         )
 
     def decode_present(mut self, pg: Page) raises:
-        self.values.clear()
+        self.value_offsets.clear()
+        self.value_offsets.append(0)
+        self.value_data.clear()
         self.indices.clear()
         var vspan = pg.values()
         if pg.encoding.is_dictionary():
-            self.indices = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+            self.indices = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), pg.num_present, self.indices
+            )
         else:
-            self.values.extend(
-                pg.encoding.decode_bytes(
-                    vspan,
-                    pg.num_present,
-                    self.dict_body,
-                    self.dict_off,
-                    self.dict_len,
-                )
+            pg.encoding.decode_bytes(
+                vspan,
+                pg.num_present,
+                self.dict_body,
+                self.dict_off,
+                self.dict_len,
+                self.value_offsets,
+                self.value_data,
             )
 
     def place_present(mut self, vi: Int) raises:
@@ -1743,7 +1801,13 @@ struct _BytesSink[B: BytesBuilder](LeveledSink, Movable):
             )
         else:
             self.builder.append(
-                StringSlice(unsafe_from_utf8=Span(self.values[vi]))
+                StringSlice(
+                    unsafe_from_utf8=Span(self.value_data)[
+                        Int(self.value_offsets[vi]) : Int(
+                            self.value_offsets[vi + 1]
+                        )
+                    ]
+                )
             )
 
     def place_null(mut self) raises:
@@ -1792,7 +1856,10 @@ struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
         self.present.clear()
         var vspan = pg.values()
         if pg.is_dictionary():
-            var idx = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+            var idx = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), pg.num_present, idx
+            )
             for i in range(pg.num_present):
                 self.present.append(self.dict[Int(idx[i])])
         elif pg.is_plain():
@@ -1837,7 +1904,10 @@ struct _FsbSink(LeveledSink, Movable):
         self.present.clear()
         var vspan = pg.values()
         if pg.is_dictionary():
-            var idx = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+            var idx = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), pg.num_present, idx
+            )
             for i in range(pg.num_present):
                 var o = Int(idx[i]) * self.width
                 self.present.append(
@@ -1878,7 +1948,10 @@ struct _Int96Sink(LeveledSink, Movable):
         self.present.clear()
         var vspan = pg.values()
         if pg.is_dictionary():
-            var idx = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+            var idx = List[Int32]()
+            _ = Hybrid.decode_runs(
+                vspan[1:], Int(vspan[0]), pg.num_present, idx
+            )
             for i in range(pg.num_present):
                 self.present.append(self.dict[Int(idx[i])])
         elif pg.is_plain():
@@ -2106,7 +2179,8 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
             List[UInt8](),
             List[Int](),
             List[Int](),
-            List[List[UInt8]](),
+            List[Int32](),
+            List[UInt8](),
             List[Int32](),
             builder^,
         )

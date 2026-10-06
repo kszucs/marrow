@@ -18,8 +18,8 @@ encoder share one definition of every format.
 from std.bit import log2_floor
 
 from ...errors import CorruptError, DynError, NotImplementedError
-from ..byteorder import LittleEndian
 from .fse import Alphabet
+from ...codecs.byteorder import LittleEndian
 
 
 comptime BLOCK_MAX = 1 << 17
@@ -153,9 +153,7 @@ struct BlockHeader(ImplicitlyCopyable, Movable):
 
     def write_at(self, mut out: List[UInt8], at: Int):
         """Write the header over the `SIZE` bytes reserved for it at `at`."""
-        var v = self._value()
-        for k in range(Self.SIZE):
-            out[at + k] = UInt8((v >> (8 * k)) & 0xFF)
+        LittleEndian.put_le_at(out, at, UInt64(self._value()), Self.SIZE)
 
 
 @fieldwise_init
@@ -280,9 +278,7 @@ struct LiteralsHeader(ImplicitlyCopyable, Movable):
 
     def write_at(self, mut out: List[UInt8], at: Int):
         """Write the header over the bytes reserved for it at `at`."""
-        var v = self._value()
-        for k in range(self.header):
-            out[at + k] = UInt8((v >> (8 * k)) & 0xFF)
+        LittleEndian.put_le_at(out, at, UInt64(self._value()), self.header)
 
 
 @fieldwise_init

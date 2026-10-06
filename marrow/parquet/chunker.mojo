@@ -169,7 +169,7 @@ struct ContentDefinedChunker(Movable):
         """Feed a fixed-width value as its little-endian storage bytes.
 
         `as_bytes` reads the raw bit pattern for any `DType`, which is the
-        same primitive `Plain.encode_primitive` and `ColumnWriter._hash_prim`
+        same primitive `PlainValues.encode_primitive` and `ColumnWriter._hash_prim`
         already serialize a scalar with -- so floats need no special case and
         the 16- and 32-byte decimal widths come for free.
         """

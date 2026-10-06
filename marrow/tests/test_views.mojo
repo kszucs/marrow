@@ -637,6 +637,34 @@ def test_bitmapview_load_at_a_62_mod_64_extent() raises:
     assert_false(tail[0])
 
 
+def _check_load_every_position[W: Int](view: BitmapView[_]) raises:
+    for i in range(len(view) - W + 1):
+        var lanes = view.load[W](i)
+        for j in range(W):
+            assert_equal(lanes[j], view.test(i + j), String("W=", W, " i=", i))
+
+
+def test_bitmapview_load_every_width_and_position() raises:
+    """Every lane of `load[W]` at every position, at the widths CPUs use --
+    including 32 and 64, wider than one 32-bit window holds beside a sub-byte
+    shift -- over sub-byte view offsets and up to the slid-back tail."""
+    var bits = 1003
+    var bm = Bitmap.alloc_zeroed(bits)
+    var x = UInt64(0x9E3779B97F4A7C15)
+    for i in range(bits):
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        if x & 1 == 1:
+            bm.set(i)
+    for offset in [0, 3, 8, 13]:
+        var view = bm.view(offset, bits - offset)
+        _check_load_every_position[8](view)
+        _check_load_every_position[16](view)
+        _check_load_every_position[32](view)
+        _check_load_every_position[64](view)
+
+
 def test_bitmapview_pext() raises:
     """Extracts and packs bits at mask=1 positions via pext."""
     var bm = Bitmap.alloc_zeroed(64)

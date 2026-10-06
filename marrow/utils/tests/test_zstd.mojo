@@ -32,7 +32,6 @@ from std.testing import assert_true
 
 from ...errors import CorruptError, NotImplementedError
 from ...views import BufferView
-from ..byteorder import LittleEndian
 from ..compression import Codecs
 from ..testing import Rng, ScratchDir
 from ..zstd import Zstd
@@ -51,6 +50,7 @@ from .codec_data import (
     words,
     write_file,
 )
+from ...codecs.byteorder import LittleEndian
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,6 @@ of a larger buffer filled with 0xA5, and the bytes past `n` must survive.
 from std.sys import stderr
 from std.testing import assert_equal, assert_raises, assert_true
 
-from ..byteorder import LittleEndian
 from ..compression import CompressionLibs
 from ..snappy import Snappy
 from ..testing import Rng
@@ -39,6 +38,8 @@ from .codec_data import (
     small_ints,
     words,
 )
+from ...codecs.byteorder import LittleEndian
+from ...codecs.byteorder import Leb128
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +183,7 @@ def test_utils_snappy_max_compressed_length() raises:
 def _stream(n: Int) -> List[UInt8]:
     """A stream header declaring `n` bytes, for tags to follow."""
     var s = List[UInt8]()
-    LittleEndian.put_varint(s, UInt64(n))
+    Leb128.write(s, UInt64(n))
     return s^
 
 
@@ -491,7 +492,7 @@ def test_utils_snappy_pair_decodes_every_shape_pairing() raises:
 def _copy_tag_after(stream: List[UInt8], pos: Int) raises -> Int:
     """Where the first copy-1 or copy-2 tag at or past `pos` sits, found by
     walking the tags from the preamble."""
-    var ip = LittleEndian.varint(Span(stream), 0)[1]
+    var ip = Leb128.read(Span(stream), 0)[1]
     while ip < len(stream):
         var c = Int(stream[ip])
         var kind = c & 3

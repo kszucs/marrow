@@ -20,9 +20,9 @@ again.
 from std.bit import bit_width
 
 from ...views import BufferView
-from ..byteorder import LittleEndian
 from ..lz77 import LzCopy, match_length
 from .block import RepeatOffsets
+from ...codecs.byteorder import LittleEndian
 
 
 struct SeqStore[lo: MutOrigin, so: MutOrigin](TrivialRegisterPassable):

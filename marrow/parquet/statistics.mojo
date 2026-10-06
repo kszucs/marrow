@@ -19,7 +19,6 @@ from ..arrays import (
     PrimitiveArray,
     BytesArray,
 )
-from ..utils import BigEndian, LittleEndian
 from ..scalars import (
     PrimitiveScalar,
     DynScalar,
@@ -47,7 +46,6 @@ from ..scalars import (
     Decimal256Scalar,
     FixedSizeBinaryScalar,
 )
-from .codecs import Plain
 from .format import PhysicalType
 from .schema import (
     LeafColumn,
@@ -56,6 +54,17 @@ from .schema import (
     is_wide_decimal,
     has_plain_physical,
 )
+from ..codecs import BigEndian, LittleEndian
+
+
+def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
+    """Unsigned byte-wise lexicographic `a < b` -- BYTE_ARRAY ordering, where
+    a prefix sorts first."""
+    var n = min(len(a), len(b))
+    for i in range(n):
+        if a[i] != b[i]:
+            return a[i] < b[i]
+    return len(a) < len(b)
 
 
 struct Statistics:
@@ -163,9 +172,9 @@ struct Statistics:
             hi = List[UInt8](v)
             seen = True
         else:
-            if LittleEndian.bytes_less(v, Span(lo)):
+            if bytes_less(v, Span(lo)):
                 lo = List[UInt8](v)
-            if LittleEndian.bytes_less(Span(hi), v):
+            if bytes_less(Span(hi), v):
                 hi = List[UInt8](v)
 
     @staticmethod

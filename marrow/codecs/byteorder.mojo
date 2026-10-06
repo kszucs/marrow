@@ -1,13 +1,11 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Byte, bit and varint primitives.
+"""Byte order: fixed-width values as little- and big-endian bytes.
 
-The low-level serialization helpers shared by the Arrow IPC (FlatBuffers),
-Parquet (Thrift / page) and Avro codecs. Fixed-width scalars are read and written as
-little-endian bytes independent of the host byte order: the
-`from_bytes[big_endian=False]` read and the shift/mask write both assemble LE
-bytes numerically, so no host byteswap is needed.
+The fixed-width reads and writes every format in marrow goes through -- Arrow
+IPC, Parquet, Avro, the compressors and the hashes. Values are read and written
+as little-endian bytes whatever the host's byte order.
 """
 
 from std.bit import byte_swap
@@ -17,8 +15,7 @@ from ..errors import CorruptError
 
 
 struct LittleEndian:
-    """Little-endian byte, bit, and LEB128-varint reads/writes over a byte span.
-    """
+    """Little-endian byte and LEB128-varint reads/writes over a byte span."""
 
     @staticmethod
     def fixed[T: DType](data: Span[UInt8, _], pos: Int) -> Scalar[T]:
@@ -127,25 +124,29 @@ struct LittleEndian:
             buf.append((val >> Scalar[T](i * 8)).cast[DType.uint8]())
 
     @staticmethod
-    def u32(body: Span[UInt8, _], off: Int) -> Int:
-        return Int(Self.fixed[DType.uint32](body, off))
-
-    @staticmethod
-    def put_u32(mut out: List[UInt8], v: Int):
-        Self.append[DType.uint32](out, UInt32(v))
-
-    @staticmethod
     def put_le(mut out: List[UInt8], bits: UInt64, width: Int):
         """Append the low `width` bytes of `bits`, least-significant first."""
         for i in range(width):
             out.append(UInt8((bits >> UInt64(i * 8)) & 0xFF))
 
     @staticmethod
-    def varint(
+    def put_le_at(mut buf: List[UInt8], pos: Int, bits: UInt64, width: Int):
+        """Write the low `width` bytes of `bits` at `pos`, least-significant
+        first -- `put_le` over bytes that already exist."""
+        for i in range(width):
+            buf[pos + i] = UInt8((bits >> UInt64(i * 8)) & 0xFF)
+
+
+struct Leb128:
+    """Unsigned integers as ULEB128 -- seven bits a byte, least significant
+    first, the high bit set on every byte but the last. The varint of Parquet's
+    Thrift, Avro, Snappy's preamble and the `Varint` codec."""
+
+    @staticmethod
+    def read(
         data: Span[UInt8, _], pos: Int
     ) raises CorruptError -> Tuple[UInt64, Int]:
-        """Read an unsigned LEB128 varint at `pos`; return `(value, next_pos)`.
-        """
+        """The ULEB128 value at `pos`, and the position after it."""
         var result: UInt64 = 0
         var shift: Int = 0
         var p = pos
@@ -163,8 +164,8 @@ struct LittleEndian:
         return (result, p)
 
     @staticmethod
-    def put_varint(mut out: List[UInt8], var v: UInt64):
-        """Append `v` as an unsigned LEB128 varint."""
+    def write(mut out: List[UInt8], var v: UInt64):
+        """Append `v` as ULEB128."""
         while True:
             var b = UInt8(v & 0x7F)
             v >>= 7
@@ -174,59 +175,28 @@ struct LittleEndian:
                 out.append(b)
                 break
 
-    @staticmethod
-    def bits(data: Span[UInt8, _], bit_offset: Int, nbits: Int) -> UInt64:
-        """Read `nbits` starting at absolute `bit_offset`, least-significant
-        first."""
-        var result: UInt64 = 0
-        for i in range(nbits):
-            var abs_bit = bit_offset + i
-            var byte_idx = abs_bit >> 3
-            var bit_idx = abs_bit & 7
-            var bit = (UInt64(data[byte_idx]) >> UInt64(bit_idx)) & 1
-            result |= bit << UInt64(i)
-        return result
-
-    @staticmethod
-    def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
-        """Unsigned byte-wise lexicographic `a < b` (BYTE_ARRAY ordering)."""
-        var n = min(len(a), len(b))
-        for i in range(n):
-            if a[i] != b[i]:
-                return a[i] < b[i]
-        return len(a) < len(b)
-
-
-struct Zigzag:
-    """Signed <-> unsigned mapping so small-magnitude signed integers stay small
-    as varints — shared by Parquet's delta codecs and Thrift Compact Protocol,
-    and by Avro's `int` and `long`. Stateless; a namespace of static methods."""
-
-    @staticmethod
-    @always_inline
-    def encode(v: Int64) -> UInt64:
-        return UInt64((v << 1) ^ (v >> 63))
-
-    @staticmethod
-    @always_inline
-    def decode(u: UInt64) -> Int64:
-        return Int64(u >> 1) ^ -Int64(u & 1)
-
 
 struct BigEndian:
     """The few big-endian reads and writes marrow's formats need: Parquet's and
-    Avro's two's-complement decimals, and Avro's snappy checksum trailer."""
+    Avro's two's-complement decimals, Avro's snappy checksum trailer, and
+    Hadoop-framed LZ4's sizes."""
 
     @staticmethod
-    def u32(data: Span[UInt8, _], pos: Int) -> UInt32:
-        """The 4 bytes at `pos` as a big-endian `UInt32`; the caller has
-        checked the range."""
-        return byte_swap(LittleEndian.fixed[DType.uint32](data, pos))
+    def fixed[T: DType](data: Span[UInt8, _], pos: Int) -> Scalar[T]:
+        """A big-endian `T` at byte `pos`; the caller has checked the
+        range."""
+        return byte_swap(LittleEndian.fixed[T](data, pos))
 
     @staticmethod
-    def put_u32(mut out: List[UInt8], v: UInt32):
-        """Append `v` as 4 big-endian bytes."""
-        LittleEndian.append[DType.uint32](out, byte_swap(v))
+    def append[T: DType](mut buf: List[UInt8], val: Scalar[T]):
+        """Append `val` as `T`-width big-endian bytes."""
+        LittleEndian.append[T](buf, byte_swap(val))
+
+    @staticmethod
+    def write[T: DType](mut buf: List[UInt8], pos: Int, val: Scalar[T]):
+        """Write `val` as `T`-width big-endian bytes at `pos`, over bytes that
+        already exist."""
+        LittleEndian.write[T](buf, pos, byte_swap(val))
 
     @staticmethod
     def signed[T: DType](data: Span[UInt8, _]) -> Scalar[T]:

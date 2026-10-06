@@ -65,8 +65,9 @@ from .builders import Int32Builder
 from .kernels.concat import concat as _concat
 from .kernels.hashing import KeyCompare
 from .kernels.filter import take as _take
-from .utils import CompressionLibs, LittleEndian, Lz4, Zstd
+from .utils import CompressionLibs, Lz4, Zstd
 from . import dtypes as dt
+from .codecs import LittleEndian
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ reference implementations in arrow-rs (`bloom_filter.rs`) and Arrow C++:
 from std.math import log
 
 from ..errors import CorruptError
-from ..utils import LittleEndian, XxHash64
+from ..utils import XxHash64
 from .format import (
     ThriftCompactWriter,
     ThriftCompactReader,
@@ -29,6 +29,7 @@ from .format import (
     TC_I32,
     TC_STRUCT,
 )
+from ..codecs import LittleEndian
 
 
 # ---------------------------------------------------------------------------

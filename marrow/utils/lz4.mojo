@@ -52,14 +52,13 @@ off liblz4's through `CompressionLibs` -- so the framing rules are kept once
 for a reader that chose the library.
 """
 
-from std.bit import byte_swap
 
 from ..errors import CorruptError, DynError, InvalidError, NotImplementedError
 from ..views import BufferView
-from .byteorder import LittleEndian
 from .compression import CompressionLibs
 from .hashing import XxHash32
 from .lz77 import LzCopy, match_length
+from ..codecs.byteorder import BigEndian, LittleEndian
 
 
 # ---------------------------------------------------------------------------
@@ -582,8 +581,8 @@ struct Lz4:
             except e:
                 raise DynError(e)
         var size = len(dst) - at - 8
-        LittleEndian.write[DType.uint32](dst, at, byte_swap(UInt32(len(src))))
-        LittleEndian.write[DType.uint32](dst, at + 4, byte_swap(UInt32(size)))
+        BigEndian.write[DType.uint32](dst, at, UInt32(len(src)))
+        BigEndian.write[DType.uint32](dst, at + 4, UInt32(size))
 
     @staticmethod
     def decompress_hadoop_into[
@@ -621,10 +620,8 @@ struct Lz4:
         var ip = 0
         var op = 0
         while len(src) - ip >= 8:
-            var raw = Int(byte_swap(LittleEndian.fixed[DType.uint32](src, ip)))
-            var size = Int(
-                byte_swap(LittleEndian.fixed[DType.uint32](src, ip + 4))
-            )
+            var raw = Int(BigEndian.fixed[DType.uint32](src, ip))
+            var size = Int(BigEndian.fixed[DType.uint32](src, ip + 4))
             ip += 8
             if size > len(src) - ip or raw > len(dst) - op:
                 return False

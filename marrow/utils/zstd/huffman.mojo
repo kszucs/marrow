@@ -31,9 +31,9 @@ from std.memory import bitcast
 
 from ...errors import CorruptError
 from ...views import BufferView
-from ..byteorder import LittleEndian
 from .bits import BitReader, BitWriter
 from .fse import MAX_WEIGHT, Alphabet, Distribution, FseEncoder, FseTable
+from ...codecs.byteorder import LittleEndian
 
 
 struct HuffmanTable(Movable):

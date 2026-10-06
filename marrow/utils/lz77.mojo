@@ -26,7 +26,7 @@ from std.bit import count_trailing_zeros
 from std.builtin.globals import global_constant
 
 from ..views import BufferView
-from .byteorder import LittleEndian
+from ..codecs.byteorder import LittleEndian
 
 
 struct LzCopy:

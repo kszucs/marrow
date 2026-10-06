@@ -52,9 +52,8 @@ verdict = "reject"
 bug = "B8"
 
 ["b9-dictionary-page-short.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B9"
-match = "LittleEndian"
 
 ["b10-page-values-overflow.parquet"]
 verdict = "crash"
@@ -70,9 +69,8 @@ verdict = "reject"
 bug = "B12"
 
 ["b13-rle-run-truncated.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B13"
-match = "marrow/parquet/codecs.mojo:66"
 
 ["b14-page-size-negative.parquet"]
 verdict = "reject"
@@ -94,27 +92,20 @@ sanitizer = "address"
 note = "a fixed-width dictionary page with fewer bytes than num_values: PrimitiveLeafBuilder.consume copies past the page"
 
 ["b-pr7-dictionary-index-bytes.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B-PR7"
-match = "marrow/parquet/reader.mojo:925"
-note = "a dictionary index past a byte-array dictionary: ByteArrayLeafBuilder._place_dictionary slices past it"
 
 ["b-pr8-dictionary-index-gather.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B-PR8"
-note = "more values than rows, as B10, but on the dictionary fast path: Rle.gather writes past the values buffer (ASAN); a plain build stops at a Bitmap bounds assertion"
 
 ["b-pr9-dictionary-bit-width.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B-PR9"
-match = "marrow/parquet/codecs.mojo:89"
-note = "a dictionary-index bit width over 32 reaches Rle unchecked from PrimitiveLeafBuilder.consume"
 
 ["b-pr10-levels-count-overread.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B-PR10"
-match = "marrow/utils/byteorder.mojo:186"
-note = "Rle.count_matches reads past the v1 definition levels it is given"
 
 ["b-pr11-plain-byte-array-length.parquet"]
 verdict = "reject"
@@ -122,7 +113,5 @@ bug = "B-PR11"
 note = "a PLAIN byte-array value whose 4-byte length runs past the page"
 
 ["b-pr12-rle-boolean-length.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B-PR12"
-match = "marrow/parquet/codecs.mojo:1058"
-note = "an RLE boolean page whose 4-byte length runs past the values"
