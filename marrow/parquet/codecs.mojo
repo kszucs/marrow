@@ -271,9 +271,9 @@ struct Rle:
     def encode_bitpacked(values: List[Int32], width: Int) -> List[UInt8]:
         """Encode all of `values` as a single bit-packed hybrid run (groups of 8,
         LSB-first) at `width` bits each — compact for dictionary indices, which
-        rarely form the equal-value runs `encode` exploits. A `width` of 0 (a
-        single-entry dictionary) emits nothing; the reader treats every index as
-        0. Mirrors the reader's `_unpack8` bit order."""
+        rarely form the equal-value runs `encode` exploits. A `width` of 0
+        emits nothing, so a writer must pass at least 1 for any values.
+        Mirrors the reader's `_unpack8` bit order."""
         var out = List[UInt8]()
         var n = len(values)
         if width == 0 or n == 0:
@@ -580,17 +580,19 @@ struct Dictionary:
         mut indices: List[Int32],
     ) raises -> Int:
         """Dictionary-encode a primitive column: PLAIN-encode each distinct value
-        (widened to `phys`) into `dict_body`, collect the per-value index."""
+        (widened to `phys`) into `dict_body`, collect the per-value index.
+        Values are keyed by their bits, so `0.0` and `-0.0` stay distinct."""
         comptime W = size_of[Scalar[phys]]()
-        var seen = Dict[Scalar[store.native], Int]()
+        var seen = Dict[UInt64, Int]()
         var num_dict = 0
         for i in range(arr.length):
             if arr.is_valid(i):
                 var v = arr[i].value()
-                if v in seen:
-                    indices.append(Int32(seen[v]))
+                var key = UInt64(v.to_bits())
+                if key in seen:
+                    indices.append(Int32(seen[key]))
                 else:
-                    seen[v] = num_dict
+                    seen[key] = num_dict
                     indices.append(Int32(num_dict))
                     num_dict += 1
                     var bytes = v.cast[phys]().as_bytes[big_endian=False]()

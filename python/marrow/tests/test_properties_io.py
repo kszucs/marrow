@@ -17,7 +17,6 @@ import subprocess
 import sys
 
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 import pytest
@@ -64,9 +63,8 @@ def to_pa_table(marrow_table):
 
 # ── Parquet ────────────────────────────────────────────────────────────────
 
-# The leaf types both libraries write to Parquet. Left out: timestamp[s] and
-# time32[s] (marrow mis-scales them, pinned below), float16, and the types
-# marrow cannot write (date64, duration, interval, null, dictionary).
+# The leaf types both libraries write to Parquet. Left out: float16, and the
+# types marrow cannot write (date64, duration, interval, null, dictionary).
 _PARQUET_LEAVES = st.sampled_from(
     [pa.bool_()]
     + INTEGER_TYPES
@@ -76,9 +74,11 @@ _PARQUET_LEAVES = st.sampled_from(
     + [pa.binary(3)]
     + [
         pa.date32(),
+        pa.time32("s"),
         pa.time32("ms"),
         pa.time64("us"),
         pa.time64("ns"),
+        pa.timestamp("s"),
         pa.timestamp("ms"),
         pa.timestamp("us", "UTC"),
         pa.timestamp("ns"),
@@ -91,43 +91,10 @@ _PARQUET_LEAVES = st.sampled_from(
 _PARQUET_TYPES = st.one_of(
     _PARQUET_LEAVES, nested_types(_PARQUET_LEAVES, fixed=False), dictionary_types
 )
-# What marrow is asked to write: no large_list either, since writing one
-# aborts the process (pinned below).
+# What marrow is asked to write.
 _PARQUET_WRITE_TYPES = st.one_of(
-    _PARQUET_LEAVES, nested_types(_PARQUET_LEAVES, large=False, fixed=False)
+    _PARQUET_LEAVES, nested_types(_PARQUET_LEAVES, fixed=False)
 )
-
-
-def _leaves(arr):
-    """The leaf arrays a Parquet writer encodes: parent nulls applied, values
-    under a null list dropped."""
-    t = arr.type
-    if pa.types.is_struct(t):
-        for child in arr.flatten():
-            yield from _leaves(child)
-    elif pa.types.is_map(t):
-        # `flatten` has no map kernel; null maps are empty, so the entries
-        # between the first and last offset are exactly what is written.
-        offsets = arr.offsets.to_pylist()
-        yield from _leaves(arr.values.slice(offsets[0], offsets[-1] - offsets[0]))
-    elif pa.types.is_list(t) or pa.types.is_large_list(t):
-        yield from _leaves(arr.flatten())
-    else:
-        yield arr
-
-
-def _single_valued(table):
-    """Whether some leaf holds exactly one distinct value. marrow writes such a
-    column with a zero-width dictionary index and no RLE run, which PyArrow
-    cannot read (pinned below)."""
-    for column in table.columns:
-        for leaf in _leaves(column.combine_chunks()):
-            if (
-                not pa.types.is_boolean(leaf.type)
-                and pc.count_distinct(leaf).as_py() == 1
-            ):
-                return True
-    return False
 
 
 def _contains(t, predicate):
@@ -146,38 +113,6 @@ def _empty_list_column(table):
     return table.num_rows == 0 and any(
         _contains(f.type, _is_list) for f in table.schema
     )
-
-
-def _null_struct_over_list(table):
-    """A null struct entry above a list, which marrow's writer turns into a
-    present struct holding an empty list (pinned below)."""
-
-    def walk(arr):
-        t = arr.type
-        if pa.types.is_struct(t):
-            if arr.null_count and _contains(t, _is_list):
-                return True
-            return any(walk(arr.field(i)) for i in range(t.num_fields))
-        if pa.types.is_map(t):
-            offsets = arr.offsets.to_pylist()
-            return walk(arr.values.slice(offsets[0], offsets[-1] - offsets[0]))
-        if pa.types.is_list(t) or pa.types.is_large_list(t):
-            return walk(arr.flatten())
-        return False
-
-    return any(walk(c.combine_chunks()) for c in table.columns)
-
-
-def _mixed_signed_zero(table):
-    """Whether a float leaf holds both 0.0 and -0.0, which marrow's dictionary
-    encoder merges into whichever came first (pinned below)."""
-    for column in table.columns:
-        for leaf in _leaves(column.combine_chunks()):
-            if pa.types.is_floating(leaf.type):
-                zeros = {math.copysign(1, v) for v in leaf.to_pylist() if v == 0}
-                if len(zeros) == 2:
-                    return True
-    return False
 
 
 def _pyarrow_read(path):
@@ -236,8 +171,6 @@ def test_parquet_pyarrow_writes_marrow_reads(
 )
 def test_parquet_marrow_writes_pyarrow_reads(tmp_path, table, codec, page_version):
     """PyArrow reads back the values marrow wrote."""
-    assume(not _single_valued(table) and not _null_struct_over_list(table))
-    assume(not _mixed_signed_zero(table))
     path = tmp_path / "t.parquet"
     mpq.write_table(
         ma.table(table), path, compression=codec, data_page_version=page_version
@@ -250,8 +183,7 @@ def test_parquet_marrow_writes_pyarrow_reads(tmp_path, table, codec, page_versio
 @given(tables(_PARQUET_WRITE_TYPES), st.sampled_from(_PARQUET_CODECS), st.booleans())
 def test_parquet_marrow_roundtrip(tmp_path, table, codec, cdc):
     """marrow reads back what marrow wrote, content-defined chunking or not."""
-    assume(not _empty_list_column(table) and not _null_struct_over_list(table))
-    assume(not _mixed_signed_zero(table))
+    assume(not _empty_list_column(table))
     path = tmp_path / "t.parquet"
     mpq.write_table(
         ma.table(table), path, compression=codec, use_content_defined_chunking=cdc
@@ -373,38 +305,13 @@ def _in_subprocess(code, *args):
     return proc.returncode
 
 
-def _parquet_roundtrip_in_subprocess(tmp_path, arr):
-    """Write `arr` with marrow in a child process and return its exit code."""
-    src = tmp_path / "in.arrow"
-    with (
-        pa.OSFile(str(src), "wb") as sink,
-        ipc.new_file(sink, pa.schema([("c", arr.type)])) as w,
-    ):
-        w.write_batch(pa.record_batch({"c": arr}))
-    code = (
-        "import sys, pyarrow as pa, marrow as ma, marrow.parquet as mpq;"
-        "t = pa.ipc.open_file(sys.argv[1]).read_all();"
-        "mpq.write_table(ma.table(t), sys.argv[2])"
-    )
-    return _in_subprocess(code, src, tmp_path / "out.parquet")
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="parquet write of a large_list column aborts the process: "
-    "parquet/schema.mojo reads it with as_list(), which holds only ListArray",
-)
 def test_parquet_write_large_list(tmp_path):
-    arr = pa.array([[1]], pa.large_list(pa.int32()))
-    assert _parquet_roundtrip_in_subprocess(tmp_path, arr) == 0
+    arr = pa.array([[1, None], None, [], [2]], pa.large_list(pa.int32()))
+    path = tmp_path / "t.parquet"
+    mpq.write_table(ma.table(pa.table({"c": arr})), path)
+    assert pq.read_table(path).column("c").to_pylist() == arr.to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="parquet write of a column whose values are all equal emits a "
-    "zero-width dictionary index with no RLE run; PyArrow cannot read the file",
-)
 @pytest.mark.parametrize(
     "arr",
     [
@@ -421,18 +328,27 @@ def test_parquet_write_single_valued_column(tmp_path, arr):
     assert pq.read_table(path).column("c").to_pylist() == arr.to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="parquet write of timestamp[s] / time32[s] stores the raw seconds "
-    "under a nanosecond (timestamp) or millisecond (time32) annotation",
-)
-@pytest.mark.parametrize("dtype", [pa.timestamp("s"), pa.time32("s")])
+@pytest.mark.parametrize("dtype", [pa.timestamp("s", "UTC"), pa.time32("s")])
 def test_parquet_write_seconds_unit(tmp_path, dtype):
-    arr = pa.array([1, 2], dtype)
+    """Parquet has no second unit: both writers store milliseconds. PyArrow
+    restores the unit from its stored Arrow schema; marrow writes none, so
+    PyArrow -- and marrow -- read the column back in milliseconds."""
+    arr = pa.array([1, None, 2], dtype)
     path = tmp_path / "t.parquet"
     mpq.write_table(ma.table(pa.table({"c": arr})), path)
-    got = pq.read_table(path).column("c")
-    assert got.cast(dtype).to_pylist() == arr.to_pylist()
+    want = pq.read_table(path).column("c")
+    assert want.type.unit == "ms"
+    assert want.cast(dtype).to_pylist() == arr.to_pylist()
+    got = pa.table(mpq.read_table(path)).column("c")
+    assert got.equals(want)
+
+
+def test_parquet_write_seconds_overflow(tmp_path):
+    """A timestamp[s] too large for milliseconds is refused. Arrow C++ means
+    to refuse it too, but PyArrow 23 writes the wrapped product."""
+    table = pa.table({"c": pa.array([2**62], pa.timestamp("s"))})
+    with pytest.raises(ma.ArrowInvalid):
+        mpq.write_table(ma.table(table), tmp_path / "ma.parquet")
 
 
 @pytest.mark.xfail(
@@ -463,18 +379,35 @@ def test_parquet_read_zero_row_list(tmp_path, dtype):
     assert mpq.read_table(path).num_rows == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="parquet write of a null struct holding a list writes a present "
-    "struct with an empty list",
+_LIST = pa.list_(pa.bool_())
+_STRUCT_OF_LIST = pa.struct([("f0", _LIST)])
+
+
+@pytest.mark.parametrize(
+    "arr",
+    [
+        pa.array([None, {"f0": [True, False]}], _STRUCT_OF_LIST),
+        pa.array(
+            [None, {"s": None}, {"s": {"f0": None}}, {"s": {"f0": [True]}}],
+            pa.struct([("s", _STRUCT_OF_LIST)]),
+        ),
+        pa.array(
+            [None, [], [None, {"f0": []}, {"f0": [False, None]}], [None]],
+            pa.list_(_STRUCT_OF_LIST),
+        ),
+        pa.array(
+            [[("k", None), ("j", {"f0": [True]})], None],
+            pa.map_(pa.string(), _STRUCT_OF_LIST),
+        ),
+    ],
+    ids=["struct-list", "struct-struct-list", "list-struct-list", "map-struct-list"],
 )
-def test_parquet_write_null_struct_over_list(tmp_path):
-    arr = pa.array(
-        [None, {"f0": [True, False]}], pa.struct([("f0", pa.list_(pa.bool_()))])
-    )
+def test_parquet_write_null_struct_over_list(tmp_path, arr):
     path = tmp_path / "t.parquet"
     mpq.write_table(ma.table(pa.table({"c": arr})), path)
     assert pq.read_table(path).column("c").to_pylist() == arr.to_pylist()
+    got = pa.table(mpq.read_table(path)).column("c")
+    assert got.to_pylist() == arr.to_pylist()
 
 
 @pytest.mark.parametrize(
@@ -494,11 +427,6 @@ def test_parquet_read_v2_page_under_empty_list(tmp_path, dtype):
     assert _in_subprocess(code, path) == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="parquet dictionary encoding keys floats by value, so 0.0 and -0.0 "
-    "share one entry and the later one comes back with the earlier one's sign",
-)
 def test_parquet_write_keeps_signed_zero(tmp_path):
     arr = pa.array([0.0, -0.0, 1.0])
     path = tmp_path / "t.parquet"

@@ -17,6 +17,7 @@ writer mirrors the reader's structure.
 
 
 from ..errors import InternalError, NotImplementedError
+from ..kernels.cast import TemporalCastKernel
 from ..arrays import (
     DynArray,
     PrimitiveArray,
@@ -603,7 +604,8 @@ struct ColumnWriter(Movable):
                 indices = List[Int32]()
             else:
                 chunk_distinct = num_dict
-                dict_width = Rle.bit_width(num_dict - 1) if num_dict > 0 else 0
+                if num_dict > 0:  # one bit even for a one-entry dictionary
+                    dict_width = max(1, Rle.bit_width(num_dict - 1))
                 var d = self._write_dict_page(dict_body^, num_dict, out, codecs)
                 dict_page_offset = d[0]
                 total_uncompressed += d[1]
@@ -947,6 +949,15 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
 
             for k in range(len(col_leaves)):
                 var gi = col_leaves[k]
+                # A leaf written in another unit (`SchemaMapping._written_type`)
+                # is cast to it; the cast raises where the scale overflows.
+                ref leaf_type = self.leaves[gi].dtype
+                if leaf_type.is_temporal() and not (
+                    leaf_values[k].dtype() == leaf_type
+                ):
+                    leaf_values[k] = TemporalCastKernel.dispatch(
+                        leaf_values[k], leaf_type
+                    )
 
                 # A flat leaf (required or nullable) is never Dremel-shredded,
                 # so its def levels only exist here -- synthesized once and

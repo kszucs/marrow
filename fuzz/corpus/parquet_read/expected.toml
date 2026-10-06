@@ -125,5 +125,5 @@ note = "a PLAIN byte-array value whose 4-byte length runs past the page"
 ["b-pr12-rle-boolean-length.parquet"]
 verdict = "crash"
 bug = "B-PR12"
-match = "marrow/parquet/codecs.mojo:1033"
+match = "marrow/parquet/codecs.mojo:1035"
 note = "an RLE boolean page whose 4-byte length runs past the values"

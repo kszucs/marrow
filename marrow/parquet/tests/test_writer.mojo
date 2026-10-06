@@ -18,8 +18,17 @@ from ...parquet.writer import FileWriter, MAX_ROWS_PER_PAGE
 from ...parquet.chunker import ContentDefinedChunking
 from ...parquet.codecs import Compression, Encoding
 from ...utils import Crc32
-from ...tabular import Table
+from ...tabular import RecordBatch, Table, record_batch
 from ...c_data import CArrowArrayStream
+from ...arrays import (
+    BoolArray,
+    DynArray,
+    LargeListArray,
+    ListArray,
+    StructArray,
+)
+from ...builders import Int64Builder, array
+from ...dtypes import Field, Int64Type, float64, int32, int64, field
 
 
 def _to_marrow(py: PythonObject) raises -> Table:
@@ -1829,3 +1838,245 @@ def test_view_decode_matches_string_decode() raises:
                 if bi == len(sb):
                     j += 1
                     bi = 0
+
+
+# ---------------------------------------------------------------------------
+# Single-case round trips: each writes one shape and reads it back with marrow
+# ---------------------------------------------------------------------------
+
+
+def _table(var column: DynArray) raises -> Table:
+    """A one-column ("c") table holding `column` as its only chunk."""
+    var batch = record_batch([column^], names=["c"])
+    var schema = batch.schema.copy()
+    return Table.from_batches(schema, [batch^])
+
+
+def _to_pa(t: Table) raises -> PythonObject:
+    """A marrow Table -> PyArrow table via the Arrow C stream interface."""
+    var pa = Python.import_module("pyarrow")
+    var caps = CArrowArrayStream.from_batches(
+        t.schema.copy(), t.to_batches()
+    ).to_pycapsule()
+    return pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
+
+
+def _pylist(t: Table) raises -> PythonObject:
+    """Column 0 of `t` as a Python list."""
+    return _to_pa(t).column(0).to_pylist()
+
+
+def _assert_roundtrips(t: Table) raises:
+    """Write `t` as one row group and again in row groups of two rows --
+    every group after the first a slice with a non-zero offset -- and check
+    marrow reads back the same values from both."""
+    var want = _pylist(t)
+    for row_group_size in [t.num_rows(), 2]:
+        with ScratchDir() as dir:
+            var path = join(dir, "case.parquet")
+            var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
+            w.write(t, row_group_size=row_group_size)
+            var got = _pylist(read_table(path))
+            assert_true(Bool(got == want), String(got, " != ", want))
+
+
+def test_write_large_list() raises:
+    # [[1, 2], None, [], [3], [None, 4, 5]]
+    var values: DynArray = array[Int64Type]([1, 2, 3, None, 4, 5], int64)
+    var offsets = array([0, 2, 2, 2, 3, 6], int64)
+    var mask = array([False, True, False, False, False])
+    var col = LargeListArray.from_arrays(offsets, values^, mask^)
+    _assert_roundtrips(_table(col^))
+
+
+def test_write_large_list_in_struct() raises:
+    # {xs: ["a"]}, {xs: None}, {xs: ["b", "c"]}, {xs: []}
+    var strings: DynArray = array(["a", "b", "c"])
+    var offsets = array([0, 1, 1, 3, 3], int64)
+    var mask = array([False, True, False, False])
+    var xs: DynArray = LargeListArray.from_arrays(offsets, strings^, mask^)
+    var fields: List[Field] = [field("xs", xs.dtype())]
+    var col = StructArray.from_arrays([xs^], fields)
+    _assert_roundtrips(_table(col^))
+
+
+def test_write_one_entry_dictionary() raises:
+    # One distinct value builds a one-entry dictionary, whose indices still
+    # need a 1-bit run: at width 0 no run is written and PyArrow refuses the
+    # file. The last column spans two data pages.
+    var pq = Python.import_module("pyarrow.parquet")
+    var many = Int64Builder()
+    for _ in range(MAX_ROWS_PER_PAGE + 10_001):
+        many.append(7)
+    var cols: List[DynArray] = [
+        array([7], int64),
+        array(["x", None, "x"]),
+        many.finish(),
+    ]
+    for col in cols:
+        var t = _table(col.copy())
+        var want = _pylist(t)
+        with ScratchDir() as dir:
+            var path = join(dir, "one_entry.parquet")
+            write_table(t, path, Compression.UNCOMPRESSED)
+            var meta = pq.ParquetFile(path).metadata.row_group(0).column(0)
+            assert_true(
+                Bool(String(meta.encodings).find("RLE_DICTIONARY") >= 0)
+            )
+            assert_true(Bool(pq.read_table(path).column(0).to_pylist() == want))
+            assert_true(Bool(_pylist(read_table(path)) == want))
+
+
+def test_write_dictionary_signed_zero() raises:
+    # 0.0 and -0.0 compare equal but are different values: a dictionary keyed
+    # by equality gave -0.0 the entry of the 0.0 before it, sign lost.
+    var xs: List[Optional[Float64]] = [0.0, -0.0, None, -0.0, 0.0]
+    var col = array(xs, float64)
+    with ScratchDir() as dir:
+        var path = join(dir, "signed_zero.parquet")
+        write_table(_table(col^), path, Compression.UNCOMPRESSED)
+        var got = read_table(path).combine_chunks().columns[0].copy()
+        ref back = got.as_float64()
+        assert_equal(back.null_count(), 1)
+        var signs = List[Int]()
+        for i in [0, 1, 3, 4]:
+            assert_equal(back[i].value(), 0.0)
+            signs.append(Int(back[i].value().to_bits() >> 63))
+        assert_equal(signs, [0, 1, 1, 0])
+
+
+def _struct_of_list(nullable: Bool) raises -> Table:
+    """{xs: [1, 2]}, <row 1>, {xs: []}, {xs: None}, {xs: [3]} -- row 1 a null
+    struct when `nullable`, else {xs: None}."""
+    var ints: DynArray = array([1, 2, 3], int64)
+    var list_nulls = array([False, True, False, True, False])
+    var xs: DynArray = ListArray.from_arrays(
+        array([0, 2, 2, 2, 2, 3], int32), ints^, list_nulls^
+    )
+    var fields: List[Field] = [field("xs", xs.dtype())]
+    var mask: Optional[BoolArray] = None
+    if nullable:
+        mask = array([False, True, False, False, False])
+    var col: DynArray = StructArray.from_arrays([xs^], fields, mask^)
+    var schema = Schema(fields=[Field("c", col.dtype(), nullable=nullable)])
+    var batch = RecordBatch(schema, [col^])
+    return Table.from_batches(schema, [batch^])
+
+
+def test_write_null_struct_over_list() raises:
+    # A nullable struct holding a list is an OPTIONAL group, one definition
+    # level above the list's; a non-nullable one stays REQUIRED.
+    var pq = Python.import_module("pyarrow.parquet")
+    for nullable in [True, False]:
+        var t = _struct_of_list(nullable)
+        with ScratchDir() as dir:
+            var path = join(dir, "struct_list.parquet")
+            write_table(t, path, Compression.UNCOMPRESSED)
+            var leaf = pq.ParquetFile(path).schema.column(0)
+            assert_equal(
+                Int(py=leaf.max_definition_level), 4 if nullable else 3
+            )
+            var got = read_table(path)
+            assert_equal(
+                got.combine_chunks().columns[0].null_count(),
+                1 if nullable else 0,
+            )
+            assert_true(Bool(_pylist(got) == _pylist(t)))
+
+
+def test_write_seconds_as_milliseconds() raises:
+    # Parquet has no second unit: timestamp[s] and time32[s] are written in
+    # milliseconds, values scaled, and read back in milliseconds.
+    var pa = Python.import_module("pyarrow")
+    var secs = Python.list(-86_400, 0, Python.none(), 1_700_000_000)
+    var day = Python.list(0, 1, Python.none(), 86_399)
+    var given = pa.table(
+        Python.dict(
+            ts=pa.array(secs, pa.timestamp("s")),
+            tz=pa.array(secs, pa.timestamp("s", "UTC")),
+            t32=pa.array(day, pa.time32("s")),
+        )
+    )
+    var want = pa.table(
+        Python.dict(
+            ts=given.column("ts").cast(pa.timestamp("ms")),
+            tz=given.column("tz").cast(pa.timestamp("ms", "UTC")),
+            t32=given.column("t32").cast(pa.time32("ms")),
+        )
+    )
+    var t = _to_marrow(given)
+    with ScratchDir() as dir:
+        var path = join(dir, "seconds.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var got = _to_pa(read_table(path))
+        for name in ["ts", "tz", "t32"]:
+            assert_true(
+                Bool(got.column(name).equals(want.column(name))),
+                String(got.column(name)),
+            )
+
+
+# Arrow leaves the offsets of a null slot unspecified, so a null list -- or a
+# list under a null struct -- may still span child values. They are not
+# written: every value after them would land on the wrong level.
+
+
+def _list_with_hidden_values() raises -> DynArray:
+    """[[1, 2], None (spans 3, 4), [5], None (spans 6)]."""
+    return ListArray.from_arrays(
+        array([0, 2, 4, 5, 6], int32),
+        array([1, 2, 3, 4, 5, 6], int64),
+        array([False, True, False, True]),
+    )
+
+
+def _struct_with_hidden_values() raises -> DynArray:
+    """[{xs: [1, 2]}, None (xs spans 3, 4), {xs: [5, 6]}]: the list itself is
+    valid at the null struct's slot."""
+    var xs: DynArray = ListArray.from_arrays(
+        array([0, 2, 4, 6], int32), array([1, 2, 3, 4, 5, 6], int64)
+    )
+    var fields: List[Field] = [field("xs", xs.dtype())]
+    return StructArray.from_arrays([xs^], fields, array([False, True, False]))
+
+
+def test_write_null_list_spanning_values() raises:
+    _assert_roundtrips(_table(_list_with_hidden_values()))
+
+
+def test_write_null_struct_spanning_list_values() raises:
+    _assert_roundtrips(_table(_struct_with_hidden_values()))
+
+
+def test_write_null_list_spanning_lists() raises:
+    # [[[1, 2], None (spans 3, 4)], None (spans [[5]]), [[6]]]
+    var inner = ListArray.from_arrays(
+        array([0, 2, 4, 5, 6], int32),
+        array([1, 2, 3, 4, 5, 6], int64),
+        array([False, True, False, False]),
+    )
+    var outer = ListArray.from_arrays(
+        array([0, 2, 3, 4], int32), inner^, array([False, True, False])
+    )
+    _assert_roundtrips(_table(outer^))
+
+
+def test_write_null_list_spanning_structs() raises:
+    # [[{xs: [1, 2]}], None (spans [None]), [{xs: [5, 6]}]]
+    var outer = ListArray.from_arrays(
+        array([0, 1, 2, 3], int32),
+        _struct_with_hidden_values(),
+        array([False, True, False]),
+    )
+    _assert_roundtrips(_table(outer^))
+
+
+def test_write_null_map_spanning_entries() raises:
+    # [{1: "a"}, None (spans {2: "b", 3: "c"}), {4: "d"}]
+    var map_col = ListArray.from_arrays(
+        array([0, 1, 3, 4], int32),
+        array([1, 2, 3, 4], int64),
+        array(["a", "b", "c", "d"]),
+        mask=array([False, True, False]),
+    )
+    _assert_roundtrips(_table(map_col^))

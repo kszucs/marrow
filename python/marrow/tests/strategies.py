@@ -185,7 +185,10 @@ def values(t):
     if pa.types.is_time(t):
         return st.integers(0, 86_400 * _UNIT[t.unit] - 1)
     if pa.types.is_timestamp(t) or pa.types.is_duration(t):
-        return st.integers(-(2**62), 2**62)
+        # Seconds stay within what milliseconds can hold: Parquet has no
+        # second unit, and both writers scale to it.
+        bound = 2**62 // (1000 if t.unit == "s" else 1)
+        return st.integers(-bound, bound)
     if pa.types.is_decimal(t):
         bound = 10**t.precision - 1
         # A wide context: the default 28 digits would round a decimal256.

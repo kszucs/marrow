@@ -94,29 +94,8 @@ PyArrow under Hypothesis. Every item below is a strict `xfail` there with its
 minimal input, so fixing one flips its test; the properties themselves step
 around the pinned inputs. Line numbers are as of `2c28f9bb`.
 
-**Process crashes** (each reproduced in a child process):
-
-- **Parquet write of any `large_list` column aborts** — `get: wrong variant
-  type`. `parquet/schema.mojo:309` and `:428` read the column with
-  `as_list()`, which holds only `ListArray`. (`test_parquet_write_large_list`)
-
 **Silently wrong data:**
 
-- **Parquet: a column whose values are all equal is unreadable by PyArrow** —
-  every one-row column, among others. A one-entry dictionary gets index width
-  0 (`parquet/writer.mojo:606`) and `Rle.encode` then emits no run at all
-  (`parquet/codecs.mojo:321`); PyArrow wants a run header even at width 0.
-  marrow reads its own file back. (`test_parquet_write_single_valued_column`)
-- **Parquet: `timestamp[s]` is written under a nanosecond annotation and
-  `time32[s]` under a millisecond one**, values unscaled — 1 s reads back as
-  1 ns / 1 ms, in marrow and PyArrow alike (`parquet/schema.mojo:1123`, `:1097`).
-  (`test_parquet_write_seconds_unit`)
-- **Parquet: a null struct holding a list is written as a present struct with
-  an empty list** — writer side, both readers agree. Suspected in the struct
-  arm of `_shred_elem` (`parquet/schema.mojo:401`). (`test_parquet_write_null_struct_over_list`)
-- **Parquet: dictionary encoding merges `0.0` and `-0.0`** — `Dict` keyed by
-  float value (`parquet/codecs.mojo:622`), so the later sign is lost.
-  (`test_parquet_write_keeps_signed_zero`)
 - **IPC file writer reuses the first batch's dictionary for every batch**
   (`ipc.mojo:2234` skips a written id without comparing); later batches decode
   against the wrong dictionary. PyArrow refuses the replacement; the stream
