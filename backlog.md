@@ -117,13 +117,14 @@ around the pinned inputs. Line numbers are as of `2c28f9bb`.
 
 **Divergences from PyArrow's defaults:**
 
-- `RecordBatch.sort_by` puts nulls first by default
-  (`python/bindings/tabular.mojo:397`); PyArrow puts them at the end.
-- `compute.any`/`all` answer False/True for empty or all-null input
-  (`kernels/aggregate.mojo:574`, `:612`); PyArrow's `min_count=1` answers null.
-- `upper` and `capitalize` apply the full case mapping, `'ß'` -> `'SS'`
-  (`kernels/string.mojo:226`, `:283`); PyArrow maps one code point to one
-  (`'ẞ'`), and `capitalize` should give the titlecase `'Ss'` either way.
+- `reverse` keeps a grapheme together; PyArrow's `utf8_reverse` reverses code
+  points. (`test_reverse_by_code_point`)
+- The plan layer's sort still puts nulls first by default
+  (`DynRelation.sort_by`, `Window`, the Python lazy `sort_by`), where the
+  kernels and `RecordBatch`/`Table.sort_by` now follow PyArrow's nulls-last.
+  Not a PyArrow API; changing it moves golden output and the TopN rule.
+- `compute.any`/`all` return a Python `bool` or `None`, not a scalar, and take
+  no `options=`.
 
 Not bugs, recorded so nobody re-derives them: `count_distinct` counts `0.0`
 and `-0.0` once (hashing canonicalises on purpose, `kernels/hashing.mojo:163`);

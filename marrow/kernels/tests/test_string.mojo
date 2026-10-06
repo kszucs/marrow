@@ -134,6 +134,30 @@ def test_capitalize() raises:
     )
 
 
+def test_upper_maps_one_code_point_to_one() raises:
+    """PyArrow's `utf8_upper`: `'ß'` gives `'ẞ'`, not the full mapping's
+    `"SS"`; a code point with no single uppercase (`'ŉ'`, `'ﬁ'`) stays."""
+    var a = array(["ß", "straße x", "ǆ", "ǅa", "ŉ", "ﬁx", "ᾳ", "ΣΑΣ", "\u0345"])
+    var expected = array(
+        ["ẞ", "STRAẞE X", "Ǆ", "ǄA", "ŉ", "ﬁX", "ᾼ", "ΣΑΣ", "Ι"]
+    )
+    assert_true(UpperKernel.apply(a) == expected)
+
+
+def test_lower_maps_one_code_point_to_one() raises:
+    """PyArrow's `utf8_lower`: `'İ'` gives `'i'`, not `"i̇"`."""
+    var a = array(["İ", "ẞ", "ǅa", "ΣΑΣ", "ᾼ"])
+    assert_true(LowerKernel.apply(a) == array(["i", "ß", "ǆa", "σασ", "ᾳ"]))
+
+
+def test_capitalize_maps_one_code_point_to_one() raises:
+    """PyArrow's `utf8_capitalize`: the first code point upper-cased, not
+    title-cased, and the rest lower-cased, one code point each."""
+    var a = array(["ß", "straße x", "ǆ", "ǅA", "ΣΑΣ", "α\u0345X", "İX"])
+    var expected = array(["ẞ", "Straße x", "Ǆ", "Ǆa", "Σασ", "Α\u0345x", "İx"])
+    assert_true(CapitalizeKernel.apply(a) == expected)
+
+
 def test_unary_preserves_nulls() raises:
     # null in -> null out, valid values transformed
     var r = UpperKernel.apply(_with_null())

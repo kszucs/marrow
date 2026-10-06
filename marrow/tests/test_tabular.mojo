@@ -161,3 +161,23 @@ def test_record_batch_eq_sliced() raises:
     var batch_a = RecordBatch(schema, [full_a.slice(1, 3)])
     var batch_b = RecordBatch(schema, [full_b.slice(1, 3)])
     assert_true(batch_a == batch_b)
+
+
+def test_record_batch_sort_by_puts_nulls_last_by_default() raises:
+    """PyArrow's `null_placement` defaults to "at_end"."""
+    var b = PrimitiveBuilder[Int64Type](3)
+    b.append_null()
+    b.append(2)
+    b.append(1)
+    var col: DynArray = b.finish()
+    var columns = List[DynArray]()
+    columns.append(col^)
+    var batch = RecordBatch(
+        schema=Schema(fields=[Field("k", int64)]), columns=columns^
+    )
+
+    var sorted = batch.sort_by(["k"], [True]).column(0).copy()
+    assert_true(sorted.is_valid(0) and sorted.is_valid(1))
+    assert_true(sorted.is_null(2))
+    assert_equal(sorted.as_int64().unsafe_get(0), 1)
+    assert_equal(sorted.as_int64().unsafe_get(1), 2)

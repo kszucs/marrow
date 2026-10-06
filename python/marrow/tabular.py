@@ -25,6 +25,7 @@ from .arrays import (
     ChunkedArray,
     Scalar,
     _as_binding_array,
+    _nulls_first,
     _serial,
     array,
 )
@@ -162,8 +163,10 @@ class RecordBatch(_Tabular):
             )
         )
 
-    def sort_by(self, by, null_placement=None, num_threads=0):
-        return RecordBatch.wrap(self._binding.sort_by(by, null_placement, num_threads))
+    def sort_by(self, sorting, *, null_placement="at_end", num_threads=0):
+        return RecordBatch.wrap(
+            self._binding.sort_by(sorting, _nulls_first(null_placement), num_threads)
+        )
 
     def rename_columns(self, names):
         return RecordBatch.wrap(self._binding.rename_columns(list(names)))
@@ -299,8 +302,10 @@ class Table(_Tabular):
     def take(self, indices):
         return self._via_batch("take", indices)
 
-    def sort_by(self, by, null_placement=None, num_threads=0):
-        return self._via_batch("sort_by", by, null_placement, num_threads)
+    def sort_by(self, sorting, *, null_placement="at_end", num_threads=0):
+        return self._via_batch(
+            "sort_by", sorting, null_placement=null_placement, num_threads=num_threads
+        )
 
     def rename_columns(self, names):
         return self._per_batch("rename_columns", names)

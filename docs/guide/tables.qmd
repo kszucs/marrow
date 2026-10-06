@@ -99,8 +99,8 @@ print("removed:  ", without_score.column_names)
 
 ## Sorting
 
-`sort_by` orders a batch by a column. The second argument is null placement
-(`None` for the default, or `"at_start"` / `"at_end"`):
+`sort_by` orders a batch by a column. Nulls go last unless you pass
+`null_placement="at_start"`:
 
 ```{python}
 print(batch.sort_by([("score", "descending")]).to_pylist())

@@ -164,7 +164,9 @@ print(ma.memtable(ids).aggregate(
 
 ### Boolean aggregates
 
-`any` and `all` operate on boolean arrays. Nulls are skipped.
+`any` and `all` operate on boolean arrays. As in PyArrow, nulls are skipped
+unless you pass `skip_nulls=False`, and fewer than `min_count` valid values
+(default 1) answer `None`.
 
 ```{python}
 flags = ma.array([True, False, None, True])
@@ -176,9 +178,10 @@ print("all:", mc.all(flags))   # False — False is present
 all_true = ma.array([True, True, None])
 print("all with nulls:", mc.all(all_true))   # True — only True values
 
-all_false = ma.array([None, None], type=ma.bool_())
-print("all empty/null:", mc.all(all_false))   # True (identity)
-print("any empty/null:", mc.any(all_false))   # False (identity)
+all_null = ma.array([None, None], type=ma.bool_())
+print("all of nulls:", mc.all(all_null))   # None — no valid value
+print("any of nulls:", mc.any(all_null, min_count=0))   # False (identity)
+print("all, nulls unknown:", mc.all(all_true, skip_nulls=False))   # None
 ```
 
 ## Selection

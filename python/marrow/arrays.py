@@ -184,8 +184,14 @@ def _as_binding_array(value):
 
 def _sort_flags(order, null_placement):
     asc = order != "descending" if order is not None else True
-    nulls_first = null_placement != "at_end" if null_placement is not None else False
-    return asc, nulls_first
+    return asc, _nulls_first(null_placement)
+
+
+def _nulls_first(null_placement):
+    """PyArrow's `null_placement` spelling as the kernels' `nulls_first` flag."""
+    if null_placement not in ("at_start", "at_end"):
+        raise ValueError(f'"{null_placement}" is not a valid null placement')
+    return null_placement == "at_start"
 
 
 class ChunkedArray(_Wrapper):

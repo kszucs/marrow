@@ -219,18 +219,77 @@ trait StringMapKernel(Kernel):
 
 
 struct UpperKernel(StringMapKernel):
+    """Arrow's `utf8_upper`: each code point to exactly one, so `'ß'` gives
+    `'ẞ'` where the full case mapping would give `"SS"`."""
+
     comptime name = "upper"
+
+    @always_inline
+    @staticmethod
+    def core(cp: Codepoint) -> Codepoint:
+        """One code point to one, as Arrow's `utf8_upper` maps it."""
+        if cp.is_ascii():
+            if cp.is_ascii_lower():
+                return Codepoint(unsafe_unchecked_codepoint=cp.to_u32() - 32)
+            return cp
+        var full = String(cp).upper()
+        if full.count_codepoints() == 1:
+            return Codepoint.ord(full)
+        return Codepoint(unsafe_unchecked_codepoint=Self.expanding(cp.to_u32()))
+
+    @always_inline
+    @staticmethod
+    def expanding(cp: UInt32) -> UInt32:
+        """The one-code-point uppercase of a code point whose full mapping
+        expands.
+
+        `'ß'` maps to `"SS"` and `'ᾳ'` to `"ΑΙ"` in full; Arrow's `utf8_upper`
+        takes a single code point instead: `'ẞ'`, and the titlecase
+        letter with the iota subscript kept. Every other expanding code point
+        (`'ŉ'`, the `'ﬁ'` ligatures, ...) has none and stays as it is.
+        """
+        if cp == 0xDF:
+            return 0x1E9E
+        if (
+            (cp >= 0x1F80 and cp <= 0x1F87)
+            or (cp >= 0x1F90 and cp <= 0x1F97)
+            or (cp >= 0x1FA0 and cp <= 0x1FA7)
+        ):
+            return cp + 8
+        if cp == 0x1FB3 or cp == 0x1FC3 or cp == 0x1FF3:
+            return cp + 9
+        return cp
 
     @staticmethod
     def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
-        return s.upper()
+        var out = String(capacity_bytes=s.byte_length())
+        for cp in s.codepoints():
+            out.append(Self.core(cp))
+        return out^
 
 
 struct LowerKernel(StringMapKernel):
+    """Arrow's `utf8_lower`: each code point to exactly one, so `'İ'` gives
+    `'i'`."""
+
     comptime name = "lower"
+
+    @always_inline
+    @staticmethod
+    def core(cp: Codepoint) -> Codepoint:
+        """One code point to one, as Arrow's `utf8_lower` maps it."""
+        if cp.is_ascii():
+            if cp.is_ascii_upper():
+                return Codepoint(unsafe_unchecked_codepoint=cp.to_u32() + 32)
+            return cp
+        var full = String(cp).lower()
+        if full.count_codepoints() == 1:
+            return Codepoint.ord(full)
+        return cp
 
     @staticmethod
     def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
+        # The stdlib's lowercase mapping is already one code point to one.
         return s.lower()
 
 
@@ -275,16 +334,17 @@ struct CapitalizeKernel(StringMapKernel):
 
     @staticmethod
     def transform[o: Origin[mut=False]](s: StringSlice[o]) -> String:
-        # First grapheme upper-cased, the rest lower-cased (pyarrow semantics).
-        var out = String()
+        # Arrow's `utf8_capitalize`: the first code point upper-cased, the rest
+        # lower-cased, each to exactly one.
+        var out = String(capacity_bytes=s.byte_length())
         var first = True
-        for g in s:
+        for cp in s.codepoints():
             if first:
-                out += String(g).upper()
+                out.append(UpperKernel.core(cp))
                 first = False
             else:
-                out += String(g).lower()
-        return out
+                out.append(LowerKernel.core(cp))
+        return out^
 
 
 # ---------------------------------------------------------------------------

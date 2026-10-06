@@ -13,7 +13,7 @@ return :class:`~marrow.Array` or :class:`~marrow.Scalar` as appropriate.
 
 from . import libmarrow as _ma
 from ._wrapper import unwrap
-from .arrays import Array, _serial
+from .arrays import Array, _nulls_first, _serial
 
 
 # ── Arithmetic ────────────────────────────────────────────────────────────────
@@ -61,24 +61,24 @@ def divide(left, right, memory_pool=None, ctx=None):
 # ── Aggregations ────────────────────────────────────────────────────────────────────────
 
 
-def any(array, *, skip_nulls=True, memory_pool=None, ctx=None):
+def any(array, *, skip_nulls=True, min_count=1, memory_pool=None, ctx=None):
     """Return whether any element in the array is true.
 
-    Equivalent to ``pyarrow.compute.any``.
+    Equivalent to ``pyarrow.compute.any``: ``None`` when fewer than
+    *min_count* elements are valid, and, with ``skip_nulls=False``, when a null
+    could still make the answer true.
     """
-    if not skip_nulls:
-        raise NotImplementedError("skip_nulls=False is not implemented")
-    return _ma.any(array.unwrap(), (ctx or _serial()))
+    return _ma.any(array.unwrap(), skip_nulls, min_count, (ctx or _serial()))
 
 
-def all(array, *, skip_nulls=True, memory_pool=None, ctx=None):
+def all(array, *, skip_nulls=True, min_count=1, memory_pool=None, ctx=None):
     """Return whether all elements in the array are true.
 
-    Equivalent to ``pyarrow.compute.all``.
+    Equivalent to ``pyarrow.compute.all``: ``None`` when fewer than
+    *min_count* elements are valid, and, with ``skip_nulls=False``, when a null
+    could still make the answer false.
     """
-    if not skip_nulls:
-        raise NotImplementedError("skip_nulls=False is not implemented")
-    return _ma.all(array.unwrap(), (ctx or _serial()))
+    return _ma.all(array.unwrap(), skip_nulls, min_count, (ctx or _serial()))
 
 
 # ── Comparisons ───────────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ def sort_indices(
         asc = order != "descending"
     else:
         asc = True
-    nulls_first = null_placement != "at_end"
+    nulls_first = _nulls_first(null_placement)
     return Array.wrap(
         _ma.sort_indices(input.unwrap(), asc, nulls_first, (ctx or _serial()))
     )
@@ -245,7 +245,7 @@ def sort(input, sort_keys=(), *, null_placement="at_end", memory_pool=None, ctx=
         else (None, "ascending")
     )
     ascending = order != "descending"
-    nulls_first = null_placement != "at_end"
+    nulls_first = _nulls_first(null_placement)
     return Array.wrap(
         _ma.sort(input.unwrap(), ascending, nulls_first, (ctx or _serial()))
     )

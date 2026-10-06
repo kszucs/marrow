@@ -70,7 +70,7 @@ from ..dtypes import (
     int32,
     int64,
 )
-from ..scalars import PrimitiveScalar, DynScalar
+from ..scalars import BoolScalar, PrimitiveScalar, DynScalar
 from ..views import reduce
 from .core import Kernel
 from .groupby import Groups
@@ -557,8 +557,13 @@ comptime DecimalMeanFold = DecimalFold[mean=True]
 trait BoolReduceKernel(Kernel):
     """A boolean whole-column fold to a single `Bool` — `any`/`all`. Not an
     `FoldKernel` (it folds bit-packed masks, not the numeric accumulator algebra),
-    so it exposes just `reduce(BoolArray) -> Bool`; the expression layer selects
-    between the two by kernel type."""
+    so a conformer supplies `reduce(BoolArray) -> Bool` and its `absorbing`
+    answer, and `dispatch` and `aggregate` are defaulted over them; the
+    expression layer selects between the two by kernel type."""
+
+    comptime absorbing: Bool
+    """The answer no other element can overturn: True for `any`, False for
+    `all`."""
 
     @staticmethod
     def reduce(
@@ -573,11 +578,34 @@ trait BoolReduceKernel(Kernel):
         """Runtime-dtype entry: fold a boolean `DynArray` to a `Bool`."""
         return Self.reduce(array.as_bool(), ctx)
 
+    @staticmethod
+    def aggregate(
+        array: BoolArray,
+        skip_nulls: Bool = True,
+        min_count: Int = 1,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> BoolScalar:
+        """The fold under Arrow's `ScalarAggregateOptions`, as PyArrow answers
+        it: null when fewer than `min_count` elements are valid, and, without
+        `skip_nulls`, null when a null could still change the answer.
+
+        Without `skip_nulls` a null stands for an unknown value, so the answer
+        is known only once the fold has reached `absorbing` (Kleene logic).
+        """
+        var value = Self.reduce(array, ctx)
+        var nulls = array.null_count()
+        var unknown = not skip_nulls and nulls > 0 and value != Self.absorbing
+        if len(array) - nulls < min_count or unknown:
+            return BoolScalar.null()
+        return BoolScalar(value)
+
 
 struct AnyKernel(BoolReduceKernel):
-    """True if any valid element is True. False if empty or all null."""
+    """True if any valid element is True. `reduce` answers False for an empty
+    or all-null input; `aggregate` answers null there, as PyArrow does."""
 
     comptime name = "any"
+    comptime absorbing = True
 
     @staticmethod
     def reduce(
@@ -613,9 +641,11 @@ struct AnyKernel(BoolReduceKernel):
 
 
 struct AllKernel(BoolReduceKernel):
-    """True if all valid elements are True. True if empty or all null."""
+    """True if all valid elements are True. `reduce` answers True for an empty
+    or all-null input; `aggregate` answers null there, as PyArrow does."""
 
     comptime name = "all"
+    comptime absorbing = False
 
     @staticmethod
     def reduce(

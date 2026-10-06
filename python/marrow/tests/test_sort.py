@@ -7,7 +7,7 @@ Covers:
   - array.argsort(order, null_placement) — PyArrow-compatible string order
   - array.sort(order, null_placement)
   - array.take(indices)
-  - record_batch.sort_by(by, null_placement)
+  - record_batch.sort_by(sorting, *, null_placement)
   - ma.compute.sort_indices(array, *, ascending, null_placement)
   - ma.compute.sort(array, *, ascending, null_placement)
 """
@@ -180,7 +180,7 @@ def test_sort_by_bare_string():
             "v": ma.array([10, 20, 30], type=ma.int64()),
         }
     )
-    result = rb.sort_by("k", None)
+    result = rb.sort_by("k")
     assert arr_to_pylist(result.column("k")) == [1, 2, 3]
     assert arr_to_pylist(result.column("v")) == [20, 30, 10]
 
@@ -192,7 +192,7 @@ def test_sort_by_list_of_strings():
             "v": ma.array([10, 20, 30], type=ma.int64()),
         }
     )
-    result = rb.sort_by(["k"], None)
+    result = rb.sort_by(["k"])
     assert arr_to_pylist(result.column("k")) == [1, 2, 3]
 
 
@@ -203,7 +203,7 @@ def test_sort_by_list_of_tuples_ascending():
             "v": ma.array([10, 20, 30], type=ma.int64()),
         }
     )
-    result = rb.sort_by([("k", "ascending")], None)
+    result = rb.sort_by([("k", "ascending")])
     assert arr_to_pylist(result.column("k")) == [1, 2, 3]
 
 
@@ -214,7 +214,7 @@ def test_sort_by_list_of_tuples_descending():
             "v": ma.array([10, 20, 30], type=ma.int64()),
         }
     )
-    result = rb.sort_by([("k", "descending")], None)
+    result = rb.sort_by([("k", "descending")])
     assert arr_to_pylist(result.column("k")) == [3, 2, 1]
     assert arr_to_pylist(result.column("v")) == [10, 30, 20]
 
@@ -225,10 +225,29 @@ def test_sort_by_null_placement_at_end():
             "k": ma.array([3, None, 1], type=ma.int64()),
         }
     )
-    result = rb.sort_by("k", "at_end")
+    result = rb.sort_by("k", null_placement="at_end")
     vals = arr_to_pylist(result.column("k"))
     assert vals[-1] is None
     assert vals[:2] == [1, 3]
+
+
+def test_sort_by_null_placement_defaults_to_at_end():
+    rb = ma.record_batch({"k": ma.array([None, 3, 1], type=ma.int64())})
+    assert arr_to_pylist(rb.sort_by("k").column("k")) == [1, 3, None]
+    table = ma.Table.from_batches([rb])
+    assert table.sort_by("k").column("k").to_pylist() == [1, 3, None]
+
+
+def test_sort_by_null_placement_at_start():
+    rb = ma.record_batch({"k": ma.array([3, None, 1], type=ma.int64())})
+    result = rb.sort_by("k", null_placement="at_start")
+    assert arr_to_pylist(result.column("k")) == [None, 1, 3]
+
+
+def test_sort_by_rejects_unknown_null_placement():
+    rb = ma.record_batch({"k": ma.array([3, None, 1], type=ma.int64())})
+    with pytest.raises(ValueError, match="not a valid null placement"):
+        rb.sort_by("k", null_placement="last")
 
 
 def test_sort_by_preserves_row_correspondence():
@@ -238,6 +257,6 @@ def test_sort_by_preserves_row_correspondence():
             "b": ma.array(["x", "y", "z"]),
         }
     )
-    result = rb.sort_by([("a", "ascending")], None)
+    result = rb.sort_by([("a", "ascending")])
     assert arr_to_pylist(result.column("a")) == [10, 20, 30]
     assert arr_to_pylist(result.column("b")) == ["y", "z", "x"]

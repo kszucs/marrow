@@ -81,9 +81,15 @@ def test_any_skips_nulls_all_false():
     assert ma.compute.any(ma.array([False, None, False])) == False
 
 
-def test_any_empty_or_all_null_returns_false():
-    # identity for any is False
-    assert ma.compute.any(ma.array([False, False], type=ma.bool_())) == False
+def test_any_empty_or_all_null_returns_null():
+    assert ma.compute.any(ma.array([], type=ma.bool_())) is None
+    assert ma.compute.any(ma.array([None, None], type=ma.bool_())) is None
+    assert ma.compute.any(ma.array([], type=ma.bool_()), min_count=0) == False
+
+
+def test_any_without_skip_nulls():
+    assert ma.compute.any(ma.array([False, None]), skip_nulls=False) is None
+    assert ma.compute.any(ma.array([True, None]), skip_nulls=False) == True
 
 
 # ── all ──────────────────────────────────────────────────────────────────────
@@ -105,9 +111,15 @@ def test_all_skips_nulls_finds_false():
     assert ma.compute.all(ma.array([True, None, False])) == False
 
 
-def test_all_empty_or_all_null_returns_true():
-    # identity for all is True
-    assert ma.compute.all(ma.array([True, True], type=ma.bool_())) == True
+def test_all_empty_or_all_null_returns_null():
+    assert ma.compute.all(ma.array([], type=ma.bool_())) is None
+    assert ma.compute.all(ma.array([None, None], type=ma.bool_())) is None
+    assert ma.compute.all(ma.array([], type=ma.bool_()), min_count=0) == True
+
+
+def test_all_without_skip_nulls():
+    assert ma.compute.all(ma.array([True, None]), skip_nulls=False) is None
+    assert ma.compute.all(ma.array([False, None]), skip_nulls=False) == False
 
 
 # ── count_distinct / approx_count_distinct ────────────────────────────────────

@@ -172,7 +172,7 @@ def _assert_sorted(
     a: DynArray,
     idx: Int32Array,
     ascending: Bool = True,
-    nulls_first: Bool = True,
+    nulls_first: Bool = False,
 ) raises:
     """Assert idx is a correct sort permutation for a (full order check)."""
     var n = len(a)
@@ -223,7 +223,7 @@ def _assert_sorted(
 
 
 def _assert_values_sorted(
-    a: DynArray, ascending: Bool = True, nulls_first: Bool = True
+    a: DynArray, ascending: Bool = True, nulls_first: Bool = False
 ) raises:
     """Assert that the array's values are already in sorted order."""
     var n = len(a)
@@ -612,6 +612,16 @@ def test_sort_indices_nulls_last() raises:
     var i4 = _idx(idx, 4)
     assert_true((i3 == 1 or i3 == 3) and (i4 == 1 or i4 == 3) and i3 != i4)
     _assert_sorted(a, idx, nulls_first=False)
+
+
+def test_sort_indices_puts_nulls_last_by_default() raises:
+    """PyArrow's `null_placement` defaults to "at_end"."""
+    var b = Int32Builder(capacity=3)
+    b.append_null()
+    b.append(Int32(2))
+    b.append(Int32(1))
+    var a: DynArray = b.finish().to_dyn()
+    _assert_perm(sort_indices(a), [2, 1, 0])
 
 
 def test_sort_indices_all_null() raises:

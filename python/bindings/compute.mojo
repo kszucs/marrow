@@ -15,7 +15,8 @@ in the file that performs it.
 
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from marrow.arrays import DynArray
+from marrow.arrays import BoolArray, DynArray
+from marrow.scalars import BoolScalar
 from marrow.errors import InvalidError
 from marrow.dtypes import DynType, bool_, int32
 import marrow.kernels as mk
@@ -66,12 +67,28 @@ def _binary[
 
 
 def _reduce[
-    f: def(DynArray, ExecContext) raises thin -> Bool,
-]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
-    """``(array, ctx) -> bool`` — the boolean reductions."""
+    f: def(BoolArray, Bool, Int, ExecContext) raises thin -> BoolScalar,
+]() -> def(
+    PythonObject, PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    """``(array, skip_nulls, min_count, ctx) -> bool | None`` — the boolean
+    reductions."""
 
-    def wrapper(array: PythonObject, ctx: PythonObject) raises -> PythonObject:
-        return PythonObject(f(DynArray(py=array), ExecContext(py=ctx)))
+    def wrapper(
+        array: PythonObject,
+        skip_nulls: PythonObject,
+        min_count: PythonObject,
+        ctx: PythonObject,
+    ) raises -> PythonObject:
+        var out = f(
+            DynArray(py=array).as_bool(),
+            Bool(py=skip_nulls),
+            Int(py=min_count),
+            ExecContext(py=ctx),
+        )
+        if out.is_valid():
+            return PythonObject(out.value())
+        return PythonObject(None)
 
     return wrapper
 
@@ -241,8 +258,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_binary[mk.SubKernel.dispatch]()]("subtract")
     mb.def_function[_binary[mk.MulKernel.dispatch]()]("multiply")
     mb.def_function[_binary[_divide]()]("divide")
-    mb.def_function[_reduce[mk.AnyKernel.dispatch]()]("any")
-    mb.def_function[_reduce[mk.AllKernel.dispatch]()]("all")
+    mb.def_function[_reduce[mk.AnyKernel.aggregate]()]("any")
+    mb.def_function[_reduce[mk.AllKernel.aggregate]()]("all")
     mb.def_function[_unary[IsNullKernel.dispatch]()]("is_null")
     mb.def_function[_unary[NotNullKernel.dispatch]()]("is_valid")
     mb.def_function[_unary[mk.drop_null]()]("drop_null")

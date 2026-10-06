@@ -5,7 +5,7 @@ from std.math import nan
 from std.testing import assert_equal, assert_true, assert_false
 
 from ...arrays import DynArray, Int32Array, PrimitiveArray, StringArray
-from ...scalars import DynScalar
+from ...scalars import BoolScalar, DynScalar
 from ...builders import (
     array,
     nulls,
@@ -46,6 +46,8 @@ from ...kernels.aggregate import (
     CountFold,
     Windowable,
     ValidCount,
+    AnyKernel,
+    AllKernel,
 )
 
 
@@ -311,3 +313,54 @@ def test_over_float_min_max_with_nan() raises:
     _check_over[Fold[MinFold, Float64Type]](col)
     _check_over[Fold[MaxFold, Float64Type]](col)
     _check_over[Fold[SumFold, Float64Type]](col)
+
+
+# ---------------------------------------------------------------------------
+# any / all under PyArrow's ScalarAggregateOptions
+# ---------------------------------------------------------------------------
+
+
+def _is(got: BoolScalar, expected: Optional[Bool]) raises:
+    if expected:
+        assert_true(got.is_valid())
+        assert_equal(got.value(), expected.value())
+    else:
+        assert_false(got.is_valid())
+
+
+def test_any_all_empty_or_all_null_is_null() raises:
+    """The default `min_count=1` answers null without a valid element."""
+    var all_null: List[Optional[Bool]] = [None, None]
+    for values in [array(List[Optional[Bool]]()), array(all_null)]:
+        _is(AnyKernel.aggregate(values), None)
+        _is(AllKernel.aggregate(values), None)
+        _is(AnyKernel.aggregate(values, min_count=0), False)
+        _is(AllKernel.aggregate(values, min_count=0), True)
+
+
+def test_any_all_skip_nulls() raises:
+    var false_null = array([False, None])
+    var true_null = array([True, None])
+    _is(AnyKernel.aggregate(false_null), False)
+    _is(AnyKernel.aggregate(true_null), True)
+    _is(AllKernel.aggregate(false_null), False)
+    _is(AllKernel.aggregate(true_null), True)
+
+
+def test_any_all_without_skip_nulls_is_kleene() raises:
+    """A null is unknown: the answer is null unless the fold already decided
+    it — a True for `any`, a False for `all`."""
+    var false_null = array([False, None])
+    var true_null = array([True, None])
+    _is(AnyKernel.aggregate(false_null, skip_nulls=False), None)
+    _is(AnyKernel.aggregate(true_null, skip_nulls=False), True)
+    _is(AllKernel.aggregate(false_null, skip_nulls=False), False)
+    _is(AllKernel.aggregate(true_null, skip_nulls=False), None)
+    _is(AnyKernel.aggregate(array([False, True]), skip_nulls=False), True)
+
+
+def test_any_all_min_count_counts_valid_elements() raises:
+    var values = array([True, None, True])
+    _is(AnyKernel.aggregate(values, min_count=2), True)
+    _is(AnyKernel.aggregate(values, min_count=3), None)
+    _is(AllKernel.aggregate(values, skip_nulls=False, min_count=3), None)

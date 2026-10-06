@@ -62,8 +62,8 @@ print(mc.sort(words, null_placement="at_end"))
 ## Sorting a table
 
 `RecordBatch.sort_by` reorders whole rows by a key column. Pass a list of
-`(column, "ascending" | "descending")` tuples and a null-placement argument
-(`None` for the default):
+`(column, "ascending" | "descending")` tuples; as in PyArrow, nulls go last
+unless you pass `null_placement="at_start"`:
 
 ```{python}
 people = ma.record_batch({

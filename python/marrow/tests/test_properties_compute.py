@@ -181,13 +181,26 @@ def test_invert_matches_pyarrow(a):
     assert_same(got, pc.invert(a))
 
 
-@given(any_arrays(st.just(pa.bool_())), st.sampled_from(["any", "all"]))
-def test_any_all_match_pyarrow(a, op):
-    """any / all skipping nulls. Compared with ``min_count=0``: marrow answers
-    a value for an empty or all-null input where PyArrow's default answers
-    null — pinned below."""
-    got = getattr(mc, op)(ma.array(a))
-    assert got == getattr(pc, op)(a, min_count=0).as_py()
+@given(
+    any_arrays(st.just(pa.bool_())),
+    st.sampled_from(["any", "all"]),
+    st.booleans(),
+    st.integers(0, 3),
+)
+def test_any_all_match_pyarrow(a, op, skip_nulls, min_count):
+    """any / all under every ``skip_nulls`` and a range of ``min_count``."""
+    got = getattr(mc, op)(ma.array(a), skip_nulls=skip_nulls, min_count=min_count)
+    want = getattr(pc, op)(a, skip_nulls=skip_nulls, min_count=min_count)
+    assert got == want.as_py()
+
+
+@pytest.mark.parametrize("op", ["any", "all"])
+@pytest.mark.parametrize("values", [[], [None]])
+def test_any_all_empty_is_null(op, values):
+    """PyArrow's default ``min_count=1`` answers null without a valid value."""
+    a = pa.array(values, pa.bool_())
+    assert getattr(mc, op)(ma.array(a)) is None
+    assert getattr(pc, op)(a).as_py() is None
 
 
 @given(any_arrays(), st.sampled_from(["is_null", "is_valid", "drop_null"]))
@@ -715,12 +728,20 @@ def test_sort_by_matches_pyarrow(inputs, null_placement):
         assert_same(_unsigned_zero(got.column(name)), _unsigned_zero(want.column(name)))
 
 
+def test_sort_by_default_null_placement():
+    rb = pa.record_batch({"a": pa.array([None, 1], pa.int64())})
+    assert ma.record_batch(rb).sort_by("a").to_pydict() == rb.sort_by("a").to_pydict()
+    table = pa.table(rb)
+    assert ma.table(table).sort_by("a").to_pydict() == table.sort_by("a").to_pydict()
+
+
 # ── strings ────────────────────────────────────────────────────────────────
 
-# Letters with interesting case mappings, multi-byte code points and the
-# whitespace that trimming has to recognise.
-# 'ß' is left out: its case mapping is pinned below.
-_ALPHABET = "aAzZ0 \t\néÉΣσ€😀"
+# Letters with interesting case mappings (including ones whose full mapping
+# expands, and a titlecase digraph), multi-byte code points and the whitespace
+# that trimming has to recognise. No combining marks: `reverse` keeps a
+# grapheme together, pinned below.
+_ALPHABET = "aAzZ0 \t\néÉΣσßẞİǅŉﬁᾳ€😀"
 _texts = st.text(alphabet=_ALPHABET, max_size=8)
 
 
@@ -756,6 +777,14 @@ def test_unary_string_matches_pyarrow(arr, verb):
     assert got.to_pylist() == want.to_pylist()
 
 
+@pytest.mark.parametrize("verb", ["upper", "capitalize"])
+def test_case_mapping_sharp_s(verb):
+    """One code point to one: 'ß' upper-cases to 'ẞ', not "SS"."""
+    arr = pa.array(["ß"])
+    got = to_pa(getattr(col("s"), verb)().execute(batch(s=arr)))
+    assert got.to_pylist() == _UNARY_STRINGS[verb](arr).to_pylist()
+
+
 _STRING_PREDICATES = {
     "startswith": pc.starts_with,
     "endswith": pc.ends_with,
@@ -788,18 +817,6 @@ def test_divide_int_min_by_minus_one():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="any/all: an empty or all-null input answers False/True; "
-    "pyarrow's default min_count=1 answers null",
-)
-@pytest.mark.parametrize("op", ["any", "all"])
-@pytest.mark.parametrize("values", [[], [None]])
-def test_any_all_empty_is_null(op, values):
-    a = pa.array(values, pa.bool_())
-    assert getattr(mc, op)(ma.array(a)) == getattr(pc, op)(a).as_py()
-
-
-@pytest.mark.xfail(
-    strict=True,
     reason="take: an out-of-bounds or negative index yields null instead of raising",
 )
 @pytest.mark.parametrize("index", [1, -1])
@@ -824,15 +841,6 @@ def test_sort_indices_nan_placement(order, null_placement):
     want = pc.sort_indices(arr, sort_keys=[("", order)], null_placement=null_placement)
     got = mc.sort_indices(ma.array(arr), [("", order)], null_placement=null_placement)
     assert to_pa(got).to_pylist() == want.to_pylist()
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="RecordBatch.sort_by: nulls default to first; pyarrow defaults to at_end",
-)
-def test_sort_by_default_null_placement():
-    rb = pa.record_batch({"a": pa.array([None, 1], pa.int64())})
-    assert ma.record_batch(rb).sort_by("a").to_pydict() == rb.sort_by("a").to_pydict()
 
 
 @pytest.mark.xfail(
@@ -865,15 +873,13 @@ def test_cast_sign_change_is_checked(value, src, dst):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="upper/capitalize apply the full case mapping ('ß' -> 'SS', and "
-    "capitalize gives 'SS', not even the titlecase 'Ss'); PyArrow's utf8_upper "
-    "and utf8_capitalize map one code point to one ('ß' -> 'ẞ')",
+    reason="reverse keeps a grapheme cluster together; PyArrow's utf8_reverse "
+    "reverses code points, so a combining mark moves before its base",
 )
-@pytest.mark.parametrize("verb", ["upper", "capitalize"])
-def test_case_mapping_sharp_s(verb):
-    arr = pa.array(["ß"])
-    got = to_pa(getattr(col("s"), verb)().execute(batch(s=arr)))
-    assert got.to_pylist() == _UNARY_STRINGS[verb](arr).to_pylist()
+def test_reverse_by_code_point():
+    arr = pa.array(["0\u0345"])
+    got = to_pa(col("s").reverse().execute(batch(s=arr)))
+    assert got.to_pylist() == pc.utf8_reverse(arr).to_pylist()
 
 
 @pytest.mark.parametrize("safe", [False, True])

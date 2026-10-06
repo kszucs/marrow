@@ -384,7 +384,7 @@ def _record_batch_join(
 def _record_batch_sort_by(
     py_self: PythonObject,
     by: PythonObject,
-    null_placement: PythonObject,
+    nulls_first: PythonObject,
     num_threads: PythonObject,
 ) raises -> PythonObject:
     """Flatten PyArrow's `by` spellings, then call `RecordBatch.sort_by`.
@@ -394,9 +394,6 @@ def _record_batch_sort_by(
     it is on the core type.
     """
     ref rb = py_self.downcast_value_ptr[RecordBatch]()[]
-    var nulls_first = True
-    if not null_placement.__is__(PythonObject(None)):
-        nulls_first = String(py=null_placement) != "at_end"
 
     var builtins = Python.import_module("builtins")
     var keys = List[String]()
@@ -417,7 +414,7 @@ def _record_batch_sort_by(
     return rb.sort_by(
         keys,
         ascending,
-        nulls_first,
+        Bool(py=nulls_first),
         ExecContext.parallel(Int(py=num_threads)),
     ).to_python_object()
 

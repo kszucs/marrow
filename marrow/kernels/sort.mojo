@@ -412,7 +412,7 @@ struct SortIndices(Kernel):
     def dispatch(
         array: DynArray,
         ascending: Bool = True,
-        nulls_first: Bool = True,
+        nulls_first: Bool = False,
         stable: Bool = False,
         limit: Optional[Int] = None,
         ctx: ExecContext = ExecContext.serial(),
@@ -496,7 +496,7 @@ struct SortIndices(Kernel):
         array: StructArray,
         key_indices: List[Int],
         ascending: List[Bool],
-        nulls_first: Bool = True,
+        nulls_first: Bool = False,
         stable: Bool = False,
         limit: Optional[Int] = None,
         ctx: ExecContext = ExecContext.serial(),
@@ -574,7 +574,7 @@ struct SortIndices(Kernel):
     ](
         arr: PrimitiveArray[T],
         ascending: Bool = True,
-        nulls_first: Bool = True,
+        nulls_first: Bool = False,
         stable: Bool = False,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
@@ -682,7 +682,7 @@ struct SortIndices(Kernel):
     def apply(
         arr: BoolArray,
         ascending: Bool = True,
-        nulls_first: Bool = True,
+        nulls_first: Bool = False,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
         """O(N) counting sort for bool arrays.
@@ -806,7 +806,7 @@ struct SortIndices(Kernel):
     ](
         arr: A,
         ascending: Bool = True,
-        nulls_first: Bool = True,
+        nulls_first: Bool = False,
         stable: Bool = False,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
@@ -863,7 +863,7 @@ struct SortIndices(Kernel):
 def sort_indices(
     array: DynArray,
     ascending: Bool = True,
-    nulls_first: Bool = True,
+    nulls_first: Bool = False,
     stable: Bool = False,
     limit: Optional[Int] = None,
     ctx: ExecContext = ExecContext.serial(),
@@ -878,7 +878,7 @@ def sort(
     array: StructArray,
     key_indices: List[Int],
     ascending: List[Bool],
-    nulls_first: Bool = True,
+    nulls_first: Bool = False,
     stable: Bool = False,
     limit: Optional[Int] = None,
     ctx: ExecContext = ExecContext.serial(),

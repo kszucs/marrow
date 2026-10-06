@@ -273,7 +273,7 @@ struct RecordBatch(
         self,
         keys: List[String],
         ascending: List[Bool],
-        nulls_first: Bool = True,
+        nulls_first: Bool = False,
         ctx: ExecContext = ExecContext.auto(),
     ) raises -> RecordBatch:
         """Sort by one or more key columns, most-significant first.
