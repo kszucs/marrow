@@ -32,6 +32,7 @@ ul.task-list li input[type="checkbox"] {
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
+<link href="../reference/compliance.html" rel="next">
 <link href="../reference/comptime.html" rel="prev">
 <link href="../assets/favicon.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
@@ -514,6 +515,12 @@ document.addEventListener("DOMContentLoaded", function () {
  <span class="menu-text">Status &amp; limitations</span></a>
   </div>
 </li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../reference/compliance.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Spec compliance</span></a>
+  </div>
+</li>
       </ul>
   </li>
     </ul>
@@ -569,7 +576,7 @@ SPDX-License-Identifier: Apache-2.0
 <p>Two independent checks, neither of which grades marrow against itself:</p>
 <ul>
 <li><strong>The golden corpus</strong> — <code>golden/</code>, <strong>285 query cases</strong>. Each records a SQL query, the answer <strong>generated from DuckDB</strong>, and the marrow spelling. The expectations are <em>never</em> regenerated from marrow. The corpus currently carries <strong>zero <code>xfail</code>s</strong>: every case that compiles, passes.</li>
-<li><strong>Arrow archery integration</strong> — the official cross-implementation suite, run against the <strong>C++, Rust and Go</strong> implementations in both directions (<code>pixi run -e integration integration</code>), skipping the layouts marrow does not implement: unions, views, run-end encoding and extension types.</li>
+<li><strong>Arrow archery integration</strong> — the official cross-implementation suite, run against the <strong>C++, Rust and Go</strong> implementations in both directions (<code>pixi run -e integration integration</code>), skipping the layouts marrow does not implement: unions, list views, run-end encoding and extension types. Marrow reads the suite’s JSON, writes and reads IPC, and exports and imports C Data itself; pyarrow only compares the results. See <a href="../reference/compliance.html">Spec compliance</a> for what is checked, type by type.</li>
 </ul>
 </section>
 <section id="known-wrong-answers" class="level2">
@@ -1131,6 +1138,9 @@ SPDX-License-Identifier: Apache-2.0
       </a>          
   </div>
   <div class="nav-page nav-page-next">
+      <a href="../reference/compliance.html" class="pagination-link" aria-label="Spec compliance">
+        <span class="nav-page-text">Spec compliance</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
   </div>
 </nav>
 </div> <!-- /content -->

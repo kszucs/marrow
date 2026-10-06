@@ -550,6 +550,12 @@ document.addEventListener("DOMContentLoaded", function () {
  <span class="menu-text">Status &amp; limitations</span></a>
   </div>
 </li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../reference/compliance.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Spec compliance</span></a>
+  </div>
+</li>
       </ul>
   </li>
     </ul>
@@ -771,6 +777,7 @@ Note
 <span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="kw">out</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><code>row_number</code>, <code>rank</code> and <code>dense_rank</code> are re-exported from <code>marrow.expr</code>; <code>percent_rank</code>, <code>cume_dist</code> and <code>ntile</code> come from <code>marrow.expr.builders</code>. <code>lag</code>, <code>lead</code>, <code>first_value</code>, <code>nth_value</code> and <code>last_value</code> are methods on a value. A window preserves <strong>input order</strong>, not sorted order.</p>
+<p>A window function needs <code>.over(...)</code> before it is a column. Window values and per-row values may share one <code>with_columns</code>: the per-row ones are added first, so a window can order by a column the same call computes. Each window value gets its own <code>Window</code> node and its own sort; <code>optimize[AllRules]()</code> merges the ones over the same window, so they share one.</p>
 </section>
 <section id="the-optimizer" class="level2">
 <h2 class="anchored" data-anchor-id="the-optimizer">The optimizer</h2>

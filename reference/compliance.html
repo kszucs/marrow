@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Comptime vs runtime lane – Marrow</title>
+<title>Spec compliance – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -23,41 +23,6 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
-/* CSS for syntax highlighting */
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-  { counter-reset: source-line 0; }
-pre.numberSource code > span
-  { position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-  { content: counter(source-line);
-    position: relative; left: -1em; text-align: right; vertical-align: baseline;
-    border: none; display: inline-block;
-    -webkit-touch-callout: none; -webkit-user-select: none;
-    -khtml-user-select: none; -moz-user-select: none;
-    -ms-user-select: none; user-select: none;
-    padding: 0 4px; width: 4em;
-  }
-pre.numberSource { margin-left: 3em;  padding-left: 4px; }
-div.sourceCode
-  {   }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
-}
 </style>
 
 
@@ -67,8 +32,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/status.html" rel="next">
-<link href="../reference/architecture.html" rel="prev">
+<link href="../reference/status.html" rel="prev">
 <link href="../assets/favicon.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -139,12 +103,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="Comptime vs runtime lane – Marrow">
-<meta property="og:description" content="The same query in both lanes, measured">
+<meta property="og:title" content="Spec compliance – Marrow">
+<meta property="og:description" content="Which parts of the Arrow specifications marrow implements, and how each is checked">
 <meta property="og:image" content="https://marrow.kszucs.dev/reference/assets/social.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="Comptime vs runtime lane – Marrow">
-<meta name="twitter:description" content="The same query in both lanes, measured">
+<meta name="twitter:title" content="Spec compliance – Marrow">
+<meta name="twitter:description" content="Which parts of the Arrow specifications marrow implements, and how each is checked">
 <meta name="twitter:image" content="https://marrow.kszucs.dev/reference/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -366,7 +330,7 @@ document.addEventListener("DOMContentLoaded", function () {
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/comptime.html">Comptime vs runtime lane</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/compliance.html">Spec compliance</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -540,7 +504,7 @@ document.addEventListener("DOMContentLoaded", function () {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../reference/comptime.html" class="sidebar-item-text sidebar-link active">
+  <a href="../reference/comptime.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Comptime vs runtime lane</span></a>
   </div>
 </li>
@@ -552,7 +516,7 @@ document.addEventListener("DOMContentLoaded", function () {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../reference/compliance.html" class="sidebar-item-text sidebar-link">
+  <a href="../reference/compliance.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Spec compliance</span></a>
   </div>
 </li>
@@ -568,19 +532,26 @@ document.addEventListener("DOMContentLoaded", function () {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#what-is-compared" id="toc-what-is-compared" class="nav-link active" data-scroll-target="#what-is-compared">What is compared</a></li>
-  <li><a href="#reproducing-it" id="toc-reproducing-it" class="nav-link" data-scroll-target="#reproducing-it">Reproducing it</a></li>
+  <li><a href="#how-marrow-is-checked" id="toc-how-marrow-is-checked" class="nav-link active" data-scroll-target="#how-marrow-is-checked">How marrow is checked</a></li>
+  <li><a href="#data-types" id="toc-data-types" class="nav-link" data-scroll-target="#data-types">Data types</a>
+  <ul class="collapse">
+  <li><a href="#nesting" id="toc-nesting" class="nav-link" data-scroll-target="#nesting">Nesting</a></li>
+  </ul></li>
+  <li><a href="#ipc-format" id="toc-ipc-format" class="nav-link" data-scroll-target="#ipc-format">IPC format</a></li>
+  <li><a href="#c-interfaces" id="toc-c-interfaces" class="nav-link" data-scroll-target="#c-interfaces">C interfaces</a></li>
+  <li><a href="#robustness-against-malformed-input" id="toc-robustness-against-malformed-input" class="nav-link" data-scroll-target="#robustness-against-malformed-input">Robustness against malformed input</a></li>
+  <li><a href="#compared-with-other-implementations" id="toc-compared-with-other-implementations" class="nav-link" data-scroll-target="#compared-with-other-implementations">Compared with other implementations</a></li>
   </ul>
-<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/comptime.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/compliance.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/comptime.html">Comptime vs runtime lane</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/compliance.html">Spec compliance</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">Comptime vs runtime lane</h1>
-<p class="subtitle lead">The same query in both lanes, measured</p>
+<h1 class="title">Spec compliance</h1>
+<p class="subtitle lead">Which parts of the Arrow specifications marrow implements, and how each is checked</p>
 </div>
 
 
@@ -601,83 +572,451 @@ document.addEventListener("DOMContentLoaded", function () {
 Copyright 2024 Szűcs Krisztián
 SPDX-License-Identifier: Apache-2.0
 -->
-<p><a href="../guide/expressions.html">Queries in Mojo</a> describes two expression lanes under one plan IR: <code>col("a", int64)</code> resolves the operand’s dtype at compile time and fuses a subtree into one SIMD loop, while <code>col("a")</code> resolves it at run time and materialises every intermediate column. This page measures what that difference is worth, query by query.</p>
-<p>The comptime lane is faster on <strong>8 of 8</strong> queries; speedups range from 1.05× to 9.22×.</p>
+<p>Apache Arrow is several specifications: the <strong>columnar format</strong> (the data types and their memory layout), the <strong>IPC format</strong> (how batches are written to files and streams), and the <strong>C interfaces</strong> (how two libraries in one process hand each other data). This page shows what marrow implements of each, and what checks it against other Arrow implementations.</p>
+<p><strong>Legend:</strong> ✅ supported and cross-checked · ☑️ supported, checked by marrow’s own tests only · ❌ not supported.</p>
+<section id="how-marrow-is-checked" class="level2">
+<h2 class="anchored" data-anchor-id="how-marrow-is-checked">How marrow is checked</h2>
 <table class="caption-top table">
-<caption>Mean over each case’s rounds, 1,000,000 rows. Measured on Apple M4 Max (Darwin 24.6.0, arm64) with Mojo 1.2.0.dev2026092105 (e9569894), at commit <a href="https://github.com/kszucs/marrow/commit/35db696a7a2cf3f766db1b419d75ab2e0cf036ab"><code>35db696a</code></a> on 2026-09-27.</caption>
 <thead>
 <tr class="header">
-<th>Query</th>
-<th style="text-align: right;">Comptime</th>
-<th style="text-align: right;">Runtime</th>
-<th style="text-align: right;">Speedup</th>
+<th>Check</th>
+<th>What it does</th>
+<th>Run it</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td><code>aggregate_sum</code></td>
-<td style="text-align: right;">1.07 ms</td>
-<td style="text-align: right;">1.88 ms</td>
-<td style="text-align: right;"><strong>1.75×</strong></td>
+<td><strong>Arrow integration suite</strong> (archery)</td>
+<td>The official cross-implementation suite. Each implementation writes data that the others must read back exactly, as IPC files and streams and through the C Data Interface. Marrow takes part against <strong>Arrow C++, arrow-rs and arrow-go</strong>, in both directions.</td>
+<td><code>pixi run -e integration integration</code></td>
 </tr>
 <tr class="even">
-<td><code>aggregate_sum_grouped_1</code></td>
-<td style="text-align: right;">8.76 ms</td>
-<td style="text-align: right;">9.93 ms</td>
-<td style="text-align: right;"><strong>1.13×</strong></td>
+<td><strong>Gold files</strong></td>
+<td>IPC files written by past Arrow C++ releases (0.14.1 to 21.0.0), from <a href="https://github.com/apache/arrow-testing"><code>apache/arrow-testing</code></a>. Marrow must read each and agree with the JSON beside it.</td>
+<td>part of the suite above</td>
 </tr>
 <tr class="odd">
-<td><code>aggregate_sum_grouped_100</code></td>
-<td style="text-align: right;">7.90 ms</td>
-<td style="text-align: right;">8.27 ms</td>
-<td style="text-align: right;"><strong>1.05×</strong></td>
+<td><strong>C Stream and C Device phases</strong></td>
+<td>Not covered by archery: every case of the suite goes both ways through each interface against Arrow C++.</td>
+<td>part of the suite above</td>
 </tr>
 <tr class="even">
-<td><code>aggregate_sum_grouped_4</code></td>
-<td style="text-align: right;">7.23 ms</td>
-<td style="text-align: right;">9.44 ms</td>
-<td style="text-align: right;"><strong>1.31×</strong></td>
-</tr>
-<tr class="odd">
-<td><code>filter_computed</code></td>
-<td style="text-align: right;">3.80 ms</td>
-<td style="text-align: right;">15.57 ms</td>
-<td style="text-align: right;"><strong>4.09×</strong></td>
-</tr>
-<tr class="even">
-<td><code>filter_range</code></td>
-<td style="text-align: right;">4.05 ms</td>
-<td style="text-align: right;">12.24 ms</td>
-<td style="text-align: right;"><strong>3.03×</strong></td>
-</tr>
-<tr class="odd">
-<td><code>project_float_arithmetic</code></td>
-<td style="text-align: right;">0.72 ms</td>
-<td style="text-align: right;">6.62 ms</td>
-<td style="text-align: right;"><strong>9.22×</strong></td>
-</tr>
-<tr class="even">
-<td><code>project_int_arithmetic</code></td>
-<td style="text-align: right;">0.91 ms</td>
-<td style="text-align: right;">2.21 ms</td>
-<td style="text-align: right;"><strong>2.44×</strong></td>
+<td><strong>Fuzz regression inputs</strong></td>
+<td>Malformed files that once crashed Arrow C++’s fuzzers. Marrow must read or refuse each one, never crash.</td>
+<td><code>pixi run -e dev pytest fuzz</code></td>
 </tr>
 </tbody>
 </table>
-<section id="what-is-compared" class="level2">
-<h2 class="anchored" data-anchor-id="what-is-compared">What is compared</h2>
-<p>Every row is a pair of benchmarks in <a href="https://github.com/kszucs/marrow/blob/main/marrow/expr/tests/bench_comptime.mojo"><code>marrow/expr/tests/bench_comptime.mojo</code></a>: <code>bench_comptime_&lt;query&gt;</code> and <code>bench_runtime_&lt;query&gt;</code> build the same plan over the same batch and return the same answer — two contenders, compared the way <code>--competition</code> compares libraries. The only thing that differs is how the leaves are spelled:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode mojo fragment code-with-copy"><code class="sourceCode mojo"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(batch).<span class="fu">filter</span>((<span class="fu">col</span>(<span class="st">"a"</span>, int64) <span class="op">&gt;</span> <span class="fu">lit</span>(<span class="dv">200</span>, int64)) <span class="op">&amp;</span> (<span class="fu">col</span>(<span class="st">"a"</span>, int64) <span class="op">&lt;</span> <span class="fu">lit</span>(<span class="dv">800</span>, int64)))</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(batch).<span class="fu">filter</span>((<span class="fu">col</span>(<span class="st">"a"</span>) <span class="op">&gt;</span> <span class="fu">lit</span>(<span class="fu">Int64Scalar</span>(<span class="dv">200</span>))) <span class="op">&amp;</span> (<span class="fu">col</span>(<span class="st">"a"</span>) <span class="op">&lt;</span> <span class="fu">lit</span>(<span class="fu">Int64Scalar</span>(<span class="dv">800</span>))))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>The time covers the whole plan — building it, lowering it to operators and draining it — so it is what a caller of <code>.execute()</code> pays.</p>
-<p>Every query is one the comptime lane can <strong>fuse</strong>: it runs the expression as one loop over the input, where the runtime lane evaluates <code>a * b</code> into a column, then the comparison into another, and so on. An aggregate neither lane can fuse, such as <code>count(DISTINCT a)</code>, is left out on purpose: both lanes call the same kernel and the times tie.</p>
-<p>The grouped rows win by less, and that is the grouping rather than the fusion. Fusion saves about the same absolute time there as in the whole-table <code>sum</code>, but every row’s key is hashed and probed whatever the number of groups, and both lanes pay that alike. A single group is no cheaper: every row then updates the same slot, one after another.</p>
+<p>The comparisons are exact, including schema and field metadata. Marrow does every step itself: it reads the suite’s JSON, writes and reads IPC, and exports and imports C structs. pyarrow is used only to compare two results.</p>
 </section>
-<section id="reproducing-it" class="level2">
-<h2 class="anchored" data-anchor-id="reproducing-it">Reproducing it</h2>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> dev bench-comptime</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>That runs the pairs with <code>--competition-winner comptime</code>, which <strong>fails the run unless the comptime lane is faster on every query</strong> — a tie, or a query only one lane ran, counts as a loss — and <code>--competition-json docs/data/comptime.json</code>, which is what this page renders. The Benchmarks workflow runs the same check on every pull request.</p>
-<p>Timings on a shared machine are noisy, and the numbers above are only as good as the machine they were recorded on.</p>
+<section id="data-types" class="level2">
+<h2 class="anchored" data-anchor-id="data-types">Data types</h2>
+<p>“Cross-checked with” names the implementations marrow exchanges the type with, over IPC and the C Data Interface. Where an implementation is missing, that implementation does not support the type.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 27%">
+<col style="width: 45%">
+<col style="width: 27%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Type</th>
+<th style="text-align: center;">Supported</th>
+<th>Cross-checked with</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Null</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Boolean</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Integers (8 to 64 bits, signed and unsigned)</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Float32, Float64</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Float16</td>
+<td style="text-align: center;">✅</td>
+<td>C++</td>
+</tr>
+<tr class="even">
+<td>Decimal128, Decimal256</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Decimal32, Decimal64</td>
+<td style="text-align: center;">✅</td>
+<td>C++</td>
+</tr>
+<tr class="even">
+<td>Date32, Date64</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Time32, Time64 (all units)</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Timestamp (all units, with and without time zone)</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Duration (all units)</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Interval: year-month, day-time, month-day-nano</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Binary, String</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Large binary, large string</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Binary view, string view</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Go</td>
+</tr>
+<tr class="even">
+<td>Fixed-size binary</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>List, large list, fixed-size list</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Struct</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Map (including non-canonical field names)</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Dictionary (signed and unsigned indices, nested dictionaries)</td>
+<td style="text-align: center;">✅</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>List view, large list view</td>
+<td style="text-align: center;">❌</td>
+<td></td>
+</tr>
+<tr class="even">
+<td>Union (sparse and dense)</td>
+<td style="text-align: center;">❌</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td>Run-end encoded</td>
+<td style="text-align: center;">❌</td>
+<td></td>
+</tr>
+<tr class="even">
+<td>Extension types</td>
+<td style="text-align: center;">❌</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<section id="nesting" class="level3">
+<h3 class="anchored" data-anchor-id="nesting">Nesting</h3>
+<p>The suite’s own cases nest little, so marrow adds its own, built with the suite’s tooling and read by every implementation.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Case</th>
+<th>What it nests</th>
+<th>Cross-checked with</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Every type inside a struct</td>
+<td>All the types above, each as a struct field</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="even">
+<td>Structs inside every container</td>
+<td>Structs (holding decimals, timestamps, maps, dictionaries) inside a list, large list, fixed-size list, map value and struct</td>
+<td>C++, Rust, Go</td>
+</tr>
+<tr class="odd">
+<td>Nested views</td>
+<td>String and binary views inside a struct and a list</td>
+<td>C++, Go</td>
+</tr>
+<tr class="even">
+<td>Nested small decimals</td>
+<td>Decimal32 and decimal64 inside a struct</td>
+<td>C++</td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="ipc-format" class="level2">
+<h2 class="anchored" data-anchor-id="ipc-format">IPC format</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 27%">
+<col style="width: 45%">
+<col style="width: 27%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Feature</th>
+<th style="text-align: center;">Supported</th>
+<th>How it is checked</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>File format</td>
+<td style="text-align: center;">✅</td>
+<td>integration suite, every type</td>
+</tr>
+<tr class="even">
+<td>Stream format</td>
+<td style="text-align: center;">✅</td>
+<td>integration suite, every type</td>
+</tr>
+<tr class="odd">
+<td>Dictionary batches</td>
+<td style="text-align: center;">✅</td>
+<td>integration suite, including dictionaries nested in lists, maps and structs</td>
+</tr>
+<tr class="even">
+<td>Delta and replacement dictionaries (reading streams)</td>
+<td style="text-align: center;">☑️</td>
+<td>marrow’s tests</td>
+</tr>
+<tr class="odd">
+<td>Changing a dictionary between batches of a file</td>
+<td style="text-align: center;">✅ refused</td>
+<td>the file format allows one dictionary per id</td>
+</tr>
+<tr class="even">
+<td>LZ4 and ZSTD body compression</td>
+<td style="text-align: center;">✅</td>
+<td>gold files (2.0.0-compression), and round trips with pyarrow</td>
+</tr>
+<tr class="odd">
+<td>Shared dictionaries across fields</td>
+<td style="text-align: center;">✅</td>
+<td>gold files (4.0.0-shareddict)</td>
+</tr>
+<tr class="even">
+<td>Files from older Arrow releases</td>
+<td style="text-align: center;">✅</td>
+<td>gold files 0.14.1, 0.17.1, 1.0.0 and 21.0.0</td>
+</tr>
+<tr class="odd">
+<td>Schema and field metadata</td>
+<td style="text-align: center;">✅</td>
+<td>integration suite, compared exactly</td>
+</tr>
+<tr class="even">
+<td>Big-endian data</td>
+<td style="text-align: center;">❌ refused</td>
+<td>reading one raises an error instead of returning wrong values</td>
+</tr>
+<tr class="odd">
+<td>Tensor and sparse tensor messages</td>
+<td style="text-align: center;">❌</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="c-interfaces" class="level2">
+<h2 class="anchored" data-anchor-id="c-interfaces">C interfaces</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 27%">
+<col style="width: 45%">
+<col style="width: 27%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Interface</th>
+<th style="text-align: center;">Supported</th>
+<th>How it is checked</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>C Data Interface: schemas and arrays</td>
+<td style="text-align: center;">✅</td>
+<td>integration suite against C++, Rust and Go, both directions</td>
+</tr>
+<tr class="even">
+<td>C Stream Interface</td>
+<td style="text-align: center;">✅</td>
+<td>every suite case, both directions, against C++</td>
+</tr>
+<tr class="odd">
+<td>C Device Interface, CPU memory</td>
+<td style="text-align: center;">✅</td>
+<td>every suite case, both directions, against C++</td>
+</tr>
+<tr class="even">
+<td>C Device Interface, GPU memory</td>
+<td style="text-align: center;">❌</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Two checks run on every C Data exchange:</p>
+<ul>
+<li><strong>Full validation on import.</strong> Every imported batch is validated value by value (offsets never decrease, every dictionary index exists) before it is compared, as Arrow C++ and arrow-rs do.</li>
+<li><strong>Memory release.</strong> The suite counts the memory marrow’s exported structs hold before an exchange and after the other side releases them; the two must match, so a leak on either side fails the run.</li>
+</ul>
+</section>
+<section id="robustness-against-malformed-input" class="level2">
+<h2 class="anchored" data-anchor-id="robustness-against-malformed-input">Robustness against malformed input</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Input</th>
+<th>Expected</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>IPC streams and files that crashed Arrow C++’s fuzzers</td>
+<td>read or refused, never a crash</td>
+<td><code>apache/arrow-testing</code></td>
+</tr>
+<tr class="even">
+<td>Parquet files that crashed Arrow C++’s fuzzers</td>
+<td>read or refused, never a crash</td>
+<td><code>apache/arrow-testing</code></td>
+</tr>
+<tr class="odd">
+<td>Marrow’s own fuzzing finds</td>
+<td>as recorded per file</td>
+<td><code>fuzz/corpus/</code></td>
+</tr>
+</tbody>
+</table>
+<p>Known crashes that are not fixed yet are listed in <code>backlog.md</code> with their reproducers.</p>
+</section>
+<section id="compared-with-other-implementations" class="level2">
+<h2 class="anchored" data-anchor-id="compared-with-other-implementations">Compared with other implementations</h2>
+<p>How marrow’s checking lines up with Arrow C++ and arrow-rs:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 16%">
+<col style="width: 27%">
+<col style="width: 27%">
+<col style="width: 27%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Practice</th>
+<th style="text-align: center;">Arrow C++</th>
+<th style="text-align: center;">arrow-rs</th>
+<th style="text-align: center;">marrow</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Integration suite, IPC and C Data</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅</td>
+</tr>
+<tr class="even">
+<td>Gold files</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅</td>
+</tr>
+<tr class="odd">
+<td>C Stream checked against another implementation</td>
+<td style="text-align: center;">❌</td>
+<td style="text-align: center;">✅ (C++)</td>
+<td style="text-align: center;">✅ (C++)</td>
+</tr>
+<tr class="even">
+<td>C Device checked against another implementation</td>
+<td style="text-align: center;">❌</td>
+<td style="text-align: center;">❌</td>
+<td style="text-align: center;">✅ (C++)</td>
+</tr>
+<tr class="odd">
+<td>Full validation after a C Data import</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅</td>
+</tr>
+<tr class="even">
+<td>Memory release checked</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">❌</td>
+<td style="text-align: center;">✅</td>
+</tr>
+<tr class="odd">
+<td>Fuzz regression inputs replayed</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">❌</td>
+<td style="text-align: center;">✅</td>
+</tr>
+<tr class="even">
+<td>Big-endian</td>
+<td style="text-align: center;">reads it</td>
+<td style="text-align: center;">refuses it</td>
+<td style="text-align: center;">refuses it</td>
+</tr>
+<tr class="odd">
+<td>Arrow Flight</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">❌</td>
+</tr>
+</tbody>
+</table>
 
 
 </section>
@@ -1103,14 +1442,11 @@ SPDX-License-Identifier: Apache-2.0
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Architecture</span>
+      <a href="../reference/status.html" class="pagination-link" aria-label="Status &amp; limitations">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Status &amp; limitations</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/status.html" class="pagination-link" aria-label="Status &amp; limitations">
-        <span class="nav-page-text">Status &amp; limitations</span> <i class="bi bi-arrow-right-short"></i>
-      </a>
   </div>
 </nav>
 </div> <!-- /content -->
@@ -1121,7 +1457,7 @@ SPDX-License-Identifier: Apache-2.0
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/comptime.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/reference/compliance.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></div>
     <div class="nav-footer-right">
       <ul class="footer-items list-unstyled">
     <li class="nav-item">
