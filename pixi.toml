@@ -67,6 +67,10 @@ MODULAR_CACHE_DIR = "${MODULAR_CACHE_DIR:-$HOME/.cache/marrow-mojo}"
 # The developer CLI, with arguments passed through: `pixi run devkit license check`.
 devkit = "python -m devkit"
 build_python = { cmd = "python -m devkit build lib --bench" }
+# apache/arrow-testing, the `testing` submodule: archery's gold IPC files and
+# the inputs that crashed Arrow C++'s fuzzers. Outside a git checkout there is
+# nothing to fetch, and what reads it skips instead.
+testing_data = { cmd = "git submodule update --init testing || echo 'testing/ not fetched: not a git checkout'" }
 profile = "python -m devkit profile"
 package = "python -m devkit build package"
 publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
@@ -161,7 +165,7 @@ bench-history = { cmd = "python -m devkit bench history" }
 # declined cases trip over -- the list to work down when widening the grammar.
 golden_sql = { cmd = "python -m devkit golden sql", depends-on = ["build_python"] }
 test_mojo = { cmd = "pytest --mojo -v" }
-test_python = { cmd = "pytest --python -v" }
+test_python = { cmd = "pytest --python -v", depends-on = ["testing_data"] }
 test_gpu = { cmd = "pytest --gpu -v" }
 # The thread pool, and `ExecContext` dispatching through it, under
 # ThreadSanitizer. Mojo's driver finds the TSAN runtime itself (Xcode's clang
@@ -175,7 +179,7 @@ test_threads = { cmd = "pytest --mojo -v marrow/utils/tests/test_threads.mojo ma
 # loop 50x longer — a few minutes, for the race that shows once in a hundred
 # runs.
 test_threads_stress = { cmd = "pytest --mojo -v --repeat 30 --define MARROW_THREADS_STRESS=50 marrow/utils/tests/test_threads.mojo" }
-test = { cmd = "pytest -v" }
+test = { cmd = "pytest -v", depends-on = ["testing_data"] }
 # The exact hash consumers — group-by and join — with a 6-bit key hash, so
 # nearly every probe meets a colliding key and a hash-only answer would be
 # wrong (`KeyHash` in marrow/utils/hashing.mojo). Mojo lanes only:
@@ -185,7 +189,7 @@ test_collisions = { cmd = "pytest --mojo -v --define MARROW_HASH_BITS=6 marrow/k
 # Compiles every fuzz harness and replays the committed corpus against its
 # recorded verdicts; `fuzz-replay-asan` in `asan` also runs the entries only a
 # sanitizer catches. Fuzzing itself is the `fuzz` environment's.
-fuzz-replay = { cmd = "pytest -v fuzz" }
+fuzz-replay = { cmd = "pytest -v fuzz", depends-on = ["testing_data"] }
 # One selection = one compilation unit, so there is nothing for xdist to
 # parallelise across: splitting by file would rebuild the same unit per worker.
 # Narrow the selection instead (a directory, a file) — that shrinks the unit.
@@ -245,6 +249,7 @@ build_arrow = { cmd = "CONDA_PREFIX= integration/arrow/ci/scripts/integration_ar
 
 # --- run all integration tests ---
 integration = { cmd = "python -m devkit integration run --run-ipc --run-c-data --with-rust --with-go --with-cpp", depends-on = [
+  "testing_data",
   "build_python",
   "install_archery",
   "build_arrow",
@@ -265,7 +270,7 @@ test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
 # LeakSanitizer: any memory still allocated at exit fails the run.
 test_threads_asan = { cmd = "pytest --mojo --asan --leaks -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo" }
 # The fuzz corpus replayed under ASAN, entries marked `sanitizer` included.
-fuzz-replay-asan = { cmd = "pytest -v --asan fuzz" }
+fuzz-replay-asan = { cmd = "pytest -v --asan fuzz", depends-on = ["testing_data"] }
 
 # Fuzz — coverage-guided fuzzing with libFuzzer. `mojo build` has no coverage
 # flag, so a harness is emitted as LLVM bitcode and clang instruments and links
