@@ -5,10 +5,10 @@
 
 [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema)
 """
-from std.python import PythonObject
+from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.reflection import reflect
-from .errors import KeyError
+from .errors import KeyError, TypeError
 from .dtypes import DataType, DynType, Field
 
 
@@ -80,19 +80,22 @@ struct Schema(
         except:
             pass
 
-        # Try the Arrow C Schema Interface for foreign objects.
-        try:
+        var builtins = Python.import_module("builtins")
+        if Bool(py=builtins.hasattr(py, "__arrow_c_schema__")):
             var capsule = py.__arrow_c_schema__()
             self = CArrowSchema.from_pycapsule(capsule).to_schema()
-            return
-        except:
-            pass
-
-        # Fall back to iterating as a sequence of Field objects.
-        var fields = List[Field]()
-        for f in py:
-            fields.append(f.downcast_value_ptr[Field]()[].copy())
-        self = Schema(fields=fields^)
+        elif Bool(py=builtins.isinstance(py, builtins.list)) or Bool(
+            py=builtins.isinstance(py, builtins.tuple)
+        ):
+            var fields = List[Field]()
+            for f in py:
+                fields.append(f.downcast_value_ptr[Field]()[].copy())
+            self = Schema(fields=fields^)
+        else:
+            raise TypeError(
+                "expected a Schema, a list of Fields, or an object exporting"
+                " __arrow_c_schema__"
+            )
 
     @staticmethod
     def from_struct[T: AnyType]() -> Schema:

@@ -96,7 +96,7 @@ note = "a fixed-width dictionary page with fewer bytes than num_values: Primitiv
 ["b-pr7-dictionary-index-bytes.parquet"]
 verdict = "crash"
 bug = "B-PR7"
-match = "marrow/parquet/reader.mojo:921"
+match = "marrow/parquet/reader.mojo:925"
 note = "a dictionary index past a byte-array dictionary: ByteArrayLeafBuilder._place_dictionary slices past it"
 
 ["b-pr8-dictionary-index-gather.parquet"]
@@ -117,13 +117,12 @@ match = "marrow/utils/byteorder.mojo:186"
 note = "Rle.count_matches reads past the v1 definition levels it is given"
 
 ["b-pr11-plain-byte-array-length.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B-PR11"
-match = "marrow/parquet/reader.mojo:890"
 note = "a PLAIN byte-array value whose 4-byte length runs past the page"
 
 ["b-pr12-rle-boolean-length.parquet"]
 verdict = "crash"
 bug = "B-PR12"
-match = "marrow/parquet/codecs.mojo:1035"
+match = "marrow/parquet/codecs.mojo:1058"
 note = "an RLE boolean page whose 4-byte length runs past the values"

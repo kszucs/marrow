@@ -47,8 +47,18 @@ from .mojo import BuildOptions, write_if_changed
 #: What a target file has to define.
 ENTRY = re.compile(r"^def\s+fuzz_one\s*\(", re.MULTILINE)
 
-#: The verdicts `expected.toml` may give an entry.
-VERDICTS = ("accept", "reject", "crash")
+#: The verdicts `expected.toml` may give an entry. `survive` is either of
+#: `accept` and `reject`: what Arrow C++ asks of its fuzzers' regression inputs.
+VERDICTS = ("accept", "reject", "crash", "survive")
+
+#: apache/arrow-testing's regression inputs for each target -- what crashed
+#: Arrow C++'s fuzzers -- under the `testing` submodule's `data/`. Each must
+#: survive unless `fuzz/corpus/<target>/upstream.toml` gives it a verdict.
+UPSTREAM = {
+    "ipc_stream": ("arrow-ipc-stream", ("crash-*", "*-testcase-*")),
+    "ipc_file": ("arrow-ipc-file", ("*-testcase-*",)),
+    "parquet_read": ("parquet/fuzzing", ("*-testcase-*",)),
+}
 
 #: Every built artifact carries the platform it is for, so a host and a
 #: container working in one tree never run each other's binaries.
@@ -102,6 +112,25 @@ class Targets:
     def work(self, name):
         """Untracked: the binary, seeds, the growing corpus and crashes."""
         return self._repo.fuzz_work_dir / name
+
+    def upstream(self, name):
+        """arrow-testing's regression inputs for *name*: `survive` each, unless
+        `upstream.toml` beside its corpus says otherwise. None when the
+        `testing` submodule is not checked out."""
+        if name not in UPSTREAM:
+            return []
+        subdir, patterns = UPSTREAM[name]
+        directory = self._repo.root / "testing" / "data" / subdir
+        if not directory.is_dir():
+            return []
+        files = sorted({p for pattern in patterns for p in directory.glob(pattern)})
+        verdicts = Expectations.load(
+            directory, self.corpus(name) / "upstream.toml"
+        ).by_name()
+        return [
+            verdicts.get(p.name, Entry(p, "survive", note="arrow-testing"))
+            for p in files
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -573,9 +602,11 @@ class Expectations:
         self.entries = entries
 
     @classmethod
-    def load(cls, directory):
+    def load(cls, directory, manifest=None):
+        """The verdicts in *manifest* (`expected.toml` in *directory* by
+        default), for files in *directory*."""
         directory = Path(directory)
-        manifest = directory / cls.FILE
+        manifest = Path(manifest) if manifest else directory / cls.FILE
         table = tomllib.loads(manifest.read_text()) if manifest.exists() else {}
         entries = []
         for name, spec in table.items():
@@ -596,6 +627,9 @@ class Expectations:
                 )
             )
         return cls(directory, entries)
+
+    def by_name(self):
+        return {entry.name: entry for entry in self.entries}
 
     def problems(self):
         """Files with no verdict, and verdicts naming no file."""
@@ -630,6 +664,13 @@ class Outcome:
 
 def judge(entry, outcome):
     """None if *outcome* is what *entry* expects, else why not."""
+    if entry.verdict == "survive":
+        if outcome.verdict == "crash":
+            return (
+                f"{entry.name}: crashed on an input it must accept or refuse "
+                f"({signature(outcome.output)})\n{outcome.output[-4000:]}"
+            )
+        return None
     if outcome.verdict == entry.verdict:
         if (
             entry.verdict == "crash"
@@ -694,6 +735,8 @@ class Replay:
         """`(target, entry)` for every committed input."""
         for name in names or self._targets.names():
             for entry in Expectations.load(self._targets.corpus(name)).entries:
+                yield name, entry
+            for entry in self._targets.upstream(name):
                 yield name, entry
 
     def run(self, target, entry):

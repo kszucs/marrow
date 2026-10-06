@@ -16,6 +16,7 @@ from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .errors import InvalidError, KeyError, TypeError
 from .arrays import DynArray, ChunkedArray, StructArray
 from .builders import array
+from .c_data import CArrowArray
 from .schema import Schema
 from .dtypes import struct_, Field
 from .kernels.join import (
@@ -49,7 +50,7 @@ struct RecordBatch(
         self.columns = cols^
 
     def __init__(out self, *, py: PythonObject) raises:
-        from .c_data import CArrowSchema, CArrowArray
+        from .c_data import CArrowSchema
 
         # Try downcasting from a marrow Python object.
         try:
@@ -67,14 +68,26 @@ struct RecordBatch(
                 caps = py.__arrow_c_array__(Python.none())
             except:
                 raise TypeError("cannot convert Python object to RecordBatch")
-        var schema = CArrowSchema.from_pycapsule(caps[0]).to_schema()
-        var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(
-            struct_(schema.fields.copy())
+        self = RecordBatch.from_c(
+            CArrowArray.from_pycapsule(caps[1]),
+            CArrowSchema.from_pycapsule(caps[0]).to_schema(),
         )
+
+    def validate(self, full: Bool = False) raises:
+        """Raise unless every column is safe to read; with `full`, also check
+        every value, as pyarrow's `RecordBatch.validate(full=True)` does."""
+        for column in self.columns:
+            column.to_data().validate(full)
+
+    @staticmethod
+    def from_c(var array: CArrowArray, schema: Schema) raises -> RecordBatch:
+        """Import a C Data struct array whose children are `schema`'s columns.
+        """
+        var struct_arr = array^.to_array(struct_(schema.fields.copy()))
         var columns = List[DynArray]()
         for child in struct_arr.as_struct().children:
             columns.append(child.copy())
-        self = RecordBatch(schema=schema, columns=columns^)
+        return RecordBatch(schema=schema, columns=columns^)
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

@@ -420,6 +420,15 @@ def _chunked_table():
     return ma.Table.from_batches([a, b])
 
 
+def test_table_from_no_batches_takes_the_schema():
+    schema = _chunked_table().schema
+    table = ma.Table.from_batches([], schema=schema)
+    assert table.num_rows == 0
+    assert table.schema.equals(schema)
+    with pytest.raises(ma.ArrowInvalid, match="needs a schema"):
+        ma.Table.from_batches([])
+
+
 def test_chunked_array_reports_its_chunks():
     col = _chunked_table().column("n")
     assert isinstance(col, ma.ChunkedArray)

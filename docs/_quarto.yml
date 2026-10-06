@@ -105,6 +105,8 @@ website:
             href: reference/comptime.qmd
           - text: "Status & limitations"
             href: reference/status.qmd
+          - text: "Spec compliance"
+            href: reference/compliance.qmd
 
   page-footer:
     border: true

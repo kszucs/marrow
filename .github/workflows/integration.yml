@@ -29,6 +29,9 @@ jobs:
     steps:
       - name: Checkout marrow
         uses: actions/checkout@v7
+        with:
+          # apache/arrow-testing: archery's gold IPC files.
+          submodules: true
 
       # Building libmarrow.so can use the whole 16 GB runner. Without swap
       # the runner is killed ("received a shutdown signal").

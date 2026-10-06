@@ -19,6 +19,24 @@ def _schema_arrow_c_schema(py_self: PythonObject) raises -> PythonObject:
     return CArrowSchema.from_schema(ptr[]).to_pycapsule()
 
 
+def _schema_export_to_c(
+    py_self: PythonObject, address: PythonObject
+) raises -> PythonObject:
+    """Write the schema into the caller's C Data struct at `address`."""
+    var ptr = py_self.downcast_value_ptr[Schema]()
+    CArrowSchema.from_schema(ptr[]).to_address(Int(py=address))
+    return Python.none()
+
+
+def import_schema_from_c(address: PythonObject) raises -> PythonObject:
+    """Take ownership of the C Data schema struct at `address`."""
+    return (
+        CArrowSchema.from_address(Int(py=address))
+        .to_schema()
+        .to_python_object()
+    )
+
+
 def _schema_len(py_self: PythonObject) raises -> PythonObject:
     return PythonObject(len(py_self.downcast_value_ptr[Schema]()[]))
 
@@ -75,6 +93,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         mb.add_type[Schema]("Schema")
         .def_py_init[_schema_init]()
         .def_method[_schema_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[_schema_export_to_c]("_export_to_c")
         .def_method[_schema_len]("__len__")
         .def_method[_schema_names]("names")
         .def_method[_schema_types]("types")
@@ -83,3 +102,4 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_schema_equals]("equals")
         .def_method[_schema_str]("__str__")
     )
+    mb.def_function[import_schema_from_c]("import_schema_from_c")

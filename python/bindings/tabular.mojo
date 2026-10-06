@@ -20,7 +20,12 @@ from marrow.schema import Schema
 from marrow.arrays import DynArray, ChunkedArray
 from marrow.dtypes import Field
 from std.memory import ArcPointer, Pointer
-from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
+from marrow.c_data import (
+    CArrowArray,
+    CArrowArrayStream,
+    CArrowDeviceArray,
+    CArrowSchema,
+)
 from marrow.arrays import Int32Array
 
 
@@ -178,6 +183,64 @@ def _record_batch_arrow_c_schema(py_self: PythonObject) raises -> PythonObject:
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
+def _record_batch_validate(
+    py_self: PythonObject, full: PythonObject
+) raises -> PythonObject:
+    py_self.downcast_value_ptr[RecordBatch]()[].validate(Bool(py=full))
+    return Python.none()
+
+
+def _record_batch_export_to_c(
+    py_self: PythonObject,
+    array_address: PythonObject,
+    schema_address: PythonObject,
+) raises -> PythonObject:
+    """Write the batch, and its schema unless `schema_address` is `None`, into
+    the caller's C Data structs."""
+    ref batch = py_self.downcast_value_ptr[RecordBatch]()[]
+    var struct_arr: DynArray = batch.to_struct_array()
+    CArrowArray.from_array(struct_arr).to_address(Int(py=array_address))
+    if not schema_address.__is__(Python.none()):
+        CArrowSchema.from_schema(batch.schema).to_address(
+            Int(py=schema_address)
+        )
+    return Python.none()
+
+
+def _record_batch_export_to_c_device(
+    py_self: PythonObject, array_address: PythonObject, schema_address: PythonObject
+) raises -> PythonObject:
+    """Write the batch as a CPU device array, and its schema unless
+    `schema_address` is `None`, into the caller's C structs."""
+    ref batch = py_self.downcast_value_ptr[RecordBatch]()[]
+    var struct_arr: DynArray = batch.to_struct_array()
+    CArrowDeviceArray.from_array(struct_arr).to_address(Int(py=array_address))
+    if not schema_address.__is__(Python.none()):
+        CArrowSchema.from_schema(batch.schema).to_address(
+            Int(py=schema_address)
+        )
+    return Python.none()
+
+
+def import_record_batch_from_c_device(
+    array_address: PythonObject, schema: PythonObject
+) raises -> PythonObject:
+    """Take ownership of the CPU device array at `array_address`, whose
+    children are `schema`'s columns."""
+    var array = CArrowDeviceArray.from_address(Int(py=array_address)).to_cpu()
+    return RecordBatch.from_c(array^, Schema(py=schema)).to_python_object()
+
+
+def import_record_batch_from_c(
+    array_address: PythonObject, schema: PythonObject
+) raises -> PythonObject:
+    """Take ownership of the C Data struct array at `array_address`, whose
+    children are `schema`'s columns."""
+    return RecordBatch.from_c(
+        CArrowArray.from_address(Int(py=array_address)), Schema(py=schema)
+    ).to_python_object()
+
+
 # def _record_batch_rich_compare(
 #     first: RecordBatch, second: PythonObject, op: Int
 # ) raises -> Bool:
@@ -330,21 +393,27 @@ def table(data: PythonObject, names: PythonObject) raises -> PythonObject:
     return Table.from_batches(schema, batch_list).to_python_object()
 
 
-def table_from_batches(batches: PythonObject) raises -> PythonObject:
+def table_from_batches(
+    batches: PythonObject, schema: PythonObject
+) raises -> PythonObject:
     """A `Table` whose columns are chunked one chunk per batch.
 
     The one way to build a multi-chunk column: a `ChunkedArray` reaches Python
     out of a `Table`, and `Table.from_batches` is what puts more than one chunk
     in it. `table()` always answers a single-chunk table because it builds one
-    `RecordBatch`."""
+    `RecordBatch`. `schema` is `None` to take the first batch's."""
     var n = Int(py=batches.__len__())
-    if n == 0:
-        raise InvalidError("from_batches: needs at least one batch")
     var out = List[RecordBatch](capacity=n)
     for i in range(n):
         out.append(RecordBatch(py=batches[i]))
-    var schema = out[0].schema.copy()
-    return Table.from_batches(schema, out^).to_python_object()
+    var table_schema: Schema
+    if not schema.__is__(Python.none()):
+        table_schema = Schema(py=schema)
+    elif n > 0:
+        table_schema = out[0].schema.copy()
+    else:
+        raise InvalidError("from_batches: needs a schema or at least one batch")
+    return Table.from_batches(table_schema, out^).to_python_object()
 
 
 def _record_batch_join(
@@ -609,6 +678,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_arrow_c_array]("__arrow_c_array__")
         .def_method[_record_batch_arrow_c_array]("__arrow_c_record_batch__")
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[_record_batch_validate]("validate")
+        .def_method[_record_batch_export_to_c]("_export_to_c")
+        .def_method[_record_batch_export_to_c_device]("_export_to_c_device")
         .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
     )
@@ -619,6 +691,10 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     # _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
 
     mb.def_function[record_batch]("record_batch")
+    mb.def_function[import_record_batch_from_c]("import_record_batch_from_c")
+    mb.def_function[import_record_batch_from_c_device](
+        "import_record_batch_from_c_device"
+    )
 
     # Table
     ref t_py = mb.add_type[Table]("Table")

@@ -181,3 +181,35 @@ def test_an_anchor_that_crashes_is_a_regression(tmp_path):
     entry = Entry(tmp_path / "ok.arrows", "accept")
     assert judge(entry, Outcome("accept", "accept")) is None
     assert "expected accept, got crash" in judge(entry, Outcome("crash", ASSERT_OUTPUT))
+
+
+def test_an_upstream_input_must_only_survive(tmp_path):
+    entry = Entry(tmp_path / "crash-1", "survive")
+    assert judge(entry, Outcome("accept", "accept")) is None
+    assert judge(entry, Outcome("reject", "reject: CorruptError")) is None
+    assert "crashed" in judge(entry, Outcome("crash", ASSERT_OUTPUT))
+
+
+def test_upstream_inputs_come_from_arrow_testing(tmp_path):
+    repo = scratch_repo(tmp_path)
+    (repo.root / "fuzz" / "ipc_stream.mojo").write_text(
+        "def fuzz_one(data: Span[UInt8, _]) raises:\n    pass\n"
+    )
+    upstream = repo.root / "testing" / "data" / "arrow-ipc-stream"
+    upstream.mkdir(parents=True)
+    for name in ("crash-a", "x-testcase-b", "README.md"):
+        (upstream / name).write_bytes(b"")
+    corpus = repo.root / "fuzz" / "corpus" / "ipc_stream"
+    corpus.mkdir(parents=True)
+    (corpus / "upstream.toml").write_text(
+        '["crash-a"]\nverdict = "crash"\nbug = "B9"\n'
+    )
+    entries = {e.name: e for e in Targets(repo).upstream("ipc_stream")}
+    assert set(entries) == {"crash-a", "x-testcase-b"}
+    assert entries["crash-a"].verdict == "crash" and entries["crash-a"].bug == "B9"
+    assert entries["x-testcase-b"].verdict == "survive"
+    assert entries["crash-a"].path == upstream / "crash-a"
+
+
+def test_upstream_inputs_need_the_submodule(tmp_path):
+    assert Targets(scratch_repo(tmp_path)).upstream("ipc_stream") == []

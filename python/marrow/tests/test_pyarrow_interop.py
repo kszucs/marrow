@@ -705,3 +705,86 @@ def test_pyarrow_to_mojo_drop_nulls(pa_type: pa.DType) -> None:
     assert out[0].as_py() == 1
     assert out[1].as_py() == 3
     assert out[2].as_py() == 5
+
+
+# ===========================================================================
+# C Data structs at raw addresses: `_export_to_c` / `_import_from_c`
+# ===========================================================================
+
+
+def _address(ptr):
+    from pyarrow.cffi import ffi
+
+    return int(ffi.cast("uintptr_t", ptr))
+
+
+def _structs(*kinds):
+    from pyarrow.cffi import ffi
+
+    return [ffi.new(f"struct {kind} *") for kind in kinds]
+
+
+def _nested_batch():
+    return pa.record_batch(
+        {
+            "i": pa.array([1, None, 3], pa.int64()),
+            "l": pa.array([["a"], None, ["b", "c"]], pa.list_(pa.string())),
+            "d": pa.array(["x", "y", "x"]).dictionary_encode(),
+        }
+    )
+
+
+def test_record_batch_export_to_c_is_read_by_pyarrow():
+    expected = _nested_batch()
+    c_schema, c_array = _structs("ArrowSchema", "ArrowArray")
+    ma.record_batch(expected)._export_to_c(_address(c_array), _address(c_schema))
+    schema = pa.Schema._import_from_c(_address(c_schema))
+    assert pa.RecordBatch._import_from_c(_address(c_array), schema).equals(expected)
+
+
+def test_record_batch_import_from_c_takes_ownership():
+    from pyarrow.cffi import ffi
+
+    expected = _nested_batch()
+    (c_array,) = _structs("ArrowArray")
+    expected._export_to_c(_address(c_array))
+    result = ma.RecordBatch._import_from_c(_address(c_array), expected.schema)
+    assert c_array.release == ffi.NULL
+    assert pa.record_batch(result).equals(expected)
+
+
+def test_schema_export_to_c_and_import_from_c():
+    expected = _nested_batch().schema.with_metadata({"k": "v"})
+    (exported,) = _structs("ArrowSchema")
+    ma.schema(expected)._export_to_c(_address(exported))
+    assert pa.Schema._import_from_c(_address(exported)).equals(
+        expected, check_metadata=True
+    )
+    (imported,) = _structs("ArrowSchema")
+    expected._export_to_c(_address(imported))
+    result = ma.Schema._import_from_c(_address(imported))
+    assert pa.schema(result).equals(expected, check_metadata=True)
+
+
+def test_record_batch_export_to_c_device_is_read_by_pyarrow():
+    expected = _nested_batch()
+    c_schema, c_array = _structs("ArrowSchema", "ArrowDeviceArray")
+    ma.record_batch(expected)._export_to_c_device(
+        _address(c_array), _address(c_schema)
+    )
+    assert c_array.device_type == 1  # ARROW_DEVICE_CPU
+    schema = pa.Schema._import_from_c(_address(c_schema))
+    result = pa.RecordBatch._import_from_c_device(_address(c_array), schema)
+    assert result.equals(expected)
+
+
+def test_record_batch_import_from_c_device_takes_ownership():
+    from pyarrow.cffi import ffi
+
+    expected = _nested_batch()
+    (c_array,) = _structs("ArrowDeviceArray")
+    expected._export_to_c_device(_address(c_array))
+    result = ma.RecordBatch._import_from_c_device(_address(c_array), expected.schema)
+    assert c_array.array.release == ffi.NULL
+    assert pa.record_batch(result).equals(expected)
+

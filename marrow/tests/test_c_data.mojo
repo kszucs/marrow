@@ -11,7 +11,8 @@ from std.python import Python, PythonObject
 from std.memory import ArcPointer
 from std.memory.alloc import unsafe_alloc
 from ..c_data import *
-from ..tabular import Table
+from ..schema import Schema
+from ..tabular import RecordBatch, Table
 from ..buffers import Allocation
 from ..arrays import (
     DynArray,
@@ -1562,3 +1563,30 @@ def test_import_refuses_a_buffer_size_that_overflows() raises:
         _ = ints.to_data(int32, _no_owner())
     ints.length = 3
     ints.buffers[unsafe_offset=1] = values
+
+
+def test_c_data_allocations_return_after_release() raises:
+    """An exported struct holds heap blocks until its release callback runs."""
+    var before = live_allocations()
+    var exported = CArrowArray.from_array(array([1, 2, 3], int32))
+    assert_true(live_allocations() > before)
+    var schema = CArrowSchema.from_dtype(int32)
+    _ = exported^
+    _ = schema^
+    assert_equal(live_allocations(), before)
+
+
+def test_c_stream_import_frees_its_struct_shells() raises:
+    """Each schema and array moves out of a heap shell that must be freed."""
+    var batch = RecordBatch(
+        Schema(fields=[Field("a", int32)]), [array([1, 2], int32).to_dyn()]
+    )
+    var before = live_allocations()
+    var table = CArrowArrayStream.from_batches(
+        batch.schema.copy(), [batch.copy(), batch.copy()]
+    ).to_table()
+    assert_equal(table.num_rows(), 4)
+    # The import is zero-copy: the exported arrays live as long as the table.
+    _ = table^
+    assert_equal(live_allocations(), before)
+

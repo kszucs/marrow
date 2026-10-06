@@ -106,6 +106,35 @@ class RecordBatch(_Tabular):
     def __arrow_c_record_batch__(self, requested_schema=None):
         return self._binding.__arrow_c_record_batch__(requested_schema)
 
+    def validate(self, *, full=False):
+        """Raise unless the batch is safe to read; with `full`, also check
+        every value."""
+        self._binding.validate(full)
+
+    def _export_to_c(self, out_ptr, out_schema_ptr=None):
+        """Write the batch, and its schema if `out_schema_ptr` is given, into
+        the C Data structs at those addresses, as pyarrow's does."""
+        self._binding._export_to_c(out_ptr, out_schema_ptr)
+
+    def _export_to_c_device(self, out_ptr, out_schema_ptr=None):
+        """Write the batch as a CPU `ArrowDeviceArray`, and its schema if
+        `out_schema_ptr` is given, as pyarrow's does."""
+        self._binding._export_to_c_device(out_ptr, out_schema_ptr)
+
+    @staticmethod
+    def _import_from_c_device(in_ptr, schema):
+        """Take ownership of the CPU `ArrowDeviceArray` at `in_ptr`, read
+        against `schema`, as pyarrow's does."""
+        return RecordBatch.wrap(
+            _ma.import_record_batch_from_c_device(in_ptr, unwrap(schema))
+        )
+
+    @staticmethod
+    def _import_from_c(in_ptr, schema):
+        """Take ownership of the C Data struct array at `in_ptr`, read
+        against `schema`, as pyarrow's does."""
+        return RecordBatch.wrap(_ma.import_record_batch_from_c(in_ptr, unwrap(schema)))
+
     @property
     def columns(self):
         return [Array.wrap(c) for c in self._binding.columns()]
@@ -350,11 +379,12 @@ class Table(_Tabular):
 
     @classmethod
     def from_batches(cls, batches, schema=None):
-        """One chunk per batch — the only way to build a chunked column."""
-        batches = list(batches)
-        if not batches:
-            raise ValueError("from_batches: needs at least one batch")
-        return cls.wrap(_ma.table_from_batches([unwrap(b) for b in batches]))
+        """One chunk per batch — the only way to build a chunked column.
+
+        `schema` is the table's, which an empty `batches` needs."""
+        raw = [unwrap(b) for b in batches]
+        schema = unwrap(schema) if schema is not None else None
+        return cls.wrap(_ma.table_from_batches(raw, schema))
 
 
 def _as_array(column):

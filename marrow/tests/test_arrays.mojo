@@ -1649,7 +1649,7 @@ def test_array_data_eq_recurses_into_children() raises:
 def _invalid(data: ArrayData, full: Bool = False) -> Bool:
     try:
         if full:
-            data.validate_full()
+            data.validate(full=True)
         else:
             data.validate()
     except:
@@ -1659,15 +1659,15 @@ def _invalid(data: ArrayData, full: Bool = False) -> Bool:
 
 def test_validate_accepts_built_layouts() raises:
     var strings: StringArray = ["ab", "c"]
-    strings.to_data().validate_full()
-    strings.slice(1, 1).to_data().validate_full()
-    array([1, None, 3], int32).to_data().validate_full()
-    array([True, None, False]).to_data().validate_full()
+    strings.to_data().validate(full=True)
+    strings.slice(1, 1).to_data().validate(full=True)
+    array([1, None, 3], int32).to_data().validate(full=True)
+    array([True, None, False]).to_data().validate(full=True)
     var views: StringViewArray = ["short", "a value longer than twelve"]
-    views.to_data().validate_full()
+    views.to_data().validate(full=True)
     var values: DynArray = strings^.to_dyn()
     var indices: DynArray = array([1, None, 0], int32)
-    DictionaryArray.from_arrays(indices^, values^).to_data().validate_full()
+    DictionaryArray.from_arrays(indices^, values^).to_data().validate(full=True)
 
 
 def test_validate_rejects_short_buffers() raises:
@@ -1709,7 +1709,7 @@ def test_validate_rejects_counts_and_lengths() raises:
         buffers=[array([0, 2, 4], int32).to_data().buffers[0]],
         children=[child.copy()],
     )
-    lists.validate_full()
+    lists.validate(full=True)
     lists.buffers[0] = array([0, 2, 5], int32).to_data().buffers[0]
     assert_true(_invalid(lists))  # last offset past the child
     lists.children = []

@@ -337,24 +337,13 @@ struct _FieldIpcInfo(Copyable, Movable):
             ref d = dtype.as_dictionary()
             var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
             return _FieldIpcInfo.find(d.value_type().copy(), vt_ipc^, target_id)
-        elif dtype.is_list():
-            if len(ipc_info.children) > 0:
-                return _FieldIpcInfo.find(
-                    dtype.as_list().value_type().copy(),
-                    ipc_info.children[0].copy(),
-                    target_id,
-                )
-        elif dtype.is_struct():
-            ref st = dtype.as_struct()
-            for i in range(len(st.fields)):
-                if i < len(ipc_info.children):
-                    var found = _FieldIpcInfo.find(
-                        st.fields[i].dtype.copy(),
-                        ipc_info.children[i].copy(),
-                        target_id,
-                    )
-                    if found:
-                        return found^
+        var n = min(dtype.layout().num_children, len(ipc_info.children))
+        for i in range(n):
+            var found = _FieldIpcInfo.find(
+                dtype.child_type(i), ipc_info.children[i].copy(), target_id
+            )
+            if found:
+                return found^
         return None
 
     @staticmethod
@@ -1271,51 +1260,13 @@ struct _IpcEncoder(Movable):
         var dtype = f.dtype.copy()
         var own_dict_id = -1
 
-        if dtype.is_map():
-            child_positions.append(
-                self._write_field(dtype.as_map().entries[].copy(), next_dict_id)
-            )
-        elif dtype.is_list():
-            child_positions.append(
-                self._write_field(
-                    dtype.as_list().value_field().copy(), next_dict_id
-                )
-            )
-        elif dtype.is_large_list():
-            child_positions.append(
-                self._write_field(
-                    dtype.as_large_list().value_field().copy(), next_dict_id
-                )
-            )
-        elif dtype.is_fixed_size_list():
-            child_positions.append(
-                self._write_field(
-                    dtype.as_fixed_size_list().value_field().copy(),
-                    next_dict_id,
-                )
-            )
-        elif dtype.is_struct():
-            ref st = dtype.as_struct()
-            for i in range(len(st.fields)):
-                child_positions.append(
-                    self._write_field(st.fields[i], next_dict_id)
-                )
-        elif dtype.is_dictionary():
-            # Write children of the VALUE TYPE first (inner dicts before outer).
-            var val_type = dtype.as_dictionary().value_type().copy()
-            if val_type.is_list():
-                child_positions.append(
-                    self._write_field(
-                        val_type.as_list().value_field().copy(), next_dict_id
-                    )
-                )
-            elif val_type.is_struct():
-                ref st = val_type.as_struct()
-                for i in range(len(st.fields)):
-                    child_positions.append(
-                        self._write_field(st.fields[i], next_dict_id)
-                    )
-            # Assign this dictionary's own id AFTER all nested children.
+        # Children first -- a dictionary's are its value type's -- so inner
+        # dictionaries get lower ids than outer ones. A leaf has none.
+        var children = dtype.children()
+        if len(children) > 0:
+            for child in children:
+                child_positions.append(self._write_field(child, next_dict_id))
+        if dtype.is_dictionary():
             own_dict_id = next_dict_id
             next_dict_id += 1
 
@@ -1595,6 +1546,10 @@ struct _IpcDecoder(Movable):
     def _decode_schema_fields(
         self, schema_pos: UInt32, mut out_ipc: List[_FieldIpcInfo]
     ) raises -> List[dt.Field]:
+        # Field 0 is the endianness of every buffer that follows; reading
+        # big-endian data as little-endian would answer wrong values silently.
+        if self._r.read_u16(schema_pos, 0) != UInt16(_ENDIANNESS_LITTLE):
+            raise NotImplementedError("ipc: big-endian data is not supported")
         var fields = List[dt.Field]()
         var fields_vec = self._r.read_vector(schema_pos, 1)
         var n = Int(self._r.vector_len(fields_vec))
@@ -2083,16 +2038,9 @@ struct _BatchEncoder(Movable):
                 _DictPair(next_id, DynArray.from_data(data.children[0]))
             )
             next_id += 1
-        elif data.dtype.is_list():
-            if len(data.children) > 0:
-                _BatchEncoder.collect_dict_pairs(
-                    data.children[0], pairs, next_id
-                )
-        elif data.dtype.is_struct():
-            for i in range(len(data.children)):
-                _BatchEncoder.collect_dict_pairs(
-                    data.children[i], pairs, next_id
-                )
+        else:
+            for child in data.children:
+                _BatchEncoder.collect_dict_pairs(child, pairs, next_id)
 
     def _build_body(
         mut self, mut buf_meta: List[_BodyBuffer], mut body: List[UInt8]
@@ -2308,7 +2256,7 @@ struct _BatchDecoder(Movable):
         )
         # Each child was validated when it was read.
         try:
-            ad.validate_full()
+            ad.validate_node(full=True)
         except e:
             raise CorruptError(t"ipc: {e.message()}")
         return DynArray.from_data(ad)

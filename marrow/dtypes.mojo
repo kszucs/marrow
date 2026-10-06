@@ -1398,6 +1398,28 @@ struct DynType(
     def is_fixed_size_binary(self) -> Bool:
         return self._v.isa[FixedSizeBinaryType]()
 
+    def children(self) -> List[Field]:
+        """The child fields, as a schema lists them: a struct's fields, a
+        list's value field, a map's entries struct, and a dictionary's value
+        type's children. Empty for every other type.
+
+        `layout()` counts the children of an array instead, where a
+        dictionary's values are one -- see `child_type`.
+        """
+        if self.is_dictionary():
+            return self.as_dictionary().value_type().children()
+        elif self.is_struct():
+            return self.as_struct().fields.copy()
+        elif self.is_map():
+            return [self.as_map().entries_field()]
+        elif self.is_list():
+            return [self.as_list().value_field().copy()]
+        elif self.is_large_list():
+            return [self.as_large_list().value_field().copy()]
+        elif self.is_fixed_size_list():
+            return [self.as_fixed_size_list().value_field().copy()]
+        return []
+
     def is_struct(self) -> Bool:
         return self._v.isa[StructType]()
 

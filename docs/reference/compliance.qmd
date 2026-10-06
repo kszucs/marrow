@@ -1,0 +1,139 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
+---
+title: "Spec compliance"
+subtitle: "Which parts of the Arrow specifications marrow implements, and how each is checked"
+execute:
+  enabled: false
+---
+
+Apache Arrow is several specifications: the **columnar format** (the data types
+and their memory layout), the **IPC format** (how batches are written to files
+and streams), and the **C interfaces** (how two libraries in one process hand
+each other data). This page shows what marrow implements of each, and what
+checks it against other Arrow implementations.
+
+**Legend:** ✅ supported and cross-checked · ☑️ supported, checked by marrow's
+own tests only · ❌ not supported.
+
+## How marrow is checked
+
+| Check | What it does | Run it |
+|---|---|---|
+| **Arrow integration suite** (archery) | The official cross-implementation suite. Each implementation writes data that the others must read back exactly, as IPC files and streams and through the C Data Interface. Marrow takes part against **Arrow C++, arrow-rs and arrow-go**, in both directions. | `pixi run -e integration integration` |
+| **Gold files** | IPC files written by past Arrow C++ releases (0.14.1 to 21.0.0), from [`apache/arrow-testing`](https://github.com/apache/arrow-testing). Marrow must read each and agree with the JSON beside it. | part of the suite above |
+| **C Stream and C Device phases** | Not covered by archery: every case of the suite goes both ways through each interface against Arrow C++. | part of the suite above |
+| **Fuzz regression inputs** | Malformed files that once crashed Arrow C++'s fuzzers. Marrow must read or refuse each one, never crash. | `pixi run -e dev pytest fuzz` |
+
+The comparisons are exact, including schema and field metadata. Marrow does
+every step itself: it reads the suite's JSON, writes and reads IPC, and exports
+and imports C structs. pyarrow is used only to compare two results.
+
+## Data types
+
+"Cross-checked with" names the implementations marrow exchanges the type with,
+over IPC and the C Data Interface. Where an implementation is missing, that
+implementation does not support the type.
+
+| Type | Supported | Cross-checked with |
+|---|:---:|---|
+| Null | ✅ | C++, Rust, Go |
+| Boolean | ✅ | C++, Rust, Go |
+| Integers (8 to 64 bits, signed and unsigned) | ✅ | C++, Rust, Go |
+| Float32, Float64 | ✅ | C++, Rust, Go |
+| Float16 | ✅ | C++ |
+| Decimal128, Decimal256 | ✅ | C++, Rust, Go |
+| Decimal32, Decimal64 | ✅ | C++ |
+| Date32, Date64 | ✅ | C++, Rust, Go |
+| Time32, Time64 (all units) | ✅ | C++, Rust, Go |
+| Timestamp (all units, with and without time zone) | ✅ | C++, Rust, Go |
+| Duration (all units) | ✅ | C++, Rust, Go |
+| Interval: year-month, day-time, month-day-nano | ✅ | C++, Rust, Go |
+| Binary, String | ✅ | C++, Rust, Go |
+| Large binary, large string | ✅ | C++, Rust, Go |
+| Binary view, string view | ✅ | C++, Go |
+| Fixed-size binary | ✅ | C++, Rust, Go |
+| List, large list, fixed-size list | ✅ | C++, Rust, Go |
+| Struct | ✅ | C++, Rust, Go |
+| Map (including non-canonical field names) | ✅ | C++, Rust, Go |
+| Dictionary (signed and unsigned indices, nested dictionaries) | ✅ | C++, Rust, Go |
+| List view, large list view | ❌ | |
+| Union (sparse and dense) | ❌ | |
+| Run-end encoded | ❌ | |
+| Extension types | ❌ | |
+
+### Nesting
+
+The suite's own cases nest little, so marrow adds its own, built with the
+suite's tooling and read by every implementation.
+
+| Case | What it nests | Cross-checked with |
+|---|---|---|
+| Every type inside a struct | All the types above, each as a struct field | C++, Rust, Go |
+| Structs inside every container | Structs (holding decimals, timestamps, maps, dictionaries) inside a list, large list, fixed-size list, map value and struct | C++, Rust, Go |
+| Nested views | String and binary views inside a struct and a list | C++, Go |
+| Nested small decimals | Decimal32 and decimal64 inside a struct | C++ |
+
+## IPC format
+
+| Feature | Supported | How it is checked |
+|---|:---:|---|
+| File format | ✅ | integration suite, every type |
+| Stream format | ✅ | integration suite, every type |
+| Dictionary batches | ✅ | integration suite, including dictionaries nested in lists, maps and structs |
+| Delta and replacement dictionaries (reading streams) | ☑️ | marrow's tests |
+| Changing a dictionary between batches of a file | ✅ refused | the file format allows one dictionary per id |
+| LZ4 and ZSTD body compression | ✅ | gold files (2.0.0-compression), and round trips with pyarrow |
+| Shared dictionaries across fields | ✅ | gold files (4.0.0-shareddict) |
+| Files from older Arrow releases | ✅ | gold files 0.14.1, 0.17.1, 1.0.0 and 21.0.0 |
+| Schema and field metadata | ✅ | integration suite, compared exactly |
+| Big-endian data | ❌ refused | reading one raises an error instead of returning wrong values |
+| Tensor and sparse tensor messages | ❌ | |
+
+## C interfaces
+
+| Interface | Supported | How it is checked |
+|---|:---:|---|
+| C Data Interface: schemas and arrays | ✅ | integration suite against C++, Rust and Go, both directions |
+| C Stream Interface | ✅ | every suite case, both directions, against C++ |
+| C Device Interface, CPU memory | ✅ | every suite case, both directions, against C++ |
+| C Device Interface, GPU memory | ❌ | |
+
+Two checks run on every C Data exchange:
+
+- **Full validation on import.** Every imported batch is validated value by
+  value (offsets never decrease, every dictionary index exists) before it is
+  compared, as Arrow C++ and arrow-rs do.
+- **Memory release.** The suite counts the memory marrow's exported structs
+  hold before an exchange and after the other side releases them; the two must
+  match, so a leak on either side fails the run.
+
+## Robustness against malformed input
+
+| Input | Expected | Source |
+|---|---|---|
+| IPC streams and files that crashed Arrow C++'s fuzzers | read or refused, never a crash | `apache/arrow-testing` |
+| Parquet files that crashed Arrow C++'s fuzzers | read or refused, never a crash | `apache/arrow-testing` |
+| Marrow's own fuzzing finds | as recorded per file | `fuzz/corpus/` |
+
+Known crashes that are not fixed yet are listed in `backlog.md` with their
+reproducers.
+
+## Compared with other implementations
+
+How marrow's checking lines up with Arrow C++ and arrow-rs:
+
+| Practice | Arrow C++ | arrow-rs | marrow |
+|---|:---:|:---:|:---:|
+| Integration suite, IPC and C Data | ✅ | ✅ | ✅ |
+| Gold files | ✅ | ✅ | ✅ |
+| C Stream checked against another implementation | ❌ | ✅ (C++) | ✅ (C++) |
+| C Device checked against another implementation | ❌ | ❌ | ✅ (C++) |
+| Full validation after a C Data import | ✅ | ✅ | ✅ |
+| Memory release checked | ✅ | ❌ | ✅ |
+| Fuzz regression inputs replayed | ✅ | ❌ | ✅ |
+| Big-endian | reads it | refuses it | refuses it |
+| Arrow Flight | ✅ | ✅ | ❌ |

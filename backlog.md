@@ -639,16 +639,15 @@ entries.
 | B13 | `parquet/codecs.mojo:66` `Rle._run_value` | a truncated RLE run header reads past the data |
 | B16 | `utils/snappy.mojo` | a literal whose 4-byte length is `0xFFFFFFFF`: libsnappy wraps it to 0 and accepts, the native decoder refuses -- a parity gap, not a memory bug |
 | B-PR6 | `parquet/reader.mojo` `PrimitiveLeafBuilder.consume` | a fixed-width dictionary page with fewer bytes than `num_values` is copied past the page (ASAN only) |
-| B-PR7 | `parquet/reader.mojo:921` `ByteArrayLeafBuilder._place_dictionary` | a dictionary index past a byte-array dictionary slices past it |
+| B-PR7 | `parquet/reader.mojo:925` `ByteArrayLeafBuilder._place_dictionary` | a dictionary index past a byte-array dictionary slices past it |
 | B-PR8 | `parquet/codecs.mojo` `Rle.gather` | more values than rows, as B10, on the dictionary fast path: writes past the values buffer (ASAN) |
 | B-PR9 | `parquet/codecs.mojo:89` `Rle` | a dictionary-index bit width over 32 reaches the decoder unchecked |
 | B-PR10 | `utils/byteorder.mojo:186` `Rle.count_matches` | reads past the v1 definition levels it is given |
-| B-PR11 | `parquet/reader.mojo:890` | a PLAIN byte-array value whose 4-byte length runs past the page |
-| B-PR12 | `parquet/codecs.mojo:1033` | an RLE boolean page whose 4-byte length runs past the values |
+| B-PR12 | `parquet/codecs.mojo:1056` | an RLE boolean page whose 4-byte length runs past the values |
 | B-PR13 | `parquet/reader.mojo` leaf builders | a huge positive `RowGroup.num_rows` is preallocated up front and aborts (an allocation, not corruption); the builders should grow as pages arrive |
 
-B8, B11, B12, B14, B15 and the footer's Thrift bugs (B-PR1 to B-PR4) are
-fixed; their reproducers stay as `reject` entries.
+B8, B11, B12, B14, B15, B-PR11 and the footer's Thrift bugs (B-PR1 to
+B-PR4) are fixed; their reproducers stay as `reject` entries.
 
 ## 2. Missing capabilities, in detail
 

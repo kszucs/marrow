@@ -1,22 +1,20 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Arrow-JSON bridge, and that the archery module is importable at all.
+"""That the archery module is importable at all, its skip sets, and its report.
 
 `archery` is only installed in the `integration` environment, and it in turn
 needs the apache/arrow clone.  These tests stub the three base classes marrow
 subclasses so the module can be imported anywhere -- which is what catches a
 name error or a bad signature without a ninety-minute Arrow build.
 
-The JSON conversion itself is pure pyarrow and is tested for real: neither
-archery nor pyarrow exposes that conversion, so it is marrow's own code and the
-only part of the suite that can be checked here.
+The testers themselves drive `libmarrow.so` and run only in the suite; the
+integration JSON reader they rely on is tested in `marrow/tests/test_integration.mojo`.
 """
 
 import sys
 import types
 
-import pyarrow as pa
 import pytest
 
 
@@ -26,7 +24,7 @@ def integration():
 
     The stubs come back out afterwards.  Left in `sys.modules` they outlive this
     file and tell every later test in the session that archery is installed,
-    when what is installed is four empty modules -- so a test that means to
+    when what is installed is three empty modules -- so a test that means to
     assert "this environment has no archery" quietly asserts nothing, and which
     way it goes depends on collection order.
     """
@@ -35,14 +33,10 @@ def integration():
         tester = types.ModuleType("archery.integration.tester")
         for name in ("Tester", "CDataExporter", "CDataImporter"):
             setattr(tester, name, type(name, (), {}))
-        util = types.ModuleType("archery.integration.util")
-        util.SKIP_C_ARRAY = "c_array"
-        util.SKIP_C_SCHEMA = "c_schema"
         installed = {
             "archery": types.ModuleType("archery"),
             "archery.integration": types.ModuleType("archery.integration"),
             "archery.integration.tester": tester,
-            "archery.integration.util": util,
         }
         sys.modules.update(installed)
     import devkit
@@ -70,134 +64,9 @@ def test_the_module_imports_and_exposes_the_participants(integration):
     assert integration.ArcherySuite and integration.ArcheryReport
 
 
-def test_the_skip_sets_say_why(integration):
-    suite = integration.ArcherySuite
-    # `interval` is a harness limit, not a library one -- pyarrow has no type
-    # for YEAR_MONTH or DAY_TIME, so the bridge cannot build the column.
-    assert "interval" in suite.UNSUPPORTED
-    assert "union" in suite.UNSUPPORTED
-    assert suite.SKIP_C_DATA == frozenset({"nested_dictionary"})
-
-
-# ---------------------------------------------------------------------------
-# The JSON bridge
-# ---------------------------------------------------------------------------
-
-
-def field(name, type_obj, **extra):
-    return {"name": name, "type": type_obj, "nullable": True, "children": [], **extra}
-
-
-def test_primitive_types_convert(integration):
-    convert = integration._json_field_to_pa
-    cases = {
-        "int64": ({"name": "int", "bitWidth": 64, "isSigned": True}, pa.int64()),
-        "uint32": ({"name": "int", "bitWidth": 32, "isSigned": False}, pa.uint32()),
-        "double": ({"name": "floatingpoint", "precision": "DOUBLE"}, pa.float64()),
-        "single": ({"name": "floatingpoint", "precision": "SINGLE"}, pa.float32()),
-        "utf8": ({"name": "utf8"}, pa.string()),
-        "binary": ({"name": "binary"}, pa.binary()),
-        "bool": ({"name": "bool"}, pa.bool_()),
-        "null": ({"name": "null"}, pa.null()),
-    }
-    for label, (type_obj, expected) in cases.items():
-        assert convert(field(label, type_obj)).type == expected, label
-
-
-def test_unsupported_types_answer_none_rather_than_raising(integration):
-    """The outer schema filters them out; raising would fail the whole case."""
-    assert integration._json_field_to_pa(field("u", {"name": "union"})) is None
-
-
-def test_nested_types_keep_their_child_field_names(integration):
-    """The whole reason pyarrow is the intermediate: marrow's `list_` cannot."""
-    child = field("item", {"name": "int", "bitWidth": 32, "isSigned": True})
-    listed = integration._json_field_to_pa(
-        {
-            "name": "l",
-            "type": {"name": "list"},
-            "nullable": True,
-            "children": [child],
-        }
-    )
-    assert pa.types.is_list(listed.type)
-    assert listed.type.value_field.name == "item"
-
-
-def test_struct_children_are_preserved(integration):
-    struct = integration._json_field_to_pa(
-        {
-            "name": "s",
-            "type": {"name": "struct"},
-            "nullable": True,
-            "children": [
-                field("a", {"name": "int", "bitWidth": 64, "isSigned": True}),
-                field("b", {"name": "utf8"}),
-            ],
-        }
-    )
-    assert struct.type == pa.struct(
-        [pa.field("a", pa.int64()), pa.field("b", pa.string())]
-    )
-
-
-def test_a_64_bit_column_arrives_as_strings(integration):
-    """JSON cannot represent a 64-bit integer, so the format sends them quoted."""
-    array = integration._json_col_to_pa(
-        {
-            "name": "v",
-            "count": 3,
-            "VALIDITY": [1, 0, 1],
-            "DATA": ["1", "2", "9223372036854775807"],
-        },
-        pa.int64(),
-    )
-    assert array.to_pylist() == [1, None, 9223372036854775807]
-
-
-def test_a_binary_column_arrives_as_hex(integration):
-    array = integration._json_col_to_pa(
-        {"name": "v", "count": 2, "VALIDITY": [1, 1], "DATA": ["00FF", ""]},
-        pa.binary(),
-    )
-    assert array.to_pylist() == [b"\x00\xff", b""]
-
-
-def test_validity_becomes_nulls(integration):
-    array = integration._json_col_to_pa(
-        {"name": "v", "count": 3, "VALIDITY": [1, 0, 1], "DATA": [True, False, True]},
-        pa.bool_(),
-    )
-    assert array.to_pylist() == [True, None, True]
-
-
-def test_a_schema_drops_only_the_unsupported_fields(integration):
-    schema = integration._json_to_pa_schema(
-        {
-            "schema": {
-                "fields": [
-                    field("keep", {"name": "int", "bitWidth": 64, "isSigned": True}),
-                    field("drop", {"name": "union"}),
-                    field("also_keep", {"name": "utf8"}),
-                ]
-            }
-        }
-    )
-    assert schema.names == ["keep", "also_keep"]
-
-
-def test_the_dictionary_id_search_recurses(integration):
-    fields = [
-        {
-            "name": "outer",
-            "children": [
-                {"name": "inner", "dictionary": {"id": 7}, "children": []},
-            ],
-        }
-    ]
-    found = integration._find_field_for_dict_id(fields, 7)
-    assert found is not None and found["name"] == "inner"
-    assert integration._find_field_for_dict_id(fields, 99) is None
+def test_the_skip_sets_name_only_unimplemented_layouts(integration):
+    unsupported = integration.ArcherySuite.UNSUPPORTED
+    assert unsupported == {"union", "list_view", "extension", "run_end_encoded"}
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +160,7 @@ def run_suite(integration, monkeypatch, outcome):
     monkeypatch.setitem(sys.modules, "archery.integration.runner", runner)
 
     suite = integration.ArcherySuite()
-    monkeypatch.setattr(suite, "patch_datagen", lambda: None)
+    monkeypatch.setattr(suite, "patch_archery", lambda: None)
     monkeypatch.setattr(integration, "MarrowTester", lambda: object())
     return suite.run(run_ipc=True, run_c_data=False), runner
 
@@ -316,41 +185,49 @@ def test_a_zero_exit_is_still_a_pass(integration, monkeypatch):
     assert passed
 
 
-def test_the_skip_sets_are_applied_to_the_generated_files(integration):
-    """Asserting the sets' *contents* does not prove anything consults them."""
-    import sys
-    import types
+def test_the_skip_sets_are_applied_to_the_generated_files(integration, monkeypatch):
+    """Asserting the sets' *contents* does not prove anything consults them:
+    marrow's own cases land beside the generated ones, and the skips reach
+    both those and the gold files."""
 
     class Entry:
         def __init__(self, name):
             self.name = name
+            self.path = f"/tmp/generated/generated_{name}.json"
             self.skipped_testers = []
-            self.skipped_formats = []
 
         def skip_tester(self, tester):
             self.skipped_testers.append(tester)
 
-        def skip_format(self, fmt, tester):
-            self.skipped_formats.append((fmt, tester))
+        def write(self, path):
+            self.path = path
 
     entries = [Entry("union"), Entry("nested_dictionary"), Entry("primitive")]
+    extra = Entry("marrow_struct_of_every_type")
     datagen = types.ModuleType("archery.integration.datagen")
-    datagen.get_generated_json_files = lambda tempdir=None: entries
-    saved = sys.modules.get("archery.integration.datagen")
-    sys.modules["archery.integration.datagen"] = datagen
-    try:
-        suite = integration.ArcherySuite()
-        suite.patch_datagen()
-        datagen.get_generated_json_files()
-    finally:
-        if saved is None:
-            del sys.modules["archery.integration.datagen"]
-        else:
-            sys.modules["archery.integration.datagen"] = saved
+    datagen.get_generated_json_files = lambda tempdir=None: list(entries)
+    monkeypatch.setitem(sys.modules, "archery.integration.datagen", datagen)
 
-    union, nested, primitive = entries
-    assert union.skipped_testers == ["Mojo"]
-    assert nested.skipped_formats and all(
-        t == "Mojo" for _, t in nested.skipped_formats
+    class IntegrationRunner:
+        def _gold_tests(self, gold_dir):
+            yield from (Entry("primitive"), Entry("union"))
+
+    runner = types.ModuleType("archery.integration.runner")
+    runner.IntegrationRunner = IntegrationRunner
+    monkeypatch.setitem(sys.modules, "archery.integration.runner", runner)
+    monkeypatch.setattr(
+        integration.ArcherySuite, "marrow_cases", staticmethod(lambda dg: [extra])
     )
-    assert not primitive.skipped_testers and not primitive.skipped_formats
+    integration.ArcherySuite().patch_archery()
+    files = datagen.get_generated_json_files()
+
+    assert [f.name for f in files][-1] == "marrow_struct_of_every_type"
+    assert extra.path == "/tmp/generated/generated_marrow_struct_of_every_type.json"
+    assert [f.skipped_testers for f in files] == [["Mojo"], [], [], []]
+
+    def gold(prefix):
+        cases = IntegrationRunner()._gold_tests(f"/gold/{prefix}")
+        return [case.skipped_testers for case in cases]
+
+    assert gold("1.0.0-bigendian") == [["Mojo"], ["Mojo"]]
+    assert gold("1.0.0-littleendian") == [[], ["Mojo"]]

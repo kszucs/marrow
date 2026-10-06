@@ -4,34 +4,28 @@
 """Arrow protocol conformance, via apache/arrow's archery.
 
 Registers marrow as a participant in the integration suite and runs it against
-the C++, Rust and Go implementations.  All IPC reading and writing goes through
-marrow (never `pa.ipc.*`); pyarrow is the comparison oracle in `validate()` and
-the JSON-integration-format intermediate, since `pa.list_(field)` preserves
-nested-field names that marrow's `ma.list_(value_type)` cannot.  The bridge from
-pyarrow to marrow is the C Data Interface: any `pa.RecordBatch` can be wrapped as
-a `marrow.RecordBatch` via `ma.record_batch(pa_batch)`.
+the C++, Rust and Go implementations.  Marrow does every step itself: it reads
+archery's JSON (`marrow.integration`), reads and writes IPC, and exports and
+imports the C Data structs at the addresses archery hands over.  pyarrow is
+only the equality oracle -- `RecordBatch.equals` on both sides of a comparison,
+reached over the PyCapsule interface -- because marrow's own `equals` compares
+layouts, not values.
 
 **This module needs `archery`, which only the `integration` environment has**,
 and archery in turn needs the apache/arrow clone that `pixi run -e integration
 clone_arrow` fetches.  `devkit.cli` therefore imports it inside the command,
 never at module scope.
-
-The `_json_*` conversion functions below are the Arrow JSON integration format
-read into pyarrow.  Neither archery nor pyarrow exposes that conversion, so it
-is written out here; it is the one part of the suite that is pure pyarrow and
-has its own unit tests in `devkit/tests/test_integration.py`.
 """
 
 import contextlib
-import functools
+import gc
 import io
-import json
 import os
+from pathlib import Path
 import re
 import sys
 from collections import defaultdict
 
-import numpy as np
 import pyarrow as pa
 from rich import box
 from rich.console import Console
@@ -42,15 +36,15 @@ from archery.integration.tester import CDataExporter, CDataImporter, Tester
 class _LazyMarrow:
     """`marrow`, imported on first attribute access rather than at module scope.
 
-    Importing it here would load `libmarrow.so`, and the two halves of this
-    module have very different needs: the Arrow-JSON bridge and the report are
-    pure pyarrow and are unit-tested, while only the tester classes actually
-    drive marrow.  A module-scope import puts a shared-library build in front of
-    `pixi run selftest`, which is meant to be a one-second command -- and makes
-    those unit tests pass or fail on whether a stale `.so` happens to be on disk.
+    Importing it here would load `libmarrow.so`, while only the tester classes
+    drive marrow; the report and the skip sets are unit-tested without it.  A
+    module-scope import puts a shared-library build in front of `pixi run
+    selftest`, which is meant to be a one-second command -- and makes those
+    unit tests pass or fail on whether a stale `.so` happens to be on disk.
     """
 
     def __getattr__(self, name):
+        import marrow.integration  # noqa: F401 - binds `marrow.integration`
         import marrow
 
         return getattr(marrow, name)
@@ -59,427 +53,18 @@ class _LazyMarrow:
 ma = _LazyMarrow()
 
 
-# ---------------------------------------------------------------------------
-# Arrow JSON integration format → PyArrow (preserves nested-field names)
-# ---------------------------------------------------------------------------
+def _address(ptr):
+    """Archery's cffi struct pointer, as the integer address marrow takes."""
+    from archery.integration import cdata
 
-#: The JSON format spells a temporal unit out; pyarrow abbreviates it.
-_UNITS = {
-    "SECOND": "s",
-    "MILLISECOND": "ms",
-    "MICROSECOND": "us",
-    "NANOSECOND": "ns",
-}
+    return int(cdata.ffi().cast("uintptr_t", ptr))
 
 
-def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | None:
-    """Convert an Arrow JSON type descriptor to a pyarrow DataType.
-
-    Returns None when any nested type is unsupported (we filter the outer
-    field out instead of materialising an unsupported pa type).
-    """
-    name = type_obj["name"]
-    if name == "null":
-        return pa.null()
-    if name == "bool":
-        return pa.bool_()
-    if name == "int":
-        bw = type_obj["bitWidth"]
-        prefix = "int" if type_obj["isSigned"] else "uint"
-        return getattr(pa, f"{prefix}{bw}")()
-    if name == "floatingpoint":
-        return {"HALF": pa.float16(), "SINGLE": pa.float32(), "DOUBLE": pa.float64()}[
-            type_obj["precision"]
-        ]
-    if name == "binary":
-        return pa.binary()
-    if name == "fixedsizebinary":
-        return pa.binary(type_obj["byteWidth"])
-    if name == "utf8":
-        return pa.utf8()
-    if name == "largebinary":
-        return pa.large_binary()
-    if name == "largeutf8":
-        return pa.large_utf8()
-    if name == "binaryview":
-        return pa.binary_view()
-    if name == "utf8view":
-        return pa.string_view()
-    if name == "largelist":
-        child = _json_field_to_pa(children_fields[0])
-        return None if child is None else pa.large_list(child)
-    if name == "date":
-        return pa.date32() if type_obj.get("unit") == "DAY" else pa.date64()
-    if name == "time":
-        unit = _UNITS[type_obj["unit"]]
-        if type_obj.get("bitWidth", 32) == 32:
-            return pa.time32(unit)
-        else:
-            return pa.time64(unit)
-    if name == "timestamp":
-        unit = _UNITS[type_obj["unit"]]
-        tz = type_obj.get("timezone")
-        return pa.timestamp(unit, tz=tz)
-    if name == "duration":
-        return pa.duration(_UNITS[type_obj["unit"]])
-    if name == "list":
-        child = _json_field_to_pa(children_fields[0])
-        return None if child is None else pa.list_(child)
-    if name == "fixedsizelist":
-        child = _json_field_to_pa(children_fields[0])
-        return None if child is None else pa.list_(child, type_obj["listSize"])
-    if name == "map":
-        # The single child is the entries struct field; its two fields carry the
-        # key/value names, which `map_non_canonical` deliberately varies.
-        entries = _json_field_to_pa(children_fields[0])
-        if entries is None or not pa.types.is_struct(entries.type):
-            return None
-        return pa.map_(
-            entries.type.field(0),
-            entries.type.field(1),
-            keys_sorted=type_obj.get("keysSorted", False),
-        )
-    if name == "interval":
-        # Only MONTH_DAY_NANO is reachable: pyarrow 23 exposes
-        # `month_day_nano_interval` and has no type at all for YEAR_MONTH or
-        # DAY_TIME, and this converter builds every column through pyarrow
-        # before bridging to marrow over the C Data Interface.  Marrow itself
-        # handles all three -- it reads them back from C++/Rust/Go -- so the
-        # limit here is the bridge, not the library.
-        return (
-            pa.month_day_nano_interval()
-            if type_obj.get("unit") == "MONTH_DAY_NANO"
-            else None
-        )
-    if name == "struct":
-        pa_fields = [_json_field_to_pa(f) for f in children_fields]
-        return None if any(f is None for f in pa_fields) else pa.struct(pa_fields)
-    if name == "decimal":
-        precision = type_obj["precision"]
-        scale = type_obj["scale"]
-        bit_width = type_obj.get("bitWidth", 128)
-        if bit_width == 32:
-            return pa.decimal32(precision, scale)
-        elif bit_width == 64:
-            return pa.decimal64(precision, scale)
-        elif bit_width == 256:
-            return pa.decimal256(precision, scale)
-        else:
-            return pa.decimal128(precision, scale)
-    return None
-
-
-def _json_field_to_pa(field_obj: dict) -> pa.Field | None:
-    """Convert an Arrow JSON field to a pyarrow Field (None if unsupported)."""
-    metadata = {kv["key"]: kv["value"] for kv in field_obj.get("metadata") or []}
-    dict_info = field_obj.get("dictionary")
-    if dict_info is not None:
-        value_type = _json_type_to_pa(
-            field_obj["type"], field_obj.get("children") or []
-        )
-        if value_type is None:
-            return None
-        idx = dict_info["indexType"]
-        bw = idx["bitWidth"]
-        index_type = getattr(pa, ("int" if idx["isSigned"] else "uint") + str(bw))()
-        ordered = dict_info.get("isOrdered", False)
-        pa_type = pa.dictionary(index_type, value_type, ordered=ordered)
-    else:
-        pa_type = _json_type_to_pa(field_obj["type"], field_obj.get("children") or [])
-        if pa_type is None:
-            return None
-    return pa.field(
-        field_obj["name"],
-        pa_type,
-        nullable=field_obj.get("nullable", True),
-        metadata=metadata or None,
+def _assert_equal(expected, result, what):
+    """Compare two pyarrow schemas or batches, metadata included."""
+    assert expected.equals(result, check_metadata=True), (
+        f"{what} mismatch:\n  expected: {expected}\n  got: {result}"
     )
-
-
-def _find_field_for_dict_id(json_fields: list, dict_id: int) -> dict | None:
-    """Recursively search schema fields for the one referencing the given dict_id."""
-    for f in json_fields:
-        if (di := f.get("dictionary")) is not None and di["id"] == dict_id:
-            return f
-        found = _find_field_for_dict_id(f.get("children") or [], dict_id)
-        if found is not None:
-            return found
-    return None
-
-
-def _json_view_values(col_obj: dict, pa_type: pa.DataType) -> list:
-    """The values of a view column: each view is either INLINED or points into
-    one of VARIADIC_DATA_BUFFERS. Binary is hex-encoded throughout; a
-    string_view's INLINED value is plain text, its data buffers hex."""
-    is_text = pa.types.is_string_view(pa_type)
-    buffers = [bytes.fromhex(b) for b in col_obj.get("VARIADIC_DATA_BUFFERS", [])]
-    values = []
-    for view in col_obj.get("VIEWS", []):
-        if "INLINED" in view:
-            raw = view["INLINED"]
-            value = raw.encode() if is_text else bytes.fromhex(raw)
-        else:
-            start = view["OFFSET"]
-            value = buffers[view["BUFFER_INDEX"]][start : start + view["SIZE"]]
-        values.append(value.decode() if is_text else value)
-    return values
-
-
-def _json_col_to_pa(
-    col_obj: dict,
-    pa_type: pa.DataType,
-    dict_cache: dict | None = None,
-    json_field: dict | None = None,
-) -> pa.Array:
-    """Convert an Arrow JSON column to a pyarrow Array.
-
-    Encoding quirks:
-      - int64 / uint64 DATA are JSON strings (JSON can't represent 64-bit ints)
-      - binary DATA are hex strings
-      - all other primitives are native Python types
-    """
-    n = col_obj["count"]
-    validity = col_obj.get("VALIDITY")
-    mask_pa = (
-        None
-        if validity is None
-        else pa.array(~np.array(validity, dtype=bool), type=pa.bool_())
-    )
-    mask_np = None if validity is None else ~np.array(validity, dtype=bool)
-
-    if pa.types.is_null(pa_type):
-        return pa.array([None] * n, type=pa_type)
-
-    if pa.types.is_boolean(pa_type) or pa.types.is_integer(pa_type):
-        data = [int(v) if isinstance(v, str) else v for v in col_obj.get("DATA", [])]
-        return pa.array(data, type=pa_type, mask=mask_np)
-
-    if pa.types.is_floating(pa_type):
-        return pa.array(col_obj.get("DATA", []), type=pa_type, mask=mask_np)
-
-    if (
-        pa.types.is_binary(pa_type)
-        or pa.types.is_large_binary(pa_type)
-        or pa.types.is_fixed_size_binary(pa_type)
-    ):
-        # Binary DATA arrives hex-encoded, whatever the width.
-        data = [bytes.fromhex(v) if v else b"" for v in col_obj.get("DATA", [])]
-        return pa.array(data, type=pa_type, mask=mask_np)
-
-    if (
-        pa.types.is_date(pa_type)
-        or pa.types.is_time(pa_type)
-        or pa.types.is_timestamp(pa_type)
-        or pa.types.is_duration(pa_type)
-    ):
-        data = [int(v) if isinstance(v, str) else v for v in col_obj.get("DATA", [])]
-        return pa.array(data, type=pa_type, mask=mask_np)
-
-    if pa.types.is_string(pa_type) or pa.types.is_large_string(pa_type):
-        return pa.array(col_obj.get("DATA", []), type=pa_type, mask=mask_np)
-
-    if pa.types.is_binary_view(pa_type) or pa.types.is_string_view(pa_type):
-        return pa.array(_json_view_values(col_obj, pa_type), type=pa_type, mask=mask_np)
-
-    if pa.types.is_decimal(pa_type):
-        from decimal import Decimal as _Decimal
-
-        scale = pa_type.scale
-        # Use exponential notation to avoid Python's default 28-digit Decimal
-        # precision limit — large decimal256 values need up to 76 digits.
-        data = [
-            _Decimal(f"{v}E-{scale}") if v is not None else None
-            for v in col_obj.get("DATA", [])
-        ]
-        return pa.array(data, type=pa_type, mask=mask_np)
-
-    if pa.types.is_large_list(pa_type):
-        offsets = [int(v) for v in col_obj.get("OFFSET", [])]
-        child_jf = (
-            json_field["children"][0]
-            if json_field and json_field.get("children")
-            else None
-        )
-        child_arr = _json_col_to_pa(
-            col_obj["children"][0], pa_type.value_type, dict_cache, child_jf
-        )
-        return pa.LargeListArray.from_arrays(offsets, child_arr, mask=mask_pa)
-
-    if pa.types.is_list(pa_type) and not pa.types.is_fixed_size_list(pa_type):
-        offsets = col_obj.get("OFFSET", [])
-        child_jf = (
-            json_field["children"][0]
-            if json_field and json_field.get("children")
-            else None
-        )
-        child_arr = _json_col_to_pa(
-            col_obj["children"][0], pa_type.value_type, dict_cache, child_jf
-        )
-        return pa.ListArray.from_arrays(offsets, child_arr, mask=mask_pa)
-
-    if pa.types.is_fixed_size_list(pa_type):
-        child_jf = (
-            json_field["children"][0]
-            if json_field and json_field.get("children")
-            else None
-        )
-        child_arr = _json_col_to_pa(
-            col_obj["children"][0], pa_type.value_type, dict_cache, child_jf
-        )
-        return pa.FixedSizeListArray.from_arrays(
-            child_arr, pa_type.list_size, mask=mask_pa
-        )
-
-    if pa.types.is_map(pa_type):
-        offsets = [int(v) for v in col_obj.get("OFFSET", [])]
-        child_jf = (
-            json_field["children"][0]
-            if json_field and json_field.get("children")
-            else None
-        )
-        entries = _json_col_to_pa(
-            col_obj["children"][0],
-            pa.struct([pa_type.key_field, pa_type.item_field]),
-            dict_cache,
-            child_jf,
-        )
-        return pa.MapArray.from_arrays(
-            offsets,
-            entries.field(0),
-            entries.field(1),
-            type=pa_type,
-            mask=mask_pa,
-        )
-
-    if pa.types.is_interval(pa_type):
-        # DATA is a list of {'months', 'days', 'nanoseconds'} objects.
-        data = [
-            None
-            if v is None
-            else pa.MonthDayNano([v["months"], v["days"], int(v["nanoseconds"])])
-            for v in col_obj.get("DATA", [])
-        ]
-        return pa.array(data, type=pa_type, mask=mask_np)
-
-    if pa.types.is_struct(pa_type):
-        field_arrs = []
-        for i in range(pa_type.num_fields):
-            child_jf = (
-                json_field["children"][i]
-                if json_field
-                and json_field.get("children")
-                and i < len(json_field["children"])
-                else None
-            )
-            field_arrs.append(
-                _json_col_to_pa(
-                    col_obj["children"][i], pa_type.field(i).type, dict_cache, child_jf
-                )
-            )
-        return pa.StructArray.from_arrays(
-            field_arrs, fields=list(pa_type), mask=mask_pa
-        )
-
-    if pa.types.is_dictionary(pa_type):
-        if dict_cache is None or json_field is None:
-            raise ValueError(
-                "dict_cache and json_field required for dictionary columns"
-            )
-        dict_id = json_field["dictionary"]["id"]
-        indices = pa.array(
-            [int(v) for v in col_obj.get("DATA", [])],
-            type=pa_type.index_type,
-            mask=mask_np,
-        )
-        return pa.DictionaryArray.from_arrays(indices, dict_cache[dict_id])
-
-    raise ValueError(f"Unsupported pa type in JSON converter: {pa_type}")
-
-
-# ---------------------------------------------------------------------------
-# JSON → Marrow (via PyArrow + C Data Interface)
-# ---------------------------------------------------------------------------
-
-
-def _read_json(json_path: os.PathLike) -> dict:
-    with open(json_path, "rb") as f:
-        return json.loads(f.read())
-
-
-def _json_to_pa_schema(json_dict: dict) -> pa.Schema | None:
-    """Build a pa.Schema from the supported subset of JSON fields, or None."""
-    pa_fields = [_json_field_to_pa(f) for f in json_dict["schema"]["fields"]]
-    pa_fields = [f for f in pa_fields if f is not None]
-    if not pa_fields:
-        return None
-    schema_meta = {
-        kv["key"]: kv["value"] for kv in json_dict["schema"].get("metadata") or []
-    }
-    return pa.schema(pa_fields, metadata=schema_meta or None)
-
-
-def _empty_ma_batch(pa_schema: pa.Schema):
-    """Build an empty marrow RecordBatch matching the given pa.Schema."""
-    arrays = []
-    for f in pa_schema:
-        try:
-            arrays.append(pa.array([], type=f.type))
-        except Exception:
-            arrays.append(pa.nulls(0, type=f.type))
-    pa_batch = pa.record_batch(arrays, schema=pa_schema)
-    return ma.record_batch(pa_batch)
-
-
-def _json_to_ma_batch(json_dict: dict, num_batch: int):
-    """Build a marrow RecordBatch from a JSON batch.
-
-    Build a pa.RecordBatch (which preserves nested-field names) and bridge to
-    marrow via the C Data Interface.  Columns are matched positionally — the
-    JSON schema may contain duplicate field names (e.g. the duplicate_fieldnames
-    test case has two "ints" columns of different widths).
-    """
-    pa_schema = _json_to_pa_schema(json_dict)
-    assert pa_schema is not None, "no supported fields"
-    batch_obj = json_dict["batches"][num_batch]
-    # Build dict_cache sorted by id so inner (lower-id) dicts are ready when
-    # outer dict values reference them (nested dictionary case).
-    dict_cache: dict[int, pa.Array] = {}
-    for d in sorted(json_dict.get("dictionaries", []), key=lambda x: x["id"]):
-        d_id = d["id"]
-        dict_field = _find_field_for_dict_id(json_dict["schema"]["fields"], d_id)
-        if dict_field is not None:
-            value_type = _json_type_to_pa(
-                dict_field["type"], dict_field.get("children") or []
-            )
-            if value_type is not None:
-                dict_cache[d_id] = _json_col_to_pa(
-                    d["data"]["columns"][0], value_type, dict_cache, dict_field
-                )
-    # Pair each surviving (supported) JSON field with its column at the same
-    # index in the original schema, preserving order across drops.
-    json_fields = json_dict["schema"]["fields"]
-    json_cols = batch_obj["columns"]
-    arrays: list[pa.Array] = []
-    pa_field_iter = iter(pa_schema)
-    for jf, jc in zip(json_fields, json_cols):
-        if _json_field_to_pa(jf) is None:
-            continue
-        pa_field = next(pa_field_iter)
-        arrays.append(_json_col_to_pa(jc, pa_field.type, dict_cache, jf))
-    pa_batch = pa.record_batch(arrays, schema=pa_schema)
-    return ma.record_batch(pa_batch)
-
-
-@functools.cache
-def _ffi():
-    """cffi's FFI is stateless here and costs 106 us to build; build it once."""
-    import cffi
-
-    return cffi.FFI()
-
-
-def _cffi_ptr_to_int(cffi_ptr) -> int:
-    return int(_ffi().cast("uintptr_t", cffi_ptr))
 
 
 # ---------------------------------------------------------------------------
@@ -505,34 +90,22 @@ class MarrowTester(Tester):
         return MarrowCDataImporter()
 
     def json_to_file(self, json_path, arrow_path):
-        json_dict = _read_json(json_path)
-        # Strict: refuse if any field is unsupported (a partial-coverage write
-        # would round-trip differently than the JSON expects).
-        if any(_json_field_to_pa(f) is None for f in json_dict["schema"]["fields"]):
-            raise NotImplementedError("test case has unsupported column types")
-        empty_rb = _empty_ma_batch(_json_to_pa_schema(json_dict))
-        n_batches = len(json_dict.get("batches", []))
-        batches = [_json_to_ma_batch(json_dict, i) for i in range(n_batches)]
-        ma.write_ipc_file(str(arrow_path), schema=empty_rb, batches=batches)
+        schema, batches = ma.integration.read_json(json_path)
+        ma.write_ipc_file(str(arrow_path), schema=schema, batches=batches)
 
     def validate(self, json_path, arrow_path, quirks=None):
-        json_dict = _read_json(json_path)
-        if _json_to_pa_schema(json_dict) is None:
-            raise NotImplementedError("no supported columns in this test case")
-        ma_batches = list(ma.read_ipc_file(str(arrow_path)))
-        n_expected = len(json_dict.get("batches", []))
-        assert len(ma_batches) == n_expected, (
-            f"Expected {n_expected} batches, got {len(ma_batches)}"
+        schema, expected = ma.integration.read_json(json_path)
+        result = list(ma.read_ipc_file(str(arrow_path)))
+        assert len(result) == len(expected), (
+            f"Expected {len(expected)} batches, got {len(result)}"
         )
-        for i, ma_batch in enumerate(ma_batches):
-            expected = pa.record_batch(_json_to_ma_batch(json_dict, i))
-            result = pa.record_batch(ma_batch)
-            assert expected.equals(result), (
-                f"Batch {i} mismatch:\n"
-                f"  expected schema: {expected.schema}\n"
-                f"  got schema: {result.schema}\n"
-                f"  rows: {expected.num_rows}"
-            )
+        _assert_equal(
+            pa.schema(schema),
+            pa.schema(ma.read_ipc_file_schema(str(arrow_path)).schema),
+            "Schema",
+        )
+        for i, (e, r) in enumerate(zip(expected, result)):
+            _assert_equal(pa.record_batch(e), pa.record_batch(r), f"Batch {i}")
 
     def stream_to_file(self, stream_path, file_path):
         ma_batches = list(ma.read_ipc_stream(str(stream_path)))
@@ -552,71 +125,150 @@ class MarrowTester(Tester):
 
 
 # ---------------------------------------------------------------------------
-# C Data exporter
+# C Data exporter and importer
 # ---------------------------------------------------------------------------
 
 
 class MarrowCDataExporter(CDataExporter):
-    """Export test data from Arrow JSON format through Marrow's C Data Interface."""
+    """Export the JSON's schema and batches through marrow's C Data export.
+
+    archery samples `record_allocation_state` before an export and after the
+    importer is done: the count of heap blocks marrow's C Data structs hold must
+    return to where it was, or the consumer leaked what marrow exported.
+    """
 
     @property
     def supports_releasing_memory(self) -> bool:
-        return False
+        return True
+
+    def record_allocation_state(self):
+        return ma.integration.c_data_allocations()
+
+    def run_gc(self):
+        gc.collect()
 
     def export_schema_from_json(self, json_path, c_schema_ptr):
-        json_dict = _read_json(json_path)
-        empty_rb = _empty_ma_batch(_json_to_pa_schema(json_dict))
-        pa.record_batch(empty_rb).schema._export_to_c(_cffi_ptr_to_int(c_schema_ptr))
+        schema, _ = ma.integration.read_json(json_path)
+        schema._export_to_c(_address(c_schema_ptr))
 
     def export_batch_from_json(self, json_path, num_batch: int, c_array_ptr):
-        json_dict = _read_json(json_path)
-        pa.record_batch(_json_to_ma_batch(json_dict, num_batch))._export_to_c(
-            _cffi_ptr_to_int(c_array_ptr)
-        )
-
-
-# ---------------------------------------------------------------------------
-# C Data importer
-# ---------------------------------------------------------------------------
+        _, batches = ma.integration.read_json(json_path)
+        batches[num_batch]._export_to_c(_address(c_array_ptr))
 
 
 class MarrowCDataImporter(CDataImporter):
-    """Import test data from CFFI struct through Marrow's C Data Interface."""
+    """Import archery's structs through marrow's C Data import, then validate
+    every value before comparing, as Arrow C++ and arrow-rs do."""
 
     @property
     def supports_releasing_memory(self) -> bool:
-        return False
+        return True
+
+    def run_gc(self):
+        gc.collect()
 
     def import_schema_and_compare_to_json(self, json_path, c_schema_ptr):
-        json_dict = _read_json(json_path)
-        expected_schema = pa.record_batch(
-            _empty_ma_batch(_json_to_pa_schema(json_dict))
-        ).schema
-
-        imported_schema = pa.Schema._import_from_c(_cffi_ptr_to_int(c_schema_ptr))
-        empty_batch = pa.record_batch(
-            [pa.array([], type=f.type) for f in imported_schema], schema=imported_schema
-        )
-        result_schema = pa.record_batch(ma.record_batch(empty_batch)).schema
-
-        assert expected_schema.equals(result_schema), (
-            f"Schema mismatch:\n  expected: {expected_schema}\n  got: {result_schema}"
-        )
+        schema, _ = ma.integration.read_json(json_path)
+        result = ma.Schema._import_from_c(_address(c_schema_ptr))
+        _assert_equal(pa.schema(schema), pa.schema(result), "Schema")
 
     def import_batch_and_compare_to_json(self, json_path, num_batch: int, c_array_ptr):
-        json_dict = _read_json(json_path)
-        expected = pa.record_batch(_json_to_ma_batch(json_dict, num_batch))
-
-        pa_batch = pa.RecordBatch._import_from_c(
-            _cffi_ptr_to_int(c_array_ptr), expected.schema
+        schema, batches = ma.integration.read_json(json_path)
+        result = ma.RecordBatch._import_from_c(_address(c_array_ptr), schema)
+        result.validate(full=True)
+        _assert_equal(
+            pa.record_batch(batches[num_batch]),
+            pa.record_batch(result),
+            f"Batch {num_batch}",
         )
-        result = pa.record_batch(ma.record_batch(pa_batch))
 
-        assert expected.equals(result), (
-            f"Batch {num_batch} mismatch:\n"
-            f"  schema: {expected.schema}\n"
-            f"  rows: {expected.num_rows}"
+
+# ---------------------------------------------------------------------------
+# C Stream and C Device, against Arrow C++
+# ---------------------------------------------------------------------------
+
+
+class InterfacePhases:
+    """The C Stream and C Device interfaces, which archery does not exercise,
+    against Arrow C++ through pyarrow -- the way arrow-rs tests its C Stream.
+
+    Every case of the corpus goes both ways through each interface. The log
+    follows archery's, so `ArcheryReport` counts these phases with the rest.
+    """
+
+    BANNER = "#" * 58
+
+    def __init__(self, files, match=None):
+        from archery.integration.util import SKIP_C_ARRAY, SKIP_C_SCHEMA
+
+        def usable(case):
+            return (match is None or match in case.name) and not any(
+                case.should_skip(tester, fmt)
+                for tester in ("Mojo", "C++")
+                for fmt in (SKIP_C_SCHEMA, SKIP_C_ARRAY)
+            )
+
+        self.files = [case for case in files if usable(case)]
+
+    def run(self):
+        """Every phase; whether all of them passed."""
+        phases = [
+            ("C Stream: Mojo exporting, C++ importing", self._stream_to_cpp),
+            ("C Stream: C++ exporting, Mojo importing", self._stream_from_cpp),
+            ("C Device: Mojo exporting, C++ importing", self._device_to_cpp),
+            ("C Device: C++ exporting, Mojo importing", self._device_from_cpp),
+        ]
+        passed = True
+        for title, check in phases:
+            print(f"{self.BANNER}\n{title}\n{self.BANNER}")
+            for case in self.files:
+                print("=" * 70)
+                print(f"Testing file {case.path}")
+                schema, batches = ma.integration.read_json(case.path)
+                try:
+                    check(schema, batches)
+                    print("-- Validating")
+                except Exception as error:
+                    passed = False
+                    print(f"-- FAILED: {type(error).__name__}: {error}")
+        return passed
+
+    @staticmethod
+    def _expected(schema, batches):
+        return pa.Table.from_batches(
+            [pa.record_batch(b) for b in batches], schema=pa.schema(schema)
         )
+
+    def _stream_to_cpp(self, schema, batches):
+        table = ma.Table.from_batches(batches, schema=schema)
+        result = pa.RecordBatchReader.from_stream(table).read_all()
+        _assert_equal(self._expected(schema, batches), result, "Stream")
+
+    def _stream_from_cpp(self, schema, batches):
+        expected = self._expected(schema, batches)
+        _assert_equal(expected, pa.table(ma.table(expected)), "Stream")
+
+    @staticmethod
+    def _structs(*kinds):
+        from pyarrow.cffi import ffi
+
+        return [ffi.new(f"struct {kind} *") for kind in kinds]
+
+    def _device_to_cpp(self, schema, batches):
+        for i, batch in enumerate(batches):
+            c_schema, c_array = self._structs("ArrowSchema", "ArrowDeviceArray")
+            batch._export_to_c_device(_address(c_array), _address(c_schema))
+            imported = pa.Schema._import_from_c(_address(c_schema))
+            result = pa.RecordBatch._import_from_c_device(_address(c_array), imported)
+            _assert_equal(pa.record_batch(batch), result, f"Batch {i}")
+
+    def _device_from_cpp(self, schema, batches):
+        for i, batch in enumerate(batches):
+            expected = pa.record_batch(batch)
+            (c_array,) = self._structs("ArrowDeviceArray")
+            expected._export_to_c_device(_address(c_array))
+            result = ma.RecordBatch._import_from_c_device(_address(c_array), schema)
+            _assert_equal(expected, pa.record_batch(result), f"Batch {i}")
 
 
 # ---------------------------------------------------------------------------
@@ -673,7 +325,7 @@ class ArcheryReport:
         ]
         banners.append((len(log), None))
 
-        phases = defaultdict(lambda: {"pass": set(), "skip": set()})
+        phases = defaultdict(lambda: {"pass": set(), "skip": set(), "seen": set()})
         for index in range(len(banners) - 1):
             start, phase = banners[index]
             body = log[start : banners[index + 1][0]]
@@ -682,6 +334,7 @@ class ArcheryReport:
                 match = cls.FILE_CASE.match(line) or cls.C_DATA_CASE.match(line)
                 if match is not None:
                     case = match.group(1)
+                    phases[phase]["seen"].add(case)
                     continue
                 if case is None:
                     continue
@@ -704,7 +357,7 @@ class ArcheryReport:
         """
         cases = set()
         for counts in self.phases.values():
-            cases |= counts["pass"] | counts["skip"]
+            cases |= counts["pass"] | counts["skip"] | counts["seen"]
         return {
             case: sum(1 for counts in self.phases.values() if case in counts["pass"])
             for case in cases
@@ -728,15 +381,15 @@ class ArcheryReport:
         phases.add_row("TOTAL", str(total_pass), str(total_skip))
         console.print(phases)
 
-        # Out of how many phases, because that denominator is the vocabulary
-        # everything about this suite is written in -- "14/14", "10/14", "7/14".
-        total = len(self.phases)
+        # Out of the phases that ran the case: a gold file runs in one phase,
+        # and a case that failed somewhere must still show the phase it lost.
         cases = Table(title="Per-case coverage", box=box.SIMPLE_HEAD)
         cases.add_column("Case", no_wrap=True)
         cases.add_column("Phases passing", justify="right")
         coverage = self.coverage()
         for case, count in sorted(coverage.items(), key=lambda kv: (-kv[1], kv[0])):
-            cases.add_row(case, f"{count} / {total}")
+            ran = sum(1 for counts in self.phases.values() if case in counts["seen"])
+            cases.add_row(case, f"{count} / {ran}")
         console.print(cases)
 
 
@@ -754,17 +407,19 @@ class ArcherySuite:
     this module cannot silently change archery's behaviour for something else.
     """
 
-    #: Layouts marrow genuinely does not implement.
-    #:
-    #: `interval` is different: it is a *harness* limit, not a library one.
-    #: pyarrow has no type for YEAR_MONTH or DAY_TIME, so `_json_field_to_pa`
-    #: returns None, `json_to_file` refuses the case, and marrow's IPC writer is
-    #: never reached.  Marrow reads all three back from C++, Rust and Go
-    #: correctly.  Measured 2026-08-14: un-skipping `interval` scores 10/14 with
-    #: every failure on the `Mojo producing` side, and 10/14 fails the job.
+    #: archery's gold files: IPC written by earlier Arrow C++ releases, in the
+    #: `testing` submodule (apache/arrow-testing, pinned to Arrow 24's commit).
+    GOLD_ROOT = (
+        Path(__file__).resolve().parents[1]
+        / "testing/data/arrow-ipc-stream/integration"
+    )
+
+    #: Gold directories marrow does not read: it refuses big-endian IPC.
+    UNSUPPORTED_GOLD = frozenset({"1.0.0-bigendian"})
+
+    #: Layouts marrow does not implement.
     UNSUPPORTED = frozenset(
         {
-            "interval",
             "union",
             "list_view",
             "extension",
@@ -772,18 +427,12 @@ class ArcherySuite:
         }
     )
 
-    #: PyArrow cannot construct empty arrays for nested-dictionary types
-    #: (ArrowNotImplementedError), so the C Data phases are skipped for Mojo.
-    #: IPC is unaffected: the other implementations validate directly without
-    #: going through pyarrow.  The case shows 7/14.
-    SKIP_C_DATA = frozenset({"nested_dictionary"})
-
     # Expected partial coverage, and not marrow bugs:
     #
-    # decimal32 / decimal64 (6/14): Rust and Go implement neither type in IPC
-    # or C Data, so four IPC phases and four C Data phases are skipped by them.
+    # decimal32 / decimal64: Rust and Go implement neither type in IPC or C
+    # Data, so their phases are skipped.
     #
-    # binary_no_batches / primitive_no_batches (7/14): these files contain zero
+    # binary_no_batches / primitive_no_batches: these files contain zero
     # record batches.  The IPC phases pass because the schema is still
     # exchanged; the C Data array phases iterate over batches, and zero batches
     # produce zero results, which archery counts as zero passes rather than one.
@@ -791,23 +440,187 @@ class ArcherySuite:
     def __init__(self):
         self._patched = False
 
-    def patch_datagen(self):
-        """Mark the cases marrow does not implement as skipped, for Mojo only."""
+    @staticmethod
+    def marrow_cases(dg):
+        """The cases archery's corpus leaves out, built from its own field
+        classes so every implementation reads them as it reads the corpus.
+
+        The corpus never generates `float16`, and nests little beyond `int32`
+        and `utf8`: these put every layout marrow implements inside a struct,
+        and structs inside every container.
+        """
+        import numpy as np
+
+        class HalfFloatField(dg.FloatingPointField):
+            """`float16`, spelled as Arrow C++ reads it: the uint16 bits."""
+
+            def __init__(self, name, **kwargs):
+                super().__init__(name, 16, **kwargs)
+
+            def generate_column(self, size, name=None):
+                halves = (np.random.randn(size) * 100).astype(np.float16)
+                bits = [int(b) for b in halves.view(np.uint16)]
+                return dg.PrimitiveColumn(
+                    name or self.name, size, self._make_is_valid(size), bits
+                )
+
+        def flat():
+            """One field of every non-nested type Rust and Go implement too."""
+            names = [
+                "bool", "int8", "int16", "int32", "int64", "uint8", "uint16",
+                "uint32", "uint64", "float32", "float64", "binary", "utf8",
+                "largebinary", "largeutf8", "fixedsizebinary_7",
+            ]  # fmt: skip
+            return [
+                dg.NullField("null"),
+                *(dg.get_field(name, name) for name in names),
+                dg.DecimalField("decimal128", 20, 3, 128),
+                dg.DecimalField("decimal256", 60, 5, 256),
+                dg.DateField("date32", dg.DateField.DAY),
+                dg.DateField("date64", dg.DateField.MILLISECOND),
+                dg.TimeField("time32", "ms"),
+                dg.TimeField("time64", "ns"),
+                dg.TimestampField("timestamp", "us", tz="UTC"),
+                dg.DurationIntervalField("duration", "ns"),
+                dg.YearMonthIntervalField("year_month"),
+                dg.DayTimeIntervalField("day_time"),
+                dg.MonthDayNanoIntervalField("month_day_nano"),
+            ]
+
+        def nested(dictionary):
+            """One field of every nested type, and a dictionary."""
+            return [
+                dg.ListField("list", dg.get_field("item", "int32")),
+                dg.LargeListField("large_list", dg.get_field("item", "utf8")),
+                dg.FixedSizeListField(
+                    "fixed_size_list", dg.get_field("item", "int16"), 3
+                ),
+                dg.MapField(
+                    "map",
+                    dg.get_field("key", "utf8", nullable=False),
+                    dg.get_field("value", "float64"),
+                ),
+                dg.StructField(
+                    "struct", [dg.get_field("a", "int32"), dg.get_field("b", "utf8")]
+                ),
+                dg.DictionaryField("dictionary", dg.get_field("", "int16"), dictionary),
+            ]
+
+        def case(name, fields, dictionaries=()):
+            batches = [
+                dg.RecordBatch(size, [f.generate_column(size) for f in fields])
+                for size in (7, 10)
+            ]
+            return dg.File(name, dg.Schema(fields), batches, list(dictionaries))
+
+        every = dg.Dictionary(0, dg.StringField("dictionary0"), size=5)
+        inner = dg.Dictionary(0, dg.StringField("dictionary0"), size=5)
+        row = [
+            dg.get_field("int64", "int64"),
+            dg.DecimalField("decimal128", 20, 3, 128),
+            dg.TimestampField("timestamp", "ns", tz="Europe/Paris"),
+            *nested(inner),
+        ]
+        return [
+            # Only C++ reads `HALF` as bits; Go reads the same numbers as
+            # values and Rust not at all, which is why archery leaves it out.
+            case(
+                "marrow_half_float",
+                [HalfFloatField("f16"), HalfFloatField("f16_nn", nullable=False)],
+            )
+            .skip_tester("Rust")
+            .skip_tester("Go"),
+            case(
+                "marrow_struct_of_every_type",
+                [dg.StructField("every_type", flat() + nested(every))],
+                [every],
+            ),
+            case(
+                "marrow_structs_in_containers",
+                [
+                    dg.ListField("list", dg.StructField("item", row)),
+                    dg.LargeListField("large_list", dg.StructField("item", row)),
+                    dg.FixedSizeListField(
+                        "fixed_size_list", dg.StructField("item", row), 2
+                    ),
+                    dg.MapField(
+                        "map",
+                        dg.get_field("key", "utf8", nullable=False),
+                        dg.StructField("value", row),
+                    ),
+                    dg.StructField("struct", [dg.StructField("inner", row)]),
+                ],
+                [inner],
+            ),
+            # Rust implements neither view type; see archery's `binary_view`.
+            case(
+                "marrow_nested_views",
+                [
+                    dg.StructField(
+                        "views",
+                        [dg.StringViewField("utf8"), dg.BinaryViewField("binary")],
+                    ),
+                    dg.ListField("list", dg.StringViewField("item")),
+                ],
+            ).skip_tester("Rust"),
+            # Rust and Go implement neither width; see archery's `decimal32`.
+            case(
+                "marrow_nested_small_decimals",
+                [
+                    dg.StructField(
+                        "decimals",
+                        [
+                            dg.DecimalField("decimal32", 7, 2, 32),
+                            dg.DecimalField("decimal64", 15, 3, 64),
+                        ],
+                    )
+                ],
+            )
+            .skip_tester("Rust")
+            .skip_tester("Go"),
+        ]
+
+    @classmethod
+    def gold_dirs(cls):
+        """Every gold directory in the `testing` submodule, or none if it is
+        not checked out."""
+        if not cls.GOLD_ROOT.is_dir():
+            print(
+                "arrow-testing is not checked out; gold files skipped "
+                "(git submodule update --init testing)"
+            )
+            return []
+        return sorted(str(d) for d in cls.GOLD_ROOT.iterdir() if d.is_dir())
+
+    def patch_archery(self):
+        """Add marrow's cases, and skip what marrow does not implement, in
+        both the generated corpus and the gold files."""
         if self._patched:
             return
-        from archery.integration import datagen
-        from archery.integration.util import SKIP_C_ARRAY, SKIP_C_SCHEMA
+        from archery.integration import datagen, runner
+
+        original_gold = runner.IntegrationRunner._gold_tests
+
+        def gold_tests(runner_self, gold_dir):
+            prefix = os.path.basename(os.path.normpath(gold_dir))
+            for case in original_gold(runner_self, gold_dir):
+                if prefix in self.UNSUPPORTED_GOLD or case.name in self.UNSUPPORTED:
+                    case.skip_tester("Mojo")
+                yield case
+
+        runner.IntegrationRunner._gold_tests = gold_tests
 
         original = datagen.get_generated_json_files
 
         def patched(tempdir=None):
             files = original(tempdir)
+            tempdir = os.path.dirname(files[0].path)
+            for case in self.marrow_cases(datagen):
+                case.write(os.path.join(tempdir, f"generated_{case.name}.json"))
+                files.append(case)
             for entry in files:
                 if entry.name in self.UNSUPPORTED:
                     entry.skip_tester("Mojo")
-                if entry.name in self.SKIP_C_DATA:
-                    entry.skip_format(SKIP_C_SCHEMA, "Mojo")
-                    entry.skip_format(SKIP_C_ARRAY, "Mojo")
             return files
 
         datagen.get_generated_json_files = patched
@@ -845,7 +658,9 @@ class ArcherySuite:
     ):
         from archery.integration.runner import run_all_tests
 
-        self.patch_datagen()
+        self.patch_archery()
+        if gold_dirs is None:
+            gold_dirs = self.gold_dirs()
 
         # Tee stdout to a buffer so the report can summarise a stream the user
         # is still watching live.
@@ -865,5 +680,11 @@ class ArcherySuite:
         except SystemExit as exit_request:
             # archery signals failure by exiting; the report is still wanted.
             passed = not exit_request.code
+        if run_c_data and with_cpp:
+            from archery.integration import datagen
+
+            files = datagen.get_generated_json_files()
+            with contextlib.redirect_stdout(Tee(sys.stdout, buffer)):
+                passed &= InterfacePhases(files, match=match).run()
         ArcheryReport(buffer.getvalue()).render()
         return passed

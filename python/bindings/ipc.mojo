@@ -15,6 +15,7 @@ from marrow.ipc import (
     write_ipc_file as _ipc_write_file,
     write_ipc_stream as _ipc_write_stream,
 )
+from marrow.schema import Schema
 from marrow.tabular import RecordBatch
 
 
@@ -54,10 +55,9 @@ def write_ipc_file(
         for i in range(n):
             rb_list.append(RecordBatch(py=batches[i]))
     if not schema.__is__(builtins.None):
-        var schema_rb = RecordBatch(py=schema)
         _ipc_write_file(
             path_str,
-            schema_rb.schema,
+            Schema(py=schema),
             rb_list,
             compression=_compression(compression),
             native_codecs=Bool(py=native_codecs),
@@ -105,10 +105,9 @@ def write_ipc_stream(
         for i in range(n):
             rb_list.append(RecordBatch(py=batches[i]))
     if not schema.__is__(builtins.None):
-        var schema_rb = RecordBatch(py=schema)
         _ipc_write_stream(
             path_str,
-            schema_rb.schema,
+            Schema(py=schema),
             rb_list,
             compression=_compression(compression),
             native_codecs=Bool(py=native_codecs),

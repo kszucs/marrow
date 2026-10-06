@@ -351,13 +351,23 @@ struct ArrayData(Copyable, Equatable, Movable):
     def __ne__(self, other: Self) -> Bool:
         return not (self == other)
 
-    def validate(self) raises InvalidError:
+    def validate(self, full: Bool = False) raises InvalidError:
+        """Raise unless this array is safe to read: `validate_node` on every
+        node of it, as pyarrow's `Array.validate`."""
+        self.validate_node(full)
+        for child in self.children:
+            child.validate(full)
+
+    def validate_node(self, full: Bool = False) raises InvalidError:
         """Raise unless this node is safe to read: it has the buffers and
         children its dtype's `layout()` describes, each long enough for
         `offset + length` values, and any nulls come with a validity bitmap.
+        With `full`, also the checks that read every value: offsets never
+        decrease, and every valid dictionary index names a value.
 
-        O(1), and this node only: a reader validates each child as it builds
-        it. A view array's views are checked by its typed constructor.
+        This node only: a reader validates each child as it builds it, so
+        `validate` would repeat the work below. Without `full` it is O(1). A
+        view array's views are checked by its typed constructor.
         """
         var layout = self.dtype.layout()
         var want = layout.num_buffers()
@@ -430,11 +440,11 @@ struct ArrayData(Copyable, Equatable, Movable):
                     )
         elif layout.kind != ArrayLayout.NULL:
             self._expect(end, layout.width)
+        if full:
+            self._validate_values()
 
-    def validate_full(self) raises InvalidError:
-        """`validate`, then the checks that read every value: offsets never
-        decrease, and every valid dictionary index names a value."""
-        self.validate()
+    def _validate_values(self) raises InvalidError:
+        """The checks of `validate_node(full=True)` that read every value."""
         var layout = self.dtype.layout()
         if layout.kind == ArrayLayout.BINARY or layout.kind == ArrayLayout.LIST:
             var bad = (

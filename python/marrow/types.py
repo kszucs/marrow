@@ -162,6 +162,17 @@ class Schema(_Wrapper):
     def __arrow_c_schema__(self):
         return self._binding.__arrow_c_schema__()
 
+    def _export_to_c(self, out_ptr):
+        """Write the schema into the C Data struct at `out_ptr`, as pyarrow's
+        does."""
+        self._binding._export_to_c(out_ptr)
+
+    @staticmethod
+    def _import_from_c(in_ptr):
+        """Take ownership of the C Data schema struct at `in_ptr`, as
+        pyarrow's does."""
+        return Schema.wrap(_ma.import_schema_from_c(in_ptr))
+
     def __str__(self):
         return self._binding.__str__()
 

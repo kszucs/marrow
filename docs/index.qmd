@@ -193,7 +193,7 @@ A corpus of 278 SQL queries whose expected answers come from DuckDB, never from
 marrow: 215 run and match, and 63 wait on features marrow does not have yet.
 Arrow's own integration suite round-trips IPC files and
 C Data with the C++, Rust and Go implementations, skipping the layouts marrow
-does not implement (unions, views, run-end encoding, extension types). See
+does not implement (unions, list views, run-end encoding, extension types). See
 [Status & limitations](reference/status.qmd) for the full list.
 :::
 

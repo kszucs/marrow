@@ -795,6 +795,8 @@ marrow/
 ├── tabular.mojo          # RecordBatch, Table
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
+├── integration.mojo      # archery's integration JSON, read for the
+│                         #   cross-implementation suite (test-only)
 ├── execution.mojo        # ExecContext — threads, device, `stripe`, GPU_ENABLED
 ├── errors.mojo           # ArrowError + ErrorKind — the error taxonomy
 ├── io/                   # core (ByteSource/ByteSink), local, opendal, dispatch
@@ -1444,20 +1446,17 @@ release with both artifacts attached.
 
 ## Known Limitations
 
-1. **Testing**: conformance testing leans on PyArrow until Mojo has a JSON
-   library.
-2. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
+1. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    string_view/binary_view, fixed_size_binary, list/large_list/fixed_size_list,
    struct, map, dictionary, decimal (32/64/128/256) and temporal
    (date/time/timestamp/duration/interval) are implemented; union,
    run-end-encoded and list-view layouts are not. The archery
-   integration suite runs `map`, `map_non_canonical` and `interval_mdn` at
-   **14/14** against C++, Rust and Go, both directions, and `binary_view` at
-   **10/14** — every C++ and Go phase; archery's pinned datagen skips the Rust
-   tester for that case (`.skip_tester('Rust')`). `interval`
-   (YEAR_MONTH / DAY_TIME) is skipped there, but that is a pyarrow limit — it
-   has no type for either unit and the harness bridges through pyarrow; marrow
-   consumes all three from the other implementations.
+   integration suite runs every implemented layout at **14/14** against C++,
+   Rust and Go, both directions, except `binary_view` at **10/14** — every C++
+   and Go phase; archery's pinned datagen skips the Rust tester for that case
+   (`.skip_tester('Rust')`) — and `decimal32`/`decimal64`, which Rust and Go
+   do not implement. Marrow reads the suite's JSON (`marrow/integration.mojo`),
+   IPC and C Data itself; pyarrow is only the equality oracle.
 
 ## How to Identify Leaky Abstractions
 

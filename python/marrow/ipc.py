@@ -24,9 +24,10 @@ __all__ = [
 def write_ipc_file(
     path, batches=None, schema=None, compression=None, native_codecs=True
 ):
-    """Write an IPC file; `compression` is `None`, `"lz4"` or `"zstd"`, as
-    for pyarrow's `IpcWriteOptions`. The codec runs in Mojo, or with
-    `native_codecs=False` through liblz4 and libzstd."""
+    """Write an IPC file; `schema` is anything exporting an Arrow schema, and
+    `compression` is `None`, `"lz4"` or `"zstd"`, as for pyarrow's
+    `IpcWriteOptions`. The codec runs in Mojo, or with `native_codecs=False`
+    through liblz4 and libzstd."""
     raw = [unwrap(b) for b in batches] if batches is not None else None
     return _ma.write_ipc_file(path, raw, unwrap(schema), compression, native_codecs)
 

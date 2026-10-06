@@ -886,6 +886,10 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
             if present_here:
                 var n = LittleEndian.u32(vspan, bpos)
                 bpos += 4
+                if bpos + Int(n) > len(vspan):
+                    raise CorruptError(
+                        t"parquet: a {n}-byte value overruns its page"
+                    )
                 if selected:
                     self._append(vspan[bpos : bpos + n])
                 bpos += n

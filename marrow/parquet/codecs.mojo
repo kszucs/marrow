@@ -348,6 +348,11 @@ struct DeltaBinaryPacked:
         first_z, pos = LittleEndian.varint(data, pos)
 
         var num_miniblocks = Int(miniblocks)
+        if num_miniblocks <= 0 or Int(block_size) < num_miniblocks:
+            raise CorruptError(
+                t"parquet: a delta block of {block_size} values in"
+                t" {miniblocks} miniblocks"
+            )
         var vals_per_mb = Int(block_size) // num_miniblocks
 
         var value = Zigzag.decode(first_z)
@@ -360,8 +365,12 @@ struct DeltaBinaryPacked:
             var min_delta = Zigzag.decode(min_delta_z)
             var widths_at = pos
             pos += num_miniblocks  # one bit-width byte per miniblock
+            if pos > len(data):
+                raise CorruptError("parquet: delta miniblock widths overrun the page")
             for mb in range(num_miniblocks):
                 var w = Int(data[widths_at + mb])
+                if w > 64:
+                    raise CorruptError(t"parquet: a {w}-bit delta")
                 var base_bit = pos * 8
                 pos += (
                     vals_per_mb * w
@@ -369,6 +378,10 @@ struct DeltaBinaryPacked:
                 for j in range(vals_per_mb):
                     var delta: UInt64 = 0
                     if w > 0:
+                        if base_bit + (j + 1) * w > len(data) * 8:
+                            raise CorruptError(
+                                "parquet: delta values overrun the page"
+                            )
                         delta = LittleEndian.bits(data, base_bit + j * w, w)
                     value += min_delta + Int64(delta)
                     out.append(value)
@@ -888,8 +901,18 @@ struct DeltaByteArray:
         var prev = List[UInt8]()
         for i in range(np):
             var v = List[UInt8]()
-            v.extend(Span(prev)[0 : Int(prefixes[i])])
+            var prefix = Int(prefixes[i])
             var sl = Int(suffix_lens[i])
+            if prefix < 0 or prefix > len(prev):
+                raise CorruptError(
+                    t"parquet: value {i} shares {prefix} bytes of a"
+                    t" {len(prev)}-byte predecessor"
+                )
+            if sl < 0 or pos + sl > len(values):
+                raise CorruptError(
+                    t"parquet: value {i}'s {sl}-byte suffix overruns the page"
+                )
+            v.extend(Span(prev)[0:prefix])
             v.extend(values[pos : pos + sl])
             pos += sl
             out.append(v.copy())

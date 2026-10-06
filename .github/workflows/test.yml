@@ -62,6 +62,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          # apache/arrow-testing: the gold IPC files some tests read.
+          submodules: true
 
       # /mnt is the runner's ~70 GB scratch disk, and 24 GB there costs nothing
       # when it is not touched. macOS grows its swap on its own.
