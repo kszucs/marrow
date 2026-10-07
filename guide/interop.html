@@ -68,7 +68,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
 <link href="../examples/datafusion.html" rel="next">
-<link href="../guide/io.html" rel="prev">
+<link href="../guide/datasets.html" rel="prev">
 <link href="../assets/favicon.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -511,6 +511,12 @@ document.addEventListener("DOMContentLoaded", function () {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="../guide/datasets.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Datasets</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="../guide/interop.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">PyArrow interop</span></a>
   </div>
@@ -651,7 +657,7 @@ SPDX-License-Identifier: Apache-2.0
 <p>Marrow arrays implement the Arrow C Data Interface protocol (<code>__arrow_c_array__</code> / <code>__arrow_c_schema__</code>), so they exchange data with PyArrow with <strong>zero copies</strong> at both the Python and Mojo level.</p>
 <section id="python-level" class="level3">
 <h3 class="anchored" data-anchor-id="python-level">Python level</h3>
-<div id="9b44c041" class="cell" data-execution_count="1">
+<div id="9cd3d6bb" class="cell" data-execution_count="1">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>sys.path.insert(<span class="dv">0</span>, <span class="st">"../../python"</span>)   <span class="co"># the built extension</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
@@ -1125,8 +1131,8 @@ SPDX-License-Identifier: Apache-2.0
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../guide/io.html" class="pagination-link" aria-label="Parquet &amp; Arrow IPC">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Parquet &amp; Arrow IPC</span>
+      <a href="../guide/datasets.html" class="pagination-link" aria-label="Datasets">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Datasets</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">

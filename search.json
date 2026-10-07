@@ -376,7 +376,7 @@
     "href": "guide/io.html#parquet",
     "title": "File I/O",
     "section": "Parquet",
-    "text": "Parquet\nMarrow ships a from-scratch Parquet reader and writer — it decodes and encodes the Parquet format itself, with no PyArrow at runtime. The Python API lives in marrow.parquet and mirrors pyarrow.parquet:\n\nimport marrow.parquet as pq\n\ntable = ma.table({\n    \"id\":     ma.array([1, 2, 3, 4]),\n    \"city\":   ma.array([\"NYC\", \"LA\", None, \"SEA\"]),\n    \"amount\": ma.array([10.0, 20.0, 30.0, 40.0]),\n})\n\npq_path = os.path.join(tempfile.mkdtemp(), \"cities.parquet\")\npq.write_table(table, pq_path)\n\nrestored = pq.read_table(pq_path)\nprint(restored.to_pydict())\n\n{'id': [1, 2, 3, 4], 'city': ['NYC', 'LA', None, 'SEA'], 'amount': [10.0, 20.0, 30.0, 40.0]}\n\n\n\nColumn projection\nPass columns= to read only a subset of top-level columns (in the given order) — the reader skips the others entirely:\n\nsubset = pq.read_table(pq_path, columns=[\"city\", \"id\"])\nprint(subset.column_names)\n\n['city', 'id']\n\n\n\n\nCompression and page version\nwrite_table accepts a compression codec and a Parquet data-page version:\n\npq.write_table(table, pq_path, compression=\"zstd\", data_page_version=\"2.0\")\nprint(pq.read_table(pq_path).num_rows)\n\n4\n\n\n\n\n\nArgument\nValues\nDefault\n\n\n\n\ncompression\n\"snappy\", \"zstd\", \"lz4\", \"none\"\n\"snappy\"\n\n\ndata_page_version\n\"1.0\", \"2.0\"\n\"1.0\"\n\n\n\nThe writer also emits column statistics (min/max/null/distinct counts) and a page index, so readers on the other side can prune row groups and pages. Bloom filters are implemented but off by default and not currently reachable from Python. write_table accepts any Arrow-C-stream object too, so a PyArrow table can be written directly.\n\n\n\n\n\n\nNote\n\n\n\nThe Mojo API mirrors the Python one — from marrow.parquet import read_table, write_table operate on a marrow Table, and the marrow/parquet package also exposes lower-level metadata, statistics, page-index and bloom-filter readers.",
+    "text": "Parquet\nMarrow ships a from-scratch Parquet reader and writer — it decodes and encodes the Parquet format itself, with no PyArrow at runtime. The Python API lives in marrow.parquet and mirrors pyarrow.parquet:\n\nimport marrow.parquet as pq\n\ntable = ma.table({\n    \"id\":     ma.array([1, 2, 3, 4]),\n    \"city\":   ma.array([\"NYC\", \"LA\", None, \"SEA\"]),\n    \"amount\": ma.array([10.0, 20.0, 30.0, 40.0]),\n})\n\npq_path = os.path.join(tempfile.mkdtemp(), \"cities.parquet\")\npq.write_table(table, pq_path)\n\nrestored = pq.read_table(pq_path)\nprint(restored.to_pydict())\n\n{'id': [1, 2, 3, 4], 'city': ['NYC', 'LA', None, 'SEA'], 'amount': [10.0, 20.0, 30.0, 40.0]}\n\n\n\nColumn projection\nPass columns= to read only a subset of top-level columns (in the given order) — the reader skips the others entirely:\n\nsubset = pq.read_table(pq_path, columns=[\"city\", \"id\"])\nprint(subset.column_names)\n\n['city', 'id']\n\n\n\n\nCompression and page version\nwrite_table accepts a compression codec and a Parquet data-page version:\n\npq.write_table(table, pq_path, compression=\"zstd\", data_page_version=\"2.0\")\nprint(pq.read_table(pq_path).num_rows)\n\n4\n\n\n\n\n\nArgument\nValues\nDefault\n\n\n\n\ncompression\n\"snappy\", \"zstd\", \"lz4\", \"none\"\n\"snappy\"\n\n\ndata_page_version\n\"1.0\", \"2.0\"\n\"1.0\"\n\n\n\nThe writer also emits column statistics (min/max/null/distinct counts) and a page index, so readers on the other side can prune row groups and pages. Bloom filters are implemented but off by default and not currently reachable from Python. write_table accepts any Arrow-C-stream object too, so a PyArrow table can be written directly.\n\n\n\n\n\n\nNote\n\n\n\nThe Mojo API mirrors the Python one — from marrow.parquet import read_table, write_table operate on a marrow Table, and the marrow/parquet package also exposes lower-level metadata, statistics, page-index and bloom-filter readers.\n\n\n\n\n\n\n\n\nTip\n\n\n\nTo read many files — a directory, a glob, or a Hugging Face Hub dataset — as one lazy table, see Datasets.",
     "crumbs": [
       "Home",
       "I/O & interop",
@@ -468,358 +468,63 @@
     ]
   },
   {
-    "objectID": "guide/compute.html",
-    "href": "guide/compute.html",
-    "title": "Compute",
+    "objectID": "guide/datasets.html",
+    "href": "guide/datasets.html",
+    "title": "Datasets",
     "section": "",
-    "text": "Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons, selection and casting. All kernels are null-aware; the exact null handling depends on the operation.\nString, temporal, boolean and conditional kernels are implemented in Mojo but not yet bound to Python — they are reachable from a query plan instead.\nThe compute functions live in marrow.compute, and their names and signatures follow pyarrow.compute for the functions it implements — mc.add, mc.subtract, mc.cast, mc.filter. It is not a drop-in replacement: some options (skip_nulls=False, nan_is_null=True, multi-key sort_keys) raise NotImplementedError, and memory_pool is ignored.",
+    "text": "marrow.datasets.load_dataset is shaped like the datasets function of the same name. It resolves one split of a dataset to the files it is made of and returns a lazy table scanning all of them in order. Building the table reads the first file’s schema and nothing else; the data is read when the plan runs, so filters and column pruning apply to every file.",
     "crumbs": [
       "Home",
-      "Compute",
-      "Compute kernels"
+      "I/O & interop",
+      "Datasets"
     ]
   },
   {
-    "objectID": "guide/compute.html#arithmetic",
-    "href": "guide/compute.html#arithmetic",
-    "title": "Compute",
-    "section": "Arithmetic",
-    "text": "Arithmetic\nElement-wise binary operations: add, subtract, multiply, divide.\n\na = ma.array([1, 2, 3, 4, 5], type=ma.int64())\nb = ma.array([10, 20, 30, 40, 50], type=ma.int64())\n\nprint(\"add:     \", mc.add(a, b))\nprint(\"subtract:\", mc.subtract(b, a))\nprint(\"multiply:\", mc.multiply(a, b))\nprint(\"divide:  \", mc.divide(b, a))\n\nadd:      PrimitiveArray[int64]([11, 22, 33, 44, 55])\nsubtract: PrimitiveArray[int64]([9, 18, 27, 36, 45])\nmultiply: PrimitiveArray[int64]([10, 40, 90, 160, 250])\ndivide:   PrimitiveArray[int64]([10, 10, 10, 10, 10])\n\n\nFloats work the same way:\n\nx = ma.array([1.0, 2.0, 3.0])\ny = ma.array([0.5, 1.5, 2.5])\nprint(\"add:   \", mc.add(x, y))\nprint(\"divide:\", mc.divide(x, y))\n\nadd:    PrimitiveArray[float64]([1.5, 3.5, 5.5])\ndivide: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])\n\n\n\n\n\n\n\n\nNotemarrow.compute compares like pyarrow; marrow.expr compares like SQL\n\n\n\nThe two answer differently on NaN, deliberately. marrow.compute mirrors pyarrow.compute, so its comparisons are IEEE — a NaN equals nothing, itself included. marrow.expr is a SQL engine, and DuckDB, DataFusion and Polars all agree that SQL’s comparisons are total:\n\n\n\nexpression\npc.equal / pc.greater\ncol(\"a\") == … / &gt; …\n\n\n\n\nnan = nan\nFalse\nTrue\n\n\nnan &lt;&gt; nan\nTrue\nFalse\n\n\nnan &gt; 1.0\nFalse\nTrue\n\n\n\nSo a NaN is its own GROUP BY group, its own join key and its own rank peer, and it sorts after inf. NULL is unaffected and stays three-valued in both.\nFloat division by zero answers a value — 10.0 / 0.0 is inf, 0.0 / 0.0 is nan — while integer // and % by zero answer NULL, as SQL does. The two genuinely want different answers: division by zero has a value in the reals’ completion and integer division by zero does not.\n\n\n\nNull propagation\nIf either operand at a position is null, the result at that position is null. This mirrors SQL’s three-valued logic.\n\na = ma.array([1, None, 3, None])\nb = ma.array([10, 20, 30, 40])\n\nresult = mc.add(a, b)\nprint(result)    # index 1 and 3 are null\nprint(\"null count:\", result.null_count)\n\nPrimitiveArray[int64]([11, NULL, 33, NULL])\nnull count: 2\n\n\n\n# Both inputs can contribute nulls\na = ma.array([None, 2, 3, None])\nb = ma.array([10, None, 30, None])\n\nprint(mc.add(a, b))   # null at 0, 1, and 3\n\nPrimitiveArray[int64]([NULL, NULL, 33, NULL])",
+    "objectID": "guide/datasets.html#files-of-one-format",
+    "href": "guide/datasets.html#files-of-one-format",
+    "title": "Datasets",
+    "section": "Files of one format",
+    "text": "Files of one format\nName the format — \"parquet\", \"json\" (newline-delimited) or \"arrow\" (the IPC file format) — and the files with data_files. A pattern or a list of them is the train split, as in datasets; a mapping names each split.\n\nimport os, tempfile\nimport marrow.parquet as pq\nfrom marrow.datasets import load_dataset\n\ndata = tempfile.mkdtemp()\nfor shard, start in enumerate([0, 3, 6]):\n    pq.write_table(\n        ma.table({\"id\": ma.array([start, start + 1, start + 2])}),\n        os.path.join(data, f\"train-{shard}.parquet\"),\n    )\npq.write_table(ma.table({\"id\": ma.array([100])}), os.path.join(data, \"test-0.parquet\"))\n\ntrain = load_dataset(\"parquet\", data_files=os.path.join(data, \"train-*.parquet\"))\nprint(train.collect().column(\"id\").to_pylist())\n\n[0, 1, 2, 3, 4, 5, 6, 7, 8]\n\n\n\nfiles = {\n    \"train\": os.path.join(data, \"train-*.parquet\"),\n    \"test\": os.path.join(data, \"test-*.parquet\"),\n}\nprint(load_dataset(\"parquet\", data_files=files, split=\"test\").collect().num_rows)\n\n1\n\n\nThe result is an ordinary plan over one scan of every file, so the verbs, the optimizer and the engine treat it like any other:\n\nquery = train.filter(col(\"id\") &gt;= 5).optimize()\nprint(query.explain())\nprint(query.collect().column(\"id\").to_pylist())\n\nFilter(ParquetScan(/tmp/tmpu4kaxumv/train-0.parquet, /tmp/tmpu4kaxumv/train-1.parquet, /tmp/tmpu4kaxumv/train-2.parquet) pruned by 1, ge(id, 5))\n[5, 6, 7, 8]\n\n\n\nPatterns\nA pattern is a path or a URI whose last segments may hold wildcards, matched the way datasets and fsspec match data_files:\n\n\n\n\n\n\n\nWildcard\nMatches\n\n\n\n\n*\nany run of characters within one path segment\n\n\n**\nany run of segments, none included — **/*.parquet reaches the top level too\n\n\n?\none character other than /, in a local path\n\n\n\\\nmakes the next character literal\n\n\n\nA local path is listed from the filesystem; any other URI (hf://, s3://, gs://, …) through its OpenDAL service, which must be able to list — http(s):// cannot, so name each file there. In a URI ? starts the query, as it does in any URI, and every file found carries the query on. A pattern without wildcards names one file and needs no listing.\nEvery file must have the first file’s columns; a file that does not is named in the error when the scan reaches it.",
     "crumbs": [
       "Home",
-      "Compute",
-      "Compute kernels"
+      "I/O & interop",
+      "Datasets"
     ]
   },
   {
-    "objectID": "guide/compute.html#aggregates",
-    "href": "guide/compute.html#aggregates",
-    "title": "Compute",
-    "section": "Aggregates",
-    "text": "Aggregates\nMost aggregates are not eager kernel calls (boolean any and all, below, are the exception). sum, mean, min, max, product, count, count_distinct and the rest reduce a column inside a query plan, so that a whole-table reduction and a GROUP BY are the same code path. Wrap a batch with ma.memtable(), describe the reduction, and .collect() runs it:\n\nbatch = ma.record_batch({\"v\": ma.array([1, None, 3, None, 5])})\nq = ma.memtable(batch)\n\nout = q.aggregate(\n    total=(\"sum\", \"v\"),\n    smallest=(\"min\", \"v\"),\n    largest=(\"max\", \"v\"),\n    average=(\"mean\", \"v\"),\n)\nprint(out.collect().to_pylist())\n\n[{'total': 9, 'smallest': 1, 'largest': 5, 'average': 3.0}]\n\n\nNulls are skipped, so sum above is 1 + 3 + 5. Adding a by= key groups rather than reducing to one row — the only change is the argument:\n\nsales = ma.record_batch({\n    \"region\": ma.array([\"east\", \"west\", \"east\", \"west\"]),\n    \"amount\": ma.array([10, 20, 30, 40]),\n})\nby_region = ma.memtable(sales).aggregate(\n    by=[\"region\"], total=(\"sum\", \"amount\"),\n).order_by(\"region\")\nprint(by_region.collect().to_pylist())\n\n[{'region': 'east', 'total': 40}, {'region': 'west', 'total': 60}]\n\n\n\nAccumulator types widen\nsum and product do not preserve the input type — integers accumulate in int64 and floats in float64, so a long column cannot silently overflow its own width. mean is always float64:\n\nints = ma.record_batch({\"v\": ma.array([10, 20, 30], type=ma.int32())})\nres  = ma.memtable(ints).aggregate(total=(\"sum\", \"v\"), avg=(\"mean\", \"v\")).collect()\nprint(\"sum of int32 -&gt;\", res.column(\"total\").type)\nprint(\"mean         -&gt;\", res.column(\"avg\").type)\n\nsum of int32 -&gt; int64\nmean         -&gt; float64\n\n\n\n\nCounting\ncount counts non-null values; ma.count_star() counts rows, which differs on a nullable column. count_distinct is exact, while approx_count_distinct uses a fixed-size HyperLogLog sketch — far cheaper in memory on a high-cardinality column:\n\nids = ma.record_batch({\"id\": ma.array([1, 1, 2, 3, 3, 3, None, 4])})\nprint(ma.memtable(ids).aggregate(\n    rows=ma.count_star(),\n    values=(\"count\", \"id\"),\n    distinct=(\"count_distinct\", \"id\"),\n    approx=(\"approx_count_distinct\", \"id\"),\n).collect().to_pylist())\n\n[{'rows': 8, 'values': 7, 'distinct': 4, 'approx': 4}]\n\n\n\n\nBoolean aggregates\nany and all operate on boolean arrays. As in PyArrow, nulls are skipped unless you pass skip_nulls=False, and fewer than min_count valid values (default 1) answer None.\n\nflags = ma.array([True, False, None, True])\nprint(\"any:\", mc.any(flags))   # True  — at least one True\nprint(\"all:\", mc.all(flags))   # False — False is present\n\nany: True\nall: False\n\n\n\nall_true = ma.array([True, True, None])\nprint(\"all with nulls:\", mc.all(all_true))   # True — only True values\n\nall_null = ma.array([None, None], type=ma.bool_())\nprint(\"all of nulls:\", mc.all(all_null))   # None — no valid value\nprint(\"any of nulls:\", mc.any(all_null, min_count=0))   # False (identity)\nprint(\"all, nulls unknown:\", mc.all(all_true, skip_nulls=False))   # None\n\nall with nulls: True\nall of nulls: None\nany of nulls: False\nall, nulls unknown: None",
+    "objectID": "guide/datasets.html#hugging-face-hub-datasets",
+    "href": "guide/datasets.html#hugging-face-hub-datasets",
+    "title": "Datasets",
+    "section": "Hugging Face Hub datasets",
+    "text": "Hugging Face Hub datasets\nPass a dataset’s owner/name instead of a format. Its configs and their splits come from the dataset card’s configs: block, or, when the card has none, from the file names the way datasets infers them (train, validation/valid/dev/val, test/eval):\n\nfrom marrow.datasets import (\n    get_dataset_config_names,\n    get_dataset_split_names,\n    load_dataset,\n)\n\nget_dataset_config_names(\"openai/gsm8k\")          # ['main', 'socratic']\nget_dataset_split_names(\"openai/gsm8k\", \"main\")   # ['train', 'test']\n\ngsm = load_dataset(\"openai/gsm8k\", \"main\", split=\"test\")\ngsm.filter(col(\"question\").char_length() &gt; 300).select(\"question\").collect()\n\nA split stored as Parquet, JSON Lines or Arrow is read from its own files, through hf://, fetching only the column chunks the query needs. One stored otherwise — CSV, a .json document, compressed files, images — or with no data files at all is read from the Parquet copy the Hub converts every public dataset into, which exists for the default branch:\n\niris = load_dataset(\"scikit-learn/iris\")           # Iris.csv, read as Parquet\niris.collect().num_rows                            # 150\n\ndata_files works for a Hub dataset too, its patterns relative to the repository. revision= picks a branch, a tag or a commit; a revision holding a /, such as refs/pr/1, cannot be named, so use its commit. HF_TOKEN is sent when it is set, which private and gated datasets need.\n\n\n\n\n\n\nNote\n\n\n\nReading from the Hub, or any object store, needs libopendal_c; a local path never does. See the opendal environment in pixi.toml.",
     "crumbs": [
       "Home",
-      "Compute",
-      "Compute kernels"
+      "I/O & interop",
+      "Datasets"
     ]
   },
   {
-    "objectID": "guide/compute.html#selection",
-    "href": "guide/compute.html#selection",
-    "title": "Compute",
-    "section": "Selection",
-    "text": "Selection\n\nfilter\nfilter(array, mask) keeps elements where the boolean mask is True. The mask must be a BoolArray of the same length.\n\narr  = ma.array([10, 20, 30, 40, 50])\nmask = ma.array([True, False, True, False, True])\n\nprint(mc.filter(arr, mask))   # [10, 30, 50]\n\nPrimitiveArray[int64]([10, 30, 50])\n\n\nNulls in the source array are preserved through the filter:\n\narr  = ma.array([1, None, 3, 4, None])\nmask = ma.array([True, True, False, True, True])\n\nprint(mc.filter(arr, mask))   # [1, NULL, 4, NULL]\n\nPrimitiveArray[int64]([1, NULL, 4, NULL])\n\n\nNulls in the mask are treated as False (the element is excluded):\n\narr  = ma.array([1, 2, 3, 4])\nmask = ma.array([True, None, True, None])\n\nprint(mc.filter(arr, mask))   # [1, 3]\n\nPrimitiveArray[int64]([1, 3])\n\n\n\n\ndrop_null\ndrop_null(array) removes all null positions. Equivalent to filtering by the array’s own validity bitmap.\n\narr = ma.array([1, None, 3, None, 5])\nprint(mc.drop_null(arr))   # [1, 3, 5]\n\nPrimitiveArray[int64]([1, 3, 5])\n\n\nWorks on numeric array types:\n\nf = ma.array([1.0, None, 3.0, None, 5.0])\nprint(mc.drop_null(f))\n\nPrimitiveArray[float64]([1.0, 3.0, 5.0])",
+    "objectID": "guide/datasets.html#in-mojo",
+    "href": "guide/datasets.html#in-mojo",
+    "title": "Datasets",
+    "section": "In Mojo",
+    "text": "In Mojo\nThe same entry point returns a DynRelation. HubDataset is what the Hub says about a dataset, DataFiles the patterns of each split, and the patterns themselves are marrow.io.Glob, usable on their own to match or expand paths.\n\n\ndocs/snippets/load_dataset.mojo\n\n\"\"\"A Hub dataset's split and a glob of local files, each as a plan.\n\nCompiled by `pixi run docs_check`; included by docs/guide/datasets.qmd.\n\"\"\"\n\nfrom marrow.datasets import DataFiles, HubDataset, load_dataset\nfrom marrow.dtypes import int64\nfrom marrow.expr import col, lit\n\n\ndef main() raises:\n    # What the Hub says about a dataset: its configs, and each one's splits.\n    var hub = HubDataset.fetch(\"openai/gsm8k\")\n    print(hub)\n\n    # One split of one config, as a scan over every file in it.\n    var gsm = load_dataset(\"openai/gsm8k\", \"main\", split=\"test\")\n    print(gsm.limit(3).execute())\n\n    # Files of one format, named by a glob.\n    var orders = load_dataset(\n        \"parquet\", DataFiles([\"data/orders-*.parquet\"])\n    ).filter(col(\"amount\", int64) &gt; lit(100, int64))\n    print(orders.execute())",
     "crumbs": [
       "Home",
-      "Compute",
-      "Compute kernels"
+      "I/O & interop",
+      "Datasets"
     ]
   },
   {
-    "objectID": "guide/compute.html#comparisons",
-    "href": "guide/compute.html#comparisons",
-    "title": "Compute",
-    "section": "Comparisons",
-    "text": "Comparisons\nElement-wise comparison kernels return a boolean array. Nulls propagate: if either input at a position is null, the output is null.\n\na = ma.array([1, 2, 3, None, 5])\nb = ma.array([1, 3, 2, 4,    5])\n\nprint(\"equal:        \", mc.equal(a, b))\nprint(\"not_equal:    \", mc.not_equal(a, b))\nprint(\"less:         \", mc.less(a, b))\nprint(\"less_equal:   \", mc.less_equal(a, b))\nprint(\"greater:      \", mc.greater(a, b))\nprint(\"greater_equal:\", mc.greater_equal(a, b))\n\nequal:         BoolArray([True, False, False, NULL, True])\nnot_equal:     BoolArray([False, True, True, NULL, False])\nless:          BoolArray([False, True, False, NULL, False])\nless_equal:    BoolArray([True, True, False, NULL, True])\ngreater:       BoolArray([False, False, True, NULL, False])\ngreater_equal: BoolArray([True, False, True, NULL, True])\n\n\nThe null at index 3 propagates to all output arrays:\n\nresult = mc.equal(a, b)\nprint(\"null count:\", result.null_count)      # 1\nprint(\"is_valid(3):\", result[3].is_valid())     # False\n\nnull count: 1\nis_valid(3): False",
+    "objectID": "guide/datasets.html#limits",
+    "href": "guide/datasets.html#limits",
+    "title": "Datasets",
+    "section": "Limits",
+    "text": "Limits\n\nA remote Parquet scan fetches one row group per request, one after another, so a file written with many small row groups reads slowly over the network.\nA config is resolved when the plan is built; it is not a parameter of the plan.\nHive-style key=value/ directories do not become columns.",
     "crumbs": [
       "Home",
-      "Compute",
-      "Compute kernels"
-    ]
-  },
-  {
-    "objectID": "guide/compute.html#casting",
-    "href": "guide/compute.html#casting",
-    "title": "Compute",
-    "section": "Casting",
-    "text": "Casting\ncast converts an array to another type. By default a lossy conversion raises; pass safe=False for the raw truncating/wrapping conversion.\n\nints = ma.array([1, 2, 3], type=ma.int32())\nprint(\"to float64:\", mc.cast(ints, ma.float64()))\n\n# safe=False truncates toward zero instead of raising\nfloats = ma.array([1.9, -1.9, 2.5], type=ma.float64())\nprint(\"truncated: \", mc.cast(floats, ma.int32(), safe=False))\n\nto float64: PrimitiveArray[float64]([1.0, 2.0, 3.0])\ntruncated:  PrimitiveArray[int32]([1, -1, 2])\n\n\nCasts cover the numeric, boolean, string/binary and temporal families, including decimal rescaling and dictionary decode at the Mojo level.",
-    "crumbs": [
-      "Home",
-      "Compute",
-      "Compute kernels"
-    ]
-  },
-  {
-    "objectID": "guide/compute.html#null-behaviour-summary",
-    "href": "guide/compute.html#null-behaviour-summary",
-    "title": "Compute",
-    "section": "Null behaviour summary",
-    "text": "Null behaviour summary\n\n\n\n\n\n\n\n\nOperation\nNull input\nNull output\n\n\n\n\nadd, subtract, multiply, divide\neither operand null\nnull propagates\n\n\nequal, less, greater, …\neither operand null\nnull propagates\n\n\nsum, product, min, max, mean\nelement null\nelement skipped\n\n\ncount_distinct, approx_count_distinct\nelement null\nelement skipped\n\n\nany, all\nelement null\nelement skipped\n\n\nfilter (source null)\nsource element null\nnull preserved in output\n\n\nfilter (mask null)\nmask element null\nelement excluded\n\n\ndrop_null\nelement null\nelement removed\n\n\ncast\nelement null\nnull preserved",
-    "crumbs": [
-      "Home",
-      "Compute",
-      "Compute kernels"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html",
-    "href": "guide/arrays.html",
-    "title": "Arrays",
-    "section": "",
-    "text": "Arrays are the core data structure in marrow. They are immutable and columnar — values sit contiguously in memory with a separate validity bitmap tracking null positions. Immutability is what makes a copy O(1): every array holds its data behind ref-counted buffers, so sharing one costs a refcount bump, never a memcpy.\nThe rest of this page is the Python API; Building arrays in Mojo at the end covers the native builder API.",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html#primitive-arrays",
-    "href": "guide/arrays.html#primitive-arrays",
-    "title": "Arrays",
-    "section": "Primitive arrays",
-    "text": "Primitive arrays\nPrimitive arrays hold fixed-size scalar values: booleans, integers, and floats.\n\n# Integer arrays\ni64 = ma.array([1, 2, 3, 4, 5])\ni32 = ma.array([1, 2, 3, 4, 5], type=ma.int32())\nu8  = ma.array([0, 127, 255],   type=ma.uint8())\n\nprint(i64)\nprint(i32)\nprint(u8)\n\nPrimitiveArray[int64]([1, 2, 3, 4, 5])\nPrimitiveArray[int32]([1, 2, 3, 4, 5])\nPrimitiveArray[uint8]([0, 127, 255])\n\n\n\n# Floating point\nf32 = ma.array([1.0, 2.5, 3.14], type=ma.float32())\nf64 = ma.array([1.0, 2.5, 3.14])   # float64 inferred\nprint(f32)\nprint(f64)\n\nPrimitiveArray[float32]([1.0, 2.5, 3.14])\nPrimitiveArray[float64]([1.0, 2.5, 3.14])\n\n\n\n# Boolean\nb = ma.array([True, False, True, False])\nprint(b)\n\nBoolArray([True, False, True, False])\n\n\n\nNull values\nPass None to mark a position as null. The validity bitmap tracks which positions are valid.\n\narr = ma.array([1, None, 3, None, 5])\nprint(arr)\nprint(\"null count:\", arr.null_count)\nprint(\"is_valid:  \", arr.is_valid())     # elementwise BoolArray\nprint(\"is_valid(0):\", arr[0].is_valid())   # True\nprint(\"is_valid(1):\", arr[1].is_valid())   # False — null\n\nPrimitiveArray[int64]([1, NULL, 3, NULL, 5])\nnull count: 2\nis_valid:   BoolArray([True, False, True, False, True])\nis_valid(0): True\nis_valid(1): False\n\n\n\n\n\n\n\n\nNote\n\n\n\nNull is not zero. is_valid() reports False at index 1 — the value there is absent entirely, not 0 or empty. Array.is_valid() returns an elementwise BoolArray (like pyarrow.compute.is_valid); index into the array first (arr[1]) to check a single position.\n\n\n\n\nInspecting arrays\n\narr = ma.array([10, 20, 30, None, 50], type=ma.int32())\n\nprint(\"length:    \", len(arr))\nprint(\"null count:\", arr.null_count)\nprint(\"type:      \", arr.type)\n\nlength:     5\nnull count: 1\ntype:       int32",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html#string-arrays",
-    "href": "guide/arrays.html#string-arrays",
-    "title": "Arrays",
-    "section": "String arrays",
-    "text": "String arrays\nString arrays store variable-length UTF-8 strings.\n\ns = ma.array([\"hello\", None, \"world\", \"mañana\"])\nprint(s)\nprint(\"null count:\", s.null_count)\nprint(\"is_valid(1):\", s[1].is_valid())\n\nStringArray([hello, NULL, world, mañana])\nnull count: 1\nis_valid(1): False",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html#list-arrays",
-    "href": "guide/arrays.html#list-arrays",
-    "title": "Arrays",
-    "section": "List arrays",
-    "text": "List arrays\nList arrays store variable-length sequences. Each element is itself a list.\n\nnested = ma.array([[1, 2], [3, 4, 5], [6]])\nprint(nested)\nprint(\"type:\", nested.type)\n\nListArray([PrimitiveArray[int64]([1, 2]), PrimitiveArray[int64]([3, 4, 5]), PrimitiveArray[int64]([6])])\ntype: list&lt;int64&gt;\n\n\n\nNulls in list arrays\n\nwith_null = ma.array([[1, 2], None, [3, 4, 5]])\nprint(with_null)\nprint(\"null count:\", with_null.null_count)\n\nListArray([PrimitiveArray[int64]([1, 2]), NULL, PrimitiveArray[int64]([3, 4, 5])])\nnull count: 1",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html#struct-arrays",
-    "href": "guide/arrays.html#struct-arrays",
-    "title": "Arrays",
-    "section": "Struct arrays",
-    "text": "Struct arrays\nStruct arrays store rows of named fields — like a table with one row per element.\n\npeople = ma.array([\n    {\"name\": \"Alice\", \"age\": 30},\n    {\"name\": \"Bob\",   \"age\": 25},\n    {\"name\": None,    \"age\": 40},   # null name\n])\nprint(people)\nprint(\"type:\", people.type)\n\nStructArray({'name': StringArray([Alice, Bob, NULL]), 'age': PrimitiveArray[int64]([30, 25, 40])})\ntype: struct&lt;name: string, age: int64&gt;",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html#slicing",
-    "href": "guide/arrays.html#slicing",
-    "title": "Arrays",
-    "section": "Slicing",
-    "text": "Slicing\nslice(offset, length) returns a zero-copy view of a sub-range. No data is copied.\n\narr = ma.array([10, 20, 30, None, 50, 60])\nprint(\"original: \", arr)\nprint(\"slice(2, 3):\", arr.slice(2, 3))   # [30, NULL, 50]\nprint(\"slice(0, 4):\", arr.slice(0, 4))   # [10, 20, 30, NULL]\n\noriginal:  PrimitiveArray[int64]([10, 20, 30, NULL, 50, 60])\nslice(2, 3): PrimitiveArray[int64]([30, NULL, 50])\nslice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])\n\n\nSlicing works on all array types:\n\ns = ma.array([\"a\", \"b\", \"c\", \"d\", \"e\"])\nprint(s.slice(1, 3))   # [\"b\", \"c\", \"d\"]\n\nStringArray([b, c, d])",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html#fixedsizelist-arrays",
-    "href": "guide/arrays.html#fixedsizelist-arrays",
-    "title": "Arrays",
-    "section": "FixedSizeList arrays",
-    "text": "FixedSizeList arrays\nFixedSizeList arrays store sequences of a fixed length per element — the natural layout for embedding vectors or coordinates, where every row has the same width.\nType inference always produces a variable-length list, even when every row happens to be the same length:\n\n# inference sees lists — the result is list&lt;float64&gt;, not a fixed-size list\ncoords = ma.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])\nprint(coords.type)   # list&lt;float64&gt;\n\nlist&lt;float64&gt;\n\n\nTo get a genuine fixed_size_list, pass the type explicitly with fixed_size_list_(value_type, size). The fixed width is part of the type, which lets kernels skip per-row offset lookups:\n\ncoords = ma.array(\n    [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],\n    type=ma.fixed_size_list_(ma.float64(), 2),\n)\nprint(coords)\nprint(\"type:\", coords.type)   # fixed_size_list&lt;item: float64&gt;\n\nFixedSizeListArray([PrimitiveArray[float64]([1.0, 2.0]), PrimitiveArray[float64]([3.0, 4.0]), PrimitiveArray[float64]([5.0, 6.0])])\ntype: fixed_size_list&lt;item: float64&gt;",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "guide/arrays.html#building-arrays-in-mojo",
-    "href": "guide/arrays.html#building-arrays-in-mojo",
-    "title": "Arrays",
-    "section": "Building arrays in Mojo",
-    "text": "Building arrays in Mojo\nma.array() is a convenience over the native builder API — the mutable staging area you accumulate values in before freezing them with finish(). Reach for it in Mojo when values arrive one at a time.\nfrom marrow.builders import Int64Builder\nfrom marrow.arrays import Int64Array\n\nvar b = Int64Builder(capacity=4)\nb.append(10)\nb.append(20)\nb.append_null()\nb.append(40)\n\nvar arr: Int64Array = b.finish()\nprint(arr)               # PrimitiveArray[int64]([10, 20, NULL, 40])\ncapacity pre-allocates the backing buffer; it is optional but avoids reallocation when the size is known.\nStringBuilder tracks offsets for you:\nfrom marrow.builders import StringBuilder\nfrom marrow.arrays import StringArray\n\nvar sb = StringBuilder()\nsb.append(\"hello\")\nsb.append_null()\nsb.append(\"world\")\nvar strs: StringArray = sb.finish()   # StringArray([hello, NULL, world])\n\nNested builders\nA ListBuilder wraps a child builder. Append child values, then commit each list element with append_valid() — or append_null() for a null list:\nfrom marrow.builders import ListBuilder, Int64Builder\n\nvar lists = ListBuilder(Int64Builder())\nvar child_any = lists.values()      # a DynBuilder over the child\nref child = child_any.as_int64()    # borrow it at its real type\n\nchild.append(1)\nchild.append(2)\nlists.append_valid()                # [1, 2]\n\nchild.append(3)\nlists.append_valid()                # [3]\n\nlists.append_null()                 # a null list\nvar arr = lists.finish()\nvalues() hands back a DynBuilder, which has no append of its own — narrow it with .as_int64() / .as_string() / … first. StructBuilder and FixedSizeListBuilder follow the same build-children-then-commit shape.\n\n\nType-erased builders\nDynBuilder is the runtime-typed builder. Construct one from a DataType when the type is only known at run time; typed builders convert to it implicitly:\nfrom marrow.builders import DynBuilder, Int64Builder\nfrom marrow.dtypes import int64\n\nvar dyn = DynBuilder(int64)      # int64 is already an instance — not int64()\n\nvar typed = Int64Builder()\nvar erased: DynBuilder = typed^  # move it in -- no explicit wrapper needed\nThe conversion is implicit, so no DynBuilder(...) wrapper is needed, but the typed builder is moved (typed^) rather than copied: builders are not ImplicitlyCopyable, which keeps ownership visible at the call site.\nfinish() on a DynBuilder returns a DynArray, the type-erased array container.",
-    "crumbs": [
-      "Home",
-      "Data",
-      "Arrays"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html",
-    "href": "tutorials/data-pipeline.html",
-    "title": "Build a data pipeline",
-    "section": "",
-    "text": "This tutorial builds a small analytics pipeline over two related datasets — employees and the departments they belong to. Along the way you’ll use array construction, compute kernels, row filtering, sorting and a hash join. Every cell runs when the docs are built.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html#the-data",
-    "href": "tutorials/data-pipeline.html#the-data",
-    "title": "Build a data pipeline",
-    "section": "The data",
-    "text": "The data\nWe start with two RecordBatches. The first holds employees; the second maps department ids to names.\n\nemployees = ma.record_batch({\n    \"name\":    ma.array([\"Alice\", \"Bob\", \"Carol\", \"Dave\", \"Eve\", \"Frank\"]),\n    \"dept_id\": ma.array([1, 2, 1, 3, 2, 1]),\n    \"salary\":  ma.array([95_000, 72_000, 120_000, 88_000, 61_000, 105_000]),\n    \"age\":     ma.array([34, 28, 45, 52, 24, 39]),\n})\n\ndepartments = ma.record_batch({\n    \"dept_id\": ma.array([1, 2, 3]),\n    \"dept\":    ma.array([\"Engineering\", \"Sales\", \"Marketing\"]),\n})\n\nprint(employees)\nprint(departments)\n\nRecordBatch(num_rows=6, schema=Schema(fields=[name: string, dept_id: int64, salary: int64, age: int64]))\nRecordBatch(num_rows=3, schema=Schema(fields=[dept_id: int64, dept: string]))",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html#step-1-filter-rows",
-    "href": "tutorials/data-pipeline.html#step-1-filter-rows",
-    "title": "Build a data pipeline",
-    "section": "Step 1 — filter rows",
-    "text": "Step 1 — filter rows\nFiltering rows has two spellings, and it is worth seeing both.\nThe query layer is the one you will reach for. col(...) names a column, comparison operators build a predicate, and the engine applies it to every column for you:\n\nfrom marrow import col, lit\n\ntop_earners = (\n    ma.memtable(employees)\n      .filter(col(\"salary\") &gt; lit(80_000))\n      .collect()\n)\nprint(top_earners.to_pylist())\n\n[{'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34}, {'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39}]\n\n\nThe eager kernels work a column at a time, so the same thing by hand is a mask plus a filter per column. Reach for this when you already hold a mask:\n\nthreshold = ma.array([80_000] * employees.num_rows)\nwell_paid = mc.greater(employees.column(\"salary\"), threshold)\nprint(\"mask:\", well_paid)\n\nkept = mc.filter(employees.column(\"name\"), well_paid)\nprint(\"names:\", kept)\n\nmask: BoolArray([True, False, True, True, False, True])\nnames: StringArray([Alice, Carol, Dave, Frank])\n\n\nNote the comparison needs both operands to share a dtype — hence the array of thresholds. The query layer handles that for you, which is most of why it is the shorter spelling.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html#step-2-sort",
-    "href": "tutorials/data-pipeline.html#step-2-sort",
-    "title": "Build a data pipeline",
-    "section": "Step 2 — sort",
-    "text": "Step 2 — sort\nsort_by orders a batch by one or more keys. Pass a list of (column, \"ascending\" | \"descending\") tuples; the second argument controls null placement (None uses the default). Multi-column keys are honoured — ties on the first key break on the next:\n\nby_salary = top_earners.sort_by([(\"dept_id\", \"ascending\"), (\"salary\", \"descending\")])\nprint(by_salary.to_pylist())\n\n[{'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39}, {'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52}]",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html#step-3-join",
-    "href": "tutorials/data-pipeline.html#step-3-join",
-    "title": "Build a data pipeline",
-    "section": "Step 3 — join",
-    "text": "Step 3 — join\njoin performs a hash join between two record batches on named key columns. The signature is join(right, keys, right_keys=None, join_type=\"inner\", num_threads=0):\n\nkeys — list of left-side key column names,\nright_keys — right-side names, or None to reuse keys,\njoin_type — \"inner\", \"left\", \"right\", \"full\", \"semi\" or \"anti\",\nnum_threads — 0 auto-selects cores, 1 forces the serial path.\n\nEnrich each employee with their department name:\n\nenriched = employees.join(departments, [\"dept_id\"], join_type=\"inner\")\nprint(enriched.to_pylist())\n\n[{'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Bob', 'dept_id': 2, 'salary': 72000, 'age': 28, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Eve', 'dept_id': 2, 'salary': 61000, 'age': 24, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52, 'dept_id_right': 3, 'dept': 'Marketing'}]\n\n\nColumns that collide between the two sides are suffixed with _right, the right-hand key included.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html#step-4-put-it-together",
-    "href": "tutorials/data-pipeline.html#step-4-put-it-together",
-    "title": "Build a data pipeline",
-    "section": "Step 4 — put it together",
-    "text": "Step 4 — put it together\nThe whole pipeline reads as a short sequence of transformations: join, filter, sort, project.\n\n# 1. join employees to their departments\njoined = employees.join(departments, [\"dept_id\"], join_type=\"inner\")\n\n# 2-4. filter, sort and project as one plan\nreport = (\n    ma.memtable(joined)\n      .filter(col(\"salary\") &gt; lit(80_000))\n      .order_by((\"salary\", \"descending\"))\n      .select(\"name\", \"dept\", \"salary\")\n      .collect()\n)\nprint(report.to_pylist())\n\n[{'name': 'Carol', 'dept': 'Engineering', 'salary': 120000}, {'name': 'Frank', 'dept': 'Engineering', 'salary': 105000}, {'name': 'Alice', 'dept': 'Engineering', 'salary': 95000}, {'name': 'Dave', 'dept': 'Marketing', 'salary': 88000}]\n\n\nOnly the join is eager here — it is a RecordBatch method. Everything after it is one plan, which runs when collect() is called. Add .optimize() before collect() to let the plan rewriter act on it first.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html#step-5-aggregate",
-    "href": "tutorials/data-pipeline.html#step-5-aggregate",
-    "title": "Build a data pipeline",
-    "section": "Step 5 — aggregate",
-    "text": "Step 5 — aggregate\nAggregation is not an eager kernel call — it happens inside a query plan. Wrap the batch with ma.memtable() to get a lazy table, describe what you want, and call .collect() to run it. Nulls are skipped:\n\nq = ma.memtable(joined)\n\ntotals = q.aggregate(\n    headcount=(\"count\", \"salary\"),\n    total_spend=(\"sum\", \"salary\"),\n    top_salary=(\"max\", \"salary\"),\n)\nprint(totals.collect().to_pylist())\n\n[{'headcount': 6, 'total_spend': 541000, 'top_salary': 120000}]\n\n\nThe same call with a by= key groups instead of reducing to one row — one code path for both:\n\nby_dept = (\n    q.aggregate(\n        by=[\"dept\"],\n        headcount=(\"count\", \"salary\"),\n        avg_salary=(\"mean\", \"salary\"),\n    )\n    .order_by(\"dept\")\n)\nprint(by_dept.collect().to_pylist())\n\n[{'dept': 'Engineering', 'headcount': 3, 'avg_salary': 106666.66666666667}, {'dept': 'Marketing', 'headcount': 1, 'avg_salary': 88000.0}, {'dept': 'Sales', 'headcount': 2, 'avg_salary': 66500.0}]\n\n\nNothing has run until .collect(), so a plan is a reusable template — and explain() shows what will happen:\n\nprint(by_dept.explain())\n\nSort(Aggregate(InMemoryTable(6 rows), by=dept, count(salary), mean(salary)), dept asc)",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "tutorials/data-pipeline.html#where-to-go-next",
-    "href": "tutorials/data-pipeline.html#where-to-go-next",
-    "title": "Build a data pipeline",
-    "section": "Where to go next",
-    "text": "Where to go next\n\nTables & joins — the full RecordBatch / Table API.\nCompute kernels — every kernel and its null rules.\nExpressions — the query layer this tutorial reached for in step 5, in full.\nFile I/O — read and write Parquet and Arrow IPC.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Build a data pipeline"
-    ]
-  },
-  {
-    "objectID": "index.html",
-    "href": "index.html",
-    "title": "Apache Arrow,written in Mojo.",
-    "section": "",
-    "text": "ExperimentalOpen source, Apache 2.0\nApache Arrow,written in Mojo.\n\n  Columnar arrays, null-aware compute kernels, Parquet and Arrow IPC, and a\n  small query engine. Use it from Python much as you would PyArrow, or build a\n  Mojo query into its own executable. It covers a useful part of Arrow, not all\n  of it.\n\n\n  \n    Read the quickstart\n    \n  \n  \n     GitHub\n  \n\n\n  Shares buffers with PyArrow\n  Reads and writes Parquet\n  Answers checked against DuckDB\n\n\n\n\norders.py\nimport marrow as ma\nfrom marrow import col, lit\n\n(ma.read_parquet(\"orders.parquet\")\n   .filter(col(\"price\") &gt; lit(15))\n   .aggregate(by=[\"region\"], total=(\"sum\", \"price\"))\n   .order_by((\"total\", \"descending\"))\n   .head(10)\n   .optimize()\n   .collect())\n\nNothing runs until collect(). optimize() rewrites the plan first; it is opt-in.\n\n\n\n\n\n  \n    215 of 278\n    SQL queries in the test corpus answered exactly as DuckDB answers them. The other 63 are recorded too, and wait on features marrow does not have yet.\n  \n  \n    3\n    Arrow implementations (C++, Rust, Go) it exchanges IPC files and C Data with in Arrow's integration suite, for the layouts it implements.\n  \n  \n    3.0 MB\n    Machine code in a compiled Parquet query on macOS arm64, held there by a CI size gate. The executable also loads the Mojo runtime libraries.\n  \n\n\n\n  Three ways in\n  Call a kernel, build a plan, or compile it\n  The same arrays and kernels sit under all three. What changes is how much\n  is decided before anything runs.\n\n\nEager PythonLazy PythonCompiled Mojo\n\n\nNames follow PyArrow’s. Each call runs its kernel straight away.\nimport marrow as ma\n\nbatch = ma.record_batch({\n    \"region\": ma.array([\"east\", \"west\", \"east\"]),\n    \"price\":  ma.array([10, 20, 30]),\n})\n\nhot = ma.compute.greater(batch.column(\"price\"), ma.array([15, 15, 15]))\nma.compute.filter(batch.column(\"price\"), hot)\n\n\nDescribe the query first and run it with collect(). Add optimize() to let the plan rewriter push filters down and prune columns before it runs.\nimport marrow as ma\nfrom marrow import col, lit\n\nma.read_parquet(\"orders.parquet\") \\\n  .filter(col(\"price\") &gt; lit(15)) \\\n  .aggregate(by=[\"region\"], total=(\"sum\", \"price\")) \\\n  .optimize() \\\n  .collect()\n\n\nColumn types are fixed when the query is compiled, so an expression can fuse into a single loop, and kernels the query never uses are not linked in. Every param in the plan becomes a command-line flag.\nfrom marrow.dtypes import field, int64, string\nfrom marrow.expr import DynRelation, QueryCli, col, param, scan\nfrom marrow.schema import schema\n\n\ndef query() raises -&gt; DynRelation:\n    var orders = scan(\n        param(\"src\", string),\n        schema(\n            [field(\"id\", int64), field(\"amount\", int64), field(\"name\", string)]\n        ),\n    )\n    return orders.filter(col(\"amount\", int64) &gt;= param(\"min-amount\", int64))\n\n\ndef main() raises:\n    QueryCli(query()).run()\n$ marrow compile query.mojo -o orders\n$ ./orders --src orders.parquet --min-amount 250\nBuilding takes a minute or two, so this suits a query you run many times, not one you are still shaping. --bundle copies the executable together with the runtime libraries it loads, for running it on another machine.\n\n\n\n\n  Where it fits\n  Next to the tools you already use\n  Each of these is more complete and better tested than marrow. The right\n  column is what marrow offers anyway.\n\n\n\n\n\n\n\n\n\n\nWhat it is\nWhat marrow offers\n\n\n\n\nPyArrow\nPython bindings to Arrow C++, the reference implementation\nSimilar method names, and arrays pass between the two without copying their buffers\n\n\nPolars / DuckDB\nMature query engines with far broader features\nA fixed query compiled into its own executable. No benchmark results are published yet, so no speed claims\n\n\narrow-rs / DataFusion\nArrow and a query engine in Rust, the closest relatives in design\nIts IPC and C Data output is tested against arrow-rs, C++ and Go in Arrow’s integration suite\n\n\nMojo\nThe language marrow is written in\nArrow arrays, Parquet and a query engine for Mojo programs; a few element-wise kernels can also run on a GPU behind a build flag\n\n\n\n\n\n\n\n\n\nNoteHow correctness is checked\n\n\n\nA corpus of 278 SQL queries whose expected answers come from DuckDB, never from marrow: 215 run and match, and 63 wait on features marrow does not have yet. Arrow’s own integration suite round-trips IPC files and C Data with the C++, Rust and Go implementations, skipping the layouts marrow does not implement (unions, list views, run-end encoding, extension types). See Status & limitations for the full list.\n\n\n\n  See it run\n  A short tour\n  These cells run when the site is built, so the output below is real.\n\nBuild arrays from Python data. The type is inferred, and None marks a null:\n\nages   = ma.array([25, 35, 45, None, 55])\nnames  = ma.array([\"Alice\", \"Bob\", \"Carol\", \"Dave\", \"Eve\"])\nsalary = ma.array([70_000, 90_000, 110_000, 50_000, 130_000])\n\nprint(ages)\nprint(names)\n\nPrimitiveArray[int64]([25, 35, 45, NULL, 55])\nStringArray([Alice, Bob, Carol, Dave, Eve])\n\n\nKernels are vectorized and null-aware; a null in either operand gives a null:\n\nprint(\"next year:\", ma.compute.add(ages, ma.array([1] * 5)))\nprint(\"over 40:  \", ma.compute.greater(ages, ma.array([40] * 5)))\n\nnext year: PrimitiveArray[int64]([26, 36, 46, NULL, 56])\nover 40:   BoolArray([False, False, True, NULL, True])\n\n\nAssemble columns into a RecordBatch, then query it lazily:\n\npeople = ma.record_batch({\"age\": ages, \"name\": names, \"salary\": salary})\n\n(ma.memtable(people)\n   .filter(col(\"salary\") &gt; lit(60_000))\n   .aggregate(headcount=(\"count\", \"salary\"), payroll=(\"sum\", \"salary\"))\n   .collect()\n   .to_pylist())\n\n[{'headcount': 4, 'payroll': 400000}]\n\n\nArrays implement the Arrow PyCapsule interface, so PyArrow takes them without copying the buffers, and marrow takes PyArrow’s the same way:\n\nimport pyarrow as pa\npa_ages = pa.array(ages)          # marrow → PyArrow, no copy\nback    = ma.array(pa_ages)       # PyArrow → marrow, no copy\nprint(pa_ages.type, \"|\", len(back))\n\nint64 | 5\n\n\n\n  Keep going\n  Where to next\n\n\n\n  \n    \n    Quickstart →\n    Build the extension, then try arrays, kernels and tables.\n  \n  \n    \n    Lazy queries →\n    Build a plan in Python, optionally optimize it, then run it.\n  \n  \n    \n    Compile a query →\n    Turn a Mojo query into a native program whose parameters are command-line flags.\n  \n  \n    \n    Status →\n    What is implemented, what is missing, and what is known to be wrong.\n  \n\n\n\n\n\n Back to top"
-  },
-  {
-    "objectID": "tutorials/quickstart.html",
-    "href": "tutorials/quickstart.html",
-    "title": "Quickstart",
-    "section": "",
-    "text": "This tour takes you through the essentials of Marrow from Python: building arrays, running compute kernels, and assembling columns into a table. Every snippet on this page is executed when the docs are built, so the output you see is real.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Quickstart"
-    ]
-  },
-  {
-    "objectID": "tutorials/quickstart.html#install",
-    "href": "tutorials/quickstart.html#install",
-    "title": "Quickstart",
-    "section": "Install",
-    "text": "Install\nMarrow is a Mojo project with a Python binding compiled to a native extension. Clone the repository and build the extension with pixi:\ngit clone https://github.com/kszucs/marrow\ncd marrow\npixi run build_python     # compiles the native extension (python/marrow/libmarrow.so)\nThen bring it in under the customary ma alias:\n\nimport marrow as ma\nfrom marrow import compute as mc\n\n\n\n\n\n\n\nTip\n\n\n\nThe API follows PyArrow’s names where it can: pa.array, pa.record_batch and pa.table have direct counterparts, though marrow implements far less of the API.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Quickstart"
-    ]
-  },
-  {
-    "objectID": "tutorials/quickstart.html#create-an-array",
-    "href": "tutorials/quickstart.html#create-an-array",
-    "title": "Quickstart",
-    "section": "Create an array",
-    "text": "Create an array\nma.array() turns a Python list into a columnar array. The type is inferred, and None marks a null position:\n\na = ma.array([1, 2, 3, None, 5])\nprint(a)\nprint(\"length:    \", len(a))\nprint(\"null count:\", a.null_count)\nprint(\"type:      \", a.type)\n\nPrimitiveArray[int64]([1, 2, 3, NULL, 5])\nlength:     5\nnull count: 1\ntype:       int64\n\n\nPass type= to skip inference and coerce the data to a specific type:\n\nf = ma.array([1, 2, 3], type=ma.float32())\nprint(f)\n\nPrimitiveArray[float32]([1.0, 2.0, 3.0])\n\n\nStrings, nested lists and structs all work the same way:\n\nprint(ma.array([\"hello\", None, \"world\"]))\nprint(ma.array([[1, 2], [3, 4, 5], None]))\nprint(ma.array([{\"x\": 1, \"y\": 1.5}, {\"x\": 2, \"y\": 2.5}]))\n\nStringArray([hello, NULL, world])\nListArray([PrimitiveArray[int64]([1, 2]), PrimitiveArray[int64]([3, 4, 5]), NULL])\nStructArray({'x': PrimitiveArray[int64]([1, 2]), 'y': PrimitiveArray[float64]([1.5, 2.5])})",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Quickstart"
-    ]
-  },
-  {
-    "objectID": "tutorials/quickstart.html#compute-on-arrays",
-    "href": "tutorials/quickstart.html#compute-on-arrays",
-    "title": "Quickstart",
-    "section": "Compute on arrays",
-    "text": "Compute on arrays\nCompute kernels live in marrow.compute (imported here as mc), vectorized and null-aware, with names that mirror pyarrow.compute. A null in either operand propagates to the result:\n\nx = ma.array([1, 2, 3, None, 5])\ny = ma.array([10, 20, 30, 40, 50])\n\nprint(\"add:     \", mc.add(x, y))        # index 3 is null\nprint(\"multiply:\", mc.multiply(y, y))\n\nadd:      PrimitiveArray[int64]([11, 22, 33, NULL, 55])\nmultiply: PrimitiveArray[int64]([100, 400, 900, 1600, 2500])\n\n\n\n\n\n\n\n\nNote\n\n\n\nMost aggregates are not on the eager surface (boolean mc.any and mc.all are). sum, mean, min, max, count_distinct and the rest reduce a column inside a query plan, built with ma.memtable(...) / ma.read_parquet(...), so that a group-by and a whole-table aggregate are the same code path.\n\n\nComparisons return a boolean array, which you can feed straight into filter:\n\nbig  = mc.greater(y, ma.array([15, 15, 15, 15, 15]))\nprint(\"mask:  \", big)\nprint(\"kept:  \", mc.filter(y, big))\nprint(\"no nulls:\", mc.drop_null(x))\n\nmask:   BoolArray([False, True, True, True, True])\nkept:   PrimitiveArray[int64]([20, 30, 40, 50])\nno nulls: PrimitiveArray[int64]([1, 2, 3, 5])\n\n\nSorting handles nulls explicitly and returns either the sorted values or the sort indices:\n\ns = ma.array([3, 1, None, 2, 5])\nprint(\"sorted:  \", mc.sort(s))\nprint(\"desc:    \", mc.sort(s, [(\"\", \"descending\")], null_placement=\"at_end\"))\nprint(\"argsort: \", s.argsort())\n\nsorted:   PrimitiveArray[int64]([1, 2, 3, 5, NULL])\ndesc:     PrimitiveArray[int64]([5, 3, 2, 1, NULL])\nargsort:  PrimitiveArray[int32]([1, 3, 0, 4, 2])",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Quickstart"
-    ]
-  },
-  {
-    "objectID": "tutorials/quickstart.html#assemble-a-table",
-    "href": "tutorials/quickstart.html#assemble-a-table",
-    "title": "Quickstart",
-    "section": "Assemble a table",
-    "text": "Assemble a table\nA RecordBatch is a schema plus a set of equal-length columns — the workhorse tabular structure:\n\npeople = ma.record_batch({\n    \"name\":   ma.array([\"Alice\", \"Bob\", \"Carol\", \"Dave\"]),\n    \"age\":    ma.array([34, 28, 45, 52]),\n    \"salary\": ma.array([95_000, 72_000, 120_000, 88_000]),\n})\nprint(people)\nprint(\"shape:\", people.shape)\n\nRecordBatch(num_rows=4, schema=Schema(fields=[name: string, age: int64, salary: int64]))\nshape: (4, 3)\n\n\nInspect it as native Python with to_pydict() (column-oriented) or to_pylist() (row-oriented):\n\nprint(people.to_pydict())\nprint(people.to_pylist())\n\n{'name': ['Alice', 'Bob', 'Carol', 'Dave'], 'age': [34, 28, 45, 52], 'salary': [95000, 72000, 120000, 88000]}\n[{'name': 'Alice', 'age': 34, 'salary': 95000}, {'name': 'Bob', 'age': 28, 'salary': 72000}, {'name': 'Carol', 'age': 45, 'salary': 120000}, {'name': 'Dave', 'age': 52, 'salary': 88000}]\n\n\nSelect columns, slice rows, and sort by one or more keys:\n\nprint(people.select([\"name\", \"salary\"]).to_pydict())\nprint(people.slice(1, 2).to_pylist())\nprint(people.sort_by([(\"age\", \"descending\")]).to_pylist())\n\n{'name': ['Alice', 'Bob', 'Carol', 'Dave'], 'salary': [95000, 72000, 120000, 88000]}\n[{'name': 'Bob', 'age': 28, 'salary': 72000}, {'name': 'Carol', 'age': 45, 'salary': 120000}]\n[{'name': 'Dave', 'age': 52, 'salary': 88000}, {'name': 'Carol', 'age': 45, 'salary': 120000}, {'name': 'Alice', 'age': 34, 'salary': 95000}, {'name': 'Bob', 'age': 28, 'salary': 72000}]",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Quickstart"
-    ]
-  },
-  {
-    "objectID": "tutorials/quickstart.html#where-to-go-next",
-    "href": "tutorials/quickstart.html#where-to-go-next",
-    "title": "Quickstart",
-    "section": "Where to go next",
-    "text": "Where to go next\n\nBuild a data pipeline — a worked example that filters, sorts and joins two datasets.\nArrays — every array type in depth.\nCompute kernels — the full kernel catalogue and null semantics.\nTables & joins — RecordBatch, Table and hash joins.",
-    "crumbs": [
-      "Home",
-      "Start here",
-      "Quickstart"
+      "I/O & interop",
+      "Datasets"
     ]
   },
   {
@@ -952,6 +657,361 @@
       "Home",
       "Queries",
       "Compile a query"
+    ]
+  },
+  {
+    "objectID": "tutorials/quickstart.html",
+    "href": "tutorials/quickstart.html",
+    "title": "Quickstart",
+    "section": "",
+    "text": "This tour takes you through the essentials of Marrow from Python: building arrays, running compute kernels, and assembling columns into a table. Every snippet on this page is executed when the docs are built, so the output you see is real.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Quickstart"
+    ]
+  },
+  {
+    "objectID": "tutorials/quickstart.html#install",
+    "href": "tutorials/quickstart.html#install",
+    "title": "Quickstart",
+    "section": "Install",
+    "text": "Install\nMarrow is a Mojo project with a Python binding compiled to a native extension. Clone the repository and build the extension with pixi:\ngit clone https://github.com/kszucs/marrow\ncd marrow\npixi run build_python     # compiles the native extension (python/marrow/libmarrow.so)\nThen bring it in under the customary ma alias:\n\nimport marrow as ma\nfrom marrow import compute as mc\n\n\n\n\n\n\n\nTip\n\n\n\nThe API follows PyArrow’s names where it can: pa.array, pa.record_batch and pa.table have direct counterparts, though marrow implements far less of the API.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Quickstart"
+    ]
+  },
+  {
+    "objectID": "tutorials/quickstart.html#create-an-array",
+    "href": "tutorials/quickstart.html#create-an-array",
+    "title": "Quickstart",
+    "section": "Create an array",
+    "text": "Create an array\nma.array() turns a Python list into a columnar array. The type is inferred, and None marks a null position:\n\na = ma.array([1, 2, 3, None, 5])\nprint(a)\nprint(\"length:    \", len(a))\nprint(\"null count:\", a.null_count)\nprint(\"type:      \", a.type)\n\nPrimitiveArray[int64]([1, 2, 3, NULL, 5])\nlength:     5\nnull count: 1\ntype:       int64\n\n\nPass type= to skip inference and coerce the data to a specific type:\n\nf = ma.array([1, 2, 3], type=ma.float32())\nprint(f)\n\nPrimitiveArray[float32]([1.0, 2.0, 3.0])\n\n\nStrings, nested lists and structs all work the same way:\n\nprint(ma.array([\"hello\", None, \"world\"]))\nprint(ma.array([[1, 2], [3, 4, 5], None]))\nprint(ma.array([{\"x\": 1, \"y\": 1.5}, {\"x\": 2, \"y\": 2.5}]))\n\nStringArray([hello, NULL, world])\nListArray([PrimitiveArray[int64]([1, 2]), PrimitiveArray[int64]([3, 4, 5]), NULL])\nStructArray({'x': PrimitiveArray[int64]([1, 2]), 'y': PrimitiveArray[float64]([1.5, 2.5])})",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Quickstart"
+    ]
+  },
+  {
+    "objectID": "tutorials/quickstart.html#compute-on-arrays",
+    "href": "tutorials/quickstart.html#compute-on-arrays",
+    "title": "Quickstart",
+    "section": "Compute on arrays",
+    "text": "Compute on arrays\nCompute kernels live in marrow.compute (imported here as mc), vectorized and null-aware, with names that mirror pyarrow.compute. A null in either operand propagates to the result:\n\nx = ma.array([1, 2, 3, None, 5])\ny = ma.array([10, 20, 30, 40, 50])\n\nprint(\"add:     \", mc.add(x, y))        # index 3 is null\nprint(\"multiply:\", mc.multiply(y, y))\n\nadd:      PrimitiveArray[int64]([11, 22, 33, NULL, 55])\nmultiply: PrimitiveArray[int64]([100, 400, 900, 1600, 2500])\n\n\n\n\n\n\n\n\nNote\n\n\n\nMost aggregates are not on the eager surface (boolean mc.any and mc.all are). sum, mean, min, max, count_distinct and the rest reduce a column inside a query plan, built with ma.memtable(...) / ma.read_parquet(...), so that a group-by and a whole-table aggregate are the same code path.\n\n\nComparisons return a boolean array, which you can feed straight into filter:\n\nbig  = mc.greater(y, ma.array([15, 15, 15, 15, 15]))\nprint(\"mask:  \", big)\nprint(\"kept:  \", mc.filter(y, big))\nprint(\"no nulls:\", mc.drop_null(x))\n\nmask:   BoolArray([False, True, True, True, True])\nkept:   PrimitiveArray[int64]([20, 30, 40, 50])\nno nulls: PrimitiveArray[int64]([1, 2, 3, 5])\n\n\nSorting handles nulls explicitly and returns either the sorted values or the sort indices:\n\ns = ma.array([3, 1, None, 2, 5])\nprint(\"sorted:  \", mc.sort(s))\nprint(\"desc:    \", mc.sort(s, [(\"\", \"descending\")], null_placement=\"at_end\"))\nprint(\"argsort: \", s.argsort())\n\nsorted:   PrimitiveArray[int64]([1, 2, 3, 5, NULL])\ndesc:     PrimitiveArray[int64]([5, 3, 2, 1, NULL])\nargsort:  PrimitiveArray[int32]([1, 3, 0, 4, 2])",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Quickstart"
+    ]
+  },
+  {
+    "objectID": "tutorials/quickstart.html#assemble-a-table",
+    "href": "tutorials/quickstart.html#assemble-a-table",
+    "title": "Quickstart",
+    "section": "Assemble a table",
+    "text": "Assemble a table\nA RecordBatch is a schema plus a set of equal-length columns — the workhorse tabular structure:\n\npeople = ma.record_batch({\n    \"name\":   ma.array([\"Alice\", \"Bob\", \"Carol\", \"Dave\"]),\n    \"age\":    ma.array([34, 28, 45, 52]),\n    \"salary\": ma.array([95_000, 72_000, 120_000, 88_000]),\n})\nprint(people)\nprint(\"shape:\", people.shape)\n\nRecordBatch(num_rows=4, schema=Schema(fields=[name: string, age: int64, salary: int64]))\nshape: (4, 3)\n\n\nInspect it as native Python with to_pydict() (column-oriented) or to_pylist() (row-oriented):\n\nprint(people.to_pydict())\nprint(people.to_pylist())\n\n{'name': ['Alice', 'Bob', 'Carol', 'Dave'], 'age': [34, 28, 45, 52], 'salary': [95000, 72000, 120000, 88000]}\n[{'name': 'Alice', 'age': 34, 'salary': 95000}, {'name': 'Bob', 'age': 28, 'salary': 72000}, {'name': 'Carol', 'age': 45, 'salary': 120000}, {'name': 'Dave', 'age': 52, 'salary': 88000}]\n\n\nSelect columns, slice rows, and sort by one or more keys:\n\nprint(people.select([\"name\", \"salary\"]).to_pydict())\nprint(people.slice(1, 2).to_pylist())\nprint(people.sort_by([(\"age\", \"descending\")]).to_pylist())\n\n{'name': ['Alice', 'Bob', 'Carol', 'Dave'], 'salary': [95000, 72000, 120000, 88000]}\n[{'name': 'Bob', 'age': 28, 'salary': 72000}, {'name': 'Carol', 'age': 45, 'salary': 120000}]\n[{'name': 'Dave', 'age': 52, 'salary': 88000}, {'name': 'Carol', 'age': 45, 'salary': 120000}, {'name': 'Alice', 'age': 34, 'salary': 95000}, {'name': 'Bob', 'age': 28, 'salary': 72000}]",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Quickstart"
+    ]
+  },
+  {
+    "objectID": "tutorials/quickstart.html#where-to-go-next",
+    "href": "tutorials/quickstart.html#where-to-go-next",
+    "title": "Quickstart",
+    "section": "Where to go next",
+    "text": "Where to go next\n\nBuild a data pipeline — a worked example that filters, sorts and joins two datasets.\nArrays — every array type in depth.\nCompute kernels — the full kernel catalogue and null semantics.\nTables & joins — RecordBatch, Table and hash joins.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Quickstart"
+    ]
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Apache Arrow,written in Mojo.",
+    "section": "",
+    "text": "ExperimentalOpen source, Apache 2.0\nApache Arrow,written in Mojo.\n\n  Columnar arrays, null-aware compute kernels, Parquet and Arrow IPC, and a\n  small query engine. Use it from Python much as you would PyArrow, or build a\n  Mojo query into its own executable. It covers a useful part of Arrow, not all\n  of it.\n\n\n  \n    Read the quickstart\n    \n  \n  \n     GitHub\n  \n\n\n  Shares buffers with PyArrow\n  Reads and writes Parquet\n  Answers checked against DuckDB\n\n\n\n\norders.py\nimport marrow as ma\nfrom marrow import col, lit\n\n(ma.read_parquet(\"orders.parquet\")\n   .filter(col(\"price\") &gt; lit(15))\n   .aggregate(by=[\"region\"], total=(\"sum\", \"price\"))\n   .order_by((\"total\", \"descending\"))\n   .head(10)\n   .optimize()\n   .collect())\n\nNothing runs until collect(). optimize() rewrites the plan first; it is opt-in.\n\n\n\n\n\n  \n    215 of 278\n    SQL queries in the test corpus answered exactly as DuckDB answers them. The other 63 are recorded too, and wait on features marrow does not have yet.\n  \n  \n    3\n    Arrow implementations (C++, Rust, Go) it exchanges IPC files and C Data with in Arrow's integration suite, for the layouts it implements.\n  \n  \n    3.0 MB\n    Machine code in a compiled Parquet query on macOS arm64, held there by a CI size gate. The executable also loads the Mojo runtime libraries.\n  \n\n\n\n  Three ways in\n  Call a kernel, build a plan, or compile it\n  The same arrays and kernels sit under all three. What changes is how much\n  is decided before anything runs.\n\n\nEager PythonLazy PythonCompiled Mojo\n\n\nNames follow PyArrow’s. Each call runs its kernel straight away.\nimport marrow as ma\n\nbatch = ma.record_batch({\n    \"region\": ma.array([\"east\", \"west\", \"east\"]),\n    \"price\":  ma.array([10, 20, 30]),\n})\n\nhot = ma.compute.greater(batch.column(\"price\"), ma.array([15, 15, 15]))\nma.compute.filter(batch.column(\"price\"), hot)\n\n\nDescribe the query first and run it with collect(). Add optimize() to let the plan rewriter push filters down and prune columns before it runs.\nimport marrow as ma\nfrom marrow import col, lit\n\nma.read_parquet(\"orders.parquet\") \\\n  .filter(col(\"price\") &gt; lit(15)) \\\n  .aggregate(by=[\"region\"], total=(\"sum\", \"price\")) \\\n  .optimize() \\\n  .collect()\n\n\nColumn types are fixed when the query is compiled, so an expression can fuse into a single loop, and kernels the query never uses are not linked in. Every param in the plan becomes a command-line flag.\nfrom marrow.dtypes import field, int64, string\nfrom marrow.expr import DynRelation, QueryCli, col, param, scan\nfrom marrow.schema import schema\n\n\ndef query() raises -&gt; DynRelation:\n    var orders = scan(\n        param(\"src\", string),\n        schema(\n            [field(\"id\", int64), field(\"amount\", int64), field(\"name\", string)]\n        ),\n    )\n    return orders.filter(col(\"amount\", int64) &gt;= param(\"min-amount\", int64))\n\n\ndef main() raises:\n    QueryCli(query()).run()\n$ marrow compile query.mojo -o orders\n$ ./orders --src orders.parquet --min-amount 250\nBuilding takes a minute or two, so this suits a query you run many times, not one you are still shaping. --bundle copies the executable together with the runtime libraries it loads, for running it on another machine.\n\n\n\n\n  Where it fits\n  Next to the tools you already use\n  Each of these is more complete and better tested than marrow. The right\n  column is what marrow offers anyway.\n\n\n\n\n\n\n\n\n\n\nWhat it is\nWhat marrow offers\n\n\n\n\nPyArrow\nPython bindings to Arrow C++, the reference implementation\nSimilar method names, and arrays pass between the two without copying their buffers\n\n\nPolars / DuckDB\nMature query engines with far broader features\nA fixed query compiled into its own executable. No benchmark results are published yet, so no speed claims\n\n\narrow-rs / DataFusion\nArrow and a query engine in Rust, the closest relatives in design\nIts IPC and C Data output is tested against arrow-rs, C++ and Go in Arrow’s integration suite\n\n\nMojo\nThe language marrow is written in\nArrow arrays, Parquet and a query engine for Mojo programs; a few element-wise kernels can also run on a GPU behind a build flag\n\n\n\n\n\n\n\n\n\nNoteHow correctness is checked\n\n\n\nA corpus of 278 SQL queries whose expected answers come from DuckDB, never from marrow: 215 run and match, and 63 wait on features marrow does not have yet. Arrow’s own integration suite round-trips IPC files and C Data with the C++, Rust and Go implementations, skipping the layouts marrow does not implement (unions, list views, run-end encoding, extension types). See Status & limitations for the full list.\n\n\n\n  See it run\n  A short tour\n  These cells run when the site is built, so the output below is real.\n\nBuild arrays from Python data. The type is inferred, and None marks a null:\n\nages   = ma.array([25, 35, 45, None, 55])\nnames  = ma.array([\"Alice\", \"Bob\", \"Carol\", \"Dave\", \"Eve\"])\nsalary = ma.array([70_000, 90_000, 110_000, 50_000, 130_000])\n\nprint(ages)\nprint(names)\n\nPrimitiveArray[int64]([25, 35, 45, NULL, 55])\nStringArray([Alice, Bob, Carol, Dave, Eve])\n\n\nKernels are vectorized and null-aware; a null in either operand gives a null:\n\nprint(\"next year:\", ma.compute.add(ages, ma.array([1] * 5)))\nprint(\"over 40:  \", ma.compute.greater(ages, ma.array([40] * 5)))\n\nnext year: PrimitiveArray[int64]([26, 36, 46, NULL, 56])\nover 40:   BoolArray([False, False, True, NULL, True])\n\n\nAssemble columns into a RecordBatch, then query it lazily:\n\npeople = ma.record_batch({\"age\": ages, \"name\": names, \"salary\": salary})\n\n(ma.memtable(people)\n   .filter(col(\"salary\") &gt; lit(60_000))\n   .aggregate(headcount=(\"count\", \"salary\"), payroll=(\"sum\", \"salary\"))\n   .collect()\n   .to_pylist())\n\n[{'headcount': 4, 'payroll': 400000}]\n\n\nArrays implement the Arrow PyCapsule interface, so PyArrow takes them without copying the buffers, and marrow takes PyArrow’s the same way:\n\nimport pyarrow as pa\npa_ages = pa.array(ages)          # marrow → PyArrow, no copy\nback    = ma.array(pa_ages)       # PyArrow → marrow, no copy\nprint(pa_ages.type, \"|\", len(back))\n\nint64 | 5\n\n\n\n  Keep going\n  Where to next\n\n\n\n  \n    \n    Quickstart →\n    Build the extension, then try arrays, kernels and tables.\n  \n  \n    \n    Lazy queries →\n    Build a plan in Python, optionally optimize it, then run it.\n  \n  \n    \n    Compile a query →\n    Turn a Mojo query into a native program whose parameters are command-line flags.\n  \n  \n    \n    Status →\n    What is implemented, what is missing, and what is known to be wrong.\n  \n\n\n\n\n\n Back to top"
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html",
+    "href": "tutorials/data-pipeline.html",
+    "title": "Build a data pipeline",
+    "section": "",
+    "text": "This tutorial builds a small analytics pipeline over two related datasets — employees and the departments they belong to. Along the way you’ll use array construction, compute kernels, row filtering, sorting and a hash join. Every cell runs when the docs are built.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html#the-data",
+    "href": "tutorials/data-pipeline.html#the-data",
+    "title": "Build a data pipeline",
+    "section": "The data",
+    "text": "The data\nWe start with two RecordBatches. The first holds employees; the second maps department ids to names.\n\nemployees = ma.record_batch({\n    \"name\":    ma.array([\"Alice\", \"Bob\", \"Carol\", \"Dave\", \"Eve\", \"Frank\"]),\n    \"dept_id\": ma.array([1, 2, 1, 3, 2, 1]),\n    \"salary\":  ma.array([95_000, 72_000, 120_000, 88_000, 61_000, 105_000]),\n    \"age\":     ma.array([34, 28, 45, 52, 24, 39]),\n})\n\ndepartments = ma.record_batch({\n    \"dept_id\": ma.array([1, 2, 3]),\n    \"dept\":    ma.array([\"Engineering\", \"Sales\", \"Marketing\"]),\n})\n\nprint(employees)\nprint(departments)\n\nRecordBatch(num_rows=6, schema=Schema(fields=[name: string, dept_id: int64, salary: int64, age: int64]))\nRecordBatch(num_rows=3, schema=Schema(fields=[dept_id: int64, dept: string]))",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html#step-1-filter-rows",
+    "href": "tutorials/data-pipeline.html#step-1-filter-rows",
+    "title": "Build a data pipeline",
+    "section": "Step 1 — filter rows",
+    "text": "Step 1 — filter rows\nFiltering rows has two spellings, and it is worth seeing both.\nThe query layer is the one you will reach for. col(...) names a column, comparison operators build a predicate, and the engine applies it to every column for you:\n\nfrom marrow import col, lit\n\ntop_earners = (\n    ma.memtable(employees)\n      .filter(col(\"salary\") &gt; lit(80_000))\n      .collect()\n)\nprint(top_earners.to_pylist())\n\n[{'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34}, {'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39}]\n\n\nThe eager kernels work a column at a time, so the same thing by hand is a mask plus a filter per column. Reach for this when you already hold a mask:\n\nthreshold = ma.array([80_000] * employees.num_rows)\nwell_paid = mc.greater(employees.column(\"salary\"), threshold)\nprint(\"mask:\", well_paid)\n\nkept = mc.filter(employees.column(\"name\"), well_paid)\nprint(\"names:\", kept)\n\nmask: BoolArray([True, False, True, True, False, True])\nnames: StringArray([Alice, Carol, Dave, Frank])\n\n\nNote the comparison needs both operands to share a dtype — hence the array of thresholds. The query layer handles that for you, which is most of why it is the shorter spelling.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html#step-2-sort",
+    "href": "tutorials/data-pipeline.html#step-2-sort",
+    "title": "Build a data pipeline",
+    "section": "Step 2 — sort",
+    "text": "Step 2 — sort\nsort_by orders a batch by one or more keys. Pass a list of (column, \"ascending\" | \"descending\") tuples; the second argument controls null placement (None uses the default). Multi-column keys are honoured — ties on the first key break on the next:\n\nby_salary = top_earners.sort_by([(\"dept_id\", \"ascending\"), (\"salary\", \"descending\")])\nprint(by_salary.to_pylist())\n\n[{'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39}, {'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52}]",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html#step-3-join",
+    "href": "tutorials/data-pipeline.html#step-3-join",
+    "title": "Build a data pipeline",
+    "section": "Step 3 — join",
+    "text": "Step 3 — join\njoin performs a hash join between two record batches on named key columns. The signature is join(right, keys, right_keys=None, join_type=\"inner\", num_threads=0):\n\nkeys — list of left-side key column names,\nright_keys — right-side names, or None to reuse keys,\njoin_type — \"inner\", \"left\", \"right\", \"full\", \"semi\" or \"anti\",\nnum_threads — 0 auto-selects cores, 1 forces the serial path.\n\nEnrich each employee with their department name:\n\nenriched = employees.join(departments, [\"dept_id\"], join_type=\"inner\")\nprint(enriched.to_pylist())\n\n[{'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Bob', 'dept_id': 2, 'salary': 72000, 'age': 28, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Eve', 'dept_id': 2, 'salary': 61000, 'age': 24, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52, 'dept_id_right': 3, 'dept': 'Marketing'}]\n\n\nColumns that collide between the two sides are suffixed with _right, the right-hand key included.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html#step-4-put-it-together",
+    "href": "tutorials/data-pipeline.html#step-4-put-it-together",
+    "title": "Build a data pipeline",
+    "section": "Step 4 — put it together",
+    "text": "Step 4 — put it together\nThe whole pipeline reads as a short sequence of transformations: join, filter, sort, project.\n\n# 1. join employees to their departments\njoined = employees.join(departments, [\"dept_id\"], join_type=\"inner\")\n\n# 2-4. filter, sort and project as one plan\nreport = (\n    ma.memtable(joined)\n      .filter(col(\"salary\") &gt; lit(80_000))\n      .order_by((\"salary\", \"descending\"))\n      .select(\"name\", \"dept\", \"salary\")\n      .collect()\n)\nprint(report.to_pylist())\n\n[{'name': 'Carol', 'dept': 'Engineering', 'salary': 120000}, {'name': 'Frank', 'dept': 'Engineering', 'salary': 105000}, {'name': 'Alice', 'dept': 'Engineering', 'salary': 95000}, {'name': 'Dave', 'dept': 'Marketing', 'salary': 88000}]\n\n\nOnly the join is eager here — it is a RecordBatch method. Everything after it is one plan, which runs when collect() is called. Add .optimize() before collect() to let the plan rewriter act on it first.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html#step-5-aggregate",
+    "href": "tutorials/data-pipeline.html#step-5-aggregate",
+    "title": "Build a data pipeline",
+    "section": "Step 5 — aggregate",
+    "text": "Step 5 — aggregate\nAggregation is not an eager kernel call — it happens inside a query plan. Wrap the batch with ma.memtable() to get a lazy table, describe what you want, and call .collect() to run it. Nulls are skipped:\n\nq = ma.memtable(joined)\n\ntotals = q.aggregate(\n    headcount=(\"count\", \"salary\"),\n    total_spend=(\"sum\", \"salary\"),\n    top_salary=(\"max\", \"salary\"),\n)\nprint(totals.collect().to_pylist())\n\n[{'headcount': 6, 'total_spend': 541000, 'top_salary': 120000}]\n\n\nThe same call with a by= key groups instead of reducing to one row — one code path for both:\n\nby_dept = (\n    q.aggregate(\n        by=[\"dept\"],\n        headcount=(\"count\", \"salary\"),\n        avg_salary=(\"mean\", \"salary\"),\n    )\n    .order_by(\"dept\")\n)\nprint(by_dept.collect().to_pylist())\n\n[{'dept': 'Engineering', 'headcount': 3, 'avg_salary': 106666.66666666667}, {'dept': 'Marketing', 'headcount': 1, 'avg_salary': 88000.0}, {'dept': 'Sales', 'headcount': 2, 'avg_salary': 66500.0}]\n\n\nNothing has run until .collect(), so a plan is a reusable template — and explain() shows what will happen:\n\nprint(by_dept.explain())\n\nSort(Aggregate(InMemoryTable(6 rows), by=dept, count(salary), mean(salary)), dept asc)",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "tutorials/data-pipeline.html#where-to-go-next",
+    "href": "tutorials/data-pipeline.html#where-to-go-next",
+    "title": "Build a data pipeline",
+    "section": "Where to go next",
+    "text": "Where to go next\n\nTables & joins — the full RecordBatch / Table API.\nCompute kernels — every kernel and its null rules.\nExpressions — the query layer this tutorial reached for in step 5, in full.\nFile I/O — read and write Parquet and Arrow IPC.",
+    "crumbs": [
+      "Home",
+      "Start here",
+      "Build a data pipeline"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html",
+    "href": "guide/arrays.html",
+    "title": "Arrays",
+    "section": "",
+    "text": "Arrays are the core data structure in marrow. They are immutable and columnar — values sit contiguously in memory with a separate validity bitmap tracking null positions. Immutability is what makes a copy O(1): every array holds its data behind ref-counted buffers, so sharing one costs a refcount bump, never a memcpy.\nThe rest of this page is the Python API; Building arrays in Mojo at the end covers the native builder API.",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html#primitive-arrays",
+    "href": "guide/arrays.html#primitive-arrays",
+    "title": "Arrays",
+    "section": "Primitive arrays",
+    "text": "Primitive arrays\nPrimitive arrays hold fixed-size scalar values: booleans, integers, and floats.\n\n# Integer arrays\ni64 = ma.array([1, 2, 3, 4, 5])\ni32 = ma.array([1, 2, 3, 4, 5], type=ma.int32())\nu8  = ma.array([0, 127, 255],   type=ma.uint8())\n\nprint(i64)\nprint(i32)\nprint(u8)\n\nPrimitiveArray[int64]([1, 2, 3, 4, 5])\nPrimitiveArray[int32]([1, 2, 3, 4, 5])\nPrimitiveArray[uint8]([0, 127, 255])\n\n\n\n# Floating point\nf32 = ma.array([1.0, 2.5, 3.14], type=ma.float32())\nf64 = ma.array([1.0, 2.5, 3.14])   # float64 inferred\nprint(f32)\nprint(f64)\n\nPrimitiveArray[float32]([1.0, 2.5, 3.14])\nPrimitiveArray[float64]([1.0, 2.5, 3.14])\n\n\n\n# Boolean\nb = ma.array([True, False, True, False])\nprint(b)\n\nBoolArray([True, False, True, False])\n\n\n\nNull values\nPass None to mark a position as null. The validity bitmap tracks which positions are valid.\n\narr = ma.array([1, None, 3, None, 5])\nprint(arr)\nprint(\"null count:\", arr.null_count)\nprint(\"is_valid:  \", arr.is_valid())     # elementwise BoolArray\nprint(\"is_valid(0):\", arr[0].is_valid())   # True\nprint(\"is_valid(1):\", arr[1].is_valid())   # False — null\n\nPrimitiveArray[int64]([1, NULL, 3, NULL, 5])\nnull count: 2\nis_valid:   BoolArray([True, False, True, False, True])\nis_valid(0): True\nis_valid(1): False\n\n\n\n\n\n\n\n\nNote\n\n\n\nNull is not zero. is_valid() reports False at index 1 — the value there is absent entirely, not 0 or empty. Array.is_valid() returns an elementwise BoolArray (like pyarrow.compute.is_valid); index into the array first (arr[1]) to check a single position.\n\n\n\n\nInspecting arrays\n\narr = ma.array([10, 20, 30, None, 50], type=ma.int32())\n\nprint(\"length:    \", len(arr))\nprint(\"null count:\", arr.null_count)\nprint(\"type:      \", arr.type)\n\nlength:     5\nnull count: 1\ntype:       int32",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html#string-arrays",
+    "href": "guide/arrays.html#string-arrays",
+    "title": "Arrays",
+    "section": "String arrays",
+    "text": "String arrays\nString arrays store variable-length UTF-8 strings.\n\ns = ma.array([\"hello\", None, \"world\", \"mañana\"])\nprint(s)\nprint(\"null count:\", s.null_count)\nprint(\"is_valid(1):\", s[1].is_valid())\n\nStringArray([hello, NULL, world, mañana])\nnull count: 1\nis_valid(1): False",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html#list-arrays",
+    "href": "guide/arrays.html#list-arrays",
+    "title": "Arrays",
+    "section": "List arrays",
+    "text": "List arrays\nList arrays store variable-length sequences. Each element is itself a list.\n\nnested = ma.array([[1, 2], [3, 4, 5], [6]])\nprint(nested)\nprint(\"type:\", nested.type)\n\nListArray([PrimitiveArray[int64]([1, 2]), PrimitiveArray[int64]([3, 4, 5]), PrimitiveArray[int64]([6])])\ntype: list&lt;int64&gt;\n\n\n\nNulls in list arrays\n\nwith_null = ma.array([[1, 2], None, [3, 4, 5]])\nprint(with_null)\nprint(\"null count:\", with_null.null_count)\n\nListArray([PrimitiveArray[int64]([1, 2]), NULL, PrimitiveArray[int64]([3, 4, 5])])\nnull count: 1",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html#struct-arrays",
+    "href": "guide/arrays.html#struct-arrays",
+    "title": "Arrays",
+    "section": "Struct arrays",
+    "text": "Struct arrays\nStruct arrays store rows of named fields — like a table with one row per element.\n\npeople = ma.array([\n    {\"name\": \"Alice\", \"age\": 30},\n    {\"name\": \"Bob\",   \"age\": 25},\n    {\"name\": None,    \"age\": 40},   # null name\n])\nprint(people)\nprint(\"type:\", people.type)\n\nStructArray({'name': StringArray([Alice, Bob, NULL]), 'age': PrimitiveArray[int64]([30, 25, 40])})\ntype: struct&lt;name: string, age: int64&gt;",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html#slicing",
+    "href": "guide/arrays.html#slicing",
+    "title": "Arrays",
+    "section": "Slicing",
+    "text": "Slicing\nslice(offset, length) returns a zero-copy view of a sub-range. No data is copied.\n\narr = ma.array([10, 20, 30, None, 50, 60])\nprint(\"original: \", arr)\nprint(\"slice(2, 3):\", arr.slice(2, 3))   # [30, NULL, 50]\nprint(\"slice(0, 4):\", arr.slice(0, 4))   # [10, 20, 30, NULL]\n\noriginal:  PrimitiveArray[int64]([10, 20, 30, NULL, 50, 60])\nslice(2, 3): PrimitiveArray[int64]([30, NULL, 50])\nslice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])\n\n\nSlicing works on all array types:\n\ns = ma.array([\"a\", \"b\", \"c\", \"d\", \"e\"])\nprint(s.slice(1, 3))   # [\"b\", \"c\", \"d\"]\n\nStringArray([b, c, d])",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html#fixedsizelist-arrays",
+    "href": "guide/arrays.html#fixedsizelist-arrays",
+    "title": "Arrays",
+    "section": "FixedSizeList arrays",
+    "text": "FixedSizeList arrays\nFixedSizeList arrays store sequences of a fixed length per element — the natural layout for embedding vectors or coordinates, where every row has the same width.\nType inference always produces a variable-length list, even when every row happens to be the same length:\n\n# inference sees lists — the result is list&lt;float64&gt;, not a fixed-size list\ncoords = ma.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])\nprint(coords.type)   # list&lt;float64&gt;\n\nlist&lt;float64&gt;\n\n\nTo get a genuine fixed_size_list, pass the type explicitly with fixed_size_list_(value_type, size). The fixed width is part of the type, which lets kernels skip per-row offset lookups:\n\ncoords = ma.array(\n    [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],\n    type=ma.fixed_size_list_(ma.float64(), 2),\n)\nprint(coords)\nprint(\"type:\", coords.type)   # fixed_size_list&lt;item: float64&gt;\n\nFixedSizeListArray([PrimitiveArray[float64]([1.0, 2.0]), PrimitiveArray[float64]([3.0, 4.0]), PrimitiveArray[float64]([5.0, 6.0])])\ntype: fixed_size_list&lt;item: float64&gt;",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/arrays.html#building-arrays-in-mojo",
+    "href": "guide/arrays.html#building-arrays-in-mojo",
+    "title": "Arrays",
+    "section": "Building arrays in Mojo",
+    "text": "Building arrays in Mojo\nma.array() is a convenience over the native builder API — the mutable staging area you accumulate values in before freezing them with finish(). Reach for it in Mojo when values arrive one at a time.\nfrom marrow.builders import Int64Builder\nfrom marrow.arrays import Int64Array\n\nvar b = Int64Builder(capacity=4)\nb.append(10)\nb.append(20)\nb.append_null()\nb.append(40)\n\nvar arr: Int64Array = b.finish()\nprint(arr)               # PrimitiveArray[int64]([10, 20, NULL, 40])\ncapacity pre-allocates the backing buffer; it is optional but avoids reallocation when the size is known.\nStringBuilder tracks offsets for you:\nfrom marrow.builders import StringBuilder\nfrom marrow.arrays import StringArray\n\nvar sb = StringBuilder()\nsb.append(\"hello\")\nsb.append_null()\nsb.append(\"world\")\nvar strs: StringArray = sb.finish()   # StringArray([hello, NULL, world])\n\nNested builders\nA ListBuilder wraps a child builder. Append child values, then commit each list element with append_valid() — or append_null() for a null list:\nfrom marrow.builders import ListBuilder, Int64Builder\n\nvar lists = ListBuilder(Int64Builder())\nvar child_any = lists.values()      # a DynBuilder over the child\nref child = child_any.as_int64()    # borrow it at its real type\n\nchild.append(1)\nchild.append(2)\nlists.append_valid()                # [1, 2]\n\nchild.append(3)\nlists.append_valid()                # [3]\n\nlists.append_null()                 # a null list\nvar arr = lists.finish()\nvalues() hands back a DynBuilder, which has no append of its own — narrow it with .as_int64() / .as_string() / … first. StructBuilder and FixedSizeListBuilder follow the same build-children-then-commit shape.\n\n\nType-erased builders\nDynBuilder is the runtime-typed builder. Construct one from a DataType when the type is only known at run time; typed builders convert to it implicitly:\nfrom marrow.builders import DynBuilder, Int64Builder\nfrom marrow.dtypes import int64\n\nvar dyn = DynBuilder(int64)      # int64 is already an instance — not int64()\n\nvar typed = Int64Builder()\nvar erased: DynBuilder = typed^  # move it in -- no explicit wrapper needed\nThe conversion is implicit, so no DynBuilder(...) wrapper is needed, but the typed builder is moved (typed^) rather than copied: builders are not ImplicitlyCopyable, which keeps ownership visible at the call site.\nfinish() on a DynBuilder returns a DynArray, the type-erased array container.",
+    "crumbs": [
+      "Home",
+      "Data",
+      "Arrays"
+    ]
+  },
+  {
+    "objectID": "guide/compute.html",
+    "href": "guide/compute.html",
+    "title": "Compute",
+    "section": "",
+    "text": "Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons, selection and casting. All kernels are null-aware; the exact null handling depends on the operation.\nString, temporal, boolean and conditional kernels are implemented in Mojo but not yet bound to Python — they are reachable from a query plan instead.\nThe compute functions live in marrow.compute, and their names and signatures follow pyarrow.compute for the functions it implements — mc.add, mc.subtract, mc.cast, mc.filter. It is not a drop-in replacement: some options (skip_nulls=False, nan_is_null=True, multi-key sort_keys) raise NotImplementedError, and memory_pool is ignored.",
+    "crumbs": [
+      "Home",
+      "Compute",
+      "Compute kernels"
+    ]
+  },
+  {
+    "objectID": "guide/compute.html#arithmetic",
+    "href": "guide/compute.html#arithmetic",
+    "title": "Compute",
+    "section": "Arithmetic",
+    "text": "Arithmetic\nElement-wise binary operations: add, subtract, multiply, divide.\n\na = ma.array([1, 2, 3, 4, 5], type=ma.int64())\nb = ma.array([10, 20, 30, 40, 50], type=ma.int64())\n\nprint(\"add:     \", mc.add(a, b))\nprint(\"subtract:\", mc.subtract(b, a))\nprint(\"multiply:\", mc.multiply(a, b))\nprint(\"divide:  \", mc.divide(b, a))\n\nadd:      PrimitiveArray[int64]([11, 22, 33, 44, 55])\nsubtract: PrimitiveArray[int64]([9, 18, 27, 36, 45])\nmultiply: PrimitiveArray[int64]([10, 40, 90, 160, 250])\ndivide:   PrimitiveArray[int64]([10, 10, 10, 10, 10])\n\n\nFloats work the same way:\n\nx = ma.array([1.0, 2.0, 3.0])\ny = ma.array([0.5, 1.5, 2.5])\nprint(\"add:   \", mc.add(x, y))\nprint(\"divide:\", mc.divide(x, y))\n\nadd:    PrimitiveArray[float64]([1.5, 3.5, 5.5])\ndivide: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])\n\n\n\n\n\n\n\n\nNotemarrow.compute compares like pyarrow; marrow.expr compares like SQL\n\n\n\nThe two answer differently on NaN, deliberately. marrow.compute mirrors pyarrow.compute, so its comparisons are IEEE — a NaN equals nothing, itself included. marrow.expr is a SQL engine, and DuckDB, DataFusion and Polars all agree that SQL’s comparisons are total:\n\n\n\nexpression\npc.equal / pc.greater\ncol(\"a\") == … / &gt; …\n\n\n\n\nnan = nan\nFalse\nTrue\n\n\nnan &lt;&gt; nan\nTrue\nFalse\n\n\nnan &gt; 1.0\nFalse\nTrue\n\n\n\nSo a NaN is its own GROUP BY group, its own join key and its own rank peer, and it sorts after inf. NULL is unaffected and stays three-valued in both.\nFloat division by zero answers a value — 10.0 / 0.0 is inf, 0.0 / 0.0 is nan — while integer // and % by zero answer NULL, as SQL does. The two genuinely want different answers: division by zero has a value in the reals’ completion and integer division by zero does not.\n\n\n\nNull propagation\nIf either operand at a position is null, the result at that position is null. This mirrors SQL’s three-valued logic.\n\na = ma.array([1, None, 3, None])\nb = ma.array([10, 20, 30, 40])\n\nresult = mc.add(a, b)\nprint(result)    # index 1 and 3 are null\nprint(\"null count:\", result.null_count)\n\nPrimitiveArray[int64]([11, NULL, 33, NULL])\nnull count: 2\n\n\n\n# Both inputs can contribute nulls\na = ma.array([None, 2, 3, None])\nb = ma.array([10, None, 30, None])\n\nprint(mc.add(a, b))   # null at 0, 1, and 3\n\nPrimitiveArray[int64]([NULL, NULL, 33, NULL])",
+    "crumbs": [
+      "Home",
+      "Compute",
+      "Compute kernels"
+    ]
+  },
+  {
+    "objectID": "guide/compute.html#aggregates",
+    "href": "guide/compute.html#aggregates",
+    "title": "Compute",
+    "section": "Aggregates",
+    "text": "Aggregates\nMost aggregates are not eager kernel calls (boolean any and all, below, are the exception). sum, mean, min, max, product, count, count_distinct and the rest reduce a column inside a query plan, so that a whole-table reduction and a GROUP BY are the same code path. Wrap a batch with ma.memtable(), describe the reduction, and .collect() runs it:\n\nbatch = ma.record_batch({\"v\": ma.array([1, None, 3, None, 5])})\nq = ma.memtable(batch)\n\nout = q.aggregate(\n    total=(\"sum\", \"v\"),\n    smallest=(\"min\", \"v\"),\n    largest=(\"max\", \"v\"),\n    average=(\"mean\", \"v\"),\n)\nprint(out.collect().to_pylist())\n\n[{'total': 9, 'smallest': 1, 'largest': 5, 'average': 3.0}]\n\n\nNulls are skipped, so sum above is 1 + 3 + 5. Adding a by= key groups rather than reducing to one row — the only change is the argument:\n\nsales = ma.record_batch({\n    \"region\": ma.array([\"east\", \"west\", \"east\", \"west\"]),\n    \"amount\": ma.array([10, 20, 30, 40]),\n})\nby_region = ma.memtable(sales).aggregate(\n    by=[\"region\"], total=(\"sum\", \"amount\"),\n).order_by(\"region\")\nprint(by_region.collect().to_pylist())\n\n[{'region': 'east', 'total': 40}, {'region': 'west', 'total': 60}]\n\n\n\nAccumulator types widen\nsum and product do not preserve the input type — integers accumulate in int64 and floats in float64, so a long column cannot silently overflow its own width. mean is always float64:\n\nints = ma.record_batch({\"v\": ma.array([10, 20, 30], type=ma.int32())})\nres  = ma.memtable(ints).aggregate(total=(\"sum\", \"v\"), avg=(\"mean\", \"v\")).collect()\nprint(\"sum of int32 -&gt;\", res.column(\"total\").type)\nprint(\"mean         -&gt;\", res.column(\"avg\").type)\n\nsum of int32 -&gt; int64\nmean         -&gt; float64\n\n\n\n\nCounting\ncount counts non-null values; ma.count_star() counts rows, which differs on a nullable column. count_distinct is exact, while approx_count_distinct uses a fixed-size HyperLogLog sketch — far cheaper in memory on a high-cardinality column:\n\nids = ma.record_batch({\"id\": ma.array([1, 1, 2, 3, 3, 3, None, 4])})\nprint(ma.memtable(ids).aggregate(\n    rows=ma.count_star(),\n    values=(\"count\", \"id\"),\n    distinct=(\"count_distinct\", \"id\"),\n    approx=(\"approx_count_distinct\", \"id\"),\n).collect().to_pylist())\n\n[{'rows': 8, 'values': 7, 'distinct': 4, 'approx': 4}]\n\n\n\n\nBoolean aggregates\nany and all operate on boolean arrays. As in PyArrow, nulls are skipped unless you pass skip_nulls=False, and fewer than min_count valid values (default 1) answer None.\n\nflags = ma.array([True, False, None, True])\nprint(\"any:\", mc.any(flags))   # True  — at least one True\nprint(\"all:\", mc.all(flags))   # False — False is present\n\nany: True\nall: False\n\n\n\nall_true = ma.array([True, True, None])\nprint(\"all with nulls:\", mc.all(all_true))   # True — only True values\n\nall_null = ma.array([None, None], type=ma.bool_())\nprint(\"all of nulls:\", mc.all(all_null))   # None — no valid value\nprint(\"any of nulls:\", mc.any(all_null, min_count=0))   # False (identity)\nprint(\"all, nulls unknown:\", mc.all(all_true, skip_nulls=False))   # None\n\nall with nulls: True\nall of nulls: None\nany of nulls: False\nall, nulls unknown: None",
+    "crumbs": [
+      "Home",
+      "Compute",
+      "Compute kernels"
+    ]
+  },
+  {
+    "objectID": "guide/compute.html#selection",
+    "href": "guide/compute.html#selection",
+    "title": "Compute",
+    "section": "Selection",
+    "text": "Selection\n\nfilter\nfilter(array, mask) keeps elements where the boolean mask is True. The mask must be a BoolArray of the same length.\n\narr  = ma.array([10, 20, 30, 40, 50])\nmask = ma.array([True, False, True, False, True])\n\nprint(mc.filter(arr, mask))   # [10, 30, 50]\n\nPrimitiveArray[int64]([10, 30, 50])\n\n\nNulls in the source array are preserved through the filter:\n\narr  = ma.array([1, None, 3, 4, None])\nmask = ma.array([True, True, False, True, True])\n\nprint(mc.filter(arr, mask))   # [1, NULL, 4, NULL]\n\nPrimitiveArray[int64]([1, NULL, 4, NULL])\n\n\nNulls in the mask are treated as False (the element is excluded):\n\narr  = ma.array([1, 2, 3, 4])\nmask = ma.array([True, None, True, None])\n\nprint(mc.filter(arr, mask))   # [1, 3]\n\nPrimitiveArray[int64]([1, 3])\n\n\n\n\ndrop_null\ndrop_null(array) removes all null positions. Equivalent to filtering by the array’s own validity bitmap.\n\narr = ma.array([1, None, 3, None, 5])\nprint(mc.drop_null(arr))   # [1, 3, 5]\n\nPrimitiveArray[int64]([1, 3, 5])\n\n\nWorks on numeric array types:\n\nf = ma.array([1.0, None, 3.0, None, 5.0])\nprint(mc.drop_null(f))\n\nPrimitiveArray[float64]([1.0, 3.0, 5.0])",
+    "crumbs": [
+      "Home",
+      "Compute",
+      "Compute kernels"
+    ]
+  },
+  {
+    "objectID": "guide/compute.html#comparisons",
+    "href": "guide/compute.html#comparisons",
+    "title": "Compute",
+    "section": "Comparisons",
+    "text": "Comparisons\nElement-wise comparison kernels return a boolean array. Nulls propagate: if either input at a position is null, the output is null.\n\na = ma.array([1, 2, 3, None, 5])\nb = ma.array([1, 3, 2, 4,    5])\n\nprint(\"equal:        \", mc.equal(a, b))\nprint(\"not_equal:    \", mc.not_equal(a, b))\nprint(\"less:         \", mc.less(a, b))\nprint(\"less_equal:   \", mc.less_equal(a, b))\nprint(\"greater:      \", mc.greater(a, b))\nprint(\"greater_equal:\", mc.greater_equal(a, b))\n\nequal:         BoolArray([True, False, False, NULL, True])\nnot_equal:     BoolArray([False, True, True, NULL, False])\nless:          BoolArray([False, True, False, NULL, False])\nless_equal:    BoolArray([True, True, False, NULL, True])\ngreater:       BoolArray([False, False, True, NULL, False])\ngreater_equal: BoolArray([True, False, True, NULL, True])\n\n\nThe null at index 3 propagates to all output arrays:\n\nresult = mc.equal(a, b)\nprint(\"null count:\", result.null_count)      # 1\nprint(\"is_valid(3):\", result[3].is_valid())     # False\n\nnull count: 1\nis_valid(3): False",
+    "crumbs": [
+      "Home",
+      "Compute",
+      "Compute kernels"
+    ]
+  },
+  {
+    "objectID": "guide/compute.html#casting",
+    "href": "guide/compute.html#casting",
+    "title": "Compute",
+    "section": "Casting",
+    "text": "Casting\ncast converts an array to another type. By default a lossy conversion raises; pass safe=False for the raw truncating/wrapping conversion.\n\nints = ma.array([1, 2, 3], type=ma.int32())\nprint(\"to float64:\", mc.cast(ints, ma.float64()))\n\n# safe=False truncates toward zero instead of raising\nfloats = ma.array([1.9, -1.9, 2.5], type=ma.float64())\nprint(\"truncated: \", mc.cast(floats, ma.int32(), safe=False))\n\nto float64: PrimitiveArray[float64]([1.0, 2.0, 3.0])\ntruncated:  PrimitiveArray[int32]([1, -1, 2])\n\n\nCasts cover the numeric, boolean, string/binary and temporal families, including decimal rescaling and dictionary decode at the Mojo level.",
+    "crumbs": [
+      "Home",
+      "Compute",
+      "Compute kernels"
+    ]
+  },
+  {
+    "objectID": "guide/compute.html#null-behaviour-summary",
+    "href": "guide/compute.html#null-behaviour-summary",
+    "title": "Compute",
+    "section": "Null behaviour summary",
+    "text": "Null behaviour summary\n\n\n\n\n\n\n\n\nOperation\nNull input\nNull output\n\n\n\n\nadd, subtract, multiply, divide\neither operand null\nnull propagates\n\n\nequal, less, greater, …\neither operand null\nnull propagates\n\n\nsum, product, min, max, mean\nelement null\nelement skipped\n\n\ncount_distinct, approx_count_distinct\nelement null\nelement skipped\n\n\nany, all\nelement null\nelement skipped\n\n\nfilter (source null)\nsource element null\nnull preserved in output\n\n\nfilter (mask null)\nmask element null\nelement excluded\n\n\ndrop_null\nelement null\nelement removed\n\n\ncast\nelement null\nnull preserved",
+    "crumbs": [
+      "Home",
+      "Compute",
+      "Compute kernels"
     ]
   },
   {
