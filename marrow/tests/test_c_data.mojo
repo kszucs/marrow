@@ -7,6 +7,7 @@ from std.testing import (
     assert_false,
     assert_raises,
 )
+from std.benchmark import keep
 from std.python import Python, PythonObject
 from std.memory import ArcPointer
 from std.memory.alloc import unsafe_alloc
@@ -1407,6 +1408,10 @@ def test_import_refuses_wrong_schema_children() raises:
     with assert_raises(contains="NULL or released"):
         _ = schema.to_dtype()
     child.release = release
+    # `schema` must outlive the write above, which reaches it only through a
+    # raw pointer: its last *visible* use is reading `children`, and it would
+    # otherwise be released -- freeing that child -- before the write lands.
+    keep(schema)
 
 
 def test_import_of_an_unsupported_nested_format_is_not_implemented() raises:
@@ -1453,6 +1458,7 @@ def test_import_refuses_wrong_array_children() raises:
     with assert_raises(contains="NULL or released"):
         _ = arr.to_data(dtype, _no_owner())
     child.release = release
+    keep(arr)  # outlives the write through `child`
 
 
 def test_import_refuses_short_struct_and_fixed_size_list_children() raises:
@@ -1463,6 +1469,7 @@ def test_import_refuses_short_struct_and_fixed_size_list_children() raises:
     with assert_raises(contains="shorter than its parent"):
         _ = arr.to_data(dtype, _no_owner())
     arr.children[unsafe_offset=0][].length = 2
+    keep(arr)  # outlives the write through its `children`
 
     var py_fsl = _pyarrow(
         "array([[1, 2], None, [5, 6]], pa.list_(pa.int32(), 2))"
@@ -1473,6 +1480,7 @@ def test_import_refuses_short_struct_and_fixed_size_list_children() raises:
     with assert_raises(contains="fewer than"):
         _ = fsl.to_data(fsl_dtype, _no_owner())
     fsl.children[unsafe_offset=0][].length = 6
+    keep(fsl)  # outlives the write through its `children`
 
 
 def test_import_refuses_a_missing_or_unexpected_dictionary() raises:
@@ -1518,6 +1526,7 @@ def test_import_refuses_null_buffers() raises:
         with assert_raises(contains="is NULL"):
             _ = strings.to_data(string, _no_owner())
         strings.buffers[unsafe_offset=i] = buffer
+    keep(strings)  # outlives the writes through its `buffers`
 
 
 def test_import_refuses_a_wrong_buffer_count() raises:
@@ -1563,6 +1572,7 @@ def test_import_refuses_a_buffer_size_that_overflows() raises:
         _ = ints.to_data(int32, _no_owner())
     ints.length = 3
     ints.buffers[unsafe_offset=1] = values
+    keep(ints)  # outlives the write through its `buffers`
 
 
 def test_c_data_allocations_return_after_release() raises:
