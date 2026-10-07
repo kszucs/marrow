@@ -24,7 +24,7 @@ from ...dtypes import bool_, field, int64, string
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
 from ...scalars import BoolScalar, Int64Scalar
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..builders import (
     col,
     count_star,

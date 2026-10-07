@@ -60,7 +60,7 @@ from marrow.arrays import DynArray
 from marrow.dtypes import DynType
 from marrow.scalars import DynScalar, Int64Scalar
 from marrow.tabular import RecordBatch
-from marrow.expr.bindings import Bindings
+from marrow.expr import Bindings
 from marrow.expr.builders import (
     cume_dist as _cume_dist,
     dense_rank as _dense_rank,

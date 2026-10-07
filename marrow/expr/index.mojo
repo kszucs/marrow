@@ -109,7 +109,7 @@ from ..parquet.reader import (
 from ..io import ByteSource
 from ..scalars import BoolScalar, DynScalar, NullScalar, PrimitiveScalar
 from ..schema import Schema
-from .bindings import Bindings
+from .logical import Bindings
 from .logical import DynValue
 
 

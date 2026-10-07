@@ -20,7 +20,7 @@ from ...scalars import Int64Scalar, StringScalar
 from ...schema import schema
 from ...tabular import Table, record_batch
 from ..builders import col, param, scan, table
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..logical import DynRelation, DynValue, InMemoryTable
 from ..optimizer import AllRules, ScanPruning
 from ..`comptime`.leaves import NumericColumn

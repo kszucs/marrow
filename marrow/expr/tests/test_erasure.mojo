@@ -42,7 +42,7 @@ from ..logical import (
     Shape,
     Value,
 )
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..builders import col, row_number
 from ...arrays import BoolArray
 from ...builders import BoolBuilder

@@ -82,7 +82,7 @@ from ..kernels.join import (
     JoinKind,
 )
 from ..utils import KeyHash
-from .bindings import Bindings
+from .logical import Bindings
 from .estimates import Cost, Estimate
 from .logical import (
     DynValue,

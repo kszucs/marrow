@@ -75,7 +75,7 @@ from ..logical import (
     is_filled,
     reject_non_boolean_filter,
 )
-from ..bindings import Bindings
+from ..logical import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
 from ...kernels.groupby import Groups

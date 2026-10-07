@@ -14,7 +14,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import array_contains, array_length, col, lit
 from ....arrays import BoolArray
-from ...bindings import Bindings
+from ...logical import Bindings
 from ....builders import BoolBuilder, Int64Builder, ListBuilder, array
 from ....dtypes import int64, int32, list_
 from ....tabular import RecordBatch, record_batch

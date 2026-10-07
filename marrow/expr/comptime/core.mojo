@@ -67,7 +67,7 @@ from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
 from ..logical import Nothing, Shape, Value
-from ..bindings import Bindings
+from ..logical import Bindings
 from ...kernels.aggregate import (
     COUNT,
     MAX,

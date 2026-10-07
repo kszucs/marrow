@@ -25,7 +25,7 @@ from ..parquet.reader import LeafSet, ParquetFile
 from ..scalars import DynScalar, NullScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .bindings import Bindings
+from .logical import Bindings
 from .estimates import Approx, ColumnEstimate, Estimate
 from .index import ColumnZones, Index
 from .logical import DynRelation, InMemoryTable, ParquetScan

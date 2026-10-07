@@ -35,7 +35,7 @@ from ...arrays import BoolArray
 from ...builders import array
 from ...dtypes import Date32Type, Int64Type, date32, int64
 from ...scalars import Date32Scalar, DynScalar, Int64Scalar
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..builders import col, lit, param
 from ..index import ColumnZones, Index
 from ...parquet.reader import PageBounds

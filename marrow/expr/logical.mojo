@@ -79,7 +79,7 @@ from ..schema import Schema, schema
 from ..iceberg.catalog import IcebergTable
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, StringType, field, int64, null
-from .bindings import Bindings, ParamSpec, distinct_params
+from ..scalars import DynScalar
 from .estimates import (
     Approx,
     ColumnEstimate,
@@ -739,6 +739,58 @@ struct DynValue(Copyable, Movable, Writable):
 
 
 # ---------------------------------------------------------------------------
+# Parameters — what a plan declares, and the values one execution binds
+# ---------------------------------------------------------------------------
+comptime Bindings = Dict[String, DynScalar]
+"""Parameter values for one execution: a plain name -> scalar map.
+
+A caller writes a dict literal:
+
+    plan.execute(bindings={"min-a": Int64Scalar(4).to_dyn()})
+
+Passed to `to_operator`, not stored on the plan, which is what keeps a plan
+immutable and lets two executions use different values without interfering.
+
+Missing names are not an error here — a parameter with a default is satisfied
+without one, and `NumericParam` raises naming itself when it has neither.
+"""
+
+
+struct ParamSpec(Copyable, Movable):
+    """A parameter a plan declares: what a caller must, or may, bind.
+
+    Holds no `DynScalar`: a `List` of a struct carrying one is the
+    List-of-Variant growth defect CLAUDE.md records, and the default is only
+    ever *shown* here — the node itself applies it.
+    """
+
+    var name: String
+    var dtype: DynType
+    var help: String
+    var default: Optional[String]
+    """The default as a command line would spell it; `None` when required."""
+
+    var parse: Optional[def(String) thin raises -> DynScalar]
+    """A command-line token as this parameter's scalar, or `None` when the dtype
+    has no command-line spelling. Instantiated per dtype a plan names, so a
+    binary links only the parsers its parameters need."""
+
+    def __init__(
+        out self,
+        var name: String,
+        var dtype: DynType,
+        var help: String,
+        var default: Optional[String],
+        parse: Optional[def(String) thin raises -> DynScalar],
+    ):
+        self.name = name^
+        self.dtype = dtype^
+        self.help = help^
+        self.default = default^
+        self.parse = parse
+
+
+# ---------------------------------------------------------------------------
 # References — what an expression reads from outside itself
 # ---------------------------------------------------------------------------
 struct References(Movable):
@@ -1371,7 +1423,17 @@ struct DynRelation(Copyable, Movable, Writable):
         what `QueryCli` turns into a command line."""
         var refs = References()
         self.references(refs)
-        return distinct_params(refs.params)
+        # The first declaration of a name is the one reported; a later read of
+        # another dtype is refused when the value binds, naming the parameter.
+        var out = List[ParamSpec]()
+        for ref spec in refs.params:
+            var seen = False
+            for ref kept in out:
+                if kept.name == spec.name:
+                    seen = True
+            if not seen:
+                out.append(spec.copy())
+        return out^
 
     def schema(self) -> Schema:
         def job[T: Relation](node: T) raises {imm} -> Schema:

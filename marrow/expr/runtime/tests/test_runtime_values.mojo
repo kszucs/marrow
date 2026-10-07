@@ -18,7 +18,7 @@ from std.testing import (
 )
 
 from ....arrays import StructArray, DynArray, StringArray
-from ...bindings import Bindings
+from ...logical import Bindings
 from .. import values as rv
 from ...builders import array_contains as build_array_contains
 from ...builders import array_length as build_array_length

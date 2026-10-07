@@ -38,7 +38,7 @@ from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
 from marrow.execution import ExecContext
-from marrow.expr.bindings import Bindings
+from marrow.expr import Bindings
 from marrow.expr.builders import scan as _scan, table as _table
 from marrow.expr.logical import DynRelation, DynValue
 from marrow.expr.optimizer import AllRules

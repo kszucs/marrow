@@ -71,7 +71,7 @@ from ....scalars import (
 )
 from ....tabular import record_batch
 from ...builders import array_length, col, lit, param, table
-from ...bindings import ParamSpec
+from ...logical import ParamSpec
 from ...logical import DynRelation, References, Value
 
 

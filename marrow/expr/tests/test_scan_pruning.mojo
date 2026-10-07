@@ -27,7 +27,7 @@ from ...schema import schema
 from ...parquet.reader import ParquetFile
 from ...scalars import Int64Scalar
 from ...tabular import Table
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..builders import col, lit, scan
 from ..logical import Filter, ParquetScan
 from ..optimizer import AllRules, NoRules

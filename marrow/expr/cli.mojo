@@ -37,7 +37,7 @@ from ..ipc import RecordBatchFileWriter
 from ..parquet.writer import write_table
 from ..tabular import RecordBatch, Table
 from ..utils.argparse import ArgumentParser, ParsedArgs
-from .bindings import Bindings, ParamSpec
+from .logical import Bindings, ParamSpec
 from .logical import DynRelation
 
 

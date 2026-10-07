@@ -13,7 +13,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import col, is_in, lit
 from ....arrays import BoolArray
-from ...bindings import Bindings
+from ...logical import Bindings
 from ....builders import BoolBuilder, StringBuilder, array
 from ....dtypes import Int64Type, int32, int64, string
 from ....tabular import RecordBatch, record_batch

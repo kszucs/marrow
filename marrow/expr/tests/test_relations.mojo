@@ -59,7 +59,7 @@ from ...parquet.writer import write_table
 from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..physical import (
     Datum,
     JoinOrder,

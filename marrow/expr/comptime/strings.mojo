@@ -87,7 +87,7 @@ from ...kernels.string import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..physical import Datum
 
 from .rules import widest_shape

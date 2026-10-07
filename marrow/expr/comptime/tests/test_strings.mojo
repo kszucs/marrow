@@ -13,7 +13,7 @@ and drives a `Filter` unchanged.
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import col, lit, table
-from ...bindings import Bindings
+from ...logical import Bindings
 from ....builders import array, Int64Builder, StringBuilder
 from ....arrays import BoolArray, StringArray
 from ....dtypes import (

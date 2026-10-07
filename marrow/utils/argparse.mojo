@@ -24,7 +24,7 @@ has since been deleted; this half survived because it never needed it. The split
   Turning `"250"` into an `int64` scalar is expression-layer knowledge — it
   needs `marrow.dtypes` and `marrow.scalars`, and importing either would cost
   the leaf property. Each parameter carries its own parser instead
-  (`marrow.expr.bindings.ParamSpec.parse`), and `marrow.expr.cli.QueryCli`
+  (`marrow.expr.logical.ParamSpec.parse`), and `marrow.expr.cli.QueryCli`
   builds a parser from a plan's parameters, runs it, then applies them.
 - *Also not here*: the `-o` / `--format` output writers, which know about
   Parquet and IPC; they live in `QueryCli` too.

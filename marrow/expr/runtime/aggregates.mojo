@@ -109,7 +109,7 @@ from ..logical import (
     reject_non_boolean_filter,
 )
 from .values import RuntimeValue
-from ..bindings import Bindings
+from ..logical import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
 from std.memory import ArcPointer

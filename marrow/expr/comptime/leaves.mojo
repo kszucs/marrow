@@ -53,14 +53,8 @@ from ...scalars import (
 )
 from ...errors import InvalidError, KeyError, TypeError
 from ...schema import Schema
-from ..logical import References, Shape
-from ..bindings import (
-    Bindings,
-    ParamSpec,
-    bool_from_text,
-    numeric_from_text,
-    string_from_text,
-)
+from ...utils.argparse import parse_bool
+from ..logical import Bindings, ParamSpec, References, Shape
 from ..index import Index
 from ..physical import Datum
 from .core import (
@@ -1046,6 +1040,41 @@ struct NumericParam[T: NumericType](NumericValue):
         self._help = help^
         self._default = default^
 
+    @staticmethod
+    def parse(text: String) raises -> DynScalar:
+        """`text` as a `T` scalar, refusing a value `T` cannot hold.
+
+        A narrowing that changes the value is an error rather than a wrap: `300`
+        is not a `uint8`, and a negative number is not an unsigned one.
+        """
+        comptime if Self.T.native.is_floating_point():
+            var value: Float64
+            try:
+                value = atof(text)
+            except:
+                raise InvalidError(t"expected {Self.T()}, got '{text}'")
+            return PrimitiveScalar[Self.T](
+                Scalar[Self.T.native](value)
+            ).to_dyn()
+        else:
+            var wide: Int
+            try:
+                wide = atol(text)
+            except:
+                raise InvalidError(t"expected {Self.T()}, got '{text}'")
+            var narrow = Scalar[Self.T.native](wide)
+            comptime if Self.T.native.is_unsigned():
+                if wide < 0 or Int(narrow) != wide:
+                    raise InvalidError(
+                        t"'{text}' is out of range for {Self.T()}"
+                    )
+            else:
+                if Int(narrow) != wide:
+                    raise InvalidError(
+                        t"'{text}' is out of range for {Self.T()}"
+                    )
+            return PrimitiveScalar[Self.T](narrow).to_dyn()
+
     # -- Value --------------------------------------------------------------
 
     def references(self, mut into: References):
@@ -1055,7 +1084,7 @@ struct NumericParam[T: NumericType](NumericValue):
                 DynType(Self.T()),
                 self._help.copy(),
                 _shown(self._default),
-                numeric_from_text[Self.T],
+                Self.parse,
             )
         )
 
@@ -1335,6 +1364,12 @@ struct BoolParam(BoolValue):
         self._help = help^
         self._default = default^
 
+    @staticmethod
+    def parse(text: String) raises -> DynScalar:
+        """`true`/`false`/`1`/`0` as a `bool` scalar — `parse_bool`'s spellings.
+        """
+        return BoolScalar(parse_bool(text)).to_dyn()
+
     # -- Value --------------------------------------------------------------
 
     def references(self, mut into: References):
@@ -1344,7 +1379,7 @@ struct BoolParam(BoolValue):
                 DynType(bool_),
                 self._help.copy(),
                 _shown_bool(self._default),
-                bool_from_text,
+                Self.parse,
             )
         )
 
@@ -1399,6 +1434,11 @@ struct StringParam[T: StringLikeType](StringValue):
         self._help = help^
         self._default = default^
 
+    @staticmethod
+    def parse(text: String) raises -> DynScalar:
+        """`text` itself, as a `T` scalar."""
+        return BinaryLikeScalar[Self.T](text).to_dyn()
+
     # -- Value --------------------------------------------------------------
 
     def references(self, mut into: References):
@@ -1408,7 +1448,7 @@ struct StringParam[T: StringLikeType](StringValue):
                 DynType(Self.T()),
                 self._help.copy(),
                 _shown(self._default),
-                string_from_text[Self.T],
+                Self.parse,
             )
         )
 

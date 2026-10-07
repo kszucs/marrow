@@ -50,7 +50,7 @@ from ...kernels.cast import (
 from ...errors import TypeError
 from ...schema import Schema
 from ..logical import Shape
-from ..bindings import Bindings
+from ..logical import Bindings
 from .core import (
     BoolValue,
     ColumnBound,

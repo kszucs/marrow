@@ -200,7 +200,7 @@ from ...scalars import BoolScalar, DynScalar, PrimitiveScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, References, Shape, Value
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..index import Index, keep_every
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator

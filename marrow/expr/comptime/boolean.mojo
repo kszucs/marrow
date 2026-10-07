@@ -42,7 +42,7 @@ from ...kernels.membership import IsInKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..index import Index, keep_every
 from ..physical import Datum
 from .core import (

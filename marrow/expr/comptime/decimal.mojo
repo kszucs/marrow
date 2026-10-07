@@ -69,7 +69,7 @@ from ...kernels.numeric import (
 from ...errors import NotImplementedError
 from ...schema import Schema
 from ..logical import Shape
-from ..bindings import Bindings
+from ..logical import Bindings
 from .rules import wider, widest_shape
 from .core import (
     BoolValue,

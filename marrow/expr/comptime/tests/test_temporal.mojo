@@ -24,7 +24,7 @@ Three things are worth asserting and each has its own case below:
 from std.testing import assert_equal, assert_raises, assert_true
 
 from ...builders import col, table
-from ...bindings import Bindings
+from ...logical import Bindings
 from ....arrays import BoolArray, Int32Array, TimestampArray
 from ....builders import PrimitiveBuilder, array
 from ....dtypes import (

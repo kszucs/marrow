@@ -25,7 +25,7 @@ from ...arrays import BoolArray, Int32Array, StructArray
 from ...dtypes import DynType, Int32Type
 from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 from ...schema import Schema
-from ..bindings import Bindings
+from ..logical import Bindings
 from ..logical import Shape
 from .core import (
     BoolValue,
