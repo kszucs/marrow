@@ -86,7 +86,7 @@ Soundness is by construction, not by review:
   this is an invariant to keep rather than a wrong answer to fix.
 """
 
-from std.collections import Dict
+from std.collections import Dict, Set
 from std.memory import ArcPointer
 
 from ..kernels.join import (
@@ -103,7 +103,6 @@ from ..tabular import RecordBatch
 from .estimates import Cost, Estimate
 from .physical import JoinOrder, PlannedJoin
 from ..errors import InternalError, KeyError
-from .sets import ParticipantSet
 from .logical import (
     Aggregate,
     JoinLink,
@@ -627,11 +626,11 @@ struct PushFilterIntoJoin(Rule):
         # Onto the participant it reads when every tree may filter that
         # participant alone first.
         if (
-            reads.is_single()
+            len(reads) == 1
             and not renamed
             and chain.rules().holds(filter, reads)
         ):
-            var p = reads.lowest()
+            var p = filter.refs[0].input
             var inputs = chain.inputs.copy()
             var moved: DynRelation = f.with_input(inputs[p][].copy())
             inputs[p] = ArcPointer(moved^)
@@ -650,8 +649,8 @@ struct MergeJoinChains(Rule):
     filtered chain once `PushFilterIntoJoin` has taken its filter in. Spliced,
     the nested links join the outer chain's (`inlined`) and one
     planner sees every join: the bushy spelling reorders exactly as the
-    left-deep one does. A chain that would pass `JoinChain.MAX_INPUTS` is not
-    spliced, and neither is one whose joins must keep their place.
+    left-deep one does. A chain whose joins must keep their place is not
+    spliced.
     """
 
     @staticmethod
@@ -663,11 +662,8 @@ struct MergeJoinChains(Rule):
             ref input = chain.inputs[p][]
             if not input.isa[JoinChain]():
                 continue
-            ref inner = input.get[JoinChain]()
-            if len(chain.inputs) + len(inner.inputs) - 1 > JoinChain.MAX_INPUTS:
-                continue
             var order = Self.layout(chain, p)
-            if len(order) == len(inner.inputs):
+            if len(order) == len(input.get[JoinChain]().inputs):
                 return node.with_chain(Self.inlined(chain, p, order))
         return node.copy()
 
@@ -695,10 +691,10 @@ struct MergeJoinChains(Rule):
         for ref l in inner.links:
             if not l.is_inner():
                 return order^
-        var reach = ParticipantSet()
+        var reach = Set[Int]()
         for ref r in chain.links[p - 1].right_keys:
-            reach = reach | ParticipantSet.of(inner.ref_of(r.name).input)
-        var laid = ParticipantSet()
+            reach.add(inner.ref_of(r.name).input)
+        var laid = Set[Int]()
         while len(order) < len(inner.inputs):
             var next = -1
             for i in range(len(inner.inputs)):
@@ -707,13 +703,13 @@ struct MergeJoinChains(Rule):
             if next < 0:
                 return order^
             order.append(next)
-            laid = laid | ParticipantSet.of(next)
+            laid.add(next)
             for j in range(len(inner.links)):
                 for ref r in inner.links[j].left_keys:
                     if r.input == next:
-                        reach = reach | ParticipantSet.of(j + 1)
+                        reach.add(j + 1)
                     if j + 1 == next:
-                        reach = reach | ParticipantSet.of(r.input)
+                        reach.add(r.input)
         return order^
 
     @staticmethod
@@ -1196,7 +1192,7 @@ struct _Choice(Copyable, Movable):
     subset on the left (empty for a participant) and the side to index."""
 
     var cost: Cost
-    var left: ParticipantSet
+    var left: Set[Int]
     var side: JoinBuildSide
 
 
@@ -1205,14 +1201,13 @@ struct _Choices(Movable):
     participants. Costs leave out the participants' own work, which every
     tree pays alike."""
 
-    var best: Dict[ParticipantSet, _Choice]
+    var best: Dict[Set[Int], _Choice]
 
     def __init__(out self, mut pricing: JoinPricing) raises:
-        self.best = Dict[ParticipantSet, _Choice]()
+        self.best = Dict[Set[Int], _Choice]()
         for p in range(pricing.rules.participants()):
-            self.best[ParticipantSet.of(p)] = _Choice(
-                pricing.leaf(p), ParticipantSet(), BUILD_LEFT
-            )
+            var one: Set[Int] = {p}
+            self.best[one^] = _Choice(pricing.leaf(p), Set[Int](), BUILD_LEFT)
 
     @staticmethod
     def search[budget: Int](mut pricing: JoinPricing) raises -> Self:
@@ -1231,7 +1226,7 @@ struct _Choices(Movable):
         return choices^
 
     def offer(
-        mut self, mut pricing: JoinPricing, a: ParticipantSet, b: ParticipantSet
+        mut self, mut pricing: JoinPricing, a: Set[Int], b: Set[Int]
     ) raises:
         """Price joining `a` to `b`, keeping it if it is the cheapest way yet to
         join their union. A pair that cannot be priced is left unpriced:
@@ -1245,11 +1240,11 @@ struct _Choices(Movable):
         if not left_choice or not right_choice:
             return
         var s = a | b
-        var left = a
-        var right = b
+        var left = a.copy()
+        var right = b.copy()
         var own = pricing.rules.attaching(a, b)
         if own >= 0:
-            right = ParticipantSet.of(own)
+            right = {own}
             left = s - right
         var link = pricing.rules.link(left, right)
         if link.strictness == JOIN_ALL and link.kind.commutes():
@@ -1282,7 +1277,7 @@ struct _Choices(Movable):
             var held = incumbent.value().cost.total().known()
             if held and held.value() <= total.value():
                 return
-        self.best[s] = _Choice(cost, left, link.build_side)
+        self.best[s^] = _Choice(cost, left^, link.build_side)
 
     def greedy(mut self, mut pricing: JoinPricing) raises:
         """Greedy operator ordering: repeatedly join the connected pair of parts
@@ -1290,9 +1285,9 @@ struct _Choices(Movable):
         dynamic program would. A pair that cannot be estimated or priced is
         passed over for the next; the search fails only once no pair is left
         to join."""
-        var parts = List[ParticipantSet]()
+        var parts = List[Set[Int]]()
         for p in range(pricing.rules.participants()):
-            parts.append(ParticipantSet.of(p))
+            parts.append({p})
         while len(parts) > 1:
             var ranked = List[Tuple[Int, Int, Int]]()
             for i in range(len(parts)):
@@ -1313,7 +1308,7 @@ struct _Choices(Movable):
                 var merged = parts[i] | parts[j]
                 self.offer(pricing, parts[i], parts[j])
                 if merged in self.best:
-                    parts[i] = merged
+                    parts[i] = merged^
                     _ = parts.pop(j)
                     joined = True
                     break
@@ -1321,14 +1316,15 @@ struct _Choices(Movable):
                 return
 
     def emit(
-        self, rules: JoinRules, s: ParticipantSet, mut order: JoinOrder
+        self, rules: JoinRules, s: Set[Int], mut order: JoinOrder
     ) raises -> Int:
         """The tree chosen for `s`, added to `order` bottom-up; answers its
         node."""
-        if s.is_single():
-            return s.lowest()
+        if len(s) == 1:
+            for p in s:
+                return p
         ref choice = self.best[s]
-        var left = choice.left
+        ref left = choice.left
         var right = s - left
         var l = self.emit(rules, left, order)
         var r = self.emit(rules, right, order)
@@ -1387,21 +1383,21 @@ struct _Pairs(Movable):
     var budget: Int
     var visited: Int
     var over: Bool
-    var pairs: List[Tuple[ParticipantSet, ParticipantSet]]
+    var pairs: List[Tuple[Set[Int], Set[Int]]]
 
     def __init__(out self, budget: Int):
         self.budget = budget
         self.visited = 0
         self.over = False
-        self.pairs = List[Tuple[ParticipantSet, ParticipantSet]]()
+        self.pairs = List[Tuple[Set[Int], Set[Int]]]()
 
     def _visit(mut self):
         self.visited += 1
         if self.visited > self.budget:
             self.over = True
 
-    def _emit(mut self, a: ParticipantSet, b: ParticipantSet):
-        self.pairs.append((a, b))
+    def _emit(mut self, a: Set[Int], b: Set[Int]):
+        self.pairs.append((a.copy(), b.copy()))
         if len(self.pairs) > self.budget:
             self.over = True
 
@@ -1409,78 +1405,94 @@ struct _Pairs(Movable):
         for i in reversed(range(rules.participants())):
             if self.over:
                 return
-            self._emit_csg(rules, ParticipantSet.of(i))
-            self._csg(rules, ParticipantSet.of(i), ParticipantSet.below(i + 1))
+            var excluded = Set[Int]()
+            for j in range(i + 1):
+                excluded.add(j)
+            self._emit_csg(rules, {i})
+            self._csg(rules, {i}, excluded)
 
-    def _csg(
-        mut self, rules: JoinRules, s: ParticipantSet, excluded: ParticipantSet
-    ):
+    @staticmethod
+    def _next(mut sub: Set[Int], of: Set[Int], n: Int):
+        """Step `sub` to the next subset of `of`, the whole set first and the
+        empty one last: every member below `sub`'s lowest joins it, and that
+        lowest leaves."""
+        for i in range(n):
+            if i in of:
+                if i in sub:
+                    sub.discard(i)
+                    return
+                sub.add(i)
+
+    def _csg(mut self, rules: JoinRules, s: Set[Int], excluded: Set[Int]):
         """Every connected set grown from `s` through participants not in
         `excluded`."""
+        var n = rules.participants()
         var grow = rules.adjacent(s) - excluded
-        if grow.is_empty():
+        if len(grow) == 0:
             return
-        for sub in grow.subsets():
-            if self.over:
-                break
+        var sub = grow.copy()
+        while len(sub) > 0 and not self.over:
             self._visit()
             self._emit_csg(rules, s | sub)
-        for sub in grow.subsets():
-            if self.over:
-                break
+            Self._next(sub, grow, n)
+        sub = grow.copy()
+        while len(sub) > 0 and not self.over:
             self._visit()
             self._csg(rules, s | sub, excluded | grow)
+            Self._next(sub, grow, n)
 
-    def _emit_csg(mut self, rules: JoinRules, s1: ParticipantSet):
+    def _emit_csg(mut self, rules: JoinRules, s1: Set[Int]):
         """Every connected complement of `s1` whose lowest participant is above
         `s1`'s."""
-        var excluded = s1 | ParticipantSet.below(s1.lowest() + 1)
+        var low = 0
+        while low not in s1:
+            low += 1
+        var excluded = s1.copy()
+        for j in range(low + 1):
+            excluded.add(j)
         var start = rules.adjacent(s1) - excluded
-        var rest = start
-        while not rest.is_empty() and not self.over:
-            var i = rest.highest()
-            rest = rest - ParticipantSet.of(i)
-            self._emit(s1, ParticipantSet.of(i))
-            self._cmp(
-                rules,
-                s1,
-                ParticipantSet.of(i),
-                excluded | (start & ParticipantSet.below(i + 1)),
-            )
+        for i in reversed(range(rules.participants())):
+            if self.over:
+                break
+            if i not in start:
+                continue
+            self._emit(s1, {i})
+            var below = excluded.copy()
+            for j in start:
+                if j <= i:
+                    below.add(j)
+            self._cmp(rules, s1, {i}, below)
 
     def _cmp(
         mut self,
         rules: JoinRules,
-        s1: ParticipantSet,
-        s2: ParticipantSet,
-        excluded: ParticipantSet,
+        s1: Set[Int],
+        s2: Set[Int],
+        excluded: Set[Int],
     ):
+        var n = rules.participants()
         var grow = rules.adjacent(s2) - excluded
-        if grow.is_empty():
+        if len(grow) == 0:
             return
-        for sub in grow.subsets():
-            if self.over:
-                break
+        var sub = grow.copy()
+        while len(sub) > 0 and not self.over:
             self._visit()
             self._emit(s1, s2 | sub)
-        for sub in grow.subsets():
-            if self.over:
-                break
+            Self._next(sub, grow, n)
+        sub = grow.copy()
+        while len(sub) > 0 and not self.over:
             self._visit()
             self._cmp(rules, s1, s2 | sub, excluded | grow)
+            Self._next(sub, grow, n)
 
-    def by_size(
-        self, n: Int
-    ) -> List[List[Tuple[ParticipantSet, ParticipantSet]]]:
+    def by_size(self, n: Int) -> List[List[Tuple[Set[Int], Set[Int]]]]:
         """The pairs bucketed by the size of their union, smallest first, so
         both halves of a pair are always solved before it."""
-        var buckets = List[List[Tuple[ParticipantSet, ParticipantSet]]](
-            capacity=n + 1
-        )
+        var buckets = List[List[Tuple[Set[Int], Set[Int]]]](capacity=n + 1)
         for _ in range(n + 1):
-            buckets.append(List[Tuple[ParticipantSet, ParticipantSet]]())
+            buckets.append(List[Tuple[Set[Int], Set[Int]]]())
         for ref pair in self.pairs:
-            buckets[(pair[0] | pair[1]).count()].append(pair)
+            buckets[len(pair[0]) + len(pair[1])].append(pair.copy())
         return buckets^
 
 

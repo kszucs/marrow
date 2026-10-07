@@ -72,7 +72,6 @@ from ..`comptime`.leaves import NumericColumn, NumericLiteral
 from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
 from ..builders import col, lit, param, scan, table
-from ..sets import ParticipantSet
 from ..runtime.values import (
     column as runtime_column,
     gt as runtime_gt,
@@ -1502,7 +1501,7 @@ def test_an_any_join_keeps_its_side_and_its_filters_above() raises:
 def _landing(chain: JoinChain) raises -> Int:
     """The node of `chain`'s planned tree its first filter lands on."""
     var order = chain.planned_order()
-    return order.landing(order.masks(), chain.rules(), chain.filters[0])
+    return order.landing(order.participants(), chain.rules(), chain.filters[0])
 
 
 def _join(
@@ -1886,35 +1885,12 @@ def test_a_spliced_chain_keeps_its_filters_and_names() raises:
     # The filter came along, reading the participants it was written over.
     ref first = MergeJoinChains.apply(plans[0]).get[JoinChain]()
     assert_equal(len(first.filters), 1)
-    assert_true(
-        first.filters[0].participants()
-        == ParticipantSet.of(1) | ParticipantSet.of(2)
-    )
+    assert_true(first.filters[0].participants() == {1, 2})
 
     var outer = table(_right()).join(table(_third()), [0], [0], JOIN_LEFT)
     var nested_outer = table(_left()).join(outer^, [0], [0])
     var kept = MergeJoinChains.apply(nested_outer)
     assert_equal(len(kept.get[JoinChain]().inputs), 2, String(kept))
-
-
-def _one_key(n: Int) raises -> DynRelation:
-    var b = record_batch([array([1, 2], int64).copy()], names=["k"])
-    var plan = table(b.copy())
-    for _ in range(n - 1):
-        plan = plan.join(table(b.copy()), [0], [0])
-    return plan^
-
-
-def test_a_chain_holds_at_most_max_inputs_participants() raises:
-    """Participants are bits of an `Int` mask. Past the limit the verb
-    raises, and `MergeJoinChains` leaves a nested chain nested rather than
-    splicing past it."""
-    with assert_raises(contains="at most"):
-        _ = _one_key(JoinChain.MAX_INPUTS + 1)
-    var nested = _one_key(JoinChain.MAX_INPUTS - 1).join(_one_key(3), [0], [0])
-    assert_equal(len(nested.get[JoinChain]().inputs), JoinChain.MAX_INPUTS)
-    var kept = MergeJoinChains.apply(nested)
-    assert_equal(len(kept.get[JoinChain]().inputs), JoinChain.MAX_INPUTS)
 
 
 def test_select_operator_picks_a_sliced_batch_by_position() raises:

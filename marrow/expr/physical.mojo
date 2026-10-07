@@ -40,6 +40,7 @@ plan: a source relation creates the pipeline, and every relation above it
 appends one stage.
 """
 
+from std.collections import Set
 from std.memory import ArcPointer
 
 from ..errors import DynError, InternalError
@@ -97,7 +98,6 @@ from .logical import (
     Value,
     WindowSpec,
 )
-from .sets import ParticipantSet
 from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
 from ..kernels.window import WindowExtents, WindowFrame, WindowKernel
@@ -2454,17 +2454,17 @@ struct JoinOrder(Copyable, Equatable, Movable, Writable):
         """The join `node` is. Undefined unless `is_join(node)`."""
         return self.joins[node - self.inputs]
 
-    def masks(self) -> List[ParticipantSet]:
+    def participants(self) -> List[Set[Int]]:
         """Every node's participants, by node."""
-        var out = List[ParticipantSet](capacity=self.inputs + len(self.joins))
+        var out = List[Set[Int]](capacity=self.inputs + len(self.joins))
         for p in range(self.inputs):
-            out.append(ParticipantSet.of(p))
+            out.append({p})
         for ref j in self.joins:
             out.append(out[j.left] | out[j.right])
         return out^
 
     def landing(
-        self, masks: List[ParticipantSet], rules: JoinRules, f: JoinFilter
+        self, held: List[Set[Int]], rules: JoinRules, f: JoinFilter
     ) -> Int:
         """The node `f` is evaluated after: the lowest one holding it
         (`JoinRules.holds`) — the nodes that do are the root's path down to
@@ -2472,9 +2472,9 @@ struct JoinOrder(Copyable, Equatable, Movable, Writable):
         var node = self.root()
         while self.is_join(node):
             ref j = self.join(node)
-            if rules.holds(f, masks[j.left]):
+            if rules.holds(f, held[j.left]):
                 node = j.left
-            elif rules.holds(f, masks[j.right]):
+            elif rules.holds(f, held[j.right]):
                 node = j.right
             else:
                 return node
@@ -2495,16 +2495,17 @@ struct JoinOrder(Copyable, Equatable, Movable, Writable):
                 if node < 0 or node >= self.inputs + i or used[node]:
                     raise InternalError(t"join: node {node} joined twice")
                 used[node] = True
-        var masks = self.masks()
-        if len(self.joins) != len(chain.links) or masks[
-            self.root()
-        ] != ParticipantSet.below(self.inputs):
+        var held = self.participants()
+        if (
+            len(self.joins) != len(chain.links)
+            or len(held[self.root()]) != self.inputs
+        ):
             raise InternalError("join: a tree not joining every input once")
         var rules = chain.rules()
         var made = JoinClasses()
         for ref j in self.joins:
-            var l = masks[j.left]
-            var r = masks[j.right]
+            ref l = held[j.left]
+            ref r = held[j.right]
             for ref k in j.link.left_keys:
                 if k.input not in l:
                     raise InternalError(t"join: {k} read from the wrong side")
@@ -2514,7 +2515,8 @@ struct JoinOrder(Copyable, Equatable, Movable, Writable):
             var own = rules.attaching(l, r)
             var as_written = (
                 own >= 0
-                and r == ParticipantSet.of(own)
+                and len(r) == 1
+                and own in r
                 and j.computes(rules.links[own - 1])
             )
             if not rules.joinable(l, r) or not (

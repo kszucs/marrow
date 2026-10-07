@@ -38,7 +38,7 @@ added later needs no change there.
 """
 
 from std.builtin.rebind import downcast
-from std.collections import Dict
+from std.collections import Dict, Set
 from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant
@@ -92,7 +92,6 @@ from .estimates import (
 )
 from .index import Index, keep_every
 from .analyze import analyze
-from .sets import ParticipantSet
 from .optimizer import RuleSet, optimize
 from .`comptime`.leaves import StringParam
 from .physical import (
@@ -2989,12 +2988,12 @@ struct JoinFilter(Copyable, Movable):
         out.bound = bound
         return out^
 
-    def participants(self) -> ParticipantSet:
+    def participants(self) -> Set[Int]:
         """The participants this reads."""
-        var out = ParticipantSet()
+        var out = Set[Int]()
         for ref r in self.refs:
-            out = out | ParticipantSet.of(r.input)
-        return out
+            out.add(r.input)
+        return out^
 
     def verdict(self, estimate: Estimate) raises -> Selectivity:
         """What this filter keeps of `estimate`, whose columns are keyed by
@@ -3122,9 +3121,9 @@ struct KeyClass(Copyable, Movable):
     order, and the participants holding one."""
 
     var members: List[JoinRef]
-    var span: ParticipantSet
+    var span: Set[Int]
 
-    def within(self, s: ParticipantSet) -> List[JoinRef]:
+    def within(self, s: Set[Int]) -> List[JoinRef]:
         """The members held by the participants `s`, in order."""
         var out = List[JoinRef]()
         for ref m in self.members:
@@ -3132,7 +3131,7 @@ struct KeyClass(Copyable, Movable):
                 out.append(m.copy())
         return out^
 
-    def side(self, s: ParticipantSet) -> List[JoinRef]:
+    def side(self, s: Set[Int]) -> List[JoinRef]:
         """The members of `s` a join to `s` compares: every one when they all
         sit in one participant — no join has compared those to one another
         yet — and otherwise the first. Undefined unless `span` meets `s`."""
@@ -3173,11 +3172,11 @@ struct JoinRules(Copyable, Movable):
     var classes: List[KeyClass]
     """The classes the inner keys make, ascending by their least member, so
     a join's keys come out in an order no plan changes."""
-    var spines: List[ParticipantSet]
+    var spines: List[Set[Int]]
     """Per participant joined by its own link, the participants that must be
     in first: what its keys read when attached, everything before it when in
     place. Empty for one joined on inner keys."""
-    var neighbours: List[ParticipantSet]
+    var neighbours: List[Set[Int]]
     """Per participant, those it shares a class with, attaches to or is
     attached by — a superset of what joins it, which `joinable` narrows."""
 
@@ -3185,27 +3184,28 @@ struct JoinRules(Copyable, Movable):
         var n = len(links) + 1
         self.links = links.copy()
         self.classes = List[KeyClass]()
-        self.spines = List[ParticipantSet](length=n, fill=ParticipantSet())
-        self.neighbours = List[ParticipantSet](length=n, fill=ParticipantSet())
+        self.spines = List[Set[Int]](length=n, fill=Set[Int]())
+        self.neighbours = List[Set[Int]](length=n, fill=Set[Int]())
 
         var union = JoinClasses()
-        var attached = ParticipantSet()
+        var attached = Set[Int]()
         for i in range(1, n):
             ref link = links[i - 1]
-            var reads = ParticipantSet()
+            var reads = Set[Int]()
             for ref r in link.left_keys:
-                reads = reads | ParticipantSet.of(r.input)
-            if link.is_inner() and not reads.meets(attached):
+                reads.add(r.input)
+            if link.is_inner() and reads.isdisjoint(attached):
                 union.union_all(link.left_keys, link.right_keys)
                 continue
             if link.attaches():
-                self.spines[i] = reads
-                attached = attached | ParticipantSet.of(i)
+                self.spines[i] = reads^
+                attached.add(i)
             else:
-                self.spines[i] = ParticipantSet.below(i)
-            self.neighbours[i] = self.neighbours[i] | self.spines[i]
+                for j in range(i):
+                    self.spines[i].add(j)
+            self.neighbours[i] |= self.spines[i]
             for j in self.spines[i]:
-                self.neighbours[j] = self.neighbours[j] | ParticipantSet.of(i)
+                self.neighbours[j].add(i)
 
         var roots = List[Int]()
         for i in range(len(union.refs)):
@@ -3217,10 +3217,10 @@ struct JoinRules(Copyable, Movable):
             if k < 0:
                 k = len(roots)
                 roots.append(root)
-                self.classes.append(KeyClass(List[JoinRef](), ParticipantSet()))
+                self.classes.append(KeyClass(List[JoinRef](), Set[Int]()))
             ref r = union.refs[i]
             ref c = self.classes[k]
-            c.span = c.span | ParticipantSet.of(r.input)
+            c.span.add(r.input)
             var at = len(c.members)
             while at > 0 and r < c.members[at - 1]:
                 at -= 1
@@ -3235,57 +3235,63 @@ struct JoinRules(Copyable, Movable):
                 j -= 1
         for ref c in self.classes:
             for ref m in c.members:
-                self.neighbours[m.input] = self.neighbours[m.input] | (
-                    c.span - ParticipantSet.of(m.input)
-                )
+                for j in c.span:
+                    if j != m.input:
+                        self.neighbours[m.input].add(j)
 
     def participants(self) -> Int:
         return len(self.links) + 1
 
-    def everything(self) -> ParticipantSet:
-        return ParticipantSet.below(self.participants())
+    def everything(self) -> Set[Int]:
+        var out = Set[Int]()
+        for i in range(self.participants()):
+            out.add(i)
+        return out^
 
     def in_place(self, i: Int) -> Bool:
         """Is participant `i` joined by its own link onto exactly the
         participants before it?"""
-        return (
-            not self.spines[i].is_empty() and not self.links[i - 1].attaches()
-        )
+        return len(self.spines[i]) > 0 and not self.links[i - 1].attaches()
 
     # -- which sets a tree may join -------------------------------------------
-    def valid(self, s: ParticipantSet) -> Bool:
+    def valid(self, s: Set[Int]) -> Bool:
         """Can a tree join exactly the participants `s`? Not one holding a
         participant joined by its own link without what must be in first,
         nor one holding participants from both sides of an in-place link
         without that link's own."""
-        if s.is_single():
+        if len(s) == 1:
             return True
         for i in s:
-            if not self.spines[i].within(s):
+            if not self.spines[i] <= s:
                 return False
         for i in range(1, self.participants()):
-            if (
-                self.in_place(i)
-                and i not in s
-                and s.meets(ParticipantSet.below(i))
-                and not s.within(ParticipantSet.below(i))
-            ):
-                return False
+            if self.in_place(i) and i not in s:
+                var before = False
+                var after = False
+                for j in s:
+                    if j < i:
+                        before = True
+                    else:
+                        after = True
+                if before and after:
+                    return False
         return True
 
-    def attaching(self, a: ParticipantSet, b: ParticipantSet) -> Int:
+    def attaching(self, a: Set[Int], b: Set[Int]) -> Int:
         """The participant joined by its own link when `a` meets `b` — one
         side that participant alone, the other holding what must be in
         first — or `-1`."""
-        if b.is_single() and not self.spines[b.lowest()].is_empty():
-            if self.spines[b.lowest()].within(a):
-                return b.lowest()
-        if a.is_single() and not self.spines[a.lowest()].is_empty():
-            if self.spines[a.lowest()].within(b):
-                return a.lowest()
+        if len(b) == 1:
+            for i in b:
+                if len(self.spines[i]) > 0 and self.spines[i] <= a:
+                    return i
+        if len(a) == 1:
+            for i in a:
+                if len(self.spines[i]) > 0 and self.spines[i] <= b:
+                    return i
         return -1
 
-    def joinable(self, a: ParticipantSet, b: ParticipantSet) -> Bool:
+    def joinable(self, a: Set[Int], b: Set[Int]) -> Bool:
         """May a tree join `a` to `b`: by a participant's own link, or on
         inner keys, between two sets a tree can join into one it can join
         too."""
@@ -3294,20 +3300,20 @@ struct JoinRules(Copyable, Movable):
         if self.attaching(a, b) >= 0:
             return True
         for ref c in self.classes:
-            if c.span.meets(a) and c.span.meets(b):
+            if not c.span.isdisjoint(a) and not c.span.isdisjoint(b):
                 return True
         return False
 
-    def adjacent(self, s: ParticipantSet) -> ParticipantSet:
+    def adjacent(self, s: Set[Int]) -> Set[Int]:
         """The participants outside `s` that share a class with one inside
         it, or are joined to it by a link."""
-        var out = ParticipantSet()
+        var out = Set[Int]()
         for i in s:
-            out = out | self.neighbours[i]
+            out |= self.neighbours[i]
         return out - s
 
     def keys(
-        self, a: ParticipantSet, b: ParticipantSet
+        self, a: Set[Int], b: Set[Int]
     ) -> Tuple[List[JoinRef], List[JoinRef]]:
         """The key pairs joining `a` to `b`: per class present on both sides,
         `KeyClass.side` of each, each member paired with the other side's
@@ -3316,7 +3322,7 @@ struct JoinRules(Copyable, Movable):
         var left = List[JoinRef]()
         var right = List[JoinRef]()
         for ref c in self.classes:
-            if c.span.meets(a) and c.span.meets(b):
+            if not c.span.isdisjoint(a) and not c.span.isdisjoint(b):
                 var l = c.side(a)
                 var r = c.side(b)
                 for ref x in l:
@@ -3327,7 +3333,7 @@ struct JoinRules(Copyable, Movable):
                     right.append(r[k].copy())
         return (left^, right^)
 
-    def link(self, a: ParticipantSet, b: ParticipantSet) -> JoinLink:
+    def link(self, a: Set[Int], b: Set[Int]) -> JoinLink:
         """The link joining `a` to `b`: a participant's own, or an inner join
         on `keys`. Undefined unless `joinable(a, b)`."""
         var own = self.attaching(a, b)
@@ -3339,7 +3345,7 @@ struct JoinRules(Copyable, Movable):
         )
 
     # -- filters -------------------------------------------------------------
-    def holds(self, f: JoinFilter, s: ParticipantSet) -> Bool:
+    def holds(self, f: JoinFilter, s: Set[Int]) -> Bool:
         """Is filter `f` evaluated within every tree over `s`? When `s` holds what it reads, unless a link
         stands between them that the filter may not cross: one over the
         participant it joins alone that does not pass its right side, or one
@@ -3349,18 +3355,21 @@ struct JoinRules(Copyable, Movable):
         # A filter reading no column, a parameter test constant per
         # execution, goes toward participant 0.
         var need = f.participants()
-        if need.is_empty():
-            need = ParticipantSet.of(0)
-        if s.is_empty() or not need.within(s):
+        if len(need) == 0:
+            need.add(0)
+        if len(s) == 0 or not need <= s:
             return False
-        if s.is_single():
-            var i = s.lowest()
-            if i > 0 and not self.links[i - 1].passes(False):
-                return False
+        if len(s) == 1:
+            for i in s:
+                if i > 0 and not self.links[i - 1].passes(False):
+                    return False
+        var last = 0
+        for i in need:
+            last = max(last, i)
         for i in range(1, min(f.bound, len(self.links)) + 1):
             if (
                 not self.links[i - 1].passes(True)
-                and need.within(ParticipantSet.below(i))
+                and last < i
                 and i not in s
             ):
                 return False
@@ -3376,26 +3385,26 @@ struct JoinPricing(Movable):
     var filters: List[JoinFilter]
     var inputs: List[Estimate]
     """Each participant's estimate (`JoinChain.participant_estimates`)."""
-    var _sizes: Dict[ParticipantSet, Size]
+    var _sizes: Dict[Set[Int], Size]
 
     def __init__(out self, chain: JoinChain) raises:
         self.rules = chain.rules()
         self.filters = chain.filters.copy()
         self.inputs = chain.participant_estimates()
-        self._sizes = Dict[ParticipantSet, Size]()
+        self._sizes = Dict[Set[Int], Size]()
 
-    def size(mut self, s: ParticipantSet) raises -> Size:
+    def size(mut self, s: Set[Int]) raises -> Size:
         """The size of `estimate(s)`, memoised: a search asks for both halves
         of every pair."""
         var hit = self._sizes.get(s)
         if hit:
             return hit.value()
         var out = self.estimate(s).size()
-        self._sizes[s] = out
+        self._sizes[s.copy()] = out
         return out
 
     def join(
-        mut self, a: ParticipantSet, b: ParticipantSet, link: JoinLink
+        mut self, a: Set[Int], b: Set[Int], link: JoinLink
     ) raises -> Cost:
         """Joining `a` to `b` by `link`, hashing its build side, and
         evaluating the filters it is the first to hold over its rows."""
@@ -3412,7 +3421,7 @@ struct JoinPricing(Movable):
                 cost = cost + Cost.per_row(self.size(s).rows)
         return cost
 
-    def estimate(self, s: ParticipantSet) raises -> Estimate:
+    def estimate(self, s: Set[Int]) raises -> Estimate:
         """What joining the participants `s` produces, every filter `s`
         holds applied — unknown when no tree joins `s`.
 
@@ -3421,26 +3430,32 @@ struct JoinPricing(Movable):
         by the set, so every tree over `s` is priced on one cardinality and a
         search comparing trees compares only their costs.
         """
-        var into = ParticipantSet.of(s.lowest())
-        var out = self._filtered(
-            self.inputs[s.lowest()].copy(), into, ParticipantSet()
-        )
+        var low = 0
+        while low not in s:
+            low += 1
+        var into: Set[Int] = {low}
+        var out = self._filtered(self.inputs[low].copy(), into, Set[Int]())
         while into != s:
             var next = -1
-            for i in s - into:
-                if next < 0 and self.rules.joinable(into, ParticipantSet.of(i)):
+            for i in range(self.rules.participants()):
+                if (
+                    next < 0
+                    and i in s
+                    and i not in into
+                    and self.rules.joinable(into, {i})
+                ):
                     next = i
             if next < 0:
                 return Estimate()
-            var one = ParticipantSet.of(next)
+            var one: Set[Int] = {next}
             out = self.rules.link(into, one).joined(out, self.inputs[next])
-            var before = into
-            into = into | one
+            var before = into.copy()
+            into.add(next)
             out = self._filtered(out^, into, before)
         return out^
 
     def _filtered(
-        self, var estimate: Estimate, s: ParticipantSet, before: ParticipantSet
+        self, var estimate: Estimate, s: Set[Int], before: Set[Int]
     ) raises -> Estimate:
         """`estimate` of `s` with the filters `s` holds and `before` did not
         applied."""
@@ -3452,7 +3467,7 @@ struct JoinPricing(Movable):
 
     def leaf(mut self, p: Int) raises -> Cost:
         """The filters evaluated on participant `p` alone, over its rows."""
-        var one = ParticipantSet.of(p)
+        var one: Set[Int] = {p}
         var out = Cost()
         for ref f in self.filters:
             if self.rules.holds(f, one):
@@ -3462,12 +3477,12 @@ struct JoinPricing(Movable):
     def tree(mut self, order: JoinOrder) raises -> Cost:
         """What `order`'s joins and filters take, its participants' own work
         aside: each join as it hashes, each filter at the node it lands on."""
-        var masks = order.masks()
+        var held = order.participants()
         var out = Cost()
         for p in range(order.inputs):
             out = out + self.leaf(p)
         for ref j in order.joins:
-            out = out + self.join(masks[j.left], masks[j.right], j.link)
+            out = out + self.join(held[j.left], held[j.right], j.link)
         return out
 
 
@@ -3499,10 +3514,6 @@ struct JoinChain(Relation, Writable):
     tell them apart by name.
     """
 
-    comptime MAX_INPUTS = 62
-    """Participants are bits of an `Int` mask. A query joining more tables than
-    this is not one anyone writes."""
-
     var inputs: List[ArcPointer[DynRelation]]
     var links: List[JoinLink]
     """Link `k` joins participant `k + 1` to participants `0 … k`."""
@@ -3524,10 +3535,6 @@ struct JoinChain(Relation, Writable):
         names: List[String],
         var filters: List[JoinFilter],
     ) raises:
-        if len(inputs) > Self.MAX_INPUTS:
-            raise InvalidError(
-                t"join: {len(inputs)} inputs, at most {Self.MAX_INPUTS}"
-            )
         if len(refs) != len(names):
             raise InvalidError(
                 t"join: {len(refs)} columns but {len(names)} names"
@@ -3845,10 +3852,10 @@ struct JoinChain(Relation, Writable):
         ref order = self._order[]
         var landings = List[Int](capacity=len(self.filters))
         if len(self.filters) > 0:
-            var masks = order.masks()
+            var held = order.participants()
             var rules = self.rules()
             for ref f in self.filters:
-                landings.append(order.landing(masks, rules, f))
+                landings.append(order.landing(held, rules, f))
         var cols = List[JoinRef]()
         return self._lower(order.root(), landings, ctx, bindings, cols)
 

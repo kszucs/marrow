@@ -15,6 +15,7 @@ sides of the comparison travel the same code path and differ in exactly one
 variable: whether any rule was allowed to fire.
 """
 
+from std.collections import Set
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...arrays import DynArray
@@ -53,7 +54,6 @@ from ...kernels.join import (
     JoinKind,
 )
 from ..physical import JoinOrder, PlannedJoin
-from ..sets import ParticipantSet
 from ..logical import (
     Aggregate,
     DynRelation,
@@ -1504,7 +1504,7 @@ def _shape(plan: DynRelation) raises -> String:
 def _landing(chain: JoinChain) raises -> Int:
     """The node of `chain`'s planned tree its first filter lands on."""
     var order = chain.planned_order()
-    return order.landing(order.masks(), chain.rules(), chain.filters[0])
+    return order.landing(order.participants(), chain.rules(), chain.filters[0])
 
 
 def _facts() raises -> RecordBatch:
@@ -2015,28 +2015,39 @@ def _shifted(join: PlannedJoin, inputs: Int, by: Int) -> PlannedJoin:
 
 
 def _root_of(
-    s: ParticipantSet, joins: List[PlannedJoin], at: Int, inputs: Int
+    s: Set[Int], joins: List[PlannedJoin], at: Int, inputs: Int
 ) -> Int:
     """The root of a tree over inputs `s` whose joins start at `at`."""
     if len(joins) == 0:
-        return s.lowest()
+        for p in s:
+            return p
     return inputs + at + len(joins) - 1
 
 
 def _every_tree(
-    rules: JoinRules, inputs: Int, s: ParticipantSet
+    rules: JoinRules, inputs: Int, s: Set[Int]
 ) raises -> List[List[PlannedJoin]]:
     """Every cross-product-free bushy tree over the inputs in `s` of a chain's
     one multi-join, both build sides of every join, keyed by its own rule —
     the space the search claims to be exact over, spelled out the slow way. A
     tree is its joins, root last; a single input is a tree of none."""
     var out = List[List[PlannedJoin]]()
-    if s.is_single():
+    if len(s) == 1:
         out.append(List[PlannedJoin]())
         return out^
-    var low = ParticipantSet.of(s.lowest())
-    for sub in s.subsets():
-        if sub != s and sub.meets(low):
+    var low = 0
+    while low not in s:
+        low += 1
+    # Every subset holding the lowest input: each other input doubles them.
+    var subs: List[Set[Int]] = [{low}]
+    for i in s:
+        if i != low:
+            for k in range(len(subs)):
+                var grown = subs[k].copy()
+                grown.add(i)
+                subs.append(grown^)
+    for ref sub in subs:
+        if len(sub) < len(s):
             var other = s - sub
             var keys = rules.keys(sub, other)
             if len(keys[0]) > 0:
@@ -2218,7 +2229,7 @@ def test_join_order_compares_two_members_of_one_input() raises:
         .join(_keyed(["m"], 20, [10]), [1, 2], [0, 0], JOIN_INNER)
     )
     var rules = plan.get[JoinChain]().rules()
-    var keys = rules.keys(ParticipantSet.of(0), ParticipantSet.of(1))
+    var keys = rules.keys({0}, {1})
     assert_equal(len(keys[0]), 2, String(plan))
     _agree(plan)
 
