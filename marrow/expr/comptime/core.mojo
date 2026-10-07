@@ -1085,7 +1085,7 @@ trait NumericValue(PrimitiveValue):
         comparison, even though it has no min or max to compare. Default:
         always defined, which proves nothing and so prunes nothing.
         """
-        return keep_every(index.chunks)
+        return keep_every(index.chunks())
 
     def statistics[
         Stat: NumericType
@@ -1123,8 +1123,8 @@ trait NumericValue(PrimitiveValue):
         chunk". A comparison against null is null, and a null mask bit is read
         as keep.
         """
-        var out = PrimitiveBuilder[Stat](Stat(), capacity=index.chunks)
-        out.append_nulls(index.chunks)
+        var out = PrimitiveBuilder[Stat](Stat(), capacity=index.chunks())
+        out.append_nulls(index.chunks())
         return out.finish()
 
     comptime Type: NumericType

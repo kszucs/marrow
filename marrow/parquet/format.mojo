@@ -15,6 +15,7 @@ the `parquet.thrift` IDL; the small enum discriminants are namespaced value
 types (`PhysicalType`, `Encoding`, …) rather than bare integer constants.
 """
 
+from std.bit import bit_width
 from std.memory import bitcast
 
 from ..errors import CorruptError
@@ -960,6 +961,14 @@ struct ColumnMetaData(Copyable, Movable):
     var max_value: List[UInt8]  # PLAIN-encoded max
     var bloom_filter_offset: Int  # -1 if absent
     var bloom_filter_length: Int
+    var plain_pages: Bool
+    """Whether `encoding_stats` records a data page encoded without a
+    dictionary — so a dictionary chunk fell back part-way through. `False`
+    when the footer carries no `encoding_stats`."""
+    var unencoded_byte_array_bytes: Int
+    """The values' own bytes for a `BYTE_ARRAY` chunk, as the writer measured
+    them (`SizeStatistics.unencoded_byte_array_data_bytes`); `-1` when it did
+    not."""
 
     def __init__(out self):
         self.type = -1
@@ -978,6 +987,8 @@ struct ColumnMetaData(Copyable, Movable):
         self.max_value = List[UInt8]()
         self.bloom_filter_offset = -1
         self.bloom_filter_length = 0
+        self.plain_pages = False
+        self.unencoded_byte_array_bytes = -1
 
     @staticmethod
     def read[
@@ -992,6 +1003,11 @@ struct ColumnMetaData(Copyable, Movable):
                     out.path_in_schema.append(r.read_string())
             elif f.id == 1:
                 out.type = Int(r.read_i32())
+            elif f.id == 2:
+                var _, n = r.read_list_header()
+                out.encodings = List[Int](capacity=n)
+                for _ in range(n):
+                    out.encodings.append(Int(r.read_i32()))
             elif f.id == 4:
                 out.codec = Int(r.read_i32())
             elif f.id == 5:
@@ -1006,13 +1022,101 @@ struct ColumnMetaData(Copyable, Movable):
                 out.dictionary_page_offset = Int(r.read_i64())
             elif f.id == 12:
                 out._read_statistics(r)
+            elif f.id == 13:
+                out._read_encoding_stats(r)
             elif f.id == 14:
                 out.bloom_filter_offset = Int(r.read_i64())
             elif f.id == 15:
                 out.bloom_filter_length = Int(r.read_i32())
+            elif f.id == 16:
+                out._read_size_statistics(r)
             else:
                 r.skip(f.type)
         return out^
+
+    def _read_size_statistics[
+        o: Origin[mut=False]
+    ](mut self, mut r: ThriftCompactReader[o]) raises CorruptError:
+        """Keep `SizeStatistics.unencoded_byte_array_data_bytes` (1); the level
+        histograms (2, 3) are skipped."""
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
+                self.unencoded_byte_array_bytes = Int(r.read_i64())
+            else:
+                r.skip(f.type)
+
+    def decoded_bytes(self, distinct: Int) -> Int:
+        """What this chunk's values occupy once decoded into Arrow, estimated
+        from its footer entry; `-1` when the entry cannot say.
+
+        A writer that measured its `BYTE_ARRAY` values says so, and each value
+        also takes an offset. Otherwise, a chunk without a dictionary stores
+        each value much as it decodes — a string as a length prefix and its
+        bytes — so its uncompressed size is the answer, page headers and levels
+        included. A dictionary-encoded chunk stores each distinct value once
+        and a bit-packed index per value, so an entry's average size is what is
+        left once the indices are taken out, spread over `distinct`, and every
+        value decodes to one entry.
+
+        A chunk that fell back from its dictionary part-way through holds plain
+        pages too, which that formula would count as entries and multiply by
+        every value; `encoding_stats` tells such a chunk apart, and it is
+        answered with its uncompressed size, the plain pages' share exactly and
+        the dictionary's an underestimate. Without `encoding_stats` a chunk
+        is taken to be what its writer's distinct count says it is, wholly
+        dictionary-encoded; without a distinct count it is `-1`.
+        """
+        if self.unencoded_byte_array_bytes >= 0:
+            return self.unencoded_byte_array_bytes + 4 * self.num_values
+        var dictionary = self.dictionary_page_offset >= 0
+        for code in self.encodings:
+            if Encoding(code).is_dictionary():
+                dictionary = True
+        if not dictionary or self.plain_pages:
+            return self.total_uncompressed_size
+        if distinct <= 0 or self.num_values <= 0:
+            return -1
+        var index_bits = max(1, Int(bit_width(UInt64(distinct - 1))))
+        var entries = (
+            self.total_uncompressed_size
+            - (self.num_values * index_bits + 7) // 8
+        )
+        if entries <= 0:
+            return -1
+        # Saturated: a chunk this large decodes past any width worth comparing.
+        if entries > Int.MAX // self.num_values:
+            return Int.MAX // distinct
+        return entries * self.num_values // distinct
+
+    def _read_encoding_stats[
+        o: Origin[mut=False]
+    ](mut self, mut r: ThriftCompactReader[o]) raises CorruptError:
+        """Note a data page encoded without a dictionary, from
+        `list<PageEncodingStats>`: page type (1), encoding (2) and page count
+        (3). Dictionary pages themselves do not count — they hold the
+        dictionary, not the values."""
+        var _, n = r.read_list_header()
+        for _ in range(n):
+            var page_type = -1
+            var encoding = -1
+            var count = 0
+            var f = FieldHeader()
+            while r.next_field(f):
+                if f.id == 1:
+                    page_type = Int(r.read_i32())
+                elif f.id == 2:
+                    encoding = Int(r.read_i32())
+                elif f.id == 3:
+                    count = Int(r.read_i32())
+                else:
+                    r.skip(f.type)
+            if (
+                page_type != PageType.DICTIONARY.code
+                and count > 0
+                and not Encoding(encoding).is_dictionary()
+            ):
+                self.plain_pages = True
 
     def _read_statistics[
         o: Origin[mut=False]

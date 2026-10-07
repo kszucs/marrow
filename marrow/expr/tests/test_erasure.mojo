@@ -112,8 +112,8 @@ struct _ValueProbe(Copyable, Movable, Value, Writable):
         """Overridden so the erasure case has something to observe: `Value`'s
         default keeps every chunk, which a box that forgot its node would also
         do."""
-        var out = BoolBuilder(capacity=index.chunks)
-        for _ in range(index.chunks):
+        var out = BoolBuilder(capacity=index.chunks())
+        for _ in range(index.chunks()):
             out.append(False)
         return out.finish()
 
@@ -187,7 +187,7 @@ def test_dyn_value_masks_through_the_box() raises:
     box of its own.
     """
     var boxed = DynValue(_ValueProbe(_tally()))
-    var answer = boxed.mask(Index(chunks=1))
+    var answer = boxed.mask(Index([-1]))
     assert_equal(len(answer), 1)
     assert_false(answer[0].value(), "the box must reach the probe's override")
 

@@ -1359,6 +1359,39 @@ def test_struct_array_select_inherits_offset() raises:
     assert_equal(len(result), 2)
 
 
+def test_struct_array_with_fields_renames_a_slice() raises:
+    """`with_fields` changes only the type: the slice's offset and children
+    stay, so each field still reads the slice's own rows."""
+    var sb = StructBuilder([field("a", int32), field("b", int32)], capacity=3)
+    for i in range(3):
+        sb.field_builder(0).as_int32().append(Int32(i))
+        sb.field_builder(1).as_int32().append(Int32(10 * i))
+        sb.append_valid()
+    var sa = sb.finish().slice(1)
+    var renamed = sa.with_fields([field("x", int32), field("y", int32)])
+    assert_equal(renamed.dtype.as_struct().fields[0].name, "x")
+    assert_equal(renamed.offset, 1)
+    assert_true(renamed.field(1).as_int32() == sa.field(1).as_int32())
+    var refused = False
+    try:
+        _ = sa.with_fields([field("x", int32)])
+    except:
+        refused = True
+    assert_true(refused)
+
+
+def test_string_array_total_values_length_of_a_slice() raises:
+    """The bytes a slice's values take, not its shared buffer's."""
+    var sb = StringBuilder()
+    sb.append("ab")
+    sb.append("cde")
+    sb.append("f")
+    var arr = sb.finish()
+    assert_equal(arr.total_values_length(), 6)
+    assert_equal(arr.slice(1, 2).total_values_length(), 4)
+    assert_equal(arr.slice(3, 0).total_values_length(), 0)
+
+
 # ---------------------------------------------------------------------------
 # Equality tests
 # ---------------------------------------------------------------------------

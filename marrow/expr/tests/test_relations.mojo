@@ -14,13 +14,21 @@ result whose schema names fields it has no columns for. Both run fine and
 corrupt whatever reads them by index.
 """
 
-from std.testing import assert_equal, assert_true
+from std.testing import assert_equal, assert_raises, assert_true
 from std.os.path import join
 
 from ...utils.testing import ScratchDir
 from ...arrays import StructArray, DynArray, StringArray
 from ...builders import array
-from ...dtypes import DynType, Int64Type, float64, int64, string, string_view
+from ...dtypes import (
+    DynType,
+    Int64Type,
+    bool_,
+    float64,
+    int64,
+    string,
+    string_view,
+)
 from ...execution import ExecContext
 from ...kernels.join import (
     JOIN_INNER,
@@ -34,29 +42,49 @@ from ...kernels.join import (
     JoinKind,
     BUILD_LEFT,
     BUILD_RIGHT,
+    JOIN_ALL,
+    JOIN_ANY,
 )
 from ...kernels.sort import sort
-from ..optimizer import AllRules, PushFilterBelowJoin
+from ..optimizer import (
+    AllRules,
+    ColumnPruning,
+    MergeJoinChains,
+    MergeProjectIntoJoin,
+    PushFilterIntoJoin,
+)
 from ...dtypes import Field, field
 from ...schema import Schema, schema
 from ...parquet.writer import write_table
 from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue
-from ..physical import Datum
+from ..bindings import Bindings
+from ..physical import (
+    Datum,
+    JoinOrder,
+    Morsel,
+    PlannedJoin,
+    RenamedPredicate,
+    SelectOperator,
+)
 from ..`comptime`.leaves import NumericColumn, NumericLiteral
 from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
-from ..builders import col, lit, scan, table
+from ..builders import col, lit, param, scan, table
+from ..sets import ParticipantSet
 from ..runtime.values import (
     column as runtime_column,
     gt as runtime_gt,
     literal as runtime_literal,
 )
-from ...scalars import Int64Scalar
+from ...scalars import BoolScalar, Int64Scalar
 from ..logical import (
     Aggregate,
-    Join,
+    JoinChain,
+    JoinLink,
+    JoinFilter,
+    JoinRef,
     ParquetScan,
     Limit,
     Sort,
@@ -462,17 +490,20 @@ def test_an_inner_join_streams_the_probe_side() raises:
     var plan = table(_left()).join(table(_right()), [0], [0], JOIN_INNER)
     var out = plan.execute()
     assert_equal(out.num_rows(), 2)
-    assert_equal(out.num_columns(), 4)  # left k, lv + right k, rv
+    assert_equal(out.num_columns(), 3)  # k once, lv, rv
     assert_true(out.columns[1].as_int64() == array([20, 30], int64))
-    assert_true(out.columns[3].as_int64() == array([200, 300], int64))
+    assert_true(out.columns[2].as_int64() == array([200, 300], int64))
 
 
 def test_join_schema_is_left_then_right() raises:
+    """An inner key both sides call `k` is one column, as in ibis: the join
+    made the two equal, so the second copy says nothing."""
     var plan = table(_left()).join(table(_right()), [0], [0], JOIN_INNER)
     var s = plan.schema()
-    assert_equal(len(s.fields), 4)
+    assert_equal(len(s.fields), 3)
+    assert_equal(s.fields[0].name, "k")
     assert_equal(s.fields[1].name, "lv")
-    assert_equal(s.fields[3].name, "rv")
+    assert_equal(s.fields[2].name, "rv")
     assert_true(plan.schema() == plan.execute().schema)
 
 
@@ -496,6 +527,9 @@ def test_a_left_join_keeps_unmatched_build_rows_once() raises:
     var plan = table(_left()).join(table(_right()), [0], [0], JOIN_LEFT)
     var out = plan.execute()
     assert_equal(out.num_rows(), 3)  # 2 and 3 matched, 1 null-widened once
+    # An outer join's right key is NULL where the left one is not, so it is
+    # its own column, renamed rather than merged.
+    assert_equal(out.schema.fields[2].name, "k_right")
 
 
 def test_join_rejects_mismatched_key_counts() raises:
@@ -506,6 +540,16 @@ def test_join_rejects_mismatched_key_counts() raises:
         raised = True
         assert_true("join" in String(e))
     assert_true(raised)
+
+
+def test_join_rejects_a_missing_or_out_of_range_key() raises:
+    var none = List[Int]()
+    with assert_raises(contains="at least one key"):
+        _ = table(_left()).join(table(_right()), none.copy(), none.copy())
+    with assert_raises(contains="left key 5"):
+        _ = table(_left()).join(table(_right()), [5], [0])
+    with assert_raises(contains="right key -1"):
+        _ = table(_left()).join(table(_right()), [0], [-1])
 
 
 def test_a_join_composes_with_a_filter_above_it() raises:
@@ -828,9 +872,10 @@ def test_filter_above_limit_with_offset_reads_the_limited_rows() raises:
 
 
 # ---------------------------------------------------------------------------
-# Join.build_side — a physical choice carried through a logical plan
+# JoinLink.build_side — a physical choice carried through a logical plan
 #
-# `left` and `right` say what the answer is; `build_side` says what it costs.
+# The participants and keys say what the answer is; `build_side` says what it
+# costs.
 # The three claims below are what make that true at the plan layer: the schema
 # does not move, the rows do not move, and a rewrite does not lose the choice.
 # ---------------------------------------------------------------------------
@@ -902,14 +947,14 @@ def test_plan_build_side_agrees_for_every_kind() raises:
 # total, which is what made a build side free to choose — so the kernel tests
 # them and `Estimate.joined` tests them, and until now this file did not
 # mention them at all. They are reachable as logical kinds
-# (`JoinKind.parse("right semi")`, `Join(kind=...)`), so every claim the other
+# (`JoinKind.parse("right semi")`, `.join(..., kind)`), so every claim the other
 # six carry here has to hold for them too: the schema, the rows, survival
 # through `traverse`, and survival through a rule that rebuilds the node.
 # ---------------------------------------------------------------------------
 def test_a_right_semi_join_emits_only_the_right_side() raises:
     """The mirror of `test_a_semi_join_emits_only_the_left_side`.
 
-    `_output_schema` asks `emits_left_columns` / `emits_right_columns`, so a
+    `JoinChain.joined` asks the kind which side it emits, so a
     kind whose arm was missing there would come back with four columns rather
     than two — and the declared schema is what everything above the join reads.
     """
@@ -945,8 +990,8 @@ def test_a_right_anti_join_emits_the_unmatched_right_rows() raises:
 
 
 def test_a_right_sided_existence_filter_survives_traverse() raises:
-    """`traverse` rebuilds a join through the by-name constructor, which takes
-    the kind as an argument like any other field.
+    """`traverse` rebuilds a chain over rewritten participants and keeps its
+    links as they are.
 
     Paired with the build side because the two fail the same way: a rebuild
     that dropped either produces a plan that still runs, and only a kind that
@@ -957,22 +1002,15 @@ def test_a_right_sided_existence_filter_survives_traverse() raises:
 
     var kinds: List[JoinKind] = [JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI]
     for ref k in kinds:
-        var j = Join(
-            table(_left()),
-            table(_right()),
-            [0],
-            [0],
-            k,
-            build_side=BUILD_RIGHT,
-        )
+        var j = table(_left()).join(table(_right()), [0], [0], k, BUILD_RIGHT)
         var again = j.traverse(identity)
-        assert_true(again.isa[Join]())
+        assert_true(again.isa[JoinChain]())
+        ref step = again.get[JoinChain]().links[0]
         assert_true(
-            again.get[Join]().kind == k,
-            String("traverse dropped the kind: ", again),
+            step.kind == k, String("traverse dropped the kind: ", again)
         )
         assert_true(
-            again.get[Join]().build_side == BUILD_RIGHT,
+            step.build_side == BUILD_RIGHT,
             String("traverse dropped the build side: ", again),
         )
         assert_true(
@@ -985,16 +1023,16 @@ def test_a_right_sided_existence_filter_survives_the_optimizer() raises:
     anything else.
 
     The kind decides *which* rows come back, so a rule that lost it is a wrong
-    answer rather than a slow one — and `SelectBuildSide` reaches these two
+    answer rather than a slow one — and `JoinOrdering` reaches these two
     precisely because `commutes` admits them.
     """
     var kinds: List[JoinKind] = [JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI]
     for ref k in kinds:
         var plan = table(_left()).join(table(_right()), [0], [0], k)
         var optimized = plan.optimize[AllRules]()
-        assert_true(optimized.isa[Join](), String(optimized))
+        assert_true(optimized.isa[JoinChain](), String(optimized))
         assert_true(
-            optimized.get[Join]().kind == k,
+            optimized.get[JoinChain]().links[0].kind == k,
             String("kind ", k, ": the optimizer changed it — ", optimized),
         )
         assert_true(
@@ -1038,53 +1076,50 @@ def test_a_right_built_left_join_still_streams_its_morsels() raises:
 
 
 def test_join_build_side_survives_traverse() raises:
-    """`traverse` rebuilds a join through the by-name constructor.
+    """`traverse` rebuilds a chain over rewritten participants.
 
     Losing `build_side` there costs an optimization rather than an answer, so
     nothing else in this file would fail — the same argument `ParquetScan`'s
     pruners carry, and the reason they are tested the same way.
     """
-    var j = Join(
-        table(_left()),
-        table(_right()),
-        [0],
-        [0],
-        JOIN_INNER,
-        build_side=BUILD_RIGHT,
+    var j = table(_left()).join(
+        table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT
     )
 
     def identity(node: DynRelation) raises {imm} -> DynRelation:
         return node.copy()
 
     var again = j.traverse(identity)
-    assert_true(again.isa[Join]())
+    assert_true(again.isa[JoinChain]())
     assert_true(
-        again.get[Join]().build_side == BUILD_RIGHT,
+        again.get[JoinChain]().links[0].build_side == BUILD_RIGHT,
         "traverse dropped the build side",
     )
 
 
 def test_join_build_side_survives_a_rule_that_rebuilds_the_node() raises:
-    """The rewrite that actually happens: a filter pushed below the join.
+    """The rewrite that actually happens: a filter pushed into a participant.
 
-    `PushFilterBelowJoin` rebuilds the node, so this is `traverse`'s claim one
-    level up, through a rule that has its own `Join(...)` call. Asked of that
-    rule *alone*, because `AllRules` also contains a rule whose whole job is to
-    change this field — see the case below, which is the one that would fail if
-    the two were run together and could not be told apart.
+    `PushFilterIntoJoin` rebuilds the chain, so this is `traverse`'s claim one
+    level up. Asked of that rule *alone*, because `AllRules` ends with
+    `JoinOrdering`, whose planner may hash the other side — see the case
+    below, which is the one that would fail if the two were run together and
+    could not be told apart.
     """
     var plan = (
         table(_left())
         .join(table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT)
         .filter(col("lv", int64) > lit(15, int64))
     )
-    var rewritten = PushFilterBelowJoin.apply(plan)
+    var rewritten = PushFilterIntoJoin.apply(plan)
     assert_true(
-        rewritten.isa[Join](),
-        String("expected the filter below the join, got ", rewritten),
+        rewritten.isa[JoinChain](),
+        String("expected the filter inside the join, got ", rewritten),
     )
+    ref chain = rewritten.get[JoinChain]()
+    assert_true(chain.inputs[0][].isa[Filter](), String(rewritten))
     assert_true(
-        rewritten.get[Join]().build_side == BUILD_RIGHT,
+        chain.links[0].build_side == BUILD_RIGHT,
         "the rule dropped the build side",
     )
     # A right-built join prints its build side, so a plan that lost it is
@@ -1100,7 +1135,7 @@ def test_the_optimizer_may_overrule_a_hand_written_build_side() raises:
     cost-based rule is entitled to re-take it. Pushing the filter below the
     join is what changes the arithmetic: the left input drops to an estimated
     one row against the right's three, so indexing the left becomes the cheaper
-    arrangement and `SelectBuildSide` says so — even though the author asked
+    arrangement and `JoinOrdering` says so — even though the author asked
     for `BUILD_RIGHT` when both sides still had three rows.
 
     The distinction this pins is between *chosen* and *lost*. A rule that
@@ -1114,9 +1149,10 @@ def test_the_optimizer_may_overrule_a_hand_written_build_side() raises:
         .filter(col("lv", int64) > lit(15, int64))
     )
     var rewritten = plan.optimize[AllRules]()
-    assert_true(rewritten.isa[Join](), String(rewritten))
+    assert_true(rewritten.isa[JoinChain](), String(rewritten))
     assert_true(
-        rewritten.get[Join]().build_side == BUILD_LEFT,
+        rewritten.get[JoinChain]().planned_order().joins[0].link.build_side
+        == BUILD_LEFT,
         String("expected the cheaper side to win, got ", rewritten),
     )
 
@@ -1127,9 +1163,10 @@ def test_the_optimizer_may_overrule_a_hand_written_build_side() raises:
         .filter(col("rv", int64) > lit(150, int64))
     )
     var kept = other.optimize[AllRules]()
-    assert_true(kept.isa[Join](), String(kept))
+    assert_true(kept.isa[JoinChain](), String(kept))
     assert_true(
-        kept.get[Join]().build_side == BUILD_RIGHT,
+        kept.get[JoinChain]().planned_order().joins[0].link.build_side
+        == BUILD_RIGHT,
         String(
             "the filter went to the right side, so should the build: ", kept
         ),
@@ -1137,7 +1174,7 @@ def test_the_optimizer_may_overrule_a_hand_written_build_side() raises:
 
 
 def test_join_schema_ignores_the_build_side() raises:
-    """The field `_output_schema` is not allowed to see.
+    """The field the chain's schema is not allowed to see.
 
     A schema that moved with the build side would make choosing one a change
     of meaning, which is the coupling this field exists to break.
@@ -1178,3 +1215,759 @@ def test_a_parquet_scan_schema_picks_the_string_layout() raises:
             out.columns[0].as_string_view()[1].value(),
             "a value longer than twelve",
         )
+
+
+# ---------------------------------------------------------------------------
+# JoinChain — every join as ibis represents one
+#
+# One node holds the participants, a link per join and the columns they
+# answer with. Names follow ibis's `disambiguate_fields`: an inner key both
+# sides name alike is one column, any other clash is renamed by `lname` /
+# `rname`, and a clash those leave raises at the join.
+# ---------------------------------------------------------------------------
+def _third() raises -> RecordBatch:
+    return record_batch(
+        [array([2, 3, 5], int64).copy(), array([7, 8, 9], int64).copy()],
+        names=["k", "tv"],
+    )
+
+
+def _names(plan: DynRelation) -> List[String]:
+    var out = List[String]()
+    for ref f in plan.schema().fields:
+        out.append(f.name.copy())
+    return out^
+
+
+def test_a_chain_emits_a_key_every_join_equates_once() raises:
+    """Three inputs joined on `k` are one node with one `k`: each join made
+    the new `k` equal to the one already emitted."""
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0])
+        .join(table(_third()), [0], [0])
+    )
+    assert_true(plan.isa[JoinChain](), String(plan))
+    assert_equal(len(plan.get[JoinChain]().inputs), 3)
+    assert_equal(_names(plan), ["k", "lv", "rv", "tv"])
+    var out = plan.execute()
+    assert_true(plan.schema() == out.schema)
+    var rows = _canonical_rows(out)
+    assert_true(rows.children[0].as_int64() == array([2, 3], int64))
+    assert_true(rows.children[3].as_int64() == array([7, 8], int64))
+
+
+def test_a_chain_on_the_right_is_spliced_into_one_chain() raises:
+    """`a.join(b.join(c))` takes `b.join(c)` as one participant, as ibis
+    does; `MergeJoinChains` splices it in, so the chain written bushy is one
+    of three inputs and two links, numbered as the left-deep spelling numbers
+    them, with the same names and the same rows."""
+    var plan = table(_left()).join(
+        table(_right()).join(table(_third()), [0], [0]), [0], [0]
+    )
+    assert_equal(len(plan.get[JoinChain]().inputs), 2)
+    var spliced = MergeJoinChains.apply(plan)
+    assert_true(spliced.isa[JoinChain](), String(spliced))
+    ref chain = spliced.get[JoinChain]()
+    assert_equal(len(chain.inputs), 3)
+    assert_equal(len(chain.links), 2)
+    assert_true(spliced.schema() == plan.schema())
+    assert_equal(_names(spliced), ["k", "lv", "rv", "tv"])
+    assert_true(
+        _canonical_rows(spliced.execute()) == _canonical_rows(plan.execute())
+    )
+
+    # Under an outer join the nested chain stays one participant: its joins
+    # may not run before the LEFT join's.
+    var outer = table(_left()).join(
+        table(_right()).join(table(_third()), [0], [0]), [0], [0], JOIN_LEFT
+    )
+    var spliced_outer = MergeJoinChains.apply(outer)
+    assert_equal(len(spliced_outer.get[JoinChain]().inputs), 2)
+    assert_true(spliced_outer.schema() == outer.schema())
+    assert_equal(spliced_outer.execute().num_rows(), 3)
+    assert_true(
+        _canonical_rows(spliced_outer.execute())
+        == _canonical_rows(outer.execute())
+    )
+
+
+def test_a_join_renames_a_clash_it_cannot_merge() raises:
+    """`lv` is not a key, so the right one is renamed; under LEFT even the key
+    is, since a padded row holds NULL on one side only."""
+    var inner = table(_left()).join(table(_left()), [0], [0])
+    assert_equal(_names(inner), ["k", "lv", "lv_right"])
+    var custom = table(_left()).join(
+        table(_left()), [0], [0], lname="{name}_l", rname="{name}_r"
+    )
+    assert_equal(_names(custom), ["k", "lv_l", "lv_r"])
+    var outer = table(_left()).join(table(_left()), [0], [0], JOIN_LEFT)
+    assert_equal(_names(outer), ["k", "lv", "k_right", "lv_right"])
+
+    # Two participants call a column `lv`, and the chain lowers by position,
+    # so each output reads its own: a self-join on a unique key pairs every
+    # row with itself.
+    var out = inner.execute()
+    assert_true(inner.schema() == out.schema)
+    assert_equal(out.num_rows(), 3)
+    assert_true(
+        out.column("lv").as_int64() == out.column("lv_right").as_int64()
+    )
+
+
+def test_a_clash_lname_makes_raises_at_the_join() raises:
+    """Renaming the left `v` to `v_l` lands on a column the left side already
+    has: two output columns would share a name, so the join refuses."""
+    var left = record_batch(
+        [
+            array([1, 2], int64).copy(),
+            array([10, 20], int64).copy(),
+            array([5, 6], int64).copy(),
+        ],
+        names=["k", "v", "v_l"],
+    )
+    var right = record_batch(
+        [array([1, 2], int64).copy(), array([7, 8], int64).copy()],
+        names=["k", "v"],
+    )
+    with assert_raises(contains="two columns would be named 'v_l'"):
+        _ = table(left^).join(table(right^), [0], [0], lname="{name}_l")
+
+
+def test_a_join_input_may_not_repeat_a_column_name() raises:
+    """A participant's columns are read by name, so a repeated one would be
+    ambiguous inside the chain as well as out of it."""
+    var dup = record_batch(
+        [array([1], int64).copy(), array([2], int64).copy()],
+        names=["k", "k"],
+    )
+    with assert_raises(contains="twice"):
+        _ = table(dup^).join(table(_right()), [0], [0])
+
+
+def test_select_rename_and_drop_fold_into_the_chain() raises:
+    """Each says which participant columns the chain answers with, so
+    `MergeProjectIntoJoin` makes each the chain's own output rather than a
+    node above it — with the schema and rows the verb declared."""
+    var plan = table(_left()).join(table(_right()), [0], [0])
+    var picked = plan.select(["rv", "k"])
+    var renamed = plan.rename(["lv"], ["left_value"])
+    var dropped = plan.drop(["lv"])
+    var shapes: List[DynRelation] = [
+        picked.copy(),
+        renamed.copy(),
+        dropped.copy(),
+    ]
+    for ref written in shapes:
+        assert_true(written.isa[Project](), String(written))
+        var folded = MergeProjectIntoJoin.apply(written)
+        assert_true(folded.isa[JoinChain](), String(folded))
+        assert_true(folded.schema() == written.schema(), String(folded))
+        assert_true(folded.schema() == folded.execute().schema)
+        assert_true(
+            _canonical_rows(folded.execute())
+            == _canonical_rows(written.execute())
+        )
+    assert_equal(_names(picked), ["rv", "k"])
+    assert_equal(_names(renamed), ["k", "left_value", "rv"])
+    assert_equal(_names(dropped), ["k", "rv"])
+
+
+def test_a_project_folds_only_when_it_reads() raises:
+    """A read folds; a computation sits above; and an aggregate aliased to the
+    very column it reads is no read at all — `project` refuses it, so it
+    never reaches the rule."""
+    var plan = table(_left()).join(table(_right()), [0], [0])
+    var reads: List[DynValue] = [col("rv", int64), col("k", int64)]
+    var folded = MergeProjectIntoJoin.apply(
+        plan.project(["value", "k"], reads^)
+    )
+    assert_true(folded.isa[JoinChain](), String(folded))
+    assert_equal(_names(folded), ["value", "k"])
+
+    var computes: List[DynValue] = [col("rv", int64) + col("lv", int64)]
+    var above = MergeProjectIntoJoin.apply(plan.project(["total"], computes^))
+    assert_true(above.isa[Project](), String(above))
+    assert_true(above.get[Project]().input[].isa[JoinChain]())
+
+    var aggregate: List[DynValue] = [col("rv", int64).sum().alias("rv")]
+    with assert_raises(contains=".aggregate()"):
+        _ = plan.project(["rv"], aggregate^)
+
+
+def test_a_filter_on_a_renamed_column_runs_on_its_participant() raises:
+    """`lv_right` is participant 1's `lv`. The filter cannot move into the
+    participant under a name it does not have there, so the chain keeps it —
+    and evaluates it straight after that participant, under the name it was
+    written with."""
+    var plan = (
+        table(_left())
+        .join(table(_left()), [0], [0])
+        .filter(col("lv_right", int64) > lit(15, int64))
+    )
+    var pushed = PushFilterIntoJoin.apply(plan)
+    assert_true(pushed.isa[JoinChain](), String(pushed))
+    ref chain = pushed.get[JoinChain]()
+    assert_equal(len(chain.filters), 1)
+    assert_equal(_landing(chain), 1)
+    var want = _canonical_rows(plan.execute())
+    assert_equal(len(want), 2)
+    assert_true(_canonical_rows(pushed.execute()) == want)
+
+    # The same after a folded rename: the filter reads a name no input has.
+    var renamed = (
+        table(_left())
+        .join(table(_right()), [0], [0])
+        .rename(["rv"], ["value"])
+        .filter(col("value", int64) > lit(250, int64))
+    )
+    var absorbed = renamed.optimize[AllRules]()
+    assert_true(absorbed.isa[JoinChain](), String(absorbed))
+    assert_equal(_landing(absorbed.get[JoinChain]()), 1)
+    assert_equal(absorbed.execute().num_rows(), 1)
+
+
+def test_a_filter_reading_no_column_still_runs() raises:
+    """A parameter test reads no participant. It still has to run exactly
+    once, and a plan's parameters still have to include it."""
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0])
+        .filter(param("keep", bool_))
+    )
+    var optimized = plan.optimize[AllRules]()
+    assert_true(optimized.isa[JoinChain](), String(optimized))
+    assert_equal(len(optimized.get[JoinChain]().filters), 1)
+    assert_equal(len(optimized.params()), 1)
+    var keep: Bindings = {"keep": BoolScalar(True).to_dyn()}
+    var drop: Bindings = {"keep": BoolScalar(False).to_dyn()}
+    assert_equal(optimized.execute(bindings=keep).num_rows(), 2)
+    assert_equal(optimized.execute(bindings=drop).num_rows(), 0)
+
+
+def test_a_join_appended_later_leaves_a_filter_below_it() raises:
+    """A filter absorbed into an inner chain is bounded by the participants
+    it was absorbed over. A RIGHT join appended afterwards pads rows the filter never
+    saw; evaluating it above that join would drop them."""
+    var filtered = (
+        table(_left())
+        .join(table(_right()), [0], [0])
+        .filter(col("lv", int64) + col("rv", int64) > lit(250, int64))
+    )
+    var optimized = filtered.optimize[AllRules]()
+    assert_true(optimized.isa[JoinChain](), String(optimized))
+    var written = filtered.join(table(_third()), [0], [0], JOIN_RIGHT)
+    var appended = optimized.join(table(_third()), [0], [0], JOIN_RIGHT)
+    assert_true(appended.isa[JoinChain](), String(appended))
+    assert_equal(len(appended.get[JoinChain]().inputs), 3)
+    # k = 2 and 5 padded, k = 3 matched
+    assert_equal(written.execute().num_rows(), 3)
+    assert_true(
+        _canonical_rows(appended.execute())
+        == _canonical_rows(written.execute())
+    )
+
+
+def test_an_any_join_keeps_its_side_and_its_filters_above() raises:
+    """`JOIN_ANY` keeps one match per probe row, so the build side decides
+    which — the optimizer may not flip it, and a filter on the build side
+    changes which match is picked, so it stays above the join."""
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT, JOIN_ANY)
+        .filter(col("rv", int64) > lit(250, int64))
+    )
+    var optimized = plan.optimize[AllRules]()
+    ref chain = optimized.get[JoinChain]()
+    var order = chain.planned_order()
+    assert_true(
+        order.joins[0].link.build_side == BUILD_RIGHT, String(optimized)
+    )
+    assert_true(order.joins[0].link.strictness == JOIN_ANY)
+    assert_equal(len(chain.filters), 1, String(optimized))
+    assert_equal(_landing(chain), order.root())
+
+    # The probe side picks nothing, so a filter there moves in.
+    var probe = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT, JOIN_ANY)
+        .filter(col("lv", int64) > lit(25, int64))
+    )
+    var pushed = probe.optimize[AllRules]()
+    assert_true(pushed.isa[JoinChain](), String(pushed))
+    assert_true(pushed.get[JoinChain]().inputs[0][].isa[Filter]())
+    assert_equal(pushed.execute().num_rows(), 1)
+
+
+def _landing(chain: JoinChain) raises -> Int:
+    """The node of `chain`'s planned tree its first filter lands on."""
+    var order = chain.planned_order()
+    return order.landing(order.masks(), chain.rules(), chain.filters[0])
+
+
+def _join(
+    left: Int, right: Int, kind: JoinKind, lkey: JoinRef, rkey: JoinRef
+) -> PlannedJoin:
+    return PlannedJoin(
+        left,
+        right,
+        JoinLink(kind, JOIN_ALL, BUILD_LEFT, [lkey.copy()], [rkey.copy()]),
+    )
+
+
+def _tree(chain: JoinChain, var joins: List[PlannedJoin]) -> JoinOrder:
+    var out = JoinOrder(len(chain.inputs))
+    for ref j in joins:
+        _ = out.add(j.copy())
+    return out^
+
+
+def _run(chain: JoinChain, order: JoinOrder) raises -> StructArray:
+    """`chain` computed by `order`, its rows in canonical order."""
+    var pipe = chain.with_order(order.copy()).to_operator(
+        ExecContext(), Bindings()
+    )
+    return _canonical_rows(
+        RecordBatch.from_struct_array(pipe.collect(chain.schema()))
+    )
+
+
+def test_a_join_order_is_verified_against_the_links() raises:
+    """`JoinOrder.verify` is what a planner's tree must pass, so it is where
+    one that got the equalities, a participant or a link's place wrong is
+    caught."""
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0])
+        .join(table(_third()), [0], [0])
+    )
+    ref chain = plan.get[JoinChain]()
+    var k0 = JoinRef(0, "k")
+    var k1 = JoinRef(1, "k")
+    var k2 = JoinRef(2, "k")
+
+    # Another order over the same equalities is the same answer.
+    var other = _tree(
+        chain,
+        [_join(0, 2, JOIN_INNER, k0, k2), _join(3, 1, JOIN_INNER, k2, k1)],
+    )
+    other.verify(chain)
+    assert_true(_canonical_rows(plan.execute()) == _run(chain, other))
+    # Equating `lv` with `#2.k` instead of `k` is not.
+    with assert_raises(contains="other equalities"):
+        _tree(
+            chain,
+            [
+                _join(0, 1, JOIN_INNER, k0, k1),
+                _join(3, 2, JOIN_INNER, JoinRef(0, "lv"), k2),
+            ],
+        ).verify(chain)
+    # A participant joined twice is not a tree.
+    with assert_raises(contains="joined twice"):
+        _tree(
+            chain,
+            [_join(0, 1, JOIN_INNER, k0, k1), _join(3, 1, JOIN_INNER, k0, k1)],
+        ).verify(chain)
+    # A tree must join every participant.
+    with assert_raises(contains="every input"):
+        _tree(chain, [_join(0, 1, JOIN_INNER, k0, k1)]).verify(chain)
+    # A join compares only columns its own two inputs carry: `#0 ⋈ #1`
+    # equating `#0.k` with `#2.k` makes the same classes, but `#2` is not
+    # there to compare.
+    with assert_raises(contains="wrong side"):
+        _tree(
+            chain,
+            [_join(0, 1, JOIN_INNER, k0, k2), _join(3, 2, JOIN_INNER, k1, k2)],
+        ).verify(chain)
+
+    # A LEFT join attaching `#1` may not attach `#1 ⋈ #2` instead, nor join on
+    # other columns: its keys are part of what it answers.
+    var outer = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_LEFT)
+        .join(table(_third()), [0], [0])
+    )
+    ref outer_chain = outer.get[JoinChain]()
+    with assert_raises(contains="not joined as"):
+        _tree(
+            outer_chain,
+            [_join(1, 2, JOIN_INNER, k1, k2), _join(0, 3, JOIN_LEFT, k0, k1)],
+        ).verify(outer_chain)
+    with assert_raises(contains="not joined as"):
+        _tree(
+            outer_chain,
+            [
+                _join(0, 1, JOIN_LEFT, JoinRef(0, "lv"), JoinRef(1, "rv")),
+                _join(3, 2, JOIN_INNER, k0, k2),
+            ],
+        ).verify(outer_chain)
+
+    # `JOIN_ANY` keeps one match per probe row, so its build side is part of
+    # the answer.
+    var any = table(_left()).join(
+        table(_right()), [0], [0], JOIN_INNER, BUILD_RIGHT, JOIN_ANY
+    )
+    ref any_chain = any.get[JoinChain]()
+    with assert_raises(contains="not joined as"):
+        _tree(
+            any_chain,
+            [
+                PlannedJoin.of(any_chain.links[0], 0, 1, BUILD_LEFT),
+            ],
+        ).verify(any_chain)
+
+
+def test_a_join_filter_reads_only_participants_before_its_bound() raises:
+    """A filter bounded by `#1` is evaluated before `#2` joins, so it may not
+    read `#2`."""
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0])
+        .join(table(_third()), [0], [0])
+    )
+    var reads_third: List[JoinFilter] = [
+        JoinFilter(col("tv", int64) > lit(7, int64), [JoinRef(2, "tv")], 1)
+    ]
+    with assert_raises(contains="bounded by"):
+        _ = plan.get[JoinChain]().with_filters(reads_third^)
+
+
+def test_a_join_order_keeps_equalities_multi_join_by_multi_join() raises:
+    """`A ⋈ B` on `k, m` sits on the probe side of a `JOIN_ANY` join to `C`,
+    with `D` joined on `m` above it. Moving the `B.m` equality from below the
+    ANY join to above it equates the same columns chain-wide — and changes
+    which `(A, B)` pair the ANY join can pick, so it is refused."""
+    var a = record_batch(
+        [
+            array([1], int64).copy(),
+            array([1], int64).copy(),
+            array([1], int64).copy(),
+        ],
+        names=["k", "m", "j"],
+    )
+    var b = record_batch(
+        [array([1], int64).copy(), array([1], int64).copy()],
+        names=["k", "m"],
+    )
+    var c = record_batch([array([1], int64).copy()], names=["j"])
+    var d = record_batch([array([1], int64).copy()], names=["m"])
+    var plan = (
+        table(a^)
+        .join(table(b^), [0, 1], [0, 1])
+        .join(table(c^), [2], [0], JOIN_INNER, BUILD_LEFT, JOIN_ANY)
+        .join(table(d^), [1], [0])
+    )
+    ref chain = plan.get[JoinChain]()
+    var moved = _tree(
+        chain,
+        [
+            _join(0, 1, JOIN_INNER, JoinRef(0, "k"), JoinRef(1, "k")),
+            PlannedJoin.of(chain.links[1], 4, 2, BUILD_LEFT),
+            PlannedJoin(
+                5,
+                3,
+                JoinLink(
+                    JOIN_INNER,
+                    JOIN_ALL,
+                    BUILD_LEFT,
+                    [JoinRef(0, "m"), JoinRef(1, "m")],
+                    [JoinRef(3, "m"), JoinRef(3, "m")],
+                ),
+            ),
+        ],
+    )
+    with assert_raises(contains="other equalities"):
+        moved.verify(chain)
+
+
+def test_a_join_order_moves_an_inner_join_across_a_left_join() raises:
+    """`(#0 ⋈ #2) ⟕ #1` and `(#0 ⟕ #1) ⋈ #2` answer alike: `#2`'s key reads
+    nothing the LEFT join pads. Reading `#1` instead, `#2` may not join below
+    it — the LEFT join would then pad what the inner join drops."""
+    var plan = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_LEFT)
+        .join(table(_third()), [0], [0])
+    )
+    ref chain = plan.get[JoinChain]()
+    var k0 = JoinRef(0, "k")
+    var crossed = _tree(
+        chain,
+        [
+            _join(0, 2, JOIN_INNER, k0, JoinRef(2, "k")),
+            _join(3, 1, JOIN_LEFT, k0, JoinRef(1, "k")),
+        ],
+    )
+    crossed.verify(chain)
+    assert_true(_canonical_rows(plan.execute()) == _run(chain, crossed))
+
+    var reads_padded = (
+        table(_left())
+        .join(table(_right()), [0], [0], JOIN_LEFT)
+        .join(table(_third()), [2], [0], rname="{name}_third")
+    )
+    ref padded = reads_padded.get[JoinChain]()
+    with assert_raises(contains="not joined as"):
+        _tree(
+            padded,
+            [
+                _join(1, 2, JOIN_INNER, JoinRef(1, "k"), JoinRef(2, "k")),
+                _join(0, 3, JOIN_LEFT, k0, JoinRef(1, "k")),
+            ],
+        ).verify(padded)
+
+
+def test_a_filter_over_a_spine_lands_below_the_left_join() raises:
+    """`lv > tv + 15` reads two participants on the preserved side of a LEFT
+    join, so it is evaluated where both are joined, below the LEFT join — and
+    the rows are the ones the filter above the chain returns."""
+    var plan = (
+        table(_left())
+        .join(table(_third()), [0], [0])
+        .join(table(_right()), [0], [0], JOIN_LEFT)
+        .filter(col("lv", int64) > col("tv", int64) + lit(15, int64))
+    )
+    var absorbed = PushFilterIntoJoin.apply(plan)
+    ref chain = absorbed.get[JoinChain]()
+    assert_equal(len(chain.filters), 1, String(absorbed))
+    assert_equal(_landing(chain), len(chain.inputs), String(absorbed))
+    assert_equal(plan.execute().num_rows(), 1)
+    assert_true(
+        _canonical_rows(plan.execute()) == _canonical_rows(absorbed.execute())
+    )
+
+
+def test_a_chain_answering_with_no_column_emits_none() raises:
+    """An empty output is a valid projection — every row, no column — and the
+    root join must emit exactly that rather than everything it joined."""
+    var plan = table(_left()).join(table(_right()), [0], [0])
+    var empty = plan.with_chain(plan.get[JoinChain]().with_output([], []))
+    assert_equal(len(empty.schema().fields), 0)
+    var out = empty.execute()
+    assert_true(empty.schema() == out.schema, String(out.schema))
+    assert_equal(out.num_columns(), 0)
+
+
+# ---------------------------------------------------------------------------
+# The rest of a chain's contract, one claim each
+# ---------------------------------------------------------------------------
+def test_a_clash_rname_leaves_raises_at_the_join() raises:
+    """A self-join with `rname=""` renames nothing, so both `lv`s would keep
+    their name: refused at the join, before anything can read either."""
+    with assert_raises(contains="two columns would be named 'lv'"):
+        _ = table(_left()).join(table(_left()), [0], [0], rname="")
+
+
+def test_an_existence_join_has_no_clash_to_refuse() raises:
+    """SEMI and ANTI emit only the left side and RIGHT_SEMI and RIGHT_ANTI
+    only the right, so two sides sharing every name join without renaming."""
+    var semi = table(_left()).join(
+        table(_left()), [0], [0], JOIN_SEMI, rname=""
+    )
+    assert_equal(_names(semi), ["k", "lv"])
+    var anti = table(_left()).join(
+        table(_third()), [0], [0], JOIN_ANTI, rname=""
+    )
+    assert_equal(_names(anti), ["k", "lv"])
+    var right_semi = table(_left()).join(
+        table(_third()), [0], [0], JOIN_RIGHT_SEMI, rname=""
+    )
+    assert_equal(_names(right_semi), ["k", "tv"])
+    var right_anti = table(_left()).join(
+        table(_third()), [0], [0], JOIN_RIGHT_ANTI, rname=""
+    )
+    assert_equal(_names(right_anti), ["k", "tv"])
+
+
+def test_column_pruning_narrows_each_participant_to_what_the_chain_reads() raises:
+    """A self-join: both participants call their columns `k` and `lv`. Asked
+    for `k` alone, the first keeps its key; the second keeps its key and the
+    `lv` an absorbed filter reads — by participant, though the names are the
+    same."""
+    var plan = PushFilterIntoJoin.apply(
+        table(_left())
+        .join(table(_left()), [0], [0])
+        .filter(col("lv_right", int64) > lit(15, int64))
+    )
+    var pruned = ColumnPruning.apply(plan, ["k"])
+    ref chain = pruned.get[JoinChain]()
+    assert_equal(_names(pruned), ["k"])
+    assert_equal(chain.inputs[0][].schema().names(), ["k"])
+    assert_equal(chain.inputs[1][].schema().names(), ["k", "lv"])
+    assert_equal(pruned.execute().num_rows(), 2)
+
+    # Asked for nothing, a chain still answers with one column: a batch
+    # carries its row count in its columns.
+    var none = ColumnPruning.apply(
+        table(_left()).join(table(_right()), [0], [0]), ["x"]
+    )
+    assert_equal(_names(none), ["k"])
+    assert_equal(none.execute().num_rows(), 2)
+
+
+def _absorbed(plan: DynRelation) raises -> Optional[JoinChain]:
+    """What `plan`, a filter over a chain, absorbs into the chain, or `None`
+    when the filter stays above."""
+    var out = PushFilterIntoJoin.apply(plan)
+    if not out.isa[JoinChain]():
+        return None
+    return out.get[JoinChain]().copy()
+
+
+def test_a_filter_moves_into_a_participant_only_where_no_join_pads_it() raises:
+    """Per kind: the side a join pads with NULLs keeps its filter above the
+    join — absorbed by the chain (`-1`), landing no lower than the join — and
+    the other side takes it."""
+
+    def pushed(k: JoinKind, on_left: Bool) raises -> Optional[Int]:
+        var predicate: DynValue
+        if on_left:
+            predicate = DynValue(col("lv", int64) > lit(15, int64))
+        else:
+            predicate = DynValue(col("rv", int64) > lit(250, int64))
+        var plan = table(_left()).join(table(_right()), [0], [0], k)
+        var got = _absorbed(plan.filter(predicate^))
+        if not got:
+            return None
+        for p in range(2):
+            if got.value().inputs[p][].isa[Filter]():
+                return p
+        return -1
+
+    # RIGHT pads the left side; FULL pads both; LEFT pads the right.
+    assert_equal(pushed(JOIN_RIGHT, True).value(), -1)
+    assert_equal(pushed(JOIN_RIGHT, False).value(), 1)
+    assert_equal(pushed(JOIN_FULL, True).value(), -1)
+    assert_equal(pushed(JOIN_FULL, False).value(), -1)
+    assert_equal(pushed(JOIN_LEFT, True).value(), 0)
+    assert_equal(pushed(JOIN_LEFT, False).value(), -1)
+    # SEMI emits only the left side, which it never pads.
+    assert_equal(pushed(JOIN_SEMI, True).value(), 0)
+
+    # Under a LEFT join an inner participant still takes its own filter, and
+    # one spanning two on its spine lands on the inner join below it.
+    var mixed = (
+        table(_left())
+        .join(table(_right()), [0], [0])
+        .join(table(_third()), [0], [0], JOIN_LEFT)
+    )
+    var own = _absorbed(mixed.filter(col("rv", int64) > lit(250, int64)))
+    assert_true(own.value().inputs[1][].isa[Filter]())
+    var spanning = _absorbed(
+        mixed.filter(col("lv", int64) + col("rv", int64) > lit(250, int64))
+    )
+    assert_equal(_landing(spanning.value()), 3)
+
+
+def test_a_spliced_chain_keeps_its_filters_and_names() raises:
+    """`MergeJoinChains` over a nested chain that has absorbed a filter, and
+    one answering with a renamed column — each the same rows and schema
+    spliced as nested. One with an outer join stays nested."""
+    var filtered = PushFilterIntoJoin.apply(
+        table(_right())
+        .join(table(_third()), [0], [0])
+        .filter(col("rv", int64) + col("tv", int64) > lit(300, int64))
+    )
+    var nested_filter = table(_left()).join(filtered^, [0], [0])
+    var renamed = table(_left()).join(table(_left()), [0], [0])
+    var nested_renamed = table(_right()).join(renamed^, [0], [0])
+
+    var plans: List[DynRelation] = [nested_filter^, nested_renamed^]
+    for ref plan in plans:
+        var spliced = MergeJoinChains.apply(plan)
+        ref chain = spliced.get[JoinChain]()
+        assert_equal(len(chain.inputs), 3, String(spliced))
+        assert_true(spliced.schema() == plan.schema(), String(spliced))
+        assert_true(
+            _canonical_rows(spliced.execute())
+            == _canonical_rows(plan.execute()),
+            String(spliced),
+        )
+    # The filter came along, reading the participants it was written over.
+    ref first = MergeJoinChains.apply(plans[0]).get[JoinChain]()
+    assert_equal(len(first.filters), 1)
+    assert_true(
+        first.filters[0].participants()
+        == ParticipantSet.of(1) | ParticipantSet.of(2)
+    )
+
+    var outer = table(_right()).join(table(_third()), [0], [0], JOIN_LEFT)
+    var nested_outer = table(_left()).join(outer^, [0], [0])
+    var kept = MergeJoinChains.apply(nested_outer)
+    assert_equal(len(kept.get[JoinChain]().inputs), 2, String(kept))
+
+
+def _one_key(n: Int) raises -> DynRelation:
+    var b = record_batch([array([1, 2], int64).copy()], names=["k"])
+    var plan = table(b.copy())
+    for _ in range(n - 1):
+        plan = plan.join(table(b.copy()), [0], [0])
+    return plan^
+
+
+def test_a_chain_holds_at_most_max_inputs_participants() raises:
+    """Participants are bits of an `Int` mask. Past the limit the verb
+    raises, and `MergeJoinChains` leaves a nested chain nested rather than
+    splicing past it."""
+    with assert_raises(contains="at most"):
+        _ = _one_key(JoinChain.MAX_INPUTS + 1)
+    var nested = _one_key(JoinChain.MAX_INPUTS - 1).join(_one_key(3), [0], [0])
+    assert_equal(len(nested.get[JoinChain]().inputs), JoinChain.MAX_INPUTS)
+    var kept = MergeJoinChains.apply(nested)
+    assert_equal(len(kept.get[JoinChain]().inputs), JoinChain.MAX_INPUTS)
+
+
+def test_select_operator_picks_a_sliced_batch_by_position() raises:
+    """The stage picking a chain's output after a filter on its root. A slice
+    must select the slice's rows; compared by value, since array equality is
+    structural and a slice keeps its offset."""
+    var sliced = _batch().to_struct_array().slice(1, 2)
+    var op = SelectOperator(
+        [1, 0], schema([field("x", int64), field("a", int64)])
+    )
+    var got = op.push(Morsel.ungrouped(sliced^)).value().to_array(2)
+    ref out = got.as_struct()
+    assert_equal(out.dtype.as_struct().fields[0].name, "x")
+    var x = out.field(0)
+    assert_equal(Int(x.as_int64()[0].value()), 20)
+    assert_equal(Int(x.as_int64()[1].value()), 30)
+    var a = out.field(1)
+    assert_equal(Int(a.as_int64()[0].value()), 2)
+    assert_true(a.as_int64().is_null(1))
+
+
+def test_renamed_predicate_reads_its_columns_by_position() raises:
+    """A filter between joins reads columns by position under the names it
+    was written with: `b` at index 1 is read as `x`."""
+    var sliced = _batch().to_struct_array().slice(1, 2)
+    var view = schema([field("x", int64)])
+    var predicate: DynValue = col("x", int64) > lit(25, int64)
+    var op = RenamedPredicate(
+        predicate.to_operator(view, False, Bindings()), [1], view.copy()
+    )
+    var mask = op.push(Morsel.ungrouped(sliced^)).value().to_array(2)
+    ref bits = mask.as_bool()
+    assert_true(not bits[0].value())
+    assert_true(bits[1].value())
+
+
+def test_a_filter_never_moves_below_an_outer_join() raises:
+    """`tv_right` is the nested chain's `tv`, from the right side of its LEFT
+    join, read under a renamed name — so the outer chain absorbs the filter
+    rather than pushing it, and the nested chain stays one participant, so
+    the filter cannot land below the join that pads `tv`. Above the join, a
+    padded row's NULL fails the filter; below, it would survive."""
+    var nested = table(_right()).join(table(_third()), [0], [0], JOIN_LEFT)
+    var plan = (
+        table(_third())
+        .join(nested^, [0], [0])
+        .filter(col("tv_right", int64) > lit(7, int64))
+    )
+    var absorbed = PushFilterIntoJoin.apply(plan)
+    assert_equal(len(absorbed.get[JoinChain]().filters), 1, String(absorbed))
+    var spliced = MergeJoinChains.apply(absorbed)
+    ref chain = spliced.get[JoinChain]()
+    assert_equal(len(chain.inputs), 2, String(spliced))
+    assert_equal(_landing(chain), 1, String(spliced))
+    assert_equal(plan.execute().num_rows(), 1)
+    assert_equal(spliced.execute().num_rows(), 1)

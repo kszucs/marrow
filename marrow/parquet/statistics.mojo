@@ -67,38 +67,38 @@ def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
     return len(a) < len(b)
 
 
+def valid_min_max[
+    T: PrimitiveType, skip_nan: Bool = False
+](arr: PrimitiveArray[T]) raises -> Tuple[
+    Scalar[T.native], Scalar[T.native], Bool
+]:
+    """The smallest and largest valid value of `arr` in `T`'s native order, and
+    whether there was one. `skip_nan` excludes NaN — floats only: a bound is
+    read as a proof, and a NaN maximum would prove `x > 5` false."""
+    var seen = False
+    var mn = Scalar[T.native](0)
+    var mx = Scalar[T.native](0)
+    for i in range(len(arr)):
+        if arr.is_valid(i):
+            var v = arr[i].value()
+
+            comptime if skip_nan:
+                if isnan(v):
+                    continue
+            if not seen:
+                mn = v
+                mx = v
+                seen = True
+            else:
+                if v < mn:
+                    mn = v
+                if v > mx:
+                    mx = v
+    return (mn, mx, seen)
+
+
 struct Statistics:
     """Bidirectional column-chunk statistics: min/max byte encode + decode."""
-
-    @staticmethod
-    def _mm[
-        T: PrimitiveType, skip_nan: Bool = False
-    ](arr: PrimitiveArray[T]) raises -> Tuple[
-        Scalar[T.native], Scalar[T.native], Bool
-    ]:
-        """min/max over the valid values in T's native (signed/unsigned) order.
-        `skip_nan` excludes NaN — floats only, per the spec (NaN bounds nothing);
-        the check is comptime-elided for integer columns."""
-        var seen = False
-        var mn = Scalar[T.native](0)
-        var mx = Scalar[T.native](0)
-        for i in range(len(arr)):
-            if arr.is_valid(i):
-                var v = arr[i].value()
-
-                comptime if skip_nan:
-                    if isnan(v):
-                        continue
-                if not seen:
-                    mn = v
-                    mx = v
-                    seen = True
-                else:
-                    if v < mn:
-                        mn = v
-                    if v > mx:
-                        mx = v
-        return (mn, mx, seen)
 
     @staticmethod
     def _int_stats[
@@ -110,7 +110,7 @@ struct Statistics:
     ) raises -> Bool:
         """Signed/unsigned integer bounds, widened to `width` little-endian bytes
         (the physical INT32 / INT64 width). False when there are no values."""
-        var r = Self._mm(arr)
+        var r = valid_min_max(arr)
         if not r[2]:
             return False
         LittleEndian.put_le(min_out, r[0].cast[DType.uint64](), width)
@@ -127,7 +127,7 @@ struct Statistics:
     ) raises -> Bool:
         """IEEE float bounds (NaN skipped), stored as their bit pattern with the
         signed zero normalised so the bound brackets both +0.0 and -0.0."""
-        var r = Self._mm[skip_nan=True](arr)
+        var r = valid_min_max[skip_nan=True](arr)
         if not r[2]:
             return False
         var zero = Scalar[T.native](0)
@@ -148,7 +148,7 @@ struct Statistics:
         """DECIMAL FIXED_LEN_BYTE_ARRAY bounds: signed numeric min/max over the
         int128/int256 values, big-endian two's complement of `width` bytes (the
         full storage width, matching the value encoding)."""
-        var r = Self._mm(arr)
+        var r = valid_min_max(arr)
         if not r[2]:
             return False
         var lo = r[0].as_bytes[big_endian=True]()

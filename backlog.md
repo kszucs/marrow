@@ -30,7 +30,7 @@ all of them.
 | 1 | **CSV reader** | A first user arrives with a CSV, not a Parquet file. NDJSON reads (`marrow.json`, §1.2); CSV does not | **M** | — |
 | 2 | **Declared error types** — every raise site raises an `ArrowError` kind, but ~1,800 signatures still declare bare `raises` | A bare frame keeps only an error's text, so a caller recovers the kind by parsing it (`DynError(e)`) instead of catching a type, and Python gets it through the same parse. Migrate bottom-up: a function declares its kind (`raises CorruptError`) or `DynError` once nothing it calls raises a bare `Error`; dispatch ladders forward `raises E`. It also pays back a size cost: a kind raised in a bare frame is converted to `Error` inline at the site, which put +21 KB (+1.5%) on `query_streaming_agg_fused` and `query_expr2_agg_fused`, mostly in the `dispatch_*` and `DynBuilder._dispatch_mut` ladders | **L** | — |
 | 3 | **Hive partitions, and a remote scan that does not pay one round trip per row group** | Multi-file scans and globs exist (`marrow.datasets`), but a partitioned directory yields no partition columns, and a remote Parquet scan fetches one row group per request, serially | **M** | — |
-| 4 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
+| 4 | **Runtime join filters** — a build side's keys never reach the probe side's scan | The next TPC-H win after join order: once a dimension is hashed, its key range (and a bloom filter of its keys) can prune the fact table's row groups and pages through the same `Value.mask` path a static predicate uses, before a row is decoded. The join search now builds on the small, filtered side; this is what makes that choice pay off at the scan | **M** | — |
 | 5 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowSpec.__eq__` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
 | 6 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
 | 7 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
@@ -743,22 +743,24 @@ first file's schema.
 - **The Hub's Parquet conversion** is used for the default branch only, and
   its HTTPS URLs get no `HF_TOKEN`, so a gated CSV dataset cannot be read.
 
-#### 1.4 The optimizer: no cost model, no CSE
+#### 1.4 The optimizer: no CSE
 
 **What exists.** A plan-to-plan rewriter in `marrow/expr/optimizer.mojo` —
-**18 rules and one downward pass**, invoked as `plan.optimize[AllRules]()`,
-which returns an ordinary `DynRelation` that prints, diffs and executes:
+**18 rules, one downward pass and a join search**, invoked as
+`plan.optimize[AllRules]()`, which returns an ordinary `DynRelation` that
+prints, diffs and executes:
 
     Limit(Sort(Filter(ParquetScan(...))))  ->  Sort(Filter(ParquetScan(...)) top 10)
 
 | | |
 |---|---|
 | elimination | `EliminateFilter`, `RemoveEmptyLimit`, `PropagateEmpty`, `RemoveNoOpProject`, `RemoveRedundantSort`, `RemoveSortBeforeAggregate` |
-| merging | `MergeProjects`, `MergeLimits` |
+| merging | `MergeProjects`, `MergeJoinChains`, `MergeProjectIntoJoin`, `MergeLimits` |
 | splitting | `SplitConjunction` |
-| pushdown | `PushFilterBelowProject`, `PushFilterBelowSort`, `PushFilterBelowJoin`, `PushFilterBelowAggregate`, `PushLimitBelowProject` |
+| pushdown | `PushFilterBelowProject`, `PushFilterBelowSort`, `PushFilterIntoJoin`, `PushFilterBelowAggregate`, `PushLimitBelowProject` |
 | reparameterization | `TopN` |
 | downward pass | `ColumnPruning` |
+| after the fixpoint | `JoinOrdering`: join order and every build side |
 
 plus constant folding in the `RuntimeValue` constructors. Parquet statistics
 pushdown is `PushFilterIntoScan`, in the same list.
@@ -786,18 +788,42 @@ and as int64 are indistinguishable. A deduplicating rule written today would
 merge keys that differ. The work is making every node's `write_to` injective
 over what distinguishes it, then the rule is small.
 
-**Still missing in the join path:** the **search**. Choosing among the
-Catalan-many associations of an *n*-join chain is a `prepare` pass, not a
-`Rule`. And a reassociation is only as well-informed as its sources' NDV:
-over a pyarrow-written file, which records no `distinct_count`,
-`max_distinct` falls back to the row count, every join estimates at
-`min(|L|, |R|)` rows and only the intermediate's *width* is left to decide on.
-From Python the rules see no source statistics at all: `parquet_scan` in
-`python/bindings/plan.mojo` attaches none, and an in-memory table records no
-distinct count.
+**Still missing in the join path.** The planner reorders inner `JOIN_ALL`
+links and LEFT, SEMI, ANTI and probe-left `JOIN_ANY` links around one another;
+what it leaves:
 
-A credible engine ships without a join-tree search, so none of this is urgent. But
-the `count_star()` hazard in §1.1 is the mirror image of it: the same
+- **RIGHT and FULL joins, and build-left `JOIN_ANY`, stay in place.**
+  Reordering across them needs the rest of CD-C's conflict rules; nothing
+  reorders a FULL join.
+- **A nested chain with a non-inner join stays one participant.** A chain is a
+  sequence of links, so `a.join(b.join(c, how="left"))` cannot be laid out in
+  a row and is planned on its own; only all-inner nesting is spliced.
+- **A null-rejecting predicate does not simplify an outer join.** An inner key
+  or a filter above a LEFT join that reads its padded side drops every padded
+  row, so the LEFT join is an inner one; it is kept as written, and the inner
+  key above it pins it in place.
+- **Constants do not travel through a class.** `a.x = 5 ∧ a.x = b.y` implies
+  `b.y = 5`, a filter the search could push into `b`; nothing derives it.
+- **Non-equi joins.** A chain could now hold a residual `ON` predicate as a
+  `JoinFilter` on its link, which is what `join_on`, `cross_join` and
+  `asof_join`'s golden cases need; there is no verb and no operator for it.
+- **An outer join does not mark its padded side nullable.** A `JoinChain`
+  copies each participant's field as it is, so `nullable=False` survives on a
+  column a LEFT join fills with NULLs.
+- **`PropagateEmpty` has no join arm**, though its docstring describes one: an
+  inner join over an `EmptyRelation` is not collapsed.
+- **The eager `RecordBatch.join` keeps `k_right`** where a plan's inner join
+  merges `k`, so the two surfaces answer with different columns.
+- **`hash_join`'s `_assemble` may ignore a sliced input's offset** — found by
+  reading, not by a failing case.
+- **Widths.** A list or map column has no width, so a chain exposing one
+  cannot be priced. Parquet widths for a
+  dictionary-encoded chunk need its distinct count.
+- **Distinct counts.** Only `analyze()`, a footer's `distinct_count` and a key's
+  integer range feed one. A Parquet column with none of the three still
+  estimates its domain at its row count.
+
+None of this is urgent. But the `count_star()` hazard in §1.1 is the mirror image of it: the same
 expression that blocks projection pushdown is the one an optimizer most wants
 to special-case. `ColumnPruning` clamps rather than special-cases, never
 narrowing a source to zero columns, because a `RecordBatch` carries its row

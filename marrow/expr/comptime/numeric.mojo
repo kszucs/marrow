@@ -555,7 +555,7 @@ struct NumericCompare[
             var above = GeKernel[nan_safe=True].apply(hi, rlo)
             return AndKernel.apply(live, AndKernel.apply(below^, above^))
         else:
-            return keep_every(index.chunks)
+            return keep_every(index.chunks())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

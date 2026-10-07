@@ -300,7 +300,10 @@ comptime JOIN_ALL: UInt8 = 0
 """ALL strictness (default): return all matching rows (Cartesian product for multi-match)."""
 
 comptime JOIN_ANY: UInt8 = 1
-"""ANY strictness: return at most one matching right row per left row (no row duplication)."""
+"""ANY strictness: return at most one matching right row per left row (no row duplication).
+
+Which matching row is unspecified: any one of them is a correct answer, so a
+plan may produce the build side in any order."""
 
 
 # ---------------------------------------------------------------------------

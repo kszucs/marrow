@@ -102,12 +102,16 @@ def _int_files() raises -> List[DataFile]:
     return out^
 
 
+def _nulls(idx: Index, name: String) -> List[Int]:
+    """`name`'s null count per chunk."""
+    return idx.columns[idx.find(name)].null_counts.copy()
+
+
 def test_iceberg_index_one_chunk_per_file() raises:
     var idx = Index.from_manifest(_int_files(), _schema(), _unpartitioned())
-    assert_equal(idx.chunks, 3)
+    assert_equal(idx.chunks(), 3)
     assert_equal(idx.rows, [10, 10, 10])
-    assert_equal(idx.num_rows().value(), 30)
-    assert_equal(idx.null_count("x").value(), 0)
+    assert_equal(_nulls(idx, "x"), [0, 0, 0])
 
 
 def test_iceberg_index_int_range() raises:
@@ -149,8 +153,7 @@ def test_iceberg_index_absent_bounds_are_kept() raises:
     var idx = Index.from_manifest(files, _schema(), _unpartitioned())
     var gt15: List[DynValue] = [DynValue(col("x", int64) > lit(15, int64))]
     assert_equal(idx.read_plan(gt15), [1, 2, 3])
-    assert_equal(idx.zones.null_counts("x"), [0, 0, 0, -1])
-    assert_true(not idx.null_count("x"))
+    assert_equal(_nulls(idx, "x"), [0, 0, 0, -1])
 
 
 def test_iceberg_index_all_null_column() raises:
@@ -192,7 +195,7 @@ def test_iceberg_index_identity_partition_without_bounds() raises:
     assert_equal(idx.read_plan(eq7), [1])
     var gt5: List[DynValue] = [DynValue(col("x", int64) > lit(5, int64))]
     assert_equal(idx.read_plan(gt5), [1, 2])
-    assert_equal(idx.zones.null_counts("x"), [0, 0, 0])
+    assert_equal(_nulls(idx, "x"), [0, 0, 0])
 
 
 def test_iceberg_index_null_partition_value() raises:
@@ -201,7 +204,7 @@ def test_iceberg_index_null_partition_value() raises:
     files.append(_File(4, [_i64(3)]).build())
     files.append(_File(6, [NullScalar().to_dyn()]).build())
     var idx = Index.from_manifest(files, _schema(), _identity_on_x())
-    assert_equal(idx.zones.null_counts("x"), [0, 6])
+    assert_equal(_nulls(idx, "x"), [0, 6])
     var gt0: List[DynValue] = [DynValue(col("x", int64) > lit(0, int64))]
     assert_equal(idx.read_plan(gt0), [0])
     var is_null: List[DynValue] = [DynValue(col("x", int64).is_null())]
@@ -234,7 +237,7 @@ def test_iceberg_index_ignores_nested_columns() raises:
     f.bounds(3, _i64(0), _i64(1))
     var files: List[DataFile] = [f.build()]
     var idx = Index.from_manifest(files, sch, _unpartitioned())
-    assert_equal(idx.zones.num_columns(), 1)
+    assert_equal(len(idx.columns), 1)
     assert_true(idx.dtype_of("n").is_null())
     var gt5: List[DynValue] = [DynValue(gt(column("n"), literal(_i64(5))))]
     assert_equal(idx.read_plan(gt5), [0])

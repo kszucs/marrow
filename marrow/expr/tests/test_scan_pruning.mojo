@@ -301,7 +301,7 @@ def test_scan_pruning_skips_row_groups_and_returns_the_same_rows() raises:
         var f = ParquetFile(path)
 
         var idx = Index.from_parquet(f)
-        assert_equal(idx.chunks, 4)
+        assert_equal(idx.chunks(), 4)
 
         # `a > 150` — groups 0..2 hold [0,50) [50,100) [100,150); only group 3 can
         # match, and its bounds are [150, 200).
@@ -420,7 +420,7 @@ def test_scan_pruning_a_file_without_statistics_prunes_nothing() raises:
 
         var f = ParquetFile(path)
         var idx = Index.from_parquet(f)
-        assert_equal(idx.chunks, 3)
+        assert_equal(idx.chunks(), 3)
 
         var pushed: List[DynValue] = [
             DynValue(col("a", int64) > lit(1000, int64))
@@ -464,8 +464,8 @@ def test_scan_pruning_a_nested_schema_prunes_nothing() raises:
 
         var f = ParquetFile(path)
         var idx = Index.from_parquet(f)
-        assert_equal(idx.chunks, 3)
-        assert_equal(idx.zones.num_columns(), 0)
+        assert_equal(idx.chunks(), 3)
+        assert_equal(len(idx.columns), 0)
 
         var pushed: List[DynValue] = [
             DynValue(col("a", int64) > lit(1000, int64))
@@ -495,7 +495,7 @@ def test_scan_pruning_reads_null_counts_from_a_foreign_writer() raises:
 
         var f = ParquetFile(path)
         var idx = Index.from_parquet(f)
-        assert_equal(idx.chunks, 2)
+        assert_equal(idx.chunks(), 2)
         var live = idx.defined(String("a"))
         assert_false(live[0].value(), "the all-null group has no live row")
         assert_true(live[1].value())

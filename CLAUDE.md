@@ -540,7 +540,7 @@ share no node types**:
   nodes are `EmptyRelation`, `InMemoryTable`, the `FileScan`s (`ParquetScan`,
   `IpcScan`, `JsonScan`; `with_schema` is how `ColumnPruning` narrows any of
   them), `Filter`,
-  `Project`, `Aggregate`, `Limit`, `Sort`, `Window`, `Join`, `Union`,
+  `Project`, `Aggregate`, `Limit`, `Sort`, `Window`, `JoinChain`, `Union`,
   `Intersection` and `Difference`, chained by `.filter()` / `.select()` /
   `.project()` / `.aggregate()` / `.sort_by()` / `.limit()` / `.join()` /
   `.union()` / `.except_()` / `.intersect()` and run by `.execute()`.
@@ -550,6 +550,49 @@ share no node types**:
   `.over(...)` on the aggregate. It also holds `Value` — the five-member trait
   every expression implements in either lane — and `DynValue`, the box the two
   lanes meet in.
+- **Every join is one `JoinChain`, as ibis represents it**: the participants,
+  one `JoinLink` per `.join` (kind, keys, build-side hint) saying how its
+  participant joins those before it, and the output — `refs`, one participant
+  column per field. **The chain is logical; the tree is physical.** The tree
+  is a `JoinOrder` (physical.mojo): left-deep in link order
+  (`JoinOrder.written`) unless the optimizer attached another
+  (`JoinChain.with_order`), as it attaches pruners to a scan; the chain
+  always holds one, and a chain built from new links holds the written one.
+  **`JoinRules` (`JoinChain.rules()`) is the one definition of which trees
+  compute the answer**: which sets of participants a tree may join (`valid`,
+  `joinable`), on which keys (`keys`), and where a filter is evaluated
+  (`holds`). **`JoinPricing` is the one definition of what they produce and
+  cost**: `estimate(S)` folds `Estimate.joined` over `S` in an order fixed
+  by the set, so no tree moves a chain's estimate, and the search and
+  `JoinOrder.cost` price joins alike. **The chain holds no rewrite logic**: absorbing a filter,
+  folding a projection, narrowing and splicing live in their rules. A chain
+  on the right is one participant, which `MergeJoinChains` splices in when
+  its joins may be laid out in a row. Keys, filters and outputs name a column
+  by participant (`JoinRef`), so two inputs may share a name and lowering is
+  positional. **Names follow ibis**: an inner key both sides call alike is
+  emitted once, any other clash is renamed by `lname` / `rname`
+  (`{name}_right`), and a clash those leave raises at the join.
+  `MergeProjectIntoJoin` folds a bare-column projection into the chain's
+  output. An absorbed filter carries a `bound`, the last participant joined
+  when it was absorbed, and lands on the lowest node of the planned tree that
+  `JoinRules.holds` it. **`JoinOrder.verify` is the soundness check** every
+  planned tree passes: each join one the rules allow, a participant joined
+  by its own link joined by it, and every equality class's members compared
+  by the smallest subtree holding two of them.
+
+  **Only `.join()` builds a chain, and nothing boxes one afresh where it can
+  assign into a copy** (`DynRelation.with_chain`): boxing a `JoinChain` wires
+  its lowering — the join and filter kernels — into every binary that reaches
+  the call. Measured on `query_streaming`, which never joins: folding `select`
+  at the verb and boxing the result cost 852 KB of `__text`; folding in place
+  still cost 46 KB, which is why the verbs do not fold at all. An absorbed
+  filter lowers itself, through a function pointer its constructor wires
+  (`JoinFilter.stages`), for the same reason — the filter kernel was 435 KB
+  of `query_join` — and so does the stage picking the output after a filter
+  on the root (otherwise the root's `JoinOperator` picks it): only the
+  optimizer builds a `JoinFilter`. The chain's schema sits behind an `ArcPointer`: inline, it made the
+  chain the variant's largest member, and every `DynRelation` move 40 bytes
+  wider cost `query_streaming` 17.7 KB.
 - **`physical.mojo`** — the executing counterpart. `Relation.to_operator(ctx)`
   builds an `Operator` owning all mutable state (grouper table, accumulator
   slots, child operators), erased by `DynOperator`. **The engine pushes**:
@@ -565,8 +608,10 @@ share no node types**:
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
   `UnionOperator`, `MultisetOperator[M]`, `LimitOperator`,
   `ParquetScanOperator`, `IpcScanOperator`, `JsonScanOperator`,
-  `BatchSourceOperator` — plus
-  `Pipeline` and `EvalOperator`.
+  `BatchSourceOperator` — plus `Pipeline`, `EvalOperator`, and the two a join
+  chain lowers through: `SelectOperator` (its output, by position, after a
+  filter on its root) and `RenamedPredicate` (a filter between two joins,
+  reading its columns by position).
 - **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
   `boolean.mojo`, `strings.mojo`, `temporal.mojo`, `nested.mojo`, `casts.mojo`,
   `aggregates.mojo`, `rules.mojo`) — every node's operands are bound on a family
@@ -622,13 +667,46 @@ share no node types**:
   plan is copied, so `ScanPath` keeps its parameter behind an `ArcPointer` —
   inline, it cost `query_join`, which never scans, 23,904 bytes of `__text`.
 - **`optimizer.mojo`** — the plan rewriter. `plan.optimize[AllRules]()` returns a
-  new `DynRelation` you can print and diff: 16 rules (elimination, merging,
-  `SplitConjunction`, four filter pushdowns, `PushFilterIntoScan`, `TopN`) run
-  in a chosen order so each sees the previous one's output, plus
-  `ColumnPruning`, a preparatory downward pass with a needed-column accumulator
-  seeded from the plan's own output schema. The rule set is a comptime
-  parameter, so a binary links exactly the rules it names and `execute()` alone
-  optimizes nothing.
+  new `DynRelation` you can print and diff: 18 rules (elimination, merging —
+  `MergeJoinChains` and `MergeProjectIntoJoin` among them — `SplitConjunction`,
+  four filter pushdowns, `PushFilterIntoScan`, `TopN`) run in a chosen order so
+  each sees the previous one's output, plus `ColumnPruning`, a preparatory downward pass with a
+  needed-column accumulator seeded from the plan's own output schema. A
+  `RuleSet` has three hooks — `prepare` once, `rewrite` to a fixpoint, `finish`
+  once after it — and `AllRules.finish` is the join search. The rule set is a
+  comptime parameter, so a binary links exactly the rules it names and
+  `execute()` alone optimizes nothing.
+- **`estimates.mojo`** — what each node expects to produce (`Estimate`: rows
+  and a summary per column, each count an `Approx` that is exact, estimated or
+  unknown, unknown absorbing) and what running it should cost (`Cost`: rows
+  moved, comparisons, bytes held). A node estimates in `Relation.estimate`,
+  over its children's estimates; the per-node formulas are statics
+  (`Estimate.joined`, `Cost.hash_join`, `Filter.verdict_of`) so a search
+  can price a node it has not built. A filter's `Selectivity` is read with
+  `Value.mask`, so there is one definition of each comparison: over the
+  input's bounds for a proof, over an equal-width histogram of the one
+  column it reads for a share. An unmeasured variable-width column is priced
+  at Spark's default width rather than left unknown.
+- **Join ordering is an optimizer rule** (`JoinOrdering`, optimizer.mojo, in
+  `AllRules.finish`). Participant `i` is joined by link `i - 1` on inner
+  keys (an inner `JOIN_ALL` link, its keys joining the equality classes),
+  attached (LEFT, SEMI, ANTI and probe-left `JOIN_ANY` links, by their own
+  link once what their keys read is in), or in place (RIGHT, FULL, right
+  existence and build-left `JOIN_ANY` links, and an inner link reading an
+  attached participant: onto exactly the participants before it, with no
+  set straddling it). The rule enumerates every cross-product-free bushy
+  tree the rules allow (DPccp's connected pairs, filtered by `joinable`;
+  greedy past a budget), keeps it only when strictly cheaper than the
+  written order, picks every build side, and attaches the result to the
+  chain. Reordering across attaching links pays: `bench_join_attach.mojo`
+  measures 5.8-6.5x on a selective inner join moved below a LEFT join. The
+  key rule pairs every member of a class an input holds twice, so no chain
+  is left unsearched. `JOIN_ANY` keeps any one match per probe row. A
+  chain's output never moves.
+- **`analyze.mojo`** — `plan.analyze()`, the one step that reads data before a
+  plan runs: an in-memory source is summarised from its batch (bounds, a
+  HyperLogLog distinct count, string widths), a Parquet scan from its footer.
+  Without it an in-memory key's domain is its row count.
 - **`index.mojo`** — `Index`, what a source knows about its data before reading
   it: `chunks`, rows per chunk, and `ZoneMaps` (per-chunk `[min, max]` and null
   counts, by column). A **chunk** is whatever unit the source can skip whole —
@@ -659,7 +737,7 @@ share no node types**:
   **There is one way in** — `PushFilterIntoScan`, in `optimizer.mojo` — so
   pruning is visible in a printed plan, and a plan nobody optimized reads every
   row group. The rule descends through `Filter` and nothing else, which is what
-  stops a predicate at a `Window`, `Limit`, `Project`, `Aggregate` or `Join`
+  stops a predicate at a `Window`, `Limit`, `Project`, `Aggregate` or `JoinChain`
   without a per-node table saying so. `ParquetScanOperator.drain` builds the
   index and the read plan on first use, with this execution's `Bindings` — a
   predicate may name a `param`, which is the AOT lane's whole surface.
@@ -706,8 +784,10 @@ nothing to the rest, so those two land at +75,928 (+2.88%) and +70,784
 temporal and decimal columns that prune in the runtime lane, page granularity,
 and a `mask` that composes under Kleene `AND` rather than a bespoke `Truth`.
 
-**A cost model does not exist**, and join reordering and build-side selection
-are blocked by the join's positional output schema rather than by the optimizer.
+**Join order is only as good as the distinct counts behind it.** A key with no
+recorded count and no integer bounds estimates its domain at its row count, so
+a many-to-many join reads as a shrinking one; `analyze()` or a footer that
+records counts is what makes a search informed.
 
 Tests live in `expr/tests/`, `expr/comptime/tests/` and `expr/runtime/tests/`.
 
@@ -835,7 +915,9 @@ marrow/
 │                         #   array_length/array_contains, param, count_star,
 │                         #   table, scan
 │   ├── bindings.mojo     # ParamSpec + Bindings — what a plan declares, what a run binds
-│   ├── optimizer.mojo    # the plan rewriter: 16 rules + ColumnPruning
+│   ├── optimizer.mojo    # the plan rewriter: 18 rules, ColumnPruning, JoinOrdering
+│   ├── estimates.mojo    # Estimate / Cost — what a node produces, what it costs
+│   ├── analyze.mojo      # analyze() — statistics a caller asks for
 │   ├── index.mojo        # Index / ZoneMaps — what a source knows unread
 │   ├── cli.mojo          # QueryCli — a plan as a command-line program
 │   ├── comptime/         # AOT lane: core, leaves, numeric, boolean, strings,

@@ -891,8 +891,7 @@ struct BinaryLikeBuilder[T: BinaryLikeType](BytesBuilder):
         """Bulk-append all elements from an existing BinaryLikeArray."""
         var n = arr.length
         var chunk_start = Int(arr.offsets.unsafe_get[U.offset](arr.offset))
-        var chunk_end = Int(arr.offsets.unsafe_get[U.offset](arr.offset + n))
-        var chunk_bytes = chunk_end - chunk_start
+        var chunk_bytes = arr.total_values_length()
         self.reserve(n)
         self.reserve_bytes(chunk_bytes)
         if arr.null_count() == 0:

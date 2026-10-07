@@ -18,29 +18,31 @@ the query as written materialises an intermediate forty times the size of its
 own answer, and an engine that reorders never builds it. DuckDB and Polars
 both have planners that may; PyArrow has none and runs what it is given.
 
-Three marrow columns, because marrow's answer depends on which of them you
+Four marrow columns, because marrow's answer depends on which of them you
 ask for and conflating them would flatter it:
 
 ``marrow``
     the plan as written, ``collect()`` — which applies **no** rules at all.
 ``marrow_opt``
-    ``.optimize()``, the whole of ``AllRules``. On these inputs that is
-    `SelectBuildSide` and nothing else: `JoinReassociation` needs to see that
-    ``A ⋈ B`` explodes, and an `InMemoryTable` records no distinct count, so
+    ``.optimize()``, the whole of ``AllRules``, over tables nobody analysed.
+    An in-memory table then records no distinct count, so
     `ColumnEstimate.max_distinct` falls back to the row count, the containment
     denominator is ``max(|L|, |R|)`` and the 40n-row intermediate is estimated
-    at 1,000 rows. The rule declines, correctly, on what it can see.
+    at 1,000 rows: the join search cannot see the explosion it would avoid.
+``marrow_analyzed``
+    ``.analyze().optimize()``: the same plan over tables summarised first, so
+    the search sees 25 distinct keys on each side of ``A ⋈ B`` and joins
+    ``B ⋈ C`` first.
 ``marrow_reassoc``
-    the right-deep plan written by hand and then optimized — the plan a cost
-    model with a distinct count in hand would have chosen, and the ceiling the
-    rule is reaching for.
+    the right-deep plan written by hand and then optimized — the ceiling
+    ``marrow_analyzed`` should reach.
 
 ``join2`` is the control: one join, no association to choose, so
 ``marrow_reassoc`` *is* ``marrow_opt`` there — the same plan through the same
 rules — and the spread between those two columns is this run's noise floor,
 read off the table rather than remembered. The ``marrow`` column beside them
 is the same join with no rules at all, which makes that row the price of
-`SelectBuildSide` alone on a single join.
+choosing a build side alone on a single join.
 
 **Thread posture.** Everything is pinned to one thread:
 ``POLARS_MAX_THREADS=1`` and ``OMP_NUM_THREADS=1`` are set *before* Polars is
@@ -178,6 +180,14 @@ def tables(n):
             )
             for name, cols in raw.items()
         },
+        "ma_analyzed": {
+            name: ma.memtable(
+                ma.record_batch(
+                    {c: ma.array(v, type=ma.int64()) for c, v in cols.items()}
+                )
+            ).analyze()
+            for name, cols in raw.items()
+        },
     }
 
 
@@ -209,9 +219,10 @@ def _marrow_written(t, depth):
 def _marrow_right_deep(t, depth):
     """The same joins, associated the other way — ``A ⋈ (B ⋈ C ⋈ D)``.
 
-    Same output schema and same rows: `Join._output_schema` is left fields
-    then right fields, so ``A|B|C`` and ``A|(B|C)`` are the same field list in
-    the same order, which is what makes the association a free choice.
+    Same output schema and same rows: `MergeJoinChains` splices the chain on
+    the right into one `JoinChain` over ``A, B, C``, whose output is left
+    fields then right fields either way, which is what makes the association
+    a free choice.
     """
     if depth == 2:
         return _marrow_written(t, 2)
@@ -267,13 +278,16 @@ def test_every_library_runs_single_threaded(duck_con):
 
 
 def test_every_library_answers_the_same_table(tables, duck_con, n):
-    """Six plans, one row count and one column list — otherwise the table
+    """Seven plans, one row count and one column list — otherwise the table
     compares four engines doing different amounts of work."""
     expected = {2: n * (BRIDGE // KEYS), 3: n, 4: n}
     for depth, rows in expected.items():
         answers = {
             "marrow": _marrow_written(tables["ma"], depth).collect(1),
             "marrow_opt": _marrow_written(tables["ma"], depth).optimize().collect(1),
+            "marrow_analyzed": _marrow_written(tables["ma_analyzed"], depth)
+            .optimize()
+            .collect(1),
             "marrow_reassoc": _marrow_right_deep(tables["ma"], depth)
             .optimize()
             .collect(1),
@@ -305,6 +319,13 @@ def test_marrow_join2(benchmark, tables, n):
 def test_marrow_opt_join2(benchmark, tables, n):
     benchmark.extra_info.update(lib="marrow_opt", n=n)
     plan = _marrow_written(tables["ma"], 2).optimize()
+    benchmark(plan.collect, 1)
+
+
+@pytest.mark.benchmark(group="join_multi")
+def test_marrow_analyzed_join2(benchmark, tables, n):
+    benchmark.extra_info.update(lib="marrow_analyzed", n=n)
+    plan = _marrow_written(tables["ma_analyzed"], 2).optimize()
     benchmark(plan.collect, 1)
 
 
@@ -354,6 +375,13 @@ def test_marrow_opt_join3(benchmark, tables, n):
 
 
 @pytest.mark.benchmark(group="join_multi")
+def test_marrow_analyzed_join3(benchmark, tables, n):
+    benchmark.extra_info.update(lib="marrow_analyzed", n=n)
+    plan = _marrow_written(tables["ma_analyzed"], 3).optimize()
+    benchmark(plan.collect, 1)
+
+
+@pytest.mark.benchmark(group="join_multi")
 def test_marrow_reassoc_join3(benchmark, tables, n):
     benchmark.extra_info.update(lib="marrow_reassoc", n=n)
     plan = _marrow_right_deep(tables["ma"], 3).optimize()
@@ -395,6 +423,13 @@ def test_marrow_join4(benchmark, tables, n):
 def test_marrow_opt_join4(benchmark, tables, n):
     benchmark.extra_info.update(lib="marrow_opt", n=n)
     plan = _marrow_written(tables["ma"], 4).optimize()
+    benchmark(plan.collect, 1)
+
+
+@pytest.mark.benchmark(group="join_multi")
+def test_marrow_analyzed_join4(benchmark, tables, n):
+    benchmark.extra_info.update(lib="marrow_analyzed", n=n)
+    plan = _marrow_written(tables["ma_analyzed"], 4).optimize()
     benchmark(plan.collect, 1)
 
 

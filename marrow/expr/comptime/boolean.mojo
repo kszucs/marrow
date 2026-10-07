@@ -159,7 +159,7 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
                 self.l.mask(index, bindings), self.r.mask(index, bindings)
             )
         else:
-            return keep_every(index.chunks)
+            return keep_every(index.chunks())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

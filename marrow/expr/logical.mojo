@@ -38,6 +38,7 @@ added later needs no change there.
 """
 
 from std.builtin.rebind import downcast
+from std.collections import Dict
 from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant
@@ -51,7 +52,19 @@ from ..errors import (
 )
 from ..arrays import BoolArray, DynArray, StructArray
 from ..execution import ExecContext
-from ..kernels.join import JoinKind, JOIN_INNER, JoinBuildSide, BUILD_LEFT
+from ..kernels.join import (
+    BUILD_LEFT,
+    JOIN_ALL,
+    JOIN_ANTI,
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_RIGHT_ANTI,
+    JOIN_RIGHT_SEMI,
+    JOIN_SEMI,
+    JoinBuildSide,
+    JoinKind,
+)
 from ..kernels.window import (
     FirstValue,
     Lag,
@@ -73,8 +86,13 @@ from .estimates import (
     Cost,
     DEFAULT_SELECTIVITY,
     Estimate,
+    HISTOGRAM_BUCKETS,
+    Selectivity,
+    Size,
 )
 from .index import Index, keep_every
+from .analyze import analyze
+from .sets import ParticipantSet
 from .optimizer import RuleSet, optimize
 from .`comptime`.leaves import StringParam
 from .physical import (
@@ -92,12 +110,15 @@ from .physical import (
     Pipeline,
     FilterOperator,
     JoinOperator,
+    JoinOrder,
     IpcScanOperator,
     IcebergScanOperator,
     JsonScanOperator,
     ParquetScanOperator,
     ProjectOperator,
     MultisetOperator,
+    RenamedPredicate,
+    SelectOperator,
     SortOperator,
     UnionOperator,
     WindowOperator,
@@ -233,7 +254,7 @@ trait Value(Copyable, Deinitable, Writable):
         that cannot be read is a predicate that cannot prune: the AOT lane's
         whole surface is `col("amount") >= param("min-amount")`.
         """
-        return keep_every(index.chunks)
+        return keep_every(index.chunks())
 
     def constant_bool(self) -> Optional[Bool]:
         """`True`/`False` if this is a constant boolean, else `None`.
@@ -693,6 +714,17 @@ struct DynValue(Copyable, Movable, Writable):
         window, which only a `Window` node can compute. A field for the reason
         `aggregates` is one."""
         return self._windowed
+
+    def read_column(self) -> Optional[String]:
+        """The column this value merely reads, or `None` when it computes: a
+        read names exactly the one column it reads and is not an aggregate —
+        an aggregate aliased to its own column computes."""
+        if self.aggregates():
+            return None
+        var cols = self.columns()
+        if len(cols) != 1 or cols[0] != self.name():
+            return None
+        return cols[0].copy()
 
     def shape(self) -> Shape:
         """The boxed value's `shape`, read at construction.
@@ -1154,13 +1186,14 @@ trait Relation(Copyable, Deinitable, Movable, Writable):
         """How many rows this node produces, and what is known about each
         column.
 
-        The default knows nothing, `Estimate()`, which every formula
-        propagates as unknown, so a node without an estimate costs an
-        optimization and never a wrong answer. Resolved on the variant ladder
+        The default knows nothing but its columns' widths,
+        `Estimate.unknown`, which every formula propagates as unknown, so a
+        node without an estimate costs an optimization and never a wrong
+        answer. Resolved on the variant ladder
         rather than through a trampoline slot: it reaches no kernel, and a
         slot would be paid by every binary that holds a plan.
         """
-        return Estimate()
+        return Estimate.unknown(self.schema())
 
     def cost(self) raises -> Cost:
         """What running this subtree should take; see `estimates.Cost`.
@@ -1221,7 +1254,7 @@ struct DynRelation(Copyable, Movable, Writable):
         Limit,
         Sort,
         Window,
-        Join,
+        JoinChain,
         Union,
         Intersection,
         Difference,
@@ -1434,6 +1467,9 @@ struct DynRelation(Copyable, Movable, Writable):
         Sugar over `project`: the values are `FieldRef`s resolved against the
         input schema, so this needs no dtype from the caller and links no
         lane. A name the input lacks raises here.
+
+        Over a join chain `MergeProjectIntoJoin` folds it into the chain's own
+        output.
         """
         var input_schema = self.schema()
         var values = List[DynValue](capacity=len(names))
@@ -1461,7 +1497,11 @@ struct DynRelation(Copyable, Movable, Writable):
     def project(
         self, var names: List[String], var values: List[DynValue]
     ) raises -> DynRelation:
-        """`SELECT <values> AS <names>` — new columns over the same rows."""
+        """`SELECT <values> AS <names>` — new columns over the same rows.
+
+        Over a join chain `MergeProjectIntoJoin` folds one that only reads
+        columns into the chain.
+        """
         return Project(self.copy(), names^, values^)
 
     def with_columns(
@@ -1649,21 +1689,45 @@ struct DynRelation(Copyable, Movable, Writable):
         var right_keys: List[Int],
         kind: JoinKind = JOIN_INNER,
         build_side: JoinBuildSide = BUILD_LEFT,
+        strictness: UInt8 = JOIN_ALL,
+        lname: String = "",
+        rname: String = "{name}_right",
     ) raises -> DynRelation:
-        """Equijoin. The output is `self`'s columns then `right`'s.
+        """Equijoin, as ibis's `Join.join`: on a join chain it adds a join to
+        the chain, otherwise it starts one. Keys are positions in `self`'s and
+        `right`'s output.
 
-        `build_side` names the side to index, `BUILD_LEFT` (`self`) by
-        default. It changes the cost and nothing else, and `SelectBuildSide`
-        may change it.
+        The output is `self`'s columns then `right`'s, named by ibis's rules:
+        an inner key both sides call the same is emitted once, and any other
+        clash is renamed by `lname` / `rname`. A clash those leave raises:
+        two output columns may not share a name.
+
+        `build_side` names the side to index, the left by default, and changes
+        the cost and nothing else — except under `JOIN_ANY`, one match per
+        probe row, where it is part of the answer and nothing moves it. Which
+        of a probe row's matches `JOIN_ANY` keeps is unspecified.
         """
-        return Join(
-            self.copy(),
-            right^,
-            left_keys^,
-            right_keys^,
+        return JoinChain.joined(
+            self,
+            right,
+            left_keys,
+            right_keys,
             kind,
-            build_side=build_side,
+            strictness,
+            build_side,
+            lname,
+            rname,
         )
+
+    def with_chain(self, var chain: JoinChain) -> DynRelation:
+        """This join chain node holding `chain` instead — how a rule rebuilds
+        a chain. Undefined unless `isa[JoinChain]()`."""
+        # Assigned into a copy rather than boxed afresh: boxing a `JoinChain`
+        # wires its lowering, and the join kernels, into every binary that
+        # reaches the call, joining or not.
+        var out = self.copy()
+        out.get[JoinChain]() = chain^
+        return out^
 
     def distinct(self) raises -> DynRelation:
         """`SELECT DISTINCT *` — one row per distinct row, NULL equal to
@@ -1701,6 +1765,18 @@ struct DynRelation(Copyable, Movable, Writable):
 
     def intersect_all(self, var right: DynRelation) raises -> DynRelation:
         return Intersection(self.copy(), right^, True)
+
+    def analyze(
+        self,
+        ctx: ExecContext = ExecContext.auto(),
+        bindings: Bindings = Bindings(),
+    ) raises -> DynRelation:
+        """This plan with statistics on every source — see `analyze.mojo`.
+
+        The one step that reads data before a plan runs, so it is one a caller
+        asks for: `plan.analyze().optimize[AllRules]()`.
+        """
+        return analyze(self, ctx, bindings)
 
     def optimize[R: RuleSet](self) raises -> DynRelation:
         """This plan, rewritten by `R` until nothing changes.
@@ -1779,9 +1855,28 @@ struct InMemoryTable(Relation, Writable):
     """A batch already in memory, as a source."""
 
     var batch: RecordBatch
+    var statistics: Optional[ArcPointer[Estimate]]
+    """What `analyze` found in the batch, or `None` until something looked.
+    Behind an `ArcPointer` for the reason `ParquetScan.statistics` is."""
 
-    def __init__(out self, var batch: RecordBatch):
+    def __init__(
+        out self,
+        var batch: RecordBatch,
+        var statistics: Optional[ArcPointer[Estimate]] = None,
+    ):
         self.batch = batch^
+        self.statistics = statistics^
+
+    def with_batch(self, var batch: RecordBatch) -> InMemoryTable:
+        """This source over a narrower batch, keeping its statistics — on the
+        node so `ColumnPruning` cannot drop them by rebuilding it. The
+        statistics are kept whole: `estimate` reads only the columns the batch
+        still holds."""
+        return InMemoryTable(batch^, self.statistics.copy())
+
+    def with_statistics(self, var statistics: Estimate) -> InMemoryTable:
+        """This source, told what `analyze` found in it."""
+        return InMemoryTable(self.batch.copy(), ArcPointer(statistics^))
 
     def references(self, mut into: References):
         pass
@@ -1790,9 +1885,15 @@ struct InMemoryTable(Relation, Writable):
         return self.batch.schema.copy()
 
     def estimate(self) raises -> Estimate:
-        """The exact row and null counts, which the batch stores. Bounds and
-        distinct counts stay unknown, because computing them scans the data.
+        """What `analyze` found, when something asked it to look. Otherwise
+        the exact row and null counts, which the batch stores, and nothing a
+        scan of the data would have to find — bounds, distinct counts and a
+        string's width stay unknown.
         """
+        if self.statistics:
+            return self.statistics.value()[].select(
+                self.batch.schema.names(), self.batch.schema
+            )
         var cols = List[ColumnEstimate](capacity=self.batch.num_columns())
         for i in range(self.batch.num_columns()):
             ref f = self.batch.schema.fields[i]
@@ -1814,7 +1915,7 @@ struct InMemoryTable(Relation, Writable):
         free.
         """
         var estimate = self.estimate()
-        return Cost.source(estimate.rows, estimate.row_width())
+        return Cost.source(estimate.size())
 
     def to_operator(
         self,
@@ -1907,29 +2008,62 @@ struct Filter(Relation, Writable):
     def estimate(self) raises -> Estimate:
         """The input's rows, reduced by what the predicate can be shown to do.
 
-        Selectivity is `Value.mask` over a one-chunk index built from the
-        input's estimate, so it uses the comparisons a scan prunes with. A
-        `false` bit proves no row can match, and the answer is exactly zero;
-        otherwise it is `DEFAULT_SELECTIVITY`, an estimate that never reaches
-        zero. A predicate folded to a constant needs no index, and one that
-        cannot be evaluated, such as one naming an unbound parameter, falls
-        back to the default.
+        See `verdict_of`: the comparisons a scan prunes with, over the input's
+        bounds and over a histogram of the column the predicate reads.
         """
         var input = self.input[].estimate()
-        if self.constant:
-            if self.constant.value():
-                return input^
-            return input.filtered(Approx.exact(0))
+        return input.filtered(
+            Self.verdict_of(self.predicate, self.constant, input)
+        )
 
-        var index = input.to_index()
-        var live = keep_every(index.chunks)
-        try:
-            live = self.predicate.mask(index)
-        except:
-            pass
-        if len(live) == 1 and not live.is_null(0) and not live[0].value():
-            return input.filtered(Approx.exact(0))
-        return input.filtered(input.rows.scaled(DEFAULT_SELECTIVITY))
+    @staticmethod
+    def verdict_of(
+        predicate: DynValue, constant: Optional[Bool], input: Estimate
+    ) raises -> Selectivity:
+        """What `predicate` keeps of an input estimated as `input`. Static, so
+        a join chain's absorbed predicate, which has no `Filter` around it, is
+        judged the same way.
+
+        **A proof first**: `Value.mask` over a one-chunk index built from the
+        input's estimate, the comparisons a scan prunes with — a `false` bit
+        proves no row matches. **Then a share**, for a predicate reading one
+        column with known bounds: the fraction of an equal-width histogram's
+        buckets its `mask` keeps (`ColumnEstimate.histogram`), so an equality
+        keeps one distinct value's share and a range the share of the range it
+        covers. Anything else, and anything that cannot be evaluated — one
+        naming an unbound parameter — keeps `DEFAULT_SELECTIVITY`.
+
+        An input already proven empty is kept whole, whatever the predicate
+        would say about bounds that no longer describe any row.
+        """
+        if input.rows == Approx.exact(0):
+            return Selectivity.everything()
+        if constant:
+            if constant.value():
+                return Selectivity.everything()
+            return Selectivity.nothing()
+
+        if not input.to_index().surviving([predicate.copy()])[0]:
+            return Selectivity.nothing()
+
+        var names = predicate.columns()
+        if len(names) == 1:
+            var column = input.column(names[0])
+            if column:
+                try:
+                    var buckets = column.value().histogram(
+                        HISTOGRAM_BUCKETS, input.rows
+                    )
+                    if buckets.chunks() > 0:
+                        var kept = predicate.mask(buckets)
+                        var n = 0
+                        for i in range(len(kept)):
+                            if kept.is_null(i) or kept[i].value():
+                                n += 1
+                        return Selectivity.share(max(n, 1), len(kept))
+                except:
+                    pass
+        return Selectivity.default()
 
     def cost(self) raises -> Cost:
         """Its input's cost, plus one evaluation per row arriving.
@@ -2044,11 +2178,8 @@ struct Project(Relation, Writable):
         """
         for i in range(len(self.values)):
             if self.names[i] == name:
-                ref v = self.values[i]
-                if v.aggregates():
-                    return False
-                var cols = v.columns()
-                return len(cols) == 1 and cols[0] == name and v.name() == name
+                var read = self.values[i].read_column()
+                return Bool(read) and read.value() == name
         return False
 
     def passes_through_all(self, names: List[String]) -> Bool:
@@ -2077,23 +2208,24 @@ struct Project(Relation, Writable):
         return Project(f(self.input[]), self.names.copy(), self.values.copy())
 
     def estimate(self) raises -> Estimate:
-        """The input's rows unchanged. A column that `passes_through` keeps
-        its summary; any other output, a rename included, is new and keeps
-        only the width of its declared dtype, so this and predicate pushdown
-        agree on what a rename is.
+        """The input's rows unchanged. An output that is a bare column read
+        keeps that column's summary under its own name, **a rename included**:
+        the values are the same ones, whatever they are called. Anything
+        computed is new and keeps only the width of its declared dtype.
+
+        Deliberately wider than `passes_through`, which must refuse a rename
+        because a predicate pushed past one would name a column that does not
+        exist below. An estimate names nothing below, and every input the SQL
+        frontend builds is exactly such a rename.
         """
-        var input = self.input[].estimate()
-        var cols = List[ColumnEstimate](capacity=len(self._schema.fields))
-        for i in range(len(self._schema.fields)):
-            ref f = self._schema.fields[i]
-            var j = -1
-            if self.passes_through(f.name):
-                j = input.index_of(f.name)
-            if j >= 0:
-                cols.append(input.columns[j].copy())
+        var sources = List[String](capacity=len(self.values))
+        for ref v in self.values:
+            # A bare column, as `_output_schema` recognises one.
+            if v.name() != "" and len(v.columns()) == 1:
+                sources.append(v.name())
             else:
-                cols.append(ColumnEstimate.unknown(f.name.copy(), f.dtype))
-        return Estimate(input.rows, cols^)
+                sources.append(String())
+        return self.input[].estimate().select(sources, self._schema)
 
     def cost(self) raises -> Cost:
         """One evaluation per value per row — a projection of fifty columns is
@@ -2280,7 +2412,7 @@ struct Aggregate(Relation, Writable):
         return (
             self.input[].cost()
             + Cost.hash_probe(input.rows)
-            + Cost.hash_build(output.rows, output.row_width())
+            + Cost.hash_build(output.size())
         )
 
     def references(self, mut into: References):
@@ -2474,7 +2606,7 @@ struct Sort(Relation, Writable):
         know which ones they are.
         """
         var input = self.input[].estimate()
-        return self.input[].cost() + Cost.sort(input.rows, input.row_width())
+        return self.input[].cost() + Cost.sort(input.size())
 
     def to_operator(
         self,
@@ -2597,7 +2729,9 @@ struct Window(Relation, Writable):
         column answers unknown-but-for-its-width — a rank, a lag and a framed
         sum are all values nothing has described.
         """
-        return self.input[].estimate().carried(self._schema)
+        return (
+            self.input[].estimate().select(self._schema.names(), self._schema)
+        )
 
     def cost(self) raises -> Cost:
         """A sort, because that is what it does.
@@ -2607,7 +2741,7 @@ struct Window(Relation, Writable):
         `Sort` — a window is not a cheaper way to order.
         """
         var input = self.input[].estimate()
-        return self.input[].cost() + Cost.sort(input.rows, input.row_width())
+        return self.input[].cost() + Cost.sort(input.size())
 
     def references(self, mut into: References):
         self.input[].references(into)
@@ -2650,54 +2784,848 @@ struct Window(Relation, Writable):
         writer.write(")")
 
 
-struct Join(Relation, Writable):
-    """An equijoin over two sub-plans.
+@fieldwise_init
+struct JoinRef(Copyable, Equatable, Movable, Writable):
+    """A column of one participant of a `JoinChain`: which input, and which of
+    its columns.
 
-    The first node with two inputs (the set relations are the others), and
-    the reason `Pipeline` had to be an `Operator`: the build side is a whole
-    plan, and it is handed to the operator as an ordinary boxed stage. Before
-    that, a chain of stages was a different kind of thing from a stage, and
-    there was nowhere to put a second one.
-
-    `left` and `right` say what the answer is and `build_side` what it costs:
-    the output is the left side's columns then the right side's, whichever
-    side is indexed.
+    By participant rather than by name alone, so two inputs may share a column
+    name — a self-join, a natural key — without a key, a filter or an output
+    ever meaning the other one.
     """
 
-    var left: ArcPointer[DynRelation]
-    var right: ArcPointer[DynRelation]
-    var left_keys: List[String]
-    var right_keys: List[String]
-    """Join keys by **name**, resolved from the caller's indices once, here.
+    var input: Int
+    var name: String
 
-    The public verb still takes indices — `plan.mojo` and every existing caller
-    pass them — but a plan node must not *store* them. An index is a position
-    in a child's schema, so any rewrite that changes a child silently rebinds
-    the join to different columns: projection pushdown narrowing a scan is
-    exactly such a rewrite, and it produces a join on the wrong columns with no
-    error anywhere. Resolving to names at construction, where both child
-    schemas are in hand and correct, makes that unrepresentable.
+    def __eq__(self, other: Self) -> Bool:
+        return self.input == other.input and self.name == other.name
 
-    `to_operator` resolves back to indices against whatever schema the child
-    actually has when the plan runs, which is the point."""
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def __lt__(self, other: Self) -> Bool:
+        """By participant, then by column name — an order no plan of a chain
+        changes."""
+        if self.input != other.input:
+            return self.input < other.input
+        return self.name < other.name
+
+    def key(self) -> String:
+        """The name an `Estimate` column for this participant column carries:
+        unique across the chain, since two participants may share a name."""
+        return String("#", self.input, ".", self.name)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.key())
+
+    @staticmethod
+    def keys(refs: List[Self]) -> List[String]:
+        """`refs` as the column names an `Estimate` keys them by."""
+        var out = List[String](capacity=len(refs))
+        for ref r in refs:
+            out.append(r.key())
+        return out^
+
+
+struct JoinLink(Copyable, Equatable, Movable, Writable):
+    """One `.join` of a chain: how participant `k + 1` joins participants
+    `0 … k`, for the chain's `k`-th link.
+
+    `left_keys` read columns of the participants before it, `right_keys`
+    columns of its own. The build side is a hint the planner may overrule —
+    except under `JOIN_ANY`, which keeps one match per *probe* row and so
+    answers differently built from the other side. Which match it keeps is
+    unspecified.
+    """
+
     var kind: JoinKind
     var strictness: UInt8
     var build_side: JoinBuildSide
-    """Which input the hash table is built over. Not part of the schema:
-    `_output_schema` does not read it, so a rewrite may change it without
-    changing what the join returns."""
-    var _schema: Schema
+    var left_keys: List[JoinRef]
+    var right_keys: List[JoinRef]
 
     def __init__(
         out self,
-        var left: DynRelation,
-        var right: DynRelation,
-        var left_keys: List[Int],
-        var right_keys: List[Int],
-        kind: JoinKind = JOIN_INNER,
-        strictness: UInt8 = 0,
-        build_side: JoinBuildSide = BUILD_LEFT,
+        kind: JoinKind,
+        strictness: UInt8,
+        build_side: JoinBuildSide,
+        var left_keys: List[JoinRef],
+        var right_keys: List[JoinRef],
+    ):
+        self.kind = kind
+        self.strictness = strictness
+        self.build_side = build_side
+        self.left_keys = left_keys^
+        self.right_keys = right_keys^
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self.kind == other.kind
+            and self.strictness == other.strictness
+            and self.build_side == other.build_side
+            and self.left_keys == other.left_keys
+            and self.right_keys == other.right_keys
+        )
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def is_inner(self) -> Bool:
+        """An inner `JOIN_ALL` link: associative and commutative with every
+        other, so a planner may join its participant in any order."""
+        return self.kind == JOIN_INNER and self.strictness == JOIN_ALL
+
+    def attaches(self) -> Bool:
+        """Does this link keep, pad or drop the rows before it by what
+        matches in its participant, and otherwise leave them as they are?
+
+        A LEFT, SEMI or ANTI join does, and so does a `JOIN_ANY` inner join
+        probing from the left. Such a link commutes with an inner join or a
+        filter that does not read its participant: `(A ⟕ B) ⋈ C` is
+        `(A ⋈ C) ⟕ B` when `C`'s keys do not read `B`.
+        """
+        return self.passes(True) and not self.passes(False)
+
+    def passes(self, left: Bool) -> Bool:
+        """May a filter over the left side — or the right, when `left` is
+        false — run below this join and leave its answer as it was?
+
+        An inner `JOIN_ALL` join commutes with a filter over either side. A
+        join that keeps, pads or drops one side's rows by what matches on the
+        other — LEFT, SEMI or ANTI keep the left, their mirrors the right, a
+        `JOIN_ANY` inner join its probe side — commutes with a filter over the
+        side it keeps. A filter over a side a join pads would drop the padded
+        rows too, and one over the side a `JOIN_ANY` join picks a match from
+        would change the match.
+        """
+        if self.strictness == JOIN_ALL:
+            if self.kind == JOIN_INNER:
+                return True
+            if (
+                self.kind == JOIN_LEFT
+                or self.kind == JOIN_SEMI
+                or self.kind == JOIN_ANTI
+            ):
+                return left
+            if (
+                self.kind == JOIN_RIGHT
+                or self.kind == JOIN_RIGHT_SEMI
+                or self.kind == JOIN_RIGHT_ANTI
+            ):
+                return not left
+            return False
+        if self.kind == JOIN_INNER:
+            return left == (self.build_side != BUILD_LEFT)
+        return False
+
+    def joined(self, left: Estimate, right: Estimate) -> Estimate:
+        """`Estimate.joined` of `left` and `right` as this link joins them,
+        both keyed by participant column (`JoinRef.key`)."""
+        return Estimate.joined(
+            left,
+            right,
+            JoinRef.keys(self.left_keys),
+            JoinRef.keys(self.right_keys),
+            self.kind,
+            self.strictness,
+            self.build_side,
+        )
+
+    def write_condition[W: Writer](self, mut writer: W):
+        """`on <pairs>`, then the build side unless it is the left, and
+        `any` under `JOIN_ANY`."""
+        writer.write("on ")
+        for i in range(len(self.left_keys)):
+            if i > 0:
+                writer.write(", ")
+            writer.write(self.left_keys[i], "=", self.right_keys[i])
+        if self.build_side != BUILD_LEFT:
+            writer.write(", ", self.build_side)
+        if self.strictness != JOIN_ALL:
+            writer.write(", any")
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.kind, " #", self.right_keys[0].input, " ")
+        self.write_condition(writer)
+
+
+struct JoinFilter(Copyable, Movable):
+    """A predicate a chain evaluates between its joins rather than above
+    them — a residual `Filter` absorbed by `PushFilterIntoJoin`.
+
+    `refs` is parallel to `predicate.columns()`: the name the predicate reads
+    each column by, and the participant column it means. The predicate never
+    moves or changes; only where it is evaluated does — never after the link
+    joining participant `bound + 1`, the first one appended after it was
+    absorbed, so a join appended later never has a filter moved across it.
+
+    A filter lowers itself through function pointers its constructor wires
+    (`stage`, `selection`): only the optimizer builds one, so a binary that
+    never optimizes links neither operator.
+    """
+
+    var predicate: DynValue
+    var refs: List[JoinRef]
+    var bound: Int
+    var _stage: def(
+        DynValue, Schema, List[Int], ExecContext, Bindings
+    ) thin raises -> DynOperator
+    var _selection: def(List[Int], Schema) thin -> DynOperator
+
+    def __init__(
+        out self, var predicate: DynValue, var refs: List[JoinRef], bound: Int
+    ):
+        self.predicate = predicate^
+        self.refs = refs^
+        self.bound = bound
+        self._stage = Self._stage_of
+        self._selection = Self._selection_of
+
+    def with_bounds(self, var refs: List[JoinRef], bound: Int) -> Self:
+        """This filter reading `refs` and bounded by `bound` — how a chain
+        renumbers a filter when its participants change."""
+        var out = self.copy()
+        out.refs = refs^
+        out.bound = bound
+        return out^
+
+    def participants(self) -> ParticipantSet:
+        """The participants this reads."""
+        var out = ParticipantSet()
+        for ref r in self.refs:
+            out = out | ParticipantSet.of(r.input)
+        return out
+
+    def verdict(self, estimate: Estimate) raises -> Selectivity:
+        """What this filter keeps of `estimate`, whose columns are keyed by
+        participant column (`JoinRef.key`)."""
+        var names = self.predicate.columns()
+        var cols = List[ColumnEstimate](capacity=len(names))
+        for i in range(len(names)):
+            var c = estimate.column(self.refs[i].key())
+            if c:
+                cols.append(c.take())
+                cols[len(cols) - 1].name = names[i].copy()
+        return Filter.verdict_of(
+            self.predicate, None, Estimate(estimate.rows, cols^)
+        )
+
+    def stage(
+        self,
+        fields: List[Field],
+        indices: List[Int],
+        ctx: ExecContext,
+        bindings: Bindings,
+    ) raises -> DynOperator:
+        """The operator evaluating this filter over a batch holding its
+        columns at `indices`, typed as `fields` say."""
+        var named = List[Field](capacity=len(fields))
+        var names = self.predicate.columns()
+        for i in range(len(fields)):
+            named.append(
+                Field(
+                    names[i].copy(),
+                    fields[i].dtype.copy(),
+                    fields[i].nullable,
+                    fields[i].metadata.copy(),
+                )
+            )
+        return self._stage(
+            self.predicate, schema(named^), indices, ctx, bindings
+        )
+
+    def selection(self, indices: List[Int], schema: Schema) -> DynOperator:
+        """The operator picking the positions `indices` as `schema` — what a
+        chain answers with after the filters landing on its root, which may
+        read a column its output drops."""
+        return self._selection(indices, schema)
+
+    @staticmethod
+    def _selection_of(indices: List[Int], schema: Schema) -> DynOperator:
+        return SelectOperator(indices.copy(), schema.copy())
+
+    @staticmethod
+    def _stage_of(
+        predicate: DynValue,
+        view: Schema,
+        indices: List[Int],
+        ctx: ExecContext,
+        bindings: Bindings,
+    ) raises -> DynOperator:
+        return FilterOperator(
+            RenamedPredicate(
+                predicate.to_operator(view, False, bindings),
+                indices.copy(),
+                view.copy(),
+            ),
+            ctx.copy(),
+        )
+
+
+struct JoinClasses(Copyable, Movable):
+    """Equality classes of join keys: a union-find over `JoinRef`s.
+
+    Linear scans rather than a hash map, because the verb that builds a join
+    uses this and every binary that joins pays for what it links; a chain has
+    tens of keys, not thousands.
+    """
+
+    var refs: List[JoinRef]
+    var parent: List[Int]
+
+    def __init__(out self):
+        self.refs = List[JoinRef]()
+        self.parent = List[Int]()
+
+    def index(self, r: JoinRef) -> Int:
+        """`r`'s node, or `-1` when no key names it."""
+        for i in range(len(self.refs)):
+            if self.refs[i] == r:
+                return i
+        return -1
+
+    def _add(mut self, r: JoinRef) -> Int:
+        var i = self.index(r)
+        if i >= 0:
+            return i
+        self.refs.append(r.copy())
+        self.parent.append(len(self.parent))
+        return len(self.parent) - 1
+
+    def root(self, var i: Int) -> Int:
+        while self.parent[i] != i:
+            i = self.parent[i]
+        return i
+
+    def union(mut self, a: JoinRef, b: JoinRef):
+        var ra = self.root(self._add(a))
+        var rb = self.root(self._add(b))
+        if ra != rb:
+            self.parent[rb] = ra
+
+    def union_all(mut self, left: List[JoinRef], right: List[JoinRef]):
+        """Every key pair of one join made equal."""
+        for i in range(len(left)):
+            self.union(left[i], right[i])
+
+    def connected(self, a: JoinRef, b: JoinRef) -> Bool:
+        var i = self.index(a)
+        var j = self.index(b)
+        if i < 0 or j < 0:
+            return False
+        return self.root(i) == self.root(j)
+
+
+@fieldwise_init
+struct KeyClass(Copyable, Movable):
+    """One equality class of a chain's inner keys: its members in `JoinRef`
+    order, and the participants holding one."""
+
+    var members: List[JoinRef]
+    var span: ParticipantSet
+
+    def within(self, s: ParticipantSet) -> List[JoinRef]:
+        """The members held by the participants `s`, in order."""
+        var out = List[JoinRef]()
+        for ref m in self.members:
+            if m.input in s:
+                out.append(m.copy())
+        return out^
+
+    def side(self, s: ParticipantSet) -> List[JoinRef]:
+        """The members of `s` a join to `s` compares: every one when they all
+        sit in one participant — no join has compared those to one another
+        yet — and otherwise the first. Undefined unless `span` meets `s`."""
+        var out = self.within(s)
+        if out[0].input != out[len(out) - 1].input:
+            return [out[0].copy()]
+        return out^
+
+
+struct JoinRules(Copyable, Movable):
+    """Which join trees compute a chain's answer: the sets of participants a
+    tree may join (`valid`, `joinable`), on which keys (`keys`, `link`), and
+    where each filter is evaluated (`holds`) — what a planner may choose
+    from, and what `JoinOrder.verify` checks a tree against.
+
+    Participant `i > 0` is joined by link `i - 1` in one of three ways:
+
+    - **On inner keys**, by an inner `JOIN_ALL` link: its keys join the
+      equality classes (`classes`), and any tree comparing every member of
+      every class at least once returns the same bag — a NULL key drops its
+      row on every path, and a NaN matches a NaN, the hash join being
+      NaN-safe.
+    - **Attached**, by a link that keeps, pads or drops the rows before it
+      (`JoinLink.attaches`): only by its own link, once the participants its
+      keys read are in. It then commutes with every inner join and filter
+      over those rows — `(A ⟕ B) ⋈ C` is `(A ⋈ C) ⟕ B` — the rules of
+      Moerkotte, Fender and Eich, *On the Correct and Complete Enumeration of
+      the Core Search Space*, SIGMOD 2013, for these kinds.
+    - **In place**, by any other link — RIGHT, FULL, a right existence join,
+      a `JOIN_ANY` probing from the right, or an inner join reading an
+      attached participant: only by its own link, onto exactly the
+      participants before it, and no set may hold participants from both
+      sides of it without holding it too.
+    """
+
+    var links: List[JoinLink]
+    """Link `i - 1` joins participant `i`."""
+    var classes: List[KeyClass]
+    """The classes the inner keys make, ascending by their least member, so
+    a join's keys come out in an order no plan changes."""
+    var spines: List[ParticipantSet]
+    """Per participant joined by its own link, the participants that must be
+    in first: what its keys read when attached, everything before it when in
+    place. Empty for one joined on inner keys."""
+    var neighbours: List[ParticipantSet]
+    """Per participant, those it shares a class with, attaches to or is
+    attached by — a superset of what joins it, which `joinable` narrows."""
+
+    def __init__(out self, links: List[JoinLink]):
+        var n = len(links) + 1
+        self.links = links.copy()
+        self.classes = List[KeyClass]()
+        self.spines = List[ParticipantSet](length=n, fill=ParticipantSet())
+        self.neighbours = List[ParticipantSet](length=n, fill=ParticipantSet())
+
+        var union = JoinClasses()
+        var attached = ParticipantSet()
+        for i in range(1, n):
+            ref link = links[i - 1]
+            var reads = ParticipantSet()
+            for ref r in link.left_keys:
+                reads = reads | ParticipantSet.of(r.input)
+            if link.is_inner() and not reads.meets(attached):
+                union.union_all(link.left_keys, link.right_keys)
+                continue
+            if link.attaches():
+                self.spines[i] = reads
+                attached = attached | ParticipantSet.of(i)
+            else:
+                self.spines[i] = ParticipantSet.below(i)
+            self.neighbours[i] = self.neighbours[i] | self.spines[i]
+            for j in self.spines[i]:
+                self.neighbours[j] = self.neighbours[j] | ParticipantSet.of(i)
+
+        var roots = List[Int]()
+        for i in range(len(union.refs)):
+            var root = union.root(i)
+            var k = -1
+            for j in range(len(roots)):
+                if roots[j] == root:
+                    k = j
+            if k < 0:
+                k = len(roots)
+                roots.append(root)
+                self.classes.append(KeyClass(List[JoinRef](), ParticipantSet()))
+            ref r = union.refs[i]
+            ref c = self.classes[k]
+            c.span = c.span | ParticipantSet.of(r.input)
+            var at = len(c.members)
+            while at > 0 and r < c.members[at - 1]:
+                at -= 1
+            c.members.insert(at, r.copy())
+        for i in range(1, len(self.classes)):
+            var j = i
+            while (
+                j > 0
+                and self.classes[j].members[0] < self.classes[j - 1].members[0]
+            ):
+                self.classes.swap_elements(j, j - 1)
+                j -= 1
+        for ref c in self.classes:
+            for ref m in c.members:
+                self.neighbours[m.input] = self.neighbours[m.input] | (
+                    c.span - ParticipantSet.of(m.input)
+                )
+
+    def participants(self) -> Int:
+        return len(self.links) + 1
+
+    def everything(self) -> ParticipantSet:
+        return ParticipantSet.below(self.participants())
+
+    def in_place(self, i: Int) -> Bool:
+        """Is participant `i` joined by its own link onto exactly the
+        participants before it?"""
+        return (
+            not self.spines[i].is_empty() and not self.links[i - 1].attaches()
+        )
+
+    # -- which sets a tree may join -------------------------------------------
+    def valid(self, s: ParticipantSet) -> Bool:
+        """Can a tree join exactly the participants `s`? Not one holding a
+        participant joined by its own link without what must be in first,
+        nor one holding participants from both sides of an in-place link
+        without that link's own."""
+        if s.is_single():
+            return True
+        for i in s:
+            if not self.spines[i].within(s):
+                return False
+        for i in range(1, self.participants()):
+            if (
+                self.in_place(i)
+                and i not in s
+                and s.meets(ParticipantSet.below(i))
+                and not s.within(ParticipantSet.below(i))
+            ):
+                return False
+        return True
+
+    def attaching(self, a: ParticipantSet, b: ParticipantSet) -> Int:
+        """The participant joined by its own link when `a` meets `b` — one
+        side that participant alone, the other holding what must be in
+        first — or `-1`."""
+        if b.is_single() and not self.spines[b.lowest()].is_empty():
+            if self.spines[b.lowest()].within(a):
+                return b.lowest()
+        if a.is_single() and not self.spines[a.lowest()].is_empty():
+            if self.spines[a.lowest()].within(b):
+                return a.lowest()
+        return -1
+
+    def joinable(self, a: ParticipantSet, b: ParticipantSet) -> Bool:
+        """May a tree join `a` to `b`: by a participant's own link, or on
+        inner keys, between two sets a tree can join into one it can join
+        too."""
+        if not (self.valid(a) and self.valid(b) and self.valid(a | b)):
+            return False
+        if self.attaching(a, b) >= 0:
+            return True
+        for ref c in self.classes:
+            if c.span.meets(a) and c.span.meets(b):
+                return True
+        return False
+
+    def adjacent(self, s: ParticipantSet) -> ParticipantSet:
+        """The participants outside `s` that share a class with one inside
+        it, or are joined to it by a link."""
+        var out = ParticipantSet()
+        for i in s:
+            out = out | self.neighbours[i]
+        return out - s
+
+    def keys(
+        self, a: ParticipantSet, b: ParticipantSet
+    ) -> Tuple[List[JoinRef], List[JoinRef]]:
+        """The key pairs joining `a` to `b`: per class present on both sides,
+        `KeyClass.side` of each, each member paired with the other side's
+        first — so every member of every class is compared by the smallest
+        subtree joining it to another, and the tree returns the bag."""
+        var left = List[JoinRef]()
+        var right = List[JoinRef]()
+        for ref c in self.classes:
+            if c.span.meets(a) and c.span.meets(b):
+                var l = c.side(a)
+                var r = c.side(b)
+                for ref x in l:
+                    left.append(x.copy())
+                    right.append(r[0].copy())
+                for k in range(1, len(r)):
+                    left.append(l[0].copy())
+                    right.append(r[k].copy())
+        return (left^, right^)
+
+    def link(self, a: ParticipantSet, b: ParticipantSet) -> JoinLink:
+        """The link joining `a` to `b`: a participant's own, or an inner join
+        on `keys`. Undefined unless `joinable(a, b)`."""
+        var own = self.attaching(a, b)
+        if own >= 0:
+            return self.links[own - 1].copy()
+        var keys = self.keys(a, b)
+        return JoinLink(
+            JOIN_INNER, JOIN_ALL, BUILD_LEFT, keys[0].copy(), keys[1].copy()
+        )
+
+    # -- filters -------------------------------------------------------------
+    def holds(self, f: JoinFilter, s: ParticipantSet) -> Bool:
+        """Is filter `f` evaluated within every tree over `s`? When `s` holds what it reads, unless a link
+        stands between them that the filter may not cross: one over the
+        participant it joins alone that does not pass its right side, or one
+        at or below the bound, not passing its left side, over participants
+        all before it. A filter is evaluated at the lowest node holding it.
+        """
+        # A filter reading no column, a parameter test constant per
+        # execution, goes toward participant 0.
+        var need = f.participants()
+        if need.is_empty():
+            need = ParticipantSet.of(0)
+        if s.is_empty() or not need.within(s):
+            return False
+        if s.is_single():
+            var i = s.lowest()
+            if i > 0 and not self.links[i - 1].passes(False):
+                return False
+        for i in range(1, min(f.bound, len(self.links)) + 1):
+            if (
+                not self.links[i - 1].passes(True)
+                and need.within(ParticipantSet.below(i))
+                and i not in s
+            ):
+                return False
+        return True
+
+
+struct JoinPricing(Movable):
+    """What joining sets of a chain's participants produces and costs — the
+    one definition `JoinChain.estimate`, a search and a tree's
+    `JoinOrder.cost` all read."""
+
+    var rules: JoinRules
+    var filters: List[JoinFilter]
+    var inputs: List[Estimate]
+    """Each participant's estimate (`JoinChain.participant_estimates`)."""
+    var _sizes: Dict[ParticipantSet, Size]
+
+    def __init__(out self, chain: JoinChain) raises:
+        self.rules = chain.rules()
+        self.filters = chain.filters.copy()
+        self.inputs = chain.participant_estimates()
+        self._sizes = Dict[ParticipantSet, Size]()
+
+    def size(mut self, s: ParticipantSet) raises -> Size:
+        """The size of `estimate(s)`, memoised: a search asks for both halves
+        of every pair."""
+        var hit = self._sizes.get(s)
+        if hit:
+            return hit.value()
+        var out = self.estimate(s).size()
+        self._sizes[s] = out
+        return out
+
+    def join(
+        mut self, a: ParticipantSet, b: ParticipantSet, link: JoinLink
+    ) raises -> Cost:
+        """Joining `a` to `b` by `link`, hashing its build side, and
+        evaluating the filters it is the first to hold over its rows."""
+        var cost = Cost.hash_join(
+            self.size(a), self.size(b), link.build_side, link.kind
+        )
+        var s = a | b
+        for ref f in self.filters:
+            if (
+                self.rules.holds(f, s)
+                and not self.rules.holds(f, a)
+                and not self.rules.holds(f, b)
+            ):
+                cost = cost + Cost.per_row(self.size(s).rows)
+        return cost
+
+    def estimate(self, s: ParticipantSet) raises -> Estimate:
+        """What joining the participants `s` produces, every filter `s`
+        holds applied — unknown when no tree joins `s`.
+
+        They are joined one by one, from the lowest, each time the lowest
+        that may join those already in, by `JoinLink.joined`: an order fixed
+        by the set, so every tree over `s` is priced on one cardinality and a
+        search comparing trees compares only their costs.
+        """
+        var into = ParticipantSet.of(s.lowest())
+        var out = self._filtered(
+            self.inputs[s.lowest()].copy(), into, ParticipantSet()
+        )
+        while into != s:
+            var next = -1
+            for i in s - into:
+                if next < 0 and self.rules.joinable(into, ParticipantSet.of(i)):
+                    next = i
+            if next < 0:
+                return Estimate()
+            var one = ParticipantSet.of(next)
+            out = self.rules.link(into, one).joined(out, self.inputs[next])
+            var before = into
+            into = into | one
+            out = self._filtered(out^, into, before)
+        return out^
+
+    def _filtered(
+        self, var estimate: Estimate, s: ParticipantSet, before: ParticipantSet
+    ) raises -> Estimate:
+        """`estimate` of `s` with the filters `s` holds and `before` did not
+        applied."""
+        var kept = Selectivity.everything()
+        for ref f in self.filters:
+            if self.rules.holds(f, s) and not self.rules.holds(f, before):
+                kept = kept * f.verdict(estimate)
+        return estimate.filtered(kept)
+
+    def leaf(mut self, p: Int) raises -> Cost:
+        """The filters evaluated on participant `p` alone, over its rows."""
+        var one = ParticipantSet.of(p)
+        var out = Cost()
+        for ref f in self.filters:
+            if self.rules.holds(f, one):
+                out = out + Cost.per_row(self.size(one).rows)
+        return out
+
+    def tree(mut self, order: JoinOrder) raises -> Cost:
+        """What `order`'s joins and filters take, its participants' own work
+        aside: each join as it hashes, each filter at the node it lands on."""
+        var masks = order.masks()
+        var out = Cost()
+        for p in range(order.inputs):
+            out = out + self.leaf(p)
+        for ref j in order.joins:
+            out = out + self.join(masks[j.left], masks[j.right], j.link)
+        return out
+
+
+def _templated(template: String, name: String) -> String:
+    """ibis's `lname`/`rname`: `{name}` replaced, empty meaning the name."""
+    if template == "":
+        return name.copy()
+    return template.replace("{name}", name)
+
+
+struct JoinChain(Relation, Writable):
+    """Every join, as ibis represents one (`ops.JoinChain`): the participants,
+    one link per `.join` saying how its participant joins those before it, and
+    the columns the chain answers with — one node.
+
+    **What the answer is and what computes it are separate.** The links say
+    what the answer is, and the output is `refs`, a list of participant
+    columns parallel to the schema's fields, so it never depends on the order
+    joins run in. Which tree runs them is physical (`planned_order`):
+    left-deep in link order, unless the optimizer's `JoinOrdering` chose
+    another and attached it (`with_order`).
+
+    **Names follow ibis.** An inner key present on both sides under one name is
+    emitted once; any other clash is renamed by the join's `lname`/`rname`
+    (`{name}_right` by default), and a clash those leave raises at the join.
+
+    Everything resolves by participant, never by name alone: two inputs may
+    share a column name, and the chain lowers positionally, so it never has to
+    tell them apart by name.
+    """
+
+    comptime MAX_INPUTS = 62
+    """Participants are bits of an `Int` mask. A query joining more tables than
+    this is not one anyone writes."""
+
+    var inputs: List[ArcPointer[DynRelation]]
+    var links: List[JoinLink]
+    """Link `k` joins participant `k + 1` to participants `0 … k`."""
+    var refs: List[JoinRef]
+    """The output: the participant column behind each field of `_schema`."""
+    var filters: List[JoinFilter]
+    # Shared: inline, the schema makes the chain the variant's largest member
+    # and every `DynRelation` move wider, in binaries that never join.
+    var _schema: ArcPointer[Schema]
+    var _order: ArcPointer[JoinOrder]
+    """The tree the chain is computed by: left-deep as written unless the
+    optimizer chose another (`with_order`). Shared, like the schema."""
+
+    def __init__(
+        out self,
+        var inputs: List[ArcPointer[DynRelation]],
+        var links: List[JoinLink],
+        var refs: List[JoinRef],
+        names: List[String],
+        var filters: List[JoinFilter],
     ) raises:
+        if len(inputs) > Self.MAX_INPUTS:
+            raise InvalidError(
+                t"join: {len(inputs)} inputs, at most {Self.MAX_INPUTS}"
+            )
+        if len(refs) != len(names):
+            raise InvalidError(
+                t"join: {len(refs)} columns but {len(names)} names"
+            )
+        if len(links) == 0 or len(links) != len(inputs) - 1:
+            raise InvalidError(
+                t"join: {len(links)} links for {len(inputs)} inputs"
+            )
+        var schemas = List[Schema](capacity=len(inputs))
+        for ref inp in inputs:
+            schemas.append(inp[].schema())
+        var fields = List[Field](capacity=len(refs))
+        for i in range(len(refs)):
+            ref r = refs[i]
+            if r.input < 0 or r.input >= len(inputs):
+                raise IndexError(t"join: no input {r.input}")
+            ref src = schemas[r.input]
+            var at = src.get_field_index(r.name)
+            if at < 0:
+                raise KeyError(
+                    t"join: input {r.input} has no column '{r.name}'"
+                )
+            ref f = src.fields[at]
+            fields.append(
+                Field(
+                    names[i].copy(),
+                    f.dtype.copy(),
+                    f.nullable,
+                    f.metadata.copy(),
+                )
+            )
+        # Link `k` reads participants up to `k` and joins `k + 1`; a filter
+        # reads participants up to its bound.
+        for k in range(len(links)):
+            ref link = links[k]
+            if len(link.left_keys) == 0 or len(link.left_keys) != len(
+                link.right_keys
+            ):
+                raise InvalidError(t"join: link {k} has unpaired keys")
+            for ref r in link.left_keys:
+                if r.input < 0 or r.input > k:
+                    raise InvalidError(t"join: link {k} reads {r} on the left")
+            for ref r in link.right_keys:
+                if r.input != k + 1:
+                    raise InvalidError(t"join: link {k} reads {r} on the right")
+        for ref f in filters:
+            if f.bound < 0 or f.bound >= len(inputs):
+                raise InvalidError(t"join: a filter bounded by #{f.bound}")
+            for ref r in f.refs:
+                if r.input > f.bound:
+                    raise InvalidError(
+                        t"join: a filter bounded by #{f.bound} reads {r}"
+                    )
+        self._schema = ArcPointer(schema(fields^))
+        self.inputs = inputs^
+        self.links = links^
+        self.refs = refs^
+        self.filters = filters^
+        self._order = ArcPointer(
+            JoinOrder.written(len(self.inputs), self.links)
+        )
+
+    # -- building ------------------------------------------------------------
+    @staticmethod
+    def _columns_of(relation: DynRelation, input: Int) raises -> List[JoinRef]:
+        """`relation`'s columns as participant `input`'s. A participant is
+        read by column name, so it may not repeat one."""
+        var fields = relation.schema().fields.copy()
+        var out = List[JoinRef](capacity=len(fields))
+        for i in range(len(fields)):
+            for j in range(i):
+                if fields[i].name == fields[j].name:
+                    raise InvalidError(
+                        t"join: input {input} has '{fields[i].name}' twice"
+                    )
+            out.append(JoinRef(input, fields[i].name.copy()))
+        return out^
+
+    @staticmethod
+    def joined(
+        left: DynRelation,
+        right: DynRelation,
+        left_keys: List[Int],
+        right_keys: List[Int],
+        kind: JoinKind,
+        strictness: UInt8,
+        build_side: JoinBuildSide,
+        lname: String,
+        rname: String,
+    ) raises -> JoinChain:
+        """`left` joined to `right` — extending `left` when it is a chain, the
+        way ibis's `Join.join` does, with ibis's name rules.
+
+        `right` is one participant, a chain included, as in ibis:
+        `MergeJoinChains` splices a nested chain in, so a chain written bushy
+        is one the planner can reorder. Doing it here cost every binary that
+        joins the splicing code whether or not it ever nests a chain.
+        """
         if len(left_keys) != len(right_keys):
             raise InvalidError(
                 t"join: {len(left_keys)} left keys but {len(right_keys)} right "
@@ -2705,246 +3633,404 @@ struct Join(Relation, Writable):
             )
         if len(left_keys) == 0:
             raise InvalidError("join: needs at least one key pair")
-        self._schema = Self._output_schema(left.schema(), right.schema(), kind)
-        self.left = ArcPointer(left^)
-        self.right = ArcPointer(right^)
-        self.left_keys = Self._names_for(
-            self.left[].schema(), left_keys, "left"
-        )
-        self.right_keys = Self._names_for(
-            self.right[].schema(), right_keys, "right"
-        )
-        self.kind = kind
-        self.strictness = strictness
-        self.build_side = build_side
 
-    def __init__(
-        out self,
-        var left: DynRelation,
-        var right: DynRelation,
-        *,
-        var left_names: List[String],
-        var right_names: List[String],
-        kind: JoinKind = JOIN_INNER,
-        strictness: UInt8 = 0,
-        build_side: JoinBuildSide = BUILD_LEFT,
-    ) raises:
-        """By name, for a rewrite putting a join back together.
+        # The left side as a chain's pieces: its own when it is one,
+        # otherwise a first participant outputting its columns.
+        var inputs: List[ArcPointer[DynRelation]]
+        var links: List[JoinLink]
+        var filters: List[JoinFilter]
+        var left_refs: List[JoinRef]
+        if left.isa[JoinChain]():
+            ref c = left.get[JoinChain]()
+            inputs = c.inputs.copy()
+            links = c.links.copy()
+            filters = c.filters.copy()
+            left_refs = c.refs.copy()
+        else:
+            inputs = [ArcPointer(left.copy())]
+            links = List[JoinLink]()
+            filters = List[JoinFilter]()
+            left_refs = Self._columns_of(left, 0)
+        var left_schema = left.schema()
+        var left_names = left_schema.names()
+        var p = len(inputs)
+        inputs.append(ArcPointer(right.copy()))
+        var right_refs = Self._columns_of(right, p)
+        var right_schema = right.schema()
+        var right_names = right_schema.names()
 
-        The index form is the public verb; this is what `traverse` and
-        `optimizer.mojo` use, because a rewrite already holds names and
-        converting back to indices only to have them re-resolved would be a
-        round trip through the representation this node exists to avoid.
+        var lk = List[JoinRef](capacity=len(left_keys))
+        for idx in left_keys:
+            if idx < 0 or idx >= len(left_refs):
+                raise IndexError(t"join: left key {idx} out of range")
+            lk.append(left_refs[idx].copy())
+        var rk = List[JoinRef](capacity=len(right_keys))
+        for idx in right_keys:
+            if idx < 0 or idx >= len(right_refs):
+                raise IndexError(t"join: right key {idx} out of range")
+            rk.append(right_refs[idx].copy())
+        links.append(JoinLink(kind, strictness, build_side, lk^, rk^))
 
-        `build_side` defaults to `BUILD_LEFT`; the rules in `optimizer.mojo`
-        pass `j.build_side` through, so a rebuilt join keeps its choice.
-        """
-        self._schema = Self._output_schema(left.schema(), right.schema(), kind)
-        self.left = ArcPointer(left^)
-        self.right = ArcPointer(right^)
-        self.left_keys = left_names^
-        self.right_keys = right_names^
-        self.kind = kind
-        self.strictness = strictness
-        self.build_side = build_side
+        # ibis's `disambiguate_fields`, raising where it would leave a clash.
+        var names = List[String]()
+        var refs = List[JoinRef]()
+        if kind == JOIN_SEMI or kind == JOIN_ANTI:
+            names = left_names.copy()
+            refs = left_refs.copy()
+        elif kind == JOIN_RIGHT_SEMI or kind == JOIN_RIGHT_ANTI:
+            names = right_names.copy()
+            refs = right_refs.copy()
+        else:
+            # An outer or existence link equates nothing its output can rely
+            # on — padded rows are NULL on one side — so only inner ones do.
+            var inner = kind == JOIN_INNER
+            var classes = JoinClasses()
+            for ref l in links:
+                if l.kind == JOIN_INNER:
+                    classes.union_all(l.left_keys, l.right_keys)
+            for i in range(len(left_names)):
+                var name = left_names[i].copy()
+                var j = right_schema.get_field_index(name)
+                if j >= 0 and not (
+                    inner and classes.connected(left_refs[i], right_refs[j])
+                ):
+                    name = _templated(lname, name)
+                Self._unclashed(names, name)
+                names.append(name^)
+                refs.append(left_refs[i].copy())
+            for j in range(len(right_names)):
+                var name = right_names[j].copy()
+                var i = left_schema.get_field_index(name)
+                if i >= 0:
+                    if inner and classes.connected(left_refs[i], right_refs[j]):
+                        continue
+                    name = _templated(rname, name)
+                Self._unclashed(names, name)
+                names.append(name^)
+                refs.append(right_refs[j].copy())
+        return JoinChain(inputs^, links^, refs^, names, filters^)
 
     @staticmethod
-    def _names_for(
-        schema: Schema, indices: List[Int], side: String
-    ) raises -> List[String]:
-        """The column names at `indices`, or a diagnosable error.
+    def _unclashed(names: List[String], name: String) raises:
+        """Raise when `name` is already one of the join's output `names`."""
+        if name in names:
+            raise InvalidError(
+                t"join: two columns would be named '{name}'; tell them apart"
+                t" with `lname` or `rname`"
+            )
 
-        Out-of-range is caught here rather than at execution, where it would
-        surface as an opaque kernel failure well after the plan was built.
-        """
-        var out = List[String](capacity=len(indices))
-        for idx in indices:
-            if idx < 0 or idx >= len(schema.fields):
-                raise IndexError(
-                    t"join: {side} key index {idx} out of range for "
-                    t"{len(schema.fields)} columns"
-                )
-            out.append(schema.fields[idx].name.copy())
+    # -- the output ----------------------------------------------------------
+    def names(self) -> List[String]:
+        return self._schema[].names()
+
+    def ref_of(self, name: String) raises KeyError -> JoinRef:
+        """The participant column behind output `name`."""
+        var at = self._schema[].get_field_index(name)
+        if at < 0:
+            raise KeyError(t"join: no output column '{name}'")
+        return self.refs[at].copy()
+
+    def rules(self) -> JoinRules:
+        """The trees that compute this chain's answer (`JoinRules`)."""
+        return JoinRules(self.links)
+
+    # -- rebuilding ----------------------------------------------------------
+    def _rebuilt(
+        self,
+        var inputs: List[ArcPointer[DynRelation]],
+        var refs: List[JoinRef],
+        names: List[String],
+        var filters: List[JoinFilter],
+    ) raises -> JoinChain:
+        """This chain's links and order over `inputs`, answering with `refs`
+        under `names`, with `filters`."""
+        var out = JoinChain(inputs^, self.links.copy(), refs^, names, filters^)
+        out._order = self._order
         return out^
 
-    @staticmethod
-    def _indices_for(
-        schema: Schema, names: List[String], side: String
-    ) raises -> List[Int]:
-        """Where `names` live in `schema` now.
+    def with_output(
+        self, var refs: List[JoinRef], names: List[String]
+    ) raises -> JoinChain:
+        """This chain answering with the participant columns `refs` under
+        `names`, everything else kept."""
+        return self._rebuilt(
+            self.inputs.copy(), refs^, names, self.filters.copy()
+        )
 
-        Called at lowering, not construction, so a rewrite that reordered or
-        narrowed the child is followed rather than ignored.
-        """
-        var out = List[Int](capacity=len(names))
-        for ref n in names:
-            var at = schema.get_field_index(n)
-            if at < 0:
-                raise KeyError(t"join: {side} key '{n}' is not in the input")
-            out.append(at)
+    def with_inputs(
+        self, var inputs: List[ArcPointer[DynRelation]]
+    ) raises -> JoinChain:
+        """This chain over rewritten participants, everything else kept."""
+        return self._rebuilt(
+            inputs^, self.refs.copy(), self.names(), self.filters.copy()
+        )
+
+    def with_filters(self, var filters: List[JoinFilter]) raises -> JoinChain:
+        """This chain evaluating `filters` between its joins, everything else
+        kept."""
+        return self._rebuilt(
+            self.inputs.copy(), self.refs.copy(), self.names(), filters^
+        )
+
+    def with_order(self, var order: JoinOrder) raises -> JoinChain:
+        """This chain computed by the tree `order` — how `JoinOrdering` hands
+        a chain the tree it chose. Raises unless `order` computes this chain's
+        answer (`JoinOrder.verify`)."""
+        order.verify(self)
+        var out = self.copy()
+        out._order = ArcPointer(order^)
         return out^
 
-    @staticmethod
-    def _output_schema(
-        left: Schema, right: Schema, kind: JoinKind
-    ) raises -> Schema:
-        """Left fields then right fields, or one side's alone for the
-        existence filters, as `JoinKind.emits_left_columns` and
-        `emits_right_columns` say. It takes no build side: which side is
-        indexed does not change what the join returns.
-        """
-        var fields = List[Field]()
-        if kind.emits_left_columns():
-            for ref f in left.fields:
-                fields.append(f.copy())
-        if kind.emits_right_columns():
-            for ref f in right.fields:
-                fields.append(f.copy())
-        return schema(fields^)
-
+    # -- Relation ------------------------------------------------------------
     def traverse[
         F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
-        """Both sides, which is why this takes a function rather than a single
-        child: a join has two inputs."""
-        return Join(
-            f(self.left[]),
-            f(self.right[]),
-            left_names=self.left_keys.copy(),
-            right_names=self.right_keys.copy(),
-            kind=self.kind,
-            strictness=self.strictness,
-            build_side=self.build_side,
-        )
-
-    def with_build_side(self, build_side: JoinBuildSide) raises -> Join:
-        """This join, indexing the other input: the same answer at a different
-        cost. `schema()` is unchanged, since `_output_schema` does not read the
-        build side. On the node so a rule need not rebuild the join field by
-        field and risk dropping one.
-        """
-        return Join(
-            self.left[].copy(),
-            self.right[].copy(),
-            left_names=self.left_keys.copy(),
-            right_names=self.right_keys.copy(),
-            kind=self.kind,
-            strictness=self.strictness,
-            build_side=build_side,
-        )
+        """Every participant — a chain has as many inputs as it joins."""
+        var inputs = List[ArcPointer[DynRelation]](capacity=len(self.inputs))
+        for ref inp in self.inputs:
+            inputs.append(ArcPointer(f(inp[])))
+        return self.with_inputs(inputs^)
 
     def references(self, mut into: References):
-        self.left[].references(into)
-        self.right[].references(into)
+        for ref inp in self.inputs:
+            inp[].references(into)
+        for ref f in self.filters:
+            f.predicate.references(into)
 
     def schema(self) -> Schema:
-        return self._schema.copy()
+        return self._schema[].copy()
 
     def estimate(self) raises -> Estimate:
-        """The containment estimate, computed by `Estimate.joined`. The keys
-        are names, so each side's summary is found by name and a narrowed child
-        schema cannot misdirect the lookup.
-        """
-        return Estimate.joined(
-            self.left[].estimate(),
-            self.right[].estimate(),
-            self.left_keys,
-            self.right_keys,
-            self.kind,
-        )
-
-    def cost_with(self, build_side: JoinBuildSide) raises -> Cost:
-        """What this join would cost if it indexed `build_side`.
-
-        A hypothetical rather than a reading of `self.build_side`, so
-        `SelectBuildSide` can ask for both arrangements from one formula. The
-        children cost the same either way; only the build and probe terms
-        move, and an unknown on either side makes both answers unknown.
-        """
-        var left = self.left[].estimate()
-        var right = self.right[].estimate()
-        var children = self.left[].cost() + self.right[].cost()
-        if build_side == BUILD_LEFT:
-            return (
-                children
-                + Cost.hash_build(left.rows, left.row_width())
-                + Cost.hash_probe(right.rows)
-            )
-        else:
-            return (
-                children
-                + Cost.hash_build(right.rows, right.row_width())
-                + Cost.hash_probe(left.rows)
-            )
+        """The rows this chain answers with: `JoinPricing.estimate` of every
+        participant — so no tree moves it."""
+        var pricing = JoinPricing(self)
+        var out = pricing.estimate(pricing.rules.everything())
+        return out.select(JoinRef.keys(self.refs), self.schema())
 
     def cost(self) raises -> Cost:
-        """What this join costs as written, `cost_with(self.build_side)`, so a
-        plan's cost reflects the build side chosen for it.
-        """
-        return self.cost_with(self.build_side)
+        """What running this chain along its planned tree should take; see
+        `JoinOrder.cost`."""
+        var pricing = JoinPricing(self)
+        var out = pricing.tree(self._order[])
+        for ref input in self.inputs:
+            out = out + input[].cost()
+        return out
+
+    def participant_estimates(self) raises -> List[Estimate]:
+        """Each participant's estimate, its columns keyed by participant
+        column (`JoinRef.key`), since two participants may share a name."""
+        var out = List[Estimate](capacity=len(self.inputs))
+        for p in range(len(self.inputs)):
+            var est = self.inputs[p][].estimate()
+            for ref c in est.columns:
+                c.name = JoinRef(p, c.name.copy()).key()
+            out.append(est^)
+        return out^
+
+    # -- lowering ------------------------------------------------------------
+    def planned_order(self) -> JoinOrder:
+        """The tree this chain is computed by: the one the optimizer chose,
+        or left-deep in link order."""
+        return self._order[].copy()
 
     def to_operator(
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
     ) raises -> Pipeline:
-        """The probe side is the pipeline and the build side a stage within it.
-        The operator is given build/probe roles, not left and right, and passes
-        `build_side` to the kernel to restore the left-then-right order.
-        """
-        var left_on = Self._indices_for(
-            self.left[].schema(), self.left_keys, "left"
-        )
-        var right_on = Self._indices_for(
-            self.right[].schema(), self.right_keys, "right"
-        )
-        # Two arrangements, spelled out. Picking the roles into locals first
-        # and building one `JoinOperator` reads as the tighter code and
-        # measured **+3,840 bytes** of `__text` on `query_join`: the branches
-        # inline away, while `DynRelation.copy()` on each side does not.
-        if self.build_side == BUILD_LEFT:
-            var probe = self.right[].to_operator(ctx, bindings)
-            probe.append(
-                JoinOperator(
-                    self.left[].to_operator(ctx, bindings),
-                    left_on^,
-                    right_on^,
-                    self.kind,
-                    self.strictness,
-                    self.build_side,
-                    self._schema.copy(),
-                    self.left[].schema(),
-                    self.right[].schema(),
-                    ctx.copy(),
-                )
-            )
-            return probe^
-        else:
-            var probe = self.left[].to_operator(ctx, bindings)
-            probe.append(
-                JoinOperator(
-                    self.right[].to_operator(ctx, bindings),
-                    right_on^,
-                    left_on^,
-                    self.kind,
-                    self.strictness,
-                    self.build_side,
-                    self._schema.copy(),
-                    self.right[].schema(),
-                    self.left[].schema(),
-                    ctx.copy(),
-                )
-            )
-            return probe^
+        """The planned tree, bottom-up: each participant's pipeline and each
+        join's `JoinOperator` — probe side the pipeline, build side a stage —
+        with the filters landing on it after it, and at the root the chain's
+        output picked by position."""
+        ref order = self._order[]
+        var landings = List[Int](capacity=len(self.filters))
+        if len(self.filters) > 0:
+            var masks = order.masks()
+            var rules = self.rules()
+            for ref f in self.filters:
+                landings.append(order.landing(masks, rules, f))
+        var cols = List[JoinRef]()
+        return self._lower(order.root(), landings, ctx, bindings, cols)
 
+    def _fields(self, cols: List[JoinRef]) raises -> Schema:
+        """The participants' own fields behind `cols`, as they are: names may
+        repeat, since everything below reads by position."""
+        var fields = List[Field](capacity=len(cols))
+        for ref c in cols:
+            fields.append(
+                self.inputs[c.input][].schema().field(name=c.name).copy()
+            )
+        return schema(fields^)
+
+    @staticmethod
+    def _positions(
+        cols: List[JoinRef], want: List[JoinRef]
+    ) raises -> List[Int]:
+        var out = List[Int](capacity=len(want))
+        for ref w in want:
+            var at = -1
+            for i in range(len(cols)):
+                if cols[i] == w:
+                    at = i
+                    break
+            if at < 0:
+                raise InternalError(t"join: column {w} is not in its input")
+            out.append(at)
+        return out^
+
+    def _stages(
+        self,
+        node: Int,
+        cols: List[JoinRef],
+        landings: List[Int],
+        ctx: ExecContext,
+        bindings: Bindings,
+    ) raises -> List[DynOperator]:
+        """The filters landing on `node`, in chain order, each reading its
+        columns at their positions in `cols`."""
+        var out = List[DynOperator]()
+        for i in range(len(self.filters)):
+            if landings[i] == node:
+                ref f = self.filters[i]
+                out.append(
+                    f.stage(
+                        self._fields(f.refs).fields,
+                        Self._positions(cols, f.refs),
+                        ctx,
+                        bindings,
+                    )
+                )
+        return out^
+
+    def _lower(
+        self,
+        node: Int,
+        landings: List[Int],
+        ctx: ExecContext,
+        bindings: Bindings,
+        mut cols: List[JoinRef],
+    ) raises -> Pipeline:
+        """`node` of the planned tree as a pipeline, and in `cols` the
+        participant column each of its output positions holds — the chain's
+        own output at the root."""
+        ref order = self._order[]
+        if not order.is_join(node):
+            var pipe = self.inputs[node][].to_operator(ctx, bindings)
+            cols = List[JoinRef]()
+            for ref f in self.inputs[node][].schema().fields:
+                cols.append(JoinRef(node, f.name.copy()))
+            var stages = self._stages(node, cols, landings, ctx, bindings)
+            while len(stages) > 0:
+                pipe.append(stages.pop(0))
+            return pipe^
+
+        ref j = order.join(node)
+        var lcols = List[JoinRef]()
+        var rcols = List[JoinRef]()
+        var left = self._lower(j.left, landings, ctx, bindings, lcols)
+        var right = self._lower(j.right, landings, ctx, bindings, rcols)
+        var left_on = Self._positions(lcols, j.link.left_keys)
+        var right_on = Self._positions(rcols, j.link.right_keys)
+        cols = List[JoinRef]()
+        if j.link.kind.emits_left_columns():
+            cols.extend(lcols.copy())
+        if j.link.kind.emits_right_columns():
+            cols.extend(rcols.copy())
+        var joined = self._fields(cols)
+        var stages = self._stages(node, cols, landings, ctx, bindings)
+
+        # The root answers with the chain's output, picked by position: in
+        # the join, or after the filters landing on it, which may read a
+        # column the output drops.
+        var root = node == order.root()
+        var pick = Self._positions(cols, self.refs) if root else List[Int]()
+        var select: List[Int]
+        var output: Schema
+        if root and len(stages) == 0:
+            select = pick.copy()
+            output = self.schema()
+        else:
+            select = List[Int](capacity=len(cols))
+            for i in range(len(cols)):
+                select.append(i)
+            output = joined.copy()
+        if root:
+            cols = self.refs.copy()
+
+        # Two arrangements, spelled out: picking the roles into locals and
+        # building one `JoinOperator` measured +3,840 bytes on `query_join`.
+        var pipe: Pipeline
+        if j.link.build_side == BUILD_LEFT:
+            right.append(
+                JoinOperator(
+                    left^,
+                    left_on^,
+                    right_on^,
+                    j.link.kind,
+                    j.link.strictness,
+                    j.link.build_side,
+                    joined^,
+                    self._fields(lcols),
+                    self._fields(rcols),
+                    select^,
+                    output^,
+                    ctx.copy(),
+                )
+            )
+            pipe = right^
+        else:
+            left.append(
+                JoinOperator(
+                    right^,
+                    right_on^,
+                    left_on^,
+                    j.link.kind,
+                    j.link.strictness,
+                    j.link.build_side,
+                    joined^,
+                    self._fields(rcols),
+                    self._fields(lcols),
+                    select^,
+                    output^,
+                    ctx.copy(),
+                )
+            )
+            pipe = left^
+        if len(stages) > 0 and root:
+            stages.append(self.filters[0].selection(pick, self.schema()))
+        while len(stages) > 0:
+            pipe.append(stages.pop(0))
+        return pipe^
+
+    # -- rendering -----------------------------------------------------------
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("Join(", self.left[], ", ", self.right[], ", ", self.kind)
-        if self.build_side != BUILD_LEFT:
-            # Printed only when it is not the default, so a plan that made no
-            # physical choice still diffs against the plans in every test that
-            # predates the field.
-            writer.write(", ", self.build_side)
+        """`Join(inputs | links | where filters | order tree | output)`: links
+        name participants `#i` and keys `#i.column`. The order shows only when
+        a cost-based planner chose a tree other than the written one."""
+        writer.write("Join(")
+        for i in range(len(self.inputs)):
+            if i > 0:
+                writer.write(", ")
+            writer.write(self.inputs[i][])
+        writer.write(" | #0")
+        for ref l in self.links:
+            writer.write(" ", l)
+        for i in range(len(self.filters)):
+            writer.write(" | where " if i == 0 else " and ")
+            writer.write(self.filters[i].predicate)
+        if self._order[] != JoinOrder.written(len(self.inputs), self.links):
+            writer.write(" | order ", self._order[])
+        writer.write(" | ")
+        for i in range(len(self.refs)):
+            if i > 0:
+                writer.write(", ")
+            writer.write(self._schema[].fields[i].name)
+            if self.refs[i].name != self._schema[].fields[i].name:
+                writer.write("=", self.refs[i])
         writer.write(")")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
 
 
 def _positional_schema(
@@ -3317,7 +4403,9 @@ struct ParquetScan(FileScan, Writable):
         number of summaries.
         """
         if self.statistics:
-            return self.statistics.value()[].copy()
+            return self.statistics.value()[].select(
+                self._schema.names(), self._schema
+            )
         return Estimate.unknown(self._schema)
 
     def cost(self) raises -> Cost:
@@ -3331,7 +4419,7 @@ struct ParquetScan(FileScan, Writable):
         different number for the same plan on every run.
         """
         var estimate = self.estimate()
-        return Cost.source(estimate.rows, estimate.row_width())
+        return Cost.source(estimate.size())
 
     def to_operator(
         self,
@@ -3397,7 +4485,7 @@ struct IpcScan(FileScan, Writable):
 
     def cost(self) raises -> Cost:
         var estimate = self.estimate()
-        return Cost.source(estimate.rows, estimate.row_width())
+        return Cost.source(estimate.size())
 
     def to_operator(
         self,
@@ -3443,7 +4531,7 @@ struct JsonScan(FileScan, Writable):
 
     def cost(self) raises -> Cost:
         var estimate = self.estimate()
-        return Cost.source(estimate.rows, estimate.row_width())
+        return Cost.source(estimate.size())
 
     def to_operator(
         self,
@@ -3526,7 +4614,7 @@ struct IcebergScan(FileScan, Writable):
 
     def cost(self) raises -> Cost:
         var estimate = self.estimate()
-        return Cost.source(estimate.rows, estimate.row_width())
+        return Cost.source(estimate.size())
 
     def to_operator(
         self,

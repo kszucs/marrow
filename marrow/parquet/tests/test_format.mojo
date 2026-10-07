@@ -15,6 +15,7 @@ from ...errors import ArrowError, CorruptError, DynError, NotImplementedError
 from ...parquet.schema import MAX_SCHEMA_DEPTH, SchemaMapping
 from ...parquet.format import (
     MAX_SKIP_DEPTH,
+    ColumnMetaData,
     Encoding,
     FileMetaData,
     PageHeader,
@@ -32,6 +33,7 @@ from ...parquet.format import (
     TC_MAP,
     TC_STOP,
     TC_BOOL_TRUE,
+    TC_STRUCT,
 )
 from ...codecs import Zigzag
 
@@ -655,3 +657,60 @@ def test_row_group_with_negative_rows_refused() raises:
     meta.row_groups[0].num_rows = -1
     var msg = _read_error(_with_footer(data, meta))
     assert_true("row group 0 has -1 rows" in msg, msg)
+
+
+# What a column chunk decodes to
+# ---------------------------------------------------------------------------
+def test_column_metadata_reads_size_statistics() raises:
+    """`SizeStatistics.unencoded_byte_array_data_bytes`, field 16's first
+    field, is kept; the level histograms beside it are skipped."""
+    var w = ThriftCompactWriter()
+    var last = w.write_field_begin(TC_I64, 5, 0)
+    w.write_i64(10)
+    _ = w.write_field_begin(TC_STRUCT, 16, last)
+    var inner = w.write_field_begin(TC_I64, 1, 0)
+    w.write_i64(500)
+    _ = w.write_field_begin(TC_LIST, 2, inner)
+    w.write_list_begin(TC_I64, 1)
+    w.write_i64(3)
+    w.write_field_stop()
+    w.write_field_stop()
+    var r = ThriftCompactReader(Span(w.buf))
+    var meta = ColumnMetaData.read(r)
+    assert_equal(meta.num_values, 10)
+    assert_equal(meta.unencoded_byte_array_bytes, 500)
+
+
+def test_column_metadata_decoded_bytes() raises:
+    """Measured value bytes plus an offset each; a plain chunk's uncompressed
+    size, and a dictionary chunk's that fell back to plain pages; a
+    dictionary chunk's entries times its values over its distinct count — and
+    nothing for a dictionary chunk without a distinct count."""
+    var measured = ColumnMetaData()
+    measured.num_values = 10
+    measured.unencoded_byte_array_bytes = 500
+    assert_equal(measured.decoded_bytes(-1), 540)
+
+    var plain = ColumnMetaData()
+    plain.num_values = 10
+    plain.total_uncompressed_size = 700
+    assert_equal(plain.decoded_bytes(-1), 700)
+
+    var dictionary = ColumnMetaData()
+    dictionary.num_values = 8
+    dictionary.total_uncompressed_size = 103
+    dictionary.dictionary_page_offset = 4
+    # Two distinct values: one bit per value, one byte of indices, and
+    # 102 bytes of entries spread over two, eight times.
+    assert_equal(dictionary.decoded_bytes(2), 102 * 8 // 2)
+
+    # One that fell back to plain pages part-way: its uncompressed size.
+    var fell_back = dictionary.copy()
+    fell_back.plain_pages = True
+    assert_equal(fell_back.decoded_bytes(2), 103)
+
+    var uncounted = ColumnMetaData()
+    uncounted.num_values = 8
+    uncounted.total_uncompressed_size = 103
+    uncounted.dictionary_page_offset = 4
+    assert_equal(uncounted.decoded_bytes(-1), -1)

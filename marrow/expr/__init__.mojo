@@ -61,7 +61,12 @@ from .logical import (
     JsonScan,
     Intersect,
     Intersection,
-    Join,
+    JoinChain,
+    JoinFilter,
+    JoinLink,
+    JoinRef,
+    JoinPricing,
+    JoinRules,
     Limit,
     Multiplicity,
     Multiset,
@@ -85,11 +90,13 @@ from .logical import (
 from .physical import (
     Datum,
     DynOperator,
+    JoinOrder,
     Morsel,
     Operator,
     Pipeline,
+    PlannedJoin,
 )
-from .index import ColumnZones, Index, ZoneMaps, keep_every
+from .index import ColumnZones, Index, keep_every
 from .estimates import (
     Approx,
     ColumnEstimate,
@@ -224,7 +231,9 @@ from .`comptime`.strings import (
 from .runtime.aggregates import RuntimeAggregate
 from .runtime.values import RuntimeValue
 
+from .analyze import analyze, summarize
 from .optimizer import (
+    JoinOrdering,
     AllRules,
     ColumnPruning,
     EliminateFilter,
@@ -232,7 +241,9 @@ from .optimizer import (
     MergeProjects,
     PropagateEmpty,
     PushFilterBelowAggregate,
-    PushFilterBelowJoin,
+    MergeJoinChains,
+    MergeProjectIntoJoin,
+    PushFilterIntoJoin,
     Optimizer,
     RemoveEmptyLimit,
     NoRules,

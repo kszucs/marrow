@@ -3236,10 +3236,12 @@ struct ParquetFile[
                         )
                         var mn: Optional[DynScalar] = None
                         var mx: Optional[DynScalar] = None
-                        # an all-null page (or a missing bound) prunes nothing
-                        if leaf and not (
+                        var all_null = (
                             p < len(cix.null_pages) and cix.null_pages[p]
-                        ):
+                        )
+                        # an all-null page has no bounds to prune with, only
+                        # its null-ness
+                        if leaf and not all_null:
                             if p < len(cix.min_values):
                                 mn = Statistics.decode(
                                     leaf.value(), cix.min_values[p]
@@ -3254,7 +3256,9 @@ struct ParquetFile[
                             if not (Bool(mn) and Bool(mx)):
                                 mn = None
                                 mx = None
-                        pages.append(PageBounds(nxt - first, mn^, mx^))
+                        pages.append(
+                            PageBounds(nxt - first, all_null, mn^, mx^)
+                        )
                 per_col.append(pages^)
             out.append(per_col^)
         return out^
@@ -3688,20 +3692,24 @@ def read_page_index(
 
 
 struct PageBounds(Copyable, Movable):
-    """One data page's decoded bounds: its row count and the typed `min`/`max`
-    (each `None` when the page is all-null or carried no bound)."""
+    """One data page's decoded bounds: its row count, whether every value in
+    it is null, and the typed `min`/`max` (each `None` when the page is
+    all-null or carried no bound)."""
 
     var num_rows: Int
+    var all_null: Bool
     var min: Optional[DynScalar]
     var max: Optional[DynScalar]
 
     def __init__(
         out self,
         num_rows: Int,
+        all_null: Bool,
         var min: Optional[DynScalar],
         var max: Optional[DynScalar],
     ):
         self.num_rows = num_rows
+        self.all_null = all_null
         self.min = min^
         self.max = max^
 

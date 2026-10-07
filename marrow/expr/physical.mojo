@@ -73,10 +73,31 @@ from ..json import (
     UnexpectedFieldBehavior,
     open_json,
 )
-from ..kernels.join import HashJoin, JoinKind, JoinBuildSide, BUILD_LEFT
+from ..kernels.join import (
+    BUILD_LEFT,
+    HashJoin,
+    JOIN_ALL,
+    JoinBuildSide,
+    JoinKind,
+)
 from ..utils import KeyHash
 from .bindings import Bindings
-from .logical import DynValue, Multiplicity, Value, WindowSpec
+from .estimates import Cost, Estimate
+from .logical import (
+    DynValue,
+    Filter,
+    JoinChain,
+    JoinPricing,
+    JoinRules,
+    JoinClasses,
+    JoinFilter,
+    JoinLink,
+    JoinRef,
+    Multiplicity,
+    Value,
+    WindowSpec,
+)
+from .sets import ParticipantSet
 from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
 from ..kernels.window import WindowExtents, WindowFrame, WindowKernel
@@ -647,6 +668,67 @@ struct ProjectOperator(Operator):
             # a projection of a constant materialises here and nowhere earlier.
             cols.append(d.value().to_array(len(batch)))
         return Datum(_struct_of(self._schema, cols^, len(batch)).to_dyn())
+
+    def drain(mut self) raises -> Optional[Datum]:
+        return None
+
+
+struct SelectOperator(Operator):
+    """Picks columns by position and names them by `schema`: a join chain's
+    output when a filter lands on its root, and so runs after the root's
+    join rather than inside it. Positional because two inputs may share a
+    name; zero-copy, and `StructArray.field` applies a sliced batch's offset.
+    """
+
+    var _indices: List[Int]
+    var _schema: Schema
+
+    def __init__(out self, var indices: List[Int], var schema: Schema):
+        self._indices = indices^
+        self._schema = schema^
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        return Datum(
+            morsel.batch.select(self._indices)
+            .with_fields(self._schema.fields)
+            .to_dyn()
+        )
+
+    def drain(mut self) raises -> Optional[Datum]:
+        return None
+
+
+struct RenamedPredicate(Operator):
+    """A predicate evaluated over a view of its input: the columns at
+    `indices`, named by `schema`.
+
+    What lets a join chain evaluate a residual filter between two joins. A
+    predicate binds its columns by name when it runs, and the columns of a
+    chain's intermediate batch are only known by position, so the filter sees
+    exactly the columns it reads under exactly the names it was written
+    against. Hand the result to a `FilterOperator`, which filters the whole
+    batch by the mask this answers.
+    """
+
+    var _predicate: DynOperator
+    var _indices: List[Int]
+    var _schema: Schema
+
+    def __init__(
+        out self,
+        var predicate: DynOperator,
+        var indices: List[Int],
+        var schema: Schema,
+    ):
+        self._predicate = predicate^
+        self._indices = indices^
+        self._schema = schema^
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        var view = morsel.batch.select(self._indices).with_fields(
+            self._schema.fields
+        )
+        return self._predicate.push(Morsel.ungrouped(view^))
 
     def drain(mut self) raises -> Optional[Datum]:
         return None
@@ -1250,9 +1332,15 @@ struct JoinOperator(Operator):
     and this carries it over deliberately.
 
     Every field is in build/probe terms except `_schema`, the column order
-    this stage promises, and `_build_side`, which says which logical side
-    `_build` is.
+    the kernel's output is relabelled to, and `_build_side`, which says which
+    logical side `_build` is.
+
+    It emits the positions `_select` of `_schema`, named by `_output` — by
+    position, since two inputs of a join chain may share a name.
     """
+
+    # Selecting here rather than in a stage of its own spares every joining
+    # binary one more operator's trampolines.
 
     var _build: DynOperator
     var _build_keys: List[Int]
@@ -1294,6 +1382,11 @@ struct JoinOperator(Operator):
     `SEMI`/`ANTI` the output schema is one side's alone, so an empty probe
     side was described with the wrong columns entirely."""
 
+    var _select: List[Int]
+    """The positions in `_schema` this stage emits, as `_output`. An empty
+    list emits no column, every row."""
+    var _output: Schema
+
     var _ctx: ExecContext
     var _index: Optional[HashJoin[KeyHash]]
     var _buffered: List[StructArray]
@@ -1310,6 +1403,8 @@ struct JoinOperator(Operator):
         var schema: Schema,
         var build_schema: Schema,
         var probe_schema: Schema,
+        var select: List[Int],
+        var output: Schema,
         var ctx: ExecContext,
     ):
         self._build = build^
@@ -1321,6 +1416,8 @@ struct JoinOperator(Operator):
         self._schema = schema^
         self._build_schema = build_schema^
         self._probe_schema = probe_schema^
+        self._select = select^
+        self._output = output^
         self._ctx = ctx^
         self._index = None
         self._buffered = List[StructArray]()
@@ -1387,7 +1484,7 @@ struct JoinOperator(Operator):
                 t"join: the kernel produced {result.dtype} for a plan that "
                 t"declared {len(want)} columns in a different shape"
             )
-        return _struct_of(self._schema, result.children.copy(), len(result))
+        return result.select(self._select).with_fields(self._output.fields)
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         self._ensure_built()
@@ -1411,14 +1508,6 @@ struct JoinOperator(Operator):
         return Datum(self._probe(whole).to_dyn())
 
 
-def _relabelled(schema: Schema, batch: StructArray) raises -> StructArray:
-    """`batch`'s columns under `schema`'s names — how a set operation hands
-    on a right-side row, which matches the output by position, not by name.
-    `flatten` applies the batch's own offset, which a `Limit`-sliced morsel
-    needs."""
-    return _struct_of(schema, batch.flatten(), len(batch))
-
-
 struct UnionOperator(Operator):
     """`UNION ALL` — the left side's morsels, then the right side's.
 
@@ -1439,13 +1528,16 @@ struct UnionOperator(Operator):
         self._schema = schema^
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        return Datum(_relabelled(self._schema, morsel.batch).to_dyn())
+        return Datum(morsel.batch.with_fields(self._schema.fields).to_dyn())
 
     def drain(mut self) raises -> Optional[Datum]:
         var b = self._other.drain()
         if b:
             return Datum(
-                _relabelled(self._schema, b.value().struct_array()).to_dyn()
+                b.value()
+                .struct_array()
+                .with_fields(self._schema.fields)
+                .to_dyn()
             )
         else:
             return None
@@ -2260,3 +2352,211 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
             # builds its output batch from.
             self._state.reserve(1)
         return Datum(self._state.finish())
+
+
+# ---------------------------------------------------------------------------
+# Join trees — how a join chain is computed
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct PlannedJoin(Copyable, Equatable, Movable, Writable):
+    """One join of a chain's tree: the two nodes it joins, numbered as in
+    `JoinOrder`, and the link it computes — a chain's own, or one joining two
+    sets of a multi-join's inputs on the keys their classes share."""
+
+    var left: Int
+    var right: Int
+    var link: JoinLink
+
+    @staticmethod
+    def of(
+        link: JoinLink, left: Int, right: Int, build_side: JoinBuildSide
+    ) -> Self:
+        """`link` joining `left` to `right`, hashing `build_side`."""
+        var out = link.copy()
+        out.build_side = build_side
+        return Self(left, right, out^)
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self.left == other.left
+            and self.right == other.right
+            and self.link == other.link
+        )
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def computes(self, link: JoinLink) -> Bool:
+        """Does this join compute `link`, whatever side it hashes — and hash
+        the same side when `link` is `JOIN_ANY`, whose answer depends on
+        it?"""
+        return (
+            self.link.kind == link.kind
+            and self.link.strictness == link.strictness
+            and (
+                link.strictness == JOIN_ALL
+                or self.link.build_side == link.build_side
+            )
+            and self.link.left_keys == link.left_keys
+            and self.link.right_keys == link.right_keys
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.link.kind, " ")
+        self.link.write_condition(writer)
+
+
+struct JoinOrder(Copyable, Equatable, Movable, Writable):
+    """The tree a join chain is computed by: left-deep as written, or the
+    one `JoinOrdering` chose.
+
+    Node `p` below `inputs` is participant `p`; node `inputs + j` is join `j`,
+    each over earlier nodes; the root is the last join.
+    """
+
+    var inputs: Int
+    var joins: List[PlannedJoin]
+
+    def __init__(out self, inputs: Int):
+        self.inputs = inputs
+        self.joins = List[PlannedJoin]()
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.inputs == other.inputs and self.joins == other.joins
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    @staticmethod
+    def written(inputs: Int, links: List[JoinLink]) -> JoinOrder:
+        """`links` over `inputs` participants as written: left-deep, each
+        link as it was joined."""
+        var out = JoinOrder(inputs)
+        var node = 0
+        for k in range(len(links)):
+            node = out.add(PlannedJoin(node, k + 1, links[k].copy()))
+        return out^
+
+    def add(mut self, var join: PlannedJoin) -> Int:
+        """Append `join`, answering its node."""
+        self.joins.append(join^)
+        return self.inputs + len(self.joins) - 1
+
+    def root(self) -> Int:
+        return self.inputs + len(self.joins) - 1
+
+    def is_join(self, node: Int) -> Bool:
+        return node >= self.inputs
+
+    def join(
+        self, node: Int
+    ) -> ref[self.joins[node - self.inputs]] PlannedJoin:
+        """The join `node` is. Undefined unless `is_join(node)`."""
+        return self.joins[node - self.inputs]
+
+    def masks(self) -> List[ParticipantSet]:
+        """Every node's participants, by node."""
+        var out = List[ParticipantSet](capacity=self.inputs + len(self.joins))
+        for p in range(self.inputs):
+            out.append(ParticipantSet.of(p))
+        for ref j in self.joins:
+            out.append(out[j.left] | out[j.right])
+        return out^
+
+    def landing(
+        self, masks: List[ParticipantSet], rules: JoinRules, f: JoinFilter
+    ) -> Int:
+        """The node `f` is evaluated after: the lowest one holding it
+        (`JoinRules.holds`) — the nodes that do are the root's path down to
+        it."""
+        var node = self.root()
+        while self.is_join(node):
+            ref j = self.join(node)
+            if rules.holds(f, masks[j.left]):
+                node = j.left
+            elif rules.holds(f, masks[j.right]):
+                node = j.right
+            else:
+                return node
+        return node
+
+    def verify(self, chain: JoinChain) raises:
+        """Raise unless this tree computes `chain`'s answer: every participant
+        joined once; every join between two sets its `JoinRules` may join,
+        reading each key from the side holding it; a participant joined by
+        its own link joined by that link; and every member of every equality
+        class compared by the smallest subtree holding two of them. A planner
+        that got any of it wrong would compute different rows; this refuses
+        it instead."""
+        var used = List[Bool](length=self.inputs + len(self.joins), fill=False)
+        for i in range(len(self.joins)):
+            ref j = self.joins[i]
+            for node in [j.left, j.right]:
+                if node < 0 or node >= self.inputs + i or used[node]:
+                    raise InternalError(t"join: node {node} joined twice")
+                used[node] = True
+        var masks = self.masks()
+        if len(self.joins) != len(chain.links) or masks[
+            self.root()
+        ] != ParticipantSet.below(self.inputs):
+            raise InternalError("join: a tree not joining every input once")
+        var rules = chain.rules()
+        var made = JoinClasses()
+        for ref j in self.joins:
+            var l = masks[j.left]
+            var r = masks[j.right]
+            for ref k in j.link.left_keys:
+                if k.input not in l:
+                    raise InternalError(t"join: {k} read from the wrong side")
+            for ref k in j.link.right_keys:
+                if k.input not in r:
+                    raise InternalError(t"join: {k} read from the wrong side")
+            var own = rules.attaching(l, r)
+            var as_written = (
+                own >= 0
+                and r == ParticipantSet.of(own)
+                and j.computes(rules.links[own - 1])
+            )
+            if not rules.joinable(l, r) or not (
+                as_written or (own < 0 and j.link.is_inner())
+            ):
+                raise InternalError(
+                    t"join: {l} and {r} are not joined as the links say"
+                )
+            if j.link.is_inner():
+                made.union_all(j.link.left_keys, j.link.right_keys)
+            var s = l | r
+            for ref c in rules.classes:
+                var inside = c.within(s)
+                for k in range(1, len(inside)):
+                    if not made.connected(inside[0], inside[k]):
+                        raise InternalError(
+                            "join: a tree making other equalities"
+                        )
+
+    # -- what it costs ---------------------------------------------------------
+    def cost(self, chain: JoinChain) raises -> Cost:
+        """What computing `chain` by this tree should take: its participants
+        and what `JoinPricing.tree` charges for its joins and filters."""
+        var pricing = JoinPricing(chain)
+        var out = pricing.tree(self)
+        for ref input in chain.inputs:
+            out = out + input[].cost()
+        return out
+
+    # -- rendering -----------------------------------------------------------
+    def _write_node[W: Writer](self, node: Int, mut writer: W):
+        if not self.is_join(node):
+            writer.write("#", node)
+            return
+        ref j = self.join(node)
+        writer.write("(")
+        self._write_node(j.left, writer)
+        writer.write(" ", j.link.kind, " ")
+        self._write_node(j.right, writer)
+        writer.write(" ")
+        j.link.write_condition(writer)
+        writer.write(")")
+
+    def write_to[W: Writer](self, mut writer: W):
+        self._write_node(self.root(), writer)

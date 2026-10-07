@@ -18,8 +18,8 @@ so the `__text` delta against the floor is what that one feature costs:
   cast (`NumericCast`) and temporal-comparison (`TemporalGt`) nodes.
 - **`query_sort.mojo`** — adds `Sort` + `Limit` (a full sort and a slice; see
   the gate's docstring, top-K is gone).
-- **`query_join.mojo`** — adds an equi-`Join` (`SwissHashTable`, `rapidhash`,
-  radix partitioning).
+- **`query_join.mojo`** — adds an equi-join, one `JoinChain` (`SwissHashTable`,
+  `rapidhash`, radix partitioning).
 - **`query_scan.mojo`** / **`query_scan_typed.mojo`** — the leaf is a
   `ParquetScan` instead of an `InMemoryTable`. `_typed` used to pin the scan's
   leaf set at comptime; `marrow.expr`'s `ParquetScan` takes no parameter, so

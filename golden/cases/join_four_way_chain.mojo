@@ -8,12 +8,9 @@ def plan() raises -> DynRelation:
     """
     SELECT s.ref, s.qty, e.eid, e.dept, d.did, m.eid AS meid FROM sales s JOIN emp e ON s.ref = e.eid JOIN dept d ON e.dept = d.did JOIN emp m ON d.did = m.dept ORDER BY s.ref NULLS FIRST, s.qty NULLS FIRST, meid NULLS FIRST
 
-    Four inputs, so the rewriter has two associations to choose between rather
-    than one and has to reach a fixpoint instead of a single rewrite. A
-    left-deep chain of three joins is `Join(Join(Join(...)))`, and
-    `JoinReassociation` only ever matches a join whose *left* input is a join —
-    so what it can reach at all is the question this case asks, and the answer
-    it has to keep giving while it reaches more.
+    Four inputs, so the join search has five trees over the chain to choose
+    between, and the build side of each of their three joins; whichever it
+    takes, the answer is this one.
 
     -- skip python
 

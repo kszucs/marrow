@@ -9,9 +9,8 @@ def plan() raises -> DynRelation:
     SELECT e.eid, e.dept, d.did, m.eid AS meid FROM emp e LEFT JOIN dept d ON e.dept = d.did JOIN emp m ON d.did = m.dept ORDER BY e.eid NULLS FIRST, meid NULLS FIRST
 
     The mirror of `join_three_way_inner_then_left`, and the one that says why
-    the guard is not paranoia. `JoinReassociation` declines on the *inner*
-    join's kind, and reassociating anyway would change the answer rather than
-    the cost: written this way, `emp` rows 4 and 5 — department 99 and NULL —
+    an outer join bounds a join-search region. Reassociating across it would
+    change the answer rather than the cost: written this way, `emp` rows 4 and 5 — department 99 and NULL —
     are widened to a null `did` by the LEFT join and then dropped by the inner
     one, for five rows. As `emp LEFT JOIN (dept ⋈ emp)` they would find no
     partner and be widened *again*, for seven.

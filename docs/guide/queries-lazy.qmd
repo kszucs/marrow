@@ -156,6 +156,18 @@ t.join(managers, on="region").select("region", "manager", "price").collect().to_
 `how=` takes `inner`, `left`, `right`, `full`, `semi` and `anti`. Use
 `left_on=` / `right_on=` when the key names differ.
 
+Output names follow ibis. An inner join emits a key both sides call by one name
+once, since the join made the two equal; any other name both sides carry is
+renamed by `lname` / `rname`, which default to keeping the left name and
+suffixing the right one:
+
+```{python}
+t.join(managers, on="region", how="left").column_names
+```
+
+A clash the templates leave over — say `rname="{name}"` — raises at the join:
+two output columns may not share a name.
+
 ## Reading Parquet
 
 `read_parquet` opens the file's footer metadata only — no column data is

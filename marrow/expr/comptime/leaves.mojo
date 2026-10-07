@@ -147,9 +147,7 @@ struct NumericColumn[T: NumericType](ColumnBound, NumericValue):
         process abort, since `as_primitive` on the wrong type is unchecked in a
         release build.
         """
-        if upper:
-            return index.maxes[Stat](self._name, Stat())
-        return index.mins[Stat](self._name, Stat())
+        return index.statistics[Stat](self._name, Stat(), upper)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
@@ -289,7 +287,7 @@ struct NumericLiteral[T: NumericType](NumericValue):
         it — converted to `Stat` by a builtin SIMD cast, which is what makes a
         promoting comparison prune without linking `kernels::cast`."""
         return PrimitiveScalar[Stat](Scalar[Stat.native](self._value)).repeat(
-            index.chunks
+            index.chunks()
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1092,7 +1090,7 @@ struct NumericParam[T: NumericType](NumericValue):
         """
         return PrimitiveScalar[Stat](
             Scalar[Stat.native](self._bound(bindings))
-        ).repeat(index.chunks)
+        ).repeat(index.chunks())
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         """Read this execution's value.

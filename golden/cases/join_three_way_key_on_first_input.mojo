@@ -8,11 +8,11 @@ def plan() raises -> DynRelation:
     """
     SELECT e.eid, e.dept, d.did, s.ref, s.qty FROM emp e JOIN dept d ON e.dept = d.did JOIN sales s ON e.eid = s.ref ORDER BY e.eid NULLS FIRST, s.qty NULLS FIRST
 
-    Three inner joins again, and this time the rewriter must leave them alone:
-    the outer predicate reads `eid`, a column of the *first* input, which has
-    nowhere to go in `dept ⋈ sales`. Every other condition holds and the cost
-    model prefers the right-deep form, so the guard is the only thing standing
-    between this plan and a join on a column that is not in scope.
+    Three inner joins again, and a star this time: both key on `emp`, so
+    `dept ⋈ sales` has no key at all. A reassociation into it would join on a
+    column that is not in scope; the join search only ever joins sets of
+    leaves a key connects, so its trees here are the ones that take `emp`
+    first.
 
     -- skip python
 

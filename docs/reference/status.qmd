@@ -74,7 +74,7 @@ table.
 | **Layouts** | bool, numeric, string/large_string, binary/large_binary, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — **implemented**. Union, run-end-encoded and view layouts — **not** |
 | **Sources** | A lazy scan reads **one Parquet file**, local or at an object-store URI through OpenDAL (whose C library is installed separately), or an in-memory batch, and **one newline-delimited JSON file** (`marrow.read_json`). Arrow IPC is read and written eagerly, NDJSON eagerly through `marrow.json`. **No CSV**, and no globs, directories or hive partitions |
 | **Parquet** | native reader and writer, snappy/zstd/lz4, data page v1 & v2, statistics, page index. Bloom filters are implemented but **off by default** and unreachable from Python. No modular encryption |
-| **Optimizer** | 16 rules plus column pruning. **No cost model**, so no join reordering and no build-side selection |
+| **Optimizer** | 18 rules plus column pruning, a cost model, and a join search over every join chain that also picks each join's build side (exhaustive, greedy past a budget) |
 | **Execution** | in-memory only — **no spilling anywhere**, so every aggregate and join is bounded by RAM |
 | **Joins** | equijoins only: inner, left, right, full, semi, anti. No nested-loop, range or asof joins |
 | **GPU** | element-wise kernels only (arithmetic, comparison, boolean, cast, hashing), and **off unless built with `-D MARROW_GPU=true`** |

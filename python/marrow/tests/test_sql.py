@@ -455,3 +455,23 @@ def test_non_equi_join_is_refused(emp, dept):
             emp=emp,
             dept=dept,
         )
+
+
+def test_a_join_under_a_where_optimizes_to_one_join_chain(emp, dept):
+    """`SELECT … FROM … JOIN … WHERE …`: the filter moves into the chain and
+    the projection folds into its output, so the optimized plan is one join
+    node, with the rows the written plan returns."""
+    plan = ma.sql(
+        "SELECT e.name, d.dname FROM emp e JOIN dept d ON e.did = d.did "
+        "WHERE d.dname = 'eng'",
+        emp=emp,
+        dept=dept,
+    )
+    optimized = plan.optimize()
+    text = optimized.explain()
+    assert text.startswith("Join("), text
+    assert sorted(r["name"] for r in optimized.collect().to_pylist()) == [
+        "ann",
+        "cid",
+    ]
+    assert sorted(r["name"] for r in plan.collect().to_pylist()) == ["ann", "cid"]

@@ -17,16 +17,19 @@ variable: whether any rule was allowed to fire.
 
 from std.testing import assert_equal, assert_false, assert_true
 
+from ...arrays import DynArray
 from ...builders import array
-from ...dtypes import field, int64, string
+from ...dtypes import bool_, field, int64, string
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
 from ...scalars import BoolScalar, Int64Scalar
+from ..bindings import Bindings
 from ..builders import (
     col,
     count_star,
     dense_rank,
     lit,
+    param,
     rank,
     row_number,
     scan,
@@ -34,7 +37,11 @@ from ..builders import (
 )
 from ..runtime.values import and_, column, gt, literal, not_
 from ...kernels.join import (
+    BUILD_LEFT,
+    BUILD_RIGHT,
+    JOIN_ALL,
     JOIN_ANTI,
+    JOIN_ANY,
     JOIN_CROSS,
     JOIN_FULL,
     JOIN_INNER,
@@ -45,23 +52,37 @@ from ...kernels.join import (
     JOIN_SEMI,
     JoinKind,
 )
-from ..logical import DynRelation, DynValue, Filter, ParquetScan
+from ..physical import JoinOrder, PlannedJoin
+from ..sets import ParticipantSet
+from ..logical import (
+    Aggregate,
+    DynRelation,
+    DynValue,
+    Filter,
+    JoinChain,
+    JoinLink,
+    JoinPricing,
+    JoinRules,
+    ParquetScan,
+    Project,
+    Sort,
+)
 from ...schema import schema
 from ..optimizer import (
     AllRules,
-    JoinReassociation,
+    JoinOrdering,
     MergeLimits,
     NoRules,
     Optimizer,
     PushFilterBelowProject,
     PushFilterBelowSort,
+    PushFilterIntoJoin,
     PushFilterIntoScan,
     PushLimitBelowProject,
     RemoveNoOpProject,
     RemoveRedundantSort,
     RuleSet,
     ScanPruning,
-    SelectBuildSide,
     TopN,
 )
 
@@ -385,10 +406,13 @@ def test_optimizer_keeps_a_reordering_projection() raises:
 
 
 def test_optimizer_merges_stacked_projections() raises:
-    """`Project(Project(x))` collapses when the outer only selects."""
+    """`Project(Project(x))` collapses when the outer only selects — and then
+    disappears: the merged projection reads `a` alone, so the second pruning
+    pass in `AllRules.finish` narrows the source to `a`, and a projection
+    reproducing its input is `RemoveNoOpProject`'s."""
     var plan = table(_batch()).select("a", "b").select("a")
     _fires(plan)
-    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Project("), 1)
+    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Project("), 0)
     _check(plan, [[3, 1, 4, 1, 5, 9]])
 
 
@@ -607,30 +631,68 @@ def test_optimizer_does_not_push_a_filter_below_an_outer_join() raises:
     An outer join manufactures NULL rows for non-matches, and a predicate
     evaluated before that step never sees them. `LEFT JOIN ... WHERE r IS NULL`
     is the anti-join idiom; pushing its predicate into the right side answers
-    empty. Asserted as *inert* rather than only on rows, because a wrong answer
-    here depends on the data happening to contain a non-match.
+    empty. Asserted on where the predicate lands rather than only on rows,
+    because a wrong answer here depends on the data happening to contain a
+    non-match: the chain takes it, and evaluates it after the LEFT join.
     """
     var plan = (
         table(_left_table())
         .join(table(_right_table()), [0], [0], JOIN_LEFT)
         .filter(col("rval", int64) > lit(150, int64))
     )
-    _inert(plan)
+    var optimized = plan.optimize[AllRules]()
+    ref chain = optimized.get[JoinChain]()
+    assert_false(chain.inputs[1][].isa[Filter](), String(optimized))
+    assert_equal(_landing(chain), chain.planned_order().root())
 
 
-def test_optimizer_leaves_an_ambiguous_join_predicate_alone() raises:
-    """A predicate on a column both sides carry could belong to either, so the
-    rule declines rather than guessing a side."""
+def test_optimizer_pushes_a_filter_on_a_name_both_sides_carry() raises:
+    """Both sides carry `lval`, and the join renames the right one
+    `lval_right`, so a predicate names exactly one side: `lval` moves into the
+    left input, and `lval_right` runs on the right one under the name it was
+    written with."""
     var both = record_batch(
         [array([1, 2, 3], int64).copy(), array([9, 9, 9], int64).copy()],
         names=["id", "lval"],
     )
     var plan = (
-        table(both^)
+        table(both.copy())
         .join(table(_left_table()), [0], [0], JOIN_INNER)
         .filter(col("lval", int64) > lit(5, int64))
     )
-    _inert(plan)
+    var out = plan.optimize[AllRules]()
+    assert_true(out.isa[JoinChain](), String(out))
+    assert_true(out.get[JoinChain]().inputs[0][].isa[Filter](), String(out))
+    _check(
+        plan.sort_by([col("id", int64)], [True]),
+        [[1, 2, 3], [9, 9, 9], [10, 20, 30]],
+    )
+
+    var right = (
+        table(both^)
+        .join(table(_left_table()), [0], [0], JOIN_INNER)
+        .filter(col("lval_right", int64) > lit(15, int64))
+    )
+    _fires(right)
+    _check(
+        right.sort_by([col("id", int64)], [True]),
+        [[2, 3], [9, 9], [20, 30]],
+    )
+
+
+def test_a_select_over_an_absorbed_filter_folds_into_the_chain() raises:
+    """SQL's `SELECT ... FROM l JOIN r WHERE ...`: the filter sits between
+    the chain and the projection until `PushFilterIntoJoin` takes it in, and
+    then the projection is the chain's own output — one node."""
+    var plan = (
+        table(_left_table())
+        .join(table(_right_table()), [0], [0], JOIN_INNER)
+        .filter(col("lval", int64) + col("rval", int64) > lit(250, int64))
+        .select(["rval", "id"])
+    )
+    var out = plan.optimize[AllRules]()
+    assert_true(out.isa[JoinChain](), String(out))
+    _check(plan, [[300], [3]])
 
 
 # ---------------------------------------------------------------------------
@@ -1218,12 +1280,13 @@ def test_push_filter_into_scan_lands_each_conjunct_separately() raises:
 
 
 # ---------------------------------------------------------------------------
-# SelectBuildSide — the one rule that spends a cost
+# Build sides — the cost `JoinOrdering` spends on every join
 #
-# Every other rule here is true by inspection; this one is true by arithmetic.
-# So each case says which of the two numbers it is relying on, and the pair
-# `_fires` / `_inert` is load-bearing in both directions: a rule that never
-# fires and a rule that fires on everything both pass an equivalence check.
+# Every rule here is true by inspection; the join search is true by
+# arithmetic. So each case says which of the two numbers it is relying on, and
+# the pair `_fires` / `_inert` is load-bearing in both directions: a pass that
+# never fires and a pass that fires on everything both pass an equivalence
+# check.
 # ---------------------------------------------------------------------------
 def _big_left() raises -> RecordBatch:
     """Twelve rows against `_right_table`'s three.
@@ -1243,13 +1306,11 @@ def _big_left() raises -> RecordBatch:
     )
 
 
-def test_select_build_side_flips_to_the_smaller_input() raises:
+def test_join_ordering_builds_the_smaller_input() raises:
     """Twelve rows on the left, three on the right: index the right.
 
-    The rewrite that was inexpressible before a join's build side became a
-    field the output schema never sees. `Join.write_to` prints a non-default
-    build side, so the flip is visible in the plan rather than only in the
-    operator.
+    A chain prints a step's non-default build side, so the flip is visible in
+    the plan rather than only in the operator.
     """
     var plan = table(_big_left()).join(
         table(_right_table()), [0], [0], JOIN_INNER
@@ -1261,14 +1322,11 @@ def test_select_build_side_flips_to_the_smaller_input() raises:
     assert_true(out.find("build=right") >= 0, out)
 
 
-def test_select_build_side_leaves_the_smaller_left_alone() raises:
+def test_join_ordering_leaves_the_smaller_left_alone() raises:
     """Three rows on the left, twelve on the right: already right.
 
     A tie keeps the current side and so does a loss, which is what makes the
-    rule idempotent — `cost_with` reads the two children and the side it was
-    asked about, never `self.build_side`, so a second pass re-derives the same
-    pair and declines. `Optimizer.run` detects convergence on the rendered
-    plan, and a rule that flipped every pass would spin to `MAX_PASSES`.
+    pass idempotent — a second run prices the same two sides and declines.
     """
     var plan = table(_right_table()).join(
         table(_big_left()), [0], [0], JOIN_INNER
@@ -1276,7 +1334,7 @@ def test_select_build_side_leaves_the_smaller_left_alone() raises:
     _inert(plan)
 
 
-def test_select_build_side_is_a_no_op_when_nothing_is_known() raises:
+def test_join_ordering_is_a_no_op_when_nothing_is_known() raises:
     """An unknown is not a number that can lose a comparison.
 
     A scan nobody read a footer for estimates unknown, so `Cost.total()` is
@@ -1291,11 +1349,11 @@ def test_select_build_side_is_a_no_op_when_nothing_is_known() raises:
     _inert(plan)
 
 
-def test_select_build_side_declines_a_kind_it_cannot_mirror() raises:
-    """`commutes` is the guard, and a rule declines where a kernel raises.
+def test_join_ordering_declines_a_kind_it_cannot_mirror() raises:
+    """`commutes` is the guard, and the pass declines where a kernel raises.
 
     `JOIN_CROSS` has a constant and no implementation, so `JoinKind.mirror`
-    raises for it. Reaching `mirror` from inside a rule would turn an
+    raises for it. Reaching `mirror` from inside the pass would turn an
     optimization into an error on a plan that was merely unexecutable.
     """
     var plan = table(_big_left()).join(
@@ -1304,11 +1362,12 @@ def test_select_build_side_declines_a_kind_it_cannot_mirror() raises:
     _inert(plan)
 
 
-def test_select_build_side_does_not_move_the_schema() raises:
+def test_join_ordering_does_not_move_the_schema() raises:
     """Bit-identical, for every kind the kernel implements.
 
-    The property the whole rewrite rests on: `Join._output_schema` takes no
-    build side, so flipping one cannot rename or reorder a column. Compared as
+    The property the whole rewrite rests on: a chain's schema is its output
+    projection, which no step reads, so flipping a side cannot rename or
+    reorder a column. Compared as
     whole `Schema`s — `Schema.__eq__` compares `Field`s, which compare all four
     of their members — rather than through a rendering, which is how a join
     dropping `nullable` went unnoticed in the first place.
@@ -1332,7 +1391,7 @@ def test_select_build_side_does_not_move_the_schema() raises:
         )
 
 
-def test_select_build_side_returns_the_same_rows() raises:
+def test_join_ordering_returns_the_same_rows() raises:
     """Same rows, same columns, after the flip.
 
     Sorted, because row order *does* move with the build side — it follows the
@@ -1349,7 +1408,7 @@ def test_select_build_side_returns_the_same_rows() raises:
     _check(plan, [[1, 2, 3], [10, 20, 30], [1, 2, 3], [100, 200, 300]])
 
 
-def test_select_build_side_returns_the_same_rows_for_a_left_join() raises:
+def test_join_ordering_returns_the_same_rows_for_a_left_join() raises:
     """The kind whose *physical* kind changes when the side flips.
 
     A LEFT join built on its right input is a physical RIGHT join, which is
@@ -1401,7 +1460,7 @@ def test_select_build_side_returns_the_same_rows_for_a_left_join() raises:
     )
 
 
-def test_select_build_side_is_absent_from_scan_pruning() raises:
+def test_join_ordering_is_absent_from_scan_pruning() raises:
     """The rule set is a comptime parameter, so a binary links exactly what it
     names — and `ScanPruning` exists so an AOT program can name row-group
     pruning and nothing else."""
@@ -1413,23 +1472,39 @@ def test_select_build_side_is_absent_from_scan_pruning() raises:
 
 
 # ---------------------------------------------------------------------------
-# JoinReassociation — the same rows, a smaller intermediate
+# Join order on small hand-checked chains
 #
-# The dangerous rule in this file. A wrong association is a silent wrong
-# answer, so the one case that asserts it fires is paired with a `_check`
-# against hand-written rows, and the cases that assert it declines outnumber
-# it four to one.
-#
-# `_inert` is **not** usable here: `SelectBuildSide` runs on the same nodes and
-# legitimately fires on most of these plans, so "no rule fired" cannot
-# distinguish a declining reassociation from a missing one. The assertion is
-# the *shape* instead — `Join(Join(` is a left-deep chain and appears exactly
-# once in one, never in a right-deep one.
+# The rows here are written by hand, so these are the cases that say *sound*
+# rather than merely consistent; the search's own section below covers what it
+# chooses. A declining search is asserted on `_shape` — the tree by participant
+# and kind — since a build side may still change where the tree does not.
 # ---------------------------------------------------------------------------
-def _nesting(plan: DynRelation) raises -> Int:
-    """How many `Join(Join(` nestings the optimized plan has: 1 left-deep, 0
-    right-deep."""
-    return _occurrences(String(plan.optimize[AllRules]()), String("Join(Join("))
+def _shape_of(order: JoinOrder, node: Int) -> String:
+    if not order.is_join(node):
+        return String("#", node)
+    ref j = order.join(node)
+    return String(
+        "(",
+        _shape_of(order, j.left),
+        " ",
+        j.link.kind,
+        " ",
+        _shape_of(order, j.right),
+        ")",
+    )
+
+
+def _shape(plan: DynRelation) raises -> String:
+    """A chain's planned tree by participant and kind — no keys, no build
+    sides."""
+    var order = plan.get[JoinChain]().planned_order()
+    return _shape_of(order, order.root())
+
+
+def _landing(chain: JoinChain) raises -> Int:
+    """The node of `chain`'s planned tree its first filter lands on."""
+    var order = chain.planned_order()
+    return order.landing(order.masks(), chain.rules(), chain.filters[0])
 
 
 def _facts() raises -> RecordBatch:
@@ -1466,8 +1541,8 @@ def _mid() raises -> RecordBatch:
     One column on purpose: the two shapes differ only in how wide a row the
     intermediate they build holds, so the fixture has to make that width
     differ. Right-deep builds `B` alone (8 bytes a row); left-deep builds
-    `A|B` (24). See `JoinReassociation`'s note on why the *cardinality* term,
-    which would normally decide this, is blind today.
+    `A|B` (24). An unanalysed in-memory table records no distinct count, so
+    the *cardinality* term, which would normally decide this, is blind here.
     """
     return record_batch([array([11, 22, 33], int64).copy()], names=["mid"])
 
@@ -1484,15 +1559,6 @@ def _leaf() raises -> RecordBatch:
             array([1, 2, 3, 4, 5, 6], int64).copy(),
         ],
         names=["ck", "cv"],
-    )
-
-
-def _linking() raises -> RecordBatch:
-    """Three rows, two columns, keyed on `_dim.dval` — the third input of the
-    fixture where the *left*-deep shape is the cheaper one."""
-    return record_batch(
-        [array([11, 22, 33], int64).copy(), array([1, 2, 3], int64).copy()],
-        names=["dval_key", "rank"],
     )
 
 
@@ -1515,30 +1581,7 @@ def _three_way() raises -> DynRelation:
     return inner.join(table(_leaf()), [2], [0], JOIN_INNER)
 
 
-def test_reassociation_moves_a_join_whose_predicate_skips_the_first_input() raises:
-    """`(A ⋈ B) ⋈ C` -> `A ⋈ (B ⋈ C)`.
-
-    Both spell the same five columns in the same order, because
-    `Join._output_schema` is left-then-right and `A|B` then `C` is the same
-    list as `A` then `B|C`. What changes is the intermediate the plan has to
-    hold: right-deep builds `B` alone at 8 bytes a row, left-deep builds
-    `A|B` at 24, and with six rows on the probe side that is the difference
-    between 297 and 321.
-    """
-    var plan = _three_way()
-    assert_equal(
-        _occurrences(String(plan), String("Join(Join(")),
-        1,
-        "the fixture is not left-deep: " + String(plan),
-    )
-    assert_equal(_nesting(plan), 0, String(plan.optimize[AllRules]()))
-    assert_true(
-        plan.schema() == plan.optimize[AllRules]().schema(),
-        "the schema moved",
-    )
-
-
-def test_reassociation_returns_the_same_rows() raises:
+def test_join_order_three_way_returns_the_same_rows() raises:
     """Hand-written rows on both sides — the assertion that says *sound*
     rather than merely different.
 
@@ -1546,7 +1589,6 @@ def test_reassociation_returns_the_same_rows() raises:
     build side it ends up with can reorder the comparison.
     """
     var plan = _three_way().sort_by([col("cv", int64)], [True])
-    _fires(plan)
     _check(
         plan,
         [
@@ -1559,81 +1601,29 @@ def test_reassociation_returns_the_same_rows() raises:
     )
 
 
-def test_reassociation_declines_when_the_outer_key_names_the_first_input() raises:
-    """The condition that decides soundness.
-
-    Here the outer join keys on `fdid`, a column of `F`. `D ⋈ L` has no such
-    column, so the rewrite is not merely more expensive — it is a different
-    query, and the key has nowhere to go.
-    """
-    var inner = table(_facts()).join(table(_dim()), [0], [0], JOIN_INNER)
-    var plan = inner.join(table(_other()), [1], [0], JOIN_INNER)
-    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
-
-
-def test_reassociation_declines_an_ambiguous_key() raises:
-    """A name both `A` and `B` carry could mean either.
-
-    `Join._output_schema` keeps both spellings, so `A|B` really does hold two
-    fields called `k`, and `Schema.get_field_index` answers the first. A rule
-    that re-read the name after the frame moved would silently join on the
-    other column — the same hazard `PushFilterBelowJoin` declines at.
-    """
-    var a = record_batch(
-        [array([1, 2, 3], int64).copy(), array([7, 8, 9], int64).copy()],
-        names=["k", "av"],
-    )
-    var b = record_batch(
-        [array([1, 2, 3], int64).copy(), array([70, 80, 90], int64).copy()],
-        names=["k", "bv"],
-    )
-    var c = record_batch(
-        [array([1, 2, 3], int64).copy(), array([5, 6, 7], int64).copy()],
-        names=["ck", "cv"],
-    )
-    var plan = (
-        table(a^)
-        .join(table(b^), [0], [0], JOIN_INNER)
-        .join(table(c^), [0], [0], JOIN_INNER)
-    )
-    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
-
-
-def test_reassociation_declines_an_outer_join() raises:
+def test_join_order_declines_an_outer_join() raises:
     """Associativity is a property of the *inner* join.
 
     An outer join manufactures rows for non-matches, and when it does so
-    depends on the association. Checked in both positions, because a guard
-    that read only one of the two kinds would pass the other.
+    depends on the association, so it keeps its place and its children.
+    Checked in both positions, because a guard that read only one of the two
+    kinds would pass the other.
     """
     var outer_inner = table(_dim()).join(table(_mid()), [1], [0], JOIN_LEFT)
     var plan = outer_inner.join(table(_leaf()), [2], [0], JOIN_INNER)
-    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
+    var optimized = plan.optimize[AllRules]()
+    assert_equal(_shape(optimized), _shape(plan), String(optimized))
 
     var inner = table(_dim()).join(table(_mid()), [1], [0], JOIN_INNER)
     var plan2 = inner.join(table(_leaf()), [2], [0], JOIN_LEFT)
-    assert_equal(_nesting(plan2), 1, String(plan2.optimize[AllRules]()))
+    var optimized2 = plan2.optimize[AllRules]()
+    assert_equal(_shape(optimized2), _shape(plan2), String(optimized2))
 
 
-def test_reassociation_declines_when_the_right_deep_shape_costs_more() raises:
-    """Right-deep is not better *per se*, and without a cost this rewrite has
-    no direction.
-
-    `(F ⋈ D) ⋈ L` keyed on `dval`: every guard passes — the outer predicate
-    reads `D` and `L` only, and nothing is ambiguous — and the rule still
-    declines. Twelve rows on the far left is what does it: left-deep probes
-    the top join with `L`'s three rows, where right-deep has to put `F`'s
-    twelve through it, and 207 against 159 is not close.
-    """
-    var inner = table(_facts()).join(table(_dim()), [0], [0], JOIN_INNER)
-    var plan = inner.join(table(_linking()), [4], [0], JOIN_INNER)
-    assert_equal(_nesting(plan), 1, String(plan.optimize[AllRules]()))
-
-
-def test_reassociation_is_a_no_op_when_nothing_is_known() raises:
-    """Three unestimable scans: neither association can be shown cheaper, so
-    neither is chosen — and no build side is either, which is why `_inert`
-    still holds here and nowhere else in this section."""
+def test_join_order_is_a_no_op_when_nothing_is_known() raises:
+    """Three unestimable scans: no tree can be shown cheaper, so none is
+    chosen — and no build side is either, which is why `_inert` still holds
+    here and nowhere else in this section."""
     var s = schema([field("k", int64), field("v", int64)])
     var t = schema([field("k2", int64), field("v2", int64)])
     var plan = (
@@ -1645,49 +1635,15 @@ def test_reassociation_is_a_no_op_when_nothing_is_known() raises:
 
 
 # ---------------------------------------------------------------------------
-# The two cost-based rules together — fixpoint, order, oscillation
+# The passes together — fixpoint and oscillation
 #
-# `test_optimizer_reaches_a_fixpoint` above optimizes a plan with **no join in
-# it**, so neither `SelectBuildSide` nor `JoinReassociation` is covered by any
-# fixpoint case — and the two interact. `JoinReassociation` compares the cost
-# of the shape it was handed against the shape it would build, and both numbers
-# depend on build sides `SelectBuildSide` chose; its first version declined
-# every time because it compared a tuned plan against an untuned one.
-#
-# Two rules that rewrite the same node, each reading the other's output, driven
-# to a fixpoint by a *rendered* comparison, is an oscillation hazard: a rule
-# that flipped on every pass would spin to `MAX_PASSES` and answer a
-# half-optimized plan with no diagnostic anywhere.
+# The rewrite loop moves filters into chains and folds projections; the join
+# search runs in `finish`, after it, and reads the estimates they leave. A
+# rule that undid what the search chose, or a search that re-ordered what a
+# second run handed it, would oscillate under a driver that converges on a
+# *rendered* comparison and answer a half-optimized plan with no diagnostic
+# anywhere.
 # ---------------------------------------------------------------------------
-struct _ReassociateThenSide(RuleSet):
-    """`AllRules.rewrite`'s last two lines, in its order and alone.
-
-    `prepare` is the identity, so `ColumnPruning` is not involved and this set
-    and the one below differ in exactly one variable: which of the two cost
-    rules sees the other's output.
-    """
-
-    @staticmethod
-    def prepare(plan: DynRelation) raises -> DynRelation:
-        return plan.copy()
-
-    @staticmethod
-    def rewrite(node: DynRelation) raises -> DynRelation:
-        return SelectBuildSide.apply(JoinReassociation.apply(node))
-
-
-struct _SideThenReassociate(RuleSet):
-    """The same two rules, the other way round."""
-
-    @staticmethod
-    def prepare(plan: DynRelation) raises -> DynRelation:
-        return plan.copy()
-
-    @staticmethod
-    def rewrite(node: DynRelation) raises -> DynRelation:
-        return JoinReassociation.apply(SelectBuildSide.apply(node))
-
-
 def _tail() raises -> RecordBatch:
     """`D` — three rows keyed on `_leaf.cv`, so a four-way chain is
     expressible."""
@@ -1701,13 +1657,8 @@ def _tail() raises -> RecordBatch:
 
 
 def _four_way() raises -> DynRelation:
-    """`((A ⋈ B) ⋈ C) ⋈ D`, left-deep, every join INNER.
-
-    Two associations are available rather than one — reassociating the top
-    join leaves `A ⋈ B` as the new top's left child, which the rule may then
-    reassociate again — so this is the shape where a second pass does real work
-    and the fixpoint is not reached by the first.
-    """
+    """`((A ⋈ B) ⋈ C) ⋈ D`, left-deep, every join INNER: one region of four
+    leaves, the largest the hand-checked rows cover."""
     return (
         table(_dim())
         .join(table(_mid()), [1], [0], JOIN_INNER)
@@ -1717,12 +1668,8 @@ def _four_way() raises -> DynRelation:
 
 
 def _right_deep_three_way() raises -> DynRelation:
-    """`A ⋈ (B ⋈ C)` written by hand — the shape `JoinReassociation` produces.
-
-    It must be a fixpoint *as written*. The rule only ever turns left-deep into
-    right-deep, so a plan already in this shape is the one place where firing
-    again could only be an oscillation.
-    """
+    """`A ⋈ (B ⋈ C)` written by hand, a bushy shape rather than a left-deep
+    one: the search must reach one fixpoint from either spelling."""
     var inner = table(_mid()).join(table(_leaf()), [0], [0], JOIN_INNER)
     return table(_dim()).join(inner^, [1], [0], JOIN_INNER)
 
@@ -1730,9 +1677,9 @@ def _right_deep_three_way() raises -> DynRelation:
 def _mixed_kinds() raises -> DynRelation:
     """LEFT, then INNER, then SEMI over one chain.
 
-    Both cost rules guard on kind — `SelectBuildSide` on `commutes`,
-    `JoinReassociation` on INNER — so a chain that mixes them exercises the
-    arms where one rule fires and the other declines on the same node.
+    Three regions of one step each: the search takes the build side of each
+    kind that commutes and re-trees nothing, so a chain that mixes kinds
+    exercises every arm of the planner on one plan.
     """
     return (
         table(_dim())
@@ -1745,9 +1692,9 @@ def _mixed_kinds() raises -> DynRelation:
 def _partly_estimable() raises -> DynRelation:
     """A three-way chain whose middle input nobody read a footer for.
 
-    Neither rule may spend a number here, and the interesting part is that the
-    other two inputs are exactly estimable: a cost model that let a known side
-    stand in for an unknown one would fire, and a fixpoint is the cheapest
+    The search may not spend a number here, and the interesting part is that
+    the other two inputs are exactly estimable: a cost model that let a known
+    side stand in for an unknown one would fire, and a fixpoint is the cheapest
     place to notice that it did.
     """
     var s = schema([field("k", int64), field("v", int64)])
@@ -1761,10 +1708,9 @@ def _partly_estimable() raises -> DynRelation:
 def _filtered_three_way() raises -> DynRelation:
     """`(A ⋈ B) ⋈ C` with a filter under the first join and one above the last.
 
-    Both filters move — the lower one is already where it belongs, the upper
-    one is pushed into the side it names — so the two cost rules see
-    cardinalities that changed under them, which is the reason `AllRules` runs
-    them last.
+    The lower one is already where it belongs and the upper one is pushed into
+    the participant it names, so the search sees cardinalities that changed
+    under it — which is why it runs in `finish`, after the rewrite loop.
     """
     return (
         table(_dim())
@@ -1784,6 +1730,8 @@ def _join_shapes() raises -> List[DynRelation]:
         _filtered_three_way(),
         _mixed_kinds(),
         _partly_estimable(),
+        _natural_key(),
+        _self_join(),
         table(_big_left()).join(table(_right_table()), [0], [0], JOIN_INNER),
     ]
 
@@ -1810,10 +1758,19 @@ def _single_passes_settle(plan: DynRelation) raises:
     the driver, and re-optimizing an already-optimized plan agrees with itself
     forever. Stepping the driver a pass at a time is the only way to see one.
 
-    `AllRules.prepare` runs first because that is what `run` does; the loop body
-    is `Optimizer.rewrite`, one whole-plan pass.
+    The steps are what `run` does: `AllRules.prepare`, passes of
+    `Optimizer.rewrite` to a fixpoint, `AllRules.finish`, and passes again —
+    the second run must settle too, and stay settled, with the search's
+    output under it.
     """
-    var current = AllRules.prepare(plan)
+    var current = _passes(AllRules.prepare(plan))
+    _ = _passes(AllRules.finish(current))
+
+
+def _passes(plan: DynRelation) raises -> DynRelation:
+    """Twelve single passes over `plan`: it stops changing and stays stopped.
+    Answers the settled plan."""
+    var current = plan.copy()
     var rendered = String(current)
     var settled = -1
     for i in range(12):
@@ -1839,24 +1796,7 @@ def _single_passes_settle(plan: DynRelation) raises:
         current = next^
         rendered = next_rendered^
     assert_true(settled >= 0, "no fixpoint in twelve passes: " + rendered)
-
-
-def _orders_agree(plan: DynRelation) raises:
-    """The two cost rules answer the same plan whichever order they run in."""
-    var forward = plan.optimize[_ReassociateThenSide]()
-    var backward = plan.optimize[_SideThenReassociate]()
-    assert_equal(
-        String(forward),
-        String(backward),
-        String(
-            "the cost rules are not confluent on:\n",
-            plan,
-            "\nreassociate-then-side: ",
-            forward,
-            "\nside-then-reassociate: ",
-            backward,
-        ),
-    )
+    return current^
 
 
 def test_optimizer_is_idempotent_on_join_plans() raises:
@@ -1874,16 +1814,8 @@ def test_the_cost_rules_do_not_oscillate() raises:
         _single_passes_settle(plan)
 
 
-def test_the_cost_rules_compose_in_either_order() raises:
-    """Either order of the two cost rules reaches the same plan, so the order
-    in `AllRules` is a preference and not a requirement."""
-    var shapes = _join_shapes()
-    for ref plan in shapes:
-        _orders_agree(plan)
-
-
 def test_a_four_way_join_returns_the_same_rows_optimized() raises:
-    """The rows, on both arms, for the shape that reassociates twice.
+    """The rows, on both arms, for the largest region written by hand.
 
     `A ⋈ B` is three rows on `dval = mid`, each matching two rows of `C`, of
     which `D` keeps the three whose `cv` is 1, 2 or 3. Sorted on `cv`, which is
@@ -1937,3 +1869,587 @@ def test_a_four_way_join_keeps_its_schema_through_the_optimizer() raises:
         mixed.schema() == mixed.optimize[AllRules]().schema(),
         String("the schema moved: ", mixed.optimize[AllRules]()),
     )
+
+
+# ---------------------------------------------------------------------------
+# Join ordering — the search over a region's trees
+#
+# The dangerous pass in this file: a wrong tree is a silent wrong answer. So
+# every case that asserts a tree changed is paired with the same rows through
+# `NoRules`, and the cases that assert it declines name the condition they
+# decline on. A chain renders its tree with every key as `#participant.column`
+# and every non-default build side, so its rendering is its fingerprint.
+#
+# The fixtures are analysed (`DynRelation.analyze`), so the search sees bounds
+# and distinct counts; an unanalysed in-memory table estimates every join at
+# the smaller side and gives the search little to choose with.
+# ---------------------------------------------------------------------------
+def _keyed(
+    names: List[String], rows: Int, modulus: List[Int]
+) raises -> DynRelation:
+    """An analysed table of `rows` rows, column `j` holding `i % modulus[j]`."""
+    var columns = List[DynArray](capacity=len(names))
+    for j in range(len(names)):
+        var values = List[Optional[Int]](capacity=rows)
+        for i in range(rows):
+            values.append(i % modulus[j])
+        columns.append(array(values^, int64).to_dyn())
+    return table(record_batch(columns^, names=names.copy())).analyze()
+
+
+def _find_join_of(plan: DynRelation, a: String, b: String) raises -> Bool:
+    """Does the planned tree join the participant holding `a` directly to the
+    one holding `b`, whichever way round?"""
+    ref chain = plan.get[JoinChain]()
+    var p = chain.ref_of(a).input
+    var q = chain.ref_of(b).input
+    for ref j in chain.planned_order().joins:
+        if (j.left == p and j.right == q) or (j.left == q and j.right == p):
+            return True
+    return False
+
+
+def _agree(plan: DynRelation) raises:
+    """`NoRules` and `AllRules` return the same rows, compared column by
+    column after sorting on every column — so neither a probe order nor a
+    build side can reorder the comparison — and the same schema."""
+    var keys = List[DynValue]()
+    var ascending = List[Bool]()
+    for ref f in plan.schema().fields:
+        keys.append(column(f.name.copy()))
+        ascending.append(True)
+    var sorted = plan.sort_by(keys^, ascending^)
+    var ctx = ExecContext()
+    var before = sorted.optimize[NoRules]().execute(ctx)
+    var after = sorted.optimize[AllRules]().execute(ctx)
+    assert_true(
+        sorted.optimize[AllRules]().schema() == plan.schema(), "schema moved"
+    )
+    assert_equal(before.num_rows(), after.num_rows(), "row count differs")
+    assert_true(before.num_rows() > 0, "the fixture joins to nothing")
+    for i in range(before.num_columns()):
+        assert_equal(_col(before, i), _col(after, i), "OPTIMIZED rows differ")
+
+
+def _chain() raises -> DynRelation:
+    """`A - B - C - D`, written left to right, where joining `C` early is
+    what blows up: `B ⋈ C` fans out 250-fold, `C ⋈ D` shrinks to a thirtieth."""
+    return (
+        _keyed(["ax"], 1_000, [50])
+        .join(_keyed(["bx", "by"], 200, [50, 20]), [0], [0], JOIN_INNER)
+        .join(_keyed(["cy", "cz"], 5_000, [20, 1_000]), [2], [0], JOIN_INNER)
+        .join(_keyed(["dz"], 30, [1_000]), [4], [0], JOIN_INNER)
+    )
+
+
+def _star() raises -> DynRelation:
+    """A fact table and three dimensions, the largest dimension joined first
+    and the one a filter makes smallest joined last."""
+    var fact = _keyed(["f1", "f2", "f3"], 3_000, [300, 20, 7])
+    return (
+        fact.join(_keyed(["d1"], 300, [300]), [0], [0], JOIN_INNER)
+        .join(_keyed(["d2"], 20, [20]), [1], [0], JOIN_INNER)
+        .join(
+            _keyed(["d3"], 7, [7]).filter(col("d3", int64) < lit(2, int64)),
+            [2],
+            [0],
+            JOIN_INNER,
+        )
+    )
+
+
+def _cycle() raises -> DynRelation:
+    """`A - B - C - D - A`: the last join closes the cycle on two key pairs."""
+    var ab = _keyed(["ab", "ad"], 400, [40, 10]).join(
+        _keyed(["ba", "bc"], 400, [40, 25]), [0], [0], JOIN_INNER
+    )
+    var abc = ab.join(_keyed(["cb", "cd"], 100, [25, 5]), [3], [0], JOIN_INNER)
+    return abc.join(
+        _keyed(["dc", "da"], 50, [5, 10]), [5, 1], [0, 1], JOIN_INNER
+    )
+
+
+def _clique() raises -> DynRelation:
+    """Four tables on one key, written as a chain: every pair of them is
+    joinable through the class, the implied pairs included."""
+    return (
+        _keyed(["k1"], 2_000, [100])
+        .join(_keyed(["k2"], 50, [50]), [0], [0], JOIN_INNER)
+        .join(_keyed(["k3"], 900, [100]), [1], [0], JOIN_INNER)
+        .join(_keyed(["k4"], 10, [10]), [2], [0], JOIN_INNER)
+    )
+
+
+def _join_order_shapes() raises -> List[DynRelation]:
+    return [_chain(), _star(), _cycle(), _clique()]
+
+
+def _natural_key() raises -> DynRelation:
+    """Three analysed tables all keyed `k`, one `k` in the output: the
+    shape ibis's name rules make reorderable, since no input's `k` is ever
+    confused with another's."""
+    return (
+        _keyed(["k", "av"], 1_000, [50, 7])
+        .join(_keyed(["k", "bv"], 1_000, [50, 3]), [0], [0], JOIN_INNER)
+        .join(_keyed(["k", "cv"], 10, [5, 2]), [0], [0], JOIN_INNER)
+    )
+
+
+def _self_join() raises -> DynRelation:
+    """A table joined to itself, then to a small one on the same key."""
+    var big = _keyed(["k", "v"], 2_000, [100, 9])
+    return big.join(big.copy(), [0], [0], JOIN_INNER).join(
+        _keyed(["k", "w"], 10, [10, 3]), [0], [0], JOIN_INNER
+    )
+
+
+def _shifted(join: PlannedJoin, inputs: Int, by: Int) -> PlannedJoin:
+    """`join` moved `by` places up a list of joins over `inputs`
+    participants."""
+    var out = join.copy()
+    if out.left >= inputs:
+        out.left += by
+    if out.right >= inputs:
+        out.right += by
+    return out^
+
+
+def _root_of(
+    s: ParticipantSet, joins: List[PlannedJoin], at: Int, inputs: Int
+) -> Int:
+    """The root of a tree over inputs `s` whose joins start at `at`."""
+    if len(joins) == 0:
+        return s.lowest()
+    return inputs + at + len(joins) - 1
+
+
+def _every_tree(
+    rules: JoinRules, inputs: Int, s: ParticipantSet
+) raises -> List[List[PlannedJoin]]:
+    """Every cross-product-free bushy tree over the inputs in `s` of a chain's
+    one multi-join, both build sides of every join, keyed by its own rule —
+    the space the search claims to be exact over, spelled out the slow way. A
+    tree is its joins, root last; a single input is a tree of none."""
+    var out = List[List[PlannedJoin]]()
+    if s.is_single():
+        out.append(List[PlannedJoin]())
+        return out^
+    var low = ParticipantSet.of(s.lowest())
+    for sub in s.subsets():
+        if sub != s and sub.meets(low):
+            var other = s - sub
+            var keys = rules.keys(sub, other)
+            if len(keys[0]) > 0:
+                var lefts = _every_tree(rules, inputs, sub)
+                var rights = _every_tree(rules, inputs, other)
+                for ref l in lefts:
+                    for ref r in rights:
+                        for side in [BUILD_LEFT, BUILD_RIGHT]:
+                            var joins = l.copy()
+                            for ref j in r:
+                                joins.append(_shifted(j, inputs, len(l)))
+                            joins.append(
+                                PlannedJoin(
+                                    _root_of(sub, l, 0, inputs),
+                                    _root_of(other, r, len(l), inputs),
+                                    JoinLink(
+                                        JOIN_INNER,
+                                        JOIN_ALL,
+                                        side,
+                                        keys[0].copy(),
+                                        keys[1].copy(),
+                                    ),
+                                )
+                            )
+                            out.append(joins^)
+    return out^
+
+
+def test_join_order_is_the_brute_force_optimum() raises:
+    """Over chain, star, cycle, a one-key clique and a chain with a filter
+    between two of its joins, the tree the planner picks costs exactly the
+    cheapest of every tree the multi-join can take — which holds only because
+    every node over one set of inputs estimates it the same way, and a filter
+    is priced where it lands, so the search prices a tree as `cost()` does."""
+    var prepared_shapes = List[DynRelation]()
+    for ref plan in _join_order_shapes():
+        prepared_shapes.append(AllRules.prepare(plan))
+    prepared_shapes.append(
+        PushFilterIntoJoin.apply(
+            AllRules.prepare(
+                _chain().filter(col("bx", int64) < col("cy", int64))
+            )
+        )
+    )
+    assert_equal(
+        len(prepared_shapes[4].get[JoinChain]().filters),
+        1,
+        String(prepared_shapes[4]),
+    )
+    for ref prepared in prepared_shapes:
+        ref chain = prepared.get[JoinChain]()
+        var rules = chain.rules()
+        var pricing = JoinPricing(chain)
+        var best = Optional[Int](None)
+        var trees = _every_tree(rules, len(chain.inputs), rules.everything())
+        for ref joins in trees:
+            var tree = JoinOrder(len(chain.inputs))
+            for ref j in joins:
+                _ = tree.add(j.copy())
+            tree.verify(chain)
+            var total = pricing.tree(tree).total().known()
+            assert_true(Bool(total), "a tree has no cost: " + String(tree))
+            if not best or total.value() < best.value():
+                best = total
+        var found = JoinOrdering.order(chain)
+        assert_equal(
+            pricing.tree(found).total().known().value(),
+            best.value(),
+            String(found),
+        )
+
+
+def test_join_order_returns_the_same_rows() raises:
+    var shapes = _join_order_shapes()
+    for ref plan in shapes:
+        _agree(plan)
+
+
+def test_join_order_improves_every_shape() raises:
+    """Each fixture is written in an order the search can beat."""
+    var shapes = _join_order_shapes()
+    for ref plan in shapes:
+        var written = plan.optimize[NoRules]().cost().total().known().value()
+        var chosen = plan.optimize[AllRules]().cost().total().known().value()
+        assert_true(
+            chosen < written,
+            String(chosen, " is not below ", written, " for ", plan),
+        )
+
+
+def test_join_order_joins_through_an_implied_edge() raises:
+    """`k1 = k2` and `k2 = k3` imply `k1 = k3`, and joining the two small
+    tables on it first is only possible because the class says so."""
+    var plan = (
+        _keyed(["k1"], 40, [40])
+        .join(_keyed(["k2"], 5_000, [40]), [0], [0], JOIN_INNER)
+        .join(_keyed(["k3"], 20, [20]), [1], [0], JOIN_INNER)
+    )
+    var optimized = plan.optimize[AllRules]()
+    assert_true(_find_join_of(optimized, "k1", "k3"), String(optimized))
+    _agree(plan)
+
+
+def test_join_order_never_moves_the_output() raises:
+    """The chain answers with its own projection, so a new tree needs nothing
+    above it to put the columns back — under an observer or not."""
+    var plan = _chain()
+    var optimized = plan.optimize[AllRules]()
+    assert_true(optimized.isa[JoinChain](), String(optimized))
+    assert_true(_shape(optimized) != _shape(plan), String(optimized))
+    assert_true(optimized.schema() == plan.schema(), String(optimized))
+
+    var grouped = plan.aggregate(
+        [col("ax", int64).count().alias("n")], [col("dz", int64)]
+    )
+    var optimized_grouped = grouped.optimize[AllRules]()
+    ref agg = optimized_grouped.get[Aggregate]()
+    assert_true(agg.input[].isa[JoinChain](), String(optimized_grouped))
+    assert_true(optimized_grouped.schema() == grouped.schema())
+
+
+def test_join_order_reorders_a_natural_key_chain() raises:
+    """Three inputs all calling their key `k`: one class, one output `k`, and
+    the small input joined first — to either large one, which tie."""
+    var plan = _natural_key()
+    var optimized = plan.optimize[AllRules]()
+    assert_true(_shape(optimized) != _shape(plan), String(optimized))
+    assert_true(
+        _find_join_of(optimized, "av", "cv")
+        or _find_join_of(optimized, "bv", "cv"),
+        String(optimized),
+    )
+    _agree(plan)
+
+
+def test_join_order_reorders_a_self_join() raises:
+    """Two participants are the same table under the same names; every key
+    and output names its participant, so the search moves them freely."""
+    var plan = _self_join()
+    var optimized = plan.optimize[AllRules]()
+    assert_true(_shape(optimized) != _shape(plan), String(optimized))
+    _agree(plan)
+
+
+def test_join_order_reaches_one_cost_however_the_chain_was_written() raises:
+    """`A ⋈ (B ⋈ (C ⋈ D))` nests three chains; `MergeJoinChains` splices
+    them into the region `((A ⋈ B) ⋈ C) ⋈ D` is, over the same participants
+    in the same order — so both spellings reach the same cheapest tree."""
+    var bushy = _keyed(["ax"], 1_000, [50]).join(
+        _keyed(["bx", "by"], 200, [50, 20]).join(
+            _keyed(["cy", "cz"], 5_000, [20, 1_000]).join(
+                _keyed(["dz"], 30, [1_000]), [1], [0], JOIN_INNER
+            ),
+            [1],
+            [0],
+            JOIN_INNER,
+        ),
+        [0],
+        [0],
+        JOIN_INNER,
+    )
+    assert_true(bushy.schema() == _chain().schema())
+    var spliced = bushy.optimize[AllRules]()
+    assert_equal(len(spliced.get[JoinChain]().inputs), 4, String(spliced))
+    var from_bushy = bushy.optimize[AllRules]().cost().total().known()
+    var from_chain = _chain().optimize[AllRules]().cost().total().known()
+    assert_equal(from_bushy.value(), from_chain.value())
+    _agree(bushy)
+
+
+def test_join_order_compares_two_members_of_one_input() raises:
+    """`a.x = b.k` and `a.y = b.k = c.m` put two of `a`'s columns in one
+    class — `a.x = a.y`, which only a join comparing both evaluates. The key
+    rule pairs every member of an input no join has compared yet, so any
+    tree the search picks keeps the answer."""
+    var plan = (
+        _keyed(["x", "y"], 100, [10, 10])
+        .join(_keyed(["k"], 50, [10]), [0], [0], JOIN_INNER)
+        .join(_keyed(["m"], 20, [10]), [1, 2], [0, 0], JOIN_INNER)
+    )
+    var rules = plan.get[JoinChain]().rules()
+    var keys = rules.keys(ParticipantSet.of(0), ParticipantSet.of(1))
+    assert_equal(len(keys[0]), 2, String(plan))
+    _agree(plan)
+
+
+def test_join_order_takes_the_greedy_path_past_its_budget() raises:
+    """A budget of one pair abandons the exhaustive search at once; the greedy
+    ordering still beats the written chain and returns the same rows."""
+    var plan = AllRules.prepare(_chain())
+    ref chain = plan.get[JoinChain]()
+    var pricing = JoinPricing(chain)
+    var written = pricing.tree(
+        JoinOrder.written(len(chain.inputs), chain.links)
+    )
+    var chosen = pricing.tree(JoinOrdering.order[1](chain))
+    assert_true(
+        chosen.total().known().value() < written.total().known().value(),
+        String(chosen, " vs ", written),
+    )
+    # A one-pair budget leaves the dynamic program no pair to price, so a
+    # tree cheaper than written is the greedy one.
+    var greedy_plan = plan.with_chain(
+        chain.with_order(JoinOrdering.order[1](chain))
+    )
+    _same_rows(greedy_plan, plan)
+
+
+def test_join_order_places_a_two_leaf_filter_at_the_lowest_join() raises:
+    """`bx < cy` reads two participants and cannot move into either; the
+    chain keeps it and evaluates it at the lowest join holding both — below
+    the root, since the chosen tree joins `B` and `C` beneath it — and the
+    rows do not move."""
+    var plan = _chain().filter(col("bx", int64) < col("cy", int64))
+    var optimized = plan.optimize[AllRules]()
+    assert_true(optimized.isa[JoinChain](), String(optimized))
+    ref chain = optimized.get[JoinChain]()
+    assert_equal(len(chain.filters), 1, String(optimized))
+    var order = chain.planned_order()
+    var landing = _landing(chain)
+    assert_true(order.is_join(landing), String(optimized))
+    assert_true(landing != order.root(), String(optimized))
+    _agree(plan)
+
+
+def test_join_order_folds_a_deep_and_a_column_free_filter() raises:
+    """An eighteen-way chain: a filter on the deepest participant moves into
+    it in one rewrite, however many joins sit above, and a parameter test,
+    which reads no column, is kept by the chain rather than dropped."""
+    var plan = _keyed(["c0"], 30, [30])
+    for i in range(1, 18):
+        plan = plan.join(
+            _keyed([String("c", i)], 30, [30]), [i - 1], [0], JOIN_INNER
+        )
+    var filtered = plan.filter(col("c0", int64) < lit(10, int64)).filter(
+        param("keep", bool_)
+    )
+    var optimized = filtered.optimize[AllRules]()
+    assert_true(optimized.isa[JoinChain](), String(optimized))
+    ref chain = optimized.get[JoinChain]()
+    assert_true(chain.inputs[0][].isa[Filter](), String(optimized))
+    assert_equal(len(chain.filters), 1, String(optimized))
+    var keep: Bindings = {"keep": BoolScalar(True).to_dyn()}
+    var drop: Bindings = {"keep": BoolScalar(False).to_dyn()}
+    var written = filtered.optimize[NoRules]().execute(ExecContext(), keep)
+    assert_equal(optimized.execute(ExecContext(), keep).num_rows(), 10)
+    assert_equal(written.num_rows(), 10)
+    assert_equal(optimized.execute(ExecContext(), drop).num_rows(), 0)
+
+
+def test_join_order_keeps_a_join_any_attached_the_same_way() raises:
+    """At most one match per probe row depends on the sides, so a `JOIN_ANY`
+    step keeps its build side and the participant it attaches, while inner
+    joins over its probe side may cross it. Any match is a correct one; here
+    every match carries the same `b`, so the rows agree exactly."""
+    var plan = (
+        _keyed(["a"], 50, [10])
+        .join(
+            _keyed(["b"], 20, [10]), [0], [0], JOIN_INNER, BUILD_RIGHT, JOIN_ANY
+        )
+        .join(_keyed(["c"], 5, [10]), [0], [0], JOIN_INNER)
+        .join(_keyed(["d"], 400, [10]), [2], [0], JOIN_INNER)
+    )
+    var optimized = plan.optimize[AllRules]()
+    var found = False
+    for ref j in optimized.get[JoinChain]().planned_order().joins:
+        if j.link.strictness == JOIN_ANY:
+            found = True
+            assert_equal(j.right, 1, String(optimized))
+            assert_true(j.link.build_side == BUILD_RIGHT, String(optimized))
+    assert_true(found, String(optimized))
+    _agree(plan)
+
+
+def _attached_last(kind: JoinKind, strictness: UInt8) raises -> DynRelation:
+    """`F` attached to `D1` by `kind`, then joined to `D2`, which keeps a
+    tenth of `F`: cheaper the other way round."""
+    var side = BUILD_RIGHT if strictness == JOIN_ANY else BUILD_LEFT
+    return (
+        _keyed(["a", "b"], 2_000, [200, 100])
+        .join(
+            _keyed(["a1", "x"], 100, [400, 7]),
+            [0],
+            [0],
+            kind,
+            side,
+            strictness,
+        )
+        .join(_keyed(["b2"], 10, [1_000]), [1], [0], JOIN_INNER)
+    )
+
+
+def test_join_order_moves_an_inner_join_below_an_attaching_step() raises:
+    """LEFT, SEMI, ANTI and `JOIN_ANY` over `F`'s side all commute with an
+    inner join over `F` that reads nothing they attach, so the search joins
+    the selective `D2` first and attaches `D1` to what is left — the same
+    rows, cheaper."""
+    var kinds: List[JoinKind] = [JOIN_LEFT, JOIN_SEMI, JOIN_ANTI, JOIN_INNER]
+    var strictness: List[UInt8] = [JOIN_ALL, JOIN_ALL, JOIN_ALL, JOIN_ANY]
+    for i in range(len(kinds)):
+        var plan = _attached_last(kinds[i], strictness[i])
+        var optimized = plan.optimize[AllRules]()
+        var order = optimized.get[JoinChain]().planned_order()
+        ref root = order.join(order.root())
+        assert_true(root.link.kind == kinds[i], String(optimized))
+        assert_true(root.link.strictness == strictness[i], String(optimized))
+        var written = plan.optimize[NoRules]().cost().total().known().value()
+        var chosen = optimized.cost().total().known().value()
+        assert_true(chosen < written, String(chosen, " vs ", written))
+        _agree(plan)
+
+
+def test_join_order_attaches_to_an_attached_leaf_after_its_spine() raises:
+    """`(#0 ⟖ #1) ⟕ #2 ⋉ #3`, every key on `#0`, which the RIGHT join
+    attaches to `#1`: `#2` and `#3` attach to `#0`, so neither may join it
+    before `#1` has — the search only builds trees that hold."""
+    var plan = (
+        _keyed(["a", "x"], 40, [8, 5])
+        .join(_keyed(["b"], 20, [8]), [0], [0], JOIN_RIGHT)
+        .join(_keyed(["c"], 30, [8]), [0], [0], JOIN_LEFT)
+        .join(_keyed(["d"], 10, [4]), [0], [0], JOIN_SEMI)
+        .filter(col("x", int64) < col("c", int64))
+    )
+    _agree(plan)
+
+
+def test_join_order_keeps_an_inner_join_reading_an_attached_side() raises:
+    """`D2` joins on `D1`'s `x`, which a LEFT join pads: compared below the
+    LEFT join it would keep `F`'s unmatched rows, so the LEFT join stays
+    beneath it."""
+    var plan = (
+        _keyed(["a", "b"], 2_000, [200, 100])
+        .join(_keyed(["a1", "x"], 100, [400, 7]), [0], [0], JOIN_LEFT)
+        .join(_keyed(["x2"], 3, [1_000]), [3], [0], JOIN_INNER)
+    )
+    var optimized = plan.optimize[AllRules]()
+    var order = optimized.get[JoinChain]().planned_order()
+    assert_true(
+        order.join(order.root()).link.kind == JOIN_INNER, String(optimized)
+    )
+    _agree(plan)
+
+
+def test_join_order_prices_a_string_column_nobody_measured() raises:
+    """An unanalysed string column is priced at Spark's default width, so a
+    tree over its table can still be priced and chosen."""
+    var dim = table(
+        record_batch(
+            [array([1, 2, 3], int64).copy(), array(["x", "y", "z"]).copy()],
+            names=["sk", "label"],
+        )
+    )
+    var plan = (
+        table(_facts())
+        .join(dim^, [0], [0], JOIN_INNER)
+        .join(table(_other()), [1], [0], JOIN_INNER)
+    )
+    assert_true(plan.optimize[AllRules]().cost().total().is_known())
+    # `_agree` compares int64 columns, so the label is left out of it.
+    _agree(plan.drop(["label"]))
+
+
+def test_join_order_orders_both_regions_an_outer_join_separates() raises:
+    """A LEFT join attaches its right side as one leaf, so the region along
+    its spine and the region under the side it attaches are each ordered."""
+    var plan = _chain().join(_star(), [0], [1], JOIN_LEFT)
+    var optimized = plan.optimize[AllRules]()
+    var written = plan.optimize[NoRules]().cost().total().known().value()
+    var chosen = optimized.cost().total().known().value()
+    assert_true(chosen < written, String(chosen, " vs ", written))
+    assert_true(optimized.schema() == plan.schema())
+
+
+def _same_rows(a: DynRelation, b: DynRelation) raises:
+    """`a` and `b` return the same rows, compared after sorting on every
+    column so neither a probe order nor a build side can reorder them."""
+    var keys = List[DynValue]()
+    var ascending = List[Bool]()
+    for ref f in a.schema().fields:
+        keys.append(column(f.name.copy()))
+        ascending.append(True)
+    var ctx = ExecContext()
+    var left = a.sort_by(keys.copy(), ascending.copy()).execute(ctx)
+    var right = b.sort_by(keys^, ascending^).execute(ctx)
+    assert_equal(left.num_rows(), right.num_rows())
+    for i in range(left.num_columns()):
+        assert_equal(_col(left, i), _col(right, i))
+
+
+def test_join_order_does_not_move_the_estimate() raises:
+    """A set of leaves has one cardinality whatever tree joins it, so the
+    chain the search picks estimates exactly as the written one — rows and
+    every column's counts."""
+    var shapes = _join_order_shapes()
+    for ref plan in shapes:
+        var optimized = plan.optimize[AllRules]()
+        assert_true(
+            String(_shape(optimized)) != String(_shape(plan)), String(optimized)
+        )
+        assert_equal(
+            String(optimized.estimate()),
+            String(plan.estimate()),
+            String(optimized),
+        )
+
+
+def test_join_order_keeps_the_written_tree_on_a_tie() raises:
+    """Three tables alike in every statistic, written with the second join
+    hashing the small table rather than the intermediate: every tree then
+    costs the same, and a tree is replaced only by a strictly cheaper one."""
+    var plan = (
+        _keyed(["a"], 100, [10])
+        .join(_keyed(["b"], 100, [10]), [0], [0], JOIN_INNER)
+        .join(_keyed(["c"], 100, [10]), [0], [0], JOIN_INNER, BUILD_RIGHT)
+    )
+    _inert(plan)

@@ -1193,6 +1193,18 @@ struct BinaryLikeArray[T: BinaryLikeType](BytesArray):
     def __str__(self) -> String:
         return String(self)
 
+    def total_values_length(self) -> Int:
+        """The bytes this array's values take: the distance between its first
+        and last offsets — not its value buffer's length, which a slice, a
+        selection or an imported array shares with its parent."""
+        if self.length == 0:
+            return 0
+        var first = self.offsets.unsafe_get[Self.T.offset](self.offset)
+        var last = self.offsets.unsafe_get[Self.T.offset](
+            self.offset + self.length
+        )
+        return Int(last) - Int(first)
+
     def null_count(self) -> Int:
         return self.nulls
 
@@ -2733,6 +2745,24 @@ struct StructArray(Array):
             offset=self.offset,
             bitmap=self.bitmap,
             children=children^,
+        )
+
+    def with_fields(self, fields: List[Field]) raises -> Self:
+        """This array under `fields` — the same children, renamed. Zero-copy:
+        only the type changes, so `fields` must type the children as they
+        are."""
+        if len(fields) != len(self.children):
+            raise InvalidError(
+                t"StructArray.with_fields: {len(fields)} fields for"
+                t" {len(self.children)} children"
+            )
+        return Self(
+            dtype=struct_(fields.copy()),
+            length=self.length,
+            nulls=self.null_count(),
+            offset=self.offset,
+            bitmap=self.bitmap,
+            children=self.children.copy(),
         )
 
     def flatten(self) raises -> List[DynArray]:

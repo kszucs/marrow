@@ -8,13 +8,13 @@ def plan() raises -> DynRelation:
     """
     SELECT s.ref, s.qty, e.eid, e.dept, g.i, g.j FROM sales s JOIN emp e ON s.ref = e.eid LEFT JOIN edges g ON e.eid = g.i ORDER BY s.ref NULLS FIRST, s.qty NULLS FIRST
 
-    Two kinds in one chain. `JoinReassociation` declines on the outer join's
-    kind before it looks at anything else: associativity is a property of the
-    inner join as a multiset operation, and a LEFT join manufactures rows for
-    non-matches at a moment the association would move.
+    Two kinds in one chain. The LEFT join bounds the join search's region:
+    associativity is a property of the inner join as a multiset operation, and
+    a LEFT join manufactures rows for non-matches at a moment the association
+    would move.
 
-    `SelectBuildSide` is not blocked by any of that and flips the LEFT join to
-    index its right input — `edges` is five rows of sixteen bytes against an
+    The build side is not bound by any of that, and the search flips the LEFT
+    join to index its right input — `edges` is five rows of sixteen bytes against an
     intermediate the model puts at five rows of twenty-eight — so the plan
     that runs here is still not the plan that was written.
 

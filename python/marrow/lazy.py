@@ -367,8 +367,17 @@ class LazyTable(_Wrapper):
         left_keys=None,
         right_keys=None,
         kind=None,
+        strictness="all",
+        lname="",
+        rname="{name}_right",
     ):
         """Equijoin. ``on`` is shorthand for equal key names on both sides.
+
+        Output names follow ibis: a key both sides call by one name is emitted
+        once by an inner join, and any other name both sides carry is renamed
+        by ``lname`` / ``rname`` (``{name}`` stands for the name). A clash
+        those leave raises: two output columns may not share a name.
+        ``strictness="any"`` keeps one match per probe row, any one of them.
 
         Keys may be given by **name**, resolved against each side's schema, or
         by **position**::
@@ -416,9 +425,17 @@ class LazyTable(_Wrapper):
             right = _key_indices(other.column_names, right_on, "right")
         if len(left) != len(right):
             raise ValueError(f"join: {len(left)} left keys but {len(right)} right keys")
+        if strictness not in ("all", "any"):
+            raise ValueError(f"join: strictness is 'all' or 'any', not {strictness!r}")
         return LazyTable.wrap(
             self._binding.join(
-                other.unwrap(), left, right, kind if kind is not None else how
+                other.unwrap(),
+                left,
+                right,
+                kind if kind is not None else how,
+                strictness == "any",
+                lname,
+                rname,
             )
         )
 
@@ -494,12 +511,25 @@ class LazyTable(_Wrapper):
         return pa.record_batch(self.collect(num_threads))
 
     def optimize(self):
-        """The plan the rewriter would run — fifteen rules plus column pruning.
+        """The plan the rewriter would run, over sources with statistics —
+        ``analyze()`` first, then the rules and column pruning.
 
-        `collect()` alone optimizes nothing, so this is opt-in. The result is
-        an ordinary `LazyTable`: print it, diff it against this one, keep
+        `collect()` alone optimizes nothing, so this is opt-in. The statistics
+        are what the join search orders by, so asking for an optimized plan
+        reads them: each in-memory table is summarised and each Parquet footer
+        read, once — a source already analysed keeps what it has. The result
+        is an ordinary `LazyTable`: print it, diff it against this one, keep
         composing it, or run it."""
-        return LazyTable.wrap(self._binding.optimize())
+        return LazyTable.wrap(self._binding.analyze().optimize())
+
+    def analyze(self):
+        """This plan with statistics on every source: row and null counts,
+        bounds, distinct counts and widths, read from each in-memory table and
+        each Parquet footer.
+
+        The one step that reads data before a plan runs; ``optimize()`` takes
+        it first, so the join search sees how many values a key holds."""
+        return LazyTable.wrap(self._binding.analyze())
 
     def explain(self):
         """The plan as text, without running it.

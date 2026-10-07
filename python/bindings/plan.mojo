@@ -52,7 +52,7 @@ from expressions import (
     unwrap as _unwrap_expr,
     unwrap_agg as _unwrap_agg,
 )
-from marrow.kernels.join import JoinKind
+from marrow.kernels.join import JOIN_ALL, JOIN_ANY, JoinKind
 from marrow.io import DynSource
 from marrow.parquet import ParquetFile
 from marrow.expr.builders import scan_json as _scan_json
@@ -333,6 +333,9 @@ def _plan_join(
     left_on: PythonObject,
     right_on: PythonObject,
     how: PythonObject,
+    any_match: PythonObject,
+    lname: PythonObject,
+    rname: PythonObject,
 ) raises -> PythonObject:
     """Hash join on column **indices**.
 
@@ -341,13 +344,18 @@ def _plan_join(
     rather than something to evaluate. Resolving a name to an index needs the
     schema, which `Plan.column_names()` already hands to Python, so the lookup
     happens there and this stays a straight forward. ``how`` uses PyArrow's
-    spelling; `JoinKind.parse` owns the name-to-kind mapping."""
+    spelling; `JoinKind.parse` owns the name-to-kind mapping. ``any_match``
+    keeps one match per probe row; ``lname`` / ``rname`` are ibis's templates
+    for a name both sides carry."""
     return _wrap(
         _plan(py_self).join(
             right.downcast_value_ptr[Plan]()[].rel.copy(),
             _int_list(left_on),
             _int_list(right_on),
             JoinKind.parse(String(py=how)),
+            strictness=JOIN_ANY if Bool(py=any_match) else JOIN_ALL,
+            lname=String(py=lname),
+            rname=String(py=rname),
         )
     )
 
@@ -392,6 +400,11 @@ def _plan_optimize(py_self: PythonObject) raises -> PythonObject:
     The result is an ordinary plan: print it, diff it against the input, keep
     composing it, or run it."""
     return _wrap(_plan(py_self).optimize[AllRules]())
+
+
+def _plan_analyze(py_self: PythonObject) raises -> PythonObject:
+    """`DynRelation.analyze`; see `LazyTable.analyze`."""
+    return _wrap(_plan(py_self).analyze())
 
 
 def _plan_batches(
@@ -589,6 +602,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_intersect]("intersect")
         .def_method[_plan_except]("except_")
         .def_method[_plan_optimize]("optimize")
+        .def_method[_plan_analyze]("analyze")
         .def_method[_plan_batches]("batches")
         .def_method[_plan_str]("__str__")
         .def_method[_plan_repr]("__repr__")

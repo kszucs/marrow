@@ -12,7 +12,7 @@ def plan() raises -> DynRelation:
     and run exactly as written — `execute()` applies no rules — so this is the
     answer every rewrite of the same query has to reproduce, and
     `join_three_way_reassociated` is that same query after the rewriter has
-    turned it inside out.
+    had the chance to reorder it.
 
     -- expected
     ref:int64	qty:int32	price:double	eid:int64	dept:int64	did:int64

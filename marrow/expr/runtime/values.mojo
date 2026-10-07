@@ -304,7 +304,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         Anything unrecognised keeps every chunk, which is always correct.
         """
         if len(self._kids) != 2:
-            return keep_every(index.chunks)
+            return keep_every(index.chunks())
         if self._tag == "and":
             return AndKernel.apply(
                 self._kids[0][].mask(index, bindings),
@@ -340,7 +340,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             or rlo.dtype() != dt
             or rhi.dtype() != dt
         ):
-            return keep_every(index.chunks)
+            return keep_every(index.chunks())
 
         if self._tag == "lt":
             return self._decided(
@@ -367,7 +367,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return AndKernel.apply(
                 live^, AndKernel.apply(below.as_bool(), above.as_bool())
             )
-        return keep_every(index.chunks)
+        return keep_every(index.chunks())
 
     @staticmethod
     def _decided(var live: BoolArray, var answer: DynArray) raises -> BoolArray:
@@ -402,19 +402,17 @@ struct RuntimeValue(Evaluable, Movable, Value):
                 if dt.is_primitive():
 
                     def arm[T: PrimitiveType](w: T) raises {imm} -> DynArray:
-                        if upper:
-                            return index.maxes[T](name, w).to_dyn()
-                        return index.mins[T](name, w).to_dyn()
+                        return index.statistics[T](name, w, upper).to_dyn()
 
                     try:
                         return dt.dispatch_primitive(arm)
                     except:
-                        return NullArray(length=index.chunks).to_dyn()
+                        return NullArray(length=index.chunks()).to_dyn()
             if self._tag == "literal" and self._payload.isa[DynScalar]():
                 ref value = self._payload[DynScalar]
                 if value.type().is_primitive():
-                    return value.to_array(index.chunks)
-        return NullArray(length=index.chunks).to_dyn()
+                    return value.to_array(index.chunks())
+        return NullArray(length=index.chunks()).to_dyn()
 
     def _defined(self, index: Index) raises -> BoolArray:
         """Where a leaf could have a non-null value."""
@@ -424,7 +422,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             and self._payload.isa[String]()
         ):
             return index.defined(self._payload[String])
-        return keep_every(index.chunks)
+        return keep_every(index.chunks())
 
     def references(self, mut into: References):
         """A column leaf names itself; every other tag reads what its children

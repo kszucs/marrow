@@ -83,7 +83,11 @@ means the narrower bound is masking a defect.
 
 The logical side (`expr/logical.mojo`) is pure, immutable `Relation` nodes —
 `InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Aggregate`, `Limit`,
-`Sort`, `Window`, `Join` — erased by `DynRelation`.
+`Sort`, `Window`, `JoinChain` — erased by `DynRelation`. Every join is one
+`JoinChain`, as ibis represents it: the participants, one link per join and
+the columns they answer with. Which tree computes it is physical, decided when
+the chain is lowered, so the join planner can choose a tree without touching
+the output.
 
 The physical side (`expr/physical.mojo`) is the executing counterpart.
 **The engine pushes**: `push(batch)` answers with what it produced, `drain()`

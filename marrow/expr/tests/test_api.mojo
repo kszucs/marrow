@@ -208,7 +208,8 @@ def test_join_composes_with_the_other_verbs() raises:
     )
     var out = customers.join(_table(), [0], [0], JOIN_INNER).execute()
     assert_equal(out.num_rows(), 4)
-    assert_equal(out.num_columns(), 4)
+    # `customer` is the key on both sides, so the join emits it once.
+    assert_equal(out.num_columns(), 3)
 
 
 def test_a_full_query_reads_as_one_sentence() raises:

@@ -66,7 +66,10 @@ Soundness is by construction, not by review:
 - Row *order* is meaningful below a `Limit`, out of a `Sort`, and — since the
   window node landed — into a `Window` that names no `ORDER BY`. The two rules
   that exploit ordering (`TopN`, `PushLimitBelowProject`) each state the
-  argument at their definition.
+  argument at their definition. The order a *join* emits is not part of any
+  answer — it follows whichever input is probed — so the join search in
+  `finish` changes it below a `Limit` or a `Window` as freely as anywhere
+  else.
 
   **The third case is why only one rule reads a `Window`.**
   `WindowOperator._permutation` returns the identity when a window names no
@@ -83,20 +86,32 @@ Soundness is by construction, not by review:
   this is an invariant to keep rather than a wrong answer to fix.
 """
 
+from std.collections import Dict
+from std.memory import ArcPointer
+
 from ..kernels.join import (
     BUILD_LEFT,
     BUILD_RIGHT,
-    JOIN_ANTI,
-    JOIN_FULL,
+    JOIN_ALL,
     JOIN_INNER,
-    JOIN_LEFT,
-    JOIN_RIGHT,
-    JOIN_SEMI,
+    JoinBuildSide,
+    JoinKind,
 )
+
 from ..schema import Field, Schema, schema
 from ..tabular import RecordBatch
+from .estimates import Cost, Estimate
+from .physical import JoinOrder, PlannedJoin
+from ..errors import InternalError, KeyError
+from .sets import ParticipantSet
 from .logical import (
     Aggregate,
+    JoinLink,
+    JoinPricing,
+    JoinRules,
+    JoinChain,
+    JoinFilter,
+    JoinRef,
     DynRelation,
     DynValue,
     EmptyRelation,
@@ -106,7 +121,6 @@ from .logical import (
     InMemoryTable,
     IpcScan,
     JsonScan,
-    Join,
     Limit,
     ParquetScan,
     Difference,
@@ -532,9 +546,9 @@ struct SplitConjunction(Rule):
     """`Filter(a AND b)` -> `Filter(a)` over `Filter(b)`.
 
     Stacked filters are not tidier — they are what lets every *other* filter
-    rule work per conjunct. `PushFilterBelowJoin` cannot move `a AND b` when
-    `a` names the left side and `b` the right; split, it moves `a` into the
-    left and `b` into the right. `PushFilterBelowProject` cannot move a
+    rule work per conjunct. `PushFilterIntoJoin` cannot move `a AND b` into a
+    participant when `a` names one input and `b` another; split, it moves each
+    into the input it names. `PushFilterBelowProject` cannot move a
     predicate that mentions one computed column; split, it moves the half that
     does not. And each conjunct prunes on its own, where a compound `AND`
     prunes only as well as its weaker half.
@@ -562,39 +576,31 @@ struct SplitConjunction(Rule):
         return out^
 
 
-struct PushFilterBelowJoin(Rule):
-    """`Filter(Join(L, R))` -> the filter moved into whichever side it reads.
+struct PushFilterIntoJoin(Rule):
+    """`Filter(JoinChain)` -> the filter inside the chain: onto the participant
+    it reads, or among the chain's own filters.
 
     The single most valuable reordering on a join-heavy workload: a predicate
     that only touches one input shrinks that input *before* it is hashed or
     probed, rather than after the join has already produced the rows it will
     throw away.
 
-    **Only for `INNER`.** An outer join manufactures NULL rows for
-    non-matches, and a predicate evaluated before that step never sees them —
-    `LEFT JOIN ... WHERE r.x IS NULL` is the canonical anti-join idiom and
-    pushing its predicate into the right side silently returns nothing. `SEMI`
-    and `ANTI` are excluded for the same reason on the right, and are not worth
-    a special case on the left.
+    **Onto a participant** when the predicate reads one participant under that
+    participant's own column names, and the participant is never padded with
+    NULLs nor picks a `JOIN_ANY` match (`JoinRules.holds`) —
+    `LEFT JOIN ... WHERE r.x IS NULL` is the canonical anti-join idiom, and
+    pushing its predicate into the right side would silently return nothing.
 
-    **The side is decided by name, not by position.** `Join` stores its keys as
-    names and both children carry schemas, so "does this predicate read only
-    left columns" is a set question with an exact answer. Positional indices
-    could not answer it after any rewrite had touched a child, which is the
-    defect that kept this rule out of the file until the keys changed.
+    **Among the chain's filters** otherwise: a predicate spanning
+    participants, one reading a renamed output, or one reading no column at
+    all. The chain evaluates it after the lowest join of its tree holding its
+    columns that it may cross — whichever tree the planner chose — and never
+    after a join appended later.
 
-    A predicate spanning *both* sides stays put here — but `SplitConjunction`
-    runs first, so `a AND b` arrives as two filters and each half is placed
-    independently. Only a genuinely inseparable predicate (`l.x + r.y > 5`)
-    remains above the join.
+    **Above** when it reads a column the chain does not answer with. The
+    predicate is never rewritten: it reads its columns by the names it was
+    written with, and the chain supplies them.
     """
-
-    @staticmethod
-    def _reads_only(names: List[String], schema: Schema) -> Bool:
-        for ref n in names:
-            if schema.get_field_index(n) < 0:
-                return False
-        return True
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -602,44 +608,274 @@ struct PushFilterBelowJoin(Rule):
             return node.copy()
         ref f = node.get[Filter]()
         var input = f.input[].copy()
-        if not input.isa[Join]():
+        if not input.isa[JoinChain]():
             return node.copy()
-        ref j = input.get[Join]()
-        if j.kind != JOIN_INNER:
-            return node.copy()
-
-        var reads = f.predicate.columns()
-        var left_schema = j.left[].schema()
-        var right_schema = j.right[].schema()
-        var left_only = Self._reads_only(reads, left_schema)
-        var right_only = Self._reads_only(reads, right_schema)
-
-        # A key column appears on both sides by name, so a predicate on one
-        # could look like either. Ambiguity is left alone rather than guessed.
-        if left_only == right_only:
-            return node.copy()
-
-        if left_only:
-            var out: DynRelation = Join(
-                f.with_input(j.left[].copy()),
-                j.right[].copy(),
-                left_names=j.left_keys.copy(),
-                right_names=j.right_keys.copy(),
-                kind=j.kind,
-                strictness=j.strictness,
-                build_side=j.build_side,
-            )
-            return out^
-        var out: DynRelation = Join(
-            j.left[].copy(),
-            f.with_input(j.right[].copy()),
-            left_names=j.left_keys.copy(),
-            right_names=j.right_keys.copy(),
-            kind=j.kind,
-            strictness=j.strictness,
-            build_side=j.build_side,
+        ref chain = input.get[JoinChain]()
+        var names = chain.names()
+        var refs = List[JoinRef]()
+        var renamed = False
+        for ref name in f.predicate.columns():
+            if name not in names:
+                return node.copy()
+            var r = chain.ref_of(name)
+            renamed = renamed or r.name != name
+            refs.append(r^)
+        var filter = JoinFilter(
+            f.predicate.copy(), refs^, len(chain.inputs) - 1
         )
+        var reads = filter.participants()
+        # Onto the participant it reads when every tree may filter that
+        # participant alone first.
+        if (
+            reads.is_single()
+            and not renamed
+            and chain.rules().holds(filter, reads)
+        ):
+            var p = reads.lowest()
+            var inputs = chain.inputs.copy()
+            var moved: DynRelation = f.with_input(inputs[p][].copy())
+            inputs[p] = ArcPointer(moved^)
+            return input.with_chain(chain.with_inputs(inputs^))
+        var filters = chain.filters.copy()
+        filters.append(filter^)
+        return input.with_chain(chain.with_filters(filters^))
+
+
+struct MergeJoinChains(Rule):
+    """`JoinChain` over a participant that is itself a `JoinChain` -> one
+    chain.
+
+    The `join` verb takes its right side as one participant, a chain
+    included, as ibis does — so `a.join(b.join(c))` nests, and so does a
+    filtered chain once `PushFilterIntoJoin` has taken its filter in. Spliced,
+    the nested links join the outer chain's (`inlined`) and one
+    planner sees every join: the bushy spelling reorders exactly as the
+    left-deep one does. A chain that would pass `JoinChain.MAX_INPUTS` is not
+    spliced, and neither is one whose joins must keep their place.
+    """
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[JoinChain]():
+            return node.copy()
+        ref chain = node.get[JoinChain]()
+        for p in range(len(chain.inputs)):
+            ref input = chain.inputs[p][]
+            if not input.isa[JoinChain]():
+                continue
+            ref inner = input.get[JoinChain]()
+            if len(chain.inputs) + len(inner.inputs) - 1 > JoinChain.MAX_INPUTS:
+                continue
+            var order = Self.layout(chain, p)
+            if len(order) == len(inner.inputs):
+                return node.with_chain(Self.inlined(chain, p, order))
+        return node.copy()
+
+    @staticmethod
+    def layout(chain: JoinChain, p: Int) raises -> List[Int]:
+        """The order participant `p`'s own participants are laid out in when
+        `p`, itself a join chain, is spliced — short of all of them when it
+        cannot be.
+
+        At participant 0 they keep their order: the nested links come first,
+        as they were. Anywhere else only when the link joining `p` and every
+        nested link are inner and `JOIN_ALL`, the joins that may run in any
+        order: each, lowest first, the first with a key pair into one already
+        placed — the participants before `p` included, through the link
+        joining `p`.
+        """
+        ref inner = chain.inputs[p][].get[JoinChain]()
+        var order = List[Int](capacity=len(inner.inputs))
+        if p == 0:
+            for i in range(len(inner.inputs)):
+                order.append(i)
+            return order^
+        if not chain.links[p - 1].is_inner():
+            return order^
+        for ref l in inner.links:
+            if not l.is_inner():
+                return order^
+        var reach = ParticipantSet()
+        for ref r in chain.links[p - 1].right_keys:
+            reach = reach | ParticipantSet.of(inner.ref_of(r.name).input)
+        var laid = ParticipantSet()
+        while len(order) < len(inner.inputs):
+            var next = -1
+            for i in range(len(inner.inputs)):
+                if next < 0 and i in reach and i not in laid:
+                    next = i
+            if next < 0:
+                return order^
+            order.append(next)
+            laid = laid | ParticipantSet.of(next)
+            for j in range(len(inner.links)):
+                for ref r in inner.links[j].left_keys:
+                    if r.input == next:
+                        reach = reach | ParticipantSet.of(j + 1)
+                    if j + 1 == next:
+                        reach = reach | ParticipantSet.of(r.input)
+        return order^
+
+    @staticmethod
+    def inlined(chain: JoinChain, p: Int, order: List[Int]) raises -> JoinChain:
+        """`chain` with participant `p`, itself a join chain, replaced by that
+        chain's participants, laid out in `order` (`layout`), and its links —
+        one chain, so one planner sees every join in it. Past participant 0
+        each key pair is compared by the link of its later participant.
+
+        The answer does not move. Nested filters come along — bounded by the
+        last nested participant, since every join they cross is inner — and
+        whatever read one of `p`'s outputs reads the participant column
+        behind it.
+        """
+        ref inner = chain.inputs[p][].get[JoinChain]()
+        var k = len(inner.inputs)
+        var at = List[Int](length=k, fill=0)
+        for i in range(k):
+            at[order[i]] = p + i
+
+        var inputs = List[ArcPointer[DynRelation]](
+            capacity=len(chain.inputs) + k - 1
+        )
+        for i in range(p):
+            inputs.append(chain.inputs[i].copy())
+        for i in order:
+            inputs.append(inner.inputs[i].copy())
+        for i in range(p + 1, len(chain.inputs)):
+            inputs.append(chain.inputs[i].copy())
+
+        var links = List[JoinLink](capacity=len(inputs) - 1)
+        for i in range(p - 1):
+            links.append(chain.links[i].copy())
+        if p == 0:
+            links.extend(inner.links.copy())
+        else:
+            # Every key pair of the link joining `p` and of the nested links,
+            # each compared by the link of its later participant.
+            ref outer = chain.links[p - 1]
+            var left = outer.left_keys.copy()
+            var right = Self.spliced(chain, outer.right_keys, p, at)
+            for ref l in inner.links:
+                left.extend(Self.nested(l.left_keys, at))
+                right.extend(Self.nested(l.right_keys, at))
+            for q in range(p, p + k):
+                var lk = List[JoinRef]()
+                var rk = List[JoinRef]()
+                for i in range(len(left)):
+                    if right[i].input == q and left[i].input < q:
+                        lk.append(left[i].copy())
+                        rk.append(right[i].copy())
+                    elif left[i].input == q and right[i].input < q:
+                        lk.append(right[i].copy())
+                        rk.append(left[i].copy())
+                var nested = order[q - p]
+                var side = (
+                    outer.build_side if nested
+                    == 0 else inner.links[nested - 1].build_side
+                )
+                links.append(JoinLink(JOIN_INNER, JOIN_ALL, side, lk^, rk^))
+        for i in range(p, len(chain.links)):
+            ref l = chain.links[i]
+            links.append(
+                JoinLink(
+                    l.kind,
+                    l.strictness,
+                    l.build_side,
+                    Self.spliced(chain, l.left_keys, p, at),
+                    Self.spliced(chain, l.right_keys, p, at),
+                )
+            )
+
+        var filters = List[JoinFilter](
+            capacity=len(inner.filters) + len(chain.filters)
+        )
+        for ref f in inner.filters:
+            filters.append(
+                f.with_bounds(
+                    Self.nested(f.refs, at), f.bound if p == 0 else p + k - 1
+                )
+            )
+        for ref f in chain.filters:
+            filters.append(
+                f.with_bounds(
+                    Self.spliced(chain, f.refs, p, at),
+                    f.bound + k - 1 if f.bound >= p else f.bound,
+                )
+            )
+        return JoinChain(
+            inputs^,
+            links^,
+            Self.spliced(chain, chain.refs, p, at),
+            chain.names(),
+            filters^,
+        )
+
+    @staticmethod
+    def nested(refs: List[JoinRef], at: List[Int]) -> List[JoinRef]:
+        """A nested chain's columns, where their participants now stand."""
+        var out = List[JoinRef](capacity=len(refs))
+        for ref r in refs:
+            out.append(JoinRef(at[r.input], r.name.copy()))
         return out^
+
+    @staticmethod
+    def spliced(
+        chain: JoinChain, refs: List[JoinRef], p: Int, at: List[Int]
+    ) raises -> List[JoinRef]:
+        """Outer columns once participant `p` is spliced: a column of `p`
+        becomes the participant column behind that output."""
+        ref inner = chain.inputs[p][].get[JoinChain]()
+        var out = List[JoinRef](capacity=len(refs))
+        for ref r in refs:
+            if r.input == p:
+                var column = inner.ref_of(r.name)
+                out.append(JoinRef(at[column.input], column.name.copy()))
+            elif r.input < p:
+                out.append(r.copy())
+            else:
+                out.append(JoinRef(r.input + len(at) - 1, r.name.copy()))
+        return out^
+
+
+struct MergeProjectIntoJoin(Rule):
+    """`Project(JoinChain)` of bare column reads -> the chain answering with
+    them.
+
+    `select`, `rename`, `drop` and a `project` of reads over a chain all
+    leave one, and so does SQL's `SELECT` over a `WHERE` once
+    `PushFilterIntoJoin` has taken the filter in. A projection that only reads
+    columns is the chain's own output under other names, one node rather than
+    two. A value that computes, or two sharing a name, keep the projection:
+    a read is a value naming exactly the one column it reads, and an aliased
+    aggregate names its alias, so it is not one.
+    """
+
+    # Folded here rather than by the verbs, so a binary that projects and
+    # never optimizes does not link the chain.
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Project]():
+            return node.copy()
+        ref p = node.get[Project]()
+        var input = p.input[].copy()
+        if not input.isa[JoinChain]():
+            return node.copy()
+        ref chain = input.get[JoinChain]()
+        var names = chain.names()
+        var refs = List[JoinRef](capacity=len(p.values))
+        for ref v in p.values:
+            var read = v.read_column()
+            if not read:
+                return node.copy()
+            if not (read.value() in names):
+                return node.copy()
+            refs.append(chain.ref_of(read.value()))
+        for i in range(len(p.names)):
+            for j in range(i):
+                if p.names[i] == p.names[j]:
+                    return node.copy()
+        return input.with_chain(chain.with_output(refs^, p.names))
 
 
 struct PushFilterBelowAggregate(Rule):
@@ -716,7 +952,7 @@ struct PushFilterIntoScan(Rule):
 
     The rules that legitimately move a filter closer to a scan —
     `PushFilterBelowSort`, `PushFilterBelowProject`, `PushFilterBelowAggregate`,
-    `PushFilterBelowJoin` — each prove their own case first, and all four
+    `PushFilterIntoJoin` — each prove their own case first, and all four
     rebuild with `with_input`, so the pruner they carry still names the columns
     it named above. That is where this rule gets reach the descent never had:
     the descent cleared at `Project`, `Aggregate` and `Join` unconditionally.
@@ -925,124 +1161,327 @@ struct MergeWindows(Rule):
 
 
 # ---------------------------------------------------------------------------
-# Rules — cost-based
+# Rules — cost-based: join order
+#
+# A `JoinChain`'s links say what a join answers; this chooses the tree that
+# computes it: the cheapest cross-product-free tree its `JoinRules` allows,
+# kept only when strictly cheaper than the written order, every join's build
+# side picked. The result is attached to the chain (`JoinChain.with_order`),
+# which checks it (`JoinOrder.verify`); `JoinRules` says why every such tree
+# returns the same answer.
+#
+# The search is exact under the model because a set of participants has one
+# estimate whatever tree produced it (`JoinPricing.estimate`), and every tree
+# is priced by one definition, `JoinPricing`.
+#
+# `EnumerateCsg` / `EnumerateCmp` (Moerkotte & Neumann, *Analysis of Two
+# Existing and One New Dynamic Programming Algorithm for the Generation of
+# Optimal Bushy Join Trees without Cross Products*, VLDB 2006) visit every
+# connected subgraph and connected complement once; sorting the pairs by the
+# size of their union solves both halves of a pair before it. A participant
+# joined by its own link neighbours what must be in first, and
+# `JoinRules.joinable` keeps the pairs a tree may join. Past `PAIR_BUDGET`
+# the dynamic program is abandoned for greedy operator ordering (Fegaras,
+# 1998).
 # ---------------------------------------------------------------------------
-struct SelectBuildSide(Rule):
-    """`Join(a, b)` -> the same join, indexing whichever side is cheaper.
+comptime PAIR_BUDGET = 10_000
+"""How much enumeration a chain may take before the search turns greedy: the
+connected-subgraph / complement pairs emitted, and separately the subsets
+visited to find them, each capped here. The pair figure is DuckDB's."""
 
-    Compares `Join.cost_with` for both build sides and keeps the strictly
-    cheaper one. The answer cannot change: the build side is the one field
-    `Join._output_schema` does not read. The join is left as it is when
-    either cost is unknown, when the two tie, and when `JoinKind.commutes`
-    says the kind has no mirror. `cost_with` does not read the current side,
-    so a second pass computes the same two costs and declines.
 
-    Not part of `ScanPruning`, whose binaries would otherwise link the
-    estimation layer for plans without a join.
+@fieldwise_init
+struct _Choice(Copyable, Movable):
+    """The cheapest way found to join one set of participants: its cost, the
+    subset on the left (empty for a participant) and the side to index."""
+
+    var cost: Cost
+    var left: ParticipantSet
+    var side: JoinBuildSide
+
+
+struct _Choices(Movable):
+    """The cheapest way found so far to join each set of a chain's
+    participants. Costs leave out the participants' own work, which every
+    tree pays alike."""
+
+    var best: Dict[ParticipantSet, _Choice]
+
+    def __init__(out self, mut pricing: JoinPricing) raises:
+        self.best = Dict[ParticipantSet, _Choice]()
+        for p in range(pricing.rules.participants()):
+            self.best[ParticipantSet.of(p)] = _Choice(
+                pricing.leaf(p), ParticipantSet(), BUILD_LEFT
+            )
+
+    @staticmethod
+    def search[budget: Int](mut pricing: JoinPricing) raises -> Self:
+        """The cheapest trees found — over every participant only when some
+        tree can be priced. Exhaustive when the pairs fit in `budget`, greedy
+        otherwise."""
+        var choices = Self(pricing)
+        var pairs = _Pairs(budget)
+        pairs.run(pricing.rules)
+        if pairs.over:
+            choices.greedy(pricing)
+        else:
+            for ref bucket in pairs.by_size(pricing.rules.participants()):
+                for ref pair in bucket:
+                    choices.offer(pricing, pair[0], pair[1])
+        return choices^
+
+    def offer(
+        mut self, mut pricing: JoinPricing, a: ParticipantSet, b: ParticipantSet
+    ) raises:
+        """Price joining `a` to `b`, keeping it if it is the cheapest way yet to
+        join their union. A pair that cannot be priced is left unpriced:
+        preferring the side that *can* be priced would hash a fact table
+        rather than a dimension whose string column has no width. A
+        participant joined by its own link goes on the right."""
+        if not pricing.rules.joinable(a, b):
+            return
+        var left_choice = self.best.get(a)
+        var right_choice = self.best.get(b)
+        if not left_choice or not right_choice:
+            return
+        var s = a | b
+        var left = a
+        var right = b
+        var own = pricing.rules.attaching(a, b)
+        if own >= 0:
+            right = ParticipantSet.of(own)
+            left = s - right
+        var link = pricing.rules.link(left, right)
+        if link.strictness == JOIN_ALL and link.kind.commutes():
+            # The other side only when strictly cheaper, and neither when
+            # either cannot be priced: a side that can be priced is not
+            # cheaper than one nobody can bound.
+            var l = pricing.size(left)
+            var r = pricing.size(right)
+            var other = (
+                BUILD_RIGHT if link.build_side == BUILD_LEFT else BUILD_LEFT
+            )
+            var here = Cost.hash_join(l, r, link.build_side, link.kind)
+            var there = Cost.hash_join(l, r, other, link.kind)
+            var here_total = here.total().known()
+            var there_total = there.total().known()
+            if not here_total or not there_total:
+                return
+            if there_total.value() < here_total.value():
+                link.build_side = other
+        var cost = (
+            left_choice.value().cost
+            + right_choice.value().cost
+            + pricing.join(left, right, link)
+        )
+        var total = cost.total().known()
+        if not total:
+            return
+        var incumbent = self.best.get(s)
+        if incumbent:
+            var held = incumbent.value().cost.total().known()
+            if held and held.value() <= total.value():
+                return
+        self.best[s] = _Choice(cost, left, link.build_side)
+
+    def greedy(mut self, mut pricing: JoinPricing) raises:
+        """Greedy operator ordering: repeatedly join the connected pair of parts
+        whose join is expected to be smallest, pricing each join exactly as the
+        dynamic program would. A pair that cannot be estimated or priced is
+        passed over for the next; the search fails only once no pair is left
+        to join."""
+        var parts = List[ParticipantSet]()
+        for p in range(pricing.rules.participants()):
+            parts.append(ParticipantSet.of(p))
+        while len(parts) > 1:
+            var ranked = List[Tuple[Int, Int, Int]]()
+            for i in range(len(parts)):
+                for j in range(i + 1, len(parts)):
+                    if not pricing.rules.joinable(parts[i], parts[j]):
+                        continue
+                    var n = pricing.size(parts[i] | parts[j]).rows.known()
+                    if not n:
+                        continue
+                    var at = len(ranked)
+                    while at > 0 and ranked[at - 1][0] > n.value():
+                        at -= 1
+                    ranked.insert(at, (n.value(), i, j))
+            var joined = False
+            for ref candidate in ranked:
+                var i = candidate[1]
+                var j = candidate[2]
+                var merged = parts[i] | parts[j]
+                self.offer(pricing, parts[i], parts[j])
+                if merged in self.best:
+                    parts[i] = merged
+                    _ = parts.pop(j)
+                    joined = True
+                    break
+            if not joined:
+                return
+
+    def emit(
+        self, rules: JoinRules, s: ParticipantSet, mut order: JoinOrder
+    ) raises -> Int:
+        """The tree chosen for `s`, added to `order` bottom-up; answers its
+        node."""
+        if s.is_single():
+            return s.lowest()
+        ref choice = self.best[s]
+        var left = choice.left
+        var right = s - left
+        var l = self.emit(rules, left, order)
+        var r = self.emit(rules, right, order)
+        return order.add(
+            PlannedJoin.of(rules.link(left, right), l, r, choice.side)
+        )
+
+
+struct JoinOrdering:
+    """Every join chain of a plan computed by the cheapest tree the search
+    finds, when that is not the written one.
+
+    Participants first, so a chain nested inside another is ordered too. The
+    output of a chain never moves, so nothing above it needs to know.
     """
 
     @staticmethod
-    def apply(node: DynRelation) raises -> DynRelation:
-        if not node.isa[Join]():
-            return node.copy()
-        ref j = node.get[Join]()
-        if not j.kind.commutes():
-            return node.copy()
+    def apply[
+        budget: Int = PAIR_BUDGET
+    ](node: DynRelation) raises -> DynRelation:
+        def descend(child: DynRelation) raises {imm} -> DynRelation:
+            return Self.apply[budget](child)
 
-        var here = j.cost_with(j.build_side).total().known()
-        var other = BUILD_RIGHT if j.build_side == BUILD_LEFT else BUILD_LEFT
-        var there = j.cost_with(other).total().known()
-        if not here or not there:
-            return node.copy()
-        if there.value() >= here.value():
-            return node.copy()
-
-        var out: DynRelation = j.with_build_side(other)
-        return out^
-
-
-struct JoinReassociation(Rule):
-    """`(A ⋈ B) ⋈ C` -> `A ⋈ (B ⋈ C)`, when that is cheaper.
-
-    Both shapes output the columns of `A`, `B` and `C` in that order, so the
-    rewrite moves no column. It applies only when:
-
-    - both joins are INNER and `JOIN_ALL`, since the rows an outer join pads
-      depend on the association;
-    - every left key of the outer join names a column of `B` and none of `A`,
-      so the outer predicate does not read `A` and no name is ambiguous;
-    - no right key of the inner join names a column of `C`, which would
-      capture it once the keys are read against `B ⋈ C`;
-    - the result is strictly cheaper by `cost()`.
-
-    It is one local rewrite, not a search over join orders; a longer chain
-    reaches its shape by the rule firing again on the result. Without a
-    recorded distinct count every join estimates at `min(|L|, |R|)` rows, so
-    the rule then decides on row width alone.
-    """
+        var rebuilt = node.traverse(descend)
+        if not rebuilt.isa[JoinChain]():
+            return rebuilt^
+        ref chain = rebuilt.get[JoinChain]()
+        var order = Self.order[budget](chain)
+        if order == JoinOrder.written(len(chain.inputs), chain.links):
+            return rebuilt^
+        return rebuilt.with_chain(chain.with_order(order^))
 
     @staticmethod
-    def _names_only_in(
-        names: List[String], present: Schema, absent: Schema
-    ) -> Bool:
-        """Every name resolves in `present` and in none of `absent`."""
-        for ref n in names:
-            if present.get_field_index(n) < 0:
-                return False
-            if absent.get_field_index(n) >= 0:
-                return False
-        return True
+    def order[budget: Int = PAIR_BUDGET](chain: JoinChain) raises -> JoinOrder:
+        """The tree to compute `chain` by: the cheapest the search finds when
+        strictly cheaper than the written one, which is otherwise kept."""
+        var pricing = JoinPricing(chain)
+        var written = JoinOrder.written(len(chain.inputs), chain.links)
+        var choices = _Choices.search[budget](pricing)
+        var everything = pricing.rules.everything()
+        if everything in choices.best:
+            var found = choices.best[everything].cost.total().known()
+            var held = pricing.tree(written).total().known()
+            if found and held and found.value() < held.value():
+                var order = JoinOrder(len(chain.inputs))
+                _ = choices.emit(pricing.rules, everything, order)
+                return order^
+        return written^
 
-    @staticmethod
-    def apply(node: DynRelation) raises -> DynRelation:
-        if not node.isa[Join]():
-            return node.copy()
-        ref outer = node.get[Join]()
-        if outer.kind != JOIN_INNER or outer.strictness != 0:
-            return node.copy()
-        var left = outer.left[].copy()
-        if not left.isa[Join]():
-            return node.copy()
-        ref inner = left.get[Join]()
-        if inner.kind != JOIN_INNER or inner.strictness != 0:
-            return node.copy()
-        if len(outer.left_keys) == 0:
-            return node.copy()
 
-        var a = inner.left[].schema()
-        var b = inner.right[].schema()
-        var c = outer.right[].schema()
-        # The outer predicate must live entirely in (B, C) ...
-        if not Self._names_only_in(outer.left_keys, b, a):
-            return node.copy()
-        # ... and the inner one's right half must still read as B afterwards.
-        if not Self._names_only_in(inner.right_keys, b, c):
-            return node.copy()
+struct _Pairs(Movable):
+    """`EnumerateCsg` and `EnumerateCmp`, collecting every pair of disjoint,
+    connected, adjacent participant sets once, until the budget runs
+    out."""
 
-        # Compare both shapes with their build sides chosen, since
-        # `SelectBuildSide` tunes whichever survives. `node`'s children were
-        # offered to it on the way up; the new inner join is offered here.
-        var fresh: DynRelation = Join(
-            inner.right[].copy(),
-            outer.right[].copy(),
-            left_names=outer.left_keys.copy(),
-            right_names=outer.right_keys.copy(),
+    var budget: Int
+    var visited: Int
+    var over: Bool
+    var pairs: List[Tuple[ParticipantSet, ParticipantSet]]
+
+    def __init__(out self, budget: Int):
+        self.budget = budget
+        self.visited = 0
+        self.over = False
+        self.pairs = List[Tuple[ParticipantSet, ParticipantSet]]()
+
+    def _visit(mut self):
+        self.visited += 1
+        if self.visited > self.budget:
+            self.over = True
+
+    def _emit(mut self, a: ParticipantSet, b: ParticipantSet):
+        self.pairs.append((a, b))
+        if len(self.pairs) > self.budget:
+            self.over = True
+
+    def run(mut self, rules: JoinRules):
+        for i in reversed(range(rules.participants())):
+            if self.over:
+                return
+            self._emit_csg(rules, ParticipantSet.of(i))
+            self._csg(rules, ParticipantSet.of(i), ParticipantSet.below(i + 1))
+
+    def _csg(
+        mut self, rules: JoinRules, s: ParticipantSet, excluded: ParticipantSet
+    ):
+        """Every connected set grown from `s` through participants not in
+        `excluded`."""
+        var grow = rules.adjacent(s) - excluded
+        if grow.is_empty():
+            return
+        for sub in grow.subsets():
+            if self.over:
+                break
+            self._visit()
+            self._emit_csg(rules, s | sub)
+        for sub in grow.subsets():
+            if self.over:
+                break
+            self._visit()
+            self._csg(rules, s | sub, excluded | grow)
+
+    def _emit_csg(mut self, rules: JoinRules, s1: ParticipantSet):
+        """Every connected complement of `s1` whose lowest participant is above
+        `s1`'s."""
+        var excluded = s1 | ParticipantSet.below(s1.lowest() + 1)
+        var start = rules.adjacent(s1) - excluded
+        var rest = start
+        while not rest.is_empty() and not self.over:
+            var i = rest.highest()
+            rest = rest - ParticipantSet.of(i)
+            self._emit(s1, ParticipantSet.of(i))
+            self._cmp(
+                rules,
+                s1,
+                ParticipantSet.of(i),
+                excluded | (start & ParticipantSet.below(i + 1)),
+            )
+
+    def _cmp(
+        mut self,
+        rules: JoinRules,
+        s1: ParticipantSet,
+        s2: ParticipantSet,
+        excluded: ParticipantSet,
+    ):
+        var grow = rules.adjacent(s2) - excluded
+        if grow.is_empty():
+            return
+        for sub in grow.subsets():
+            if self.over:
+                break
+            self._visit()
+            self._emit(s1, s2 | sub)
+        for sub in grow.subsets():
+            if self.over:
+                break
+            self._visit()
+            self._cmp(rules, s1, s2 | sub, excluded | grow)
+
+    def by_size(
+        self, n: Int
+    ) -> List[List[Tuple[ParticipantSet, ParticipantSet]]]:
+        """The pairs bucketed by the size of their union, smallest first, so
+        both halves of a pair are always solved before it."""
+        var buckets = List[List[Tuple[ParticipantSet, ParticipantSet]]](
+            capacity=n + 1
         )
-        var rebuilt: DynRelation = Join(
-            inner.left[].copy(),
-            SelectBuildSide.apply(fresh),
-            left_names=inner.left_keys.copy(),
-            right_names=inner.right_keys.copy(),
-        )
-        var tuned = SelectBuildSide.apply(rebuilt)
-
-        var here = SelectBuildSide.apply(node).cost().total().known()
-        var there = tuned.cost().total().known()
-        if not here or not there:
-            return node.copy()
-        if there.value() >= here.value():
-            return node.copy()
-        return tuned^
+        for _ in range(n + 1):
+            buckets.append(List[Tuple[ParticipantSet, ParticipantSet]]())
+        for ref pair in self.pairs:
+            buckets[(pair[0] | pair[1]).count()].append(pair)
+        return buckets^
 
 
 # ---------------------------------------------------------------------------
@@ -1095,6 +1534,46 @@ struct ColumnPruning(Copyable, Movable):
         return into^
 
     @staticmethod
+    def _narrowed_chain(
+        chain: JoinChain, needed: List[String]
+    ) raises -> JoinChain:
+        """`chain` answering with only the outputs `needed` names, in its own
+        order — at least one, since a batch carries its row count in its
+        columns."""
+        var names = List[String]()
+        var refs = List[JoinRef]()
+        var all = chain.names()
+        for i in range(len(chain.refs)):
+            if all[i] in needed:
+                names.append(all[i].copy())
+                refs.append(chain.refs[i].copy())
+        if len(names) == 0 and len(chain.refs) > 0:
+            names.append(all[0].copy())
+            refs.append(chain.refs[0].copy())
+        return chain.with_output(refs^, names)
+
+    @staticmethod
+    def _demand(chain: JoinChain) -> List[List[String]]:
+        """Per participant, the columns `chain` reads of it: its outputs,
+        every link's keys and every filter's columns, each once."""
+        var out = List[List[String]](capacity=len(chain.inputs))
+        for _ in range(len(chain.inputs)):
+            out.append(List[String]())
+
+        def take(mut out: List[List[String]], refs: List[JoinRef]):
+            for ref r in refs:
+                if r.name not in out[r.input]:
+                    out[r.input].append(r.name.copy())
+
+        take(out, chain.refs)
+        for ref l in chain.links:
+            take(out, l.left_keys)
+            take(out, l.right_keys)
+        for ref f in chain.filters:
+            take(out, f.refs)
+        return out^
+
+    @staticmethod
     def _narrowed(schema: Schema, needed: List[String]) -> List[String]:
         """`needed`, restricted to what `schema` has and in *its* order.
 
@@ -1145,7 +1624,7 @@ struct ColumnPruning(Copyable, Movable):
             var keep = Self._narrowed(src.schema(), needed)
             if len(keep) == len(src.schema().fields):
                 return node.copy()
-            var out: DynRelation = InMemoryTable(src.batch.select(keep))
+            var out: DynRelation = src.with_batch(src.batch.select(keep))
             return out^
 
         if node.isa[Filter]():
@@ -1197,23 +1676,16 @@ struct ColumnPruning(Copyable, Movable):
             var out: DynRelation = a.with_input(Self.apply(a.input[], below))
             return out^
 
-        if node.isa[Join]():
-            ref j = node.get[Join]()
-            # Keys are read even when they are not emitted, so both sides'
-            # keys join the demand before it descends. Names, not indices —
-            # which is the whole reason `Join` stores names.
-            var below = Self._widened(needed.copy(), j.left_keys)
-            below = Self._widened(below^, j.right_keys)
-            var out: DynRelation = Join(
-                Self.apply(j.left[], below),
-                Self.apply(j.right[], below),
-                left_names=j.left_keys.copy(),
-                right_names=j.right_keys.copy(),
-                kind=j.kind,
-                strictness=j.strictness,
-                build_side=j.build_side,
-            )
-            return out^
+        if node.isa[JoinChain]():
+            # The output narrows to what is needed, and each participant to
+            # what the chain then reads of it — by participant, so a name two
+            # inputs share narrows each separately.
+            var c = Self._narrowed_chain(node.get[JoinChain](), needed)
+            var demand = Self._demand(c)
+            var inputs = List[ArcPointer[DynRelation]](capacity=len(c.inputs))
+            for p in range(len(c.inputs)):
+                inputs.append(ArcPointer(Self.apply(c.inputs[p][], demand[p])))
+            return node.with_chain(c.with_inputs(inputs^))
 
         # The set relations are positional and match whole rows, so each side
         # keeps all of its own columns. Descending anyway still prunes beneath
@@ -1282,6 +1754,19 @@ trait RuleSet(Copyable, Movable):
         """Every rule in this set, applied to one node."""
         ...
 
+    @staticmethod
+    def finish(plan: DynRelation) raises -> DynRelation:
+        """Whatever this set wants done **once, after** the rewrite loop has
+        converged — the counterpart of `prepare`.
+
+        Join ordering lives here: it is a search over a whole region rather
+        than a local match, and it has to price a region after the filters
+        above it have been pushed onto its leaves, which the rewrite loop is
+        what does. Run in `prepare` it would order joins it could not see the
+        selectivity of.
+        """
+        ...
+
 
 struct NoRules(RuleSet):
     """The identity — `optimize[NoRules]()` returns the plan unchanged, which
@@ -1294,6 +1779,10 @@ struct NoRules(RuleSet):
     @staticmethod
     def rewrite(node: DynRelation) raises -> DynRelation:
         return node.copy()
+
+    @staticmethod
+    def finish(plan: DynRelation) raises -> DynRelation:
+        return plan.copy()
 
 
 struct ScanPruning(RuleSet):
@@ -1329,6 +1818,10 @@ struct ScanPruning(RuleSet):
             SplitConjunction.apply(PushFilterBelowSort.apply(node))
         )
 
+    @staticmethod
+    def finish(plan: DynRelation) raises -> DynRelation:
+        return plan.copy()
+
 
 struct AllRules(RuleSet):
     """Every rule in this file.
@@ -1359,6 +1852,14 @@ struct AllRules(RuleSet):
         return ColumnPruning.apply(plan, wanted)
 
     @staticmethod
+    def finish(plan: DynRelation) raises -> DynRelation:
+        """Every join chain ordered by `JoinOrdering`, over sources pruned
+        again first: the rewrite loop can free columns — a sort it removed
+        read one — and a tree is priced by the widths of what its inputs still
+        hold."""
+        return JoinOrdering.apply(Self.prepare(plan))
+
+    @staticmethod
     def rewrite(node: DynRelation) raises -> DynRelation:
         """Each rule in turn, every one seeing the previous rule's output.
 
@@ -1373,6 +1874,8 @@ struct AllRules(RuleSet):
         out = PropagateEmpty.apply(out)
         out = RemoveNoOpProject.apply(out)
         out = MergeProjects.apply(out)
+        out = MergeJoinChains.apply(out)
+        out = MergeProjectIntoJoin.apply(out)
         out = RemoveSortBeforeAggregate.apply(out)
         out = MergeLimits.apply(out)
         out = RemoveRedundantSort.apply(out)
@@ -1380,16 +1883,13 @@ struct AllRules(RuleSet):
         out = PushFilterIntoScan.apply(out)
         out = PushFilterBelowProject.apply(out)
         out = PushFilterBelowSort.apply(out)
-        out = PushFilterBelowJoin.apply(out)
+        out = PushFilterIntoJoin.apply(out)
         out = PushFilterBelowAggregate.apply(out)
         out = PushLimitBelowProject.apply(out)
         out = TopN.apply(out)
-        out = MergeWindows.apply(out)
-        # The cost-based rules run last: they read cardinalities, and every
-        # rule above moves rows. Reassociation goes first so that build sides
-        # are chosen for the final shape; either order reaches the same plan.
-        out = JoinReassociation.apply(out)
-        return SelectBuildSide.apply(out)
+        # Join *order* is not a rule: it is `finish`, a search over each
+        # chain's tree once everything above has settled.
+        return MergeWindows.apply(out)
 
 
 # ---------------------------------------------------------------------------
@@ -1442,8 +1942,19 @@ struct Optimizer[R: RuleSet](Copyable, Movable):
         pass here instead of an infinite loop, and it is also why a rule
         returns the node unchanged rather than an `Optional`.
         """
+        var settled = Self._settle(Self.R.prepare(plan))
+        return Self._settle(Self.R.finish(settled))
+
+    @staticmethod
+    def _settle(plan: DynRelation) raises -> DynRelation:
+        """`plan` rewritten pass after pass until a pass changes nothing.
+
+        Run after `prepare`, and again after `finish`, whose output the rules
+        have not seen — its pruning can leave a projection `RemoveNoOpProject`
+        removes, and a plan's rendering does not show a narrowed source, so
+        whether `finish` changed anything cannot be read off one.
+        """
         var current = plan.copy()
-        current = Self.R.prepare(current)
         var rendered = String(current)
         for _ in range(Self.MAX_PASSES):
             var next = Self.rewrite(current)

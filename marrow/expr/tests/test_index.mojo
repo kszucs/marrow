@@ -37,7 +37,7 @@ from ...dtypes import Date32Type, Int64Type, date32, int64
 from ...scalars import Date32Scalar, DynScalar, Int64Scalar
 from ..bindings import Bindings
 from ..builders import col, lit, param
-from ..index import ColumnZones, Index, ZoneMaps
+from ..index import ColumnZones, Index
 from ...parquet.reader import PageBounds
 from ..logical import DynValue
 from ..runtime.values import and_, column, eq, gt, literal
@@ -48,10 +48,7 @@ from ..runtime.values import and_, column, eq, gt, literal
 # ---------------------------------------------------------------------------
 def _index(var cols: List[ColumnZones], chunks: Int) raises -> Index:
     """An index over `chunks` chunks, described by these columns."""
-    var z = ZoneMaps(capacity=len(cols))
-    for ref c in cols:
-        z.add(c.copy())
-    return Index(chunks=chunks, zones=z^)
+    return Index(List[Int](length=chunks, fill=-1), cols^)
 
 
 def _i64(v: Int) -> DynScalar:
@@ -60,7 +57,7 @@ def _i64(v: Int) -> DynScalar:
 
 def _date(v: Int) -> DynScalar:
     """A `date32`, which needs its dtype spelled: a temporal type carries a
-    unit and so is not `Defaultable`, the same reason `ZoneMaps._stats` takes
+    unit and so is not `Defaultable`, the same reason `ColumnZones.statistics` takes
     the witness its caller already holds."""
     return Date32Scalar(
         Optional(Scalar[Date32Type.native](v)), date32()
@@ -86,10 +83,12 @@ def test_index_reads_one_statistic_for_every_chunk() raises:
         chunks=3,
     )
     assert_true(
-        idx.mins[Int64Type](String("a"), int64) == array([0, 10, 20], int64)
+        idx.statistics[Int64Type](String("a"), int64, upper=False)
+        == array([0, 10, 20], int64)
     )
     assert_true(
-        idx.maxes[Int64Type](String("a"), int64) == array([9, 19, 29], int64)
+        idx.statistics[Int64Type](String("a"), int64, upper=True)
+        == array([9, 19, 29], int64)
     )
 
 
@@ -100,7 +99,9 @@ def test_index_an_unrecorded_column_answers_all_null() raises:
     and a null answer already means "cannot prove, read it" -- the same rule an
     unrecognised predicate gets, expressed once in the data.
     """
-    var mins = Index(chunks=2).mins[Int64Type](String("missing"), int64)
+    var mins = Index([-1, -1]).statistics[Int64Type](
+        String("missing"), int64, upper=False
+    )
     assert_equal(len(mins), 2)
     assert_equal(mins.null_count(), 2)
 
@@ -118,7 +119,7 @@ def test_index_a_missing_statistic_is_null_for_that_chunk_alone() raises:
         ],
         chunks=3,
     )
-    var maxes = idx.maxes[Int64Type](String("a"), int64)
+    var maxes = idx.statistics[Int64Type](String("a"), int64, upper=True)
     assert_equal(maxes.null_count(), 1)
     assert_true(maxes.is_valid(0) and maxes.is_null(1) and maxes.is_valid(2))
 
@@ -134,7 +135,7 @@ def test_index_an_unrecorded_null_count_is_not_zero() raises:
         ],
         chunks=2,
     )
-    assert_equal(idx.zones.null_counts(String("a")), [-1, 4])
+    assert_equal(idx.columns[idx.find("a")].null_counts, [-1, 4])
 
 
 def test_index_an_all_null_chunk_is_skipped_without_any_bounds() raises:
@@ -173,8 +174,8 @@ def test_index_an_unknown_row_count_cannot_prove_all_null() raises:
 def test_index_an_empty_index_knows_nothing() raises:
     """The default. Every lookup is all-null, so nothing prunes."""
     var idx = Index()
-    assert_equal(idx.chunks, 0)
-    assert_equal(idx.zones.num_columns(), 0)
+    assert_equal(idx.chunks(), 0)
+    assert_equal(len(idx.columns), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +243,7 @@ def test_index_an_unknown_operand_keeps_every_chunk() raises:
 
 def test_index_an_empty_index_prunes_nothing() raises:
     """A source that knows nothing about itself keeps everything it has."""
-    var m = (col("a", int64) > lit(15, int64)).mask(Index(chunks=2))
+    var m = (col("a", int64) > lit(15, int64)).mask(Index([-1, -1]))
     assert_equal(_bits(m), [-1, -1])
 
 
@@ -365,12 +366,17 @@ def test_index_one_blind_predicate_does_not_disable_the_others() raises:
 # pages -- the same index one granularity down
 # ---------------------------------------------------------------------------
 def _page(rows: Int, lo: Int, hi: Int) -> PageBounds:
-    return PageBounds(rows, Optional(_i64(lo)), Optional(_i64(hi)))
+    return PageBounds(rows, False, Optional(_i64(lo)), Optional(_i64(hi)))
 
 
 def _null_page(rows: Int) -> PageBounds:
     """A page the writer marked all-null: no bounds at all."""
-    return PageBounds(rows, None, None)
+    return PageBounds(rows, True, None, None)
+
+
+def _unbounded_page(rows: Int) -> PageBounds:
+    """A page that holds values but recorded no bounds."""
+    return PageBounds(rows, False, None, None)
 
 
 def test_index_pages_are_chunks_like_any_other() raises:
@@ -380,23 +386,18 @@ def test_index_pages_are_chunks_like_any_other() raises:
     var idx = Index.from_pages(
         String("a"), [_page(10, 0, 9), _page(10, 10, 19), _page(10, 20, 29)], 30
     )
-    assert_equal(idx.chunks, 3)
+    assert_equal(idx.chunks(), 3)
     assert_equal(idx.rows, [10, 10, 10])
     assert_equal(_bits((col("a", int64) > lit(15, int64)).mask(idx)), [0, 1, 1])
 
 
 def test_index_a_page_with_no_bounds_is_never_skipped() raises:
-    """The page-level half of "cannot prove, read it".
-
-    `page_bounds` records no min/max for a page in `ColumnIndex.null_pages`,
-    and a page index carries no null *count* either — so an all-null page is
-    exactly the chunk nothing can be proven about. Skipping it would happen to
-    be sound, since a null satisfies no comparison, but that is an argument
-    about the predicate and this layer does not make it: it answers from the
-    bounds, and it has none.
-    """
+    """The page-level half of "cannot prove, read it": a page that holds
+    values but recorded no bounds is a chunk nothing can be proven about."""
     var idx = Index.from_pages(
-        String("a"), [_page(10, 0, 9), _null_page(10), _page(10, 20, 29)], 30
+        String("a"),
+        [_page(10, 0, 9), _unbounded_page(10), _page(10, 20, 29)],
+        30,
     )
     assert_equal(
         _bits((col("a", int64) > lit(15, int64)).mask(idx)), [0, -1, 1]
@@ -407,15 +408,29 @@ def test_index_a_page_with_no_bounds_is_never_skipped() raises:
     )
 
 
+def test_index_an_all_null_page_is_skipped() raises:
+    """`ColumnIndex.null_pages` marks a page entirely null, which is its whole
+    null count: every comparison with it is NULL, so `Index.defined` proves
+    no row of it survives."""
+    var idx = Index.from_pages(
+        String("a"), [_page(10, 0, 9), _null_page(10), _page(10, 20, 29)], 30
+    )
+    assert_equal(idx.columns[0].null_counts, [-1, 10, -1])
+    assert_equal(
+        idx.surviving([DynValue(col("a", int64) > lit(15, int64))]),
+        [False, False, True],
+    )
+
+
 def test_index_a_page_index_that_misses_rows_is_refused() raises:
     """Pages that do not tile the whole row group are a page index this cannot
     trust — answered as *no chunks*, which the caller reads as "this column
     says nothing" rather than as a selection that would misalign every column
     after it."""
     var short = Index.from_pages(String("a"), [_page(10, 0, 9)], 30)
-    assert_equal(short.chunks, 0)
+    assert_equal(short.chunks(), 0)
     var none = Index.from_pages(String("a"), List[PageBounds](), 30)
-    assert_equal(none.chunks, 0)
+    assert_equal(none.chunks(), 0)
 
 
 def test_index_never_excludes_a_chunk_that_holds_a_match() raises:

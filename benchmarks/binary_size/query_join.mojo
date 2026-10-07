@@ -19,7 +19,7 @@ any of it, and this is what proves it still doesn't.
 over whole: same kernel, same key indices, same `JOIN_INNER` from
 `marrow.kernels.join`.
 Two mechanical differences, neither of which changes what is measured — the
-output schema is derived by `Join._output_schema` instead of being passed in,
+output schema is derived by the `JoinChain` instead of being passed in,
 and the plan is spelled with the `join` verb rather than by naming the node.
 The recorded baseline predates the port and is stale.
 """
