@@ -84,8 +84,10 @@ struct Uri(Copyable, Movable, Writable):
                 var tail = String(rest[byte = slash + 1 :])
                 rest = tail^
 
+        # Only a URI has a query: a bare path is a filename, and a file really
+        # can be called `part-?.json`.
         var query = Dict[String, String]()
-        var q = rest.find("?")
+        var q = rest.find("?") if scheme != "" else -1
         if q >= 0:
             var qs = String(rest[byte = q + 1 :])
             var head = String(rest[byte=:q])
@@ -106,6 +108,21 @@ struct Uri(Copyable, Movable, Writable):
         # literally: a file really can be called `a%20b.parquet`.
         var path = String(rest) if scheme == "" else _percent_decode(rest)
         return Self(scheme^, authority^, path^, query^)
+
+    @staticmethod
+    def quote(key: StringSlice) -> String:
+        """`key` escaped for the path of a URI, so `parse` gives it back:
+        `%` and `?` are the two characters it would otherwise read as an
+        escape and as the start of the query."""
+        var out = String()
+        for c in key.codepoints():
+            if c == Codepoint.ord("%"):
+                out += "%25"
+            elif c == Codepoint.ord("?"):
+                out += "%3F"
+            else:
+                out += String(c)
+        return out^
 
     def is_local(self) -> Bool:
         """Whether this resolves to the local filesystem without OpenDAL.

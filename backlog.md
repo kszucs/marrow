@@ -29,7 +29,7 @@ all of them.
 |---|---|---|---|---|
 | 1 | **CSV reader** | A first user arrives with a CSV, not a Parquet file. NDJSON reads (`marrow.json`, §1.2); CSV does not | **M** | — |
 | 2 | **Declared error types** — every raise site raises an `ArrowError` kind, but ~1,800 signatures still declare bare `raises` | A bare frame keeps only an error's text, so a caller recovers the kind by parsing it (`DynError(e)`) instead of catching a type, and Python gets it through the same parse. Migrate bottom-up: a function declares its kind (`raises CorruptError`) or `DynError` once nothing it calls raises a bare `Error`; dispatch ladders forward `raises E`. It also pays back a size cost: a kind raised in a bare frame is converted to `Error` inline at the site, which put +21 KB (+1.5%) on `query_streaming_agg_fused` and `query_expr2_agg_fused`, mostly in the `dispatch_*` and `DynBuilder._dispatch_mut` ladders | **L** | — |
-| 3 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 1 |
+| 3 | **Hive partitions, and a remote scan that does not pay one round trip per row group** | Multi-file scans and globs exist (`marrow.datasets`), but a partitioned directory yields no partition columns, and a remote Parquet scan fetches one row group per request, serially | **M** | — |
 | 4 | **Join reordering** — no *search* over a join tree | The largest TPC-H win available. Every precondition has landed and two rewrites spend the cost: `SelectBuildSide` picks the side to index, `JoinReassociation` does one local association, and a footer's `distinct_count` now reaches `ColumnEstimate.ndv` so the cardinality term is visible wherever a writer recorded one. What is left is the **enumeration** — choosing among the Catalan-many associations of an *n*-join chain — which is a `prepare` pass rather than a `Rule` | **L** | — |
 | 5 | **CSE and duplicate group/sort key elimination** | Needs no `DynValue` equality slot: `WindowSpec.__eq__` already compares erased expressions by rendering them through the existing, non-raising `_write` slot, so duplicate key elimination is a `Rule` comparing renderings. What blocks it is that rendering is not faithful — see §1.4 | **M** | — |
 | 6 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
@@ -706,21 +706,35 @@ extension` (measured 2026-09-25), and `pixi-build-mojo 0.1.*`, which
 
 #### 1.3 Datasets: multi-file, partitioned, remote
 
-**What exists.** `scan(path: String, schema: Schema)`
-(`marrow/expr/builders.mojo:730`) — one file, and the caller supplies the schema
-because "a `Relation` is a description and must not touch the filesystem to
-exist".
+**What exists.** `scan` / `scan_json` / `scan_ipc` take a list of paths, read
+in order, each opened when the scan reaches it; Parquet pruning applies per
+file. `marrow.datasets.load_dataset` builds one from a glob (`expand`, listing
+through `OpenDalStore.list` for remote schemes) or from a Hugging Face Hub
+dataset (`HubDataset`: card `configs:`, split inference from file names, and
+the Hub's Parquet conversion for formats marrow cannot read), reading the
+first file's schema.
 
-Storage itself is no longer the gap: `marrow/io/` owns the seam, and
-`DynSource`/`DynSink` pick a backend from the URI scheme.
+**What is left.**
 
-**What it would take — two pieces left, both local.** (a) Derive a `Schema`
-from the Parquet footer so `scan(path)` needs no schema — small; everything
-needed is in `marrow/parquet/schema.mojo`, and it is row 3 of the table.
-(b) A `MultiFileScan` relation node owning a list of sources and yielding row
-groups across them, plus hive-path parsing to synthesise partition columns.
-Both are now strictly harder than the remote piece was, which inverts this
-section's original ordering.
+- **Hive partitions**: `key=value/` path segments become no columns.
+- **A standalone program calling `optimize[AllRules]()` then `execute()`
+  deadlocks the compiler** (every thread in `semaphore_wait_trap`, CPU flat
+  at ~40 s), on `4bf1c353` too: `scan(path, schema).filter(...)
+  .optimize[AllRules]().execute()` in a `main()` is enough. Inside a test
+  driver the same chain builds. The docs keep it out of compiled listings.
+- **Remote scans are latency-bound.** `ParquetScanOperator` reads one row
+  group per `drain`, and over OpenDAL each is its own request, issued only
+  when the previous one has been decoded. Hub files are often written with
+  1,000-row groups: `Salesforce/wikitext` `wikitext-103-raw-v1/train` is two
+  shards and ~1,800 groups, and read its one column in ~30 min where `curl`
+  downloads a 157 MB shard in 5 s. A request costs ~0.45 s over `https://`
+  and ~1 s over `hf://`, whose service resolves each read through the Hub
+  API. Fetching the next groups' ranges ahead of decoding, and coalescing
+  small adjacent groups into one range, is the fix.
+- **A `.json` file holding one JSON array** (not NDJSON) fails to parse;
+  `datasets` reads both.
+- **The Hub's Parquet conversion** is used for the default branch only, and
+  its HTTPS URLs get no `HF_TOKEN`, so a gated CSV dataset cannot be read.
 
 #### 1.4 The optimizer: no cost model, no CSE
 

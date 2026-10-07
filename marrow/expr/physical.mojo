@@ -42,7 +42,7 @@ appends one stage.
 
 from std.memory import ArcPointer
 
-from ..errors import InternalError
+from ..errors import DynError, InternalError
 from ..arrays import BoolArray, DynArray, Int32Array, StructArray
 from ..buffers import Bitmap
 from ..scalars import ArrowScalar, DynScalar, NullScalar
@@ -76,7 +76,7 @@ from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
 from ..kernels.window import WindowExtents, WindowFrame, WindowKernel
 from ..schema import Schema, schema
-from ..tabular import RecordBatch
+from ..tabular import RecordBatch, Table
 
 
 # ---------------------------------------------------------------------------
@@ -1571,7 +1571,7 @@ def _concat_batches(
 
 
 struct ParquetScanOperator(Operator):
-    """Reads a Parquet file, one **row group** per `drain`.
+    """Reads Parquet files in order, one **row group** per `drain`.
 
     A source like `BatchSourceOperator`, and the reason sources stayed pull:
     this is a generator over I/O, and nothing would be gained by inverting it.
@@ -1592,7 +1592,10 @@ struct ParquetScanOperator(Operator):
     rows. Row-group *windowing* is still absent and is a separate change.
     """
 
-    var _path: String
+    var _paths: List[String]
+    var _current: Int
+    """Index into `_paths` of the file `_file` holds; each file is opened only
+    once the one before it is exhausted, and gets its own read plan."""
     var _schema: Schema
     var _file: Optional[ParquetFile[DynSource, LeafSet.all()]]
     """Erased rather than pinned to the local backend, so a plan can scan
@@ -1630,13 +1633,14 @@ struct ParquetScanOperator(Operator):
 
     def __init__(
         out self,
-        var path: String,
+        var paths: List[String],
         var schema: Schema,
         var ctx: ExecContext,
         var pushed: List[DynValue] = List[DynValue](),
         var bindings: Bindings = Bindings(),
     ):
-        self._path = path^
+        self._paths = paths^
+        self._current = 0
         self._schema = schema^
         self._ctx = ctx^
         self._file = None
@@ -1651,17 +1655,41 @@ struct ParquetScanOperator(Operator):
         # A source consumes nothing; the driver never calls this.
         return None
 
+    @no_inline
+    def _in_current_file(self, e: Error) -> DynError:
+        """`e`, its message prefixed by the file being read."""
+        var err = DynError(e)
+        return DynError(
+            err.kind, t"{self._paths[self._current]}: {err.message}"
+        )
+
     def drain(mut self) raises -> Optional[Datum]:
         while len(self._pending) == 0:
+            if self._file and self._next >= len(self._plan):
+                # This file is exhausted: the next one starts over with a
+                # fresh read plan of its own.
+                self._file = None
+                self._plan = List[Int]()
+                self._selections = List[Optional[RowSelection]]()
+                self._next = 0
+                self._current += 1
+            if self._current >= len(self._paths):
+                return None
             if not self._file:
                 # Opened on first use, not at plan time: a `Relation` is a
                 # description and must not touch the filesystem to exist.
                 # The scan's schema decides each string column's layout, leaf
                 # by leaf: a column declared `string_view` -- or holding one,
                 # as `list<string_view>` -- decodes straight into views.
-                self._file = ParquetFile[DynSource, LeafSet.all()](
-                    DynSource.open(self._path), schema=self._schema.copy()
-                )
+                # A scan over many files must say which of them is missing
+                # or does not match the schema, hence the `try`s.
+                try:
+                    self._file = ParquetFile[DynSource, LeafSet.all()](
+                        DynSource.open(self._paths[self._current]),
+                        schema=self._schema.copy(),
+                    )
+                except e:
+                    raise self._in_current_file(e)
                 if len(self._pushed) == 0:
                     # Nothing to prove, so nothing to decode. Statistics are
                     # per `(row group x leaf)`, so building an index nobody
@@ -1691,7 +1719,7 @@ struct ParquetScanOperator(Operator):
                         else:
                             self._selections.append(Optional(sel.copy()))
             if self._next >= len(self._plan):
-                return None
+                continue
 
             var names = List[String](capacity=len(self._schema.fields))
             for ref f in self._schema.fields:
@@ -1708,12 +1736,16 @@ struct ParquetScanOperator(Operator):
                 picked = Optional(one^)
             self._next += 1
 
-            var table = self._file.value().read(
-                columns=Optional(names^),
-                row_groups=Optional(groups^),
-                row_selections=picked^,
-                ctx=self._ctx,
-            )
+            var table: Table
+            try:
+                table = self._file.value().read(
+                    columns=Optional(names^),
+                    row_groups=Optional(groups^),
+                    row_selections=picked^,
+                    ctx=self._ctx,
+                )
+            except e:
+                raise self._in_current_file(e)
             # A row group can decode to several chunks; each becomes a morsel
             # rather than being concatenated back together.
             for ref b in table.to_batches():
@@ -1722,17 +1754,20 @@ struct ParquetScanOperator(Operator):
 
 
 struct IpcScanOperator(Operator):
-    """Runs an `IpcScan`: one record batch of the file per `drain`, its
-    columns selected by the scan's schema. The file is opened on the first
-    `drain`, not here: a `Relation` must not touch the filesystem to exist."""
+    """Runs an `IpcScan`: one record batch per `drain`, its files read in
+    order and its columns selected by the scan's schema. Each file is opened
+    when the scan reaches it, not here: a `Relation` must not touch the
+    filesystem to exist."""
 
-    var _path: String
+    var _paths: List[String]
+    var _current: Int
     var _names: List[String]
     var _reader: Optional[RecordBatchFileReader[DynSource]]
     var _next: Int
 
-    def __init__(out self, var path: String, schema: Schema):
-        self._path = path^
+    def __init__(out self, var paths: List[String], schema: Schema):
+        self._paths = paths^
+        self._current = 0
         self._names = schema.names()
         self._reader = None
         self._next = 0
@@ -1742,30 +1777,38 @@ struct IpcScanOperator(Operator):
         return None
 
     def drain(mut self) raises -> Optional[Datum]:
-        if not self._reader:
-            self._reader = RecordBatchFileReader[DynSource](
-                DynSource.open(self._path)
-            )
-        ref reader = self._reader.value()
-        if self._next >= reader.num_record_batches():
-            return None
-        var batch = reader.read_batch(self._next)
-        self._next += 1
-        return Datum(batch.select(self._names).to_struct_array().to_dyn())
+        while self._current < len(self._paths):
+            if not self._reader:
+                self._reader = RecordBatchFileReader[DynSource](
+                    DynSource.open(self._paths[self._current])
+                )
+                self._next = 0
+            ref reader = self._reader.value()
+            if self._next < reader.num_record_batches():
+                var batch = reader.read_batch(self._next)
+                self._next += 1
+                return Datum(
+                    batch.select(self._names).to_struct_array().to_dyn()
+                )
+            self._reader = None
+            self._current += 1
+        return None
 
 
 struct JsonScanOperator(Operator):
-    """Runs a `JsonScan`: one block of the file per `drain`, parsed into the
-    scan's schema with keys outside it skipped. The file is opened on the
-    first `drain`, not here: a `Relation` must not touch the filesystem to
-    exist."""
+    """Runs a `JsonScan`: one block per `drain`, its files read in order and
+    parsed into the scan's schema with keys outside it skipped. Each file is
+    opened when the scan reaches it, not here: a `Relation` must not touch the
+    filesystem to exist."""
 
-    var _path: String
+    var _paths: List[String]
+    var _current: Int
     var _schema: Schema
     var _reader: Optional[JsonReader[DynSource]]
 
-    def __init__(out self, var path: String, var schema: Schema):
-        self._path = path^
+    def __init__(out self, var paths: List[String], var schema: Schema):
+        self._paths = paths^
+        self._current = 0
         self._schema = schema^
         self._reader = None
 
@@ -1774,16 +1817,19 @@ struct JsonScanOperator(Operator):
         return None
 
     def drain(mut self) raises -> Optional[Datum]:
-        if not self._reader:
-            self._reader = open_json(
-                self._path,
-                ReadOptions(),
-                ParseOptions(self._schema, UnexpectedFieldBehavior.IGNORE),
-            )
-        var batch = self._reader.value().read_next_batch()
-        if not batch:
-            return None
-        return Datum(batch.value().to_struct_array().to_dyn())
+        while self._current < len(self._paths):
+            if not self._reader:
+                self._reader = open_json(
+                    self._paths[self._current],
+                    ReadOptions(),
+                    ParseOptions(self._schema, UnexpectedFieldBehavior.IGNORE),
+                )
+            var batch = self._reader.value().read_next_batch()
+            if batch:
+                return Datum(batch.value().to_struct_array().to_dyn())
+            self._reader = None
+            self._current += 1
+        return None
 
 
 def admitted_bits(mask: DynArray) raises -> Bitmap[mut=False]:

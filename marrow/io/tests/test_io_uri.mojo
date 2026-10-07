@@ -57,6 +57,12 @@ def test_io_uri_scheme_aliases_collapse() raises:
     assert_equal(Uri.parse("https://host/k").service(), "http")
 
 
+def test_io_uri_bare_path_has_no_query() raises:
+    var u = Uri.parse("data/part-?.json")
+    assert_equal(u.path, "data/part-?.json")
+    assert_equal(len(u.query), 0)
+
+
 def test_io_uri_query_string_is_parsed() raises:
     var u = Uri.parse("s3://bucket/key.parquet?region=us-east-1&anonymous=")
     assert_equal(u.path, "key.parquet")

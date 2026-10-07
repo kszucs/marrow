@@ -750,6 +750,15 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     return DynRelation(ParquetScan(ScanPath(path^), schema^))
 
 
+def scan(var paths: List[String], var schema: Schema) raises -> DynRelation:
+    """Several Parquet files sharing `schema`, read in order as one plan.
+
+    Each file is opened only when the scan reaches it, and row-group and page
+    pruning apply to every file.
+    """
+    return DynRelation(ParquetScan(ScanPath(paths^), schema^))
+
+
 def scan(
     var path: StringParam[StringType], var schema: Schema
 ) raises -> DynRelation:
@@ -772,6 +781,13 @@ def scan_json(var path: String, var schema: Schema) raises -> DynRelation:
 
 
 def scan_json(
+    var paths: List[String], var schema: Schema
+) raises -> DynRelation:
+    """Several newline-delimited JSON files, read in order as one plan."""
+    return DynRelation(JsonScan(ScanPath(paths^), schema^))
+
+
+def scan_json(
     var path: StringParam[StringType], var schema: Schema
 ) raises -> DynRelation:
     """A newline-delimited JSON file named at run time, as a plan."""
@@ -782,6 +798,11 @@ def scan_ipc(var path: String, var schema: Schema) raises -> DynRelation:
     """An Arrow IPC file, as a plan: one record batch at a time, the schema
     selecting the columns."""
     return DynRelation(IpcScan(ScanPath(path^), schema^))
+
+
+def scan_ipc(var paths: List[String], var schema: Schema) raises -> DynRelation:
+    """Several Arrow IPC files sharing `schema`, read in order as one plan."""
+    return DynRelation(IpcScan(ScanPath(paths^), schema^))
 
 
 def scan_ipc(

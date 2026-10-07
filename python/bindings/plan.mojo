@@ -57,6 +57,7 @@ from marrow.io import DynSource
 from marrow.parquet import ParquetFile
 from marrow.expr.builders import scan_json as _scan_json
 from marrow.json import open_json
+from marrow.datasets import DataFiles, HubDataset, load_dataset as _load_dataset
 from marrow.schema import Schema
 from marrow.expr.sql import Catalog, sql as _sql
 from marrow.tabular import RecordBatch
@@ -492,6 +493,55 @@ def json_scan(path: PythonObject, schema: PythonObject) raises -> PythonObject:
     return _wrap(_scan_json(p^, sch^))
 
 
+def load_dataset(
+    path: PythonObject,
+    name: PythonObject,
+    split: PythonObject,
+    data_files: PythonObject,
+    revision: PythonObject,
+) raises -> PythonObject:
+    """A plan reading one split of a dataset; see `marrow.datasets`.
+
+    ``data_files`` is ``None`` or a dict of split name to a list of
+    patterns; the Python wrapper normalises every other spelling.
+    """
+    var builtins = Python.import_module("builtins")
+    var p = String(py=path)
+    var s = String(py=split)
+    var r = String(py=revision)
+    if data_files.__is__(builtins.None):
+        return _wrap(_load_dataset(p, String(py=name), s, r))
+    var files = DataFiles()
+    for key in data_files:
+        var patterns = List[String]()
+        for pattern in data_files[key]:
+            patterns.append(String(py=pattern))
+        files.add(String(py=key), patterns^)
+    return _wrap(_load_dataset(p, files, s, r))
+
+
+def hub_config_names(
+    path: PythonObject, revision: PythonObject
+) raises -> PythonObject:
+    """The config names of a Hub dataset."""
+    var hub = HubDataset.fetch(String(py=path), String(py=revision))
+    var out = Python.list()
+    for ref c in hub.config_names():
+        out.append(PythonObject(c))
+    return out
+
+
+def hub_split_names(
+    path: PythonObject, name: PythonObject, revision: PythonObject
+) raises -> PythonObject:
+    """The split names of one config of a Hub dataset."""
+    var hub = HubDataset.fetch(String(py=path), String(py=revision))
+    var out = Python.list()
+    for ref s in hub.config(String(py=name)).data_files.splits():
+        out.append(PythonObject(s))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Module registration
 # ---------------------------------------------------------------------------
@@ -527,4 +577,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[in_memory_table]("in_memory_table")
     mb.def_function[parquet_scan]("parquet_scan")
     mb.def_function[json_scan]("json_scan")
+    mb.def_function[load_dataset]("load_dataset")
+    mb.def_function[hub_config_names]("hub_config_names")
+    mb.def_function[hub_split_names]("hub_split_names")
     mb.def_function[sql_plan]("sql_plan")

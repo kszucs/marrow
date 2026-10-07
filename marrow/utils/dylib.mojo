@@ -361,6 +361,15 @@ def c_bytes(ptr: Pointer[UInt8, MutUntrackedOrigin], n: Int) -> List[UInt8]:
     return out^
 
 
+def c_string(ptr: CStr) -> String:
+    """Copy a NUL-terminated C string into an owned `String`. Non-validating,
+    for the same reason as the counted overload below."""
+    var n = 0
+    while ptr[unsafe_offset=n] != 0:
+        n += 1
+    return c_string(ptr.unsafe_bitcast[UInt8](), n)
+
+
 def c_string(ptr: Pointer[UInt8, MutUntrackedOrigin], n: Int) -> String:
     """Copy `n` bytes out of a C buffer into an owned `String`.
 

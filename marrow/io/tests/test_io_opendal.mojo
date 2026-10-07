@@ -450,3 +450,37 @@ def test_opendal_source_read_ranges_raises_the_first_failed_fetch() raises:
             assert_equal(got, want)
         _ = data^
         _ = head^
+
+
+def _has(paths: List[String], path: String) -> Bool:
+    for ref p in paths:
+        if p == path:
+            return True
+    return False
+
+
+def test_opendal_list_names_children() raises:
+    if not _available():
+        return
+    var store = OpenDalStore("memory")
+    var one: List[UInt8] = [1]
+    store.write("data/a.parquet", one)
+    store.write("data/sub/b.parquet", one)
+    store.write("top.txt", one)
+    var flat = store.list("data/")
+    assert_true(_has(flat, "data/a.parquet"))
+    assert_true(_has(flat, "data/sub/"))
+    assert_true(not _has(flat, "data/sub/b.parquet"))
+    assert_true(not _has(flat, "top.txt"))
+
+
+def test_opendal_list_recursive_reaches_every_file() raises:
+    if not _available():
+        return
+    var store = OpenDalStore("memory")
+    var one: List[UInt8] = [1]
+    store.write("data/a.parquet", one)
+    store.write("data/sub/b.parquet", one)
+    var deep = store.list("data/", recursive=True)
+    assert_true(_has(deep, "data/a.parquet"))
+    assert_true(_has(deep, "data/sub/b.parquet"))

@@ -114,7 +114,7 @@ from .expr import (
     row_number,
 )
 from .lazy import LazyTable, memtable, read_json, read_parquet, sql
-from . import compute, expr, lazy
+from . import compute, datasets, expr, lazy
 
 ExecContext = libmarrow.ExecContext
 
@@ -180,6 +180,7 @@ __all__ = [
     "count_star",
     "cpu_count",
     "cume_dist",
+    "datasets",
     "date32",
     "date64",
     "day_time_interval",

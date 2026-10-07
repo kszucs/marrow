@@ -3128,52 +3128,81 @@ comptime Difference = Multiset[Except]
 """`left EXCEPT [ALL] right`."""
 
 
+struct _ScanPathRest(Movable):
+    """What a `ScanPath` holds beyond one literal path: more paths, or a
+    parameter."""
+
+    var more: List[String]
+    var param: Optional[StringParam[StringType]]
+
+    def __init__(
+        out self,
+        var more: List[String],
+        var param: Optional[StringParam[StringType]],
+    ):
+        self.more = more^
+        self.param = param^
+
+
 struct ScanPath(Copyable, Movable, Writable):
-    """Where a scan reads from: a literal path, or a `string` parameter resolved
-    per execution.
+    """Where a scan reads from: one or more literal paths, read in order, or a
+    `string` parameter resolved per execution.
 
     A type of its own rather than a second field on the scan, so every place
     that rebuilds a scan carries the parameter with it.
-
-    **The parameter sits behind an `ArcPointer`, and that is measured.** A
-    scan is a member of `DynRelation`'s variant, whose copy and destroy code is
-    inlined wherever a plan is copied — in every binary, scans or not. Holding
-    an `Optional[StringParam[StringType]]` inline instead cost 19,396 more bytes
-    of `__text` on `query_streaming` and 23,904 on `query_join`, neither of
-    which builds a scan.
     """
 
+    # Everything but the first path sits behind one `ArcPointer`, measured: a
+    # scan is a member of `DynRelation`'s variant, whose copy and destroy code
+    # is inlined wherever a plan is copied, in every binary. The parameter
+    # inline cost `query_streaming` 19,396 bytes of `__text` and `query_join`
+    # 23,904; a second optional pointer for the other paths ~7.7 KB on
+    # `query_streaming`; one `List` of every path ~120 KB on `query_cli`.
     var _literal: String
-    var _param: Optional[ArcPointer[StringParam[StringType]]]
+    var _rest: Optional[ArcPointer[_ScanPathRest]]
 
     def __init__(out self, var path: String):
         self._literal = path^
-        self._param = None
+        self._rest = None
+
+    def __init__(out self, var paths: List[String]):
+        self._literal = paths[0].copy() if len(paths) else String()
+        self._rest = None
+        if len(paths) > 1:
+            var more = List[String](capacity=len(paths) - 1)
+            for i in range(1, len(paths)):
+                more.append(paths[i].copy())
+            self._rest = ArcPointer(_ScanPathRest(more^, None))
 
     def __init__(out self, var param: StringParam[StringType]):
         self._literal = String()
-        self._param = ArcPointer(param^)
+        self._rest = ArcPointer(_ScanPathRest(List[String](), param^))
 
-    def resolve(self, bindings: Bindings) raises -> String:
-        """The path this execution reads."""
-        if self._param:
-            return self._param.value()[].value(bindings)
-        else:
-            return self._literal.copy()
+    def resolve(self, bindings: Bindings) raises -> List[String]:
+        """The paths this execution reads, in order."""
+        if self._rest and self._rest.value()[].param:
+            return [self._rest.value()[].param.value().value(bindings)]
+        var out: List[String] = [self._literal.copy()]
+        if self._rest:
+            out.extend(self._rest.value()[].more.copy())
+        return out^
 
     def references(self, mut into: References):
-        if self._param:
-            self._param.value()[].references(into)
+        if self._rest and self._rest.value()[].param:
+            self._rest.value()[].param.value().references(into)
 
     def write_to[W: Writer](self, mut writer: W):
-        if self._param:
-            writer.write(self._param.value()[])
-        else:
-            writer.write(self._literal)
+        if self._rest and self._rest.value()[].param:
+            writer.write(self._rest.value()[].param.value())
+            return
+        writer.write(self._literal)
+        if self._rest:
+            for ref p in self._rest.value()[].more:
+                writer.write(", ", p)
 
 
 struct ParquetScan(FileScan, Writable):
-    """A Parquet file as a source, read one row group at a time.
+    """Parquet files as a source, read in order one row group at a time.
 
     **The schema is the projection.** The scan reads only its own columns out
     of the file, so narrowing a scan's schema *is* how a projection gets pushed
@@ -3301,7 +3330,8 @@ struct ParquetScan(FileScan, Writable):
 
 
 trait FileScan(Relation):
-    """A relation reading one file: `ParquetScan`, `IpcScan` or `JsonScan`.
+    """A relation reading files of one format, in order: `ParquetScan`,
+    `IpcScan` or `JsonScan`.
 
     Each is a plan node of its own, run by an operator of its own, so the
     optimizer tells formats apart with `isa`. What they share is that the

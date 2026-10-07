@@ -77,6 +77,20 @@ def test_scan_json_prints_as_a_json_scan() raises:
     assert_equal(String(plan), "JsonScan(rows.jsonl)")
 
 
+def test_scan_json_reads_several_files_in_order() raises:
+    with ScratchDir() as dir:
+        var first = join(dir, "a.jsonl")
+        var second = join(dir, "b.jsonl")
+        _write(first, _json_rows())
+        _write(second, '{"id": 4, "name": "d"}\n')
+        var plan = scan_json([first, second], _schema())
+        assert_equal(
+            String(plan), String("JsonScan(", first, ", ", second, ")")
+        )
+        var out = plan.execute()
+        assert_true(out.column("id") == array([1, 2, 3, 4], int64).to_dyn())
+
+
 def test_scan_json_column_pruning_narrows_the_read() raises:
     with ScratchDir() as dir:
         var path = join(dir, "rows.jsonl")

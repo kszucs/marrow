@@ -24,4 +24,5 @@ from .core import (
     require_range,
 )
 from .local import BufferSource, FileSink, MemorySink
+from .glob import Glob
 from .uri import StorageOptions, Uri

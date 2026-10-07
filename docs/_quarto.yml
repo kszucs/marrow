@@ -93,6 +93,8 @@ website:
         contents:
           - text: "Parquet & Arrow IPC"
             href: guide/io.qmd
+          - text: "Datasets"
+            href: guide/datasets.qmd
           - text: "PyArrow interop"
             href: guide/interop.qmd
           - text: "DataFusion UDFs"

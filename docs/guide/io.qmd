@@ -139,6 +139,11 @@ write_table` operate on a marrow `Table`, and the `marrow/parquet` package also
 exposes lower-level metadata, statistics, page-index and bloom-filter readers.
 :::
 
+::: {.callout-tip}
+To read many files — a directory, a glob, or a Hugging Face Hub dataset — as one
+lazy table, see [Datasets](datasets.qmd).
+:::
+
 ## Choosing a format
 
 - **Arrow IPC** — you want the fastest possible read/write and are staying inside

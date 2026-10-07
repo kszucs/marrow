@@ -64,6 +64,7 @@ from ..errors import IOError, InvalidError
 from ..buffers import Buffer, bulk_copy
 from ..execution import ExecContext
 from ..utils.dylib import (
+    CStr,
     CString,
     LibSet,
     LibSpec,
@@ -164,6 +165,16 @@ struct CResultHandle(RegisterPassable):
     """
 
     var handle: Opaque
+    var error: ErrorPtr
+
+
+@fieldwise_init
+struct CResultListerNext(RegisterPassable):
+    """Mirrors `opendal_result_lister_next`. Both fields NULL means the lister
+    is exhausted, which is why the entry is optional where `CResultHandle`'s
+    handle is not."""
+
+    var entry: Optional[Opaque]
     var error: ErrorPtr
 
 
@@ -278,6 +289,9 @@ struct OpenDalStore(Movable):
         comptime assert (
             size_of[CResultWriterWrite]() == 16
         ), "opendal_result_writer_write layout drifted"
+        comptime assert (
+            size_of[CResultListerNext]() == 16
+        ), "opendal_result_lister_next layout drifted"
 
     def __deinit__(deinit self):
         try:
@@ -478,6 +492,44 @@ struct OpenDalStore(Movable):
         )
         _ = cpath^
         CError.raise_if(lib, err)
+
+    def list(
+        self, path: StringSlice, recursive: Bool = False
+    ) raises -> List[String]:
+        """The paths under the directory `path`, relative to the store's root.
+
+        `path` names a directory, so it ends with `/`; `""` is the root. A
+        directory is listed with a trailing `/`. With `recursive`, every object
+        below `path` is listed rather than its immediate children.
+        """
+        var lib = OpenDal.handle()
+        var cpath = CString(path)
+        var opts = lib.call["opendal_list_options_new", Opaque]()
+        lib.call["opendal_list_options_set_recursive"](opts, recursive)
+        var res = lib.call["opendal_operator_list_with", CResultHandle](
+            self._op, cpath.ptr(), opts
+        )
+        _ = cpath^
+        # Before the raise: the options are ours on both paths.
+        lib.call["opendal_list_options_free"](opts)
+        CError.raise_if(lib, res.error)
+        var out = List[String]()
+        while True:
+            var next = lib.call["opendal_lister_next", CResultListerNext](
+                res.handle
+            )
+            if next.error is not None:
+                lib.call["opendal_lister_free"](res.handle)
+                CError.raise_if(lib, next.error)
+            if next.entry is None:
+                break
+            var entry = next.entry.value()
+            var cpath_out = lib.call["opendal_entry_path", CStr](entry)
+            out.append(c_string(cpath_out))
+            lib.call["opendal_string_free"](cpath_out)
+            lib.call["opendal_entry_free"](entry)
+        lib.call["opendal_lister_free"](res.handle)
+        return out^
 
     def delete(self, path: StringSlice) raises:
         """Delete `path`. Deleting one that is not there succeeds."""
