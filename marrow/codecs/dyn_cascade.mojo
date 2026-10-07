@@ -116,19 +116,21 @@ struct DynCodec(Copyable, Movable, Writable):
 
         return self._dispatch(f)
 
-    def forward[V: DType, W: DType](self, mut values: List[Scalar[W]]) -> UInt64:
+    def forward[
+        V: DType, W: DType
+    ](self, mut values: List[Scalar[W]]) -> UInt64:
         """Map `values` -- of `V`, held as their bits in `W`, a type of the
         same width -- through the active elementwise codec, in place; return
         the state it started from."""
 
         def f[C: Elementwise](c: C) {mut values} -> UInt64:
             comptime if C.takes[V]():
-                comptime assert size_of[Scalar[C.Out[V]]]() == size_of[
-                    Scalar[W]
-                ](), "an elementwise codec keeps the width"
-                var first = bitcast[V](values[0]) if len(values) > 0 else Scalar[
-                    V
-                ](0)
+                comptime assert (
+                    size_of[Scalar[C.Out[V]]]() == size_of[Scalar[W]]()
+                ), "an elementwise codec keeps the width"
+                var first = bitcast[V](values[0]) if len(
+                    values
+                ) > 0 else Scalar[V](0)
                 var second = bitcast[V](values[1]) if len(values) > 1 else first
                 var start = C.init(first, second)
                 var state = start

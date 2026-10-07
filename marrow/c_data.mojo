@@ -457,9 +457,7 @@ struct CArrowSchema(Copyable, Movable):
         elif dtype.is_list():
             fmt = "+l"
             n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](
-                1
-            )
+            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
             # Move child value onto the heap so the pointer stays valid after
             # this stack frame is gone.
             var child0 = CArrowSchema.from_field(
@@ -471,9 +469,7 @@ struct CArrowSchema(Copyable, Movable):
         elif dtype.is_large_list():
             fmt = "+L"
             n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](
-                1
-            )
+            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
             var child0 = CArrowSchema.from_field(
                 dtype.as_large_list().value_field().copy()
             )
@@ -484,9 +480,7 @@ struct CArrowSchema(Copyable, Movable):
             ref fsl = dtype.as_fixed_size_list()
             fmt = {"+w:", fsl.size}
             n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](
-                1
-            )
+            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
             var child0 = CArrowSchema.from_field(fsl.value_field().copy())
             var child0_ptr = _alloc[CArrowSchema](1)
             child0_ptr.unsafe_write(child0^)
@@ -568,9 +562,7 @@ struct CArrowSchema(Copyable, Movable):
             ref mt = dtype.as_map()
             fmt = "+m"
             n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](
-                1
-            )
+            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
             var entries = CArrowSchema.from_field(mt.entries_field())
             var entries_ptr = _alloc[CArrowSchema](1)
             entries_ptr.unsafe_write(entries^)
@@ -1427,9 +1419,7 @@ struct CArrowArray(Copyable, Movable):
             OpaquePointer[MutUntrackedOrigin], MutUntrackedOrigin
         ] = _null_ptr[OpaquePointer[MutUntrackedOrigin]]()
         if not is_null_dtype:
-            buffers = _alloc[OpaquePointer[MutUntrackedOrigin]](
-                Int(n_buffers)
-            )
+            buffers = _alloc[OpaquePointer[MutUntrackedOrigin]](Int(n_buffers))
             if data_heap[].bitmap:
                 buffers[unsafe_offset=0] = OpaquePointer[MutUntrackedOrigin](
                     unsafe_from_address=Int(
@@ -1453,9 +1443,9 @@ struct CArrowArray(Copyable, Movable):
             Pointer[CArrowArray, MutUntrackedOrigin], MutUntrackedOrigin
         ] = _null_ptr[Pointer[CArrowArray, MutUntrackedOrigin]]()
         if n_children > 0:
-            children_ptr = _alloc[
-                Pointer[CArrowArray, MutUntrackedOrigin]
-            ](Int(n_children))
+            children_ptr = _alloc[Pointer[CArrowArray, MutUntrackedOrigin]](
+                Int(n_children)
+            )
             for i in range(Int(n_children)):
                 var child = CArrowArray.from_data(
                     data_heap[].children[i].copy()

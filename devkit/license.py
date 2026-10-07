@@ -103,6 +103,7 @@ PLACEMENTS = {
     ".envrc": SCRIPT,
     ".gitattributes": SCRIPT,
     ".gitignore": SCRIPT,
+    ".gitmodules": SCRIPT,
 }
 
 #: Files that take no header: formats with no comment syntax (JSON, and the

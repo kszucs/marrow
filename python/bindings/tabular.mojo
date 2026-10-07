@@ -208,7 +208,9 @@ def _record_batch_export_to_c(
 
 
 def _record_batch_export_to_c_device(
-    py_self: PythonObject, array_address: PythonObject, schema_address: PythonObject
+    py_self: PythonObject,
+    array_address: PythonObject,
+    schema_address: PythonObject,
 ) raises -> PythonObject:
     """Write the batch as a CPU device array, and its schema unless
     `schema_address` is `None`, into the caller's C structs."""

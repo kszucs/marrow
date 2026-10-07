@@ -1589,4 +1589,3 @@ def test_c_stream_import_frees_its_struct_shells() raises:
     # The import is zero-copy: the exported arrays live as long as the table.
     _ = table^
     assert_equal(live_allocations(), before)
-

@@ -769,9 +769,7 @@ def test_schema_export_to_c_and_import_from_c():
 def test_record_batch_export_to_c_device_is_read_by_pyarrow():
     expected = _nested_batch()
     c_schema, c_array = _structs("ArrowSchema", "ArrowDeviceArray")
-    ma.record_batch(expected)._export_to_c_device(
-        _address(c_array), _address(c_schema)
-    )
+    ma.record_batch(expected)._export_to_c_device(_address(c_array), _address(c_schema))
     assert c_array.device_type == 1  # ARROW_DEVICE_CPU
     schema = pa.Schema._import_from_c(_address(c_schema))
     result = pa.RecordBatch._import_from_c_device(_address(c_array), schema)
@@ -787,4 +785,3 @@ def test_record_batch_import_from_c_device_takes_ownership():
     result = ma.RecordBatch._import_from_c_device(_address(c_array), expected.schema)
     assert c_array.array.release == ffi.NULL
     assert pa.record_batch(result).equals(expected)
-
