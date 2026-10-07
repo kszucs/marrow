@@ -2878,10 +2878,10 @@ struct ParquetFile[
             offset, length if length > 0 else self._source.size() - offset
         )
 
-    def metadata(self) -> FileMetaData:
-        """The file's footer metadata (row groups, column chunks, statistics).
-        """
-        return self._meta.copy()
+    def metadata(ref self) -> ref[self._meta] FileMetaData:
+        """The file's footer metadata (row groups, column chunks, statistics),
+        borrowed from the file; `.copy()` it to keep it past the file."""
+        return self._meta
 
     def schema(self) -> Schema:
         """The file's Arrow schema."""
@@ -3662,7 +3662,7 @@ def read_metadata(
 
     Reads the file's tail, not the file, so pointing this at an object store
     costs one ranged request rather than a download."""
-    return ParquetFile(DynSource.open(uri, options)).metadata()
+    return ParquetFile(DynSource.open(uri, options)).metadata().copy()
 
 
 struct PageIndex(Copyable, Movable):

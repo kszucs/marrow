@@ -102,6 +102,7 @@ from .logical import (
     EmptyRelation,
     FileScan,
     Filter,
+    IcebergScan,
     InMemoryTable,
     IpcScan,
     JsonScan,
@@ -767,6 +768,15 @@ struct PushFilterIntoScan(Rule):
             )
             var out: DynRelation = grown^
             return out^
+        if node.isa[IcebergScan]():
+            ref source = node.get[IcebergScan]()
+            for ref carried in source.pruners():
+                if String(carried) == String(predicate):
+                    return None
+            var pruners = source.pruners().copy()
+            pruners.append(predicate.copy())
+            var out: DynRelation = source.with_pruners(pruners^)
+            return out^
         if node.isa[Filter]():
             ref inner = node.get[Filter]()
             var below = Self._grown(inner.input[].copy(), predicate)
@@ -1103,11 +1113,6 @@ struct ColumnPruning(Copyable, Movable):
         return out^
 
     @staticmethod
-    def _whole(node: DynRelation) raises -> DynRelation:
-        """`node` pruned beneath, but keeping every column it produces."""
-        return Self.apply(node, node.schema().names())
-
-    @staticmethod
     def _narrow_scan[
         S: FileScan
     ](node: DynRelation, needed: List[String]) raises -> DynRelation:
@@ -1132,6 +1137,8 @@ struct ColumnPruning(Copyable, Movable):
             return Self._narrow_scan[IpcScan](node, needed)
         if node.isa[JsonScan]():
             return Self._narrow_scan[JsonScan](node, needed)
+        if node.isa[IcebergScan]():
+            return Self._narrow_scan[IcebergScan](node, needed)
 
         if node.isa[InMemoryTable]():
             ref src = node.get[InMemoryTable]()
@@ -1211,24 +1218,32 @@ struct ColumnPruning(Copyable, Movable):
         # The set relations are positional and match whole rows, so each side
         # keeps all of its own columns. Descending anyway still prunes beneath
         # them.
+        # Each side keeps every column it produces. The recursion calls
+        # `apply` itself: routing it through a helper that calls back into
+        # `apply` deadlocked the compiler.
         if node.isa[Union]():
             ref u = node.get[Union]()
             var out: DynRelation = Union(
-                Self._whole(u.left[]), Self._whole(u.right[])
+                Self.apply(u.left[], u.left[].schema().names()),
+                Self.apply(u.right[], u.right[].schema().names()),
             )
             return out^
 
         if node.isa[Intersection]():
             ref i = node.get[Intersection]()
             var out: DynRelation = Intersection(
-                Self._whole(i.left[]), Self._whole(i.right[]), i.all
+                Self.apply(i.left[], i.left[].schema().names()),
+                Self.apply(i.right[], i.right[].schema().names()),
+                i.all,
             )
             return out^
 
         if node.isa[Difference]():
             ref d = node.get[Difference]()
             var out: DynRelation = Difference(
-                Self._whole(d.left[]), Self._whole(d.right[]), d.all
+                Self.apply(d.left[], d.left[].schema().names()),
+                Self.apply(d.right[], d.right[].schema().names()),
+                d.all,
             )
             return out^
 
@@ -1400,31 +1415,20 @@ struct Optimizer[R: RuleSet](Copyable, Movable):
     """
 
     @staticmethod
-    def _rewritten_children(node: DynRelation) raises -> DynRelation:
-        """`node` with every child already rewritten.
+    def rewrite(node: DynRelation) raises -> DynRelation:
+        """One bottom-up pass over `node`: children first, then `R`'s rules.
 
         Bottom-up, because every rule reads its child's type: rewriting
         children first means a rule sees the child's *final* form, so
         `Limit(Sort(Filter(...)))` collapses in one pass instead of waiting for
         the fixpoint to rediscover it.
-
-        `traverse` is what makes this three lines instead of an arm per node —
-        a node knows its own children and how to put itself back together, so
-        adding a relation adds no code here. It also means `Aggregate` and
-        `Join` are descended into, which a hand-written ladder had quietly
-        skipped.
         """
-
-        def descend(child: DynRelation) raises {imm} -> DynRelation:
-            return Self.rewrite(child)
-
-        return node.traverse(descend)
-
-    @staticmethod
-    def rewrite(node: DynRelation) raises -> DynRelation:
-        """One bottom-up pass over `node`: children first, then `R`'s rules."""
-        var current = Self._rewritten_children(node)
-        return Self.R.rewrite(current)
+        # The recursion calls `rewrite` itself rather than through a closure
+        # handed to `traverse`: that shape deadlocked the compiler.
+        var rewritten = List[DynRelation]()
+        for ref child in node.children():
+            rewritten.append(Self.rewrite(child))
+        return Self.R.rewrite(node.with_children(rewritten))
 
     @staticmethod
     def run(plan: DynRelation) raises -> DynRelation:

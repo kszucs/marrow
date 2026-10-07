@@ -632,3 +632,16 @@ def test_dispatch_binaryview() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_field_id() raises:
+    assert_false(Field("a", int64).field_id())
+    var f = Field("a", int64, metadata={FIELD_ID_KEY: "7"})
+    assert_equal(f.field_id().value(), 7)
+    var bad = Field("a", int64, metadata={FIELD_ID_KEY: "x"})
+    var raised = False
+    try:
+        _ = bad.field_id()
+    except:
+        raised = True
+    assert_true(raised)

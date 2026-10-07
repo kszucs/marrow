@@ -61,6 +61,11 @@ from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..io import ByteSource, DynSource
 from ..ipc import RecordBatchFileReader
+from ..iceberg.catalog import IcebergTable
+from ..iceberg.manifest import DataFile
+from ..iceberg.planning import scan_tasks, snapshot_files
+from ..iceberg.projection import NameMapping
+from ..iceberg.scan import FileScanTask, IcebergFileReader
 from ..json import (
     JsonReader,
     ParseOptions,
@@ -1830,6 +1835,104 @@ struct JsonScanOperator(Operator):
             self._reader = None
             self._current += 1
         return None
+
+
+struct IcebergScanOperator(Operator):
+    """Runs an `IcebergScan`: one row group of one data file per `drain`, in
+    the scan's schema.
+
+    The snapshot is planned on the first `drain`, not here — reading its
+    manifests is I/O, and a `Relation` must not do any to exist. Planning
+    skips every data file the pushed predicates prove cannot match, from the
+    column bounds and partition values its manifest records; the predicates
+    are still evaluated by the `Filter` above, so skipping saves reads and
+    never changes an answer."""
+
+    var _table: IcebergTable
+    var _snapshot_id: Optional[Int]
+    var _schema: Schema
+    var _pushed: List[DynValue]
+    var _bindings: Bindings
+    var _ctx: ExecContext
+    var _mapping: Optional[NameMapping]
+    var _tasks: Optional[List[FileScanTask]]
+    var _next: Int
+    var _reader: Optional[IcebergFileReader]
+
+    def __init__(
+        out self,
+        var table: IcebergTable,
+        snapshot_id: Optional[Int],
+        var schema: Schema,
+        var ctx: ExecContext,
+        var pushed: List[DynValue] = [],
+        var bindings: Bindings = Bindings(),
+    ):
+        self._table = table^
+        self._snapshot_id = snapshot_id
+        self._schema = schema^
+        self._pushed = pushed^
+        self._bindings = bindings^
+        self._ctx = ctx^
+        self._mapping = None
+        self._tasks = None
+        self._next = 0
+        self._reader = None
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        # A source consumes nothing; the driver never calls this.
+        return None
+
+    def _plan(self) raises -> List[FileScanTask]:
+        if not self._snapshot_id:
+            return []
+        var files = snapshot_files(
+            self._table, self._snapshot_id.value(), self._ctx
+        )
+        if len(self._pushed) == 0:
+            return scan_tasks(self._table, files)
+        # `Index.from_manifest` describes files of one partition spec, so the
+        # files are pruned spec by spec and the verdicts put back in order.
+        var keep = List[Bool](length=len(files.data), fill=False)
+        var specs = List[Int]()
+        for ref entry in files.data:
+            if entry.spec_id not in specs:
+                specs.append(entry.spec_id)
+        for spec_id in specs:
+            var positions = List[Int]()
+            var group = List[DataFile]()
+            for i in range(len(files.data)):
+                if files.data[i].spec_id == spec_id:
+                    positions.append(i)
+                    group.append(files.data[i].data_file.copy())
+            var index = Index.from_manifest(
+                group, self._schema, self._table.metadata.spec(spec_id)
+            )
+            for chunk in index.read_plan(self._pushed, self._bindings):
+                keep[positions[chunk]] = True
+        return scan_tasks(self._table, files, keep^)
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if not self._tasks:
+            self._mapping = self._table.metadata.name_mapping()
+            self._tasks = self._plan()
+        while True:
+            if self._reader:
+                var batch = self._reader.value().next()
+                if batch:
+                    return Datum(batch.value().to_struct_array().to_dyn())
+                self._reader = None
+            ref tasks = self._tasks.value()
+            if self._next >= len(tasks):
+                return None
+            self._reader = IcebergFileReader(
+                tasks[self._next],
+                self._schema,
+                self._mapping,
+                options=self._table.options,
+                ctx=self._ctx,
+            )
+            self._next += 1
 
 
 def admitted_bits(mask: DynArray) raises -> Bitmap[mut=False]:

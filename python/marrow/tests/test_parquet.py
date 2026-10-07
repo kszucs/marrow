@@ -225,3 +225,64 @@ def test_write_string_view(tmp_path):
     out = tmp_path / "out.parquet"
     mpq.write_table(views, out)
     _assert_equiv(pq.read_table(out), _sample())
+
+
+def _ids_table():
+    def fid(n):
+        return {b"PARQUET:field_id": str(n).encode()}
+
+    schema = pa.schema(
+        [
+            pa.field("i", pa.int64(), metadata=fid(1)),
+            pa.field(
+                "s",
+                pa.struct([pa.field("a", pa.int64(), metadata=fid(3))]),
+                metadata=fid(2),
+            ),
+            pa.field(
+                "l",
+                pa.list_(pa.field("element", pa.int64(), metadata=fid(5))),
+                metadata=fid(4),
+            ),
+            pa.field(
+                "m",
+                pa.map_(
+                    pa.field("key", pa.string(), nullable=False, metadata=fid(7)),
+                    pa.field("value", pa.int64(), metadata=fid(8)),
+                ),
+                metadata=fid(6),
+            ),
+        ]
+    )
+    data = {"i": [1], "s": [{"a": 1}], "l": [[1, 2]], "m": [{"k": 1}]}
+    return pa.Table.from_pydict(data, schema=schema)
+
+
+def _field_ids(schema):
+    """Every field id in `schema`, keyed by a dotted path."""
+
+    def fid(f):
+        return int((f.metadata or {})[b"PARQUET:field_id"])
+
+    s, l, m = schema.field("s"), schema.field("l"), schema.field("m")
+    return {
+        "i": fid(schema.field("i")),
+        "s": fid(s),
+        "s.a": fid(s.type.field("a")),
+        "l": fid(l),
+        "l.element": fid(l.type.value_field),
+        "m": fid(m),
+        "m.key": fid(m.type.key_field),
+        "m.value": fid(m.type.item_field),
+    }
+
+
+def test_field_ids_round_trip(tmp_path):
+    # marrow's Python Field/Schema expose no metadata; the C stream carries it
+    src, dst = tmp_path / "src.parquet", tmp_path / "dst.parquet"
+    want = _field_ids(_ids_table().schema)
+    pq.write_table(_ids_table(), src)
+    mt = mpq.read_table(src)
+    assert _field_ids(_to_pa(mt).schema) == want
+    mpq.write_table(mt, dst)
+    assert _field_ids(pq.read_schema(dst)) == want

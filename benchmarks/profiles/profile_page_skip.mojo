@@ -79,7 +79,7 @@ def _profile(path: String) raises:
     var use_selection = _parse_int("MARROW_PROFILE_SELECTION", 1) != 0
 
     var pf = ParquetFile(path)
-    var md = pf.metadata()
+    ref md = pf.metadata()
     var num_groups = len(md.row_groups)
     var rows_per_group = md.row_groups[0].num_rows
     var first = _parse_int("MARROW_PROFILE_FIRST", rows_per_group // 8)

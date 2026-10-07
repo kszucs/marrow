@@ -56,6 +56,8 @@ from marrow.kernels.join import JoinKind
 from marrow.io import DynSource
 from marrow.parquet import ParquetFile
 from marrow.expr.builders import scan_json as _scan_json
+from marrow.expr.builders import scan_iceberg as _scan_iceberg
+from marrow.io.uri import StorageOptions
 from marrow.json import open_json
 from marrow.datasets import DataFiles, HubDataset, load_dataset as _load_dataset
 from marrow.schema import Schema
@@ -442,9 +444,9 @@ def in_memory_table(batch: PythonObject) raises -> PythonObject:
 
 
 def sql_plan(
-    query: PythonObject, names: PythonObject, batches: PythonObject
+    query: PythonObject, names: PythonObject, plans: PythonObject
 ) raises -> PythonObject:
-    """A plan parsed from a SQL string against named in-memory tables.
+    """A plan parsed from a SQL string against named tables, each a `Plan`.
 
     A third leaf constructor beside `in_memory_table` and `parquet_scan`, and
     it belongs with them: what it answers is an ordinary `Plan`, so everything
@@ -457,7 +459,7 @@ def sql_plan(
     """
     var catalog = Catalog()
     for i in range(len(names)):
-        catalog.add(String(py=names[i]), RecordBatch(py=batches[i]))
+        catalog.add(String(py=names[i]), _plan(plans[i]))
     return _wrap(_sql(String(py=query), catalog^))
 
 
@@ -542,6 +544,24 @@ def hub_split_names(
     return out
 
 
+def iceberg_scan(
+    path: PythonObject, snapshot_id: PythonObject, options: PythonObject
+) raises -> PythonObject:
+    """A plan leaf reading an Iceberg table: its metadata file or a local
+    table directory, at `snapshot_id` (`None` for the current snapshot), with
+    `options` (a `dict[str, str]`) as its storage options."""
+    var builtins = Python.import_module("builtins")
+    var snapshot: Optional[Int] = None
+    if not snapshot_id.__is__(builtins.None):
+        snapshot = Int(py=snapshot_id)
+    var kv = Dict[String, String]()
+    for item in options.items():
+        kv[String(py=item[0])] = String(py=item[1])
+    return _wrap(
+        _scan_iceberg(String(py=path), snapshot, StorageOptions(kv^))
+    )
+
+
 # ---------------------------------------------------------------------------
 # Module registration
 # ---------------------------------------------------------------------------
@@ -580,4 +600,5 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[load_dataset]("load_dataset")
     mb.def_function[hub_config_names]("hub_config_names")
     mb.def_function[hub_split_names]("hub_split_names")
+    mb.def_function[iceberg_scan]("iceberg_scan")
     mb.def_function[sql_plan]("sql_plan")

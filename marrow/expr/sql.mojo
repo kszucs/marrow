@@ -1384,16 +1384,18 @@ struct Parser(Copyable, Movable):
 
 @fieldwise_init
 struct Source(Copyable, Movable):
-    """One named table the query may read."""
+    """One named table the query may read, as the plan that produces it."""
 
     var name: String
-    var batch: RecordBatch
+    var relation: DynRelation
 
 
 struct Catalog(Copyable, Movable):
     """The tables a query may name.
 
-    A list of `Source` rather than parallel name/batch lists, and not a `Dict`
+    A table is any plan: an in-memory batch, a file or table scan, or a query
+    built from either. A list of `Source` rather than parallel lists, and not
+    a `Dict`
     because the binding marshals this from a Python mapping and a `Dict` would
     put an iteration order between the two sides to keep in step. A query's
     catalogue is never big enough for the linear scan to matter.
@@ -1406,14 +1408,17 @@ struct Catalog(Copyable, Movable):
     def __init__(out self):
         self.sources = List[Source]()
 
-    def add(mut self, var name: String, var batch: RecordBatch):
-        self.sources.append(Source(name^, batch^))
+    def add(mut self, var name: String, var batch: RecordBatch) raises:
+        self.sources.append(Source(name^, table(batch^)))
 
-    def get(self, name: String) raises -> RecordBatch:
+    def add(mut self, var name: String, var relation: DynRelation):
+        self.sources.append(Source(name^, relation^))
+
+    def get(self, name: String) raises -> DynRelation:
         var wanted = Ascii.upper(name)
         for ref source in self.sources:
             if Ascii.upper(source.name) == wanted:
-                return source.batch.copy()
+                return source.relation.copy()
         raise KeyError(t"sql: unknown table '{name}'")
 
 
@@ -2087,8 +2092,7 @@ struct Planner(Copyable, Movable):
         ref select = self.ast.select
         if select.table == "":
             raise NotImplementedError("sql: FROM is required")
-        var batch = self.catalog.get(select.table)
-        var relation = table(batch^)
+        var relation = self.catalog.get(select.table)
         var qualifier = (
             select.table_alias.copy() if select.table_alias
             != "" else select.table.copy()
@@ -2109,8 +2113,7 @@ struct Planner(Copyable, Movable):
         """
         relation = self.canonicalise(relation^)
         for ref join in self.ast.select.joins:
-            var right_batch = self.catalog.get(join.table)
-            var right = table(right_batch^)
+            var right = self.catalog.get(join.table)
             var right_qualifier = (
                 join.alias_name.copy() if join.alias_name
                 != "" else join.table.copy()

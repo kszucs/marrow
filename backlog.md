@@ -459,6 +459,13 @@ work". What is left:
   hang. Anyone touching `ipc.mojo` must run it in the combined selection or
   they will read the timeout as their own breakage -- as happened here.
 
+  **A one-case unit reading an Avro file hangs the same way.** A test whose
+  body is only `AvroFile(path).read()` stalls at ~21 s of CPU with every thread
+  of the `mojo` process in `semaphore_wait_trap`, also with a private
+  `MODULAR_CACHE_DIR`; `marrow/iceberg/tests/test_planning.mojo` alone hangs
+  too. Both compile inside the whole `marrow/iceberg/tests` selection, so run
+  that directory, not one file of it.
+
 - **A Parquet file is still staged whole before it is written.** `ColumnWriter`
   records `data_page_offset`, `dictionary_page_offset` and every
   `PageLocation.offset` as `len(out)`, an absolute file offset, so

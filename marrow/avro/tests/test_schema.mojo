@@ -7,6 +7,7 @@ from std.testing import assert_equal, assert_raises, assert_true
 
 from ...avro import AvroKind, AvroSchema, from_arrow, to_arrow
 from ...dtypes import (
+    FIELD_ID_KEY,
     DynType,
     Field,
     ListType,
@@ -229,28 +230,28 @@ def test_avro_field_ids_land_in_metadata() raises:
          "field-id": 11}
     ]}"""
     var schema = to_arrow(AvroSchema.parse(text))
-    assert_equal(schema.fields[0].metadata["field_id"], "0")
+    assert_equal(schema.fields[0].metadata[FIELD_ID_KEY], "0")
     ref tags = schema.fields[1]
-    assert_equal(tags.metadata["field_id"], "6")
-    assert_equal(tags.dtype.as_list().value_field().metadata["field_id"], "7")
+    assert_equal(tags.metadata[FIELD_ID_KEY], "6")
+    assert_equal(tags.dtype.as_list().value_field().metadata[FIELD_ID_KEY], "7")
     ref props = schema.fields[2]
-    assert_equal(props.metadata["field_id"], "8")
-    assert_equal(props.dtype.as_map().key_field().metadata["field_id"], "9")
-    assert_equal(props.dtype.as_map().item_field().metadata["field_id"], "10")
+    assert_equal(props.metadata[FIELD_ID_KEY], "8")
+    assert_equal(props.dtype.as_map().key_field().metadata[FIELD_ID_KEY], "9")
+    assert_equal(props.dtype.as_map().item_field().metadata[FIELD_ID_KEY], "10")
     ref sizes = schema.fields[3]
     assert_true(sizes.nullable)
     assert_true(sizes.dtype.is_map())
     assert_true(sizes.dtype.as_map().key_type() == int32.to_dyn())
     assert_true(sizes.dtype.as_map().item_type() == int64.to_dyn())
-    assert_equal(sizes.dtype.as_map().key_field().metadata["field_id"], "12")
-    assert_equal(sizes.dtype.as_map().item_field().metadata["field_id"], "13")
+    assert_equal(sizes.dtype.as_map().key_field().metadata[FIELD_ID_KEY], "12")
+    assert_equal(sizes.dtype.as_map().item_field().metadata[FIELD_ID_KEY], "13")
 
 
 def test_avro_from_arrow_roundtrips() raises:
     var id_md = Dict[String, String]()
-    id_md["field_id"] = "1"
+    id_md[FIELD_ID_KEY] = "1"
     var item_md = Dict[String, String]()
-    item_md["field_id"] = "2"
+    item_md[FIELD_ID_KEY] = "2"
     var schema = Schema(
         fields=[
             Field("id", int64.to_dyn(), False, id_md^),
@@ -308,6 +309,6 @@ def test_avro_ids_must_be_integers() raises:
             ' "int", "field-id": "1"}]}'
         )
     var md = Dict[String, String]()
-    md["field_id"] = "one"
-    with assert_raises(contains="non-integer field_id"):
+    md[FIELD_ID_KEY] = "one"
+    with assert_raises(contains="is not an integer"):
         _ = from_arrow(Schema(fields=[Field("a", int64.to_dyn(), True, md^)]))

@@ -63,6 +63,7 @@ from ..kernels.window import (
     WindowKernel,
 )
 from ..schema import Schema, schema
+from ..iceberg.catalog import IcebergTable
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, StringType, field, int64, null
 from .bindings import Bindings, ParamSpec, distinct_params
@@ -92,6 +93,7 @@ from .physical import (
     FilterOperator,
     JoinOperator,
     IpcScanOperator,
+    IcebergScanOperator,
     JsonScanOperator,
     ParquetScanOperator,
     ProjectOperator,
@@ -1226,6 +1228,7 @@ struct DynRelation(Copyable, Movable, Writable):
         ParquetScan,
         IpcScan,
         JsonScan,
+        IcebergScan,
     ]
 
     var _v: Self.VariantType
@@ -1290,6 +1293,28 @@ struct DynRelation(Copyable, Movable, Writable):
             return node.traverse(f)
 
         return self._dispatch(job)
+
+    def children(self) raises -> List[DynRelation]:
+        """This node's inputs, in the order `with_children` takes them."""
+        var children = List[DynRelation]()
+
+        def collect(child: DynRelation) raises {mut children} -> DynRelation:
+            children.append(child.copy())
+            return child.copy()
+
+        _ = self.traverse(collect)
+        return children^
+
+    def with_children(self, children: List[DynRelation]) raises -> DynRelation:
+        """This node over `children` in place of its inputs, one for each, in
+        the order `children()` gave them."""
+        var next = 0
+
+        def put(child: DynRelation) raises {mut next, imm} -> DynRelation:
+            next += 1
+            return children[next - 1].copy()
+
+        return self.traverse(put)
 
     def references(self, mut into: References):
         """`references` on whichever node this is.
@@ -3431,6 +3456,103 @@ struct JsonScan(FileScan, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("JsonScan(", self.path, ")")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+@fieldwise_init
+struct _IcebergSource(Movable):
+    """What an `IcebergScan` holds, behind an `ArcPointer`, so copying a plan
+    copies one pointer rather than the table's metadata."""
+
+    var table: IcebergTable
+    var snapshot_id: Optional[Int]
+    """`None` for a table with no snapshot yet, which reads no rows."""
+    var schema: Schema
+    var pruners: List[DynValue]
+
+
+struct IcebergScan(FileScan, Writable):
+    """One snapshot of an Apache Iceberg table, one row group at a time, in
+    the schema it is read with — the snapshot's own, columns matched to data
+    files by field id.
+
+    The table's metadata is loaded when the scan is built (`scan_iceberg`);
+    its manifests are read when it first runs. `pruners` are predicates
+    `PushFilterIntoScan` put here, used to skip data files whose recorded
+    bounds and partition values cannot match.
+    """
+
+    var _source: ArcPointer[_IcebergSource]
+
+    def __init__(
+        out self,
+        var table: IcebergTable,
+        snapshot_id: Optional[Int],
+        var schema: Schema,
+        var pruners: List[DynValue] = [],
+    ):
+        self._source = ArcPointer(
+            _IcebergSource(table^, snapshot_id, schema^, pruners^)
+        )
+
+    def table(self) -> ref[self._source[].table] IcebergTable:
+        return self._source[].table
+
+    def snapshot_id(self) -> Optional[Int]:
+        return self._source[].snapshot_id
+
+    def pruners(self) -> ref[self._source[].pruners] List[DynValue]:
+        return self._source[].pruners
+
+    def references(self, mut into: References):
+        for ref p in self._source[].pruners:
+            p.references(into)
+
+    def schema(self) -> Schema:
+        return self._source[].schema.copy()
+
+    def with_schema(self, var schema: Schema) -> Self:
+        ref s = self._source[]
+        return Self(s.table.copy(), s.snapshot_id, schema^, s.pruners.copy())
+
+    def with_pruners(self, var pruners: List[DynValue]) -> Self:
+        ref s = self._source[]
+        return Self(s.table.copy(), s.snapshot_id, s.schema.copy(), pruners^)
+
+    def estimate(self) raises -> Estimate:
+        return Estimate.unknown(self._source[].schema)
+
+    def cost(self) raises -> Cost:
+        var estimate = self.estimate()
+        return Cost.source(estimate.rows, estimate.row_width())
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+    ) raises -> Pipeline:
+        ref s = self._source[]
+        return Pipeline(
+            IcebergScanOperator(
+                s.table.copy(),
+                s.snapshot_id,
+                s.schema.copy(),
+                ctx.copy(),
+                s.pruners.copy(),
+                bindings.copy(),
+            )
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        ref s = self._source[]
+        writer.write("IcebergScan(", s.table.root)
+        if s.snapshot_id:
+            writer.write("@", s.snapshot_id.value())
+        writer.write(")")
+        if len(s.pruners):
+            writer.write(" pruned by ", len(s.pruners))
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)

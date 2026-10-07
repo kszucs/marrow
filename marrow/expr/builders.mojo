@@ -68,7 +68,10 @@ from .`comptime`.leaves import (
     TemporalLiteral,
     TemporalParam,
 )
+from ..iceberg.catalog import IcebergTable
+from ..io.uri import StorageOptions
 from .logical import (
+    IcebergScan,
     DynRelation,
     InMemoryTable,
     IpcScan,
@@ -810,6 +813,39 @@ def scan_ipc(
 ) raises -> DynRelation:
     """An Arrow IPC file named at run time, as a plan."""
     return DynRelation(IpcScan(ScanPath(path^), schema^))
+
+
+def scan_iceberg(
+    table: String,
+    snapshot_id: Optional[Int] = None,
+    options: StorageOptions = StorageOptions(),
+) raises -> DynRelation:
+    """An Apache Iceberg table, as a plan: its metadata file, or a local table
+    directory; see `IcebergTable.open`.
+
+    Unlike `scan`, this reads the table's metadata — the schema to plan with
+    is there, as a catalog lookup would find it. The data is not read until
+    the plan runs. `snapshot_id` picks a snapshot to read; the current one by
+    default, in the schema that snapshot was written with.
+    """
+    return scan_iceberg(IcebergTable.open(table, options), snapshot_id)
+
+
+def scan_iceberg(
+    var table: IcebergTable, snapshot_id: Optional[Int] = None
+) raises -> DynRelation:
+    """An already opened Iceberg table, as a plan."""
+    var chosen = snapshot_id
+    if not chosen:
+        chosen = table.metadata.current_snapshot()
+    var schema: Schema
+    if chosen:
+        schema = table.metadata.schema_for(
+            table.metadata.snapshot(chosen.value())
+        )
+    else:
+        schema = table.metadata.current_schema()
+    return DynRelation(IcebergScan(table^, chosen, schema^))
 
 
 def count_star() -> (

@@ -24,6 +24,7 @@ from ...avro import (
 from ...builders import array
 from ...c_data import CArrowArrayStream
 from ...dtypes import (
+    FIELD_ID_KEY,
     binary,
     float64,
     int32,
@@ -299,12 +300,12 @@ def test_avro_iceberg_manifest_list() raises:
     assert_equal(schema.metadata["format-version"], "2")
     assert_true("snapshot-id" in schema.metadata)
     ref path = schema.field(name="manifest_path")
-    assert_equal(path.metadata["field_id"], "500")
+    assert_equal(path.metadata[FIELD_ID_KEY], "500")
     assert_true(not path.nullable)
     ref partitions = schema.field(name="partitions")
-    assert_equal(partitions.metadata["field_id"], "507")
+    assert_equal(partitions.metadata[FIELD_ID_KEY], "507")
     assert_equal(
-        partitions.dtype.as_list().value_field().metadata["field_id"], "508"
+        partitions.dtype.as_list().value_field().metadata[FIELD_ID_KEY], "508"
     )
     var table = f.read()
     assert_true(table.num_rows() > 0)

@@ -519,7 +519,7 @@ def test_stats_absent_without_type_defined_order() raises:
             _col(pa.array(Python.list(5, 1, 9), type=pa.int64())),
             use_dictionary=False,
         )
-        var meta = ParquetFile(path).metadata()
+        var meta = ParquetFile(path).metadata().copy()
         assert_equal(len(meta.column_orders), 1)
         assert_true(meta.column_orders[0])
         assert_true(Bool(ParquetFile(path).statistics()[0][0].min))

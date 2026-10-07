@@ -834,16 +834,36 @@ struct SchemaMapping(Movable):
         num_children: Int,
         converted: ConvertedType = ConvertedType.NONE,
         logical: LogicalType = LogicalType.NONE,
+        field_id: Optional[Int] = None,
     ) -> SchemaElement:
         """A group `SchemaElement` (a non-leaf node) for the write path: sets the
-        repetition, child count, and optional LIST/MAP annotation."""
+        repetition, child count, optional LIST/MAP annotation and field id."""
         var el = SchemaElement()
         el.name = name
         el.repetition_type = repetition
         el.num_children = num_children
         el.converted_type = converted
         el.logical_type = logical
+        el.field_id = field_id
         return el^
+
+    @staticmethod
+    def _id_metadata(el: SchemaElement) -> Dict[String, String]:
+        """`{FIELD_ID_KEY: id}` for an element carrying a non-negative
+        `field_id`, else empty: Arrow C++'s `FieldIdMetadata`."""
+        var md = Dict[String, String]()
+        if el.field_id and el.field_id.value() >= 0:
+            md[dt.FIELD_ID_KEY] = String(el.field_id.value())
+        return md^
+
+    @staticmethod
+    def _element_id(field: dt.Field) raises InvalidError -> Optional[Int]:
+        """The `field_id` to write for `field`: its `FIELD_ID_KEY`, with a
+        negative id written as none, as Arrow C++'s `FieldIdFromMetadata`."""
+        var id = field.field_id()
+        if id and id.value() >= 0:
+            return id
+        return None
 
     @staticmethod
     def _list_node(
@@ -853,19 +873,28 @@ struct SchemaMapping(Movable):
         rep_base: Int,
         slot_def: Int,
         nullable: Bool,
+        var metadata: Dict[String, String],
     ) -> SchemaNode:
         """Assemble the `NODE_LIST` node from its (parsed/emitted) element node —
         shared by read (`_parse_node`) and write (`_emit_field`) so the list's
         Dremel geometry lives in one place. `d` is the list's own definition
         level; its repeated middle group sits at `rep_base + 1` / `d + 1`, so a
         slot holds an element at `d + 1` and the list itself is non-null at `d`.
+        `metadata` is the list field's; the element field keeps the element
+        node's.
         """
         var children = List[SchemaNode]()
         children.append(elem^)
-        var item: dt.DynType = dt.list_(children[0].field.dtype.copy())
+        var item: dt.DynType = dt.ListType(
+            dt.Field(
+                "item",
+                children[0].field.dtype.copy(),
+                metadata=children[0].field.metadata.copy(),
+            )
+        )
         return SchemaNode(
             NODE_LIST,
-            dt.Field(name, item^, nullable),
+            dt.Field(name, item^, nullable, metadata^),
             children^,
             -1,
             NodeGeom(
@@ -886,19 +915,28 @@ struct SchemaMapping(Movable):
         rep_base: Int,
         slot_def: Int,
         nullable: Bool,
+        var metadata: Dict[String, String],
+        var entries_metadata: Dict[String, String],
     ) -> SchemaNode:
         """Assemble the `NODE_MAP` node from its key and value child nodes —
         shared by read (`_parse_node`) and write (`_emit_field`) so the map's
         Dremel geometry lives in one place. `d` is the map's own definition
         level; its repeated `key_value` group sits at `rep_base + 1` / `d + 1`.
         The entries struct is non-nullable with a non-null "key"; the value keeps
-        its nullability."""
-        var key_type = key_node.field.dtype.copy()
-        var value_type = val_node.field.dtype.copy()
-        var value_nullable = val_node.field.nullable
-        key_node.field = dt.Field("key", key_type.copy(), nullable=False)
+        its nullability. `metadata` is the map field's, `entries_metadata` the
+        entries struct's (the `key_value` group's); key and value keep their
+        nodes'."""
+        key_node.field = dt.Field(
+            "key",
+            key_node.field.dtype.copy(),
+            nullable=False,
+            metadata=key_node.field.metadata.copy(),
+        )
         val_node.field = dt.Field(
-            "value", value_type.copy(), nullable=value_nullable
+            "value",
+            val_node.field.dtype.copy(),
+            nullable=val_node.field.nullable,
+            metadata=val_node.field.metadata.copy(),
         )
         var entries_fields: List[dt.Field] = [
             key_node.field.copy(),
@@ -907,9 +945,16 @@ struct SchemaMapping(Movable):
         var entries_children = List[SchemaNode]()
         entries_children.append(key_node^)
         entries_children.append(val_node^)
+        var entries = dt.Field(
+            "entries",
+            dt.struct_(entries_fields^),
+            nullable=False,
+            metadata=entries_metadata^,
+        )
+        var map_dtype: dt.DynType = dt.MapType(entries.copy())
         var entries_node = SchemaNode(
             NODE_STRUCT,
-            dt.Field("entries", dt.struct_(entries_fields^), nullable=False),
+            entries^,
             entries_children^,
             -1,
             NodeGeom(
@@ -919,14 +964,11 @@ struct SchemaMapping(Movable):
                 slot_def=d + 1,
             ),
         )
-        var map_dtype: dt.DynType = dt.MapType(
-            key_type^, value_type^, value_nullable=value_nullable
-        )
         var map_children = List[SchemaNode]()
         map_children.append(entries_node^)
         return SchemaNode(
             NODE_MAP,
-            dt.Field(name, map_dtype^, nullable),
+            dt.Field(name, map_dtype^, nullable, metadata^),
             map_children^,
             -1,
             NodeGeom(
@@ -1006,7 +1048,7 @@ struct SchemaMapping(Movable):
             )
             return SchemaNode(
                 NODE_LEAF,
-                dt.Field(el.name, dtype^, nullable),
+                dt.Field(el.name, dtype^, nullable, Self._id_metadata(el)),
                 List[SchemaNode](),
                 li,
             )
@@ -1053,7 +1095,15 @@ struct SchemaMapping(Movable):
                 declared=want_item^,
             )
             return Self._map_node(
-                el.name, key_node^, val_node^, d, r, slot_def, nullable
+                el.name,
+                key_node^,
+                val_node^,
+                d,
+                r,
+                slot_def,
+                nullable,
+                Self._id_metadata(el),
+                Self._id_metadata(kv),
             )
 
         if (
@@ -1085,7 +1135,15 @@ struct SchemaMapping(Movable):
                 under_optional=under_optional,
                 declared=want^,
             )
-            return Self._list_node(el.name, elem^, d, r, slot_def, nullable)
+            return Self._list_node(
+                el.name,
+                elem^,
+                d,
+                r,
+                slot_def,
+                nullable,
+                Self._id_metadata(el),
+            )
 
         # plain group -> Arrow struct. A nullable struct is reconstructed from its
         # leaves' def levels (below `d` -> struct null), so its descendants must
@@ -1114,7 +1172,7 @@ struct SchemaMapping(Movable):
         var dtype = dt.struct_(child_fields^)
         return SchemaNode(
             NODE_STRUCT,
-            dt.Field(el.name, dtype^, nullable),
+            dt.Field(el.name, dtype^, nullable, Self._id_metadata(el)),
             child_nodes^,
             -1,
             NodeGeom(
@@ -1281,6 +1339,7 @@ struct SchemaMapping(Movable):
                     1,
                     ConvertedType.LIST,
                     LogicalType.LIST,
+                    Self._element_id(field),
                 )
             )
             self.elements.append(
@@ -1302,7 +1361,13 @@ struct SchemaMapping(Movable):
                 under_optional=under_optional,
             )
             var node = Self._list_node(
-                field.name, elem^, d, rep_base, slot_def, nullable
+                field.name,
+                elem^,
+                d,
+                rep_base,
+                slot_def,
+                nullable,
+                field.metadata.copy(),
             )
             node.field = field.copy()  # list or large_list, for the shredder
             return node^
@@ -1313,11 +1378,22 @@ struct SchemaMapping(Movable):
             ref mt = field.dtype.as_map()
             self.elements.append(
                 Self._group_element(
-                    field.name, group_rep, 1, ConvertedType.MAP, LogicalType.MAP
+                    field.name,
+                    group_rep,
+                    1,
+                    ConvertedType.MAP,
+                    LogicalType.MAP,
+                    Self._element_id(field),
                 )
             )
+            var entries = mt.entries_field()
             self.elements.append(
-                Self._group_element("key_value", Repetition.REPEATED, 2)
+                Self._group_element(
+                    "key_value",
+                    Repetition.REPEATED,
+                    2,
+                    field_id=Self._element_id(entries),
+                )
             )
 
             var key_node = self._emit_field(
@@ -1342,6 +1418,8 @@ struct SchemaMapping(Movable):
                 rep_base,
                 slot_def,
                 nullable,
+                field.metadata.copy(),
+                entries.metadata.copy(),
             )
 
         if field.dtype.is_struct():
@@ -1349,7 +1427,12 @@ struct SchemaMapping(Movable):
             # nulls ride in the definition levels (children inherit `d`).
             ref st = field.dtype.as_struct()
             self.elements.append(
-                Self._group_element(field.name, group_rep, len(st.fields))
+                Self._group_element(
+                    field.name,
+                    group_rep,
+                    len(st.fields),
+                    field_id=Self._element_id(field),
+                )
             )
             var child_nodes = List[SchemaNode]()
             for ref cf in st.fields:
@@ -1380,6 +1463,7 @@ struct SchemaMapping(Movable):
         el.repetition_type = (
             Repetition.OPTIONAL if nullable else Repetition.REQUIRED
         )
+        el.field_id = Self._element_id(field)
         var leaf_type = Self._written_type(field.dtype)
         Self._set_leaf_physical(leaf_type, el)
         var phys = el.type

@@ -105,7 +105,7 @@ def test_read_columns():
 
 def test_field_ids_and_header_metadata():
     t = _to_pa(mavro.read_table(DATA / "manifest-list-v2-1.avro"))
-    assert t.schema.field("manifest_path").metadata == {b"field_id": b"500"}
+    assert t.schema.field("manifest_path").metadata == {b"PARQUET:field_id": b"500"}
     assert t.schema.metadata[b"format-version"] == b"2"
 
 
@@ -454,11 +454,11 @@ def test_marrow_reads_what_fastavro_writes(tmp_path, codec):
     table = _to_pa(mavro.read_table(path))
     assert _avro_rows(table) == expected
     assert table.schema.metadata[b"format-version"] == b"2"
-    assert table.schema.field("path").metadata == {b"field_id": b"100"}
+    assert table.schema.field("path").metadata == {b"PARQUET:field_id": b"100"}
     sizes = table.schema.field("column_sizes").type
-    assert sizes.key_field.metadata == {b"field_id": b"117"}
+    assert sizes.key_field.metadata == {b"PARQUET:field_id": b"117"}
     props = table.schema.field("properties").type
-    assert props.item_field.metadata == {b"field_id": b"301"}
+    assert props.item_field.metadata == {b"PARQUET:field_id": b"301"}
 
 
 @pytest.mark.parametrize("codec", CODECS)

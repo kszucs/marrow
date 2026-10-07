@@ -20,6 +20,15 @@ from ...parquet import (
 )
 from ...tabular import Table
 from ...c_data import CArrowArrayStream
+from ... import dtypes as dt
+from ...dtypes import FIELD_ID_KEY, Field
+from ...schema import Schema
+from ...parquet.format import (
+    FileMetaData,
+    ThriftCompactReader,
+    ThriftCompactWriter,
+)
+from ...parquet.schema import SchemaMapping
 
 
 # ---------------------------------------------------------------------------
@@ -711,3 +720,174 @@ def test_list_float16() raises:
         pa.list_(pa.float16()),
         "none",
     )
+
+
+# ---------------------------------------------------------------------------
+# Field ids  (`SchemaElement.field_id` <-> `Field.metadata[FIELD_ID_KEY]`)
+# ---------------------------------------------------------------------------
+
+
+def _pa_id(n: Int) raises -> PythonObject:
+    var md = Python.dict()
+    md[FIELD_ID_KEY] = String(n)
+    return md
+
+
+def _pa_ids_table() raises -> PythonObject:
+    """A column, a struct and its children, a list and its element, a map and
+    its key and value, each carrying a distinct id."""
+    var pa = Python.import_module("pyarrow")
+    var schema = pa.schema(
+        Python.list(
+            pa.field("i", pa.int64(), metadata=_pa_id(1)),
+            pa.field(
+                "s",
+                pa.struct(
+                    Python.list(
+                        pa.field("a", pa.int64(), metadata=_pa_id(3)),
+                        pa.field("x", pa.float64(), metadata=_pa_id(4)),
+                    )
+                ),
+                metadata=_pa_id(2),
+            ),
+            pa.field(
+                "l",
+                pa.list_(pa.field("element", pa.int64(), metadata=_pa_id(6))),
+                metadata=_pa_id(5),
+            ),
+            pa.field(
+                "m",
+                pa.map_(
+                    pa.field(
+                        "key", pa.string(), nullable=False, metadata=_pa_id(8)
+                    ),
+                    pa.field("value", pa.int64(), metadata=_pa_id(9)),
+                ),
+                metadata=_pa_id(7),
+            ),
+        )
+    )
+    return pa.Table.from_pydict(
+        Python.dict(
+            i=Python.list(1, 2),
+            s=Python.list(Python.dict(a=1, x=1.5), Python.dict(a=2, x=2.5)),
+            l=Python.list(Python.list(1, 2), Python.list()),
+            m=Python.list(Python.dict(a=1), Python.dict()),
+        ),
+        schema=schema,
+    )
+
+
+def _assert_ids(schema: Schema) raises:
+    assert_equal(schema.field(name="i").field_id().value(), 1)
+    ref s = schema.field(name="s")
+    assert_equal(s.field_id().value(), 2)
+    assert_equal(s.dtype.as_struct().fields[0].field_id().value(), 3)
+    assert_equal(s.dtype.as_struct().fields[1].field_id().value(), 4)
+    ref l = schema.field(name="l")
+    assert_equal(l.field_id().value(), 5)
+    assert_equal(l.dtype.as_list().value_field().field_id().value(), 6)
+    ref m = schema.field(name="m")
+    assert_equal(m.field_id().value(), 7)
+    assert_equal(m.dtype.as_map().key_field().field_id().value(), 8)
+    assert_equal(m.dtype.as_map().item_field().field_id().value(), 9)
+    # pyarrow writes no id on the `key_value` group
+    assert_false(Bool(m.dtype.as_map().entries_field().field_id()))
+
+
+def _pa_field_id(f: PythonObject) raises -> Int:
+    var builtins = Python.import_module("builtins")
+    return Int(py=builtins.int(f.metadata[Python.str(FIELD_ID_KEY).encode()]))
+
+
+def test_field_ids_every_level() raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    with ScratchDir() as dir:
+        var src = join(dir, "marrow_field_ids_src.parquet")
+        pq.write_table(_pa_ids_table(), src)
+        var t = read_table(src)
+        _assert_ids(t.schema)
+
+        # marrow write -> marrow read keeps every id
+        var dst = join(dir, "marrow_field_ids_dst.parquet")
+        write_table(t, dst)
+        var back = read_table(dst)
+        _assert_ids(back.schema)
+        assert_true(back.schema.fields == t.schema.fields)
+
+        # and pyarrow reads them off marrow's file
+        var ps = pq.read_schema(dst)
+        assert_equal(_pa_field_id(ps.field("i")), 1)
+        assert_equal(_pa_field_id(ps.field("s")), 2)
+        assert_equal(_pa_field_id(ps.field("s").type.field("a")), 3)
+        assert_equal(_pa_field_id(ps.field("s").type.field("x")), 4)
+        assert_equal(_pa_field_id(ps.field("l")), 5)
+        assert_equal(_pa_field_id(ps.field("l").type.value_field), 6)
+        assert_equal(_pa_field_id(ps.field("m")), 7)
+        assert_equal(_pa_field_id(ps.field("m").type.key_field), 8)
+        assert_equal(_pa_field_id(ps.field("m").type.item_field), 9)
+
+
+def test_field_ids_absent_add_no_metadata() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var plain = _pa_ids_table().cast(
+        pa.schema(
+            Python.list(
+                pa.field("i", pa.int64()),
+                pa.field(
+                    "s",
+                    pa.struct(
+                        Python.list(
+                            pa.field("a", pa.int64()),
+                            pa.field("x", pa.float64()),
+                        )
+                    ),
+                ),
+                pa.field("l", pa.list_(pa.int64())),
+                pa.field("m", pa.map_(pa.string(), pa.int64())),
+            )
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_field_ids_absent.parquet")
+        pq.write_table(plain, path)
+        var schema = read_table(path).schema.copy()
+        for ref f in schema.fields:
+            assert_equal(len(f.metadata), 0)
+        ref s = schema.field(name="s")
+        for ref f in s.dtype.as_struct().fields:
+            assert_equal(len(f.metadata), 0)
+        ref l = schema.field(name="l")
+        assert_equal(len(l.dtype.as_list().value_field().metadata), 0)
+        ref m = schema.field(name="m")
+        assert_equal(len(m.dtype.as_map().entries_field().metadata), 0)
+        assert_equal(len(m.dtype.as_map().key_field().metadata), 0)
+        assert_equal(len(m.dtype.as_map().item_field().metadata), 0)
+
+
+def test_field_id_on_map_entries() raises:
+    # The map's `key_value` group carries the entries struct's id, which
+    # pyarrow cannot set: map the schema to Parquet and back through the
+    # footer's Thrift encoding.
+    var entries = Field(
+        "entries",
+        dt.struct_(
+            Field(
+                "key", dt.string, nullable=False, metadata={FIELD_ID_KEY: "2"}
+            ),
+            Field("value", dt.int64, metadata={FIELD_ID_KEY: "3"}),
+        ),
+        nullable=False,
+        metadata={FIELD_ID_KEY: "4"},
+    )
+    var schema = Schema(
+        fields=[Field("m", dt.MapType(entries^), metadata={FIELD_ID_KEY: "1"})]
+    )
+    var meta = FileMetaData()
+    meta.schema = SchemaMapping.from_arrow(schema).elements.copy()
+    var w = ThriftCompactWriter()
+    meta.write(w)
+    var r = ThriftCompactReader(Span(w.buf))
+    var back = SchemaMapping.from_parquet(FileMetaData.read(r)).schema.copy()
+    assert_true(back == schema)

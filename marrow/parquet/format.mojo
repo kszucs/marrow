@@ -455,6 +455,7 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
     var logical_type: LogicalType  # union member id, NONE if absent
     var logical_unit: Int  # TimeUnit for TIMESTAMP/TIME: 1=ms 2=us 3=ns, else -1
     var logical_utc: Bool  # isAdjustedToUTC for TIMESTAMP/TIME
+    var field_id: Optional[Int]  # Thrift id 9; None if absent
 
     def __init__(out self):
         self.type = PhysicalType.NONE
@@ -468,6 +469,7 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
         self.logical_type = LogicalType.NONE
         self.logical_unit = -1
         self.logical_utc = False
+        self.field_id = None
 
     @staticmethod
     def read[
@@ -492,6 +494,8 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
                 out.scale = Int(r.read_i32())
             elif f.id == 8:
                 out.precision = Int(r.read_i32())
+            elif f.id == 9:
+                out.field_id = Int(r.read_i32())
             elif f.id == 10:
                 out._read_logical_type(r)
             else:
@@ -551,6 +555,9 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
             w.write_i32(Int32(self.scale))
             last = w.write_field_begin(TC_I32, 8, last)
             w.write_i32(Int32(self.precision))
+        if self.field_id:
+            last = w.write_field_begin(TC_I32, 9, last)
+            w.write_i32(Int32(self.field_id.value()))
         if self.logical_type != LogicalType.NONE:
             _ = w.write_field_begin(TC_STRUCT, 10, last)
             self._write_logical_type(w)

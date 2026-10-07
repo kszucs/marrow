@@ -52,7 +52,7 @@ from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 
 from std.builtin.rebind import downcast
 from std.os import abort
-from .errors import InternalError, TypeError
+from .errors import InternalError, InvalidError, TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +543,13 @@ struct MonthDayNanoIntervalType(IntervalType):
 # ---------------------------------------------------------------------------
 
 
+comptime FIELD_ID_KEY = "PARQUET:field_id"
+"""The `Field.metadata` key carrying a field's id, whichever format it came
+from: Parquet's `SchemaElement.field_id`, Avro's `field-id` / `element-id` /
+`key-id` / `value-id`, an Iceberg schema's `id`. The name is pyarrow's and
+arrow-rs's, so an id survives a round trip through either."""
+
+
 struct Field(
     ConvertibleFromPython,
     ConvertibleToPython,
@@ -585,6 +592,25 @@ struct Field(
             and self.metadata == other.metadata
         )
 
+    def field_id(self) raises InvalidError -> Optional[Int]:
+        """The id under `FIELD_ID_KEY`, or `None` when the field has none."""
+        var value = self.metadata.get(FIELD_ID_KEY)
+        if not value:
+            return None
+        try:
+            return Int(value.value())
+        except:
+            raise InvalidError(
+                t"field '{self.name}': {FIELD_ID_KEY} is not an integer:"
+                t" '{value.value()}'"
+            )
+
+    def with_field_id(self, id: Int) -> Field:
+        """This field carrying `id` under `FIELD_ID_KEY`."""
+        var out = self.copy()
+        out.metadata[FIELD_ID_KEY] = String(id)
+        return out^
+
     def write_to[W: Writer](self, mut writer: W):
         """`name: type`, then ` not null` for a required field and `{k: v}`
         for any metadata: Arrow C++'s `Field::ToString`, with the metadata on
@@ -610,6 +636,15 @@ struct Field(
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
+
+
+def field_index(fields: List[Field], id: Int) raises InvalidError -> Int:
+    """The position of the field with id `id` in `fields`, or -1."""
+    for i in range(len(fields)):
+        var fid = fields[i].field_id()
+        if fid and fid.value() == id:
+            return i
+    return -1
 
 
 struct ListType(DataType, ListLikeType):

@@ -31,7 +31,7 @@ A union of more than one non-null branch has no Arrow form here, since marrow
 has no union layout, and neither does a recursive record.
 
 **Field ids.** A record field's `field-id`, an array's `element-id` and a map's
-`key-id` / `value-id` land in the `field_id` metadata of the Arrow field they
+`key-id` / `value-id` land in the `FIELD_ID_KEY` metadata of the Arrow field they
 describe, and `from_arrow` writes them back from there. That is the whole of
 what Iceberg needs from Avro's schema: it projects and evolves columns by those
 ids itself, so this module maps the writer's schema and does no Avro schema
@@ -39,6 +39,7 @@ resolution.
 """
 
 from ..dtypes import (
+    FIELD_ID_KEY,
     DynType,
     Field,
     ListType,
@@ -69,10 +70,6 @@ from ..dtypes import (
 from ..errors import InvalidError, NotImplementedError
 from ..schema import Schema
 from .schema import AvroKind, AvroSchema, check_name
-
-comptime FIELD_ID = "field_id"
-"""The Arrow field metadata key that carries an Avro field, element, key or
-value id."""
 
 comptime EXTENSION_NAME = "ARROW:extension:name"
 comptime UUID_EXTENSION = "arrow.uuid"
@@ -105,7 +102,7 @@ def arrow_field(record: AvroSchema, i: Int) raises -> Field:
 def _id_metadata(id: Optional[Int]) -> Dict[String, String]:
     var md = Dict[String, String]()
     if id:
-        md[FIELD_ID] = String(id.value())
+        md[FIELD_ID_KEY] = String(id.value())
     return md^
 
 
@@ -310,20 +307,6 @@ def from_arrow(
     return _record_of(schema.fields, record_name)
 
 
-def _id_of(f: Field) raises -> Optional[Int]:
-    """`f`'s `field_id` metadata, if it has one."""
-    var id = f.metadata.get(FIELD_ID)
-    if not id:
-        return None
-    try:
-        return atol(id.value())
-    except:
-        raise InvalidError(
-            t"avro: field '{f.name}' has a non-integer {FIELD_ID}:"
-            t" '{id.value()}'"
-        )
-
-
 def _value_of(f: Field, namespace: String) raises -> AvroSchema:
     """An array item or map value: nullable becomes a union."""
     var t = _from_type(f, namespace)
@@ -395,7 +378,7 @@ def _from_type(f: Field, namespace: String) raises -> AvroSchema:
         else:
             item = dt.as_large_list().value_field().copy()
         var s = AvroSchema.array(_value_of(item, path))
-        s.element_id = _id_of(item)
+        s.element_id = item.field_id()
         return s^
     elif dt.is_map():
         ref m = dt.as_map()
@@ -403,8 +386,8 @@ def _from_type(f: Field, namespace: String) raises -> AvroSchema:
         var value = m.item_field()
         if key.dtype.is_string() or key.dtype.is_large_string():
             var s = AvroSchema.map(_value_of(value, path))
-            s.key_id = _id_of(key)
-            s.value_id = _id_of(value)
+            s.key_id = key.field_id()
+            s.value_id = value.field_id()
             return s^
         # Iceberg's form for a map whose keys are not strings.
         var entry = _record_of([key^, value^], path + ".entries")
@@ -432,7 +415,7 @@ def _record_of(fields: List[Field], name: String) raises -> AvroSchema:
             p["default"] = "null"
         names.append(f.name)
         children.append(t^)
-        ids.append(_id_of(f))
+        ids.append(f.field_id())
         props.append(p^)
     return AvroSchema.record(name, names^, children^, ids^, props^)
 

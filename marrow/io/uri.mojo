@@ -157,9 +157,10 @@ struct Uri(Copyable, Movable, Writable):
     def service(self) raises DynError -> String:
         """The OpenDAL service name for this scheme.
 
-        Aliases collapse here -- `gs` and `gcs` are one service, `az`/`abfs`/
-        `azblob` another -- so the table lives in one place rather than in
-        every caller.
+        Aliases collapse here -- `s3a` and `s3n` (Hadoop's spellings) are
+        `s3`, `gs` and `gcs` are one service, `az`/`abfs`/`abfss`/`azblob`
+        another -- so the table lives in one place rather than in every
+        caller.
         """
         var s = self.scheme
         if s == "fs":
@@ -169,11 +170,11 @@ struct Uri(Copyable, Movable, Writable):
             # service option such as `root` to a local path. A bare path and
             # `file://` stay on the zero-copy route.
             return String("fs")
-        elif s == "s3":
+        elif s == "s3" or s == "s3a" or s == "s3n":
             return String("s3")
         elif s == "gs" or s == "gcs":
             return String("gcs")
-        elif s == "az" or s == "abfs" or s == "azblob":
+        elif s == "az" or s == "abfs" or s == "abfss" or s == "azblob":
             return String("azblob")
         elif s == "http" or s == "https":
             return String("http")
@@ -188,7 +189,7 @@ struct Uri(Copyable, Movable, Writable):
             )
         raise NotImplementedError(
             t"uri: no storage backend for scheme '{s}://' (known: file, fs, "
-            t"s3, gs, gcs, az, abfs, azblob, hf, https)"
+            t"s3, s3a, s3n, gs, gcs, az, abfs, abfss, azblob, hf, https)"
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -437,7 +438,21 @@ struct StorageOptions(Copyable, Movable):
         elif service == "s3" or service == "gcs":
             out["bucket"] = uri.authority
         elif service == "azblob":
-            out["container"] = uri.authority
+            # Hadoop's form names the account too:
+            # `abfss://container@account.dfs.core.windows.net/key`. The blob
+            # service is the same account under `blob.` rather than `dfs.`.
+            var at = uri.authority.find("@")
+            if at < 0:
+                out["container"] = uri.authority
+            else:
+                out["container"] = String(uri.authority[byte = 0 : at])
+                var host = String(uri.authority[byte = at + 1 :])
+                _default(out, "account_name", String(host.split(".")[0]))
+                _default(
+                    out,
+                    "endpoint",
+                    "https://" + host.replace(".dfs.", ".blob."),
+                )
         elif service == "http":
             out["endpoint"] = String(uri.scheme, "://", uri.authority)
         elif service == "hf":

@@ -582,6 +582,24 @@ def read_json(path, schema=None):
     return LazyTable.wrap(_ma.json_scan(str(path), unwrap(schema)))
 
 
+def read_iceberg(path, snapshot_id=None, storage_options=None):
+    """A lazy table over an Apache Iceberg table.
+
+    ``path`` is the table's ``metadata.json``, or a local table directory, in
+    which case the version named by ``metadata/version-hint.text`` — or else
+    the newest metadata file — is read. ``snapshot_id`` reads an older
+    snapshot, in the schema it was written with; ``storage_options`` are
+    passed to the storage backend (credentials, region, endpoint), with the
+    environment filling what they leave unset.
+
+    The table's metadata is read here; its manifests and data files when the
+    plan runs. A filter on the result skips the data files whose recorded
+    bounds cannot match, once the plan is optimized.
+    """
+    options = {str(k): str(v) for k, v in (storage_options or {}).items()}
+    return LazyTable.wrap(_ma.iceberg_scan(str(path), snapshot_id, options))
+
+
 def memtable(batch):
     """A lazy table over an in-memory :class:`marrow.RecordBatch`.
 
@@ -596,9 +614,10 @@ def memtable(batch):
 def sql(query, tables=None, **named):
     """A lazy table from a SQL query over named in-memory tables.
 
-    ``tables`` is a mapping of name to :class:`marrow.RecordBatch`; the same
-    thing can be passed as keywords, which reads better for the one-table case
-    that most queries are::
+    ``tables`` is a mapping of name to a :class:`marrow.RecordBatch` or a
+    :class:`LazyTable` — a scan of a file or an Iceberg table, or any plan
+    built from one. The same thing can be passed as keywords, which reads
+    better for the one-table case that most queries are::
 
         marrow.sql("SELECT k, SUM(v) AS total FROM basic GROUP BY k",
                    basic=batch)
@@ -612,5 +631,12 @@ def sql(query, tables=None, **named):
     if not sources:
         raise ValueError("sql() needs at least one table")
     names = list(sources)
-    batches = [unwrap(sources[name]) for name in names]
-    return LazyTable.wrap(_ma.sql_plan(str(query), names, batches))
+    plans = [_plan_of(sources[name]) for name in names]
+    return LazyTable.wrap(_ma.sql_plan(str(query), names, plans))
+
+
+def _plan_of(source):
+    """A table for ``sql``: a lazy table's plan, or a batch read in memory."""
+    if isinstance(source, LazyTable):
+        return source._binding
+    return _ma.in_memory_table(unwrap(source))

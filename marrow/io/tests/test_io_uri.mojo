@@ -48,7 +48,11 @@ def test_io_uri_s3_splits_bucket_from_key() raises:
 
 
 def test_io_uri_scheme_aliases_collapse() raises:
-    """`gs` and `gcs` are one service; so are `az`, `abfs` and `azblob`."""
+    """`s3a`/`s3n` are `s3`; `gs` and `gcs` are one service; so are `az`,
+    `abfs`, `abfss` and `azblob`."""
+    assert_equal(Uri.parse("s3a://b/k").service(), "s3")
+    assert_equal(Uri.parse("s3n://b/k").service(), "s3")
+    assert_equal(Uri.parse("abfss://c/k").service(), "azblob")
     assert_equal(Uri.parse("gs://b/k").service(), "gcs")
     assert_equal(Uri.parse("gcs://b/k").service(), "gcs")
     assert_equal(Uri.parse("az://c/k").service(), "azblob")
@@ -113,6 +117,22 @@ def test_io_uri_options_precedence() raises:
 
     _ = setenv("AWS_REGION", "", True)
     _ = setenv("AWS_ACCESS_KEY_ID", "", True)
+
+
+def test_io_uri_hadoop_azure_names_the_account() raises:
+    var got = StorageOptions().resolve(
+        Uri.parse("abfss://data@acct.dfs.core.windows.net/t/f.parquet")
+    )
+    assert_equal(got["container"], "data")
+    assert_equal(got["account_name"], "acct")
+    assert_equal(got["endpoint"], "https://acct.blob.core.windows.net")
+    var plain = StorageOptions().resolve(Uri.parse("abfs://data/t/f.parquet"))
+    assert_equal(plain["container"], "data")
+
+
+def test_io_uri_s3a_takes_the_bucket() raises:
+    var got = StorageOptions().resolve(Uri.parse("s3a://bkt/t/f.parquet"))
+    assert_equal(got["bucket"], "bkt")
 
 
 def test_io_uri_http_endpoint_is_derived() raises:

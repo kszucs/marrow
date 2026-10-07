@@ -78,11 +78,11 @@ slot on an erased box is +3.2 MB.
 
 ## Two members, and they are the module's whole point
 
-`Index.from_parquet(file)` builds one from a footer; `index.read_plan(
-predicates, bindings)` spends it, answering which chunks are left to read. An
-Iceberg manifest or an in-memory table would each add a second constructor
-beside the first — a source knows how to describe itself, and `read_plan` never
-learns which one described this.
+`Index.from_parquet(file)` builds one from a footer, and
+`Index.from_manifest(files, schema, spec)` one from an Iceberg manifest, a data
+file per chunk; `index.read_plan(predicates, bindings)` spends it, answering
+which chunks are left to read. A source knows how to describe itself, and
+`read_plan` never learns which one described this.
 
 They are members rather than free functions because that is what they are:
 a constructor from a source, and the one verb an index has. They are not
@@ -96,6 +96,9 @@ from ..arrays import BoolArray, PrimitiveArray
 from ..builders import BoolBuilder, PrimitiveBuilder
 from ..dtypes import DynType, NullType, PrimitiveType
 from ..kernels.boolean import AndKernel
+from ..iceberg.bounds import decode_bound
+from ..iceberg.manifest import DataFile
+from ..iceberg.metadata import PartitionSpec
 from ..parquet.reader import (
     LeafSet,
     PageBounds,
@@ -104,6 +107,7 @@ from ..parquet.reader import (
 )
 from ..io import ByteSource
 from ..scalars import BoolScalar, DynScalar, NullScalar, PrimitiveScalar
+from ..schema import Schema
 from .bindings import Bindings
 from .logical import DynValue
 
@@ -205,6 +209,26 @@ def _or_null(bound: Optional[DynScalar]) -> DynScalar:
     if bound:
         return bound.value().copy()
     return NullScalar().to_dyn()
+
+
+def _decoded(
+    dtype: DynType, bounds: Dict[Int, List[UInt8]], id: Int
+) -> DynScalar:
+    """Column `id`'s Iceberg bound as `dtype`, or a null scalar when the
+    manifest wrote none or it does not decode -- either way it proves
+    nothing, the rule `_or_null` applies to Parquet statistics."""
+    try:
+        return _decode_bound(dtype, bounds, id)
+    except:
+        return NullScalar().to_dyn()
+
+
+def _decode_bound(
+    dtype: DynType, bounds: Dict[Int, List[UInt8]], id: Int
+) raises -> DynScalar:
+    if id not in bounds:
+        return NullScalar().to_dyn()
+    return decode_bound(dtype, Span(bounds[id]))
 
 
 struct ZoneMaps(Copyable, Movable):
@@ -573,7 +597,7 @@ struct Index(Copyable, Movable):
         is the first thing to fix if pruning ever shows up in a profile.
         """
         var arrow = file.schema()
-        var meta = file.metadata()
+        ref meta = file.metadata()
         var stats = file.statistics()
         var chunks = len(stats)
 
@@ -607,6 +631,71 @@ struct Index(Copyable, Movable):
                     distinct^,
                 )
             )
+        return Index(chunks=chunks, zones=zones^, rows=rows^)
+
+    @staticmethod
+    def from_manifest(
+        files: List[DataFile], schema: Schema, spec: PartitionSpec
+    ) raises -> Index:
+        """A data file is a chunk: one min, max and null count per top-level
+        column per file of an Iceberg manifest, keyed by `schema`'s column
+        names and looked up by each column's field id. `spec` is the
+        partition spec every file in `files` was written with.
+
+        Only flat columns with a field id are described — primitive, bool,
+        string, binary, fixed-size binary; a nested column's id names no
+        leaf statistic. A missing or undecodable bound is a null scalar and
+        a missing null count is `-1`: absence proves nothing.
+
+        An identity partition fills in what the bounds leave out: every row
+        of the file holds the partition value, so it is both min and max and
+        the column has no nulls — or, for a null value, every row is null.
+        Other transforms prune nothing here.
+        """
+        var chunks = len(files)
+        var rows = List[Int](capacity=chunks)
+        var identities = List[Dict[Int, DynScalar]](capacity=chunks)
+        for ref f in files:
+            rows.append(f.record_count)
+            identities.append(f.identity_values(spec))
+
+        var zones = ZoneMaps(capacity=len(schema.fields))
+        for ref field in schema.fields:
+            ref dtype = field.dtype
+            var flat = (
+                dtype.is_primitive()
+                or dtype.is_bool()
+                or dtype.is_binary_like()
+                or dtype.is_fixed_size_binary()
+            )
+            var id = field.field_id()
+            if not flat or not id:
+                continue
+            var fid = id.value()
+
+            var mins = List[DynScalar](capacity=chunks)
+            var maxes = List[DynScalar](capacity=chunks)
+            var nulls = List[Int](capacity=chunks)
+            for k in range(chunks):
+                ref f = files[k]
+                var lo = _decoded(dtype, f.lower_bounds, fid)
+                var hi = _decoded(dtype, f.upper_bounds, fid)
+                var null_count = f.null_value_counts.get(fid).or_else(-1)
+                if fid in identities[k]:
+                    ref value = identities[k][fid]
+                    if value.is_null():
+                        null_count = f.record_count
+                    elif value.type() == dtype:
+                        if lo.is_null():
+                            lo = value.copy()
+                        if hi.is_null():
+                            hi = value.copy()
+                        if null_count < 0:
+                            null_count = 0
+                mins.append(lo^)
+                maxes.append(hi^)
+                nulls.append(null_count)
+            zones.add(ColumnZones(field.name.copy(), mins^, maxes^, nulls^))
         return Index(chunks=chunks, zones=zones^, rows=rows^)
 
     def read_plan(
@@ -689,8 +778,7 @@ def page_selections[
     every surviving group should be read whole.
 
     `index` is the one the caller already built to choose `row_groups`; it is
-    read for its per-group row counts, which is what makes a second
-    `ParquetFile.metadata()` — a deep copy of the whole footer — unnecessary.
+    read for its per-group row counts.
 
     **A page is not a chunk shared by every column, and that is the one place
     this differs from `Index.from_parquet`.** Parquet pages are per column, so
