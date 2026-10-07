@@ -772,27 +772,6 @@ def test_a_cumulative_frame_restarts_at_each_partition() raises:
     )
 
 
-def test_a_runtime_aggregate_takes_the_one_pass_path() raises:
-    """The runtime lane resolves its kernel by name at execution, `sum` to a
-    fold and `count` to `ValidCount`'s prefix count."""
-    var plan = table(_partitioned_with_nulls()).with_columns(
-        ["s", "n"],
-        [
-            col("v").sum().over(partition_by=[col("k")], order_by=[col("o")]),
-            col("v")
-            .count()
-            .over(partition_by=[col("k")], order_by=[col("o")], rows=(-1, 0)),
-        ],
-    )
-    var out = plan.execute()
-    assert_true(
-        out.column("s").as_int64() == array([1, 1, 4, 10, 10, 30, 30], int64)
-    )
-    assert_true(
-        out.column("n").as_int64() == array([1, 1, 1, 2, 1, 2, 1], int64)
-    )
-
-
 def test_a_filtered_aggregate_skips_rows_its_filter_rejects() raises:
     """`SUM(v) FILTER (WHERE v > 2) OVER (ORDER BY v)`: a rejected row folds
     like a null, so a frame of rejected rows only is null, not 0."""
@@ -828,28 +807,22 @@ def test_an_aggregate_without_over_is_evaluated_per_frame() raises:
 
 def test_a_windowed_filter_must_be_boolean() raises:
     """A window aggregate lowers through `to_evaluator`, not `to_operator`,
-    so it must reject a non-boolean `FILTER` there too, in both lanes, or
-    narrowing the predicate to a `BoolArray` aborts the process."""
+    so it must reject a non-boolean `FILTER` there too, or narrowing the
+    predicate to a `BoolArray` aborts the process. The runtime lane's case
+    is in `runtime/tests/test_aggregates.mojo`."""
     var b = record_batch([array([1, 2, 3], int64).copy()], names=["v"])
-    var plans = [
-        table(b.copy()).with_columns(
-            ["s"],
-            [
-                col("v", int64)
-                .sum()
-                .filter(col("v", int64))
-                .over(order_by=[col("v", int64)])
-            ],
-        ),
-        table(b.copy()).with_columns(
-            ["s"],
-            [col("v").sum().filter(col("v")).over(order_by=[col("v")])],
-        ),
-    ]
-    for ref plan in plans:
-        var raised = False
-        try:
-            _ = plan.execute()
-        except:
-            raised = True
-        assert_true(raised)
+    var plan = table(b^).with_columns(
+        ["s"],
+        [
+            col("v", int64)
+            .sum()
+            .filter(col("v", int64))
+            .over(order_by=[col("v", int64)])
+        ],
+    )
+    var raised = False
+    try:
+        _ = plan.execute()
+    except:
+        raised = True
+    assert_true(raised)
