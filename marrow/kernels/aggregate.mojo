@@ -33,6 +33,7 @@ one onto ``Fold[SumFold, V]`` need the expression layer, not this one.
 """
 
 import std.math as math
+from std.math import nan
 from std.builtin.rebind import downcast
 
 from ..arrays import (
@@ -65,6 +66,7 @@ from ..dtypes import (
     StringLikeType,
     TemporalType,
     UInt8Type,
+    UInt64Type,
     WideDecimalType,
     float64,
     int32,
@@ -74,7 +76,7 @@ from ..scalars import BoolScalar, PrimitiveScalar, DynScalar
 from ..views import reduce
 from .core import Kernel
 from .groupby import Groups
-from .numeric import FloordivKernel
+from .numeric import FloordivKernel, MaxKernel, MinKernel
 from ..execution import ExecContext
 from ..errors import TypeError
 from .distinct import (
@@ -119,8 +121,8 @@ trait FoldKernel(Kernel):
 
     comptime AccType[V: PrimitiveType]: PrimitiveType
     """Per-group accumulator type for input `V` (also the output type). `sum`
-    widens integers to int64; `min`/`max` keep `V`; `count` is int64; `mean` is
-    float64.
+    widens signed integers to int64 and unsigned ones to uint64; `min`/`max`
+    keep `V`; `count` is int64; `mean` is float64.
 
     Bound on `PrimitiveType` at both ends, not `NumericType`: `min`/`max` keep
     the input's type, and that input may be a timestamp or a decimal. What a
@@ -237,8 +239,8 @@ comptime MAX = "max"
 
 trait WideningOp(Kernel):
     """The two things that distinguish `sum` from `product`: the fold's identity
-    element and its lane-wise operator. Both widen integers to int64 and floats
-    to float64, which is why they share one shell."""
+    element and its lane-wise operator. Both widen integers to 64 bits of the
+    same signedness and floats to float64, which is why they share one shell."""
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -304,8 +306,8 @@ struct ProductOp(WideningOp):
 # carries a unit and timezone and a decimal a precision and scale. So `AggState`
 # holds the dtype as a value, supplied by `FoldKernel.acc_dtype(input_dtype)` --
 # the one place that knows whether the accumulator keeps the input's dtype
-# (`min`/`max`) or names its own (`sum` -> int64/float64, `count` -> int64,
-# `mean` -> float64).
+# (`min`/`max`) or names its own (`sum` -> int64/uint64/float64, `count` ->
+# int64, `mean` -> float64).
 trait ArithmeticAgg(FoldKernel):
     """Needs addition or division, so numeric input only.
 
@@ -316,14 +318,16 @@ trait ArithmeticAgg(FoldKernel):
 
 
 struct Widening[Op: WideningOp](ArithmeticAgg):
-    """`sum`/`product` as one kernel: integers accumulate in int64 and floats in
-    float64 so narrow inputs cannot overflow, the fold is `Op.combine`, and
-    finalize is the identity."""
+    """`sum`/`product` as one kernel: signed integers accumulate in int64,
+    unsigned ones in uint64 and floats in float64 so narrow inputs cannot
+    overflow, the fold is `Op.combine`, and finalize is the identity."""
 
     comptime name = Self.Op.name
     comptime AccType[
         V: PrimitiveType
-    ] = Int64Type if V.native.is_integral() else Float64Type
+    ] = UInt64Type if V.native.is_unsigned() else (
+        Int64Type if V.native.is_integral() else Float64Type
+    )
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -332,7 +336,7 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
     @staticmethod
     def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
         # The accumulator names its own type, so the input's dtype says
-        # nothing: int64 or float64, both `Defaultable`.
+        # nothing: int64, uint64 or float64, all `Defaultable`.
         return Self.AccType[V]()
 
     @always_inline
@@ -377,7 +381,7 @@ struct MinOp(MinMaxOp):
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return math.min(a, b)
+        return MinKernel.core[T, W](a, b)
 
 
 struct MaxOp(MinMaxOp):
@@ -391,7 +395,7 @@ struct MaxOp(MinMaxOp):
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return math.max(a, b)
+        return MaxKernel.core[T, W](a, b)
 
 
 struct MinMax[Op: MinMaxOp](FoldKernel):
@@ -405,7 +409,13 @@ struct MinMax[Op: MinMaxOp](FoldKernel):
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
-        return Self.Op.identity[T]()
+        # NaN for floats, as in Arrow: `combine` is IEEE `minNum`/`maxNum`,
+        # which skips a NaN operand, so the first value replaces it and only an
+        # all-NaN group answers NaN.
+        comptime if T.is_floating_point():
+            return nan[T]()
+        else:
+            return Self.Op.identity[T]()
 
     @staticmethod
     def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:

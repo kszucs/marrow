@@ -64,7 +64,7 @@ from .tabular import RecordBatch
 from .builders import Int32Builder
 from .kernels.concat import concat as _concat
 from .kernels.hashing import KeyCompare
-from .kernels.filter import take as _take
+from .kernels.filter import TakeKernel
 from .utils import CompressionLibs, Lz4, Zstd
 from . import dtypes as dt
 from .codecs import LittleEndian
@@ -1971,7 +1971,7 @@ struct _BatchEncoder(Movable):
         var idx = Int32Builder(capacity=len(arr))
         for i in range(len(arr)):
             idx.append(Int32(i))
-        return _take(arr, idx.finish()).to_data()
+        return TakeKernel.dispatch(arr, idx.finish()).to_data()
 
     def write_array(mut self, root: ArrayData) raises:
         var stack = List[ArrayData]()

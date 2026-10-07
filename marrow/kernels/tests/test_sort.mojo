@@ -16,6 +16,7 @@ from ...arrays import (
 )
 from ...builders import (
     array,
+    PrimitiveBuilder,
     BoolBuilder,
     Date32Builder,
     Decimal128Builder,
@@ -35,6 +36,7 @@ from ...builders import (
     TimestampBuilder,
 )
 from ...dtypes import (
+    NumericType,
     PrimitiveType,
     int8,
     int16,
@@ -104,30 +106,37 @@ def _check_order[
 
 def _check_order_float[
     T: PrimitiveType
-](arr: PrimitiveArray[T], start: Int, end: Int, ascending: Bool) raises:
+](
+    arr: PrimitiveArray[T],
+    start: Int,
+    end: Int,
+    ascending: Bool,
+    nulls_first: Bool,
+) raises:
+    """NaN sits on the nulls' side whatever the direction: first with
+    `nulls_first`, last otherwise."""
     for i in range(start, end - 1):
         var vi = arr.unsafe_get(i)
         var vj = arr.unsafe_get(i + 1)
         var vi_nan = vi != vi  # IEEE 754: NaN != NaN is True
         var vj_nan = vj != vj
-        if ascending:
-            # NaN sorts last — NaN followed by a finite value is wrong.
+        if nulls_first:
+            assert_true(
+                not vj_nan or vi_nan,
+                "value before NaN at position " + String(i),
+            )
+        else:
             assert_true(
                 not vi_nan or vj_nan,
-                "NaN before finite at position " + String(i),
+                "NaN before value at position " + String(i),
             )
-            if not vi_nan and not vj_nan:
+        if not vi_nan and not vj_nan:
+            if ascending:
                 assert_true(
                     vi <= vj,
                     "ascending order violated at position " + String(i),
                 )
-        else:
-            # NaN sorts first — a finite value followed by NaN is wrong.
-            assert_true(
-                not vj_nan or vi_nan,
-                "finite before NaN at position " + String(i),
-            )
-            if not vi_nan and not vj_nan:
+            else:
                 assert_true(
                     vi >= vj,
                     "descending order violated at position " + String(i),
@@ -209,11 +218,11 @@ def _assert_sorted(
     elif dt == uint64:
         _check_order(s.as_uint64(), vs, ve, ascending)
     elif dt == float16:
-        _check_order_float(s.as_float16(), vs, ve, ascending)
+        _check_order_float(s.as_float16(), vs, ve, ascending, nulls_first)
     elif dt == float32:
-        _check_order_float(s.as_float32(), vs, ve, ascending)
+        _check_order_float(s.as_float32(), vs, ve, ascending, nulls_first)
     elif dt == float64:
-        _check_order_float(s.as_float64(), vs, ve, ascending)
+        _check_order_float(s.as_float64(), vs, ve, ascending, nulls_first)
     elif dt == _bool_dtype:
         _check_order_bool(s.as_bool(), vs, ve, ascending)
     elif dt == _string_dtype:
@@ -472,35 +481,35 @@ def test_sort_indices_float32_ascending() raises:
 
 
 def test_sort_indices_float32_nan_ascending() raises:
-    # NaN sorts last in ascending order.
+    # NaN sorts last with the nulls last.
     var b = Float32Builder(capacity=4)
     b.append(Float32(1.0))
     b.append(Float32(3.0e38))
     b.append(nan[float32.native]())
     b.append(Float32(-1.0))
     var a: DynArray = b.finish().to_dyn()
-    var idx = sort_indices(a)
+    var idx = sort_indices(a, nulls_first=False)
     assert_equal(_idx(idx, 0), 3)  # -1.0
     assert_equal(_idx(idx, 1), 0)  # 1.0
     assert_equal(_idx(idx, 2), 1)  # 3e38
     assert_equal(_idx(idx, 3), 2)  # NaN last
-    _assert_sorted(a, idx)
+    _assert_sorted(a, idx, nulls_first=False)
 
 
 def test_sort_indices_float32_nan_descending() raises:
-    # NaN sorts first in descending order (complement of uint_max = 0).
+    # NaN sorts first with the nulls first, whatever the direction.
     var b = Float32Builder(capacity=4)
     b.append(Float32(1.0))
     b.append(Float32(3.0e38))
     b.append(nan[float32.native]())
     b.append(Float32(-1.0))
     var a: DynArray = b.finish().to_dyn()
-    var idx = sort_indices(a, ascending=False)
+    var idx = sort_indices(a, ascending=False, nulls_first=True)
     assert_equal(_idx(idx, 0), 2)  # NaN first
     assert_equal(_idx(idx, 1), 1)  # 3e38
     assert_equal(_idx(idx, 2), 0)  # 1.0
     assert_equal(_idx(idx, 3), 3)  # -1.0
-    _assert_sorted(a, idx, ascending=False)
+    _assert_sorted(a, idx, ascending=False, nulls_first=True)
 
 
 def test_sort_indices_float64_inf() raises:
@@ -524,37 +533,248 @@ def test_sort_indices_float64_nan() raises:
     b.append(nan[float64.native]())
     b.append(Float64(-1.0))
     var a: DynArray = b.finish().to_dyn()
-    var idx = sort_indices(a)
+    var idx = sort_indices(a, nulls_first=False)
     assert_equal(_idx(idx, 0), 2)  # -1.0
     assert_equal(_idx(idx, 1), 0)  # 1.0
     assert_equal(_idx(idx, 2), 1)  # NaN last
-    _assert_sorted(a, idx)
+    _assert_sorted(a, idx, nulls_first=False)
 
 
-def test_sort_indices_puts_both_nan_signs_last() raises:
+def test_sort_indices_keeps_both_nan_signs_together() raises:
     """A negative NaN sorts with the positive one, not below `-inf`.
 
-    `_encode_sort_key`'s flip is sign-dependent, so before it folded the NaN
-    sign this answered `-nan, -inf, 1.0, inf, nan` — the two NaNs at opposite
-    ends. DuckDB puts both last. It is not cosmetic: `WindowExtents.of_sorted`
-    compares adjacent rows, so NaNs that never land together were never handed
-    to `equal_nan_safe` and `rank` split them into peer groups no comparison
-    could merge.
+    Sorting NaN by the encoded key's sign-dependent flip once answered
+    `-nan, -inf, 1.0, inf, nan` — the two NaNs at opposite ends. It is not
+    cosmetic: `WindowExtents.of_sorted` compares adjacent rows, so NaNs that
+    never land together were never handed to `equal_nan_safe` and `rank` split
+    them into peer groups no comparison could merge. Every NaN, whatever its
+    sign, is now set aside beside the nulls, so they land together at Arrow's
+    position for every direction and null placement.
     """
-    var b = Float64Builder(capacity=5)
+    var b = Float64Builder(capacity=6)
     b.append(nan[float64.native]())
     b.append(inf[float64.native]())
     b.append(neg_inf[float64.native]())
     b.append(-nan[float64.native]())
     b.append(Float64(1.0))
+    b.append_null()
     var a: DynArray = b.finish().to_dyn()
-    var idx = sort_indices(a)
-    assert_equal(_idx(idx, 0), 2)  # -inf
-    assert_equal(_idx(idx, 1), 4)  # 1.0
-    assert_equal(_idx(idx, 2), 1)  # +inf
-    # both NaNs last, in input order (the sort is stable)
-    assert_equal(_idx(idx, 3), 0)
-    assert_equal(_idx(idx, 4), 3)
+    # the NaNs in input order (the sort is stable), beside the null
+    var asc_first: List[Int] = [5, 0, 3, 2, 4, 1]
+    var asc_last: List[Int] = [2, 4, 1, 0, 3, 5]
+    var desc_first: List[Int] = [5, 0, 3, 1, 4, 2]
+    var desc_last: List[Int] = [1, 4, 2, 0, 3, 5]
+    for asc in [True, False]:
+        for nulls_first in [True, False]:
+            var idx = sort_indices(a, ascending=asc, nulls_first=nulls_first)
+            var want: List[Int]
+            if asc:
+                want = asc_first.copy() if nulls_first else asc_last.copy()
+            else:
+                want = desc_first.copy() if nulls_first else desc_last.copy()
+            for i in range(6):
+                assert_equal(_idx(idx, i), want[i])
+
+
+def test_sort_indices_nan_sits_beside_the_nulls() raises:
+    """Arrow's placement: NaN between the nulls and the values, in input order,
+    on whichever side the nulls go — `[null, NaN, NaN, -1, 1]` ascending with
+    the nulls first, `[1, -1, NaN, NaN, null]` descending with them last."""
+    var b = Float64Builder(capacity=5)
+    b.append(nan[float64.native]())
+    b.append(Float64(1.0))
+    b.append_null()
+    b.append(Float64(-1.0))
+    b.append(nan[float64.native]())
+    var a: DynArray = b.finish().to_dyn()
+    var first = sort_indices(a, ascending=True, nulls_first=True)
+    var want_first = [2, 0, 4, 3, 1]
+    for i in range(5):
+        assert_equal(_idx(first, i), want_first[i])
+    var last = sort_indices(a, ascending=False, nulls_first=False)
+    var want_last = [1, 3, 0, 4, 2]
+    for i in range(5):
+        assert_equal(_idx(last, i), want_last[i])
+
+
+def test_sort_indices_nan_largest() raises:
+    """SQL's order: every NaN, whatever its sign, is one value above `+inf`
+    -- last ascending, first descending -- and the nulls go where
+    `nulls_first` puts them. `-0.0` still ties with `0.0`."""
+    var b = Float64Builder(capacity=8)
+    b.append(nan[float64.native]())
+    b.append(inf[float64.native]())
+    b.append(neg_inf[float64.native]())
+    b.append(-nan[float64.native]())
+    b.append(Float64(1.0))
+    b.append_null()
+    b.append(Float64(-0.0))
+    b.append(Float64(0.0))
+    var a: DynArray = b.finish().to_dyn()
+    var asc_first: List[Int] = [5, 2, 6, 7, 4, 1, 0, 3]
+    var asc_last: List[Int] = [2, 6, 7, 4, 1, 0, 3, 5]
+    var desc_first: List[Int] = [5, 0, 3, 1, 4, 6, 7, 2]
+    var desc_last: List[Int] = [0, 3, 1, 4, 6, 7, 2, 5]
+    for asc in [True, False]:
+        for nulls_first in [True, False]:
+            var idx = sort_indices[nan_largest=True](
+                a, ascending=asc, nulls_first=nulls_first
+            )
+            var want: List[Int]
+            if asc:
+                want = asc_first.copy() if nulls_first else asc_last.copy()
+            else:
+                want = desc_first.copy() if nulls_first else desc_last.copy()
+            for i in range(8):
+                assert_equal(_idx(idx, i), want[i])
+
+
+def test_sort_indices_nan_largest_multi() raises:
+    """`multi` keeps the NaN order on every pass: a NaN key sorts above every
+    number, and ties on it are broken by the next key."""
+    var k = Float32Builder(capacity=4)
+    k.append(nan[float32.native]())
+    k.append(Float32(2.0))
+    k.append(nan[float32.native]())
+    k.append(Float32(-1.0))
+    var v = Int32Builder(capacity=4)
+    for x in [4, 3, 1, 2]:
+        v.append(Int32(x))
+    var cols = List[DynArray]()
+    cols.append(k.finish().to_dyn())
+    cols.append(v.finish().to_dyn())
+    var batch = record_batch(cols^, names=["k", "v"]).to_struct_array()
+    var idx = SortIndices[nan_largest=True].multi(batch, [0, 1], [True, True])
+    var want = [3, 1, 2, 0]
+    for i in range(4):
+        assert_equal(_idx(idx, i), want[i])
+
+
+def test_sort_indices_signed_zeros_tie() raises:
+    """`-0.0` and `0.0` are equal, so a stable sort keeps them in input order
+    on both paths — the composite PDQsort and radix."""
+    for n in [4, 20_000]:
+        var b = Float64Builder(capacity=n)
+        for i in range(n):
+            b.append(Float64(-0.0) if i % 2 == 0 else Float64(0.0))
+        var a: DynArray = b.finish().to_dyn()
+        for asc in [True, False]:
+            var idx = sort_indices(a, ascending=asc)
+            for i in range(n):
+                assert_equal(_idx(idx, i), i)
+
+
+def test_sort_indices_stable_by_default() raises:
+    """Equal values keep input order without asking, past the stdlib's
+    insertion-sort cutoff and past the radix threshold."""
+    for n in [32, 65, 10_000]:
+        var b = Int32Builder(capacity=n)
+        for i in range(n):
+            b.append(Int32(i % 3))
+        var a: DynArray = b.finish().to_dyn()
+        var idx = sort_indices(a)
+        var prev = -1
+        var prev_key = -1
+        for i in range(n):
+            var row = _idx(idx, i)
+            var key = row % 3
+            assert_true(key > prev_key or (key == prev_key and row > prev))
+            prev = row
+            prev_key = key
+
+
+def _full_width_keys[T: NumericType]() -> List[Scalar[T.native]]:
+    """Keys that need every bit of their width to order: both ends of the
+    range, either side of the sign bit, zero and one — and for floats the
+    infinities and both zeros, which must tie."""
+    comptime S = Scalar[T.native]
+    comptime if T.native.is_floating_point():
+        return [
+            S.MIN_FINITE,
+            S.MAX_FINITE,
+            neg_inf[T.native](),
+            inf[T.native](),
+            S(-0.0),
+            S(0.0),
+            S(1.5),
+            S(-1.5),
+        ]
+    else:
+        return [
+            S.MIN,
+            S.MIN + 1,
+            S.MAX,
+            S.MAX - 1,
+            S(0),
+            S(1),
+            S.MAX >> 1,
+            (S.MAX >> 1) + 1,
+        ]
+
+
+def _assert_stable_sort[
+    T: NumericType, //, stable: Bool = True
+](dtype: T, n: Int) raises:
+    """Sort `n` rows drawn from `_full_width_keys` both ways, and check the
+    answer is a permutation, ordered, with equal keys in row order when
+    `stable`."""
+    var keys = _full_width_keys[T]()
+    var b = PrimitiveBuilder[T](n)
+    var s: UInt64 = 0x9E3779B97F4A7C15
+    for _ in range(n):
+        s = s * 6364136223846793005 + 1442695040888963407
+        b.append(keys[Int(s >> 33) % len(keys)])
+    var arr = b.finish()
+    for asc in [True, False]:
+        var idx = SortIndices[stable].apply(arr, ascending=asc)
+        var seen = List[Bool](length=n, fill=False)
+        for i in range(n):
+            var row = _idx(idx, i)
+            assert_true(not seen[row])
+            seen[row] = True
+            if i > 0:
+                var prev = _idx(idx, i - 1)
+                var x = arr.unsafe_get(prev)
+                var y = arr.unsafe_get(row)
+                var ordered = x < y if asc else x > y
+                assert_true(
+                    ordered or (x == y and (prev < row or not stable)),
+                    String(dtype, " ascending=", asc, " at ", i),
+                )
+
+
+def test_sort_indices_full_width_keys_stable() raises:
+    """Every key width orders exactly and stably on both stable paths, both
+    ways: the composite (key, row) PDQsort at 300 rows and radix at 20,000."""
+    for n in [300, 20_000]:
+        _assert_stable_sort(int8, n)
+        _assert_stable_sort(int16, n)
+        _assert_stable_sort(int32, n)
+        _assert_stable_sort(int64, n)
+        _assert_stable_sort(uint8, n)
+        _assert_stable_sort(uint16, n)
+        _assert_stable_sort(uint32, n)
+        _assert_stable_sort(uint64, n)
+        _assert_stable_sort(float16, n)
+        _assert_stable_sort(float32, n)
+        _assert_stable_sort(float64, n)
+
+
+def test_sort_indices_full_width_keys_unstable() raises:
+    """The unstable sort orders every key width exactly, both ways, on the
+    packed PDQsort at 300 rows and radix at 40,000."""
+    for n in [300, 40_000]:
+        _assert_stable_sort[stable=False](int8, n)
+        _assert_stable_sort[stable=False](int16, n)
+        _assert_stable_sort[stable=False](int32, n)
+        _assert_stable_sort[stable=False](int64, n)
+        _assert_stable_sort[stable=False](uint8, n)
+        _assert_stable_sort[stable=False](uint16, n)
+        _assert_stable_sort[stable=False](uint32, n)
+        _assert_stable_sort[stable=False](uint64, n)
+        _assert_stable_sort[stable=False](float16, n)
+        _assert_stable_sort[stable=False](float32, n)
+        _assert_stable_sort[stable=False](float64, n)
 
 
 def test_sort_indices_float64_negative() raises:
@@ -795,7 +1015,7 @@ def test_sort_indices_stable_int32() raises:
     b.append(Int32(1))
     b.append(Int32(3))
     var a: DynArray = b.finish().to_dyn()
-    var idx = sort_indices(a, stable=True)
+    var idx = sort_indices[stable=True](a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 3)
     assert_equal(_idx(idx, 2), 0)
@@ -812,7 +1032,7 @@ def test_sort_indices_stable_string() raises:
     b.append("b")
     b.append("a")
     var a: DynArray = b.finish().to_dyn()
-    var idx = sort_indices(a, stable=True)
+    var idx = sort_indices[stable=True](a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 3)
     assert_equal(_idx(idx, 2), 0)
@@ -1100,7 +1320,7 @@ def test_sort_struct_timestamp_key() raises:
 # (32,768) valid rows was ordered by an unstable PDQsort. Small inputs hid it:
 # the stdlib insertion-sorts below its own cutoff, which happens to be stable.
 #
-# `SortIndices.multi` is column-oriented LSD and passes `stable=True` on every
+# `SortIndices.multi` is column-oriented LSD and sorts stably on every
 # pass — its correctness argument *is* stability — so this surfaced as
 # multi-key sorts silently returning the wrong order.
 # ---------------------------------------------------------------------------
@@ -1116,7 +1336,7 @@ def test_sort_indices_stable_int32_above_insertion_cutoff() raises:
         b.append(Scalar[int32.native](i % 4))
     var a: DynArray = b.finish().to_dyn()
 
-    var idx = sort_indices(a, stable=True)
+    var idx = sort_indices[stable=True](a)
     var prev_key = -1
     var prev_row = -1
     for p in range(_N_ABOVE_CUTOFF):

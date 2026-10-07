@@ -41,10 +41,8 @@ join and ``count_distinct``, and ``approx_count_distinct``'s sketch hash.
 """
 
 
-from std.math import isnan
 from std.sys import size_of
 from std.sys.info import simd_byte_width
-from std.utils.numerics import nan
 
 from ..arrays import (
     BoolArray,
@@ -160,20 +158,16 @@ struct HashKernel[H: Hasher](Kernel):
         probe a collision.
 
         Two values are canonicalised first, because "same number" and "same
-        bits" disagree about them. `-0.0` equals `0.0` and must group with it;
-        `+ 0.0` says that in one instruction, since adding zero is exact for
-        every float and `-0.0 + 0.0` is `+0.0`. And NaN carries a payload
-        chosen by whatever arithmetic produced it, so every NaN folds onto one
-        pattern.
+        bits" disagree about them. `-0.0` equals `0.0` and must group with it,
+        and NaN carries a payload chosen by whatever arithmetic produced it, so
+        every NaN folds onto one pattern: `EqKernel[nan_safe=True].canonical`,
+        the representative under the equality `KeyCompare` compares with.
 
         `to_bits` bitcasts to the same-width unsigned type and widens, so the
         zero-extension `_integer_lanes` masks for is already done.
         """
         comptime byte_width = size_of[Scalar[T.native]]()
-        var zeroed = vals + SIMD[T.native, W](0)
-        var canonical = isnan(vals).select(
-            SIMD[T.native, W](nan[T.native]()), zeroed
-        )
+        var canonical = EqKernel[nan_safe=True].canonical(vals)
         return Self.H.hash_lanes[byte_width, W](
             canonical.to_bits[uint64.native]()
         )

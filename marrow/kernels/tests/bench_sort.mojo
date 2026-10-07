@@ -108,8 +108,28 @@ def _bench_sort_float64(mut b: Benchmark, n: Int) raises:
 # ---------------------------------------------------------------------------
 
 
+def bench_sort_int32_1k(mut b: Benchmark) raises:
+    _bench_sort_int32(b, 1_000)
+
+
+def bench_sort_int32_4k(mut b: Benchmark) raises:
+    _bench_sort_int32(b, 4_000)
+
+
 def bench_sort_int32_10k(mut b: Benchmark) raises:
     _bench_sort_int32(b, 10_000)
+
+
+def bench_sort_float64_1k(mut b: Benchmark) raises:
+    _bench_sort_float64(b, 1_000)
+
+
+def bench_sort_int64_4k(mut b: Benchmark) raises:
+    _bench_sort_int64(b, 4_000)
+
+
+def bench_sort_float64_10k(mut b: Benchmark) raises:
+    _bench_sort_float64(b, 10_000)
 
 
 def bench_sort_int32_100k(mut b: Benchmark) raises:
@@ -139,18 +159,15 @@ def bench_sort_float64_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # Multi-key sort — column-wise LSD, one stable pass per key.
 #
-# These span `_RADIX_THRESHOLD` (32,768) deliberately. Below it each pass takes
-# the comparison path, where `stable` makes the comparator a total order
-# (ties break on the original row index); at or above it each pass takes LSD
-# radix, which is stable by construction and ignores the flag. So the two sizes
-# measure the two regimes, and only the small one can carry any cost from
-# honouring `stable`.
+# Every pass is stable. Both sizes sit above the stable radix crossover
+# (`_STABLE_RADIX_ROWS_PER_PASS`), so each pass takes LSD radix, which is
+# stable by construction; the low-cardinality leading key is radix's best case,
+# since the passes whose bits never vary are skipped.
 # ---------------------------------------------------------------------------
 
 
 def _multi_key_batch(n: Int, keys: Int) raises -> StructArray:
-    # low-cardinality leading key => large tie groups => the stable comparator's
-    # tie-break branch is taken often, which is the worst case for it.
+    # low-cardinality leading key => large tie groups
     var cols = List[DynArray]()
     var names = List[String]()
     var s: UInt64 = 0x9E3779B97F4A7C15
@@ -197,3 +214,59 @@ def bench_sort_multi_2col_1m(mut b: Benchmark) raises:
 
 def bench_sort_multi_3col_1m(mut b: Benchmark) raises:
     _bench_sort_multi(b, 1_000_000, 3)
+
+
+# ---------------------------------------------------------------------------
+# Unstable — what `sort_indices[stable=False]` saves against the stable default above.
+# ---------------------------------------------------------------------------
+
+
+def _bench_unstable(mut b: Benchmark, data: DynArray, n: Int) raises:
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(sort_indices[stable=False](data.copy()))
+
+    b.iter(call)
+    keep(data)
+
+
+def bench_sort_int32_1k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_int32(1_000), 1_000)
+
+
+def bench_sort_int32_4k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_int32(4_000), 4_000)
+
+
+def bench_sort_int32_10k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_int32(10_000), 10_000)
+
+
+def bench_sort_float64_1k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_float64(1_000), 1_000)
+
+
+def bench_sort_float64_10k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_float64(10_000), 10_000)
+
+
+def bench_sort_int32_16k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_int32(16_000), 16_000)
+
+
+def bench_sort_int64_4k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_int64(4_000), 4_000)
+
+
+def bench_sort_int64_16k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_int64(16_000), 16_000)
+
+
+def bench_sort_float64_4k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_float64(4_000), 4_000)
+
+
+def bench_sort_float64_16k_unstable(mut b: Benchmark) raises:
+    _bench_unstable(b, _random_float64(16_000), 16_000)

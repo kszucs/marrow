@@ -2217,6 +2217,40 @@ def _reduce_dispatch[
             raise NotImplementedError("reduce: no GPU accelerator available")
 
     comptime cpu_width = cpu_lanes[T]
+    # An integer combine is exact under any association, so it folds four
+    # registers per step: independent chains, so the loop is not bound by the
+    # latency of one accumulator. A float `+` rounds by association and a float
+    # min/max picks between `-0.0` and `0.0` by order, so floats keep one
+    # register and the order they always had. 64 lanes at most: a masked
+    # `input_fn` expands them from one `BitmapView.load`.
+    comptime width = cpu_width if T.is_floating_point() else max(
+        cpu_width, min(4 * cpu_width, 64)
+    )
+
+    @always_inline
+    def fold(start: Int, end: Int, identity: Scalar[T]) -> Scalar[T]:
+        var wide = SIMD[T, width](identity)
+        var i = start
+        while i + width <= end:
+            wide = combine[width](wide, input_fn[width, 1](IndexList[1](i)))
+            i += width
+        var simd_acc = wide.slice[cpu_width]()
+        comptime for r in range(1, width // cpu_width):
+            simd_acc = combine[cpu_width](
+                simd_acc, wide.slice[cpu_width, offset=r * cpu_width]()
+            )
+        while i + cpu_width <= end:
+            simd_acc = combine[cpu_width](
+                simd_acc, input_fn[cpu_width, 1](IndexList[1](i))
+            )
+            i += cpu_width
+        var acc = identity
+        comptime for k in range(cpu_width):
+            acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
+        while i < end:
+            acc = combine[1](acc, input_fn[1, 1](IndexList[1](i)))
+            i += 1
+        return acc
 
     # The serial arm below folds without scratch; only a parallel reduce needs
     # a partials slot per stripe, so the buffer is allocated inside this branch
@@ -2231,47 +2265,19 @@ def _reduce_dispatch[
             partials_view.store[1](w, identity)
 
         @always_inline
-        def fold(
+        def stripe(
             wid: Int, start: Int, end: Int
-        ) {imm identity, imm partials_view,}:
-            var simd_acc = SIMD[T, cpu_width](identity)
-            var i = start
-            var simd_end = start + ((end - start) // cpu_width) * cpu_width
-            while i < simd_end:
-                simd_acc = combine[cpu_width](
-                    simd_acc, input_fn[cpu_width, 1](IndexList[1](i))
-                )
-                i += cpu_width
-            var acc = identity
-            comptime for k in range(cpu_width):
-                acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
-            while i < end:
-                acc = combine[1](acc, input_fn[1, 1](IndexList[1](i)))
-                i += 1
-            partials_view.store[1](wid, acc)
+        ) {imm identity, imm partials_view}:
+            partials_view.store[1](wid, fold(start, end, identity))
 
-        ctx.stripe(length, fold, align=cpu_width)
+        ctx.stripe(length, stripe, align=width)
 
         var acc = identity
         for w in range(workers):
             acc = combine[1](acc, SIMD[T, 1](partials_view.load[1](w)))
         return acc
 
-    var simd_acc = SIMD[T, cpu_width](identity)
-    var i = 0
-    var simd_end = (length // cpu_width) * cpu_width
-    while i < simd_end:
-        simd_acc = combine[cpu_width](
-            simd_acc, input_fn[cpu_width, 1](IndexList[1](i))
-        )
-        i += cpu_width
-    var acc = identity
-    comptime for k in range(cpu_width):
-        acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
-    while i < length:
-        acc = combine[1](acc, input_fn[1, 1](IndexList[1](i)))
-        i += 1
-    return acc
+    return fold(0, length, identity)
 
 
 def reduce[

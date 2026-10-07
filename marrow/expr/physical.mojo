@@ -55,7 +55,7 @@ from ..kernels.aggregate import AggKernel, Windowable
 from ..kernels.conditional import case_when
 from ..kernels.concat import concat
 from ..execution import ExecContext
-from ..kernels.filter import filter, take
+from ..kernels.filter import TakeKernel, filter
 from ..kernels.groupby import Groups
 from ..kernels.dictionary import DictionaryEncoder
 from ..dtypes import DynType
@@ -1056,7 +1056,7 @@ struct SortOperator(Operator):
                 .to_array(len(whole))
             )
             if order:
-                key = take(key, order.value(), self._ctx)
+                key = TakeKernel.dispatch(key, order.value(), self._ctx)
             # **The bound applies to the primary key only.** The multi-key
             # decomposition sorts stably from the least significant key to the
             # most, composing each pass onto the previous permutation, so every
@@ -1064,11 +1064,10 @@ struct SortOperator(Operator):
             # one to permute. Truncating an earlier pass discards rows the
             # later keys still have to order, which loses answers rather than
             # reordering them. `k == 0` is the final, most significant pass.
-            var pass_order = sort_indices(
+            var pass_order = sort_indices[nan_largest=True](
                 key,
                 ascending=self._ascending[k],
                 nulls_first=self._nulls_first,
-                stable=True,
                 limit=self._limit if k == 0 else None,
                 ctx=self._ctx,
             )
@@ -1077,13 +1076,19 @@ struct SortOperator(Operator):
                 # replace it. Skipping this is the classic multi-key sort bug —
                 # the last key wins and every earlier one is discarded.
                 var prev: DynArray = order.value().copy()
-                order = take(prev, pass_order, self._ctx).as_int32().copy()
+                order = (
+                    TakeKernel.dispatch(prev, pass_order, self._ctx)
+                    .as_int32()
+                    .copy()
+                )
             else:
                 order = pass_order^
 
         if not order:
             return Datum(whole^.to_dyn())
-        return Datum(take(whole.copy().to_dyn(), order.value(), self._ctx))
+        return Datum(
+            TakeKernel.dispatch(whole.copy().to_dyn(), order.value(), self._ctx)
+        )
 
 
 struct WindowOperator(Operator):
@@ -1204,7 +1209,7 @@ struct WindowOperator(Operator):
 
         var sorted_keys = List[DynArray](capacity=len(keys))
         for ref k in keys:
-            sorted_keys.append(take(k.copy(), perm, self._ctx))
+            sorted_keys.append(TakeKernel.dispatch(k.copy(), perm, self._ctx))
         var extents = WindowExtents.of_sorted(
             sorted_keys, len(spec.partition_by), self._ctx
         )
@@ -1212,7 +1217,9 @@ struct WindowOperator(Operator):
         # -- the sorted batch, and the way back ------------------------------
         var sorted_columns = List[DynArray]()
         for i in range(len(self._input_schema.fields)):
-            sorted_columns.append(take(whole.field(i), perm, self._ctx))
+            sorted_columns.append(
+                TakeKernel.dispatch(whole.field(i), perm, self._ctx)
+            )
         var sorted_batch = _struct_of(self._input_schema, sorted_columns^, n)
         var inverse = self._inverse(perm, n)
 
@@ -1225,7 +1232,7 @@ struct WindowOperator(Operator):
                 self._bindings,
                 self._ctx,
             )
-            out.append(take(column^, inverse, self._ctx))
+            out.append(TakeKernel.dispatch(column^, inverse, self._ctx))
         return out^
 
     def _permutation(
@@ -1252,12 +1259,11 @@ struct WindowOperator(Operator):
             fields.append(field(String("k", i), keys[i].dtype()))
             indices.append(i)
         var key_batch = _struct_of(schema(fields^), keys.copy(), n)
-        return SortIndices.multi(
+        return SortIndices[nan_largest=True].multi(
             key_batch,
             indices,
             ascending,
             nulls_first=nulls_first,
-            stable=True,
             ctx=self._ctx,
         )
 
@@ -1623,7 +1629,9 @@ struct MultisetOperator[M: Multiplicity](Operator):
         if len(indices) > 0:
             var keys = self._encoder.values()
             var distinct = _struct_of(self._schema, keys^, len(self._left))
-            return Datum(take(distinct^.to_dyn(), indices, self._ctx))
+            return Datum(
+                TakeKernel.dispatch(distinct^.to_dyn(), indices, self._ctx)
+            )
         else:
             return None
 
@@ -2250,7 +2258,7 @@ struct PerFrameEvaluator[V: Value](FrameEvaluator):
             which.append(Int32(len(answers) - 1))
             prev_lo = lo
             prev_hi = hi
-        return take(concat(answers^, ctx), which.finish(), ctx)
+        return TakeKernel.dispatch(concat(answers^, ctx), which.finish(), ctx)
 
 
 struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):

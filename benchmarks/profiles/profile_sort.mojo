@@ -7,8 +7,8 @@ Calls the production sort_indices() and take() kernels directly so that the
 macOS `sample` profiler (or Instruments Time Profiler) can attribute hot
 samples to the real call tree:
 
-    main → _bench_sort_indices → sort_indices → _sort_indices_primitive → _radix_sort_indices
-    main → _bench_sort    → sort_indices + take → _radix_sort_indices + _gather
+    main → _bench_sort_indices → sort_indices → _sort_indices_primitive → KeySort.radix
+    main → _bench_sort    → sort_indices + take → KeySort.radix + _gather
 
 Run:
     pixi run profile --sample marrow/kernels/tests/profile_sort.mojo

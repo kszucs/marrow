@@ -10,6 +10,7 @@ from std.testing import (
 
 from ...arrays import (
     DynArray,
+    Int32Array,
     PrimitiveArray,
     BoolArray,
 )
@@ -43,6 +44,7 @@ from ...dtypes import (
 )
 from ...buffers import Bitmap
 from ...kernels.filter import FilterKernel, TakeKernel, filter, take, drop_null
+from ...execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -777,6 +779,77 @@ def test_take_null_index_produces_null_int32() raises:
     assert_equal(result.null_count(), 1)
     assert_false(result.is_valid(0))
     assert_true(result.is_valid(1))
+
+
+def test_take_out_of_bounds_raises() raises:
+    """A valid index outside the array raises `IndexError`, as Arrow's `take`
+    does, on either side — a negative one included — and a null index is
+    exempt whatever its payload."""
+    var a: DynArray = array([10, 20, 30], int32)
+    for bad in [3, -1, 1 << 30]:
+        with assert_raises(contains="IndexError"):
+            _ = take(a.copy(), array([0, bad], int32))
+    var idx = Int32Builder(capacity=2)
+    idx.append_null()
+    idx.append(Scalar[int32.native](2))
+    assert_equal(take(a.copy(), idx.finish()).null_count(), 1)
+
+
+def test_take_bounds_check_reads_every_valid_index() raises:
+    """The check is exact wherever an index sits — in the vector body or the
+    scalar tail, serial or striped: `len - 1` passes, `len`, `-1` and
+    `Int32.MIN` raise. A null is skipped whatever its payload, and a sliced
+    index array is read from its own offset, validity included."""
+    comptime N = 1000
+    var a: DynArray = arange[Int32Type](0, N)
+    for threads in [1, 3]:
+        var ctx = ExecContext(num_threads=threads)
+        for pos in [0, 1, 15, 16, 17, 63, 64, 500, 998, 999]:
+            for bad in [N - 1, N, -1, Int(Int32.MIN)]:
+                var b = Int32Builder(capacity=N)
+                for i in range(N):
+                    b.append(Int32(bad) if i == pos else Int32(i))
+                if bad == N - 1:
+                    _ = take(a, b.finish(), ctx)
+                else:
+                    with assert_raises(contains="IndexError"):
+                        _ = take(a, b.finish(), ctx)
+
+        # Every seventh index is null over a payload of -1; three more rows
+        # in front hold `N`, valid, and a slice past them must not see them.
+        var payload = Int32Builder(capacity=N + 3)
+        var valid = Bitmap.alloc_zeroed(N + 3)
+        var nulls = 0
+        for i in range(N + 3):
+            if i < 3:
+                payload.append(Int32(N))
+                valid.set(i)
+            elif i % 7 == 0:
+                payload.append(Int32(-1))
+                nulls += 1
+            else:
+                payload.append(Int32(i - 3))
+                valid.set(i)
+        var idx = Int32Array(
+            length=N + 3,
+            nulls=nulls,
+            offset=0,
+            bitmap=Optional(valid^.to_immutable(length=N + 3)),
+            buffer=payload.finish().buffer,
+        )
+        with assert_raises(contains="IndexError"):
+            _ = take(a, idx.copy(), ctx)
+        _ = take(a, idx.slice(3, N), ctx)
+
+
+def test_take_bounds_check_past_two_billion_rows() raises:
+    """Read as `uint32`, a negative index is at least `2**31`, which is below
+    a length past that: the check must still refuse it."""
+    for length in [(1 << 31) + 1, 3_000_000_000, 1 << 32, 1 << 40]:
+        for bad in [-1, -1_500_000_000, Int(Int32.MIN)]:
+            with assert_raises(contains="IndexError"):
+                TakeKernel.check_bounds(length, array([0, bad], int32))
+        TakeKernel.check_bounds(length, array([0, Int(Int32.MAX)], int32))
 
 
 def test_filtersliced_multiword_offset() raises:

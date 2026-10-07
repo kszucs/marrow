@@ -94,27 +94,6 @@ PyArrow under Hypothesis. Every item below is a strict `xfail` there with its
 minimal input, so fixing one flips its test; the properties themselves step
 around the pinned inputs. Line numbers are as of `2c28f9bb`.
 
-**Silently wrong data:**
-
-- **`sum`/`product` of unsigned integers accumulate as int64**
-  (`kernels/aggregate.mojo:323`); PyArrow answers uint64, so a total past
-  `2**63` comes back negative. (`test_unsigned_sum_is_uint64`)
-- **`min`/`max` start from `±MAX_FINITE`** (`kernels/aggregate.mojo:372`,
-  `:386`): all-NaN input answers ±FLT_MAX instead of NaN, `min([inf])` answers
-  FLT_MAX. (`test_min_max_identity`)
-- **`take` answers null for an out-of-bounds or negative index** instead of
-  raising (`kernels/filter.mojo:1224`). (`test_take_out_of_bounds_raises`)
-- **`divide` INT_MIN / -1** wraps to INT_MIN (`kernels/numeric.mojo:298`);
-  PyArrow answers 0. Signed overflow in `sdiv` is undefined in LLVM and
-  x86-64's `idiv` faults on it, so this may be a crash there (measured only on
-  arm64). (`test_divide_int_min_by_minus_one`)
-- **`sort_indices` is not stable from 32 elements on** — `stable` defaults to
-  False (`kernels/sort.mojo:416`) and PDQsort takes over. Its float key orders
-  NaN as the largest value (`:112`), where PyArrow keeps NaN beside the nulls,
-  and orders `-0.0` before `0.0`, so `sort_by` lets the sign of zero decide
-  instead of the next key. (`test_sort_indices_is_stable`,
-  `test_sort_indices_nan_placement`, `test_sort_by_signed_zero_ties`)
-
 **Divergences from PyArrow's defaults:**
 
 - `reverse` keeps a grapheme together; PyArrow's `utf8_reverse` reverses code
@@ -132,6 +111,15 @@ float and timestamp -> string formatting differs from PyArrow's; unparseable
 strings cast to null under `safe=False` where PyArrow raises; int -> decimal
 checks values where PyArrow refuses by precision; decimal -> float is closer
 to the nearest float than PyArrow's.
+
+**Performance:**
+
+- **Small unstable 64-bit sorts** read 5-25% slower after the packed (key, row)
+  sort replaced the comparator sort below the radix crossover, in a
+  whole-suite build under load; a smaller build and a same-binary A/B read
+  the packed sort 1.1-2x faster. Re-run `kernels/tests/bench_sort.mojo` on a
+  quiet machine, then tune `_RADIX_THRESHOLD` and
+  `_STABLE_RADIX_ROWS_PER_PASS`.
 
 ### 1.3 Latent compiler hazards
 

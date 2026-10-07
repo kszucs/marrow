@@ -1348,8 +1348,9 @@ struct CArrowArray(Copyable, Movable):
         )
         # These buffers are a foreign producer's memory: an offset past its
         # data or a child shorter than its parent is a read past the end of
-        # somebody else's allocation rather than a Mojo error.
-        data.validate_node()
+        # somebody else's allocation rather than a Mojo error. Dictionary
+        # indices are checked in full, as the kernels gather by them unchecked.
+        data.validate_node(full=dtype.is_dictionary())
         return data^
 
     def to_array(

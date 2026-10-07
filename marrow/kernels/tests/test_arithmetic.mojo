@@ -19,6 +19,9 @@ from ...builders import (
     Float64Builder,
 )
 from ...dtypes import (
+    NumericType,
+    int8,
+    int16,
     int32,
     int64,
     float32,
@@ -278,6 +281,37 @@ def test_div_by_zero_on_integers_keeps_the_trap_guard() raises:
     assert_equal(result[0].value(), 10)
     assert_equal(result[1].value(), -10)
     assert_equal(result[2].value(), 0)
+
+
+def _assert_int_min_over_minus_one[T: NumericType](dtype: T) raises:
+    comptime S = Scalar[T.native]
+    var lhs = List[S]()
+    var rhs = List[S]()
+    for i in range(67):  # past one SIMD width, so the vector body runs too
+        lhs.append(S.MIN if i % 2 == 0 else S(7))
+        rhs.append(S(1) if i % 3 == 2 else S(-1))
+    var a = array(lhs, dtype)
+    var b = array(rhs, dtype)
+    var q = DivKernel.apply[T](a, b)
+    var f = FloordivKernel.apply[T](a, b)
+    var r = ModKernel.apply[T](a, b)
+    for i in range(67):
+        var overflow = lhs[i] == S.MIN and rhs[i] == S(-1)
+        var exact = S.MIN if lhs[i] == S.MIN else lhs[i] * rhs[i]
+        assert_equal(q[i].value(), S(0) if overflow else exact)
+        assert_equal(f[i].value(), exact)
+        assert_equal(r[i].value(), S(0))
+
+
+def test_div_int_min_by_minus_one_is_zero() raises:
+    """`MIN / -1` overflows, traps on x86 `idiv` and is undefined in LLVM;
+    `pyarrow.compute.divide` answers 0, and so does this, at every signed
+    width. `//` and `%` divide that lane by 1: the two's-complement wrap and
+    an exact remainder of 0."""
+    _assert_int_min_over_minus_one(int8)
+    _assert_int_min_over_minus_one(int16)
+    _assert_int_min_over_minus_one(int32)
+    _assert_int_min_over_minus_one(int64)
 
 
 # ---------------------------------------------------------------------------

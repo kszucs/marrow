@@ -25,6 +25,7 @@ from .delta_binary_packed import DeltaBinaryPacked
 from .dictionary import Dictionary
 from .frequency import Frequency
 from .hybrid import Hybrid
+from .order_preserving import OrderPreserving
 from .plain import Plain
 from .rle import Rle
 from .varint import Varint
@@ -41,6 +42,7 @@ struct DynCodec(Copyable, Movable, Writable):
         Delta,
         Zigzag,
         Xor,
+        OrderPreserving,
         BitPack,
         Varint,
         ByteStreamSplit,

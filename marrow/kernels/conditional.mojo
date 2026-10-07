@@ -36,7 +36,7 @@ from .core import Kernel
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 from .concat import concat
-from .filter import take
+from .filter import TakeKernel
 from .numeric import equal
 
 
@@ -123,7 +123,7 @@ struct Selection:
                 idx.append(Int32(Int(sel.unsafe_get(i)) * length + i))
             else:
                 idx.append_null()
-        return take(big, idx.finish(), ctx)
+        return TakeKernel.dispatch(big, idx.finish(), ctx)
 
 
 def _as_any[

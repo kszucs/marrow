@@ -42,7 +42,6 @@ from marrow.tests.strategies import (
     assert_same,
     dictionary_types,
     flat_types,
-    has_nan,
     lengths,
     nested_types,
 )
@@ -80,15 +79,6 @@ def batch(**columns):
     return ma.record_batch(pa.record_batch(columns))
 
 
-def has_int_min_over_minus_one(a, b):
-    """Whether a signed division hits INT_MIN / -1 anywhere."""
-    if not pa.types.is_signed_integer(a.type):
-        return False
-    low = -(2 ** (a.type.bit_width - 1))
-    hits = pc.and_(pc.equal(a, low), pc.equal(b, -1))
-    return pc.any(hits).as_py() is True
-
-
 # ── arithmetic ─────────────────────────────────────────────────────────────
 
 
@@ -106,9 +96,8 @@ def test_arithmetic_matches_pyarrow(pair, op):
 @given(pairs(NUMERIC_TYPES))
 def test_divide_matches_pyarrow(pair):
     """divide: integer division truncates toward zero; a zero integer divisor
-    raises in both. INT_MIN / -1 is excluded here and pinned below."""
+    raises in both."""
     a, b = pair
-    assume(not has_int_min_over_minus_one(a, b))
     want = reference(pc.divide, a, b)
     assume(want is not None)
     if isinstance(want, Exception):
@@ -284,18 +273,7 @@ def test_aggregate_matches_pyarrow(arr, verb):
     want = reference(_EXACT_AGGREGATES[verb], arr)
     assume(want is not None and not isinstance(want, Exception))
     values = arr.to_pylist()
-    if verb in ("min", "max") and pa.types.is_floating(arr.type):
-        valid = [v for v in values if v is not None]
-        ordered = [v for v in valid if not math.isnan(v)]
-        # The identity is the largest finite float rather than an infinity, so
-        # all-NaN or all-(+/-)inf input answers it: pinned below.
-        identity = math.inf if verb == "min" else -math.inf
-        assume(not valid or (ordered and not all(v == identity for v in ordered)))
     got = aggregate(arr, verb)
-    if verb in ("sum", "product") and pa.types.is_unsigned_integer(arr.type):
-        # marrow accumulates unsigned input as int64 where PyArrow uses uint64
-        # (pinned below); the bits agree, so compare them.
-        got = None if got is None else got % 2**64
     if verb == "product" and pa.types.is_floating(arr.type):
         # A product's rounding is relative to the product, not the inputs.
         w = want.as_py()
@@ -600,7 +578,14 @@ def with_indices(draw):
     it = draw(st.sampled_from([pa.int32(), pa.int64(), pa.uint8(), pa.uint32()]))
     if it == pa.uint8():
         assume(n <= 256)
-    index = st.none() if n == 0 else st.one_of(st.none(), st.integers(0, n - 1))
+    # Mostly in bounds; now and then one past either end, which must raise.
+    bound = -1 if pa.types.is_signed_integer(it) else 0
+    index = st.one_of(
+        st.none(),
+        st.integers(0, n - 1) if n else st.none(),
+        st.integers(0, n - 1) if n else st.none(),
+        st.integers(bound, min(n + 1, 255 if it == pa.uint8() else n + 1)),
+    )
     size = draw(lengths(150))
     indices = pa.array(draw(st.lists(index, min_size=size, max_size=size)), it)
     return arr, indices
@@ -608,11 +593,15 @@ def with_indices(draw):
 
 @given(with_indices())
 def test_take_matches_pyarrow(inputs):
-    """take over every type with in-bounds indices; a null index gives a
-    null."""
+    """take over every type; a null index gives a null, and an index outside
+    the array raises in both."""
     arr, indices = inputs
     want = reference(pc.take, arr, indices)
     assume(want is not None)
+    if isinstance(want, Exception):
+        with pytest.raises(ma.ArrowException):
+            mc.take(ma.array(arr), ma.array(indices))
+        return
     got = to_pa(mc.take(ma.array(arr), ma.array(indices)))
     assert_same(got, want)
 
@@ -647,25 +636,14 @@ _SORTABLE = (
 )
 
 
-def _unsigned_zero(arr):
-    """-0.0 rewritten as 0.0: the two sort as equal, so with an unstable sort
-    either may come first."""
-    if not pa.types.is_floating(arr.type):
-        return arr
-    return pc.if_else(pc.equal(arr, 0), pa.scalar(0.0, arr.type), arr)
-
-
 @given(
     any_arrays(st.sampled_from(_SORTABLE)),
     st.sampled_from(["ascending", "descending"]),
     st.sampled_from(["at_start", "at_end"]),
 )
 def test_sort_indices_matches_pyarrow(arr, order, null_placement):
-    """sort_indices orders the values and puts nulls where asked. Compared by
-    the values the indices select: marrow's sort is not stable (pinned below),
-    so equal values may come back in another order. NaN placement is pinned
-    separately too."""
-    assume(not has_nan(arr))
+    """sort_indices orders the values, NaN and nulls where asked, stably: the
+    indices themselves agree."""
     want = reference(
         pc.sort_indices, arr, sort_keys=[("", order)], null_placement=null_placement
     )
@@ -673,8 +651,7 @@ def test_sort_indices_matches_pyarrow(arr, order, null_placement):
     got = to_pa(
         mc.sort_indices(ma.array(arr), [("", order)], null_placement=null_placement)
     )
-    assert sorted(got.to_pylist()) == list(range(len(arr)))
-    assert_same(_unsigned_zero(arr.take(got)), _unsigned_zero(arr.take(want)))
+    assert got.to_pylist() == want.to_pylist()
 
 
 @given(
@@ -684,13 +661,12 @@ def test_sort_indices_matches_pyarrow(arr, order, null_placement):
 )
 def test_sort_matches_pyarrow(arr, order, null_placement):
     """sort returns the values sort_indices would select."""
-    assume(not has_nan(arr))
     indices = reference(
         pc.sort_indices, arr, sort_keys=[("", order)], null_placement=null_placement
     )
     assume(indices is not None)
     got = to_pa(mc.sort(ma.array(arr), [("", order)], null_placement=null_placement))
-    assert_same(_unsigned_zero(got), _unsigned_zero(arr.take(indices)))
+    assert_same(got, arr.take(indices))
 
 
 @st.composite
@@ -698,9 +674,6 @@ def sort_by_inputs(draw):
     n = draw(lengths(150))
     a = draw(any_arrays(st.sampled_from([pa.int8(), pa.string()]), size=st.just(n)))
     b = draw(any_arrays(st.sampled_from([pa.int64(), pa.float64()]), size=st.just(n)))
-    assume(not has_nan(b))
-    # -0.0 sorts before 0.0 rather than equal to it: pinned below.
-    b = _unsigned_zero(b)
     keys = draw(
         st.lists(
             st.tuples(
@@ -717,15 +690,15 @@ def sort_by_inputs(draw):
 
 @given(sort_by_inputs(), st.sampled_from(["at_start", "at_end"]))
 def test_sort_by_matches_pyarrow(inputs, null_placement):
-    """RecordBatch.sort_by over one or two keys, lexicographic. Compared on
-    the key columns only, since the sort is not stable."""
+    """RecordBatch.sort_by over one or two keys, lexicographic and stable, so
+    every column agrees — the row index `i` included."""
     rb, keys = inputs
     want = rb.sort_by(keys, null_placement=null_placement)
     got = pa.record_batch(
         ma.record_batch(rb).sort_by(keys, null_placement=null_placement)
     )
-    for name, _ in keys:
-        assert_same(_unsigned_zero(got.column(name)), _unsigned_zero(want.column(name)))
+    for name in rb.schema.names:
+        assert_same(got.column(name), want.column(name))
 
 
 def test_sort_by_default_null_placement():
@@ -802,10 +775,6 @@ def test_string_predicate_matches_pyarrow(arr, pattern, verb):
 # ── pinned divergences ─────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="divide: INT_MIN / -1 wraps to INT_MIN; pyarrow.compute.divide answers 0",
-)
 def test_divide_int_min_by_minus_one():
     a = pa.array([-128], pa.int8())
     b = pa.array([-1], pa.int8())
@@ -815,10 +784,6 @@ def test_divide_int_min_by_minus_one():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="take: an out-of-bounds or negative index yields null instead of raising",
-)
 @pytest.mark.parametrize("index", [1, -1])
 def test_take_out_of_bounds_raises(index):
     arr = ma.array(pa.array([10], pa.int64()))
@@ -826,12 +791,6 @@ def test_take_out_of_bounds_raises(index):
         mc.take(arr, ma.array(pa.array([index], pa.int64())))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="sort_indices orders NaN as the largest value; PyArrow keeps NaN next "
-    "to the nulls whatever the order (just before them at_end, just after them "
-    "at_start)",
-)
 @pytest.mark.parametrize(
     "order, null_placement",
     [("descending", "at_end"), ("ascending", "at_start")],
@@ -843,11 +802,6 @@ def test_sort_indices_nan_placement(order, null_placement):
     assert to_pa(got).to_pylist() == want.to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="sort_indices is not stable from 32 elements on: equal values come "
-    "back out of input order",
-)
 @pytest.mark.parametrize("n", [32, 63, 64, 65])
 def test_sort_indices_is_stable(n):
     arr = pa.array([0] * n, pa.int8())
@@ -924,15 +878,28 @@ def test_cast_float_to_decimal_is_exact():
     assert got.to_pylist() == pc.cast(arr, pa.decimal128(20, 4), safe=False).to_pylist()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="sum/product of unsigned integers accumulate as int64; PyArrow answers "
-    "uint64, so a total past 2**63 comes back negative",
-)
 @pytest.mark.parametrize("verb", ["sum", "product"])
 def test_unsigned_sum_is_uint64(verb):
     arr = pa.array([2**63, 1], pa.uint64())
     assert aggregate(arr, verb) == getattr(pc, verb)(arr).as_py()
+    # Grouped and windowed run the same fold: both uint64, both past 2**63.
+    k = pa.array([0, 0, 1], pa.int8())
+    v = pa.array([2**63, 1, 2**63 + 5], pa.uint64())
+    want = pa.table({"k": k, "v": v}).group_by("k").aggregate([("v", verb)])
+    per_key = dict(
+        zip(want.column("k").to_pylist(), want.column(f"v_{verb}").to_pylist())
+    )
+    assert want.column(f"v_{verb}").type == pa.uint64()
+    lazy = ma.memtable(batch(k=k, v=v))
+    grouped = pa.record_batch(lazy.aggregate(by=["k"], r=(verb, "v")).collect())
+    assert grouped.schema.field("r").type == pa.uint64()
+    got = grouped.to_pydict()
+    assert dict(zip(got["k"], got["r"])) == per_key
+    window = col("v").aggregate(verb).over(partition_by=[col("k")])
+    windowed = pa.record_batch(lazy.with_columns(r=window).collect())
+    assert windowed.schema.field("r").type == pa.uint64()
+    got = windowed.to_pydict()
+    assert got["r"] == [per_key[key] for key in got["k"]]
 
 
 @pytest.mark.parametrize(
@@ -954,12 +921,6 @@ def test_cast_float_to_int_out_of_range(value, src, dst):
         mc.cast(ma.array(arr), dst, safe=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="min/max start from the largest finite float instead of an infinity: "
-    "over only NaN they answer +/-FLT_MAX (or DBL_MAX) instead of NaN, and "
-    "min([inf]) answers FLT_MAX",
-)
 @pytest.mark.parametrize(
     "verb, values",
     [
@@ -977,11 +938,39 @@ def test_min_max_identity(verb, values, dtype):
     assert got == want or (math.isnan(got) and math.isnan(want))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="sort_by orders -0.0 before 0.0 instead of treating them as equal, so "
-    "a later key no longer decides between them",
-)
+def test_min_max_grouped_and_windowed_skip_nan():
+    """Grouped and windowed min/max run the same fold: NaN only for a group
+    holding nothing else, an infinity is a value, an all-null group is null."""
+    k = pa.array([0, 0, 1, 1, 2, 3], pa.int8())
+    v = pa.array([math.nan, math.nan, math.nan, math.inf, -math.inf, None])
+    want = pa.table({"k": k, "v": v}).group_by("k")
+    want = want.aggregate([("v", "min"), ("v", "max")]).to_pydict()
+    per_key = {
+        key: (lo, hi) for key, lo, hi in zip(want["k"], want["v_min"], want["v_max"])
+    }
+    lazy = ma.memtable(batch(k=k, v=v))
+    got = lazy.aggregate(by=["k"], lo=("min", "v"), hi=("max", "v"))
+    got = pa.record_batch(got.collect()).to_pydict()
+    grouped = {key: (lo, hi) for key, lo, hi in zip(got["k"], got["lo"], got["hi"])}
+    window = lazy.with_columns(
+        lo=col("v").min().over(partition_by=[col("k")]),
+        hi=col("v").max().over(partition_by=[col("k")]),
+    )
+    got = pa.record_batch(window.collect()).to_pydict()
+    windowed = [(lo, hi) for lo, hi in zip(got["lo"], got["hi"])]
+
+    def same(a, b):
+        return all(
+            x == y
+            or (x is not None and y is not None and math.isnan(x) and math.isnan(y))
+            for x, y in zip(a, b)
+        )
+
+    assert grouped.keys() == per_key.keys()
+    assert all(same(grouped[key], per_key[key]) for key in per_key)
+    assert all(same(w, per_key[key]) for w, key in zip(windowed, got["k"]))
+
+
 def test_sort_by_signed_zero_ties():
     rb = pa.record_batch({"b": pa.array([0.0, -0.0]), "a": pa.array([0, 1])})
     keys = [("b", "ascending"), ("a", "ascending")]

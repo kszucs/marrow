@@ -46,8 +46,8 @@ def multiply(left, right, memory_pool=None, ctx=None):
 def divide(left, right, memory_pool=None, ctx=None):
     """Divide *left* by *right* element-wise.
 
-    Equivalent to ``pyarrow.compute.divide``, which is the *checked* kernel:
-    two integers divide to an integer, so ``-1 / 3`` is 0, and a zero divisor
+    Equivalent to ``pyarrow.compute.divide``: two integers divide to an
+    integer, so ``-1 / 3`` is 0, ``INT_MIN / -1`` is 0, and a zero divisor
     raises rather than answering.
 
     ``/`` on an :class:`~marrow.expr.Expr` is the other division, Python's:

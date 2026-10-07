@@ -269,6 +269,29 @@ struct DivKernel(BinaryNumericKernel):
 
     @always_inline
     @staticmethod
+    def overflows[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        """The lanes of a signed integer division whose quotient does not fit:
+        `MIN / -1`. All false for unsigned and floating types."""
+        comptime if T.is_integral() and T.is_signed():
+            return a.eq(SIMD[T, W](Scalar[T].MIN)) & b.eq(SIMD[T, W](-1))
+        else:
+            return SIMD[DType.bool, W](fill=False)
+
+    @always_inline
+    @staticmethod
+    def divisor[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        """`b` with 1 in every zero lane and, for a signed integer, every
+        `MIN / -1` lane -- the two an integer division cannot take: x86 `idiv`
+        traps on both and LLVM leaves both undefined. Dividing by 1 there
+        leaves `MIN`, the two's-complement wrap of `MIN // -1`, and a
+        remainder of 0, which is exact. `FloordivKernel` and `ModKernel`
+        divide by it too."""
+        return (b.eq(0) | Self.overflows(a, b)).select(SIMD[T, W](1), b)
+
+    @always_inline
+    @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         """True division: floats divide by zero, integers cannot.
 
@@ -290,9 +313,17 @@ struct DivKernel(BinaryNumericKernel):
         `float64` before `Div`; the one caller that can is `pc.divide`, and
         `python/bindings/compute.mojo` checks the divisor there and raises,
         which is what `pyarrow.compute.divide` does.
+
+        **The signed `MIN / -1` lane answers 0**, as `pyarrow.compute.divide`
+        does: its quotient does not fit, and `idiv` traps on x86 rather than
+        wrapping, so that lane divides by 1 too and the answer is substituted.
         """
         comptime if T.is_integral():
-            return a / b.eq(0).select(SIMD[T, W](1), b)
+            var q = a / Self.divisor(a, b)
+            comptime if T.is_signed():
+                return Self.overflows(a, b).select(SIMD[T, W](0), q)
+            else:
+                return q
         else:
             return a / b
 
@@ -324,7 +355,7 @@ struct FloordivKernel(BinaryNumericKernel):
         No golden case asks, and `//` reads as floor division everywhere else
         in the language.
         """
-        var d = b.eq(0).select(SIMD[T, W](1), b)
+        var d = DivKernel.divisor(a, b)
         var q = a // d
         comptime if T.is_integral():
             var inexact = (a - q * d).ne(0) & (a.lt(0) ^ d.lt(0))
@@ -347,7 +378,7 @@ struct ModKernel(BinaryNumericKernel):
         truncating rule, so the two must be conditional together or the
         identity breaks.
         """
-        var d = b.eq(0).select(SIMD[T, W](1), b)
+        var d = DivKernel.divisor(a, b)
         var r = a % d
         comptime if T.is_integral():
             var inexact = r.ne(0) & (a.lt(0) ^ d.lt(0))
@@ -751,6 +782,24 @@ struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):
             return a.eq(b) | (math.isnan(a) & math.isnan(b))
         else:
             return a.eq(b)
+
+    @always_inline
+    @staticmethod
+    def canonical[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+        """One representative of each class of values `core` calls equal:
+        `-0.0` becomes `0.0` and, under `nan_safe`, every NaN one NaN, so
+        equal values share one bit pattern. Integers are their own.
+
+        `+ 0.0` folds the zeros in one instruction: adding zero is exact for
+        every float, and `-0.0 + 0.0` is `+0.0`."""
+        comptime if T.is_floating_point():
+            var zeroed = a + SIMD[T, W](0)
+            comptime if Self.nan_safe:
+                return math.isnan(a).select(SIMD[T, W](math.nan[T]()), zeroed)
+            else:
+                return zeroed
+        else:
+            return a
 
 
 struct NeKernel[nan_safe: Bool = False](NumericCompareKernel):

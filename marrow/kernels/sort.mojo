@@ -4,11 +4,21 @@
 """Sort kernels — the `SortIndices` kernel and the `sort` / `sort_indices`
 delegators.
 
+Every sort is **stable by default**, as Arrow's `sort_indices` is: equal values
+keep their input order unless the caller asks for `SortIndices[stable=False]`
+(or `sort_indices[stable=False]`). Stability is a compile-time choice, so a
+program links only the strategies its sorts use. NaN goes beside the nulls,
+as in Arrow, unless `nan_largest` orders it above every number, as SQL does;
+`-0.0` ties with `0.0`.
+
 `SortIndices.apply` holds the typed leaves:
-  - PrimitiveArray[T]: PDQsort (pair-based) for N < 32768; parallel LSD radix
-    for N ≥ 32768. Values wider than 64 bits (decimal128/256) have no UInt64
-    radix key and always take the comparison path.
-  - BoolArray: O(N) counting sort.
+  - PrimitiveArray[T]: every value is encoded once into a UInt64 key, and
+    `KeySort` orders the rows — PDQsort over composite (key, row) integers
+    below the radix crossover, parallel LSD radix above. Both are stable;
+    stability only moves the crossover (`_STABLE_RADIX_ROWS_PER_PASS` rows
+    per pass when stable, `_RADIX_THRESHOLD` when not). Values wider than 64
+    bits (decimal128/256) have no UInt64 key and take a comparison sort.
+  - BoolArray: O(N) counting sort, stable by construction.
   - BytesArray (either string layout): stdlib comparison sort (bytewise
     lexicographic).
 
@@ -18,7 +28,8 @@ typed leaf (bound on `PrimitiveType`); dictionary columns sort by their
 decoded values. `SortIndices.multi` composes single-column permutations into a
 multi-key ordering, and `sort` is `take` under that permutation.
 
-Measured throughput (int64, Apple M-series, parallel where applicable):
+Measured throughput of the unstable path (int64, Apple M-series, parallel
+where applicable):
   N=1K:    7.9 µs PDQsort  vs Polars  14.7 µs (1.9x faster)
   N=4K:   34.8 µs PDQsort  vs Polars  40.5 µs (1.2x faster)
   N=10K:  155 µs PDQsort   vs Polars  92 µs   (1.7x slower)
@@ -36,8 +47,7 @@ Serial cost breakdown at N=10M (from macOS `sample`, 50 iters, 8-bit baseline):
 
 from std.builtin.sort import sort as _sort_impl
 from std.math import isnan
-from std.utils.numerics import nan
-from std.sys import size_of
+from std.sys import get_defined_int, size_of
 
 from ..arrays import (
     BinaryLikeArray,
@@ -56,6 +66,8 @@ from ..dtypes import (
 )
 from .cast import decode_dictionary
 from .core import Kernel
+from .numeric import EqKernel
+from ..codecs import OrderPreserving
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 from .filter import TakeKernel
@@ -63,13 +75,28 @@ from .partition import radix_histogram
 
 
 comptime _RADIX_THRESHOLD: Int = 32_768
-"""Arrays below this size use pair-based PDQsort instead of LSD radix.
+"""An *unstable* sort below this size uses the packed PDQsort instead of LSD
+radix.
 
 Measured on Apple M-series (int64):
   PDQsort wins: N ≤ 16K (313 µs vs 438 µs radix at N=16K)
   Radix wins:   N ≥ 32K (578 µs vs 600 µs PDQsort at N=32K)
   Crossover: ~28K elements.
 """
+
+# Measured on Apple M-series under load, random keys: int32 composite PDQsort
+# 47 us vs radix 85 us at 4K, 190 us vs 166 us at 10K; float64 218 us vs
+# 298 us at 10K. A low-cardinality key favours radix, which skips the passes
+# whose bits never vary: the 2-key 10K multi sort is 278 us on radix, 611 us
+# on the composite sort.
+comptime _STABLE_RADIX_ROWS_PER_PASS: Int = get_defined_int[
+    "MARROW_SORT_STABLE_RADIX_ROWS_PER_PASS", 2_048
+]()
+"""A *stable* sort uses LSD radix from this many rows per radix pass up, and a
+PDQsort over composite (key, row) integers below: 6,144 rows for a 32-bit key,
+12,288 for a 64-bit one. Radix is stable by construction and takes over far
+earlier than it does from the unstable PDQsort, but each pass pays a
+2,048-bucket histogram, so the crossover grows with the key width."""
 
 comptime _PARALLEL_THRESHOLD: Int = 524_288
 """Minimum element count for parallel histogram/scatter in radix sort.
@@ -94,304 +121,143 @@ fits in L1 per thread; wider passes would thrash the 512 KB L2 shared cache.
 
 
 # ---------------------------------------------------------------------------
-# Key encoding — value → UInt64 for radix sort comparisons
+# KeySort — rows ordered by their encoded keys, independent of the dtype
 # ---------------------------------------------------------------------------
 
 
-def _encode_sort_key[
-    T: PrimitiveType
-](val: Scalar[T.native], ascending: Bool,) -> UInt64:
-    """Encode val as UInt64 that sorts correctly in unsigned ascending order.
+struct KeySort[bits: Int]:
+    """Orders `Int32` rows by `UInt64` keys whose order lives in their low
+    `bits` bits, as `OrderPreserving` encodes them.
 
-    Float transform: positive → XOR sign bit; negative → XOR all bits.
-    Signed int transform: XOR sign bit so -N < 0 < +N in unsigned order.
-    Unsigned: zero-extend cast.
-    Descending: complement all bits.
-
-    **Every NaN is folded onto one bit pattern first**, exactly as
-    `HashKernel._floating_lanes` does, so `sort` and `hash` answer the same
-    question about NaN identity. The flip is otherwise sign-dependent and splits
-    them, which `WindowExtents.of_sorted` cannot recover from: it compares
-    *adjacent* rows, so NaNs that never land together are never handed to a
-    comparison at all.
-    `test_sort_indices_puts_both_nan_signs_last` has the worked example.
+    Both algorithms answer the same, stable order: `radix` is stable by
+    construction, and `packed` breaks every tie by the row index.
     """
-    comptime native = T.native
-    var key: UInt64
 
-    var v = val
-    comptime if native.is_floating_point():
-        if isnan(v):
-            v = nan[native]()
+    comptime passes = (Self.bits + _BITS_PER_PASS - 1) // _BITS_PER_PASS
+    """Radix passes over a key, `_BITS_PER_PASS` bits each."""
 
-    comptime if native == DType.float16:
-        var bits = v.to_bits().cast[DType.uint16]()
-        var sign = bits >> 15
-        var flip = (UInt16(0) - sign) | UInt16(0x8000)
-        key = (bits ^ flip).cast[DType.uint64]()
-    elif native == DType.float32:
-        var bits = v.to_bits().cast[DType.uint32]()
-        var sign = bits >> 31
-        var flip = (UInt32(0) - sign) | UInt32(0x80000000)
-        key = (bits ^ flip).cast[DType.uint64]()
-    elif native == DType.float64:
-        var bits = v.to_bits().cast[DType.uint64]()
-        var sign = bits >> 63
-        var flip = (UInt64(0) - sign) | UInt64(0x8000000000000000)
-        key = bits ^ flip
-    elif native == DType.int8:
-        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x80)
-    elif native == DType.int16:
-        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x8000)
-    elif native == DType.int32:
-        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x80000000)
-    elif native == DType.int64:
-        key = v.to_bits().cast[DType.uint64]() ^ UInt64(0x8000000000000000)
-    else:
-        # uint8, uint16, uint32, uint64 — no encoding needed.
-        key = v.cast[DType.uint64]()
+    comptime Composite = DType.uint64 if Self.bits <= 32 else DType.uint128
+    """A key with its row index in the low 32 bits."""
 
-    if not ascending:
-        key = ~key
-    return key
+    @staticmethod
+    @always_inline
+    def pack(key: UInt64, row: Int32) -> Scalar[Self.Composite]:
+        """`key` above `row`, so composites order by key, then by row."""
+        # Bits above `bits` are alike in every key (the descending complement
+        # sets them all), so shifting them out loses no order.
+        return (key.cast[Self.Composite]() << 32) | row.cast[
+            DType.uint32
+        ]().cast[Self.Composite]()
 
+    @staticmethod
+    def packed(
+        mut composites: List[Scalar[Self.Composite]],
+        var rows: Buffer[mut=True],
+    ) -> Buffer[]:
+        """PDQsort over `pack`ed composites, unpacked into `rows`.
 
-# ---------------------------------------------------------------------------
-# Comparison sort — Mojo stdlib PDQsort for small arrays (N < _RADIX_THRESHOLD)
-# ---------------------------------------------------------------------------
-
-
-struct _SortPair(Copyable, Movable, TrivialRegisterPassable):
-    """(encoded_key, original_row_index) pair for comparison sort."""
-
-    var key: UInt64
-    var idx: Int32
-
-    def __init__(out self, key: UInt64, idx: Int32):
-        self.key = key
-        self.idx = idx
-
-
-def _comparison_sort_indices[
-    T: PrimitiveType
-](
-    src: PrimitiveArray[T],
-    var idx_buf: Buffer[mut=True],
-    n: Int,
-    ascending: Bool,
-    stable: Bool,
-) raises -> Buffer[]:
-    """Sort idx_buf via Mojo stdlib PDQsort.
-
-    Non-float types: sort 4-byte indices directly using `values[a] < values[b]`.
-    No encoding, no extra struct. Covers integers, temporal, and decimal types.
-
-    Float types: encoded (key, idx) pairs for NaN-safe total order.
-    NaN → uint_max via bit-flip, sorts last (ascending) / first (descending).
-    Direct float comparison is not used because `NaN < x` is always false in
-    IEEE 754, which would corrupt PDQsort's invariants.
-
-    PDQsort is **not** stable, so `stable` breaks ties on the original row index
-    to make the comparator a total order. That costs one extra comparison per
-    equal pair and no extra pass — cheaper than sorting twice, and it is what
-    `SortIndices.multi` depends on: its column-wise LSD passes preserve a
-    less-significant key only if each pass is stable. The radix path below is
-    stable by construction and ignores this flag.
-    """
-    var values = src.values()
-    var v = idx_buf.view[DType.int32](0, n)
-
-    comptime if not T.native.is_floating_point():
-        var idx_list = List[Int32](capacity=n)
-        for i in range(n):
-            idx_list.append(v.unsafe_get(i))
-        if ascending:
-            if stable:
-
-                def cmp_asc_stable(a: Int32, b: Int32) {imm values} -> Bool:
-                    var va = values.unsafe_get(Int(a))
-                    var vb = values.unsafe_get(Int(b))
-                    return va < vb or (va == vb and a < b)
-
-                _sort_impl(idx_list, cmp_asc_stable)
-            else:
-
-                def cmp_asc(a: Int32, b: Int32) {imm values} -> Bool:
-                    return values.unsafe_get(Int(a)) < values.unsafe_get(Int(b))
-
-                _sort_impl(idx_list, cmp_asc)
-        else:
-            if stable:
-
-                def cmp_desc_stable(a: Int32, b: Int32) {imm values} -> Bool:
-                    var va = values.unsafe_get(Int(a))
-                    var vb = values.unsafe_get(Int(b))
-                    return va > vb or (va == vb and a < b)
-
-                _sort_impl(idx_list, cmp_desc_stable)
-            else:
-
-                def cmp_desc(a: Int32, b: Int32) {imm values} -> Bool:
-                    return values.unsafe_get(Int(a)) > values.unsafe_get(Int(b))
-
-                _sort_impl(idx_list, cmp_desc)
-        for i in range(n):
-            v.unsafe_set(i, idx_list[i])
-    else:
-        var pairs = List[_SortPair](capacity=n)
-        for i in range(n):
-            var orig = v.unsafe_get(i)
-            pairs.append(
-                _SortPair(
-                    key=_encode_sort_key[T](
-                        values.unsafe_get(Int(orig)), ascending
-                    ),
-                    idx=orig,
-                )
+        No two composites tie, so the unstable PDQsort answers the stable
+        order, comparing plain integers held inline.
+        """
+        var rv = rows.view[DType.int32](0, len(composites))
+        _sort_impl(composites)
+        for i in range(len(composites)):
+            rv.unsafe_set(
+                i, composites[i].cast[DType.uint32]().cast[DType.int32]()
             )
+        return rows^.to_immutable()
 
-        if stable:
+    @staticmethod
+    def radix(
+        var keys: Buffer[mut=True],
+        var rows: Buffer[mut=True],
+        n: Int,
+        ctx: ExecContext,
+    ) -> Buffer[]:
+        """LSD radix sort, `_BITS_PER_PASS` bits per pass.
 
-            def cmp_pair_stable(a: _SortPair, b: _SortPair) -> Bool:
-                return a.key < b.key or (a.key == b.key and a.idx < b.idx)
+        Each pass scatters (key, row) from one buffer pair into the other and
+        swaps them; a pass whose bits are alike in every key is skipped. Above
+        `_PARALLEL_THRESHOLD` rows the histogram and the scatter run per thread,
+        into disjoint slots.
+        """
+        comptime bucket_count = 1 << _BITS_PER_PASS
+        var keys_b = Buffer.alloc_uninit[DType.uint64](n)
+        var rows_b = Buffer.alloc_uninit[DType.int32](n)
 
-            _sort_impl(pairs, cmp_pair_stable)
-        else:
+        # The histogram and the scatter below index `write_offsets` by stripe, so
+        # both must stripe identically — same `ctx`, same `_PARALLEL_THRESHOLD`.
+        for pass_ in range(Self.passes):
+            var shift = UInt64(pass_ * _BITS_PER_PASS)
+            # The last pass may cover fewer than _BITS_PER_PASS bits.
+            var bits_this_pass = min(
+                Self.bits - pass_ * _BITS_PER_PASS, _BITS_PER_PASS
+            )
+            var mask = UInt64((1 << bits_this_pass) - 1)
 
-            def cmp_pair(a: _SortPair, b: _SortPair) -> Bool:
-                return a.key < b.key
+            var kh = keys.view[DType.uint64](0, n)
 
-            _sort_impl(pairs, cmp_pair)
-        for i in range(n):
-            v.unsafe_set(i, pairs[i].idx)
+            def bucket_of(i: Int) {imm} -> Int:
+                return Int((kh.unsafe_get(i) >> shift) & mask)
 
-    return idx_buf^.to_immutable()
+            var offsets = radix_histogram(
+                n, bucket_count, bucket_of, ctx, _PARALLEL_THRESHOLD
+            )
+            var write_offsets = offsets[0].copy()
+            ref bucket_start = offsets[1]
 
+            # One non-empty bucket: every key shares these bits, so the pass
+            # would not move anything.
+            var non_zero = 0
+            for b in range(bucket_count):
+                if bucket_start[b + 1] > bucket_start[b]:
+                    non_zero += 1
+                    if non_zero > 1:
+                        break
+            if non_zero <= 1:
+                continue
 
-# ---------------------------------------------------------------------------
-# LSD radix sort — O(N), parallel histogram + scatter
-# ---------------------------------------------------------------------------
+            var ka = keys.view[DType.uint64](0, n)
+            var ra = rows.view[DType.int32](0, n)
+            var kb = keys_b.view[DType.uint64](0, n)
+            var rb = rows_b.view[DType.int32](0, n)
 
+            @always_inline
+            def scatter_worker(
+                t: Int, start: Int, end: Int
+            ) {mut write_offsets, imm}:
+                var base = t * bucket_count
+                for i in range(start, end):
+                    var key = ka.unsafe_get(i)
+                    var b = Int((key >> shift) & mask)
+                    var pos = write_offsets[base + b]
+                    kb.unsafe_set(pos, key)
+                    rb.unsafe_set(pos, ra.unsafe_get(i))
+                    write_offsets[base + b] = pos + 1
 
-def _radix_sort_indices[
-    T: PrimitiveType
-](
-    src: PrimitiveArray[T],
-    var idx_buf: Buffer[mut=True],
-    n: Int,
-    ascending: Bool,
-    ctx: ExecContext,
-) raises -> Buffer[]:
-    """LSD radix sort over encoded UInt64 keys using _BITS_PER_PASS-bit passes.
+            ctx.stripe(n, scatter_worker, _PARALLEL_THRESHOLD)
 
-    Allocates two alternating (key, index) buffer pairs.  Each pass reads from
-    pair-A and scatters into pair-B, then swaps A↔B.  The final result always
-    resides in idx_buf (the current "A" after the last swap).
+            var tmp_keys = keys^
+            keys = keys_b^
+            keys_b = tmp_keys^
+            var tmp_rows = rows^
+            rows = rows_b^
+            rows_b = tmp_rows^
 
-    Parallel path (ctx.wants_parallel): per-thread histograms → partition-major
-    prefix sum → disjoint scatter slots, no atomics.
-    Pass skipping: if histogram has only one non-zero bucket, the pass is a
-    no-op (all elements share the same bits for that range) — free for random
-    data, significant win for timestamps/sequential IDs.
-    """
-    comptime native = T.native
-    comptime n_bits = size_of[Scalar[native]]() * 8
-    # ceil(n_bits / _BITS_PER_PASS): 6 passes for 64-bit, 3 for 32-bit, etc.
-    comptime num_passes = (n_bits + _BITS_PER_PASS - 1) // _BITS_PER_PASS
-    comptime bucket_count = 1 << _BITS_PER_PASS  # 2048
-
-    var values = src.values()
-
-    # [< 1 ms] Three buffer allocs: key pair A/B + index pair B.
-    var key_a = Buffer.alloc_uninit[DType.uint64](n)
-    var key_b = Buffer.alloc_uninit[DType.uint64](n)
-    var idx_b = Buffer.alloc_uninit[DType.int32](n)
-
-    # [~2 ms parallel, ~7 ms serial at N=10M] Encode all valid elements into key_a.
-    # Each value → UInt64 that sorts correctly in unsigned ascending order
-    # (sign-flip for signed ints, IEEE 754 bit-flip for floats).
-    var ka_init = key_a.view[DType.uint64](0, n)
-    var ia_init = idx_buf.view[DType.int32](0, n)
-    for i in range(n):
-        ka_init.unsafe_set(
-            i,
-            _encode_sort_key[T](
-                values.unsafe_get(Int(ia_init.unsafe_get(i))), ascending
-            ),
-        )
-
-    # The histogram and the scatter below index `write_offsets` by stripe, so
-    # both must stripe identically — same `ctx`, same `_PARALLEL_THRESHOLD`.
-
-    # [~35 ms parallel total, 6 passes × (hist + scatter) at N=10M int64]
-    for pass_ in range(num_passes):
-        var shift = UInt64(pass_ * _BITS_PER_PASS)
-        # Last pass may cover fewer than _BITS_PER_PASS bits.
-        var bits_this_pass = min(
-            n_bits - pass_ * _BITS_PER_PASS, _BITS_PER_PASS
-        )
-        var mask = UInt64((1 << bits_this_pass) - 1)
-
-        # [~0.9 ms parallel per pass at N=10M] Per-thread histogram + prefix sum
-        # (shared with the radix partitioner, cf. ``radix_histogram``).
-        var ka_h = key_a.view[DType.uint64](0, n)
-
-        def bucket_of(i: Int) {imm} -> Int:
-            return Int((ka_h.unsafe_get(i) >> shift) & mask)
-
-        var offsets = radix_histogram(
-            n, bucket_count, bucket_of, ctx, _PARALLEL_THRESHOLD
-        )
-        var write_offsets = offsets[0].copy()
-        ref bucket_start = offsets[1]
-
-        # Pass skipping: if only one bucket is non-empty every element shares
-        # these bits, so the data is already ordered for this pass — skip the
-        # scatter. Free for random data, a big win for clustered / timestamp IDs.
-        var non_zero = 0
-        for b in range(bucket_count):
-            if bucket_start[b + 1] > bucket_start[b]:
-                non_zero += 1
-                if non_zero > 1:
-                    break
-        if non_zero <= 1:
-            continue
-
-        # [~4.9 ms parallel per pass at N=10M] Parallel scatter.
-        # Random writes into output buffer; cache-miss rate is the core bottleneck.
-        var ka_s = key_a.view[DType.uint64](0, n)
-        var ia_s = idx_buf.view[DType.int32](0, n)
-        var kb_s = key_b.view[DType.uint64](0, n)
-        var ib_s = idx_b.view[DType.int32](0, n)
-
-        @always_inline
-        def scatter_worker(
-            t: Int, start: Int, end: Int
-        ) {mut write_offsets, imm}:
-            var base = t * bucket_count
-            for i in range(start, end):
-                var b = Int((ka_s.unsafe_get(i) >> shift) & mask)
-                var pos = write_offsets[base + b]
-                kb_s.unsafe_set(pos, ka_s.unsafe_get(i))
-                ib_s.unsafe_set(pos, ia_s.unsafe_get(i))
-                write_offsets[base + b] = pos + 1
-
-        ctx.stripe(n, scatter_worker, _PARALLEL_THRESHOLD)
-
-        # Swap A ↔ B so the next pass always reads from "current A".
-        var tmp_key = key_a^
-        key_a = key_b^
-        key_b = tmp_key^
-        var tmp_idx = idx_buf^
-        idx_buf = idx_b^
-        idx_b = tmp_idx^
-
-    # Result is always in idx_buf (the current "A" after the final swap).
-    return idx_buf^.to_immutable()
+        return rows^.to_immutable()
 
 
-struct SortIndices(Kernel):
+struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
     """Sort-permutation kernel — the indices that would sort a column.
+
+    `stable` keeps equal values in input order; `SortIndices[stable=False]`
+    may reorder them; a primitive column differs only in the size at which
+    it switches to radix.
+
+    `nan_largest` orders NaN as a value above every number — after them
+    ascending, before them descending, with the nulls placed on their own —
+    which is SQL's order and the expression layer's. Without it NaN goes
+    beside the nulls, which is Arrow's.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
     runtime-typed array to the matching leaf via the ``DynType.dispatch_*`` family
@@ -413,7 +279,6 @@ struct SortIndices(Kernel):
         array: DynArray,
         ascending: Bool = True,
         nulls_first: Bool = False,
-        stable: Bool = False,
         limit: Optional[Int] = None,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
@@ -423,7 +288,6 @@ struct SortIndices(Kernel):
             array: Input array (runtime-typed).
             ascending: Sort direction. ``True`` = smallest first.
             nulls_first: Where to place null elements in the output.
-            stable: Preserve relative order of equal elements.
             limit: If set, return only the first ``limit`` indices (top-K).
                 Phase 1: implemented as full sort + truncation. Phase 3 will
                 add O(N) quickselect.
@@ -436,15 +300,11 @@ struct SortIndices(Kernel):
         var result: Int32Array
 
         if dt == bool_dt:
-            result = SortIndices.apply(
-                array.as_bool(), ascending, nulls_first, ctx
-            )
+            result = Self.apply(array.as_bool(), ascending, nulls_first, ctx)
         elif dt.is_binary_like() or dt.is_string_view() or dt.is_binary_view():
 
             def bytes_leaf[A: BytesArray](arr: A) raises {imm} -> Int32Array:
-                return SortIndices.apply(
-                    arr, ascending, nulls_first, stable, ctx
-                )
+                return Self.apply(arr, ascending, nulls_first, ctx)
 
             result = array.dispatch_bytes(bytes_leaf)
         elif dt.is_dictionary():
@@ -453,11 +313,10 @@ struct SortIndices(Kernel):
             # order. `decode_dictionary`, not `cast`: naming the top-level
             # `cast` links its whole ladder into any binary that sorts
             # *anything*, for a dictionary path most plans never take.
-            result = SortIndices.dispatch(
+            result = Self.dispatch(
                 decode_dictionary(array.as_dictionary(), ctx),
                 ascending,
                 nulls_first,
-                stable,
                 None,
                 ctx,
             )
@@ -472,8 +331,8 @@ struct SortIndices(Kernel):
             # separate numeric/decimal128/decimal256 arms this replaces were
             # three more spellings of this one call.
             def primitive[T: PrimitiveType](d: T) raises {imm} -> Int32Array:
-                return SortIndices.apply(
-                    array.as_primitive[T](), ascending, nulls_first, stable, ctx
+                return Self.apply(
+                    array.as_primitive[T](), ascending, nulls_first, ctx
                 )
 
             result = dt.dispatch_primitive(primitive)
@@ -497,7 +356,6 @@ struct SortIndices(Kernel):
         key_indices: List[Int],
         ascending: List[Bool],
         nulls_first: Bool = False,
-        stable: Bool = False,
         limit: Optional[Int] = None,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
@@ -514,10 +372,11 @@ struct SortIndices(Kernel):
             key_indices: Column indices to sort by, most-significant first.
             ascending: Per-key sort direction.
             nulls_first: Where to place null rows.
-            stable: Preserve relative order of equal rows (single-key path only;
-                the multi-key path is always stable by construction).
             limit: If set, return only the first ``limit`` indices.
             ctx: Execution context.
+
+        `stable` decides only a single key: with several, every pass is
+        stable, since the earlier passes survive only as tie-breakers.
         """
         if len(key_indices) == 0:
             raise Self.error[InvalidError]("key_indices must not be empty")
@@ -527,11 +386,10 @@ struct SortIndices(Kernel):
             )
 
         if len(key_indices) == 1:
-            return SortIndices.dispatch(
+            return Self.dispatch(
                 array.field(key_indices[0]),
                 ascending[0],
                 nulls_first,
-                stable,
                 limit,
                 ctx,
             )
@@ -542,22 +400,21 @@ struct SortIndices(Kernel):
         # every pass is stable, so a less-significant key's order is preserved as
         # the tie-break under a more-significant one.
         var last = len(key_indices) - 1
-        var perm = SortIndices.dispatch(
+        comptime Pass = SortIndices[stable=True, nan_largest=Self.nan_largest]
+        var perm = Pass.dispatch(
             array.field(key_indices[last]),
             ascending=ascending[last],
             nulls_first=nulls_first,
-            stable=True,
             ctx=ctx,
         )
         for i in reversed(range(last)):
             var reordered = TakeKernel.dispatch(
                 array.field(key_indices[i]), perm
             )
-            var local = SortIndices.dispatch(
+            var local = Pass.dispatch(
                 reordered,
                 ascending=ascending[i],
                 nulls_first=nulls_first,
-                stable=True,
                 ctx=ctx,
             )
             perm = TakeKernel.apply(perm, local, ctx)
@@ -575,34 +432,49 @@ struct SortIndices(Kernel):
         arr: PrimitiveArray[T],
         ascending: Bool = True,
         nulls_first: Bool = False,
-        stable: Bool = False,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
-        """Return the indices that would sort a typed primitive array."""
+        """Return the indices that would sort a typed primitive array.
+
+        Unless `nan_largest`, NaN rows are set aside with the nulls and land
+        between them and the values, in input order — just after the nulls
+        with `nulls_first`, just before them otherwise, whichever the
+        direction. That is Arrow's placement: NaN is not ordered against a
+        number, so it goes to the end the caller chose for values without an
+        order.
+        """
         var n = len(arr)
         if n == 0:
             return Int32Array.empty(Int32Type())
 
         var n_null = arr.null_count()
-        var n_valid = n - n_null
 
-        # Partition: collect valid and null original row indices in one scan.
+        # Partition: collect valid, NaN and null original row indices in one
+        # scan.
         var null_list = List[Int32](capacity=max(n_null, 1))
-        var valid_buf = Buffer.alloc_uninit[DType.int32](max(n_valid, 1))
-        var vv = valid_buf.view[DType.int32](0, n_valid)
+        var nan_list = List[Int32]()
+        var valid_buf = Buffer.alloc_uninit[DType.int32](max(n - n_null, 1))
+        var vv = valid_buf.view[DType.int32](0, n - n_null)
+        var values = arr.values()
         var vi = 0
         for i in range(n):
-            if arr.is_valid(i):
+            if not arr.is_valid(i):
+                null_list.append(Int32(i))
+            else:
+                comptime if (
+                    T.native.is_floating_point() and not Self.nan_largest
+                ):
+                    if isnan(values.unsafe_get(i)):
+                        nan_list.append(Int32(i))
+                        continue
                 vv.unsafe_set(vi, Int32(i))
                 vi += 1
-            else:
-                null_list.append(Int32(i))
 
-        var sorted_valid = SortIndices._sort_valid[T](
-            arr, valid_buf^, n_valid, ascending, stable, ctx
+        var sorted_valid = Self._sort_valid[T](
+            arr, valid_buf^, vi, ascending, ctx
         )
-        return SortIndices._assemble(
-            sorted_valid, n_valid, null_list, n, nulls_first
+        return Self._assemble(
+            sorted_valid, vi, null_list, nan_list, n, nulls_first
         )
 
     @staticmethod
@@ -613,61 +485,126 @@ struct SortIndices(Kernel):
         var valid_buf: Buffer[mut=True],
         n_valid: Int,
         ascending: Bool,
-        stable: Bool,
         ctx: ExecContext,
     ) raises -> Buffer[]:
-        """Order the `n_valid` non-null row indices held in `valid_buf`.
+        """Order the `n_valid` non-null row indices in `valid_buf` -- NaN
+        rows among them only under `nan_largest`.
 
-        A stable request routes to radix wherever a radix key exists, because
-        LSD radix is stable *by construction* and costs nothing to make so.
-        Teaching the comparison path stability instead means a tie-break on the
-        original index, which turns one compare into a compare-plus-branch that
-        the predictor cannot learn — measured at **+85%** on a 10k two-key sort
-        with a low-cardinality leading key (320 µs -> 594 µs), the exact shape a
-        multi-key ORDER BY produces. `_RADIX_THRESHOLD` is tuned for the
-        *unstable* comparison sort and does not apply here.
-
-        Only decimal128/256 still need the stable comparator: they exceed the
-        UInt64 radix key, so no radix path exists for them at any size.
+        Values of at most 64 bits are encoded once into `UInt64` keys and
+        ordered by `KeySort`: LSD radix from the crossover up, the packed
+        PDQsort below it. Both are stable, so `stable` only moves the
+        crossover. Decimal128/256 exceed a `UInt64` key and take
+        `_comparison_sort`.
         """
         if n_valid <= 1:
             return valid_buf^.to_immutable()
 
         comptime if size_of[Scalar[T.native]]() <= 8:
-            if stable or n_valid >= _RADIX_THRESHOLD:
-                return _radix_sort_indices[T](
-                    arr, valid_buf^, n_valid, ascending, ctx
+            comptime Sorter = KeySort[size_of[Scalar[T.native]]() * 8]
+            comptime radix_from = (
+                _STABLE_RADIX_ROWS_PER_PASS * Sorter.passes
+            ) if Self.stable else _RADIX_THRESHOLD
+            var values = arr.values()
+            var rows = valid_buf.view[DType.int32](0, n_valid)
+
+            @always_inline
+            def key_of(i: Int) {imm} -> UInt64:
+                return Self._key[T](
+                    values.unsafe_get(Int(rows.unsafe_get(i))), ascending
                 )
-            else:
-                return _comparison_sort_indices[T](
-                    arr, valid_buf^, n_valid, ascending, stable
-                )
+
+            if n_valid >= radix_from:
+                var keys = Buffer.alloc_uninit[DType.uint64](n_valid)
+                var kv = keys.view[DType.uint64](0, n_valid)
+                for i in range(n_valid):
+                    kv.unsafe_set(i, key_of(i))
+                return Sorter.radix(keys^, valid_buf^, n_valid, ctx)
+            var composites = List[Scalar[Sorter.Composite]](capacity=n_valid)
+            for i in range(n_valid):
+                composites.append(Sorter.pack(key_of(i), rows.unsafe_get(i)))
+            return Sorter.packed(composites, valid_buf^)
         else:
-            # decimal128 / decimal256 exceed the UInt64 radix key, so the
-            # comparison path — which compares the native values directly — is
-            # the only correct one.
-            return _comparison_sort_indices[T](
-                arr, valid_buf^, n_valid, ascending, stable
-            )
+            return Self._comparison_sort[T](arr, valid_buf^, n_valid, ascending)
+
+    @staticmethod
+    @always_inline
+    def _key[
+        T: PrimitiveType
+    ](val: Scalar[T.native], ascending: Bool) -> UInt64:
+        """`val`'s sort key, with -0.0 folded onto 0.0 so the two tie, and
+        every NaN onto the one positive NaN, which encodes above `+inf`."""
+        var key = OrderPreserving.encode_value(
+            EqKernel[nan_safe=True].canonical[T.native, 1](val)
+        )
+        if ascending:
+            return key
+        else:
+            return ~key
+
+    @staticmethod
+    def _comparison_sort[
+        T: PrimitiveType
+    ](
+        src: PrimitiveArray[T],
+        var idx_buf: Buffer[mut=True],
+        n: Int,
+        ascending: Bool,
+    ) raises -> Buffer[]:
+        """Sort `idx_buf` by comparing the values it indexes — for values
+        wider than a `UInt64` key (decimal128/256).
+
+        A stable sort takes the stdlib's merge sort, an unstable one PDQsort.
+        `SortIndices.multi` depends on the former: its column-wise passes keep
+        a less-significant key only if each pass is stable.
+        """
+        comptime assert (
+            not T.native.is_floating_point()
+        ), "a float has a UInt64 key"
+        var values = src.values()
+        var v = idx_buf.view[DType.int32](0, n)
+        var idx_list = List[Int32](capacity=n)
+        for i in range(n):
+            idx_list.append(v.unsafe_get(i))
+        if ascending:
+
+            def cmp_asc(a: Int32, b: Int32) {imm values} -> Bool:
+                return values.unsafe_get(Int(a)) < values.unsafe_get(Int(b))
+
+            _sort_impl[stable=Self.stable](idx_list, cmp_asc)
+        else:
+
+            def cmp_desc(a: Int32, b: Int32) {imm values} -> Bool:
+                return values.unsafe_get(Int(a)) > values.unsafe_get(Int(b))
+
+            _sort_impl[stable=Self.stable](idx_list, cmp_desc)
+        for i in range(n):
+            v.unsafe_set(i, idx_list[i])
+        return idx_buf^.to_immutable()
 
     @staticmethod
     def _assemble(
         sorted_valid: Buffer[],
         n_valid: Int,
         null_list: List[Int32],
+        nan_list: List[Int32],
         n: Int,
         nulls_first: Bool,
     ) raises -> Int32Array:
-        """Merge sorted valid indices and null indices into the final Int32Array.
+        """Merge sorted valid, NaN and null indices into the final Int32Array:
+        `[nulls, NaNs, values]` with `nulls_first`, else `[values, NaNs, nulls]`.
         """
         var out = Buffer.alloc_uninit[DType.int32](n)
         var ov = out.view[DType.int32](0, n)
         var sv = sorted_valid.view[DType.int32](0, n_valid)
-        var n_null = n - n_valid
-        var null_off = 0 if nulls_first else n_valid
-        var valid_off = n_null if nulls_first else 0
+        var n_null = len(null_list)
+        var n_nan = len(nan_list)
+        var null_off = 0 if nulls_first else n_valid + n_nan
+        var nan_off = n_null if nulls_first else n_valid
+        var valid_off = n_null + n_nan if nulls_first else 0
         for i in range(n_null):
             ov.unsafe_set(null_off + i, null_list[i])
+        for i in range(n_nan):
+            ov.unsafe_set(nan_off + i, nan_list[i])
         for i in range(n_valid):
             ov.unsafe_set(valid_off + i, sv.unsafe_get(i))
         return Int32Array(
@@ -743,7 +680,7 @@ struct SortIndices(Kernel):
     @staticmethod
     def _sort_bytes[
         A: BytesArray
-    ](arr: A, mut rows: List[Int32], ascending: Bool, stable: Bool):
+    ](arr: A, mut rows: List[Int32], ascending: Bool):
         """Sort `rows` of `arr` bytewise, in two phases.
 
         First by each row's 8-byte `sort_key`, a comparison over one
@@ -773,14 +710,10 @@ struct SortIndices(Kernel):
         def value_desc(a: Int32, b: Int32) {imm arr} -> Bool:
             return arr.unsafe_get(UInt(b)) < arr.unsafe_get(UInt(a))
 
-        if ascending and stable:
-            _sort_impl[stable=True](rows, key_asc)
-        elif ascending:
-            _sort_impl(rows, key_asc)
-        elif stable:
-            _sort_impl[stable=True](rows, key_desc)
+        if ascending:
+            _sort_impl[stable=Self.stable](rows, key_asc)
         else:
-            _sort_impl(rows, key_desc)
+            _sort_impl[stable=Self.stable](rows, key_desc)
 
         var start = 0
         while start < len(rows):
@@ -790,14 +723,10 @@ struct SortIndices(Kernel):
                 end += 1
             if end - start > 1:
                 var run = Span(rows)[start:end]
-                if ascending and stable:
-                    _sort_impl[stable=True](run, value_asc)
-                elif ascending:
-                    _sort_impl(run, value_asc)
-                elif stable:
-                    _sort_impl[stable=True](run, value_desc)
+                if ascending:
+                    _sort_impl[stable=Self.stable](run, value_asc)
                 else:
-                    _sort_impl(run, value_desc)
+                    _sort_impl[stable=Self.stable](run, value_desc)
             start = end
 
     @staticmethod
@@ -807,7 +736,6 @@ struct SortIndices(Kernel):
         arr: A,
         ascending: Bool = True,
         nulls_first: Bool = False,
-        stable: Bool = False,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
         """Comparison sort over byte strings in either layout, using the Mojo
@@ -829,7 +757,7 @@ struct SortIndices(Kernel):
                 null_list.append(Int32(i))
 
         if n_valid > 1:
-            Self._sort_bytes(arr, valid_list, ascending, stable)
+            Self._sort_bytes(arr, valid_list, ascending)
 
         var out = Buffer.alloc_uninit[DType.int32](n)
         var ov = out.view[DType.int32](0, n)
@@ -860,26 +788,28 @@ struct SortIndices(Kernel):
 # ---------------------------------------------------------------------------
 
 
-def sort_indices(
+def sort_indices[
+    stable: Bool = True, nan_largest: Bool = False
+](
     array: DynArray,
     ascending: Bool = True,
     nulls_first: Bool = False,
-    stable: Bool = False,
     limit: Optional[Int] = None,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int32Array:
     """Return the indices that would sort ``array``."""
-    return SortIndices.dispatch(
-        array, ascending, nulls_first, stable, limit, ctx
+    return SortIndices[stable, nan_largest].dispatch(
+        array, ascending, nulls_first, limit, ctx
     )
 
 
-def sort(
+def sort[
+    stable: Bool = True, nan_largest: Bool = False
+](
     array: StructArray,
     key_indices: List[Int],
     ascending: List[Bool],
     nulls_first: Bool = False,
-    stable: Bool = False,
     limit: Optional[Int] = None,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> StructArray:
@@ -887,7 +817,7 @@ def sort(
     permutation from ``SortIndices.multi``."""
     return TakeKernel.apply(
         array,
-        SortIndices.multi(
-            array, key_indices, ascending, nulls_first, stable, limit, ctx
+        SortIndices[stable, nan_largest].multi(
+            array, key_indices, ascending, nulls_first, limit, ctx
         ),
     )

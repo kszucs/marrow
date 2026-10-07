@@ -98,7 +98,7 @@ from ..utils import (
 )
 from ..execution import ExecContext, GPU_ENABLED
 from ..errors import InternalError, InvalidError, NotImplementedError, TypeError
-from .filter import take
+from .filter import TakeKernel
 
 
 # ---------------------------------------------------------------------------
@@ -2158,7 +2158,10 @@ def decode_dictionary(
     indices, a NULL index giving a NULL value. What hashing, comparing and
     sorting a dictionary-encoded column read, and the first half of
     `DictionaryCastKernel`."""
-    return take(array.dictionary(), normalized_indices(array), ctx)
+    # Unchecked: every reader validates a dictionary's indices as it builds it.
+    return TakeKernel.dispatch(
+        array.dictionary(), normalized_indices(array), ctx
+    )
 
 
 struct DictionaryCastKernel(CastKernel):

@@ -10,7 +10,13 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from ...arrays import BoolArray, PrimitiveArray, Int64Array, Int32Array
+from ...arrays import (
+    BoolArray,
+    DynArray,
+    PrimitiveArray,
+    Int64Array,
+    Int32Array,
+)
 from ...builders import (
     arange,
     BoolBuilder,
@@ -229,6 +235,22 @@ def bench_take_1m(mut b: Benchmark) raises:
 def bench_take_parallel_1m(mut b: Benchmark) raises:
     """Forces the striped path — `ExecContext.serial()` never reaches it."""
     _bench_take(b, 1_000_000, ExecContext(num_threads=0))
+
+
+def bench_take_checked_1m(mut b: Benchmark) raises:
+    """Through `TakeKernel.dispatch`, which checks the indices are in bounds
+    before the gather — the entry point every runtime-typed caller uses."""
+    var arr: DynArray = arange[Int64Type](0, 1_000_000)
+    var idx = _shuffled_indices(1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(TakeKernel.dispatch(arr, idx)))
+
+    b.iter(call)
+    keep(arr)
+    keep(idx)
 
 
 def bench_take_nulls_1m(mut b: Benchmark) raises:

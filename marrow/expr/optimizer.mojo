@@ -75,7 +75,7 @@ Soundness is by construction, not by review:
   `WindowOperator._permutation` returns the identity when a window names no
   keys, so `ROW_NUMBER() OVER ()` reads its answer off input row order — and
   an ordered window is **not** safe either, because that permutation is
-  `stable=True`, so input order still decides ties. `row_number`, `lag`,
+  stable, so input order still decides ties. `row_number`, `lag`,
   `lead`, `first_value` and `last_value` all change answer if tie order
   changes, and `RemoveRedundantSort` trades tie order away by design. So no
   rule moves a node into a window's input: `MergeWindows` folds stacked

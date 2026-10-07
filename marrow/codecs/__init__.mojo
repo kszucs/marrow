@@ -46,6 +46,7 @@ any reader reads any writer's stream of the same chain.
 | `Delta` | integers | its difference from the one before |
 | `Zigzag` | signed integers | `0, -1, 1, -2, ...` as the unsigned `0, 1, 2, 3, ...` |
 | `Xor` | numbers | its bits XOR the previous value's |
+| `OrderPreserving` | numbers | an unsigned integer that sorts as the value does |
 
 | Writes bytes | Takes | Writes |
 |---|---|---|
@@ -110,6 +111,7 @@ from .delta import Delta
 from .delta_binary_packed import DeltaBinaryPacked
 from .delta_byte_array import DeltaByteArray
 from .delta_length_byte_array import DeltaLengthByteArray
+from .order_preserving import OrderPreserving
 from .dyn_cascade import (
     DynCascade,
     DynCascadeReader,

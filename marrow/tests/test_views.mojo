@@ -981,6 +981,36 @@ def test_reduce_all_null_returns_identity() raises:
     assert_equal(result, Int32(0))
 
 
+def _assert_masked_sum[T: DType]() raises:
+    comptime N = 300
+    var buf = Buffer.alloc_zeroed[T](N)
+    var bm = Bitmap.alloc_zeroed(N)
+    for i in range(N):
+        buf.unsafe_set[T](i, Scalar[T](i % 5 + 1))
+        if i % 3 != 0:
+            bm.set(i)
+    for offset in [0, 1, 5, 7, 13]:
+        var n = N - offset
+        var expected = Scalar[T](0)
+        for i in range(offset, N):
+            if i % 3 != 0:
+                expected += Scalar[T](i % 5 + 1)
+        var result = reduce[T, _add_i32](
+            buf.view[T](offset, n), bm.view(offset, n), Scalar[T](0)
+        )
+        assert_equal(result, expected, String(T, " offset=", offset))
+
+
+def test_reduce_masked_narrow_ints_at_bit_offsets() raises:
+    """A masked integer reduce reads many lanes per step from one bitmap
+    load, so the lanes must stay inside its window at every bit offset,
+    narrow types included, where a step covers the most lanes."""
+    _assert_masked_sum[DType.int8]()
+    _assert_masked_sum[DType.int16]()
+    _assert_masked_sum[DType.int32]()
+    _assert_masked_sum[DType.int64]()
+
+
 # ---------------------------------------------------------------------------
 # View bounds matrix
 #

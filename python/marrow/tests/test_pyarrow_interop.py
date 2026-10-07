@@ -350,6 +350,27 @@ def test_array_roundtrip_dictionary_index_types(index_pa_type):
     assert pa.array(ma.array(pa_arr)).equals(pa_arr)
 
 
+@pytest.mark.parametrize("bad", [3, -1])
+def test_array_import_dictionary_rejects_an_out_of_range_index(bad):
+    pa_arr = pa.DictionaryArray.from_arrays(
+        pa.array([0, bad, 1], type=pa.int8()), pa.array(["x", "y", "z"]), safe=False
+    )
+    with pytest.raises(ma.ArrowInvalid, match="dictionary index at 1"):
+        ma.array(pa_arr)
+
+
+def test_array_import_dictionary_ignores_the_index_under_a_null():
+    indices = pa.Array.from_buffers(
+        pa.int8(),
+        3,
+        [pa.py_buffer(bytes([0b101])), pa.py_buffer(bytes([0, 99, 1]))],
+        null_count=1,
+    )
+    pa_arr = pa.DictionaryArray.from_arrays(indices, pa.array(["x", "y"]), safe=False)
+    decoded = pa.array(ma.array(pa_arr)).dictionary_decode()
+    assert decoded.to_pylist() == ["x", None, "y"]
+
+
 # ===========================================================================
 # RecordBatch roundtrips
 # ===========================================================================

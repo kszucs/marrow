@@ -11,21 +11,26 @@ So each `AggregateFn` is exercised at one slot *and* at many, and the one-slot
 expectation is always the whole-input answer rather than the identity.
 """
 
+from std.math import inf, isnan, nan
 from std.testing import assert_equal, assert_true
 
 from ...arrays import StringArray, DynArray, Int32Array, Int64Array
 from ...builders import (
     StringBuilder,
     TimestampBuilder,
+    UInt64Builder,
     array,
 )
 from ...dtypes import (
     DynType,
+    Float64Type,
     Int64Type,
     TimestampType,
+    UInt64Type,
     float64,
     int32,
     int64,
+    uint64,
     microsecond,
     timestamp,
 )
@@ -33,6 +38,7 @@ from ..aggregate import (
     AggKernel,
     Dispersion,
     SumFold,
+    ProductFold,
     ApproxDistinctCount,
     DistinctCount,
     MaxFold,
@@ -267,6 +273,59 @@ def test_agg_numeric_min_one_slot_and_grouped() raises:
     )
     assert_true(whole == array([1], int64))
     assert_true(grouped == array([1, 1], int64))
+
+
+def test_agg_float_min_max_skip_nan() raises:
+    """Arrow's rule: NaN is skipped unless a group holds nothing else, and the
+    infinities are values like any other — the identity is NaN, not
+    `±MAX_FINITE`."""
+    var q = nan[DType.float64]()
+    var i = inf[DType.float64]()
+    var values = array([q, q, i, q, -i, 2.0], float64).to_dyn()
+    var groups = _ids([0, 0, 1, 1, 2, 2])
+    var lo = Fold[MinFold, Float64Type].grouped(
+        Groups(groups.copy(), 3), _in[Fold[MinFold, Float64Type]](values.copy())
+    )
+    var hi = Fold[MaxFold, Float64Type].grouped(
+        Groups(groups^, 3), _in[Fold[MaxFold, Float64Type]](values.copy())
+    )
+    assert_true(isnan(lo[0].value()) and isnan(hi[0].value()))
+    assert_equal(lo[1].value(), i)
+    assert_equal(hi[1].value(), i)
+    assert_equal(lo[2].value(), -i)
+    assert_equal(hi[2].value(), 2.0)
+    var whole = Fold[MinFold, Float64Type].grouped(
+        Groups.single(2),
+        _in[Fold[MinFold, Float64Type]](array([q, q], float64).to_dyn()),
+    )
+    assert_true(isnan(whole[0].value()))
+
+
+def test_agg_unsigned_sum_accumulates_in_uint64() raises:
+    """`sum` and `product` of an unsigned column are uint64, as in Arrow, so a
+    total past `2**63` stays positive — whole-column and per group alike — and
+    the declared dtype agrees with the column."""
+    var b = UInt64Builder(3)
+    b.append(UInt64(1) << 63)
+    b.append(UInt64(1))
+    b.append(UInt64(3))
+    var values: DynArray = b.finish()
+    assert_true(Fold[SumFold, UInt64Type].dtype(values.dtype()) == uint64)
+    assert_true(Fold[ProductFold, UInt64Type].dtype(values.dtype()) == uint64)
+    var whole = Fold[SumFold, UInt64Type].grouped(
+        Groups.single(3), _in[Fold[SumFold, UInt64Type]](values.copy())
+    )
+    assert_equal(whole[0].value(), (UInt64(1) << 63) + 4)
+    var per_group = Fold[SumFold, UInt64Type].grouped(
+        Groups(_ids([1, 0, 1]), 2),
+        _in[Fold[SumFold, UInt64Type]](values.copy()),
+    )
+    assert_equal(per_group[0].value(), UInt64(1))
+    assert_equal(per_group[1].value(), (UInt64(1) << 63) + 3)
+    var product = Fold[ProductFold, UInt64Type].grouped(
+        Groups.single(3), _in[Fold[ProductFold, UInt64Type]](values^)
+    )
+    assert_equal(product[0].value(), UInt64(1) << 63)  # 3 * 2**63 wraps
 
 
 def test_agg_rejects_a_dtype_it_has_no_arm_for() raises:

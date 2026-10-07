@@ -55,7 +55,7 @@ from ..dtypes import (
 )
 from ..execution import ExecContext
 from ..errors import InvalidError, NotImplementedError
-from .filter import filter, take
+from .filter import TakeKernel, filter
 from .boolean import NotNullKernel
 from .dictionary import DictionaryEncoder
 from ..utils import Hasher, KeyHash
@@ -837,7 +837,7 @@ struct HashJoin[Hash: Hasher = KeyHash]:
         """
         var ctx = self._ctx.copy()
         for c in range(len(columns)):
-            into.append(take(columns[c].copy(), indices, ctx))
+            into.append(TakeKernel.dispatch(columns[c].copy(), indices, ctx))
 
     def _assemble(
         self,

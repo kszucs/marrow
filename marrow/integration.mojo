@@ -674,11 +674,13 @@ struct _Reader[o: ImmOrigin]:
         ref encoding = field.dtype.as_dictionary()
         var indices = self.values(encoding.index_type(), node, column)
         var id = node["dictionary"].int("id")
-        return DictionaryArray.from_arrays(
+        var data = DictionaryArray.from_arrays(
             DynArray.from_data(indices),
             self.dictionary(id, encoding.value_type(), node),
             encoding.ordered,
         ).to_data()
+        data.validate_node(full=True)
+        return data^
 
     def dictionary(
         mut self, id: Int, dtype: DynType, node: _Node[Self.o]

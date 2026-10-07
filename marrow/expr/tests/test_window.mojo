@@ -186,11 +186,15 @@ def test_two_nans_in_the_order_key_are_peers() raises:
     """The NaN half of the same rule the case above states for null.
 
     `ORDER BY` compares with `IS NOT DISTINCT FROM`, so the two NaNs are one
-    peer group and both rank 3. marrow answered 3, 4: `_encode_sort_key` sorts
-    them adjacent and `equal` then said they differ, because it is IEEE and
-    the sort is not. `WindowExtents.of_sorted` asks `KeyCompare`, under which
-    NaN is NaN, for that reason.
-    DuckDB 1.5.5 was measured 2026-09-22 and agrees.
+    peer group and both rank 3. marrow answered 3, 4 when the sort placed them
+    adjacent and `equal` then said they differ, because it is IEEE and the sort
+    is not. `WindowExtents.of_sorted` asks `KeyCompare`, under which NaN is
+    NaN, for that reason.
+
+    The nulls go last here, where Arrow's placement — NaN beside the nulls —
+    and DuckDB's — NaN above every number — agree, so DuckDB 1.5.5's answer
+    (measured 2026-09-22) still holds. With the nulls first the two differ:
+    marrow sorts as Arrow does and ranks the NaNs 1.
 
     `dense_rank` is asserted alongside because it is a separate kernel, not
     because it is more sensitive — in this shape the two answer identically,
@@ -199,16 +203,16 @@ def test_two_nans_in_the_order_key_are_peers() raises:
     A mixed-sign pair is asserted alongside, because it takes *both* halves to
     work: a NaN-safe comparison alone left `-nan` and `+nan` at opposite ends of
     the partition, where `WindowExtents.of_sorted` — which compares adjacent
-    rows — never handed them to it. `_encode_sort_key` folding the NaN sign is what brings
-    them together.
+    rows — never handed them to it. The sort setting every NaN aside together
+    is what brings them together.
     """
     var q = nan[DType.float64]()
     var b = record_batch([array([q, 1.0, q, 2.0], float64).copy()], names=["a"])
     var plan = table(b^).with_columns(
         ["rk", "dr"],
         [
-            rank().over(order_by=[col("a", float64)]),
-            dense_rank().over(order_by=[col("a", float64)]),
+            rank().over(order_by=[col("a", float64)], nulls_first=False),
+            dense_rank().over(order_by=[col("a", float64)], nulls_first=False),
         ],
     )
     var out = plan.execute()
@@ -221,7 +225,10 @@ def test_two_nans_in_the_order_key_are_peers() raises:
     )
     var out2 = (
         table(mixed^)
-        .with_columns(["rk"], [rank().over(order_by=[col("a", float64)])])
+        .with_columns(
+            ["rk"],
+            [rank().over(order_by=[col("a", float64)], nulls_first=False)],
+        )
         .execute()
     )
     assert_true(out2.column("rk").as_int64() == array([3, 1, 3, 2], int64))

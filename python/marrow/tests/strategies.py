@@ -314,11 +314,3 @@ def assert_same(got, want, check_type=True):
     )
     cg, cw = _canon(got), _canon(want)
     assert cg.equals(cw), f"\n got: {got}\nwant: {want}"
-
-
-def has_nan(arr):
-    """Whether a float array holds a NaN anywhere."""
-    if not pa.types.is_floating(arr.type):
-        return False
-    wide = arr.cast(pa.float64()) if pa.types.is_float16(arr.type) else arr
-    return pc.any(pc.is_nan(wide)).as_py() is True

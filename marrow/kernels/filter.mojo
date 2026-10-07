@@ -4,7 +4,8 @@
 """Filter, take, and selection kernels.
 
 ``filter``     — select elements where a boolean mask is True.
-``take``       — gather elements at arbitrary indices (index -1 → null).
+``take``       — gather elements at arbitrary indices (null index → null,
+                 out-of-range index → ``IndexError``).
 ``drop_null``  — remove null elements using the validity bitmap.
 
 All functions support arrays with non-zero offsets (sliced arrays).
@@ -45,10 +46,12 @@ from ..dtypes import (
     uint64,
 )
 
-from ..views import BitmapView, cpu_lanes
+import std.math as math
+
+from ..views import BitmapView, cpu_lanes, reduce
 from .core import Kernel
 from ..execution import ExecContext
-from ..errors import TypeError
+from ..errors import IndexError, TypeError
 
 
 struct FilterKernel(Kernel):
@@ -643,13 +646,19 @@ struct TakeKernel(Kernel):
 
     comptime name = "take"
 
+    # Out of line: inlined, the dtype ladder was copied into every caller.
+    @no_inline
     @staticmethod
     def dispatch(
         array: DynArray,
         indices: Int32Array,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        """Resolve `array`'s runtime dtype and gather it at `indices`."""
+        """Resolve `array`'s runtime dtype and gather it at `indices`.
+
+        Trusts its indices, as the typed `apply` leaves do: for indices the
+        caller produced. `take` checks them first.
+        """
         var dt = array.dtype()
         if dt == bool_:
             return TakeKernel.apply(array.as_bool(), indices, ctx).to_dyn()
@@ -709,6 +718,52 @@ struct TakeKernel(Kernel):
             ).to_dyn()
         else:
             raise Self.error[TypeError](String("unsupported dtype ", dt))
+
+    @always_inline
+    @staticmethod
+    def _lane_max[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        """`check_bounds`' combine. `MaxKernel.core` is the same lane, but
+        `numeric` reaches this module through `string` and `cast`, so
+        importing it here would close a cycle."""
+        return math.max(a, b)
+
+    @staticmethod
+    def check_bounds(
+        length: Int,
+        indices: Int32Array,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises:
+        """Raise `IndexError` unless every valid index lies in `[0, length)`.
+
+        One vectorised max-reduce ahead of the gather, so the gather loop
+        itself never branches: read as `uint32`, an index is in range exactly
+        when it is below `length` capped at `2**31`, since a negative one
+        wraps to `2**31` or above. A null index is skipped whatever its
+        payload. `ctx` stripes the reduce as it stripes the gather.
+        """
+        # Nothing to check when every index is null -- an empty `indices`
+        # included, where the reduce would answer its identity, 0.
+        if len(indices) > indices.null_count():
+            # The indices are read on the host whatever device runs the gather.
+            var host = ExecContext.serial() if ctx.is_gpu() else ctx.copy()
+            var idx = indices.values()
+            var bound = min(length, Int(Int32.MAX) + 1)
+            var top = reduce[DType.int32, Self._lane_max, DType.uint32](
+                idx, UInt32(0), host
+            )
+            if Int(top) >= bound and indices.null_count() > 0:
+                # The offender may be a null's payload: rescan the valid ones.
+                top = 0
+                for i in range(len(indices)):
+                    if indices.is_valid(i):
+                        top = max(top, idx.unsafe_get(i).cast[DType.uint32]())
+            if Int(top) >= bound:
+                # The largest offender read back as signed: a negative index
+                # wraps to the top of the unsigned range, so it wins the max.
+                raise Self.error[IndexError](
+                    t"index {Int(top.cast[DType.int32]())} out of bounds for"
+                    t" length {length}"
+                )
 
     @staticmethod
     def apply[
@@ -1226,7 +1281,10 @@ def take(
     indices: Int32Array,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
-    """Gather elements of `array` at `indices` (null index -> null element)."""
+    """Gather elements of `array` at `indices` (null index -> null element).
+
+    Raises `IndexError` for a valid index outside `array`."""
+    TakeKernel.check_bounds(len(array), indices, ctx)
     return TakeKernel.dispatch(array, indices, ctx)
 
 

@@ -6,7 +6,8 @@ bit for bit, every truncation of a stream is refused, and a type the codec
 does not take is refused."""
 
 from std.memory import bitcast
-from std.testing import assert_raises, assert_true
+from std.testing import assert_equal, assert_raises, assert_true
+from std.utils.numerics import inf, nan, neg_inf
 
 from ...codecs import (
     BinaryCodec,
@@ -22,6 +23,7 @@ from ...codecs import (
     Dictionary,
     Frequency,
     Hybrid,
+    OrderPreserving,
     PlainBinary,
     Rle,
     Varint,
@@ -252,6 +254,79 @@ def test_codecs_xor() raises:
     _check[Xor, DType.int32]()
     _check[Xor, DType.float32]()
     _check[Xor, DType.float64]()
+
+
+def test_codecs_order_preserving() raises:
+    _check[OrderPreserving, DType.int8]()
+    _check[OrderPreserving, DType.int16]()
+    _check[OrderPreserving, DType.int32]()
+    _check[OrderPreserving, DType.int64]()
+    _check[OrderPreserving, DType.uint8]()
+    _check[OrderPreserving, DType.uint16]()
+    _check[OrderPreserving, DType.uint32]()
+    _check[OrderPreserving, DType.uint64]()
+    _check[OrderPreserving, DType.float16]()
+    _check[OrderPreserving, DType.float32]()
+    _check[OrderPreserving, DType.float64]()
+
+
+def _assert_keys_ordered[T: DType](values: List[Scalar[T]]) raises:
+    """`values` is strictly increasing, so its keys must be too, and each key
+    must decode back to its value."""
+    for i in range(len(values)):
+        var key = OrderPreserving.encode_value(values[i])
+        assert_true(
+            _same([OrderPreserving.decode_value[T](key)], [values[i]]),
+            String(T, " ", values[i], " did not round-trip"),
+        )
+        if i > 0:
+            assert_true(
+                OrderPreserving.encode_value(values[i - 1]) < key,
+                String(T, " ", values[i - 1], " < ", values[i]),
+            )
+
+
+def test_order_preserving_signed_integers() raises:
+    _assert_keys_ordered[DType.int8]([Int8.MIN, -1, 0, 1, Int8.MAX])
+    _assert_keys_ordered[DType.int16]([Int16.MIN, -300, 0, 300, Int16.MAX])
+    _assert_keys_ordered[DType.int32]([Int32.MIN, -1, 0, 1, Int32.MAX])
+    _assert_keys_ordered[DType.int64]([Int64.MIN, -1, 0, 1, Int64.MAX])
+
+
+def test_order_preserving_unsigned_integers() raises:
+    _assert_keys_ordered[DType.uint8]([0, 1, 128, UInt8.MAX])
+    _assert_keys_ordered[DType.uint64]([0, 1, UInt64(1) << 63, UInt64.MAX])
+
+
+def _assert_floats_ordered[T: DType]() raises:
+    """`-inf < negatives < -0.0 < 0.0 < positives < inf < NaN`: the zeros are
+    distinct keys, and a NaN with its sign clear sorts above `inf`."""
+    _assert_keys_ordered[T](
+        [
+            neg_inf[T](),
+            Scalar[T].MIN_FINITE,
+            Scalar[T](-1.5),
+            Scalar[T](-0.0),
+            Scalar[T](0.0),
+            Scalar[T](1.5),
+            Scalar[T].MAX_FINITE,
+            inf[T](),
+            nan[T](),
+        ]
+    )
+
+
+def test_order_preserving_floats() raises:
+    _assert_floats_ordered[DType.float16]()
+    _assert_floats_ordered[DType.float32]()
+    _assert_floats_ordered[DType.float64]()
+    _assert_keys_ordered[DType.float64]([-1e-300, -5e-324, 5e-324, 1e-300])
+
+
+def test_order_preserving_keys_are_zero_extended() raises:
+    assert_equal(OrderPreserving.encode_value(Int8.MIN), UInt64(0))
+    assert_equal(OrderPreserving.encode_value(Int8.MAX), UInt64(0xFF))
+    assert_equal(OrderPreserving.encode_value(Float32(0.0)), UInt64(1 << 31))
 
 
 def test_codecs_hybrid() raises:
