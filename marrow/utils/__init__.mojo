@@ -54,7 +54,6 @@ from .datetime import (
 )
 from .dylib import Dylib, LibSpec
 from .segment_tree import Monoid, SegmentTree
-from .uri import StorageOptions, Uri
 from .hex import hex_digit
 from .hashing import (
     AHash64,

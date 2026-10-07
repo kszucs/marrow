@@ -405,7 +405,7 @@ build_opendal = "scripts/build_opendal_c.sh"
 # MARROW_REQUIRE_OPENDAL turns "library absent" from a silent skip into a
 # failure -- without it a suite that tests nothing looks exactly like one that
 # passes.
-test_opendal = { cmd = "MARROW_REQUIRE_OPENDAL=1 pytest -v marrow/io/tests marrow/utils/tests/test_utils_uri.mojo", depends-on = [
+test_opendal = { cmd = "MARROW_REQUIRE_OPENDAL=1 pytest -v marrow/io/tests", depends-on = [
   "build_opendal",
 ] }
 # Lives here rather than under `examples` because it is the one example that

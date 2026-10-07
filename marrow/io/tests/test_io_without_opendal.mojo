@@ -145,5 +145,5 @@ def test_io_dispatch_local_uri_needs_no_opendal() raises:
 # and returned early -- a PASS, by this harness -- and the `opendal` CI
 # environment always has one, so it never checked anything where it ran.
 # Without a library it duplicated the case above. The routing half it claimed
-# to cover is in `marrow/utils/tests/test_utils_uri.mojo`, which needs no
+# to cover is in `marrow/io/tests/test_io_uri.mojo`, which needs no
 # library and no network.

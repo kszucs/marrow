@@ -15,7 +15,7 @@ touches OpenDAL, which is what lets marrow work with no `libopendal_c` present.
 from std.collections.string import Codepoint
 from std.os import getenv
 from ..errors import DynError, InvalidError, NotImplementedError
-from .hex import hex_digit
+from ..utils.hex import hex_digit
 
 
 struct Uri(Copyable, Movable, Writable):

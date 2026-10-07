@@ -51,7 +51,7 @@ from .opendal import OpenDalStore, OpenDalWriter, OpenDalSource
 from .core import ByteSink, ByteSource, Fetched
 from .local import BufferSource, FileSink, MemorySink
 from ..execution import ExecContext
-from ..utils.uri import StorageOptions, Uri
+from .uri import StorageOptions, Uri
 
 
 struct DynSource(ByteSource):

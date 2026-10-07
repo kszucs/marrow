@@ -21,7 +21,6 @@ on:
       - "marrow/io/**"
       - "scripts/build_opendal_c.sh"
       - "marrow/utils/dylib.mojo"
-      - "marrow/utils/uri.mojo"
       - "marrow/parquet/reader.mojo"
       - "marrow/parquet/writer.mojo"
       - "marrow/ipc.mojo"
