@@ -272,13 +272,26 @@ class CommandResult:
         """stderr and stdout joined, for reporting a failure against a case."""
         return "\n".join(part for part in (self.stderr, self.stdout) if part.strip())
 
+    @property
+    def status(self):
+        """How the command ended. A process the OS killed -- out of memory,
+        say -- says nothing on either stream, so this is all there is."""
+        if self.timed_out:
+            return "timed out"
+        if self.returncode < 0:
+            try:
+                return f"killed by {signal.Signals(-self.returncode).name}"
+            except ValueError:
+                return f"killed by signal {-self.returncode}"
+        return f"exit code {self.returncode}"
+
     def failure(self, what):
-        """A message naming *what* failed and everything the command said.
+        """A message naming *what* failed, how, and everything the command said.
 
         Both streams, because Mojo splits its diagnostics across them: reading
         `stderr` alone gives an empty report for a build that failed on stdout.
         """
-        return f"{what}:\n{self.output}"
+        return f"{what} ({self.status}):\n{self.output}"
 
 
 class SilentProgress:

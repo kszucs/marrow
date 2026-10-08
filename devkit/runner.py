@@ -682,7 +682,7 @@ class SuiteRunner:
                 driver, binary, self._options, f"{label} ({flavor})"
             )
             if not built.ok:
-                return None, f"mojo build failed for {driver}:\n{built.stderr}"
+                return None, built.failure(f"mojo build failed for {driver}")
             return self._execute(binary, self._label(selection, "running"))
         # `mojo run` compiles and executes in one step without leaving an
         # artifact behind; compilation is what takes the minutes.
@@ -786,7 +786,7 @@ class SuiteRunner:
         try:
             return json.loads(result.stdout), result.stderr
         except ValueError:
-            return None, result.output or f"exit code {result.returncode}"
+            return None, result.output or result.status
 
     def _label(self, selection, verb="compiling"):
         noun = "benchmarks" if self._driver.kind == "bench" else "tests"

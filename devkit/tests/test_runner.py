@@ -520,6 +520,18 @@ def test_a_build_failure_fails_every_case(repo):
     assert all(r.failed and "boom" in r.error for r in results.values())
 
 
+def test_a_build_the_os_killed_says_so(repo):
+    """A compiler killed for memory prints nothing; the signal is the report.
+    Sanitized, so the unit goes through `mojo build` rather than `mojo run`."""
+    results, _ = run_suite(
+        repo,
+        two_file_selection(repo),
+        lambda _: result("", "", returncode=-9),
+        options=BuildOptions.for_tests(asan=True),
+    )
+    assert all("killed by SIGKILL" in r.error for r in results.values())
+
+
 def test_a_case_the_runner_never_reported_is_a_failure(repo):
     """Not a silent pass."""
     cases = selection(repo, marrow__tests__test_arrays=["test_ran", "test_vanished"])
