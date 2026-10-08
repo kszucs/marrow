@@ -579,18 +579,12 @@ document.addEventListener("DOMContentLoaded", function () {
   <li><a href="#writing-and-reading-a-file" id="toc-writing-and-reading-a-file" class="nav-link" data-scroll-target="#writing-and-reading-a-file">Writing and reading a file</a></li>
   <li><a href="#reading-just-the-schema" id="toc-reading-just-the-schema" class="nav-link" data-scroll-target="#reading-just-the-schema">Reading just the schema</a></li>
   <li><a href="#file-vs.-stream" id="toc-file-vs.-stream" class="nav-link" data-scroll-target="#file-vs.-stream">File vs.&nbsp;stream</a></li>
-  <li><a href="#compression" id="toc-compression" class="nav-link" data-scroll-target="#compression">Compression</a></li>
   </ul></li>
   <li><a href="#parquet" id="toc-parquet" class="nav-link" data-scroll-target="#parquet">Parquet</a>
   <ul class="collapse">
   <li><a href="#column-projection" id="toc-column-projection" class="nav-link" data-scroll-target="#column-projection">Column projection</a></li>
-  <li><a href="#string-layout" id="toc-string-layout" class="nav-link" data-scroll-target="#string-layout">String layout</a></li>
   <li><a href="#compression-and-page-version" id="toc-compression-and-page-version" class="nav-link" data-scroll-target="#compression-and-page-version">Compression and page version</a></li>
-  <li><a href="#content-defined-chunking" id="toc-content-defined-chunking" class="nav-link" data-scroll-target="#content-defined-chunking">Content-defined chunking</a></li>
-  <li><a href="#lz4-and-zstd-in-mojo" id="toc-lz4-and-zstd-in-mojo" class="nav-link" data-scroll-target="#lz4-and-zstd-in-mojo">LZ4 and ZSTD in Mojo</a></li>
   </ul></li>
-  <li><a href="#newline-delimited-json" id="toc-newline-delimited-json" class="nav-link" data-scroll-target="#newline-delimited-json">Newline-delimited JSON</a></li>
-  <li><a href="#avro" id="toc-avro" class="nav-link" data-scroll-target="#avro">Avro</a></li>
   <li><a href="#choosing-a-format" id="toc-choosing-a-format" class="nav-link" data-scroll-target="#choosing-a-format">Choosing a format</a></li>
   </ul>
 <div class="toc-actions"><ul><li><a href="https://github.com/kszucs/marrow/edit/main/docs/guide/io.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li><li><a href="https://github.com/kszucs/marrow/issues/new" class="toc-action"><i class="bi empty"></i>Report an issue</a></li></ul></div></nav>
@@ -622,13 +616,13 @@ document.addEventListener("DOMContentLoaded", function () {
 Copyright 2024 Szűcs Krisztián
 SPDX-License-Identifier: Apache-2.0
 -->
-<p>Marrow reads and writes four on-disk formats: the <strong>Arrow IPC</strong> format (both the file and stream framings) for zero-overhead round trips of the in-memory layout, <strong>Parquet</strong> for compact, columnar long-term storage, <strong>newline-delimited JSON</strong> for exchange with tools that speak JSON, and <strong>Avro</strong> container files.</p>
+<p>Marrow reads and writes two on-disk formats: the <strong>Arrow IPC</strong> format (both the file and stream framings) for zero-overhead round trips of the in-memory layout, and <strong>Parquet</strong> for compact, columnar long-term storage.</p>
 <section id="arrow-ipc" class="level2">
 <h2 class="anchored" data-anchor-id="arrow-ipc">Arrow IPC</h2>
 <p>The Arrow IPC format serialises <code>RecordBatch</code>es with essentially no transformation of the columnar buffers, so writing and reading it back is fast and lossless across every implemented type — nested, dictionary, temporal and null columns included.</p>
 <section id="writing-and-reading-a-file" class="level3">
 <h3 class="anchored" data-anchor-id="writing-and-reading-a-file">Writing and reading a file</h3>
-<div id="ac683ccc" class="cell" data-execution_count="2">
+<div id="41d03192" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> tempfile, os</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({</span>
@@ -649,7 +643,7 @@ SPDX-License-Identifier: Apache-2.0
 </div>
 </div>
 <p><code>read_ipc_file</code> returns a list of <code>RecordBatch</code>es. Round-tripping preserves nulls and types exactly:</p>
-<div id="76b4e1ac" class="cell" data-execution_count="3">
+<div id="e3fb0f7b" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null preserved:"</span>, restored[<span class="dv">0</span>].column(<span class="st">"name"</span>))</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"schema matches: "</span>, restored[<span class="dv">0</span>].schema)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -661,7 +655,7 @@ schema matches:  Schema(fields=[id: int64, name: string])</code></pre>
 <section id="reading-just-the-schema" class="level3">
 <h3 class="anchored" data-anchor-id="reading-just-the-schema">Reading just the schema</h3>
 <p>When you only need the column layout, <code>read_ipc_file_schema</code> reads the header and returns a zero-row batch:</p>
-<div id="829255d2" class="cell" data-execution_count="4">
+<div id="66f44d56" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>header <span class="op">=</span> ma.read_ipc_file_schema(path)</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(header.schema)</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"rows:"</span>, header.num_rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -705,22 +699,10 @@ rows: 0</code></pre>
 </tr>
 </tbody>
 </table>
-<div id="5210b742" class="cell" data-execution_count="5">
+<div id="9606f076" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>stream_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"people.arrows"</span>)</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>ma.write_ipc_stream(stream_path, batches<span class="op">=</span>[batch])</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.read_ipc_stream(stream_path)[<span class="dv">0</span>].to_pydict())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>{'id': [1, 2, 3, 4], 'name': ['Alice', 'Bob', None, 'Dave']}</code></pre>
-</div>
-</div>
-</section>
-<section id="compression" class="level3">
-<h3 class="anchored" data-anchor-id="compression">Compression</h3>
-<p><code>write_ipc_file</code> and <code>write_ipc_stream</code> compress each batch’s buffers with <code>compression="lz4"</code> or <code>"zstd"</code>, as PyArrow’s <code>IpcWriteOptions</code> does. The readers take the codec from the file, so reading needs no option:</p>
-<div id="85fc8fba" class="cell" data-execution_count="6">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>zstd_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"people-zstd.arrow"</span>)</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>ma.write_ipc_file(zstd_path, batches<span class="op">=</span>[batch], compression<span class="op">=</span><span class="st">"zstd"</span>)</span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.read_ipc_file(zstd_path)[<span class="dv">0</span>].to_pydict())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>{'id': [1, 2, 3, 4], 'name': ['Alice', 'Bob', None, 'Dave']}</code></pre>
 </div>
@@ -730,20 +712,20 @@ rows: 0</code></pre>
 <section id="parquet" class="level2">
 <h2 class="anchored" data-anchor-id="parquet">Parquet</h2>
 <p>Marrow ships a <strong>from-scratch</strong> Parquet reader and writer — it decodes and encodes the Parquet format itself, with no PyArrow at runtime. The Python API lives in <code>marrow.parquet</code> and mirrors <code>pyarrow.parquet</code>:</p>
-<div id="7d45c076" class="cell" data-execution_count="7">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow.parquet <span class="im">as</span> pq</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>table <span class="op">=</span> ma.table({</span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"id"</span>:     ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>]),</span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"city"</span>:   ma.array([<span class="st">"NYC"</span>, <span class="st">"LA"</span>, <span class="va">None</span>, <span class="st">"SEA"</span>]),</span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">"amount"</span>: ma.array([<span class="fl">10.0</span>, <span class="fl">20.0</span>, <span class="fl">30.0</span>, <span class="fl">40.0</span>]),</span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>})</span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>pq_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"cities.parquet"</span>)</span>
-<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>pq.write_table(table, pq_path)</span>
-<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>restored <span class="op">=</span> pq.read_table(pq_path)</span>
-<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(restored.to_pydict())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="f59e894a" class="cell" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow.parquet <span class="im">as</span> pq</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>table <span class="op">=</span> ma.table({</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"id"</span>:     ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>]),</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"city"</span>:   ma.array([<span class="st">"NYC"</span>, <span class="st">"LA"</span>, <span class="va">None</span>, <span class="st">"SEA"</span>]),</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">"amount"</span>: ma.array([<span class="fl">10.0</span>, <span class="fl">20.0</span>, <span class="fl">30.0</span>, <span class="fl">40.0</span>]),</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>pq_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"cities.parquet"</span>)</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>pq.write_table(table, pq_path)</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>restored <span class="op">=</span> pq.read_table(pq_path)</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(restored.to_pydict())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>{'id': [1, 2, 3, 4], 'city': ['NYC', 'LA', None, 'SEA'], 'amount': [10.0, 20.0, 30.0, 40.0]}</code></pre>
 </div>
@@ -751,31 +733,20 @@ rows: 0</code></pre>
 <section id="column-projection" class="level3">
 <h3 class="anchored" data-anchor-id="column-projection">Column projection</h3>
 <p>Pass <code>columns=</code> to read only a subset of top-level columns (in the given order) — the reader skips the others entirely:</p>
-<div id="b9767bc0" class="cell" data-execution_count="8">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>subset <span class="op">=</span> pq.read_table(pq_path, columns<span class="op">=</span>[<span class="st">"city"</span>, <span class="st">"id"</span>])</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(subset.column_names)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="b75ab42c" class="cell" data-execution_count="7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>subset <span class="op">=</span> pq.read_table(pq_path, columns<span class="op">=</span>[<span class="st">"city"</span>, <span class="st">"id"</span>])</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(subset.column_names)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>['city', 'id']</code></pre>
-</div>
-</div>
-</section>
-<section id="string-layout" class="level3">
-<h3 class="anchored" data-anchor-id="string-layout">String layout</h3>
-<p>A Parquet <code>BYTE_ARRAY</code> column has no layout of its own, so the reader picks one. <code>binary_type=</code> names the type a column <em>without</em> a logical annotation decodes to, and a column annotated as a string takes the matching string layout — the same knob as PyArrow’s. With <code>ma.binary_view()</code> the rows point into the decoded page rather than being copied out of it:</p>
-<div id="ca19b83a" class="cell" data-execution_count="9">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>views <span class="op">=</span> pq.read_table(pq_path, binary_type<span class="op">=</span>ma.binary_view())</span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(views.schema.field(<span class="st">"city"</span>).<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>string_view</code></pre>
 </div>
 </div>
 </section>
 <section id="compression-and-page-version" class="level3">
 <h3 class="anchored" data-anchor-id="compression-and-page-version">Compression and page version</h3>
 <p><code>write_table</code> accepts a <code>compression</code> codec and a Parquet data-page version:</p>
-<div id="49699984" class="cell" data-execution_count="10">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>pq.write_table(table, pq_path, compression<span class="op">=</span><span class="st">"zstd"</span>, data_page_version<span class="op">=</span><span class="st">"2.0"</span>)</span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pq.read_table(pq_path).num_rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="34806b6c" class="cell" data-execution_count="8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>pq.write_table(table, pq_path, compression<span class="op">=</span><span class="st">"zstd"</span>, data_page_version<span class="op">=</span><span class="st">"2.0"</span>)</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pq.read_table(pq_path).num_rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>4</code></pre>
 </div>
@@ -799,14 +770,8 @@ rows: 0</code></pre>
 <td><code>"1.0"</code>, <code>"2.0"</code></td>
 <td><code>"1.0"</code></td>
 </tr>
-<tr class="odd">
-<td><code>native_codecs</code></td>
-<td><code>True</code>, <code>False</code></td>
-<td><code>True</code></td>
-</tr>
 </tbody>
 </table>
-<p><code>"lz4"</code> writes Parquet’s <code>LZ4_RAW</code> codec, as PyArrow’s does. The reader also decodes the gzip, brotli and Hadoop-framed <code>LZ4</code> pages other writers produce.</p>
 <p>The writer also emits column statistics (min/max/null/distinct counts) and a page index, so readers on the other side can prune row groups and pages. Bloom filters are implemented but <strong>off by default</strong> and not currently reachable from Python. <code>write_table</code> accepts any Arrow-C-stream object too, so a PyArrow table can be written directly.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
@@ -821,68 +786,6 @@ Note
 <p>The Mojo API mirrors the Python one — <code>from marrow.parquet import read_table, write_table</code> operate on a marrow <code>Table</code>, and the <code>marrow/parquet</code> package also exposes lower-level metadata, statistics, page-index and bloom-filter readers.</p>
 </div>
 </div>
-</section>
-<section id="content-defined-chunking" class="level3">
-<h3 class="anchored" data-anchor-id="content-defined-chunking">Content-defined chunking</h3>
-<p>A Parquet writer normally closes a data page once it reaches a fixed size, so inserting or deleting a few rows moves every page boundary after the edit, and every page from there on changes. With <code>use_content_defined_chunking=True</code> the boundaries are placed where a rolling hash over each column’s values says instead. An edit then changes only the pages around it, and the rest of the file stays byte-identical to the previous version. A content-addressable store such as <a href="https://huggingface.co/docs/hub/xet/deduplication">Xet</a>, the storage layer of the Hugging Face Hub, uploads and keeps only the pages that changed. The Hugging Face blog post <a href="https://huggingface.co/blog/parquet-cdc">Parquet Content-Defined Chunking</a> explains the technique and measures the savings on real datasets.</p>
-<div id="09aee249" class="cell" data-execution_count="11">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>cdc_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"cities-cdc.parquet"</span>)</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>pq.write_table(table, cdc_path, use_content_defined_chunking<span class="op">=</span><span class="va">True</span>)</span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>pq.write_table(</span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    table,</span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>    cdc_path,</span>
-<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    use_content_defined_chunking<span class="op">=</span>{</span>
-<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>        <span class="st">"min_chunk_size"</span>: <span class="dv">128</span> <span class="op">*</span> <span class="dv">1024</span>,</span>
-<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">"max_chunk_size"</span>: <span class="dv">512</span> <span class="op">*</span> <span class="dv">1024</span>,</span>
-<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>        <span class="st">"norm_level"</span>: <span class="dv">1</span>,</span>
-<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>    },</span>
-<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pq.read_table(cdc_path).num_rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>4</code></pre>
-</div>
-</div>
-<p><code>True</code> uses the defaults; a dict must name both sizes and may add <code>norm_level</code>:</p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 21%">
-<col style="width: 39%">
-<col style="width: 39%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Key</th>
-<th>Meaning</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>min_chunk_size</code></td>
-<td>bytes a page holds before a boundary may be placed</td>
-<td>262,144 (256 KiB)</td>
-</tr>
-<tr class="even">
-<td><code>max_chunk_size</code></td>
-<td>bytes at which a boundary is forced</td>
-<td>1,048,576 (1 MiB)</td>
-</tr>
-<tr class="odd">
-<td><code>norm_level</code></td>
-<td>above 0 finds boundaries more readily, centring page sizes on the average at the cost of more, smaller pages; below 0 the reverse</td>
-<td>0</td>
-</tr>
-</tbody>
-</table>
-<p>The sizes count the column’s logical content, its definition and repetition levels and its values, before encoding and compression. Only the writer changes: any Parquet reader reads the file as usual.</p>
-<p>The option, its defaults and its page boundaries are those of PyArrow’s <a href="https://arrow.apache.org/docs/python/parquet.html#content-defined-chunking"><code>use_content_defined_chunking</code></a>, which marrow’s tests check page by page against Arrow C++. As there, each chunk is still split every 20,000 rows. One difference remains: Arrow C++ also closes a page once its encoded size grows past a limit, and marrow, which picks boundaries before encoding, does not. Very wide values with a large <code>max_chunk_size</code> can therefore give larger pages than PyArrow would.</p>
-<p>Deduplication only finds what stayed the same, so keep the other write options, <code>compression</code> and <code>data_page_version</code>, the same from one version of a file to the next. The Hub’s <a href="https://huggingface.co/docs/hub/datasets-pyarrow#leverage-xet-deduplication-for-parquet">PyArrow guide</a> shows what an edit then uploads: a new column uploads only that column’s chunks, and an added, edited or deleted row about one chunk per column. It also recommends a page index, which marrow always writes. Hugging Face’s <a href="https://github.com/huggingface/dataset-dedupe-estimator">dataset-dedupe-estimator</a> estimates how well a set of files deduplicates.</p>
-<p>In Mojo, <code>write_table</code> takes <code>content_defined_chunking=ContentDefinedChunking(min_chunk_size=..., max_chunk_size=..., norm_level=...)</code>, both from <code>marrow.parquet</code>.</p>
-</section>
-<section id="lz4-and-zstd-in-mojo" class="level3">
-<h3 class="anchored" data-anchor-id="lz4-and-zstd-in-mojo">LZ4 and ZSTD in Mojo</h3>
-<p>LZ4 and ZSTD are implemented in Mojo, for Parquet pages and IPC bodies alike, on the way in and on the way out. <code>native_codecs=False</code> hands them to liblz4 and libzstd instead; the compressed bytes are the same, against liblz4 1.10.0 and libzstd 1.5.7. Every Parquet and IPC read and write function takes the switch. Snappy, gzip and brotli always go through their C libraries, which marrow loads when a file first needs them.</p>
 <div class="callout callout-style-default callout-tip callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -893,106 +796,16 @@ Tip
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>To read many files — a directory, a glob, an Iceberg table, or a Hugging Face Hub dataset — as one lazy table, see <a href="../guide/datasets.html">Datasets</a>.</p>
+<p>To read many files — a directory, a glob, or a Hugging Face Hub dataset — as one lazy table, see <a href="../guide/datasets.html">Datasets</a>.</p>
 </div>
 </div>
 </section>
-</section>
-<section id="newline-delimited-json" class="level2">
-<h2 class="anchored" data-anchor-id="newline-delimited-json">Newline-delimited JSON</h2>
-<p><code>marrow.json</code> mirrors <code>pyarrow.json</code>: one JSON object per line, read into a <code>Table</code> and written from one. Here it writes the Parquet example’s table and reads it back:</p>
-<div id="8edc457e" class="cell" data-execution_count="12">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow.json <span class="im">as</span> mj</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>json_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"cities.jsonl"</span>)</span>
-<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>mj.write_json(table, json_path)</span>
-<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">open</span>(json_path).read())</span>
-<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>from_json <span class="op">=</span> mj.read_json(json_path)</span>
-<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(from_json.schema)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>{"id":1,"city":"NYC","amount":10.0}
-{"id":2,"city":"LA","amount":20.0}
-{"id":3,"city":null,"amount":30.0}
-{"id":4,"city":"SEA","amount":40.0}
-
-Schema(fields=[id: int64, city: string, amount: float64])</code></pre>
-</div>
-</div>
-<p>Types are inferred as Arrow C++ infers them: integers widen to <code>double</code> when a column also holds fractions, ISO-8601 strings become <code>timestamp[s]</code>, objects become structs and arrays lists. Inference reads the whole file. To fix the columns instead, pass a schema:</p>
-<div id="33e28c83" class="cell" data-execution_count="13">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>fixed <span class="op">=</span> mj.read_json(</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    json_path,</span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    parse_options<span class="op">=</span>mj.ParseOptions(</span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>        explicit_schema<span class="op">=</span>ma.schema([ma.field(<span class="st">"id"</span>, ma.int32()), ma.field(<span class="st">"city"</span>, ma.string())]),</span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>        unexpected_field_behavior<span class="op">=</span><span class="st">"ignore"</span>,</span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    ),</span>
-<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(fixed.schema)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>Schema(fields=[id: int32, city: string])</code></pre>
-</div>
-</div>
-<p><code>unexpected_field_behavior</code> decides what a key outside the schema does: <code>"infer"</code> adds a column for it, <code>"ignore"</code> drops it and <code>"error"</code> raises. <code>mj.open_json</code> reads the file a block at a time, one <code>RecordBatch</code> per block, with the schema fixed after the first; <code>ReadOptions(block_size=...)</code> sets the block size, 1 MiB by default:</p>
-<div id="04906651" class="cell" data-execution_count="14">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> chunk <span class="kw">in</span> mj.open_json(json_path):</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(chunk.num_rows, chunk.column_names)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>4 ['id', 'city', 'amount']</code></pre>
-</div>
-</div>
-<p><code>write_json</code> writes keys in schema order, nulls as <code>null</code>, timestamps and dates as ISO-8601 strings, and a NaN or an infinity as <code>null</code>. It accepts any Arrow-C-stream object, so a PyArrow table can be written directly.</p>
-<p>Where marrow differs from PyArrow: the reader is single-threaded and accepts <code>use_threads</code> only to ignore it, a row longer than <code>block_size</code> grows the read instead of failing, a bare <code>NaN</code> is refused as the non-JSON it is, and a file of empty objects reads as zero rows. <code>newlines_in_values=True</code> is not supported.</p>
-<p><code>ma.read_json</code> is the <a href="../guide/queries-lazy.html">lazy</a> counterpart, a scan the query verbs compose with, as <code>read_parquet</code> is. It infers the schema from the first block only, so pass <code>schema=</code> when a later row may add a key or widen a type.</p>
-</section>
-<section id="avro" class="level2">
-<h2 class="anchored" data-anchor-id="avro">Avro</h2>
-<p><code>marrow.avro</code> reads and writes Avro object container files, the format Iceberg keeps its manifests in:</p>
-<div id="5232966c" class="cell" data-execution_count="15">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow.avro <span class="im">as</span> mavro</span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>avro_path <span class="op">=</span> os.path.join(tempfile.mkdtemp(), <span class="st">"cities.avro"</span>)</span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>mavro.write_table(table, avro_path, codec<span class="op">=</span><span class="st">"snappy"</span>)</span>
-<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mavro.read_table(avro_path, columns<span class="op">=</span>[<span class="st">"city"</span>, <span class="st">"id"</span>]).to_pydict())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>{'city': ['NYC', 'LA', None, 'SEA'], 'id': [1, 2, 3, 4]}</code></pre>
-</div>
-</div>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 37%">
-<col style="width: 29%">
-<col style="width: 33%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Argument</th>
-<th>Values</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>codec</code> (<code>write_table</code>)</td>
-<td><code>"deflate"</code>, <code>"snappy"</code>, <code>"zstandard"</code>, <code>"null"</code></td>
-<td><code>"deflate"</code></td>
-</tr>
-<tr class="even">
-<td><code>columns</code> (<code>read_table</code>)</td>
-<td>top-level field names, in the order wanted</td>
-<td>every field</td>
-</tr>
-</tbody>
-</table>
-<p>A file is read with the schema its writer recorded; there is no reader schema to resolve it against. Avro logical types become the matching Arrow types, a union of <code>null</code> and one type becomes a nullable column, and Avro’s field ids (<code>field-id</code>, and an array’s <code>element-id</code>, a map’s <code>key-id</code> and <code>value-id</code>) become <code>field_id</code> metadata on the Arrow fields. Header metadata outside <code>avro.*</code> becomes the table schema’s metadata.</p>
 </section>
 <section id="choosing-a-format" class="level2">
 <h2 class="anchored" data-anchor-id="choosing-a-format">Choosing a format</h2>
 <ul>
 <li><strong>Arrow IPC</strong> — you want the fastest possible read/write and are staying inside the Arrow ecosystem. The bytes on disk are the columnar buffers.</li>
 <li><strong>Parquet</strong> — you want compression, column pruning and row-group / page statistics for archival or interchange with data-lake tooling.</li>
-<li><strong>Newline-delimited JSON</strong> — another tool produces or consumes JSON, or a person needs to read the file.</li>
-<li><strong>Avro</strong> — you exchange row-oriented records with an Avro-based system, or read the manifests of an Iceberg table.</li>
 </ul>
 
 

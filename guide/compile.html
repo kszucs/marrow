@@ -632,8 +632,8 @@ Note
 <section id="why-compile-a-query" class="level2">
 <h2 class="anchored" data-anchor-id="why-compile-a-query">Why compile a query</h2>
 <ul>
-<li><strong>The query is the program.</strong> Column types are fixed when the query is compiled, so <code>col("amount", int64) &gt;= param("min-amount", int64)</code> fuses into a single loop, and the executable links the kernels this query uses and nothing else. The example below is 3.3 MB of machine code.</li>
-<li><strong>Far smaller than an interpreter.</strong> The same <code>GROUP BY</code> compiled this way is 1.77 MB of machine code; resolving its aggregates by name at run time, as a dynamic frontend must, takes 17.0 MB, <strong>9.6× as much</strong>. See <a href="../reference/architecture.html#why-the-compiled-binary-is-small">why the compiled binary is small</a>.</li>
+<li><strong>The query is the program.</strong> Column types are fixed when the query is compiled, so <code>col("amount", int64) &gt;= param("min-amount", int64)</code> fuses into a single loop, and the executable links the kernels this query uses and nothing else. The example below is 3.0 MB of machine code.</li>
+<li><strong>Far smaller than an interpreter.</strong> The same <code>GROUP BY</code> compiled this way is 1.45 MB of machine code; resolving its aggregates by name at run time, as a dynamic frontend must, takes 13.2 MB, <strong>9.1× as much</strong>. See <a href="../reference/architecture.html#why-the-compiled-binary-is-small">why the compiled binary is small</a>.</li>
 <li><strong>Values change, code does not.</strong> Parameters are read when the program starts, so a daily report is one binary run against a different file and threshold each day.</li>
 <li><strong>A command line for free.</strong> <code>--help</code>, <code>--describe</code>, output formats and error messages come from the query itself; there is no argument parsing to write.</li>
 <li><strong>Easy to ship.</strong> <code>--bundle</code> gathers the executable and the libraries it loads into one directory that runs without pixi or a marrow install.</li>

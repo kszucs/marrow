@@ -140,11 +140,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
 <link rel="stylesheet" href="../theme/marrow.css">
 <meta property="og:title" content="Datasets – Marrow">
-<meta property="og:description" content="Many files, an Iceberg table, or a Hugging Face Hub dataset, as one lazy table">
+<meta property="og:description" content="Many files, or a Hugging Face Hub dataset, as one lazy table">
 <meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta property="og:site_name" content="Marrow">
 <meta name="twitter:title" content="Datasets – Marrow">
-<meta name="twitter:description" content="Many files, an Iceberg table, or a Hugging Face Hub dataset, as one lazy table">
+<meta name="twitter:description" content="Many files, or a Hugging Face Hub dataset, as one lazy table">
 <meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -579,7 +579,6 @@ document.addEventListener("DOMContentLoaded", function () {
   <li><a href="#patterns" id="toc-patterns" class="nav-link" data-scroll-target="#patterns">Patterns</a></li>
   </ul></li>
   <li><a href="#hugging-face-hub-datasets" id="toc-hugging-face-hub-datasets" class="nav-link" data-scroll-target="#hugging-face-hub-datasets">Hugging Face Hub datasets</a></li>
-  <li><a href="#iceberg-tables" id="toc-iceberg-tables" class="nav-link" data-scroll-target="#iceberg-tables">Iceberg tables</a></li>
   <li><a href="#in-mojo" id="toc-in-mojo" class="nav-link" data-scroll-target="#in-mojo">In Mojo</a></li>
   <li><a href="#limits" id="toc-limits" class="nav-link" data-scroll-target="#limits">Limits</a></li>
   </ul>
@@ -592,7 +591,7 @@ document.addEventListener("DOMContentLoaded", function () {
 <header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../guide/datasets.html">Datasets</a></li></ol></nav>
 <div class="quarto-title">
 <h1 class="title">Datasets</h1>
-<p class="subtitle lead">Many files, an Iceberg table, or a Hugging Face Hub dataset, as one lazy table</p>
+<p class="subtitle lead">Many files, or a Hugging Face Hub dataset, as one lazy table</p>
 </div>
 
 
@@ -617,7 +616,7 @@ SPDX-License-Identifier: Apache-2.0
 <section id="files-of-one-format" class="level2">
 <h2 class="anchored" data-anchor-id="files-of-one-format">Files of one format</h2>
 <p>Name the format — <code>"parquet"</code>, <code>"json"</code> (newline-delimited) or <code>"arrow"</code> (the IPC file format) — and the files with <code>data_files</code>. A pattern or a list of them is the <code>train</code> split, as in <code>datasets</code>; a mapping names each split.</p>
-<div id="2b7041c1" class="cell" data-execution_count="2">
+<div id="fa5eead8" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> os, tempfile</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow.parquet <span class="im">as</span> pq</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.datasets <span class="im">import</span> load_dataset</span>
@@ -636,7 +635,7 @@ SPDX-License-Identifier: Apache-2.0
 <pre><code>[0, 1, 2, 3, 4, 5, 6, 7, 8]</code></pre>
 </div>
 </div>
-<div id="ed3b0641" class="cell" data-execution_count="3">
+<div id="4b743558" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>files <span class="op">=</span> {</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"train"</span>: os.path.join(data, <span class="st">"train-*.parquet"</span>),</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"test"</span>: os.path.join(data, <span class="st">"test-*.parquet"</span>),</span>
@@ -647,12 +646,12 @@ SPDX-License-Identifier: Apache-2.0
 </div>
 </div>
 <p>The result is an ordinary plan over one scan of every file, so the verbs, the optimizer and the engine treat it like any other:</p>
-<div id="e310ab62" class="cell" data-execution_count="4">
+<div id="3a4d1f18" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>query <span class="op">=</span> train.<span class="bu">filter</span>(col(<span class="st">"id"</span>) <span class="op">&gt;=</span> <span class="dv">5</span>).optimize()</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(query.explain())</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(query.collect().column(<span class="st">"id"</span>).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>Filter(ParquetScan(/tmp/tmp7xri9dnb/train-0.parquet, /tmp/tmp7xri9dnb/train-1.parquet, /tmp/tmp7xri9dnb/train-2.parquet) pruned by 1, ge(id, 5))
+<pre><code>Filter(ParquetScan(/tmp/tmpu4kaxumv/train-0.parquet, /tmp/tmpu4kaxumv/train-1.parquet, /tmp/tmpu4kaxumv/train-2.parquet) pruned by 1, ge(id, 5))
 [5, 6, 7, 8]</code></pre>
 </div>
 </div>
@@ -696,7 +695,7 @@ SPDX-License-Identifier: Apache-2.0
 <section id="hugging-face-hub-datasets" class="level2">
 <h2 class="anchored" data-anchor-id="hugging-face-hub-datasets">Hugging Face Hub datasets</h2>
 <p>Pass a dataset’s <code>owner/name</code> instead of a format. Its <strong>configs</strong> and their splits come from the dataset card’s <code>configs:</code> block, or, when the card has none, from the file names the way <code>datasets</code> infers them (<code>train</code>, <code>validation</code>/<code>valid</code>/<code>dev</code>/<code>val</code>, <code>test</code>/<code>eval</code>):</p>
-<div id="6d368439" class="cell" data-execution_count="5">
+<div id="2f10cce5" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.datasets <span class="im">import</span> (</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    get_dataset_config_names,</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    get_dataset_split_names,</span>
@@ -710,7 +709,7 @@ SPDX-License-Identifier: Apache-2.0
 <span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>gsm.<span class="bu">filter</span>(col(<span class="st">"question"</span>).char_length() <span class="op">&gt;</span> <span class="dv">300</span>).select(<span class="st">"question"</span>).collect()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>A split stored as Parquet, JSON Lines or Arrow is read from its own files, through <code>hf://</code>, fetching only the column chunks the query needs. One stored otherwise — CSV, a <code>.json</code> document, compressed files, images — or with no data files at all is read from the Parquet copy the Hub converts every public dataset into, which exists for the default branch:</p>
-<div id="438e5298" class="cell" data-execution_count="6">
+<div id="2de55023" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>iris <span class="op">=</span> load_dataset(<span class="st">"scikit-learn/iris"</span>)           <span class="co"># Iris.csv, read as Parquet</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>iris.collect().num_rows                            <span class="co"># 150</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
@@ -729,42 +728,6 @@ Note
 </div>
 </div>
 </section>
-<section id="iceberg-tables" class="level2">
-<h2 class="anchored" data-anchor-id="iceberg-tables">Iceberg tables</h2>
-<p><code>ma.read_iceberg</code> scans an <a href="https://iceberg.apache.org/">Apache Iceberg</a> table, format version 1 or 2. Name the table’s <code>metadata.json</code>, or its directory, in which case <code>metadata/version-hint.text</code> picks the version, or the newest metadata file when there is no hint. Opening the table reads its metadata; the manifests and the data files are read when the plan runs.</p>
-<p>The examples read the small tables marrow’s tests use. This one is partitioned by <code>category</code>, by the day of <code>ts</code> and by a bucket of <code>id</code>:</p>
-<div id="66a7f2ef" class="cell" data-execution_count="7">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> lit</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>iceberg_data <span class="op">=</span> <span class="st">"../../marrow/iceberg/tests/data"</span></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>events <span class="op">=</span> ma.read_iceberg(os.path.join(iceberg_data, <span class="st">"partitioned"</span>))</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(events.schema)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>Schema(fields=[id: int64 not null {PARQUET:field_id: 1}, category: string {PARQUET:field_id: 2}, ts: timestamp[us] {PARQUET:field_id: 3}, value: float64 {PARQUET:field_id: 4}])</code></pre>
-</div>
-</div>
-<p>A filter skips every data file whose manifest bounds cannot match, once the plan is optimized. The printed plan says how many files it pruned:</p>
-<div id="3f26c566" class="cell" data-execution_count="8">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>query <span class="op">=</span> events.<span class="bu">filter</span>(col(<span class="st">"id"</span>) <span class="op">&gt;</span> lit(<span class="dv">9</span>)).optimize()</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(query.explain())</span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">sorted</span>(query.collect().column(<span class="st">"id"</span>).to_pylist()))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>Filter(IcebergScan(../../marrow/iceberg/tests/data/partitioned@5279110126697455324) pruned by 1, gt(id, 9))
-[10, 11]</code></pre>
-</div>
-</div>
-<p><code>snapshot_id=</code> reads an older snapshot, in the schema it was written with. Columns are matched by Iceberg field id, not by name, so renamed, widened, added and dropped columns read correctly in every snapshot. This table changed its schema between its two snapshots:</p>
-<div id="faa4ffda" class="cell" data-execution_count="9">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>evolved <span class="op">=</span> os.path.join(iceberg_data, <span class="st">"evolved"</span>)</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.read_iceberg(evolved, snapshot_id<span class="op">=</span><span class="dv">2478918412197780224</span>).schema)</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.read_iceberg(evolved).schema)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>Schema(fields=[a: int32 {PARQUET:field_id: 1}, b: float32 {PARQUET:field_id: 2}, c: string {PARQUET:field_id: 3}, gone: string {PARQUET:field_id: 4}, s: struct&lt;x: int32 {PARQUET:field_id: 6}, y: string {PARQUET:field_id: 7}&gt; {PARQUET:field_id: 5}])
-Schema(fields=[a: int64 {PARQUET:field_id: 1}, b: float64 {PARQUET:field_id: 2}, c2: string {PARQUET:field_id: 3}, s: struct&lt;x: int32 {PARQUET:field_id: 6}, y: string {PARQUET:field_id: 7}, z: float64 {PARQUET:field_id: 9}&gt; {PARQUET:field_id: 5}, e: int64 {PARQUET:field_id: 8}])</code></pre>
-</div>
-</div>
-<p>Every partition transform is understood when pruning, position delete files are applied, and a data file written without field ids gets them from the table’s name mapping. For a table in an object store, pass the backend’s settings as <code>storage_options</code> (credentials, region, endpoint); the environment fills in what they leave unset. A table moved since it was written is read from its new location. Like any lazy table, the result can be a table in <a href="../guide/queries-lazy.html#sql"><code>ma.sql</code></a>.</p>
-</section>
 <section id="in-mojo" class="level2">
 <h2 class="anchored" data-anchor-id="in-mojo">In Mojo</h2>
 <p>The same entry point returns a <code>DynRelation</code>. <code>HubDataset</code> is what the Hub says about a dataset, <code>DataFiles</code> the patterns of each split, and the patterns themselves are <code>marrow.io.Glob</code>, usable on their own to match or expand paths.</p>
@@ -772,32 +735,31 @@ Schema(fields=[a: int64 {PARQUET:field_id: 1}, b: float64 {PARQUET:field_id: 2},
 <div class="code-with-filename-file">
 <pre><strong>docs/snippets/load_dataset.mojo</strong></pre>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15" data-filename="docs/snippets/load_dataset.mojo"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="do">"""A Hub dataset's split and a glob of local files, each as a plan.</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="do">Compiled by `pixi run docs_check`; included by docs/guide/datasets.qmd.</span></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="do">"""</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.datasets <span class="im">import</span> <span class="dt">DataFiles</span>, <span class="dt">HubDataset</span>, load_dataset</span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64</span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.expr <span class="im">import</span> col, lit</span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">main</span>() <span class="kw">raises</span><span class="op">:</span></span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>    <span class="co"># What the Hub says about a dataset: its configs, and each one's splits.</span></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> hub <span class="op">=</span> <span class="dt">HubDataset</span>.<span class="fu">fetch</span>(<span class="st">"openai/gsm8k"</span>)</span>
-<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(hub)</span>
-<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>    <span class="co"># One split of one config, as a scan over every file in it.</span></span>
-<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> gsm <span class="op">=</span> <span class="fu">load_dataset</span>(<span class="st">"openai/gsm8k"</span>, <span class="st">"main"</span>, split<span class="op">=</span><span class="st">"test"</span>)</span>
-<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(gsm.<span class="fu">limit</span>(<span class="dv">3</span>).<span class="fu">execute</span>())</span>
-<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Files of one format, named by a glob.</span></span>
-<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> orders <span class="op">=</span> <span class="fu">load_dataset</span>(</span>
-<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>        <span class="st">"parquet"</span>, <span class="fu">DataFiles</span>([<span class="st">"data/orders-*.parquet"</span>])</span>
-<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>    ).<span class="fu">filter</span>(<span class="fu">col</span>(<span class="st">"amount"</span>, int64) <span class="op">&gt;</span> <span class="fu">lit</span>(<span class="dv">100</span>, int64))</span>
-<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(orders.<span class="fu">execute</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9" data-filename="docs/snippets/load_dataset.mojo"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="do">"""A Hub dataset's split and a glob of local files, each as a plan.</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="do">Compiled by `pixi run docs_check`; included by docs/guide/datasets.qmd.</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="do">"""</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.datasets <span class="im">import</span> <span class="dt">DataFiles</span>, <span class="dt">HubDataset</span>, load_dataset</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.expr <span class="im">import</span> col, lit</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">main</span>() <span class="kw">raises</span><span class="op">:</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    <span class="co"># What the Hub says about a dataset: its configs, and each one's splits.</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> hub <span class="op">=</span> <span class="dt">HubDataset</span>.<span class="fu">fetch</span>(<span class="st">"openai/gsm8k"</span>)</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(hub)</span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="co"># One split of one config, as a scan over every file in it.</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> gsm <span class="op">=</span> <span class="fu">load_dataset</span>(<span class="st">"openai/gsm8k"</span>, <span class="st">"main"</span>, split<span class="op">=</span><span class="st">"test"</span>)</span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(gsm.<span class="fu">limit</span>(<span class="dv">3</span>).<span class="fu">execute</span>())</span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Files of one format, named by a glob.</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> orders <span class="op">=</span> <span class="fu">load_dataset</span>(</span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>        <span class="st">"parquet"</span>, <span class="fu">DataFiles</span>([<span class="st">"data/orders-*.parquet"</span>])</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>    ).<span class="fu">filter</span>(<span class="fu">col</span>(<span class="st">"amount"</span>, int64) <span class="op">&gt;</span> <span class="fu">lit</span>(<span class="dv">100</span>, int64))</span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(orders.<span class="fu">execute</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>An Iceberg table is <code>scan_iceberg(path, snapshot_id)</code> from <code>marrow.expr</code>, which returns the same plan as <code>ma.read_iceberg</code>; it also takes an already opened <code>IcebergTable</code>.</p>
 </section>
 <section id="limits" class="level2">
 <h2 class="anchored" data-anchor-id="limits">Limits</h2>
@@ -805,7 +767,6 @@ Schema(fields=[a: int64 {PARQUET:field_id: 1}, b: float64 {PARQUET:field_id: 2},
 <li>A remote Parquet scan fetches one row group per request, one after another, so a file written with many small row groups reads slowly over the network.</li>
 <li>A config is resolved when the plan is built; it is not a parameter of the plan.</li>
 <li>Hive-style <code>key=value/</code> directories do not become columns.</li>
-<li>Iceberg tables are read only. Their data files must be Parquet, equality delete files are not applied yet (reading a data file that has them raises), and format version 3 is refused, as are the <code>variant</code>, <code>geometry</code> and <code>geography</code> types.</li>
 </ul>
 
 

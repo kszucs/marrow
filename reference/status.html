@@ -579,23 +579,21 @@ SPDX-License-Identifier: Apache-2.0
 <p>marrow is <strong>experimental</strong>. Both Apache Arrow and Mojo are moving targets. This page lists what works and what does not, with a pointer to the source each line comes from, so it can be checked rather than taken on trust.</p>
 <section id="how-correctness-is-measured" class="level2">
 <h2 class="anchored" data-anchor-id="how-correctness-is-measured">How correctness is measured</h2>
-<p>Four checks, none of which grades marrow against itself:</p>
+<p>Two independent checks, neither of which grades marrow against itself:</p>
 <ul>
-<li><strong>The golden corpus</strong> — <code>golden/</code>, <strong>291 query cases</strong>. Each records a SQL query, the answer <strong>generated from DuckDB</strong>, and the marrow spelling. The expectations are <em>never</em> regenerated from marrow. The corpus carries <strong>one <code>xfail</code></strong>, a divergence chosen on purpose: a decimal divided by an integer stays an exact decimal, as in Arrow C++, where DuckDB answers a <code>DOUBLE</code>. Every other case that compiles, passes.</li>
+<li><strong>The golden corpus</strong> — <code>golden/</code>, <strong>285 query cases</strong>. Each records a SQL query, the answer <strong>generated from DuckDB</strong>, and the marrow spelling. The expectations are <em>never</em> regenerated from marrow. The corpus currently carries <strong>zero <code>xfail</code>s</strong>: every case that compiles, passes.</li>
 <li><strong>Arrow archery integration</strong> — the official cross-implementation suite, run against the <strong>C++, Rust and Go</strong> implementations in both directions (<code>pixi run -e integration integration</code>), skipping the layouts marrow does not implement: unions, list views, run-end encoding and extension types. Marrow reads the suite’s JSON, writes and reads IPC, and exports and imports C Data itself; pyarrow only compares the results. See <a href="../reference/compliance.html">Spec compliance</a> for what is checked, type by type.</li>
-<li><strong>Differential property tests</strong> — <code>python/marrow/tests/test_properties_*.py</code> draw random, often sliced, PyArrow inputs with Hypothesis. Every compute kernel must answer exactly as <code>pyarrow.compute</code> does, and raise where it raises. Parquet and IPC files must round-trip with PyArrow writing, reading, or both. A malformed C Data export must be refused, never crash the process. Each divergence they find is pinned as a strict <code>xfail</code> with its minimal input.</li>
-<li><strong>Fuzzing</strong> — libFuzzer harnesses for IPC streams and files, Parquet footers, whole Parquet files and page indexes, the Mojo Snappy codec and the page codecs. The corpus records a verdict per input, and <code>pixi run -e dev fuzz-replay</code> replays it, together with the inputs that once crashed Arrow C++’s own fuzzers.</li>
 </ul>
 </section>
 <section id="known-wrong-answers" class="level2">
 <h2 class="anchored" data-anchor-id="known-wrong-answers">Known-wrong answers</h2>
 <p><strong>Integer arithmetic overflow wraps where SQL raises.</strong> The <code>edges</code> fixture carries int64 max/min against the day a checked mode exists; the machinery is already in <code>cast</code>, which takes <code>safe</code> as a comptime parameter.</p>
-<p>Division by zero is no longer one of these: floats answer <code>inf</code>, <code>-inf</code> and <code>nan</code>, and <code>mc.divide</code> raises on an integer zero divisor as <code>pyarrow.compute.divide</code> does.</p>
+<p>Division by zero is no longer one of these: floats answer <code>inf</code>, <code>-inf</code> and <code>nan</code>, and <code>pc.divide</code> raises on an integer zero divisor as <code>pyarrow.compute.divide</code> does.</p>
 <p>One latent trap is worth knowing too: <code>count(*)</code> desugars to <code>count(lit(1))</code>, whose referenced-column set is empty, so anything that prunes by “what does this read” would prune every column. Column pruning handles it by never narrowing a source to zero columns.</p>
 </section>
 <section id="what-the-corpus-measures-as-missing" class="level2">
 <h2 class="anchored" data-anchor-id="what-the-corpus-measures-as-missing">What the corpus measures as missing</h2>
-<p>51 of the 291 cases carry <code>-- skip mojo</code>: marrow has no API for them, so the SQL and the DuckDB answer are recorded and the marrow body is a <em>proposal</em> rather than a verified spelling.</p>
+<p>51 of the 286 cases carry <code>-- skip mojo</code>: marrow has no API for them, so the SQL and the DuckDB answer are recorded and the marrow body is a <em>proposal</em> rather than a verified spelling.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 57%">
@@ -610,7 +608,7 @@ SPDX-License-Identifier: Apache-2.0
 <tbody>
 <tr class="odd">
 <td style="text-align: right;">12</td>
-<td>aggregates — median, quantile, mode, arg_min/arg_max, ordered first/last, string_agg, corr/covar, skewness/kurtosis, bitwise, <code>bool_and</code>/<code>bool_or</code>, multi-column <code>count(DISTINCT)</code>, <code>sum(DISTINCT)</code></td>
+<td>aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness, <code>bool_and</code>/<code>bool_or</code></td>
 </tr>
 <tr class="even">
 <td style="text-align: right;">9</td>
@@ -625,20 +623,20 @@ SPDX-License-Identifier: Apache-2.0
 <td>math — greatest/least, rounding to digits, bitwise operators, gcd/lcm, signbit, trigonometry</td>
 </tr>
 <tr class="odd">
-<td style="text-align: right;">4</td>
-<td>joins — cross, non-equi, asof, an outer join’s residual <code>ON</code> condition</td>
+<td style="text-align: right;">2</td>
+<td>string — concat_ws, null-skipping <code>concat</code></td>
 </tr>
 <tr class="even">
-<td style="text-align: right;">3</td>
-<td>GROUPING SETS / ROLLUP / CUBE</td>
+<td style="text-align: right;">4</td>
+<td>joins — cross, non-equi, asof</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;">3</td>
-<td>filters — <code>IN</code> over a literal list, SQL <code>NOT IN</code> null semantics, <code>IS DISTINCT FROM</code></td>
+<td>GROUPING SETS / ROLLUP / CUBE</td>
 </tr>
 <tr class="even">
-<td style="text-align: right;">2</td>
-<td>string — concat_ws, null-skipping <code>concat</code></td>
+<td style="text-align: right;">3</td>
+<td>filters — SQL <code>NOT IN</code> null semantics, <code>.is_in</code> as a method</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;">2</td>
@@ -655,6 +653,10 @@ SPDX-License-Identifier: Apache-2.0
 <section id="capability-by-layer" class="level2">
 <h2 class="anchored" data-anchor-id="capability-by-layer">Capability by layer</h2>
 <table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
 <thead>
 <tr class="header">
 <th></th>
@@ -664,27 +666,27 @@ SPDX-License-Identifier: Apache-2.0
 <tbody>
 <tr class="odd">
 <td><strong>Layouts</strong></td>
-<td>bool, numeric, string/large_string, binary/large_binary, string_view/binary_view, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — <strong>implemented</strong>. Union, run-end-encoded and list-view layouts — <strong>not</strong></td>
+<td>bool, numeric, string/large_string, binary/large_binary, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — <strong>implemented</strong>. Union, run-end-encoded and view layouts — <strong>not</strong></td>
 </tr>
 <tr class="even">
 <td><strong>Sources</strong></td>
-<td>A lazy scan reads one Parquet or newline-delimited JSON file (<code>read_parquet</code>, <code>read_json</code>), an Iceberg table (<code>read_iceberg</code>), many Parquet, JSON Lines or Arrow files matched by glob patterns or a Hugging Face Hub dataset (<a href="../guide/datasets.html"><code>load_dataset</code></a>), or an in-memory batch. Files are local or at an object-store URI through OpenDAL (whose C library is installed separately). Arrow IPC, NDJSON and Avro are also read and written eagerly. <strong>No CSV</strong>, and hive-style <code>key=value/</code> directories do not become columns</td>
+<td>A lazy scan reads <strong>one Parquet file</strong>, local or at an object-store URI through OpenDAL (whose C library is installed separately), or an in-memory batch, and <strong>one newline-delimited JSON file</strong> (<code>marrow.read_json</code>). Arrow IPC is read and written eagerly, NDJSON eagerly through <code>marrow.json</code>. <strong>No CSV</strong>, and no globs, directories or hive partitions</td>
 </tr>
 <tr class="odd">
 <td><strong>Parquet</strong></td>
-<td>native reader and writer; reads snappy, gzip, brotli, lz4, lz4_raw and zstd pages and writes snappy, zstd and lz4 (LZ4 and ZSTD in Mojo, the rest through their C libraries); data page v1 &amp; v2, statistics, page index. Bloom filters are implemented but <strong>off by default</strong> and unreachable from Python. No modular encryption</td>
+<td>native reader and writer, snappy/zstd/lz4, data page v1 &amp; v2, statistics, page index. Bloom filters are implemented but <strong>off by default</strong> and unreachable from Python. No modular encryption</td>
 </tr>
 <tr class="even">
 <td><strong>Optimizer</strong></td>
-<td>19 rules plus column pruning, a cost model, and a join search over every join chain that also picks each join’s build side (exhaustive, greedy past a budget)</td>
+<td>16 rules plus column pruning. <strong>No cost model</strong>, so no join reordering and no build-side selection</td>
 </tr>
 <tr class="odd">
 <td><strong>Execution</strong></td>
-<td>in-memory only — <strong>no spilling anywhere</strong>, so every aggregate and join is bounded by RAM. CPU parallelism runs on marrow’s own thread pool (<code>utils/threads.mojo</code>), sized from the environment or the CPUs the process may use</td>
+<td>in-memory only — <strong>no spilling anywhere</strong>, so every aggregate and join is bounded by RAM</td>
 </tr>
 <tr class="even">
 <td><strong>Joins</strong></td>
-<td>equijoins only: inner, left, right, full, semi, anti, right semi, right anti. No cross, nested-loop, range or asof joins</td>
+<td>equijoins only: inner, left, right, full, semi, anti. No nested-loop, range or asof joins</td>
 </tr>
 <tr class="odd">
 <td><strong>GPU</strong></td>
@@ -702,16 +704,14 @@ SPDX-License-Identifier: Apache-2.0
 <p>The Python bindings are narrower than the Mojo core, and some of the gaps are CPython-binding limits rather than missing features:</p>
 <ul>
 <li><strong>Most aggregates are not on the eager surface.</strong> <code>marrow.compute</code> has <code>any</code> and <code>all</code>, but no <code>sum</code> / <code>min</code> / <code>max</code> / <code>mean</code>; those reductions live in the query layer.</li>
-<li><strong>Regex and the aggregate <code>FILTER</code> clause are not Python expression methods.</strong> <code>regexp_matches</code>, <code>regexp_extract</code> and <code>regexp_replace</code> are verbs in both Mojo lanes and in <a href="../guide/queries-lazy.html#sql"><code>ma.sql</code></a>, and <code>FILTER (WHERE ...)</code> is <code>.filter(predicate)</code> on a Mojo aggregate; neither is on <code>col()</code> in Python.</li>
 <li><strong>Row groups are skipped only in an optimized plan.</strong> <code>.optimize()</code> pushes filters into the Parquet scan; <code>collect()</code> on a plan that was not optimized reads every row group.</li>
 <li><strong><code>==</code> on an <code>Array</code> is identity, not element-wise.</strong> Use <code>mc.equal</code> to compare values. Dtypes, fields and schemas do compare by value.</li>
-<li><strong>Some <code>pyarrow.compute</code> options are missing.</strong> Multi-key <code>sort_keys</code>, <code>nan_is_null=True</code> and <code>boundscheck=False</code> raise <code>NotImplementedError</code>, and <code>memory_pool</code> is ignored.</li>
+<li><strong>Some <code>pyarrow.compute</code> options are missing.</strong> <code>skip_nulls=False</code>, multi-key <code>sort_keys</code>, <code>nan_is_null=True</code> and <code>boundscheck=False</code> raise <code>NotImplementedError</code>, and <code>memory_pool</code> is ignored.</li>
 </ul>
 </section>
 <section id="errors" class="level2">
 <h2 class="anchored" data-anchor-id="errors">Errors</h2>
-<p>Every library failure is an <code>ArrowError</code> of one kind, named after PyArrow’s exceptions: <code>InvalidError</code>, <code>TypeError</code>, <code>KeyError</code>, <code>IndexError</code>, <code>NotImplementedError</code>, <code>IOError</code>, <code>CorruptError</code> and <code>InternalError</code>. Python raises the matching <code>ArrowInvalid</code>, <code>ArrowKeyError</code> and so on, each also deriving from the builtin a caller already catches (<code>ValueError</code>, <code>KeyError</code>, …).</p>
-<p>What is still open is the <em>declaration</em>: most Mojo signatures declare a bare <code>raises</code>, which keeps only the error’s text, so the kind travels as a prefix of the message and is recovered by parsing rather than caught by type. Migrating signatures to <code>raises CorruptError</code> / <code>raises DynError</code> is tracked in <code>backlog.md</code>.</p>
+<p>There are 300+ <code>raise Error</code> sites and <strong>zero typed exceptions</strong>, so failures cannot yet be caught by kind.</p>
 <hr>
 <p>The open work, with complexity estimates and what blocks what, is tracked in <code>backlog.md</code> at the repository root.</p>
 

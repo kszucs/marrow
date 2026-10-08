@@ -579,8 +579,6 @@ document.addEventListener("DOMContentLoaded", function () {
   <li><a href="#column-expressions" id="toc-column-expressions" class="nav-link" data-scroll-target="#column-expressions">Column expressions</a></li>
   <li><a href="#aggregation" id="toc-aggregation" class="nav-link" data-scroll-target="#aggregation">Aggregation</a></li>
   <li><a href="#joins" id="toc-joins" class="nav-link" data-scroll-target="#joins">Joins</a></li>
-  <li><a href="#set-operations" id="toc-set-operations" class="nav-link" data-scroll-target="#set-operations">Set operations</a></li>
-  <li><a href="#sql" id="toc-sql" class="nav-link" data-scroll-target="#sql">SQL</a></li>
   <li><a href="#reading-parquet" id="toc-reading-parquet" class="nav-link" data-scroll-target="#reading-parquet">Reading Parquet</a></li>
   <li><a href="#getting-results-out" id="toc-getting-results-out" class="nav-link" data-scroll-target="#getting-results-out">Getting results out</a></li>
   <li><a href="#limits-worth-knowing" id="toc-limits-worth-knowing" class="nav-link" data-scroll-target="#limits-worth-knowing">Limits worth knowing</a></li>
@@ -617,7 +615,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 <p>Alongside the eager PyArrow-shaped API, marrow has a <strong>lazy</strong> relational frontend: you describe a query, and nothing executes until <code>collect()</code>.</p>
 <p>The two worlds are told apart by the entry point — lazy is <code>memtable</code> / <code>read_parquet</code> (ibis spellings, which the frontend is modelled on); eager is <code>record_batch</code> / <code>table</code> (PyArrow spellings).</p>
-<div id="8699b91a" class="cell" data-execution_count="2">
+<div id="ac55695b" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>]),</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"product"</span>: ma.array([<span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"a"</span>, <span class="st">"c"</span>, <span class="st">"b"</span>]),</span>
@@ -635,7 +633,7 @@ InMemoryTable(5 rows)</code></pre>
 <p>Every verb returns a <strong>new</strong> plan. The underlying description is immutable and copying it is a refcount bump, so a plan is a reusable template rather than a builder you consume.</p>
 <section id="a-first-query" class="level2">
 <h2 class="anchored" data-anchor-id="a-first-query">A first query</h2>
-<div id="d5bbd084" class="cell" data-execution_count="3">
+<div id="4c43ddc4" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>top <span class="op">=</span> (</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    t.<span class="bu">filter</span>(col(<span class="st">"price"</span>) <span class="op">&gt;</span> lit(<span class="dv">15</span>))</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>     .aggregate(by<span class="op">=</span>[<span class="st">"region"</span>], total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"price"</span>))</span>
@@ -647,7 +645,7 @@ InMemoryTable(5 rows)</code></pre>
 </div>
 </div>
 <p>Nothing ran until <code>.collect()</code>. Before that, <code>explain()</code> shows the plan:</p>
-<div id="5c3740f4" class="cell" data-execution_count="4">
+<div id="bceb1dce" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(top.explain())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>Sort(Aggregate(Filter(InMemoryTable(5 rows), gt(price, 15)), by=region, sum(price)), total desc)</code></pre>
@@ -656,28 +654,26 @@ InMemoryTable(5 rows)</code></pre>
 </section>
 <section id="the-verbs" class="level2">
 <h2 class="anchored" data-anchor-id="the-verbs">The verbs</h2>
-<div id="e43b3718" class="cell" data-execution_count="5">
+<div id="d57e87cf" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>t.select(<span class="st">"region"</span>, <span class="st">"price"</span>)            <span class="co"># project by name</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>t.drop(<span class="st">"qty"</span>)</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>t.rename({<span class="st">"price"</span>: <span class="st">"amount"</span>})</span>
 <span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>t.with_columns(total<span class="op">=</span>col(<span class="st">"qty"</span>) <span class="op">*</span> col(<span class="st">"price"</span>))   <span class="co"># add/replace, keep the rest</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>t.project(bumped<span class="op">=</span>col(<span class="st">"price"</span>) <span class="op">+</span> lit(<span class="dv">1</span>))  <span class="co"># replace the projection entirely</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>t.project(only<span class="op">=</span>col(<span class="st">"price"</span>) <span class="op">+</span> lit(<span class="dv">1</span>))  <span class="co"># replace the projection entirely</span></span>
 <span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>t.<span class="bu">filter</span>(col(<span class="st">"region"</span>) <span class="op">==</span> lit(<span class="st">"east"</span>))</span>
 <span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>t.aggregate(by<span class="op">=</span>[<span class="st">"region"</span>], n<span class="op">=</span>ma.count_star())</span>
 <span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>t.order_by((<span class="st">"price"</span>, <span class="st">"descending"</span>)).limit(<span class="dv">10</span>, offset<span class="op">=</span><span class="dv">100</span>)</span>
 <span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>t.head(<span class="dv">5</span>)</span>
 <span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>t.join(other, on<span class="op">=</span><span class="st">"region"</span>, how<span class="op">=</span><span class="st">"inner"</span>)</span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>t.distinct()                           <span class="co"># SELECT DISTINCT</span></span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>t.union(other)  <span class="op">/</span>  t.except_(other)  <span class="op">/</span>  t.intersect(other)</span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>t.explain()                            <span class="co"># the plan as text</span></span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>t.collect()  <span class="op">/</span>  t.to_pyarrow()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>t.explain()                            <span class="co"># the plan as text</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>t.collect()  <span class="op">/</span>  t.to_pyarrow()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p><code>collect(num_threads=)</code> controls execution: <code>0</code> auto, <code>1</code> serial, <code>N</code> forces N workers. What <code>0</code> resolves to is <code>ma.cpu_count()</code>, and <code>ma.set_cpu_count(n)</code> changes it for every later call — the same names PyArrow uses, with <code>io_thread_count</code> / <code>set_io_thread_count</code> for the threads an object-store read fans out over.</p>
+<p><code>collect(num_threads=)</code> controls execution: <code>0</code> auto, <code>1</code> serial, <code>N</code> forces N workers.</p>
 </section>
 <section id="column-expressions" class="level2">
 <h2 class="anchored" data-anchor-id="column-expressions">Column expressions</h2>
 <p><code>col(name)</code> reads a column, <code>lit(value)</code> is a constant, and the usual operators compose them:</p>
-<div id="254ed976" class="cell" data-execution_count="6">
+<div id="76ae9652" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>expr <span class="op">=</span> (col(<span class="st">"price"</span>) <span class="op">*</span> lit(<span class="dv">2</span>) <span class="op">&gt;</span> lit(<span class="dv">60</span>)) <span class="op">&amp;</span> col(<span class="st">"qty"</span>).is_valid()</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>t.<span class="bu">filter</span>(expr).collect().to_pylist()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-display" data-execution_count="5">
@@ -686,7 +682,7 @@ InMemoryTable(5 rows)</code></pre>
 </div>
 </div>
 <p>Boolean logic is <strong>three-valued</strong>, like SQL. <code>qty</code> carries a null, so <code>qty &gt; 3</code> is null in that row — but <code>null AND false</code> is <strong>false</strong>, not null, because the second operand already decides the answer:</p>
-<div id="136d5779" class="cell" data-execution_count="7">
+<div id="d51a8a0b" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>t.with_columns(</span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    big_qty<span class="op">=</span>col(<span class="st">"qty"</span>) <span class="op">&gt;</span> lit(<span class="dv">3</span>),          <span class="co"># null in the row where qty is null</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    both<span class="op">=</span>(col(<span class="st">"qty"</span>) <span class="op">&gt;</span> lit(<span class="dv">3</span>)) <span class="op">&amp;</span> (col(<span class="st">"price"</span>) <span class="op">&gt;</span> lit(<span class="dv">100</span>)),</span>
@@ -724,13 +720,12 @@ InMemoryTable(5 rows)</code></pre>
   'both': False}]</code></pre>
 </div>
 </div>
-<p>The surface covers arithmetic and comparison operators, <code>&amp;</code>/<code>|</code>/<code>~</code>/<code>^</code>, <code>abs</code>/<code>sign</code>/<code>floor</code>/<code>ceil</code>/<code>round</code>/<code>trunc</code>/<code>sqrt</code>/<code>exp</code>/<code>ln</code>, the string verbs (<code>upper</code>, <code>lower</code>, <code>strip</code>, <code>length</code>, <code>startswith</code>, <code>contains</code>, <code>like</code>, <code>ilike</code>, …), the temporal extractors, <code>date_trunc</code>, <code>assume_timezone</code> and <code>convert_timezone</code>, plus <code>cast</code>, <code>isin</code>, <code>array_length</code>, <code>is_null</code>, <code>is_valid</code>, <code>is_nan</code>, <code>is_inf</code>, <code>fill_null</code>, <code>coalesce</code>, <code>nullif</code>, <code>if_else</code> and <code>case_when</code>.</p>
-<p>Operands of different types meet at one common type: integers widen, decimals follow Arrow’s promotion rules (a sum keeps its scale, a product adds them), a <code>string</code> beside a <code>string_view</code> takes the view layout, and null takes the other side. A timestamp with a time zone holds UTC instants and reads its fields — <code>year</code>, <code>hour</code>, <code>date_trunc</code> — in its own zone.</p>
+<p>The surface covers arithmetic and comparison operators, <code>&amp;</code>/<code>|</code>/<code>~</code>/<code>^</code>, <code>abs</code>/<code>sign</code>/<code>floor</code>/<code>ceil</code>/<code>round</code>/<code>trunc</code>/<code>sqrt</code>/<code>exp</code>/<code>ln</code>, the string verbs (<code>upper</code>, <code>lower</code>, <code>strip</code>, <code>length</code>, <code>startswith</code>, <code>contains</code>, <code>like</code>, <code>ilike</code>, …), the temporal extractors and <code>date_trunc</code>, plus <code>cast</code>, <code>isin</code>, <code>array_length</code>, <code>is_null</code>, <code>is_valid</code>, <code>is_nan</code>, <code>is_inf</code>, <code>fill_null</code>, <code>coalesce</code>, <code>nullif</code>, <code>if_else</code> and <code>case_when</code>.</p>
 </section>
 <section id="aggregation" class="level2">
 <h2 class="anchored" data-anchor-id="aggregation">Aggregation</h2>
 <p>Keyword arguments name output columns; <code>by=</code> groups. An empty <code>by</code> is one implicit group:</p>
-<div id="9b061575" class="cell" data-execution_count="8">
+<div id="f4d56a27" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>t.aggregate(</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    rows<span class="op">=</span>ma.count_star(),</span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    values<span class="op">=</span>(<span class="st">"count"</span>, <span class="st">"qty"</span>),</span>
@@ -744,7 +739,7 @@ InMemoryTable(5 rows)</code></pre>
 <p><code>count_star()</code> counts <strong>rows</strong> and <code>("count", col)</code> counts non-null values — they disagree on <code>qty</code>, which carries a null.</p>
 <p>Functions: <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>, <code>product</code>, <code>count</code>, <code>count_distinct</code>, <code>approx_count_distinct</code>, <code>variance</code>, <code>var_samp</code>, <code>stddev</code>, <code>stddev_samp</code>.</p>
 <p><code>HAVING</code> needs no special support — filter the aggregate’s output:</p>
-<div id="7b5f340a" class="cell" data-execution_count="9">
+<div id="fa36c67f" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>(t.aggregate(by<span class="op">=</span>[<span class="st">"region"</span>], total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"price"</span>))</span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  .<span class="bu">filter</span>(col(<span class="st">"total"</span>) <span class="op">&gt;</span> lit(<span class="dv">50</span>))</span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  .collect().to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -753,7 +748,7 @@ InMemoryTable(5 rows)</code></pre>
 </div>
 </div>
 <p>Group keys may be arbitrary expressions, and keys with <strong>no</strong> aggregates is <code>SELECT DISTINCT</code>:</p>
-<div id="be56d02d" class="cell" data-execution_count="10">
+<div id="6e2800f4" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>t.aggregate(by<span class="op">=</span>[<span class="st">"region"</span>]).collect().to_pylist()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-display" data-execution_count="9">
 <pre><code>[{'region': 'east'}, {'region': 'west'}]</code></pre>
@@ -763,7 +758,7 @@ InMemoryTable(5 rows)</code></pre>
 <section id="joins" class="level2">
 <h2 class="anchored" data-anchor-id="joins">Joins</h2>
 <p>Keys are given by name and resolved against each side’s schema:</p>
-<div id="6962a6be" class="cell" data-execution_count="11">
+<div id="7fabadd3" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>managers <span class="op">=</span> ma.memtable(ma.record_batch({</span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"east"</span>, <span class="st">"west"</span>]),</span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"manager"</span>: ma.array([<span class="st">"ann"</span>, <span class="st">"bo"</span>]),</span>
@@ -778,64 +773,19 @@ InMemoryTable(5 rows)</code></pre>
  {'region': 'west', 'manager': 'bo', 'price': 40}]</code></pre>
 </div>
 </div>
-<p><code>how=</code> takes <code>inner</code>, <code>left</code>, <code>right</code>, <code>full</code>, <code>semi</code>, <code>anti</code>, <code>right semi</code> and <code>right anti</code>. Use <code>left_on=</code> / <code>right_on=</code> when the key names differ. Which join runs first, and which side of each is hashed, is the optimizer’s decision, not the call’s. <code>.optimize()</code> starts by reading statistics: it summarises each in-memory table (row and null counts, bounds, distinct counts and widths) and reads each Parquet footer. It then searches the join orders those numbers make cheapest and picks every build side, without changing the output’s columns or their order. <code>.analyze()</code> is that first step on its own. A source keeps its statistics once it has them, so analyse a large in-memory table once and optimize every plan built on it without summarising it again.</p>
-<p>Output names follow ibis. An inner join emits a key both sides call by one name once, since the join made the two equal; any other name both sides carry is renamed by <code>lname</code> / <code>rname</code>, which default to keeping the left name and suffixing the right one:</p>
-<div id="939394a6" class="cell" data-execution_count="12">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>t.join(managers, on<span class="op">=</span><span class="st">"region"</span>, how<span class="op">=</span><span class="st">"left"</span>).column_names</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-display" data-execution_count="11">
-<pre><code>['region', 'product', 'qty', 'price', 'region_right', 'manager']</code></pre>
-</div>
-</div>
-<p>A clash the templates leave over — say <code>rname="{name}"</code> — raises at the join: two output columns may not share a name.</p>
-</section>
-<section id="set-operations" class="level2">
-<h2 class="anchored" data-anchor-id="set-operations">Set operations</h2>
-<p><code>distinct()</code> is <code>SELECT DISTINCT</code>, and the SQL set verbs take a second plan with the same number of columns, matched <strong>by position</strong>. <code>NULL</code> equals itself here, as in SQL’s set operations and unlike its comparisons:</p>
-<div id="25918386" class="cell" data-execution_count="13">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>west <span class="op">=</span> t.<span class="bu">filter</span>(col(<span class="st">"region"</span>) <span class="op">==</span> lit(<span class="st">"west"</span>)).select(<span class="st">"product"</span>)</span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>east <span class="op">=</span> t.<span class="bu">filter</span>(col(<span class="st">"region"</span>) <span class="op">==</span> lit(<span class="st">"east"</span>)).select(<span class="st">"product"</span>)</span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(west.union(east).order_by(<span class="st">"product"</span>).collect().to_pylist())      <span class="co"># UNION</span></span>
-<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(east.except_(west).order_by(<span class="st">"product"</span>).collect().to_pylist())    <span class="co"># EXCEPT</span></span>
-<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(east.intersect(west).collect().to_pylist())                      <span class="co"># INTERSECT</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>[{'product': 'a'}, {'product': 'b'}, {'product': 'c'}]
-[{'product': 'a'}]
-[{'product': 'b'}]</code></pre>
-</div>
-</div>
-<p><code>union_all</code>, <code>except_all</code> and <code>intersect_all</code> keep multiplicity, as their SQL counterparts do.</p>
-</section>
-<section id="sql" class="level2">
-<h2 class="anchored" data-anchor-id="sql">SQL</h2>
-<p><code>ma.sql</code> parses a query over named tables — in-memory batches, or lazy tables such as a <code>read_parquet</code> scan — into the same kind of plan, so it composes with the verbs above and runs on <code>collect()</code> like any other:</p>
-<div id="e230cbb3" class="cell" data-execution_count="14">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>q <span class="op">=</span> ma.sql(<span class="st">"SELECT region, SUM(price) AS total FROM sales GROUP BY region"</span>, sales<span class="op">=</span>batch)</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>q.order_by(<span class="st">"region"</span>).collect().to_pylist()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-display" data-execution_count="13">
-<pre><code>[{'region': 'east', 'total': 90}, {'region': 'west', 'total': 60}]</code></pre>
-</div>
-</div>
-<p>Pass several tables as keywords, or as a <code>tables=</code> mapping. The SQL surface is a little wider than the Python expression methods — the regex functions, for one:</p>
-<div id="918733ba" class="cell" data-execution_count="15">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb26"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>ma.sql(<span class="st">"SELECT region FROM sales WHERE regexp_matches(region, '^e')"</span>, sales<span class="op">=</span>batch).collect().to_pylist()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-display" data-execution_count="14">
-<pre><code>[{'region': 'east'}, {'region': 'east'}, {'region': 'east'}]</code></pre>
-</div>
-</div>
+<p><code>how=</code> takes <code>inner</code>, <code>left</code>, <code>right</code>, <code>full</code>, <code>semi</code> and <code>anti</code>. Use <code>left_on=</code> / <code>right_on=</code> when the key names differ.</p>
 </section>
 <section id="reading-parquet" class="level2">
 <h2 class="anchored" data-anchor-id="reading-parquet">Reading Parquet</h2>
 <p><code>read_parquet</code> opens the file’s footer metadata only — no column data is touched until <code>collect()</code>:</p>
-<div id="e5c2f916" class="cell" data-execution_count="16">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>t <span class="op">=</span> ma.read_parquet(<span class="st">"hits.parquet"</span>)</span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>(t.<span class="bu">filter</span>(col(<span class="st">"AdvEngineID"</span>) <span class="op">!=</span> lit(<span class="dv">0</span>))</span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  .aggregate(by<span class="op">=</span>[<span class="st">"RegionID"</span>], users<span class="op">=</span>(<span class="st">"count_distinct"</span>, <span class="st">"UserID"</span>))</span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  .order_by((<span class="st">"users"</span>, <span class="st">"descending"</span>))</span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  .head(<span class="dv">10</span>)</span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>  .collect())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="3e061818" class="cell" data-execution_count="12">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>t <span class="op">=</span> ma.read_parquet(<span class="st">"hits.parquet"</span>)</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>(t.<span class="bu">filter</span>(col(<span class="st">"AdvEngineID"</span>) <span class="op">!=</span> lit(<span class="dv">0</span>))</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  .aggregate(by<span class="op">=</span>[<span class="st">"RegionID"</span>], users<span class="op">=</span>(<span class="st">"count_distinct"</span>, <span class="st">"UserID"</span>))</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  .order_by((<span class="st">"users"</span>, <span class="st">"descending"</span>))</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  .head(<span class="dv">10</span>)</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  .collect())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p><code>ma.read_json</code> scans a newline-delimited JSON file the same way; see <a href="../guide/io.html#newline-delimited-json">File I/O</a>. <code>ma.read_iceberg</code> scans an Iceberg table, and <code>marrow.datasets.load_dataset</code> many files at once; see <a href="../guide/datasets.html">Datasets</a>.</p>
 <div class="callout callout-style-default callout-warning callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -847,16 +797,16 @@ InMemoryTable(5 rows)</code></pre>
 </div>
 <div class="callout-body-container callout-body">
 <p>A column with no logical type is <code>binary</code>, and <code>BinaryType</code> is not a <code>StringLikeType</code>, so the string verbs reject it. Cast first:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>col(<span class="st">"url"</span>).cast(ma.string()).like(<span class="st">"</span><span class="sc">%g</span><span class="st">oogle%"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>col(<span class="st">"url"</span>).cast(ma.string()).like(<span class="st">"</span><span class="sc">%g</span><span class="st">oogle%"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </div>
 </section>
 <section id="getting-results-out" class="level2">
 <h2 class="anchored" data-anchor-id="getting-results-out">Getting results out</h2>
-<div id="f16b34c4" class="cell" data-execution_count="17">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb30"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> t.<span class="bu">filter</span>(col(<span class="st">"price"</span>) <span class="op">&gt;</span> lit(<span class="dv">20</span>))</span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">type</span>(result.collect()))     <span class="co"># a RecordBatch</span></span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(result.to_pyarrow())        <span class="co"># zero-copy, over the C Data Interface</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="fa6952f3" class="cell" data-execution_count="13">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> t.<span class="bu">filter</span>(col(<span class="st">"price"</span>) <span class="op">&gt;</span> lit(<span class="dv">20</span>))</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="bu">type</span>(result.collect()))     <span class="co"># a RecordBatch</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(result.to_pyarrow())        <span class="co"># zero-copy, over the C Data Interface</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>&lt;class 'marrow.tabular.RecordBatch'&gt;
 pyarrow.RecordBatch
@@ -875,9 +825,9 @@ price: [30,40,50]</code></pre>
 <section id="limits-worth-knowing" class="level2">
 <h2 class="anchored" data-anchor-id="limits-worth-knowing">Limits worth knowing</h2>
 <ul>
-<li><strong><code>read_parquet</code> and <code>read_json</code> read one file</strong> (local, or an object-store URI through OpenDAL). <a href="../guide/datasets.html"><code>load_dataset</code></a> reads many files by glob pattern, without turning hive-style directories into columns. No CSV.</li>
+<li><strong><code>read_parquet</code> reads one file</strong> (local, or an object-store URI through OpenDAL): no globs, directories or hive partitions, and no CSV or JSON.</li>
 <li><strong>Row groups are skipped only after <code>.optimize()</code>.</strong> Without it, a filtered scan reads every row group.</li>
-<li><strong>No regex methods on <code>col()</code>.</strong> <code>regexp_matches</code>, <code>regexp_extract</code> and <code>regexp_replace</code> exist in <a href="#sql"><code>ma.sql</code></a> and in the Mojo lanes, not yet as Python expression methods.</li>
+<li><strong>No <code>distinct</code>/<code>union</code>/<code>except</code>/<code>intersect</code> nodes</strong>, and no regex.</li>
 <li><strong>Comparisons follow SQL, not IEEE</strong>: <code>nan = nan</code> is true here and false in <code>marrow.compute</code> — see <a href="../guide/compute.html">Compute</a>.</li>
 </ul>
 <p>The full list is on <a href="../reference/status.html">Status &amp; limitations</a>.</p>

@@ -712,15 +712,13 @@ Note
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode mojo gpu code-with-copy"><code class="sourceCode mojo"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> <span class="bu">max</span>.gpu.host <span class="im">import</span> <span class="dt">DeviceContext</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int32, <span class="dt">Int32Type</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.execution <span class="im">import</span> <span class="dt">ExecContext</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.numeric <span class="im">import</span> <span class="dt">AddKernel</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> device <span class="op">=</span> <span class="fu">DeviceContext</span>()</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> a <span class="op">=</span> <span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>], int32).<span class="fu">to_device</span>(device)</span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> b <span class="op">=</span> <span class="fu">array</span>([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>], int32).<span class="fu">to_device</span>(device)</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> result <span class="op">=</span> <span class="dt">AddKernel</span>.<span class="fu">apply</span>[<span class="dt">Int32Type</span>](a, b, <span class="dt">ExecContext</span>.<span class="fu">gpu</span>(device)).<span class="fu">to_cpu</span>(device)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Transfers take the <code>DeviceContext</code>; the kernel takes an <code>ExecContext</code> wrapping it, as the previous section said.</p>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.numeric <span class="im">import</span> <span class="dt">AddKernel</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> ctx <span class="op">=</span> <span class="fu">DeviceContext</span>()</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> a <span class="op">=</span> <span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>], int32).<span class="fu">to_device</span>(ctx)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> b <span class="op">=</span> <span class="fu">array</span>([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>], int32).<span class="fu">to_device</span>(ctx)</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> result <span class="op">=</span> <span class="dt">AddKernel</span>.<span class="fu">apply</span>[<span class="dt">Int32Type</span>](a, b, ctx).<span class="fu">to_cpu</span>(ctx)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 50%">
