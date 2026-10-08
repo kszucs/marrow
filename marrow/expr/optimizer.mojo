@@ -1345,10 +1345,13 @@ struct JoinOrdering:
     def apply[
         budget: Int = PAIR_BUDGET
     ](node: DynRelation) raises -> DynRelation:
-        def descend(child: DynRelation) raises {imm} -> DynRelation:
-            return Self.apply[budget](child)
-
-        var rebuilt = node.traverse(descend)
+        # The recursion calls `apply` itself rather than through a closure
+        # handed to `traverse`, as `Optimizer.rewrite` does: that shape
+        # deadlocked the compiler.
+        var children = List[DynRelation]()
+        for ref child in node.children():
+            children.append(Self.apply[budget](child))
+        var rebuilt = node.with_children(children)
         if not rebuilt.isa[JoinChain]():
             return rebuilt^
         ref chain = rebuilt.get[JoinChain]()
