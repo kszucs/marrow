@@ -30,8 +30,12 @@ jobs:
   # tree in a single call is a 2,187-case compile that took 1,802 s (the
   # `--mojo-timeout` default) on macOS and was OOM-killed on Linux -- which is
   # why no Tests run passed between 2026-05-11 and this change. Splitting the
-  # *selections* is what fixes that; splitting them across *jobs* was only ever
-  # a way to spend more runners on it.
+  # *selections* is what fixes that.
+  #
+  # The selections are then split across two jobs per platform, `core` and
+  # `expr`, because together they outgrew a job's 240 minutes: on 2026-10-07
+  # the Linux job ran 234 minutes and the macOS one was cancelled at the limit
+  # while building `libmarrow.so`. Each part takes its own cache entry.
   #
   # Every minute here is `mojo build`. Measured on the Linux runner 2026-09-08:
   # `python`'s 503 cases run in 1.56 s after a 853 s compile, and `expr-runtime`
@@ -54,13 +58,31 @@ jobs:
   # on a 16 GB runner, where it swaps for most of them. That is what the
   # swapfile below is for; without it the job cannot run at all.
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.part }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        part: [core, expr]
+        include:
+          # One selection per line. The `asan` job below runs the same Mojo
+          # selections; keep them in step.
+          - part: core
+            selections: |
+              marrow/tests
+              marrow/parquet/tests marrow/utils/tests
+              fuzz
+              marrow/kernels/tests
+              golden python
+          - part: expr
+            selections: |
+              marrow/expr/comptime/tests
+              marrow/expr/tests/test_optimizer.mojo
+              marrow/expr/tests --ignore marrow/expr/tests/test_optimizer.mojo
+              marrow/expr/runtime/tests --ignore marrow/expr/runtime/tests/test_runtime_window.mojo
+              marrow/expr/runtime/tests/test_runtime_window.mojo
     steps:
       - uses: actions/checkout@v7
         with:
@@ -88,7 +110,7 @@ jobs:
       - uses: ./.github/actions/mojo-cache
         with:
           mode: restore
-          name: test
+          name: test-${{ matrix.part }}
 
       # Every selection runs even after one fails, and the job reports which
       # ones did at the end. One job per platform would otherwise mean one
@@ -109,25 +131,22 @@ jobs:
             fi
           }
 
-          # The `asan` job below runs the same Mojo selections; keep them in step.
-          run marrow/tests
-          run marrow/parquet/tests marrow/utils/tests
-          # Compiles every fuzz harness and replays the committed corpus.
-          run fuzz
-          run marrow/expr/comptime/tests
-          run marrow/kernels/tests
-          run marrow/expr/tests/test_optimizer.mojo
-          run marrow/expr/tests --ignore marrow/expr/tests/test_optimizer.mojo
-          run marrow/expr/runtime/tests --ignore marrow/expr/runtime/tests/test_runtime_window.mojo
-          # Two cases, but the whole runtime ladder under a window: on its own,
-          # so neither unit beside it has to fit both.
-          run marrow/expr/runtime/tests/test_runtime_window.mojo
-          # One call, so `libmarrow.so` is built once rather than twice.
-          run golden python
+          # `golden` and `python` share one line, so `libmarrow.so` is built
+          # once rather than twice. `test_runtime_window.mojo` is two cases
+          # but the whole runtime ladder under a window: on its own, so
+          # neither unit beside it has to fit both.
+          # `< /dev/null`, or the first `pixi run` reads the remaining lines.
+          while read -r selection; do
+            if [ -n "$selection" ]; then
+              run $selection < /dev/null
+            fi
+          done <<< "${{ matrix.selections }}"
 
-          echo "::group::package"
-          pixi run package || failed+=("package")
-          echo "::endgroup::"
+          if [ "${{ matrix.part }}" = core ]; then
+            echo "::group::package"
+            pixi run package || failed+=("package")
+            echo "::endgroup::"
+          fi
 
           if [ ${#failed[@]} -ne 0 ]; then
             printf '\n%s selection(s) failed:\n' "${#failed[@]}"
@@ -140,7 +159,7 @@ jobs:
         uses: ./.github/actions/mojo-cache
         with:
           mode: save
-          name: test
+          name: test-${{ matrix.part }}
 
   # **The Mojo selections of `test`, again under AddressSanitizer**, one runner
   # each and longest first, so the slowest unit is never the one queued for a
