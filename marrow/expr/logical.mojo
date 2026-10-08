@@ -3429,11 +3429,7 @@ struct JoinRules(Copyable, Movable):
         for i in need:
             last = max(last, i)
         for i in range(1, min(f.bound, len(self.links)) + 1):
-            if (
-                not self.links[i - 1].passes(True)
-                and last < i
-                and i not in s
-            ):
+            if not self.links[i - 1].passes(True) and last < i and i not in s:
                 return False
         return True
 
@@ -3465,9 +3461,7 @@ struct JoinPricing(Movable):
         self._sizes[s.copy()] = out
         return out
 
-    def join(
-        mut self, a: Set[Int], b: Set[Int], link: JoinLink
-    ) raises -> Cost:
+    def join(mut self, a: Set[Int], b: Set[Int], link: JoinLink) raises -> Cost:
         """Joining `a` to `b` by `link`, hashing its build side, and
         evaluating the filters it is the first to hold over its rows."""
         var cost = Cost.hash_join(

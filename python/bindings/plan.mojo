@@ -570,9 +570,7 @@ def iceberg_scan(
     var kv = Dict[String, String]()
     for item in options.items():
         kv[String(py=item[0])] = String(py=item[1])
-    return _wrap(
-        _scan_iceberg(String(py=path), snapshot, StorageOptions(kv^))
-    )
+    return _wrap(_scan_iceberg(String(py=path), snapshot, StorageOptions(kv^)))
 
 
 # ---------------------------------------------------------------------------

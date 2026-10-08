@@ -445,7 +445,7 @@ struct StorageOptions(Copyable, Movable):
             if at < 0:
                 out["container"] = uri.authority
             else:
-                out["container"] = String(uri.authority[byte = 0 : at])
+                out["container"] = String(uri.authority[byte=0:at])
                 var host = String(uri.authority[byte = at + 1 :])
                 _default(out, "account_name", String(host.split(".")[0]))
                 _default(
