@@ -637,6 +637,168 @@ entries.
 B8, B9, B11-B15, B-PR7 to B-PR12 and the footer's Thrift bugs (B-PR1 to
 B-PR4) are fixed; their reproducers stay as `reject` entries.
 
+### 1.15 The abstraction audit (2026-10-08)
+
+**Epic: one pass over all of `marrow/` for soundness, duplicated logic, dead
+code and layering.** Found by reading, not by running: each item needs a
+failing test before its fix, and the wrong answers among them survived because
+the existing tests compare two code paths that share the bug (the serial and
+parallel join layouts, for one). Line numbers are as of `8b00780b`. Within each
+table the rows run from least to most effort. Two findings were already here:
+the Parquet page that overruns its row group is B10 in §1.14, and the NULL
+dictionary entry behind a valid index is in §1.2 -- `count_distinct` and
+`is_null` (`kernels/boolean.mojo:322`) share its index-only null test.
+
+Seven root causes account for most of the correctness rows, and each has one
+fix that closes its class: **(A)** reading `StructArray.children` or
+`array.bitmap` raw on a slice -- use `.field(i)` and one owned, rebased
+validity helper; **(B)** treating the 64-rounded `len(buffer)` as the logical
+size, which FOREIGN buffers do not back; **(C)** `as_*()` downcasts, guarded by
+`debug_assert` only, at boundaries where a wrong dtype must raise; **(D)**
+untrusted counts not bounded by their bytes, and `off + len > size` checks that
+overflow; **(E)** dtype-instance parameters (unit, scale, list kind) never
+compared; **(F)** NaN sorting above every number in predicates while
+statistics skip it; **(G)** dictionary logical nulls (§1.2).
+
+**Wrong answers on valid input:**
+
+| Fix | Where | What goes wrong |
+|---|---|---|
+| Rebase the bitmap in `UnaryKernel.apply` (`to_data().owned_validity()`) (A) | `kernels/numeric.mojo:197` | all 18 unary kernels put nulls on the wrong rows of a sliced input -- the twin of the fixed binary bug |
+| Reject a negative length or offset in `Limit.__init__`, drop the `< 0` branches | `expr/logical.mojo:2528`, `expr/optimizer.mojo:269, 1094` | `limit(-1).limit(10)` gives 0 rows unoptimized and 10 optimized |
+| Gather the join output through `TakeKernel.apply(StructArray)` or `.field(i)` (A) | `kernels/join.mojo:858` | a sliced side -- `LimitOperator` emits slices -- joins the parent's rows |
+| Split an imported struct with `.field(i)`; `to_table` reuses `RecordBatch.from_c` (A) | `c_data.mojo:1960`, `tabular.mojo:88` | a sliced struct imports at the parent's length |
+| `JOIN_ANY` with build-side existence kinds marks the whole matched range | `kernels/join.mojo:579, 655, 700` | `[1,1]` SEMI ANY `[1]` gives 1 row; ANTI and LEFT emit matched rows; the kernel's ANY docs contradict the plan layer's |
+| Compare dtype instances in every erased `extend` and in `concat` (E, C) | `builders.mojo:720, 1558, 1635, 1780, 1928, 2246`, `kernels/concat.mojo` | `concat([timestamp[s], timestamp[ms]])` is off by 1000x; mixed decimal scales merge; a family mismatch aborts |
+| Rebase every node, not only the root, in `_BatchEncoder.write_array` (A) | `ipc.mojo:2004` | a struct or list over a sliced child is written from element 0 |
+| `Table.to_batches` compares chunk lengths, not just counts | `tabular.mojo` | chunks `[2,3]` and `[3,2]` give batches with unequal columns |
+| Equal-width signed vs unsigned widens to the next signed type, both lanes | `expr/comptime/rules.mojo:45`, `expr/runtime/values.mojo:1143` | `col(uint8) == lit(-1, int8)` matches 255; the runtime lane raises instead |
+| A float chunk's upper bound is unknown unless its NaN count is 0 (F) | `expr/index.mojo:197`, `expr/comptime/numeric.mojo:529`, `expr/runtime/values.mojo:345`, `expr/analyze.mojo:151`, `parquet/statistics.mojo:77` | `x > 5` prunes a group of `[1, NaN, 3]` and loses the NaN row; the comments' reasoning is inverted |
+| `DynArray.__eq__` compares each layout's logical window | `arrays.mojo:302`, `buffers.mojo:993` | a slice and an equal fresh array compare unequal; `alloc_uninit` tails make it nondeterministic |
+
+Lower stakes, same kind: `lit(300, int8)` wraps to 44
+(`expr/builders.mojo:269`); `cli._cells` renders `""` and NULL alike
+(`expr/cli.mojo:84`); `select(["a","a"])` and `rename` build duplicate names
+(`Project.__init__`); `Selectivity.__mul__` floors to an estimated 0 after four
+stacked filters (`expr/estimates.mojo:106`); `List.flatten` and
+`FixedSizeList.flatten` ignore the slice (`arrays.mojo:1978, 2293`);
+`ListScalar.__eq__` ignores the list kind; `sign(NaN)` is 0 and `log1p` is
+`log(a+1)` (`kernels/numeric.mojo:437, 563`); `array_contains` and
+`minimum`/`maximum` dispatch numeric only, so date and decimal lists raise
+(`kernels/nested.mojo:121`) -- the widest-family rule; integer <-> decimal
+casts and `DecimalToString` ignore a negative scale (`kernels/cast.mojo:528,
+562, 1484`, plausible); `TimestampFormat` writes year -5 as `"00-5"`
+(`kernels/cast.mojo:1336`); SQL `T.*` matches case-sensitively, a quoted
+identifier with a dot splits as a qualifier, `GROUP BY UPPER(Name)` misses
+`UPPER(name)`, `Planner.schema` is never moved to the grouped schema
+(`expr/sql.mojo:2210, 1351, 2021, 1557`).
+
+**Aborts and memory errors on valid input:**
+
+| Fix | Where | What goes wrong |
+|---|---|---|
+| `BoolBuilder.reset()` zeroes `_capacity`; `finish()` calls it | `builders.mojo:2262` | reuse after `finish()` writes into a 0-byte bitmap |
+| `WindowExtents.of_sorted` takes `n` explicitly | `kernels/window.mojo:197` | `OVER ()` builds empty extents and reads out of bounds (`physical.mojo:1235, 2244`); untested |
+| `Filter.__init__` requires a boolean predicate (`reject_non_boolean_filter`) (C) | `expr/logical.mojo:2018` | `plan.filter(col("a"))` aborts the process from Python |
+| The IPC writer copies only the bytes the layout needs (B) | `ipc.mojo:2018` | exporting a C-Data import reads up to 63 bytes past the producer's allocation into the file |
+| `CArrowArrayStream` gets a releasing `__deinit__` and an `is_released()` check; `CArrowSchema`/`CArrowArray` become `Movable` only | `c_data.mojo:337, 1077, 1814` | a failed import leaks the stream, a consumed capsule calls a null `release`, a `.copy()` double-releases |
+| `load_bits` slides back like `load[W]`; `Bitmap.extend` reads its second byte only when needed (B) | `views.mojo:946`, `buffers.mojo:1487`, `kernels/aggregate.mojo:638, 676` | tails of `BitmapView.__eq__`, the filter loops and `any`/`all` read past a 64-multiple allocation |
+| Comptime column leaves check `isa` in one `_column[T]` helper (C) | `expr/comptime/leaves.mojo:117, 215, 647, 746` | `col("a", int64)` over int32 aborts; `NumericColumn.dtype` also ignores the schema |
+| `dispatch_array` and `DynScalar.as_py` cover every layout | `arrays.mojo:3867`, `scalars.mojo:1223` | runtime `count` raises on binary, list, struct, dictionary; `Scalar.as_py()` raises on temporal and decimal |
+
+Lower stakes: empty join key lists index `keys[0]` (`kernels/join.mojo:439`);
+large_list take indices truncate to `Int32` (`kernels/filter.mojo:1056`);
+`Selection.gather` overflows `Int32` past 2^31 candidate rows
+(`kernels/conditional.mojo:123`); `HashKernel` rejects fixed-size-binary and
+null keys that `KeyCompare` accepts (`kernels/hashing.mojo:292, 669`);
+comptime `coalesce`/`nullif`/`fill_null`/`CaseWhen` accept mixed dtypes and
+raise per batch (`expr/comptime/numeric.mojo:768`); `JoinPricing.estimate`
+loops forever on an empty set (`expr/logical.mojo:3495`); `Pipeline.drain`
+drains the source once under `LIMIT 0`; deflate truncates input over 4 GiB
+(`utils/compression.mojo:89`, plausible); `c_string` decodes C bytes with
+`unsafe_from_utf8` (`utils/dylib.mojo:373`); two `FileSink`s for one path share
+a temp file (`io/local.mojo:159`); a hand-built `ThreadPool` is documented to
+redirect after `fork` and does not (`utils/threads.mojo:39`).
+
+**Malformed input: an abort, an overrun or garbage instead of a
+`CorruptError`.** These belong with §1.14 and want fuzz reproducers:
+
+| Fix | Where | What the input does |
+|---|---|---|
+| Overflow-free range checks, `len > size - off` (D) | `io/core.mojo:38`, `ipc.mojo:1914` | a crafted `body_len` wraps both checks, then a huge read or allocation |
+| Reject union index -1 when there is no null branch | `avro/decoder.mojo:86` | a null in a non-nullable field |
+| Reject a tenth `Leb128` byte above bit 63 | `codecs/byteorder.mojo:150` | an overflowing varint is accepted |
+| `page_bounds` validates the page index with `_chunk_offsets(cc, rg.num_rows)` | `parquet/reader.mojo:3173` | non-tiling offsets prune the wrong rows |
+| Bound the bit width in `Hybrid.decode_runs`, `count_matches` and `DictionaryValues.gather` | `codecs/hybrid.mojo:69`, `parquet/codecs.mojo:163` | widths up to 255 straight from the page |
+| Key IPC dictionaries by `Dict[Int, DynArray]` | `ipc.mojo:2590, 2695` | id `1<<40` allocates until out of memory |
+| `BigEndian.put_signed` sign-extends when `width > size_of` | `codecs/byteorder.mojo:220`, `avro/binary.mojo:213` | a decimal written as a wider `fixed` emits 4 bytes for 20 and misaligns the file (writer side, valid schema) |
+| Check manifest and delete-file column dtypes (C) | `iceberg/manifest.mojo:159-243`, `iceberg/scan.mojo:112` | a `long` `file_path` aborts the process |
+| Validate against a buffer's logical byte size (B) | `arrays.mojo:419, 492, 1522`, `buffers.mojo:704` | a short IPC or C-Data buffer passes and padding or foreign memory reads as values |
+| Bounds-check every Parquet PLAIN, dictionary-page, INT96 and level read (`codecs.Plain`, `LittleEndian.checked`) | `parquet/codecs.mojo:128, 364, 626`, `parquet/reader.mojo:656, 729, 905, 1090, 1122, 1282, 1350, 1417, 1474` | a dictionary page claiming 10^6 values over 4 bytes reads 4 MB past it; an index with no dictionary page aborts |
+
+Lower stakes: V2 pages with empty level streams index empty lists
+(`parquet/reader.mojo:510`); a BYTE_ARRAY decimal decodes as 0 and an FLBA
+decimal wider than its storage overruns `BigEndian.signed`
+(`parquet/schema.mojo:789`); a bare `repeated` field reads one row per element
+(`parquet/schema.mojo:1027`); `tiles_chunk` accepts a negative page size
+(`parquet/format.mojo:1318`); a short `row_selections` drops trailing rows
+(`parquet/reader.mojo:3033`); IPC maps unknown int, decimal and time
+`bitWidth`s to a default where C Data refuses (`ipc.mojo:1675`); the
+DELTA_BINARY_PACKED header's miniblock layout is not validated
+(`codecs/delta_binary_packed.mojo:114`); the codec cascades `reserve` an
+unvalidated count (`codecs/core.mojo:292`); `integration.binary()` writes at a
+negative offset (`integration.mojo:370`).
+
+**Not correctness -- duplication, dead code, layering.** Gate every row that
+touches a kernel or the expression layer on `pixi run bench-size-check`.
+
+| Fix | Where | Why |
+|---|---|---|
+| Delete about 20 unused imports | `expr/physical.mojo`, `logical.mojo`, `optimizer.mojo`, `estimates.mojo`, `comptime/*`, `runtime/aggregates.mojo` | cleanup |
+| Pass `type_length` in `_emit_field` | `parquet/schema.mojo:1471` | FLBA pages fall back to `MAX_ROWS_PER_PAGE`: ~80 MB pages for `fixed_size_binary(4096)` |
+| Correct `floor_div`'s docstring or reduce it to `//` | `utils/datetime.mojo:28` | it says `//` truncates; `truncate_div` relies on it flooring |
+| Delete the small dead items: `JoinOrder.cost` (a copy of `JoinChain.cost`), `DynValue._shape`, `_IpcEncoder.encode_schema`, `create_vector_u8`, `CArrowDeviceArray.to_array`, `simd_width(s)`, `PrimitiveBuilder.set_length`, `Table.get_schema`, `SchemaNode.contains_repeated`, `PARQUET_MAGIC`, `OpenDalWriter.__enter__` | grepped across the repo | no caller |
+| Delete the codecs chain framework (`cascade.mojo`, `dyn_cascade.mojo`, `core.mojo`'s stream layer, the `constant`/`rle`/`varint`/`xor`/`frequency`/`delta`/`plain` codecs) and the test-only Iceberg transform apply path (`Transform.apply`, `murmur3_x86_32`, `encode_bound`, `snapshot_as_of`) | `marrow/codecs/`, `marrow/iceberg/` | ~1,750 lines with no caller outside their tests; if a cascade is kept, keep one -- the two writers and readers are byte-identical loops |
+| One "owned, rebased validity" helper for the five spellings and seven self-unions | `kernels/cast.mojo:338`, `string.mojo:114, 1051`, `boolean.mojo:132, 380`, `nested.mojo:76`, `temporal.mojo:289, 574, 634, 757` | its absence let the unary bitmap bug in |
+| `Buffer.alloc_for[T](ctx, n)` for the GPU-or-CPU allocation ladder | `kernels/numeric.mojo:108, 187, 607`, `cast.mojo:257, 760, 814`, `boolean.mojo:367`, `hashing.mojo:311, 379, 477` | ten copies |
+| Move `JoinOrder`/`PlannedJoin` beside `JoinRules`; `valid_min_max` into `kernels/aggregate`; `assert_values_equal` out of `utils/testing.mojo` | `expr/physical.mojo:2368`, `expr/estimates.mojo:37`, `utils/testing.mojo:36` | plan data in the physical layer, the cost model on the Parquet layer, utils on kernels |
+| One compression dispatch for Parquet, IPC and Avro; drop `CompressionLibs._sz` | `parquet/codecs.mojo`, `ipc.mojo:197`, `avro/file.mojo:51` | snappy is native in Avro and `dlopen`ed in Parquet; Avro decompresses zstd through libzstd and compresses natively |
+| Merge Parquet's flat `LeafBuilder` and leveled `LeveledSink` families into one per-type decode step | `parquet/reader.mojo:669-1965` | two copies of every encoding per physical type, with different bounds checks |
+| One dtype <-> wire table (time units, decimal precision per width) for C Data, IPC, archery JSON, Parquet, Avro and Iceberg | the six format modules | six ladders, two of them duplicated inside `c_data.mojo` and `ipc.mojo` |
+| Move `RecordBatch.join`/`sort_by` and `ChunkedArray.combine_chunks` out of the core layer | `tabular.mojo`, `arrays.mojo` | core imports `kernels.join`, `sort`, `concat`; `execution.mojo:7` still claims the edge is gone |
+
+Smaller duplicates, each a free helper: three bounds-checked byte cursors
+(`codecs/core.mojo` `Decoder`, `avro/binary.mojo` `AvroCursor`,
+`parquet/format.mojo` `ThriftCompactReader`); three checked-JSON helper sets
+(`iceberg/document.mojo`, `datasets/huggingface.mojo`, `avro/schema.mojo`);
+two serialized-bound decoders (`parquet/statistics.mojo`,
+`iceberg/bounds.mojo`); `split_days` hand-rolled with a literal 86400
+(`kernels/temporal.mojo:179, 281, 750`, `cast.mojo:1343`) and
+`TimestampFormat` beside `Iso8601`; fixed-size-binary slot slicing in five
+places (`FixedSizeBinaryArray` wants a span accessor); four definitions of "a
+bare column" (`DynValue.read_column`, `Project._output_schema`,
+`Project.estimate`, `PushFilterBelowAggregate`); `ParquetScan` lacks the
+`with_pruners` `IcebergScan` has; the HLL register update twice
+(`kernels/distinct.mojo:124`, `aggregate.mojo:1795`); `AnyKernel.reduce` beside
+`BoolReduceKernel.dispatch`; `ArrayLengthKernel` beside `LengthKernel`;
+`hex_digit` beside `utils/hex.mojo`; `mul_wide`'s GPU branch beside
+`mul_wide_portable`; the leaves' `ParamSpec` block fifteen times and column
+`bind` thirteen times (`expr/comptime/leaves.mojo`); ~25 comptime breaker nodes
+re-copy their kernel output through the family's fused `evaluate` default; the
+validity-extend block seven times in `builders.mojo` and the slice null
+recount eight times in `arrays.mojo`. Test-only surface to keep or drop:
+`RapidSecret`/`AHash64`, `LeafSet` narrowing (every caller passes `all()`),
+the typed `case_when`/`coalesce`/`nullif`/`fill_null[T]` shims, typed
+`concat[T]`, `ThreadPool.scope`, `argparse`'s `get_float`/`get_bool`.
+
+Stale text that could mislead a fix: `CLAUDE.md` still describes
+`expr/bindings.mojo` (gone in `efdcd17a`), the `Decimal256Scalar` 64/32
+variant cause, "ten arms" in `DynRelation._dispatch` (16), `uri` under
+`utils/`, and a directory map without `avro/`, `iceberg/`, `datasets/` and
+`sql.mojo`; in code, `numeric.mojo:33` recommends the offset-unaware
+`Bitmap.intersect`, `_common_type` is called symmetric, and
+`optimizer.mojo:1987` lists rules that exist as deliberately absent.
+
 ## 2. Missing capabilities, in detail
 
 The tiering is by *user impact*, and it
@@ -1102,25 +1264,23 @@ differentiator hiding inside a table-stakes item.
     wrong for a multi-gigabyte file on an object store.
   - **No `AvroScan`** in `marrow.expr`, and `AvroFile` does not implement
     `BatchReader`, so a plan cannot scan Avro.
-  - **The Iceberg layer itself** -- the manifest-list / manifest model,
-    field-id projection and evolution over the decoded tables, and
-    `Index.from_iceberg_manifest` beside `Index.from_parquet`
-    (`marrow/expr/index.mojo`) -- is unwritten. So are field ids on the
-    *Parquet* reader, which Iceberg's data files need the same way.
-- **Codec chains, beyond the first twelve.** `marrow/codecs/` chains
-  transforms (`Delta`, `Zigzag`, `Xor`) into at most one packer (`BitPack`,
-  `Varint`, `ByteStreamSplit`, `Constant`, `Rle`, `Dictionary`, `Frequency`,
-  `Hybrid`, `DeltaBinaryPacked`), at run time (`Cascade`) or compiled
-  (`Fused`), streaming a block at a time into one self-describing stream; byte strings take the
-  `BinaryCodec`s Parquet's byte-array pages use. What is missing:
+  - **Iceberg pruning stops at identity partitions.** The manifest model,
+    field-id projection (`marrow/iceberg/`), `Index.from_manifest` and Parquet
+    field ids exist; a non-identity partition transform (bucket, truncate,
+    year/month/day/hour) prunes nothing, and `Transform.apply` has no caller
+    outside its tests (§1.15).
+- **Codec chains, beyond the first twelve.** `marrow/codecs/` chains any
+  codec after any other whose output it takes, compiled and fused (`Cascade`)
+  or chosen at run time (`DynCascade`), a block at a time; the stream does not
+  name its codecs, so it is read with the chain that wrote it. Byte strings
+  take the `BinaryCodec`s Parquet's byte-array pages use. What is missing:
   - **More codecs**: patched FOR and floating-point codecs (ALP, Chimp,
-    pseudodecimal). Each is a `Transform` or a `Packer` and an arm in
-    `cascade.mojo`.
+    pseudodecimal), each one more `Codec` conformer.
   - **One dictionary builder.** `codecs.Dictionary`, Parquet's dictionary
     pages and `kernels.DictionaryEncoder` each map values to dense codes.
   - **A sampling picker**, as BtrBlocks has: trial encodes of a sample, the
-    smallest chain kept. The stream records each codec, so decoding needs no
-    change.
+    smallest chain kept. The stream does not record its chain, so a picked
+    chain must be stored beside it.
   - **A consumer.** Nothing but Parquet's kernels uses the chains; a
     marrow-native column format or spill format would.
 
