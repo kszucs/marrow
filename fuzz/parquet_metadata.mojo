@@ -14,6 +14,6 @@ from marrow.parquet import ParquetFile
 
 def fuzz_one(data: Span[UInt8, _]) raises:
     var file = ParquetFile(BufferSource(data))
-    var meta = file.metadata()
+    ref meta = file.metadata()
     _ = String(file.schema())
     _ = len(meta.row_groups)
