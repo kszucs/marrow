@@ -299,11 +299,23 @@ def relocate(path: String, location: String, root: String) -> String:
     the table was actually opened from.
 
     Iceberg records absolute paths, so a table that was copied or moved
-    names files where it used to be. A path outside `location` is returned
-    unchanged; with `root == location` this is the identity."""
-    if root == location or not path.startswith(location):
+    names files where it used to be. A local path matches a `file://`
+    location and the reverse, since writers record either spelling — a
+    file registered with pyiceberg's `add_files` keeps the bare path it was
+    given. A path outside `location` is returned unchanged; with
+    `root == location` this is the identity."""
+    var local = _without_file_scheme(path)
+    var prefix = _without_file_scheme(location)
+    if root == location or not local.startswith(prefix):
         return path
-    return root + String(path.removeprefix(location))
+    return root + String(local.removeprefix(prefix))
+
+
+def _without_file_scheme(uri: String) -> String:
+    """`uri` with a `file://` scheme dropped: `file:///w/t` is `/w/t`."""
+    if uri.startswith("file:///"):
+        return String(uri.removeprefix("file://"))
+    return uri
 
 
 def _table_schema(json: Json) raises -> TableSchema:

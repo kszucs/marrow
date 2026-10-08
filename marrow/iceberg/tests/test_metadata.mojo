@@ -92,6 +92,11 @@ def test_iceberg_metadata_relocate() raises:
     assert_equal(
         relocate("s3://elsewhere/f", at, "/repo/t"), "s3://elsewhere/f"
     )
+    # A bare path under a `file://` location, and the reverse.
+    assert_equal(
+        relocate("/w/t/data/f.parquet", at, "/repo/t"), "/repo/t/data/f.parquet"
+    )
+    assert_equal(relocate(path, "/w/t", "/repo/t"), "/repo/t/data/f.parquet")
 
 
 def _entry(status: Int, seq: Optional[Int]) -> ManifestEntry:
