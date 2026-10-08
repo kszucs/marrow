@@ -75,6 +75,12 @@ struct TestSuite:
     results as JSON) on top of the standard suite.
     """
 
+    # Nothing parameterised on `funcs` may become a symbol of its own: its
+    # mangled name spells every case of the unit, which passes a megabyte on
+    # a large unit and trips an assertion in Apple's linker. So `run` and its
+    # helpers are inlined, the rest is `_report`, and tests are registered one
+    # by one rather than through `_StdTestSuite.discover_tests`.
+    @always_inline
     @staticmethod
     def _collect_names[funcs: Tuple, prefix: StaticString]() -> List[String]:
         """Collect function names matching *prefix* at compile time."""
@@ -85,6 +91,17 @@ struct TestSuite:
                 names.append(get_function_name[func]())
         return names^
 
+    @always_inline
+    @staticmethod
+    def _discover[funcs: Tuple](flags: CLIFlags) -> _StdTestSuite:
+        """A std suite holding every `test_` function in *funcs*."""
+        var suite = _StdTestSuite(cli_args=Self._strip_flags(flags))
+        comptime for idx in range(len(funcs)):
+            comptime func = funcs[idx]
+            comptime if get_function_name[func]().startswith("test_"):
+                suite.test[rebind[def() raises thin -> None](func)]()
+        return suite^
+
     @staticmethod
     def _strip_flags(flags: CLIFlags) -> List[StaticString]:
         """Build cli_args with our flags stripped for std TestSuite."""
@@ -94,6 +111,7 @@ struct TestSuite:
                 cli_args.append(arg)
         return cli_args^
 
+    @always_inline
     @staticmethod
     def run[funcs: Tuple, /]() raises:
         """Discover tests, optionally list them, and run.
@@ -112,52 +130,50 @@ struct TestSuite:
         if flags.list_cases:
             _print_json_array(Self._collect_names[funcs, "test_"]())
             return
+        Self._report(flags, Self._discover[funcs](flags))
 
-        if flags.json_output:
-            var suite = _StdTestSuite.discover_tests[funcs](
-                cli_args=Self._strip_flags(flags)
-            )
-            var report: TestSuiteReport
-            try:
-                report = suite.generate_report()
-            finally:
-                suite^.abandon()
-
-            # Emit JSON results.
-            print("[")
-            for i in range(len(report.reports)):
-                ref r = report.reports[i]
-                var status: String
-                if r.result == TestResult.PASS:
-                    status = "PASS"
-                elif r.result == TestResult.FAIL:
-                    status = "FAIL"
-                else:
-                    status = "SKIP"
-                var error = String(r.error.value()) if r.error else String("")
-                var comma = "," if i < len(report.reports) - 1 else ""
-                print(
-                    '  {"name": "'
-                    + r.name
-                    + '", "status": "'
-                    + status
-                    + '", "duration_ns": '
-                    + String(r.duration_ns)
-                    + ', "error": '
-                    + _json_string(error)
-                    + "}"
-                    + comma
-                )
-            print("]")
-
-            if report.failures > 0:
-                raise Error(report^)
+    @staticmethod
+    def _report(flags: CLIFlags, var suite: _StdTestSuite) raises:
+        """Run `suite`, as JSON under `--json` and as the std suite's
+        human-readable output otherwise."""
+        if not flags.json_output:
+            suite^.run()
             return
 
-        # Default: delegate to std TestSuite (human-readable output).
-        _StdTestSuite.discover_tests[funcs](
-            cli_args=Self._strip_flags(flags)
-        ).run()
+        var report: TestSuiteReport
+        try:
+            report = suite.generate_report()
+        finally:
+            suite^.abandon()
+
+        print("[")
+        for i in range(len(report.reports)):
+            ref r = report.reports[i]
+            var status: String
+            if r.result == TestResult.PASS:
+                status = "PASS"
+            elif r.result == TestResult.FAIL:
+                status = "FAIL"
+            else:
+                status = "SKIP"
+            var error = String(r.error.value()) if r.error else String("")
+            var comma = "," if i < len(report.reports) - 1 else ""
+            print(
+                '  {"name": "'
+                + r.name
+                + '", "status": "'
+                + status
+                + '", "duration_ns": '
+                + String(r.duration_ns)
+                + ', "error": '
+                + _json_string(error)
+                + "}"
+                + comma
+            )
+        print("]")
+
+        if report.failures > 0:
+            raise Error(report^)
 
 
 struct Benchmark:
