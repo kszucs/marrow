@@ -151,3 +151,5 @@ print(people.sort_by([("age", "descending")]).to_pylist())
 - **[Compute kernels](../guide/compute.qmd)** — the full kernel catalogue and
   null semantics.
 - **[Tables & joins](../guide/tables.qmd)** — `RecordBatch`, `Table` and hash joins.
+- **[Lazy queries](../guide/queries-lazy.qmd)** — aggregates, group-by and SQL
+  over a plan that runs once, on `collect()`.

@@ -16,12 +16,14 @@ comes from, so it can be checked rather than taken on trust.
 
 ## How correctness is measured
 
-Two independent checks, neither of which grades marrow against itself:
+Four checks, none of which grades marrow against itself:
 
-- **The golden corpus** — `golden/`, **285 query cases**. Each records a SQL
+- **The golden corpus** — `golden/`, **291 query cases**. Each records a SQL
   query, the answer **generated from DuckDB**, and the marrow spelling. The
-  expectations are *never* regenerated from marrow. The corpus currently
-  carries **zero `xfail`s**: every case that compiles, passes.
+  expectations are *never* regenerated from marrow. The corpus carries **one
+  `xfail`**, a divergence chosen on purpose: a decimal divided by an integer
+  stays an exact decimal, as in Arrow C++, where DuckDB answers a `DOUBLE`.
+  Every other case that compiles, passes.
 - **Arrow archery integration** — the official cross-implementation suite, run
   against the **C++, Rust and Go** implementations in both directions
   (`pixi run -e integration integration`), skipping the layouts marrow does not
@@ -29,6 +31,18 @@ Two independent checks, neither of which grades marrow against itself:
   reads the suite's JSON, writes and reads IPC, and exports and imports C Data
   itself; pyarrow only compares the results. See [Spec compliance](compliance.qmd) for
   what is checked, type by type.
+- **Differential property tests** — `python/marrow/tests/test_properties_*.py`
+  draw random, often sliced, PyArrow inputs with Hypothesis. Every compute
+  kernel must answer exactly as `pyarrow.compute` does, and raise where it
+  raises. Parquet and IPC files must round-trip with PyArrow writing, reading,
+  or both. A malformed C Data export must be refused, never crash the process.
+  Each divergence they find is pinned as a strict `xfail` with its minimal
+  input.
+- **Fuzzing** — libFuzzer harnesses for IPC streams and files, Parquet footers,
+  whole Parquet files and page indexes, the Mojo Snappy codec and the page
+  codecs. The corpus records a verdict per
+  input, and `pixi run -e dev fuzz-replay` replays it, together with the inputs
+  that once crashed Arrow C++'s own fuzzers.
 
 ## Known-wrong answers
 
@@ -37,7 +51,7 @@ carries int64 max/min against the day a checked mode exists; the machinery is
 already in `cast`, which takes `safe` as a comptime parameter.
 
 Division by zero is no longer one of these: floats answer `inf`, `-inf` and
-`nan`, and `pc.divide` raises on an integer zero divisor as
+`nan`, and `mc.divide` raises on an integer zero divisor as
 `pyarrow.compute.divide` does.
 
 One latent trap is worth knowing too: `count(*)` desugars to `count(lit(1))`,
@@ -47,20 +61,20 @@ narrowing a source to zero columns.
 
 ## What the corpus measures as missing
 
-51 of the 286 cases carry `-- skip mojo`: marrow has no API for them, so the
+51 of the 291 cases carry `-- skip mojo`: marrow has no API for them, so the
 SQL and the DuckDB answer are recorded and the marrow body is a *proposal*
 rather than a verified spelling.
 
 | cases | area |
 |---:|---|
-| 12 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness, `bool_and`/`bool_or` |
+| 12 | aggregates — median, quantile, mode, arg_min/arg_max, ordered first/last, string_agg, corr/covar, skewness/kurtosis, bitwise, `bool_and`/`bool_or`, multi-column `count(DISTINCT)`, `sum(DISTINCT)` |
 | 9 | temporal — date_diff, age, strftime/strptime, make_date, epoch seconds, month intervals, timestamp literals |
 | 8 | nested — struct field, map lookup, list element/slice, unnest |
 | 7 | math — greatest/least, rounding to digits, bitwise operators, gcd/lcm, signbit, trigonometry |
-| 2 | string — concat_ws, null-skipping `concat` |
-| 4 | joins — cross, non-equi, asof |
+| 4 | joins — cross, non-equi, asof, an outer join's residual `ON` condition |
 | 3 | GROUPING SETS / ROLLUP / CUBE |
-| 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |
+| 3 | filters — `IN` over a literal list, SQL `NOT IN` null semantics, `IS DISTINCT FROM` |
+| 2 | string — concat_ws, null-skipping `concat` |
 | 2 | subqueries |
 | 1 | `DISTINCT ON` |
 
@@ -71,12 +85,12 @@ table.
 
 | | Status |
 |---|---|
-| **Layouts** | bool, numeric, string/large_string, binary/large_binary, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — **implemented**. Union, run-end-encoded and view layouts — **not** |
-| **Sources** | A lazy scan reads **one Parquet file**, local or at an object-store URI through OpenDAL (whose C library is installed separately), or an in-memory batch, and **one newline-delimited JSON file** (`marrow.read_json`). Arrow IPC is read and written eagerly, NDJSON eagerly through `marrow.json`. **No CSV**, and no globs, directories or hive partitions |
-| **Parquet** | native reader and writer, snappy/zstd/lz4, data page v1 & v2, statistics, page index. Bloom filters are implemented but **off by default** and unreachable from Python. No modular encryption |
-| **Optimizer** | 18 rules plus column pruning, a cost model, and a join search over every join chain that also picks each join's build side (exhaustive, greedy past a budget) |
-| **Execution** | in-memory only — **no spilling anywhere**, so every aggregate and join is bounded by RAM |
-| **Joins** | equijoins only: inner, left, right, full, semi, anti. No nested-loop, range or asof joins |
+| **Layouts** | bool, numeric, string/large_string, binary/large_binary, string_view/binary_view, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — **implemented**. Union, run-end-encoded and list-view layouts — **not** |
+| **Sources** | A lazy scan reads one Parquet or newline-delimited JSON file (`read_parquet`, `read_json`), an Iceberg table (`read_iceberg`), many Parquet, JSON Lines or Arrow files matched by glob patterns or a Hugging Face Hub dataset ([`load_dataset`](../guide/datasets.qmd)), or an in-memory batch. Files are local or at an object-store URI through OpenDAL (whose C library is installed separately). Arrow IPC, NDJSON and Avro are also read and written eagerly. **No CSV**, and hive-style `key=value/` directories do not become columns |
+| **Parquet** | native reader and writer; reads snappy, gzip, brotli, lz4, lz4_raw and zstd pages and writes snappy, zstd and lz4 (LZ4 and ZSTD in Mojo, the rest through their C libraries); data page v1 & v2, statistics, page index. Bloom filters are implemented but **off by default** and unreachable from Python. No modular encryption |
+| **Optimizer** | 19 rules plus column pruning, a cost model, and a join search over every join chain that also picks each join's build side (exhaustive, greedy past a budget) |
+| **Execution** | in-memory only — **no spilling anywhere**, so every aggregate and join is bounded by RAM. CPU parallelism runs on marrow's own thread pool (`utils/threads.mojo`), sized from the environment or the CPUs the process may use |
+| **Joins** | equijoins only: inner, left, right, full, semi, anti, right semi, right anti. No cross, nested-loop, range or asof joins |
 | **GPU** | element-wise kernels only (arithmetic, comparison, boolean, cast, hashing), and **off unless built with `-D MARROW_GPU=true`** |
 | **UDFs** | none |
 
@@ -88,19 +102,33 @@ CPython-binding limits rather than missing features:
 - **Most aggregates are not on the eager surface.** `marrow.compute` has `any`
   and `all`, but no `sum` / `min` / `max` / `mean`; those reductions live in the
   query layer.
+- **Regex and the aggregate `FILTER` clause are not Python expression
+  methods.** `regexp_matches`, `regexp_extract` and `regexp_replace` are verbs
+  in both Mojo lanes and in [`ma.sql`](../guide/queries-lazy.qmd#sql), and `FILTER (WHERE ...)` is
+  `.filter(predicate)` on a Mojo aggregate; neither is on `col()` in Python.
 - **Row groups are skipped only in an optimized plan.** `.optimize()` pushes
   filters into the Parquet scan; `collect()` on a plan that was not optimized
   reads every row group.
 - **`==` on an `Array` is identity, not element-wise.** Use `mc.equal` to compare
   values. Dtypes, fields and schemas do compare by value.
-- **Some `pyarrow.compute` options are missing.** `skip_nulls=False`,
-  multi-key `sort_keys`, `nan_is_null=True` and `boundscheck=False` raise
-  `NotImplementedError`, and `memory_pool` is ignored.
+- **Some `pyarrow.compute` options are missing.** Multi-key `sort_keys`,
+  `nan_is_null=True` and `boundscheck=False` raise `NotImplementedError`, and
+  `memory_pool` is ignored.
 
 ## Errors
 
-There are 300+ `raise Error` sites and **zero typed exceptions**, so failures
-cannot yet be caught by kind.
+Every library failure is an `ArrowError` of one kind, named after PyArrow's
+exceptions: `InvalidError`, `TypeError`, `KeyError`, `IndexError`,
+`NotImplementedError`, `IOError`, `CorruptError` and `InternalError`. Python
+raises the matching `ArrowInvalid`, `ArrowKeyError` and so on, each also
+deriving from the builtin a caller already catches (`ValueError`, `KeyError`,
+…).
+
+What is still open is the *declaration*: most Mojo signatures declare a bare
+`raises`, which keeps only the error's text, so the kind travels as a prefix of
+the message and is recovered by parsing rather than caught by type. Migrating
+signatures to `raises CorruptError` / `raises DynError` is tracked in
+`backlog.md`.
 
 ---
 

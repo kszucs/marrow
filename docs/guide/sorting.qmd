@@ -9,8 +9,9 @@ title: "Sorting"
 
 Marrow picks a sort by input type and size: for primitive arrays, a
 pattern-defeating quicksort for small inputs and an LSD radix sort for large
-ones; a comparison sort for strings; a counting sort for booleans. Nulls are
-ordered explicitly — you choose whether they sort to the front or the back.
+ones; a comparison sort for strings; a counting sort for booleans. Every sort
+is stable, and nulls are ordered explicitly — you choose whether they sort to
+the front or the back.
 
 ```{python}
 #| echo: false
@@ -58,6 +59,23 @@ Sorting works across types — strings order lexicographically:
 words = ma.array(["pear", "apple", None, "cherry"])
 print(mc.sort(words, null_placement="at_end"))
 ```
+
+### Ties, NaN and signed zero
+
+The sort is **stable**: equal values keep their input order, as in Arrow's
+`sort_indices`. A NaN sorts between the numbers and the nulls, at whichever
+end `null_placement` puts the nulls, as PyArrow places it. `-0.0` and `0.0`
+are equal here, so they too keep their input order:
+
+```{python}
+f = ma.array([2.0, float("nan"), None, -0.0, 1.0, 0.0])
+print(mc.sort_indices(f))
+print(mc.sort_indices(f, null_placement="at_start"))
+```
+
+The query layer orders NaN as SQL does instead: as a value above every
+number, with the nulls placed on their own. [Compute](compute.qmd) explains
+why the two differ.
 
 ## Sorting a table
 
@@ -121,10 +139,12 @@ For primitive arrays, the strategy switches at fixed sizes:
 
 | Input size | Strategy |
 |------------|----------|
-| `N < 32,768` | PDQsort (pattern-defeating quicksort) |
-| `N ≥ 32,768` | LSD radix sort |
+| below 6,144 rows (32-bit values) or 12,288 rows (64-bit values) | PDQsort over (value, row) pairs, so ties keep their order |
+| from there up | LSD radix sort, stable by construction |
 | `N ≥ 524,288` | Parallel radix sort, given a multi-threaded context |
 
-The thresholds are fixed rather than tuned per machine, and they are not the
-fastest choice at every size. `mc.sort` and `mc.sort_indices` run
-single-threaded unless you pass a multi-threaded `ctx`.
+Values wider than 64 bits (decimal128 and decimal256) take a comparison sort.
+In Mojo, `sort_indices[stable=False]` gives up stability, which moves the radix
+crossover to 32,768 rows. The thresholds are fixed rather than tuned per
+machine, and they are not the fastest choice at every size. `mc.sort` and
+`mc.sort_indices` run single-threaded unless you pass a multi-threaded `ctx`.

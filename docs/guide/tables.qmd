@@ -135,7 +135,7 @@ The signature is
 | `right` | the right-hand `RecordBatch` |
 | `keys` | list of left-side key column names (a bare string is also accepted) |
 | `right_keys` | right-side names, or `None` to reuse `keys` |
-| `join_type` | `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`, `"anti"` |
+| `join_type` | `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`, `"anti"`, `"right semi"`, `"right anti"` |
 | `num_threads` | `0` auto-selects cores; `1` forces the serial path |
 
 The supported join types:

@@ -22,10 +22,10 @@ repo-actions: false
 <span class="mr-pill"><span class="mr-pill-tag">Experimental</span>Open source, Apache 2.0</span>
 <h1 class="mr-headline">Apache Arrow,<br><span class="mr-ramp">written in Mojo.</span></h1>
 <p class="mr-lead">
-  Columnar arrays, null-aware compute kernels, Parquet and Arrow IPC, and a
-  small query engine. Use it from Python much as you would PyArrow, or build a
-  Mojo query into its own executable. It covers a useful part of Arrow, not all
-  of it.
+  Columnar arrays, null-aware compute kernels, Parquet, Arrow IPC, JSON, Avro
+  and Iceberg, and a small query engine. Use it from Python much as you would
+  PyArrow, or build a Mojo query into its own executable. It covers a useful
+  part of Arrow, not all of it.
 </p>
 <div class="mr-cta">
   <a class="mr-btn mr-btn-primary" href="tutorials/quickstart.html">
@@ -79,15 +79,15 @@ from marrow import col, lit
 ```{=html}
 <div class="mr-numbers">
   <div class="mr-number">
-    <span class="mr-number-value">215 of 278</span>
-    <span class="mr-number-label">SQL queries in the test corpus answered exactly as DuckDB answers them. The other 63 are recorded too, and wait on features marrow does not have yet.</span>
+    <span class="mr-number-value">240 of 291</span>
+    <span class="mr-number-label">SQL queries in the test corpus answered exactly as DuckDB answers them. The other 51 are recorded too, and wait on features marrow does not have yet.</span>
   </div>
   <div class="mr-number">
     <span class="mr-number-value">3</span>
     <span class="mr-number-label">Arrow implementations (C++, Rust, Go) it exchanges IPC files and C Data with in Arrow's integration suite, for the layouts it implements.</span>
   </div>
   <div class="mr-number">
-    <span class="mr-number-value">3.0 MB</span>
+    <span class="mr-number-value">3.3 MB</span>
     <span class="mr-number-label">Machine code in a compiled Parquet query on macOS arm64, held there by a CI size gate. The executable also loads the Mojo runtime libraries.</span>
   </div>
 </div>
@@ -189,8 +189,9 @@ runtime libraries it loads, for running it on another machine.
 
 ::: {.callout-note}
 ## How correctness is checked
-A corpus of 278 SQL queries whose expected answers come from DuckDB, never from
-marrow: 215 run and match, and 63 wait on features marrow does not have yet.
+A corpus of 291 SQL queries whose expected answers come from DuckDB, never from
+marrow: 240 run, 51 wait on features marrow does not have yet, and one records
+a divergence chosen on purpose.
 Arrow's own integration suite round-trips IPC files and
 C Data with the C++, Rust and Go implementations, skipping the layouts marrow
 does not implement (unions, list views, run-end encoding, extension types). See

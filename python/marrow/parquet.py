@@ -79,8 +79,9 @@ def write_table(
         with ``min_chunk_size=262144`` and ``max_chunk_size=1048576``. A dict
         overrides the defaults and must supply both ``min_chunk_size`` and
         ``max_chunk_size`` (bytes); it may also supply ``norm_level``
-        (default 0), which widens the chunk-size distribution around the
-        average when positive and narrows it when negative -- see
+        (default 0): a positive level finds boundaries more readily, which
+        centres the chunk sizes more tightly around the average at the cost of
+        more, smaller pages, and a negative one does the opposite -- see
         :func:`pyarrow.parquet.write_table`.
 
         marrow applies the 20 000-row page cap inside each chunk, matching

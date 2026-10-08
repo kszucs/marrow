@@ -86,14 +86,18 @@ download the result:
 from max.gpu.host import DeviceContext
 from marrow.builders import array
 from marrow.dtypes import int32, Int32Type
+from marrow.execution import ExecContext
 from marrow.kernels.numeric import AddKernel
 
-var ctx = DeviceContext()
-var a = array([1, 2, 3, 4], int32).to_device(ctx)
-var b = array([10, 20, 30, 40], int32).to_device(ctx)
+var device = DeviceContext()
+var a = array([1, 2, 3, 4], int32).to_device(device)
+var b = array([10, 20, 30, 40], int32).to_device(device)
 
-var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)
+var result = AddKernel.apply[Int32Type](a, b, ExecContext.gpu(device)).to_cpu(device)
 ```
+
+Transfers take the `DeviceContext`; the kernel takes an `ExecContext` wrapping
+it, as the previous section said.
 
 | Method | Effect |
 |---|---|

@@ -7,9 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 title: "File I/O"
 ---
 
-Marrow reads and writes two on-disk formats: the **Arrow IPC** format (both the
-file and stream framings) for zero-overhead round trips of the in-memory layout,
-and **Parquet** for compact, columnar long-term storage.
+Marrow reads and writes four on-disk formats: the **Arrow IPC** format (both
+the file and stream framings) for zero-overhead round trips of the in-memory
+layout, **Parquet** for compact, columnar long-term storage, **newline-delimited
+JSON** for exchange with tools that speak JSON, and **Avro** container files.
 
 ```{python}
 #| echo: false
@@ -81,6 +82,18 @@ ma.write_ipc_stream(stream_path, batches=[batch])
 print(ma.read_ipc_stream(stream_path)[0].to_pydict())
 ```
 
+### Compression
+
+`write_ipc_file` and `write_ipc_stream` compress each batch's buffers with
+`compression="lz4"` or `"zstd"`, as PyArrow's `IpcWriteOptions` does. The
+readers take the codec from the file, so reading needs no option:
+
+```{python}
+zstd_path = os.path.join(tempfile.mkdtemp(), "people-zstd.arrow")
+ma.write_ipc_file(zstd_path, batches=[batch], compression="zstd")
+print(ma.read_ipc_file(zstd_path)[0].to_pydict())
+```
+
 ## Parquet
 
 Marrow ships a **from-scratch** Parquet reader and writer — it decodes and
@@ -113,6 +126,19 @@ subset = pq.read_table(pq_path, columns=["city", "id"])
 print(subset.column_names)
 ```
 
+### String layout
+
+A Parquet `BYTE_ARRAY` column has no layout of its own, so the reader picks
+one. `binary_type=` names the type a column *without* a logical annotation
+decodes to, and a column annotated as a string takes the matching string
+layout — the same knob as PyArrow's. With `ma.binary_view()` the rows point
+into the decoded page rather than being copied out of it:
+
+```{python}
+views = pq.read_table(pq_path, binary_type=ma.binary_view())
+print(views.schema.field("city").type)
+```
+
 ### Compression and page version
 
 `write_table` accepts a `compression` codec and a Parquet data-page version:
@@ -126,6 +152,10 @@ print(pq.read_table(pq_path).num_rows)
 |----------|--------|---------|
 | `compression` | `"snappy"`, `"zstd"`, `"lz4"`, `"none"` | `"snappy"` |
 | `data_page_version` | `"1.0"`, `"2.0"` | `"1.0"` |
+| `native_codecs` | `True`, `False` | `True` |
+
+`"lz4"` writes Parquet's `LZ4_RAW` codec, as PyArrow's does. The reader also
+decodes the gzip, brotli and Hadoop-framed `LZ4` pages other writers produce.
 
 The writer also emits column statistics (min/max/null/distinct counts) and a
 page index, so readers on the other side can prune row groups and pages. Bloom
@@ -139,10 +169,167 @@ write_table` operate on a marrow `Table`, and the `marrow/parquet` package also
 exposes lower-level metadata, statistics, page-index and bloom-filter readers.
 :::
 
+### Content-defined chunking
+
+A Parquet writer normally closes a data page once it reaches a fixed size, so
+inserting or deleting a few rows moves every page boundary after the edit, and
+every page from there on changes. With `use_content_defined_chunking=True` the
+boundaries are placed where a rolling hash over each column's values says
+instead. An edit then changes only the pages around it, and the rest of the
+file stays byte-identical to the previous version. A content-addressable store
+such as [Xet](https://huggingface.co/docs/hub/xet/deduplication), the storage
+layer of the Hugging Face Hub, uploads and keeps only the pages that changed.
+The Hugging Face blog post
+[Parquet Content-Defined Chunking](https://huggingface.co/blog/parquet-cdc)
+explains the technique and measures the savings on real datasets.
+
+```{python}
+cdc_path = os.path.join(tempfile.mkdtemp(), "cities-cdc.parquet")
+pq.write_table(table, cdc_path, use_content_defined_chunking=True)
+
+pq.write_table(
+    table,
+    cdc_path,
+    use_content_defined_chunking={
+        "min_chunk_size": 128 * 1024,
+        "max_chunk_size": 512 * 1024,
+        "norm_level": 1,
+    },
+)
+print(pq.read_table(cdc_path).num_rows)
+```
+
+`True` uses the defaults; a dict must name both sizes and may add
+`norm_level`:
+
+| Key | Meaning | Default |
+|-----|---------|---------|
+| `min_chunk_size` | bytes a page holds before a boundary may be placed | 262,144 (256 KiB) |
+| `max_chunk_size` | bytes at which a boundary is forced | 1,048,576 (1 MiB) |
+| `norm_level` | above 0 finds boundaries more readily, centring page sizes on the average at the cost of more, smaller pages; below 0 the reverse | 0 |
+
+The sizes count the column's logical content, its definition and repetition
+levels and its values, before encoding and compression. Only the writer
+changes: any Parquet reader reads the file as usual.
+
+The option, its defaults and its page boundaries are those of PyArrow's
+[`use_content_defined_chunking`](https://arrow.apache.org/docs/python/parquet.html#content-defined-chunking),
+which marrow's tests check page by page against Arrow C++. As there, each
+chunk is still split every 20,000 rows. One difference remains: Arrow C++ also
+closes a page once its encoded size grows past a limit, and marrow, which
+picks boundaries before encoding, does not. Very wide values with a large
+`max_chunk_size` can therefore give larger pages than PyArrow would.
+
+Deduplication only finds what stayed the same, so keep the other write
+options, `compression` and `data_page_version`, the same from one version of
+a file to the next. The Hub's
+[PyArrow guide](https://huggingface.co/docs/hub/datasets-pyarrow#leverage-xet-deduplication-for-parquet)
+shows what an edit then uploads: a new column uploads only that column's
+chunks, and an added, edited or deleted row about one chunk per column. It
+also recommends a page index, which marrow always writes. Hugging Face's
+[dataset-dedupe-estimator](https://github.com/huggingface/dataset-dedupe-estimator)
+estimates how well a set of files deduplicates.
+
+In Mojo, `write_table` takes
+`content_defined_chunking=ContentDefinedChunking(min_chunk_size=..., max_chunk_size=..., norm_level=...)`,
+both from `marrow.parquet`.
+
+### LZ4 and ZSTD in Mojo
+
+LZ4 and ZSTD are implemented in Mojo, for Parquet pages and IPC bodies alike,
+on the way in and on the way out. `native_codecs=False` hands them to liblz4
+and libzstd instead; the compressed bytes are the same, against liblz4 1.10.0
+and libzstd 1.5.7. Every Parquet and IPC read and write function takes the
+switch. Snappy, gzip and brotli always go through their C libraries, which
+marrow loads when a file first needs them.
+
 ::: {.callout-tip}
-To read many files — a directory, a glob, or a Hugging Face Hub dataset — as one
-lazy table, see [Datasets](datasets.qmd).
+To read many files — a directory, a glob, an Iceberg table, or a Hugging Face
+Hub dataset — as one lazy table, see [Datasets](datasets.qmd).
 :::
+
+## Newline-delimited JSON
+
+`marrow.json` mirrors `pyarrow.json`: one JSON object per line, read into a
+`Table` and written from one. Here it writes the Parquet example's table and
+reads it back:
+
+```{python}
+import marrow.json as mj
+
+json_path = os.path.join(tempfile.mkdtemp(), "cities.jsonl")
+mj.write_json(table, json_path)
+print(open(json_path).read())
+
+from_json = mj.read_json(json_path)
+print(from_json.schema)
+```
+
+Types are inferred as Arrow C++ infers them: integers widen to `double` when a
+column also holds fractions, ISO-8601 strings become `timestamp[s]`, objects
+become structs and arrays lists. Inference reads the whole file. To fix the
+columns instead, pass a schema:
+
+```{python}
+fixed = mj.read_json(
+    json_path,
+    parse_options=mj.ParseOptions(
+        explicit_schema=ma.schema([ma.field("id", ma.int32()), ma.field("city", ma.string())]),
+        unexpected_field_behavior="ignore",
+    ),
+)
+print(fixed.schema)
+```
+
+`unexpected_field_behavior` decides what a key outside the schema does:
+`"infer"` adds a column for it, `"ignore"` drops it and `"error"` raises.
+`mj.open_json` reads the file a block at a time, one `RecordBatch` per block,
+with the schema fixed after the first; `ReadOptions(block_size=...)` sets the
+block size, 1 MiB by default:
+
+```{python}
+for chunk in mj.open_json(json_path):
+    print(chunk.num_rows, chunk.column_names)
+```
+
+`write_json` writes keys in schema order, nulls as `null`, timestamps and dates
+as ISO-8601 strings, and a NaN or an infinity as `null`. It accepts any
+Arrow-C-stream object, so a PyArrow table can be written directly.
+
+Where marrow differs from PyArrow: the reader is single-threaded and accepts
+`use_threads` only to ignore it, a row longer than `block_size` grows the read
+instead of failing, a bare `NaN` is refused as the non-JSON it is, and a file
+of empty objects reads as zero rows. `newlines_in_values=True` is not
+supported.
+
+`ma.read_json` is the [lazy](queries-lazy.qmd) counterpart, a scan the query
+verbs compose with, as `read_parquet` is. It infers the schema from the first
+block only, so pass `schema=` when a later row may add a key or widen a type.
+
+## Avro
+
+`marrow.avro` reads and writes Avro object container files, the format Iceberg
+keeps its manifests in:
+
+```{python}
+import marrow.avro as mavro
+
+avro_path = os.path.join(tempfile.mkdtemp(), "cities.avro")
+mavro.write_table(table, avro_path, codec="snappy")
+print(mavro.read_table(avro_path, columns=["city", "id"]).to_pydict())
+```
+
+| Argument | Values | Default |
+|----------|--------|---------|
+| `codec` (`write_table`) | `"deflate"`, `"snappy"`, `"zstandard"`, `"null"` | `"deflate"` |
+| `columns` (`read_table`) | top-level field names, in the order wanted | every field |
+
+A file is read with the schema its writer recorded; there is no reader schema
+to resolve it against. Avro logical types become the matching Arrow types,
+a union of `null` and one type becomes a nullable column, and Avro's field
+ids (`field-id`, and an array's `element-id`, a map's `key-id` and `value-id`)
+become `field_id` metadata on the Arrow fields. Header metadata outside
+`avro.*` becomes the table schema's metadata.
 
 ## Choosing a format
 
@@ -150,3 +337,7 @@ lazy table, see [Datasets](datasets.qmd).
   the Arrow ecosystem. The bytes on disk are the columnar buffers.
 - **Parquet** — you want compression, column pruning and row-group / page
   statistics for archival or interchange with data-lake tooling.
+- **Newline-delimited JSON** — another tool produces or consumes JSON, or a
+  person needs to read the file.
+- **Avro** — you exchange row-oriented records with an Avro-based system, or
+  read the manifests of an Iceberg table.

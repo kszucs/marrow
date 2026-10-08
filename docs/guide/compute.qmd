@@ -11,8 +11,10 @@ Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons,
 selection and casting. All kernels are null-aware; the exact null handling
 depends on the operation.
 
-String, temporal, boolean and conditional kernels are implemented in Mojo but
-not yet bound to Python — they are reachable from a query plan instead.
+The eager surface is arithmetic, comparison, `any`/`all`, `is_null`/`is_valid`,
+`filter`/`take`/`drop_null`, `cast` and sorting. String, temporal, conditional
+and the `and`/`or`/`not` kernels are implemented in Mojo but not yet bound to
+Python — they are reachable from a [query plan](queries-lazy.qmd) instead.
 
 ```{python}
 #| echo: false
@@ -25,7 +27,7 @@ from marrow import compute as mc
 The compute functions live in `marrow.compute`, and their names and signatures
 follow `pyarrow.compute` for the functions it implements — `mc.add`,
 `mc.subtract`, `mc.cast`, `mc.filter`. It is not a drop-in replacement: some
-options (`skip_nulls=False`, `nan_is_null=True`, multi-key `sort_keys`) raise
+options (`nan_is_null=True`, `boundscheck=False`, multi-key `sort_keys`) raise
 `NotImplementedError`, and `memory_pool` is ignored.
 
 ## Arithmetic
@@ -270,8 +272,10 @@ floats = ma.array([1.9, -1.9, 2.5], type=ma.float64())
 print("truncated: ", mc.cast(floats, ma.int32(), safe=False))
 ```
 
-Casts cover the numeric, boolean, string/binary and temporal families,
-including decimal rescaling and dictionary decode at the Mojo level.
+Casts cover the numeric, boolean, string/binary, temporal and decimal
+families — a decimal casts to and from numeric, text and another
+precision/scale — plus a zoned timestamp to text and dictionary decode at the
+Mojo level.
 
 ## Null behaviour summary
 

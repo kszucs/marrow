@@ -64,18 +64,23 @@ t.select("region", "price")            # project by name
 t.drop("qty")
 t.rename({"price": "amount"})
 t.with_columns(total=col("qty") * col("price"))   # add/replace, keep the rest
-t.project(only=col("price") + lit(1))  # replace the projection entirely
+t.project(bumped=col("price") + lit(1))  # replace the projection entirely
 t.filter(col("region") == lit("east"))
 t.aggregate(by=["region"], n=ma.count_star())
 t.order_by(("price", "descending")).limit(10, offset=100)
 t.head(5)
 t.join(other, on="region", how="inner")
+t.distinct()                           # SELECT DISTINCT
+t.union(other)  /  t.except_(other)  /  t.intersect(other)
 t.explain()                            # the plan as text
 t.collect()  /  t.to_pyarrow()
 ```
 
 `collect(num_threads=)` controls execution: `0` auto, `1` serial, `N` forces N
-workers.
+workers. What `0` resolves to is `ma.cpu_count()`, and `ma.set_cpu_count(n)`
+changes it for every later call — the same names PyArrow uses, with
+`io_thread_count` / `set_io_thread_count` for the threads an object-store read
+fans out over.
 
 ## Column expressions
 
@@ -101,9 +106,16 @@ t.with_columns(
 The surface covers arithmetic and comparison operators, `&`/`|`/`~`/`^`,
 `abs`/`sign`/`floor`/`ceil`/`round`/`trunc`/`sqrt`/`exp`/`ln`, the string verbs
 (`upper`, `lower`, `strip`, `length`, `startswith`, `contains`, `like`,
-`ilike`, …), the temporal extractors and `date_trunc`, plus `cast`, `isin`,
-`array_length`, `is_null`, `is_valid`, `is_nan`, `is_inf`, `fill_null`,
-`coalesce`, `nullif`, `if_else` and `case_when`.
+`ilike`, …), the temporal extractors, `date_trunc`, `assume_timezone` and
+`convert_timezone`, plus `cast`, `isin`, `array_length`, `is_null`,
+`is_valid`, `is_nan`, `is_inf`, `fill_null`, `coalesce`, `nullif`, `if_else`
+and `case_when`.
+
+Operands of different types meet at one common type: integers widen, decimals
+follow Arrow's promotion rules (a sum keeps its scale, a product adds them), a
+`string` beside a `string_view` takes the view layout, and null takes the other
+side. A timestamp with a time zone holds UTC instants and reads its fields —
+`year`, `hour`, `date_trunc` — in its own zone.
 
 ## Aggregation
 
@@ -153,8 +165,16 @@ managers = ma.memtable(ma.record_batch({
 t.join(managers, on="region").select("region", "manager", "price").collect().to_pylist()
 ```
 
-`how=` takes `inner`, `left`, `right`, `full`, `semi` and `anti`. Use
-`left_on=` / `right_on=` when the key names differ.
+`how=` takes `inner`, `left`, `right`, `full`, `semi`, `anti`, `right semi`
+and `right anti`. Use `left_on=` / `right_on=` when the key names differ.
+Which join runs first, and which side of each is hashed, is the optimizer's
+decision, not the call's. `.optimize()` starts by reading statistics: it
+summarises each in-memory table (row and null counts, bounds, distinct counts
+and widths) and reads each Parquet footer. It then searches the join orders
+those numbers make cheapest and picks every build side, without changing the
+output's columns or their order. `.analyze()` is that first step on its own.
+A source keeps its statistics once it has them, so analyse a large in-memory
+table once and optimize every plan built on it without summarising it again.
 
 Output names follow ibis. An inner join emits a key both sides call by one name
 once, since the join made the two equal; any other name both sides carry is
@@ -167,6 +187,43 @@ t.join(managers, on="region", how="left").column_names
 
 A clash the templates leave over — say `rname="{name}"` — raises at the join:
 two output columns may not share a name.
+
+## Set operations
+
+`distinct()` is `SELECT DISTINCT`, and the SQL set verbs take a second plan
+with the same number of columns, matched **by position**. `NULL` equals itself
+here, as in SQL's set operations and unlike its comparisons:
+
+```{python}
+west = t.filter(col("region") == lit("west")).select("product")
+east = t.filter(col("region") == lit("east")).select("product")
+
+print(west.union(east).order_by("product").collect().to_pylist())      # UNION
+print(east.except_(west).order_by("product").collect().to_pylist())    # EXCEPT
+print(east.intersect(west).collect().to_pylist())                      # INTERSECT
+```
+
+`union_all`, `except_all` and `intersect_all` keep multiplicity, as their SQL
+counterparts do.
+
+## SQL
+
+`ma.sql` parses a query over named tables — in-memory batches, or lazy tables
+such as a `read_parquet` scan — into the same kind of plan, so it composes
+with the verbs above and runs on `collect()` like any other:
+
+```{python}
+q = ma.sql("SELECT region, SUM(price) AS total FROM sales GROUP BY region", sales=batch)
+q.order_by("region").collect().to_pylist()
+```
+
+Pass several tables as keywords, or as a `tables=` mapping. The SQL surface is
+a little wider than the Python expression methods — the regex functions, for
+one:
+
+```{python}
+ma.sql("SELECT region FROM sales WHERE regexp_matches(region, '^e')", sales=batch).collect().to_pylist()
+```
 
 ## Reading Parquet
 
@@ -182,6 +239,11 @@ t = ma.read_parquet("hits.parquet")
   .head(10)
   .collect())
 ```
+
+`ma.read_json` scans a newline-delimited JSON file the same way; see
+[File I/O](io.qmd#newline-delimited-json). `ma.read_iceberg` scans an Iceberg
+table, and `marrow.datasets.load_dataset` many files at once; see
+[Datasets](datasets.qmd).
 
 ::: {.callout-warning}
 ## Parquet `BYTE_ARRAY` columns arrive as `binary`
@@ -204,11 +266,14 @@ print(result.to_pyarrow())        # zero-copy, over the C Data Interface
 
 ## Limits worth knowing
 
-- **`read_parquet` reads one file** (local, or an object-store URI through
-  OpenDAL): no globs, directories or hive partitions, and no CSV or JSON.
+- **`read_parquet` and `read_json` read one file** (local, or an object-store
+  URI through OpenDAL). [`load_dataset`](datasets.qmd) reads many files by
+  glob pattern, without turning hive-style directories into columns. No CSV.
 - **Row groups are skipped only after `.optimize()`.** Without it, a filtered
   scan reads every row group.
-- **No `distinct`/`union`/`except`/`intersect` nodes**, and no regex.
+- **No regex methods on `col()`.** `regexp_matches`, `regexp_extract` and
+  `regexp_replace` exist in [`ma.sql`](#sql) and in the Mojo lanes, not yet as
+  Python expression methods.
 - **Comparisons follow SQL, not IEEE**: `nan = nan` is true here and false in
   `marrow.compute` — see [Compute](compute.qmd).
 

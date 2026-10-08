@@ -98,7 +98,8 @@ The signature is
 
 - `keys` — list of left-side key column names,
 - `right_keys` — right-side names, or `None` to reuse `keys`,
-- `join_type` — `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"` or `"anti"`,
+- `join_type` — `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`, `"anti"`,
+  `"right semi"` or `"right anti"`,
 - `num_threads` — `0` auto-selects cores, `1` forces the serial path.
 
 Enrich each employee with their department name:
@@ -178,6 +179,7 @@ print(by_dept.explain())
 
 - **[Tables & joins](../guide/tables.qmd)** — the full `RecordBatch` / `Table` API.
 - **[Compute kernels](../guide/compute.qmd)** — every kernel and its null rules.
-- **[Expressions](../guide/expressions.qmd)** — the query layer this tutorial
-  reached for in step 5, in full.
+- **[Lazy queries](../guide/queries-lazy.qmd)** — the query layer this tutorial
+  reached for, in full; [Queries in Mojo](../guide/expressions.qmd) is the same
+  engine from Mojo.
 - **[File I/O](../guide/io.qmd)** — read and write Parquet and Arrow IPC.

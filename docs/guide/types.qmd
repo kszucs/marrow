@@ -34,8 +34,17 @@ import marrow as ma
 | `ma.float64()` | `float64` | `float` |
 | `ma.string()` | `utf8` | `str` |
 | `ma.binary()` | `binary` | `bytes` |
+| `ma.string_view()` | `string_view` | `str` |
+| `ma.binary_view()` | `binary_view` | `bytes` |
 | `ma.fixed_size_binary(n)` | fixed-width `binary` | — |
 | `ma.null()` | `null` | `None` |
+
+`string_view` and `binary_view` are Arrow's **view layouts**: each element is a
+16-byte view holding the value inline when it is at most 12 bytes, otherwise a
+prefix plus a pointer into one of any number of data buffers. A filter or a
+slice of one shares its source's bytes instead of copying them. Both exchange
+with PyArrow in both directions, and the Parquet reader produces them on
+request — see [Parquet & Arrow IPC](io.qmd#string-layout).
 
 Temporal types take a resolution unit (and, for timestamps, an optional time zone):
 

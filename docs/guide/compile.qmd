@@ -25,10 +25,10 @@ time from Python, see [Lazy queries](queries-lazy.qmd).
 - **The query is the program.** Column types are fixed when the query is
   compiled, so `col("amount", int64) >= param("min-amount", int64)` fuses into a
   single loop, and the executable links the kernels this query uses and nothing
-  else. The example below is 3.0 MB of machine code.
+  else. The example below is 3.3 MB of machine code.
 - **Far smaller than an interpreter.** The same `GROUP BY` compiled this way is
-  1.45 MB of machine code; resolving its aggregates by name at run time, as a
-  dynamic frontend must, takes 13.2 MB, **9.1× as much**. See
+  1.77 MB of machine code; resolving its aggregates by name at run time, as a
+  dynamic frontend must, takes 17.0 MB, **9.6× as much**. See
   [why the compiled binary is small](../reference/architecture.qmd#why-the-compiled-binary-is-small).
 - **Values change, code does not.** Parameters are read when the program starts,
   so a daily report is one binary run against a different file and threshold

@@ -58,6 +58,25 @@ print(round_trip, "|", round_trip.type)
 Neither direction copies the values — what crosses is a pointer, a length and a
 release callback.
 
+Record batches and tables cross the same way. A `RecordBatch` implements
+`__arrow_c_array__` and a `Table` implements `__arrow_c_stream__`, the Arrow C
+Stream Interface, so `pa.record_batch(...)` and `pa.table(...)` take them
+directly, and `ma.record_batch(...)` and `ma.table(...)` take PyArrow's:
+
+```{python}
+mt = ma.table({"x": ma.array([1, 2, 3]), "y": ma.array(["a", None, "c"])})
+pt = pa.table(mt)                 # marrow -> PyArrow, over the C Stream Interface
+print(pt.schema)
+print(ma.table(pt).num_rows)      # and back
+```
+
+`RecordBatch` and `Schema` also carry PyArrow's raw-pointer methods,
+`_export_to_c` and `_import_from_c`, which libraries that predate the capsule
+protocol call. `RecordBatch` adds the C Device Interface pair,
+`_export_to_c_device` and `_import_from_c_device`, for batches in CPU memory.
+[Spec compliance](../reference/compliance.qmd) lists what is checked against
+Arrow C++ for each interface.
+
 ### Mojo level
 
 At the Mojo level the underlying `CArrowSchema` and `CArrowArray` structs are directly accessible for low-level interop.

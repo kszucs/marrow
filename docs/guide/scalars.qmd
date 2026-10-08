@@ -60,8 +60,7 @@ absent. Absence is not the same as the value `0`.
 
 ## Scalars of every type
 
-Each array type produces a matching scalar, including strings and structs. One
-known gap: binary and large string scalars report their type as `string`.
+Each array type produces a matching scalar, including strings and structs.
 
 ```{python}
 s = ma.array(["hi", None, "there"])

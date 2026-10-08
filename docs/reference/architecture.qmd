@@ -79,15 +79,27 @@ One kernel serves CPU and GPU: every `apply` writes a **lane** —
 the widest family a leaf accepts; two arms differing only by trait bound usually
 means the narrower bound is masking a defect.
 
+CPU parallelism is marrow's own: `utils/threads.mojo` builds `Mutex`,
+`Condition`, `Thread` and `ThreadPool` on pthreads, with tasks as coroutine
+frames in a lock-free ring, and a waiting thread runs queued tasks so nested
+jobs cannot deadlock. An `ExecContext` carries a pool and caps its parallel
+calls at its thread count; the shared compute and I/O pools are sized from the
+environment or the CPUs the process may use, and resizable from Python under
+PyArrow's names.
+
 ## The query engine: one plan IR, two lanes
 
 The logical side (`expr/logical.mojo`) is pure, immutable `Relation` nodes —
-`InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Aggregate`, `Limit`,
-`Sort`, `Window`, `JoinChain` — erased by `DynRelation`. Every join is one
-`JoinChain`, as ibis represents it: the participants, one link per join and
-the columns they answer with. Which tree computes it is physical, decided when
-the chain is lowered, so the join planner can choose a tree without touching
-the output.
+`InMemoryTable`, the file scans (`ParquetScan`, `IpcScan`, `JsonScan`,
+`IcebergScan`), `Filter`, `Project`, `Aggregate`, `Limit`,
+`Sort`, `Window`, `JoinChain`, `Union`, `Intersection`, `Difference` — erased
+by `DynRelation`. Every join is one `JoinChain`, as ibis represents it: the
+participants, one link per join and the columns they answer with. Which tree
+computes it is physical, decided when the chain is lowered, so the join planner
+can choose a tree without touching the output. The planner prices each
+candidate tree with a cost model (`expr/estimates.mojo`: row counts and column
+summaries propagated up from a Parquet footer, or from `analyze()`), keeps the
+cheapest, and picks every join's build side.
 
 The physical side (`expr/physical.mojo`) is the executing counterpart.
 **The engine pushes**: `push(batch)` answers with what it produced, `drain()`
@@ -113,24 +125,27 @@ This is the payoff for having no dynamic dispatch. The comptime lane is a
 boxes that only ever hold fused nodes. So the linker can prove which kernels a
 program can reach, and delete the rest.
 
-Concretely, from the CI-gated `benchmarks/binary_size/` suite:
+Concretely, from the programs in `benchmarks/binary_size/`:
 
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name`, built two ways:
 
 | binary | `__text` |
 |---|---:|
-| every value comptime — the plan holds a direct kernel | **1,452,744** |
-| the aggregate resolved from a function *name* at run time, as the Python frontend does | 13,204,780 |
+| every value comptime — the plan holds a direct kernel | **1,772,288** |
+| the aggregate resolved from a function *name* at run time, as the Python frontend does | 17,009,860 |
 
-Same query, same answer, **about 9.1× the code** — because the second one cannot
-prove which kernels it will not call. (Figures from the gate's baseline, recorded
-with Mojo 1.2.0.dev2026091405.)
+Same query, same answer, **about 9.6× the code** — because the second one
+cannot prove which kernels it will not call. (Measured 2026-10-08 with Mojo
+1.2.0.dev2026092105 by `pixi run devkit bench size compare`, which builds the
+runtime-lane program only on request; CI holds the comptime-lane programs to
+their baseline.)
 
 The rule set is itself a comptime parameter — `plan.optimize[AllRules]()` — so a
 binary links exactly the rules it names, and `execute()` alone links none. Output
 writers are comptime parameters for the same reason: on the
 [compile guide](../guide/compile.qmd)'s example, `QueryCli(plan).run()` is
-2,994,476 bytes of `__text`, and `run[parquet=True, ipc=True]()` adds 707,568.
+3,332,316 bytes of `__text`, and `run[parquet=True, ipc=True]()` added 707,568
+for the two writers when last measured.
 
 `benchmarks/binary_size/` is the live gate, at a 0.5% threshold. Trust it over
 any ratio quoted in prose, including this one.

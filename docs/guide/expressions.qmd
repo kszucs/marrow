@@ -65,7 +65,15 @@ Aggregates come first and keys second — `aggregate(aggs, keys)` — and an
 omitted key list is a whole-table reduction. `sum`, `product`, `mean`, `min`,
 `max`, `count`, `count_distinct`, `approx_count_distinct`, `variance` and
 `stddev` are all methods, named with `.alias(...)`. `count_star()` is
-`COUNT(*)`.
+`COUNT(*)`. An aggregate's `.filter(predicate)` is SQL's `FILTER (WHERE ...)`:
+the aggregate sees only the rows the predicate answers true for, while the
+query keeps every group. Decimal columns aggregate exactly, with Arrow C++'s
+promotion rules — a `sum` keeps its scale.
+
+`.distinct()` is an aggregate keyed by every column, and the set relations sit
+beside it: `.union()` / `.union_all()`, `.intersect()` / `.intersect_all()`
+and `.except_()` / `.except_all()` take a second plan with the same number of
+columns, matched by position, with `NULL` equal to itself.
 
 ::: {.callout-note}
 Never spell the comptime `Aggregate[Fold[SumKernel, Int64Type], ...]` node by
@@ -105,10 +113,14 @@ print(optimized)                 # the rewritten plan, as text
 var out = optimized.execute()
 ```
 
-`AllRules` is sixteen rules — elimination, merging, conjunction splitting, six
-pushdowns (five for filters, one for limits) and a Top-N rewrite — plus
-`ColumnPruning`, a preparatory downward
-pass. They run in a chosen order, so each sees the previous one's output.
+`AllRules` is nineteen rewrite rules — elimination, merging (projections,
+limits, join chains, windows), conjunction splitting, filter and limit
+pushdowns, and a Top-N rewrite. They run in a chosen order, so each sees the
+previous one's output. Around them, `ColumnPruning` is a preparatory downward
+pass, and a join search runs last: it prices each join chain's candidate trees
+with a cost model, from row counts and column summaries propagated up the plan
+out of a Parquet footer or `analyze()`, keeps the cheapest and picks every
+join's build side.
 Because a plan renders as text, `optimize[NoRules]()` and `optimize[AllRules]()`
 can be printed and diffed.
 

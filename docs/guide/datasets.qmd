@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ---
 title: "Datasets"
-subtitle: "Many files, or a Hugging Face Hub dataset, as one lazy table"
+subtitle: "Many files, an Iceberg table, or a Hugging Face Hub dataset, as one lazy table"
 ---
 
 `marrow.datasets.load_dataset` is shaped like the `datasets` function of the
@@ -127,6 +127,53 @@ Reading from the Hub, or any object store, needs `libopendal_c`; a local path
 never does. See the `opendal` environment in `pixi.toml`.
 :::
 
+## Iceberg tables
+
+`ma.read_iceberg` scans an [Apache Iceberg](https://iceberg.apache.org/) table,
+format version 1 or 2. Name the table's `metadata.json`, or its directory, in
+which case `metadata/version-hint.text` picks the version, or the newest
+metadata file when there is no hint. Opening the table reads its metadata; the
+manifests and the data files are read when the plan runs.
+
+The examples read the small tables marrow's tests use. This one is partitioned
+by `category`, by the day of `ts` and by a bucket of `id`:
+
+```{python}
+from marrow import lit
+
+iceberg_data = "../../marrow/iceberg/tests/data"
+events = ma.read_iceberg(os.path.join(iceberg_data, "partitioned"))
+print(events.schema)
+```
+
+A filter skips every data file whose manifest bounds cannot match, once the
+plan is optimized. The printed plan says how many files it pruned:
+
+```{python}
+query = events.filter(col("id") > lit(9)).optimize()
+print(query.explain())
+print(sorted(query.collect().column("id").to_pylist()))
+```
+
+`snapshot_id=` reads an older snapshot, in the schema it was written with.
+Columns are matched by Iceberg field id, not by name, so renamed, widened,
+added and dropped columns read correctly in every snapshot. This table changed
+its schema between its two snapshots:
+
+```{python}
+evolved = os.path.join(iceberg_data, "evolved")
+print(ma.read_iceberg(evolved, snapshot_id=2478918412197780224).schema)
+print(ma.read_iceberg(evolved).schema)
+```
+
+Every partition transform is understood when pruning, position delete files
+are applied, and a data file written without field ids gets them from the
+table's name mapping. For a table in an object store, pass the backend's
+settings as `storage_options` (credentials, region, endpoint); the environment
+fills in what they leave unset. A table moved since it was written is read
+from its new location. Like any lazy table, the result can be a table in
+[`ma.sql`](queries-lazy.qmd#sql).
+
 ## In Mojo
 
 The same entry point returns a `DynRelation`. `HubDataset` is what the Hub says
@@ -137,6 +184,10 @@ themselves are `marrow.io.Glob`, usable on their own to match or expand paths.
 {{< include ../snippets/load_dataset.mojo >}}
 ```
 
+An Iceberg table is `scan_iceberg(path, snapshot_id)` from `marrow.expr`, which
+returns the same plan as `ma.read_iceberg`; it also takes an already opened
+`IcebergTable`.
+
 ## Limits
 
 - A remote Parquet scan fetches one row group per request, one after another,
@@ -144,3 +195,8 @@ themselves are `marrow.io.Glob`, usable on their own to match or expand paths.
 - A config is resolved when the plan is built; it is not a parameter of the
   plan.
 - Hive-style `key=value/` directories do not become columns.
+- Iceberg tables are read only. Their data files must be Parquet, equality
+  delete files are not applied yet (reading a data file that has them raises),
+  and
+  format version 3 is refused, as are the `variant`, `geometry` and `geography`
+  types.
