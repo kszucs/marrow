@@ -652,10 +652,11 @@ Note
 <li><strong><code>dispatch(DynArray)</code></strong> — the runtime-typed entry point, resolving the dtype to the typed <code>apply</code>.</li>
 </ol>
 <p>One kernel serves CPU and GPU: every <code>apply</code> writes a <strong>lane</strong> — <code>def lane[W: Int](i: Int)</code> — and hands it to one of five drivers in <code>views.mojo</code>, which own striping, vectorization and device launch. Dispatch on the widest family a leaf accepts; two arms differing only by trait bound usually means the narrower bound is masking a defect.</p>
+<p>CPU parallelism is marrow’s own: <code>utils/threads.mojo</code> builds <code>Mutex</code>, <code>Condition</code>, <code>Thread</code> and <code>ThreadPool</code> on pthreads, with tasks as coroutine frames in a lock-free ring, and a waiting thread runs queued tasks so nested jobs cannot deadlock. An <code>ExecContext</code> carries a pool and caps its parallel calls at its thread count; the shared compute and I/O pools are sized from the environment or the CPUs the process may use, and resizable from Python under PyArrow’s names.</p>
 </section>
 <section id="the-query-engine-one-plan-ir-two-lanes" class="level2">
 <h2 class="anchored" data-anchor-id="the-query-engine-one-plan-ir-two-lanes">The query engine: one plan IR, two lanes</h2>
-<p>The logical side (<code>expr/logical.mojo</code>) is pure, immutable <code>Relation</code> nodes — <code>InMemoryTable</code>, <code>ParquetScan</code>, <code>Filter</code>, <code>Project</code>, <code>Aggregate</code>, <code>Limit</code>, <code>Sort</code>, <code>Window</code>, <code>Join</code> — erased by <code>DynRelation</code>.</p>
+<p>The logical side (<code>expr/logical.mojo</code>) is pure, immutable <code>Relation</code> nodes — <code>InMemoryTable</code>, the file scans (<code>ParquetScan</code>, <code>IpcScan</code>, <code>JsonScan</code>, <code>IcebergScan</code>), <code>Filter</code>, <code>Project</code>, <code>Aggregate</code>, <code>Limit</code>, <code>Sort</code>, <code>Window</code>, <code>JoinChain</code>, <code>Union</code>, <code>Intersection</code>, <code>Difference</code> — erased by <code>DynRelation</code>. Every join is one <code>JoinChain</code>, as ibis represents it: the participants, one link per join and the columns they answer with. Which tree computes it is physical, decided when the chain is lowered, so the join planner can choose a tree without touching the output. The planner prices each candidate tree with a cost model (<code>expr/estimates.mojo</code>: row counts and column summaries propagated up from a Parquet footer, or from <code>analyze()</code>), keeps the cheapest, and picks every join’s build side.</p>
 <p>The physical side (<code>expr/physical.mojo</code>) is the executing counterpart. <strong>The engine pushes</strong>: <code>push(batch)</code> answers with what it produced, <code>drain()</code> with what is left. One operator per plan node.</p>
 <p>Underneath sit two expression lanes that share no node types:</p>
 <ul>
@@ -667,7 +668,7 @@ Note
 <section id="why-the-compiled-binary-is-small" class="level2">
 <h2 class="anchored" data-anchor-id="why-the-compiled-binary-is-small">Why the compiled binary is small</h2>
 <p>This is the payoff for having no dynamic dispatch. The comptime lane is a <strong>closed world</strong>: no open dispatchers, no function-pointer tables, and value boxes that only ever hold fused nodes. So the linker can prove which kernels a program can reach, and delete the rest.</p>
-<p>Concretely, from the CI-gated <code>benchmarks/binary_size/</code> suite:</p>
+<p>Concretely, from the programs in <code>benchmarks/binary_size/</code>:</p>
 <p><code>SELECT name, sum(a), min(b) FROM orders GROUP BY name</code>, built two ways:</p>
 <table class="caption-top table">
 <colgroup>
@@ -683,16 +684,16 @@ Note
 <tbody>
 <tr class="odd">
 <td>every value comptime — the plan holds a direct kernel</td>
-<td style="text-align: right;"><strong>1,452,744</strong></td>
+<td style="text-align: right;"><strong>1,772,288</strong></td>
 </tr>
 <tr class="even">
 <td>the aggregate resolved from a function <em>name</em> at run time, as the Python frontend does</td>
-<td style="text-align: right;">13,204,780</td>
+<td style="text-align: right;">17,009,860</td>
 </tr>
 </tbody>
 </table>
-<p>Same query, same answer, <strong>about 9.1× the code</strong> — because the second one cannot prove which kernels it will not call. (Figures from the gate’s baseline, recorded with Mojo 1.2.0.dev2026091405.)</p>
-<p>The rule set is itself a comptime parameter — <code>plan.optimize[AllRules]()</code> — so a binary links exactly the rules it names, and <code>execute()</code> alone links none. Output writers are comptime parameters for the same reason: on the <a href="../guide/compile.html">compile guide</a>’s example, <code>QueryCli(plan).run()</code> is 2,994,476 bytes of <code>__text</code>, and <code>run[parquet=True, ipc=True]()</code> adds 707,568.</p>
+<p>Same query, same answer, <strong>about 9.6× the code</strong> — because the second one cannot prove which kernels it will not call. (Measured 2026-10-08 with Mojo 1.2.0.dev2026092105 by <code>pixi run devkit bench size compare</code>, which builds the runtime-lane program only on request; CI holds the comptime-lane programs to their baseline.)</p>
+<p>The rule set is itself a comptime parameter — <code>plan.optimize[AllRules]()</code> — so a binary links exactly the rules it names, and <code>execute()</code> alone links none. Output writers are comptime parameters for the same reason: on the <a href="../guide/compile.html">compile guide</a>’s example, <code>QueryCli(plan).run()</code> is 3,332,316 bytes of <code>__text</code>, and <code>run[parquet=True, ipc=True]()</code> added 707,568 for the two writers when last measured.</p>
 <p><code>benchmarks/binary_size/</code> is the live gate, at a 0.5% threshold. Trust it over any ratio quoted in prose, including this one.</p>
 </section>
 <section id="what-this-costs" class="level2">

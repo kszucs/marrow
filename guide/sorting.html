@@ -577,6 +577,7 @@ document.addEventListener("DOMContentLoaded", function () {
   <li><a href="#sorting-an-array" id="toc-sorting-an-array" class="nav-link active" data-scroll-target="#sorting-an-array">Sorting an array</a>
   <ul class="collapse">
   <li><a href="#direction-and-null-placement" id="toc-direction-and-null-placement" class="nav-link" data-scroll-target="#direction-and-null-placement">Direction and null placement</a></li>
+  <li><a href="#ties-nan-and-signed-zero" id="toc-ties-nan-and-signed-zero" class="nav-link" data-scroll-target="#ties-nan-and-signed-zero">Ties, NaN and signed zero</a></li>
   </ul></li>
   <li><a href="#sorting-a-table" id="toc-sorting-a-table" class="nav-link" data-scroll-target="#sorting-a-table">Sorting a table</a></li>
   <li><a href="#under-the-hood-the-mojo-sort-kernel" id="toc-under-the-hood-the-mojo-sort-kernel" class="nav-link" data-scroll-target="#under-the-hood-the-mojo-sort-kernel">Under the hood — the Mojo sort kernel</a>
@@ -613,11 +614,11 @@ document.addEventListener("DOMContentLoaded", function () {
 Copyright 2024 Szűcs Krisztián
 SPDX-License-Identifier: Apache-2.0
 -->
-<p>Marrow picks a sort by input type and size: for primitive arrays, a pattern-defeating quicksort for small inputs and an LSD radix sort for large ones; a comparison sort for strings; a counting sort for booleans. Nulls are ordered explicitly — you choose whether they sort to the front or the back.</p>
+<p>Marrow picks a sort by input type and size: for primitive arrays, a pattern-defeating quicksort for small inputs and an LSD radix sort for large ones; a comparison sort for strings; a counting sort for booleans. Every sort is stable, and nulls are ordered explicitly — you choose whether they sort to the front or the back.</p>
 <section id="sorting-an-array" class="level2">
 <h2 class="anchored" data-anchor-id="sorting-an-array">Sorting an array</h2>
 <p><code>mc.sort</code> returns a sorted copy; the array’s <code>.argsort()</code> method (or <code>mc.sort_indices</code>) returns the indices that would sort it (an <code>int32</code> array), leaving the input untouched:</p>
-<div id="79999f04" class="cell" data-execution_count="2">
+<div id="c98a1ddb" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">3</span>, <span class="dv">1</span>, <span class="va">None</span>, <span class="dv">2</span>, <span class="dv">5</span>])</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sorted:      "</span>, mc.sort(a))</span>
@@ -632,7 +633,7 @@ sort_indices: PrimitiveArray[int32]([1, 3, 0, 4, 2])</code></pre>
 <section id="direction-and-null-placement" class="level3">
 <h3 class="anchored" data-anchor-id="direction-and-null-placement">Direction and null placement</h3>
 <p><code>sort</code> and <code>sort_indices</code> take a <code>sort_keys</code> sequence of <code>(column, order)</code> pairs — for a plain array the column name is ignored, the first key’s direction is used, and more than one key raises <code>NotImplementedError</code> — and a <code>null_placement</code> keyword argument:</p>
-<div id="be76100b" class="cell" data-execution_count="3">
+<div id="e2213f22" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"ascending"</span>)],  null_placement<span class="op">=</span><span class="st">"at_start"</span>))</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"ascending"</span>)],  null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"descending"</span>)], null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -669,7 +670,7 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 </tbody>
 </table>
 <p>Sorting works across types — strings order lexicographically:</p>
-<div id="05603fdb" class="cell" data-execution_count="4">
+<div id="72276751" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>words <span class="op">=</span> ma.array([<span class="st">"pear"</span>, <span class="st">"apple"</span>, <span class="va">None</span>, <span class="st">"cherry"</span>])</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(words, null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -677,24 +678,38 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 </div>
 </div>
 </section>
+<section id="ties-nan-and-signed-zero" class="level3">
+<h3 class="anchored" data-anchor-id="ties-nan-and-signed-zero">Ties, NaN and signed zero</h3>
+<p>The sort is <strong>stable</strong>: equal values keep their input order, as in Arrow’s <code>sort_indices</code>. A NaN sorts between the numbers and the nulls, at whichever end <code>null_placement</code> puts the nulls, as PyArrow places it. <code>-0.0</code> and <code>0.0</code> are equal here, so they too keep their input order:</p>
+<div id="caefa7cf" class="cell" data-execution_count="5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> ma.array([<span class="fl">2.0</span>, <span class="bu">float</span>(<span class="st">"nan"</span>), <span class="va">None</span>, <span class="op">-</span><span class="fl">0.0</span>, <span class="fl">1.0</span>, <span class="fl">0.0</span>])</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort_indices(f))</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort_indices(f, null_placement<span class="op">=</span><span class="st">"at_start"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>PrimitiveArray[int32]([3, 5, 4, 0, 1, 2])
+PrimitiveArray[int32]([2, 1, 3, 5, 4, 0])</code></pre>
+</div>
+</div>
+<p>The query layer orders NaN as SQL does instead: as a value above every number, with the nulls placed on their own. <a href="../guide/compute.html">Compute</a> explains why the two differ.</p>
+</section>
 </section>
 <section id="sorting-a-table" class="level2">
 <h2 class="anchored" data-anchor-id="sorting-a-table">Sorting a table</h2>
 <p><code>RecordBatch.sort_by</code> reorders whole rows by a key column. Pass a list of <code>(column, "ascending" | "descending")</code> tuples; as in PyArrow, nulls go last unless you pass <code>null_placement="at_start"</code>:</p>
-<div id="9d6c7d06" class="cell" data-execution_count="5">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>: ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"age"</span>:  ma.array([<span class="dv">34</span>, <span class="dv">28</span>, <span class="dv">45</span>, <span class="dv">28</span>]),</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>})</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"ascending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="45bad058" class="cell" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>: ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"age"</span>:  ma.array([<span class="dv">34</span>, <span class="dv">28</span>, <span class="dv">45</span>, <span class="dv">28</span>]),</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"ascending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[{'name': 'Bob', 'age': 28}, {'name': 'Dave', 'age': 28}, {'name': 'Alice', 'age': 34}, {'name': 'Carol', 'age': 45}]</code></pre>
 </div>
 </div>
 <p>Multi-column keys work from Python too — ties on the first key break on the next, and each key carries its own direction:</p>
-<div id="8a4ff576" class="cell" data-execution_count="6">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"ascending"</span>), (<span class="st">"name"</span>, <span class="st">"descending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="5eccd68d" class="cell" data-execution_count="7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"ascending"</span>), (<span class="st">"name"</span>, <span class="st">"descending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[{'name': 'Dave', 'age': 28}, {'name': 'Bob', 'age': 28}, {'name': 'Alice', 'age': 34}, {'name': 'Carol', 'age': 45}]</code></pre>
 </div>
@@ -704,27 +719,31 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 <section id="under-the-hood-the-mojo-sort-kernel" class="level2">
 <h2 class="anchored" data-anchor-id="under-the-hood-the-mojo-sort-kernel">Under the hood — the Mojo sort kernel</h2>
 <p>At the Mojo level, <code>sort_indices</code> returns the permutation for a single array and <code>take</code> applies it to get a sorted copy. Both take a type-erased <code>DynArray</code>; call <code>SortIndices.apply</code> / <code>TakeKernel.apply</code> when you already hold a typed array.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.sort <span class="im">import</span> sort_indices</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.filter <span class="im">import</span> take</span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array</span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64</span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> values <span class="op">=</span> <span class="fu">array</span>([<span class="dv">3</span>, <span class="dv">1</span>, <span class="dv">4</span>, <span class="dv">1</span>, <span class="dv">5</span>, <span class="dv">9</span>, <span class="dv">2</span>, <span class="dv">6</span>], int64)</span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Indices that would sort the array</span></span>
-<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> idx <span class="op">=</span> <span class="fu">sort_indices</span>(values.<span class="fu">copy</span>(), ascending<span class="op">=</span><span class="cn">True</span>, nulls_first<span class="op">=</span><span class="cn">True</span>)</span>
-<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="co"># A sorted copy</span></span>
-<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> ordered <span class="op">=</span> <span class="fu">take</span>(values.<span class="fu">copy</span>(), idx)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.sort <span class="im">import</span> sort_indices</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.filter <span class="im">import</span> take</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.builders <span class="im">import</span> array</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.dtypes <span class="im">import</span> int64</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> values <span class="op">=</span> <span class="fu">array</span>([<span class="dv">3</span>, <span class="dv">1</span>, <span class="dv">4</span>, <span class="dv">1</span>, <span class="dv">5</span>, <span class="dv">9</span>, <span class="dv">2</span>, <span class="dv">6</span>], int64)</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Indices that would sort the array</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> idx <span class="op">=</span> <span class="fu">sort_indices</span>(values.<span class="fu">copy</span>(), ascending<span class="op">=</span><span class="cn">True</span>, nulls_first<span class="op">=</span><span class="cn">True</span>)</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="co"># A sorted copy</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> ordered <span class="op">=</span> <span class="fu">take</span>(values.<span class="fu">copy</span>(), idx)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Multi-column sort operates on a <code>StructArray</code>, ordering rows by a list of key column indices with a per-key ascending flag:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode mojo fragment code-with-copy"><code class="sourceCode mojo"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.sort <span class="im">import</span> sort</span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="co"># rows sorted by column 0 ascending, ties broken by column 1 descending</span></span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> ordered <span class="op">=</span> <span class="fu">sort</span>(struct_array, key_indices<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">1</span>], ascending<span class="op">=</span>[<span class="cn">True</span>, <span class="cn">False</span>])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb14"><pre class="sourceCode mojo fragment code-with-copy"><code class="sourceCode mojo"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.kernels.sort <span class="im">import</span> sort</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="co"># rows sorted by column 0 ascending, ties broken by column 1 descending</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> ordered <span class="op">=</span> <span class="fu">sort</span>(struct_array, key_indices<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">1</span>], ascending<span class="op">=</span>[<span class="cn">True</span>, <span class="cn">False</span>])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section id="algorithm-selection" class="level3">
 <h3 class="anchored" data-anchor-id="algorithm-selection">Algorithm selection</h3>
 <p>For primitive arrays, the strategy switches at fixed sizes:</p>
 <table class="caption-top table">
+<colgroup>
+<col style="width: 54%">
+<col style="width: 45%">
+</colgroup>
 <thead>
 <tr class="header">
 <th>Input size</th>
@@ -733,12 +752,12 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 </thead>
 <tbody>
 <tr class="odd">
-<td><code>N &lt; 32,768</code></td>
-<td>PDQsort (pattern-defeating quicksort)</td>
+<td>below 6,144 rows (32-bit values) or 12,288 rows (64-bit values)</td>
+<td>PDQsort over (value, row) pairs, so ties keep their order</td>
 </tr>
 <tr class="even">
-<td><code>N ≥ 32,768</code></td>
-<td>LSD radix sort</td>
+<td>from there up</td>
+<td>LSD radix sort, stable by construction</td>
 </tr>
 <tr class="odd">
 <td><code>N ≥ 524,288</code></td>
@@ -746,7 +765,7 @@ PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
 </tr>
 </tbody>
 </table>
-<p>The thresholds are fixed rather than tuned per machine, and they are not the fastest choice at every size. <code>mc.sort</code> and <code>mc.sort_indices</code> run single-threaded unless you pass a multi-threaded <code>ctx</code>.</p>
+<p>Values wider than 64 bits (decimal128 and decimal256) take a comparison sort. In Mojo, <code>sort_indices[stable=False]</code> gives up stability, which moves the radix crossover to 32,768 rows. The thresholds are fixed rather than tuned per machine, and they are not the fastest choice at every size. <code>mc.sort</code> and <code>mc.sort_indices</code> run single-threaded unless you pass a multi-threaded <code>ctx</code>.</p>
 
 
 </section>

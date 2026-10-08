@@ -657,7 +657,7 @@ SPDX-License-Identifier: Apache-2.0
 <p>Marrow arrays implement the Arrow C Data Interface protocol (<code>__arrow_c_array__</code> / <code>__arrow_c_schema__</code>), so they exchange data with PyArrow with <strong>zero copies</strong> at both the Python and Mojo level.</p>
 <section id="python-level" class="level3">
 <h3 class="anchored" data-anchor-id="python-level">Python level</h3>
-<div id="9cd3d6bb" class="cell" data-execution_count="1">
+<div id="9015cabe" class="cell" data-execution_count="1">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>sys.path.insert(<span class="dv">0</span>, <span class="st">"../../python"</span>)   <span class="co"># the built extension</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
@@ -683,28 +683,41 @@ SPDX-License-Identifier: Apache-2.0
 </div>
 </div>
 <p>Neither direction copies the values — what crosses is a pointer, a length and a release callback.</p>
+<p>Record batches and tables cross the same way. A <code>RecordBatch</code> implements <code>__arrow_c_array__</code> and a <code>Table</code> implements <code>__arrow_c_stream__</code>, the Arrow C Stream Interface, so <code>pa.record_batch(...)</code> and <code>pa.table(...)</code> take them directly, and <code>ma.record_batch(...)</code> and <code>ma.table(...)</code> take PyArrow’s:</p>
+<div id="9f4e9850" class="cell" data-execution_count="2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>mt <span class="op">=</span> ma.table({<span class="st">"x"</span>: ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>]), <span class="st">"y"</span>: ma.array([<span class="st">"a"</span>, <span class="va">None</span>, <span class="st">"c"</span>])})</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>pt <span class="op">=</span> pa.table(mt)                 <span class="co"># marrow -&gt; PyArrow, over the C Stream Interface</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pt.schema)</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.table(pt).num_rows)      <span class="co"># and back</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>x: int64
+y: string
+3</code></pre>
+</div>
+</div>
+<p><code>RecordBatch</code> and <code>Schema</code> also carry PyArrow’s raw-pointer methods, <code>_export_to_c</code> and <code>_import_from_c</code>, which libraries that predate the capsule protocol call. <code>RecordBatch</code> adds the C Device Interface pair, <code>_export_to_c_device</code> and <code>_import_from_c_device</code>, for batches in CPU memory. <a href="../reference/compliance.html">Spec compliance</a> lists what is checked against Arrow C++ for each interface.</p>
 </section>
 <section id="mojo-level" class="level3">
 <h3 class="anchored" data-anchor-id="mojo-level">Mojo level</h3>
 <p>At the Mojo level the underlying <code>CArrowSchema</code> and <code>CArrowArray</code> structs are directly accessible for low-level interop.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> std.python <span class="im">import</span> <span class="dt">Python</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.c_data <span class="im">import</span> <span class="dt">CArrowArray</span>, <span class="dt">CArrowSchema</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> pa <span class="op">=</span> <span class="dt">Python</span>.<span class="fu">import_module</span>(<span class="st">"pyarrow"</span>)</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> pyarr <span class="op">=</span> pa.<span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], mask<span class="op">=</span>[<span class="cn">False</span>, <span class="cn">False</span>, <span class="cn">False</span>, <span class="cn">False</span>, <span class="cn">True</span>])</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Import from PyArrow via the Arrow C Data Interface capsule protocol</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> capsules <span class="op">=</span> pyarr.<span class="fu">__arrow_c_array__</span>()</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> dtype <span class="op">=</span> <span class="dt">CArrowSchema</span>.<span class="fu">from_pycapsule</span>(<span class="fu">capsules</span>[<span class="dv">0</span>]).<span class="fu">to_dtype</span>()  <span class="co"># int64</span></span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> data  <span class="op">=</span> <span class="dt">CArrowArray</span>.<span class="fu">from_pycapsule</span>(<span class="fu">capsules</span>[<span class="dv">1</span>])<span class="op">^</span>.<span class="fu">to_array</span>(dtype)</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="kw">ref</span> typed <span class="op">=</span> data.<span class="fu">as_int64</span>()</span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="fu">typed</span>[<span class="dv">0</span>].<span class="fu">is_valid</span>())   <span class="co"># True</span></span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="fu">typed</span>[<span class="dv">4</span>].<span class="fu">is_valid</span>())   <span class="co"># False — null</span></span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="fu">typed</span>[<span class="dv">0</span>].<span class="fu">value</span>())      <span class="co"># 1</span></span>
-<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="co"># Export from Mojo back to PyArrow — __arrow_c_array__ protocol is supported</span></span>
-<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> pa_result <span class="op">=</span> pa.<span class="fu">array</span>(data.<span class="fu">copy</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode mojo code-with-copy"><code class="sourceCode mojo"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> std.python <span class="im">import</span> <span class="dt">Python</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow.c_data <span class="im">import</span> <span class="dt">CArrowArray</span>, <span class="dt">CArrowSchema</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> pa <span class="op">=</span> <span class="dt">Python</span>.<span class="fu">import_module</span>(<span class="st">"pyarrow"</span>)</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> pyarr <span class="op">=</span> pa.<span class="fu">array</span>([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], mask<span class="op">=</span>[<span class="cn">False</span>, <span class="cn">False</span>, <span class="cn">False</span>, <span class="cn">False</span>, <span class="cn">True</span>])</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Import from PyArrow via the Arrow C Data Interface capsule protocol</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> capsules <span class="op">=</span> pyarr.<span class="fu">__arrow_c_array__</span>()</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> dtype <span class="op">=</span> <span class="dt">CArrowSchema</span>.<span class="fu">from_pycapsule</span>(<span class="fu">capsules</span>[<span class="dv">0</span>]).<span class="fu">to_dtype</span>()  <span class="co"># int64</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> data  <span class="op">=</span> <span class="dt">CArrowArray</span>.<span class="fu">from_pycapsule</span>(<span class="fu">capsules</span>[<span class="dv">1</span>])<span class="op">^</span>.<span class="fu">to_array</span>(dtype)</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="kw">ref</span> typed <span class="op">=</span> data.<span class="fu">as_int64</span>()</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="fu">typed</span>[<span class="dv">0</span>].<span class="fu">is_valid</span>())   <span class="co"># True</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="fu">typed</span>[<span class="dv">4</span>].<span class="fu">is_valid</span>())   <span class="co"># False — null</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="fu">typed</span>[<span class="dv">0</span>].<span class="fu">value</span>())      <span class="co"># 1</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="co"># Export from Mojo back to PyArrow — __arrow_c_array__ protocol is supported</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> pa_result <span class="op">=</span> pa.<span class="fu">array</span>(data.<span class="fu">copy</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 
 
 </section>
