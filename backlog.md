@@ -136,6 +136,55 @@ bytes, `ld` asserted (`name.size() <= maxLength`) and `libmarrow.so` failed to
 link; the tree builds without it. A new relation node with large by-value
 fields can trip it; holding them behind an `ArcPointer` is the known fix.
 
+**A capturing closure returning `None` cannot go through an `R: Movable, //`
+dispatch helper** (`_dispatch`, `_dispatch_mut`, `dispatch_*`) since nightly
+`dev2026092905`. `precompile` passes; the instantiation fails with *"struct
+'…::f::__storage' does not have witness table for trait '__mojo_closure__'"*.
+Spelling `-> None` does not help; returning a value does, so the 21 affected
+closures (the boxes' `write_to`/`write_repr_to`, `DynBuilder`'s mutators,
+`KeyCompare`'s family arms, the Parquet writer's encoders, `SchemaNode`'s
+list slot and `DynCodec`'s `inverse`/`encode`/`decode`) return a dummy `Bool`
+that their call sites discard. Revert once upstream fixes it. Reproducer:
+
+```mojo
+from std.utils import Variant
+from std.builtin.rebind import downcast
+from std.os import abort
+
+trait Shape(Writable, Copyable):
+    pass
+
+@fieldwise_init
+struct Sq(Shape):
+    var a: Int
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Sq(", self.a, ")")
+
+struct Dyn(Writable):
+    comptime V = Variant[Sq]
+    var _v: Self.V
+    def __init__(out self, v: Sq):
+        self._v = Self.V(v.copy())
+
+    def _dispatch[
+        R: Movable, //, Func: def[T: Shape](T) -> R
+    ](self, func: Func) -> R:
+        comptime for i in range(len(Self.V.Ts)):
+            comptime T = Self.V.Ts[i]
+            comptime if conforms_to(T, Shape):
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, Shape]](self._v[T]))
+        abort("no arm")
+
+    def write_to[W: Writer](self, mut writer: W):
+        def f[T: Shape](t: T) {mut writer, imm}:  # `-> Bool` builds
+            t.write_to(writer)
+        self._dispatch(f)
+
+def main():
+    print(Dyn(Sq(3)))
+```
+
 ### 1.4 Engine capability the golden corpus measures as missing
 
 `golden/COVERAGE.md` is authoritative: 286 cases, of which **51 carry

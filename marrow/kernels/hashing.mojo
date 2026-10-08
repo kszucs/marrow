@@ -675,7 +675,9 @@ struct KeyCompare(Kernel):
             )
         elif dt.is_primitive():
 
-            def primitive[T: PrimitiveType](d: T) raises {mut equal, imm}:
+            def primitive[
+                T: PrimitiveType
+            ](d: T) raises {mut equal, imm} -> Bool:
                 Self.apply(
                     left.as_primitive[T](),
                     left_rows,
@@ -684,11 +686,14 @@ struct KeyCompare(Kernel):
                     equal,
                     ctx,
                 )
+                return True
 
-            dt.dispatch_primitive(primitive)
+            _ = dt.dispatch_primitive(primitive)
         elif dt.is_binary_like():
 
-            def binarylike[T: BinaryLikeType](d: T) raises {mut equal, imm}:
+            def binarylike[
+                T: BinaryLikeType
+            ](d: T) raises {mut equal, imm} -> Bool:
                 Self.apply(
                     left.as_binary_like[T](),
                     left_rows,
@@ -697,11 +702,14 @@ struct KeyCompare(Kernel):
                     equal,
                     ctx,
                 )
+                return True
 
-            dt.dispatch_binarylike(binarylike)
+            _ = dt.dispatch_binarylike(binarylike)
         elif dt.is_string_view() or dt.is_binary_view():
 
-            def viewlike[T: BinaryViewLikeType](d: T) raises {mut equal, imm}:
+            def viewlike[
+                T: BinaryViewLikeType
+            ](d: T) raises {mut equal, imm} -> Bool:
                 Self.apply(
                     left.as_binary_view_like[T](),
                     left_rows,
@@ -710,8 +718,9 @@ struct KeyCompare(Kernel):
                     equal,
                     ctx,
                 )
+                return True
 
-            dt.dispatch_binaryview(viewlike)
+            _ = dt.dispatch_binaryview(viewlike)
         elif dt.is_fixed_size_binary():
             Self.apply(
                 left.as_fixed_size_binary(),
@@ -743,7 +752,7 @@ struct KeyCompare(Kernel):
             )
         elif dt.is_list_like():
 
-            def listlike[T: ListLikeType](d: T) raises {mut equal, imm}:
+            def listlike[T: ListLikeType](d: T) raises {mut equal, imm} -> Bool:
                 Self.apply(
                     left.as_list_like[T](),
                     left_rows,
@@ -752,8 +761,9 @@ struct KeyCompare(Kernel):
                     equal,
                     ctx,
                 )
+                return True
 
-            dt.dispatch_listlike(listlike)
+            _ = dt.dispatch_listlike(listlike)
         elif dt.is_fixed_size_list():
             Self.apply(
                 left.as_fixed_size_list(),

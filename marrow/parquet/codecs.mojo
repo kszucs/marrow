@@ -21,6 +21,7 @@ arrays:
 
 from std.memory import bitcast
 from std.sys import size_of
+from std.sys.info import Endian
 
 from ..views import BufferView
 from ..errors import CorruptError, NotImplementedError
@@ -92,7 +93,9 @@ struct PlainValues:
                     arr[i]
                     .value()
                     .cast[phys]()
-                    .as_bytes[big_endian=big_endian]()
+                    .as_bytes[
+                        endian=Endian.big if big_endian else Endian.little
+                    ]()
                 )
                 for b in range(W):
                     out.append(bytes[b])

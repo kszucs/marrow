@@ -438,7 +438,7 @@ struct SchemaNode(Copyable, Movable):
 
             def slot[
                 T: dt.ListLikeType
-            ](witness: T) raises {mut defs, mut reps, imm}:
+            ](witness: T) raises {mut defs, mut reps, imm} -> Bool:
                 ref la = arr.as_list_like[T]()
                 var start, end = la.child_range(i)
                 if self.geom.optional and not la.is_valid(i):
@@ -461,8 +461,9 @@ struct SchemaNode(Copyable, Movable):
                         self.children[0]._shred_elem(
                             la.values(), j, child_rep, meta, defs, reps
                         )
+                return True
 
-            self.field.dtype.dispatch_listlike(slot)
+            _ = self.field.dtype.dispatch_listlike(slot)
 
     def _emit_absent(
         self,

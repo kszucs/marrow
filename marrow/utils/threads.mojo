@@ -18,7 +18,7 @@ Four layers, each built only from the one below:
   block its hold on a mutex, and `Condition.wait` takes that hold, so waiting
   without the lock does not type-check.
 - Task erasure turns a closure of any type into an `AnyCoroutine` handle a
-  thread can run: `async def` frames over a heap box, through the stdlib's
+  thread can run: `__async def` frames over a heap box, through the stdlib's
   private `std.builtin._coroutine` — the reason a closure can sit in a queue
   at all. It and `std.ffi._get_global`, under the shared pools, are the
   private APIs this module stands on.
@@ -292,7 +292,7 @@ struct Condition(Movable):
 # An erased task is a coroutine frame. A function instantiated over a closure
 # type is itself "capturing", and Mojo will not take a capturing function as a
 # runtime value, so a queue of `def(void*) thin` trampolines cannot be built.
-# Calling an `async def` builds a frame, `_take_handle` erases it to
+# Calling an `__async def` builds a frame, `_take_handle` erases it to
 # `AnyCoroutine`, and the non-generic `_coro_resume_fn` runs it to completion
 # from any thread — what MAX's `enqueue_cpu_range` does, from `std` alone.
 #
@@ -302,7 +302,7 @@ struct Condition(Movable):
 # "Threads").
 
 
-async def _call_boxed[F: def() -> None](box: Pointer[F, MutUntrackedOrigin]):
+__async def _call_boxed[F: def() -> None](box: Pointer[F, MutUntrackedOrigin]):
     """Run a heap-boxed closure once, then destroy and free it."""
     box[]()
     _destroy(box)
@@ -1165,7 +1165,9 @@ def _release[Body: def(Int) -> None](job: _JobPtr[Body]):
         _destroy(job)
 
 
-async def _offer[Body: def(Int) -> None](job: _JobPtr[Body], state: _StatePtr):
+__async def _offer[
+    Body: def(Int) -> None
+](job: _JobPtr[Body], state: _StatePtr):
     """A queued offer of help with `job`."""
     _claim[Body](job, _Shared(state))
     _release[Body](job)

@@ -11,6 +11,7 @@ the per-type byte layout is defined once, so the two sides cannot drift.
 
 from std.math import isnan
 from std.sys import size_of
+from std.sys.info import Endian
 
 from .. import dtypes as dt
 from ..dtypes import PrimitiveType
@@ -151,8 +152,8 @@ struct Statistics:
         var r = valid_min_max(arr)
         if not r[2]:
             return False
-        var lo = r[0].as_bytes[big_endian=True]()
-        var hi = r[1].as_bytes[big_endian=True]()
+        var lo = r[0].as_bytes[endian=Endian.big]()
+        var hi = r[1].as_bytes[endian=Endian.big]()
         for b in range(width):
             min_out.append(lo[b])
             max_out.append(hi[b])

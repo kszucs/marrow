@@ -19,6 +19,7 @@ the boundaries against Arrow C++'s own, through pyarrow.
 
 from std.bit import bit_width
 from std.sys import size_of
+from std.sys.info import Endian
 
 from ..errors import InvalidError
 from ..arrays import (
@@ -177,7 +178,7 @@ struct ContentDefinedChunker(Movable):
         self.chunk_size += W
         if self.chunk_size < self.min_chunk_size:
             return
-        var bytes = v.as_bytes[big_endian=False]()
+        var bytes = v.as_bytes[endian=Endian.little]()
         comptime for i in range(W):
             self._roll_byte(table, bytes[i])
 

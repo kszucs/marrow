@@ -3495,10 +3495,11 @@ struct DynArray(
         return self._dispatch(f)
 
     def write_to[W: Writer](self, mut writer: W):
-        def f[T: Array](a: T) {mut writer, imm}:
+        def f[T: Array](a: T) {mut writer, imm} -> Bool:
             a.write_to(writer)
+            return True
 
-        self._dispatch(f)
+        _ = self._dispatch(f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)

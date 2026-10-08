@@ -16,6 +16,8 @@ writer mirrors the reader's structure.
 """
 
 
+from std.sys.info import Endian
+
 from ..errors import InternalError, NotImplementedError
 from ..kernels.cast import TemporalCastKernel
 from ..arrays import (
@@ -131,20 +133,24 @@ struct ColumnWriter(Movable):
             )
         elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
 
-            def encode_bytes[A: BytesArray](arr: A) raises {mut body, imm}:
+            def encode_bytes[
+                A: BytesArray
+            ](arr: A) raises {mut body, imm} -> Bool:
                 PlainValues.encode_bytes(arr, body)
+                return True
 
-            col.dispatch_bytes(encode_bytes)
+            _ = col.dispatch_bytes(encode_bytes)
         elif has_plain_physical(vt):
 
             def encode_fixed[
                 T: dt.PrimitiveType
-            ](witness: T) raises {mut body, imm}:
+            ](witness: T) raises {mut body, imm} -> Bool:
                 PlainValues.encode_primitive[
                     phys=physical_type[T], big_endian=is_wide_decimal[T]
                 ](col.as_primitive[T](), body)
+                return True
 
-            vt.dispatch_primitive(encode_fixed)
+            _ = vt.dispatch_primitive(encode_fixed)
         else:
             raise NotImplementedError(t"parquet: cannot write column type {vt}")
 
@@ -171,7 +177,9 @@ struct ColumnWriter(Movable):
         and small-decimal columns."""
         for i in range(arr.length):
             if arr.is_valid(i):
-                var b = arr[i].value().cast[phys]().as_bytes[big_endian=False]()
+                var b = (
+                    arr[i].value().cast[phys]().as_bytes[endian=Endian.little]()
+                )
                 hashes.append(XxHash64.hash(Span(b)))
 
     @staticmethod
@@ -183,7 +191,7 @@ struct ColumnWriter(Movable):
         """
         for i in range(arr.length):
             if arr.is_valid(i):
-                var b = arr[i].value().as_bytes[big_endian=True]()
+                var b = arr[i].value().as_bytes[endian=Endian.big]()
                 hashes.append(XxHash64.hash(Span(b)[0:width]))
 
     @staticmethod
@@ -214,15 +222,18 @@ struct ColumnWriter(Movable):
             self._hash_fixed_size_binary(col, hashes)
         elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
 
-            def hash_bytes[A: BytesArray](arr: A) raises {mut hashes, imm}:
+            def hash_bytes[
+                A: BytesArray
+            ](arr: A) raises {mut hashes, imm} -> Bool:
                 Self._hash_bytes(arr, hashes)
+                return True
 
-            col.dispatch_bytes(hash_bytes)
+            _ = col.dispatch_bytes(hash_bytes)
         elif has_plain_physical(vt):
 
             def hash_fixed[
                 T: dt.PrimitiveType
-            ](witness: T) raises {mut hashes, imm}:
+            ](witness: T) raises {mut hashes, imm} -> Bool:
                 comptime if is_wide_decimal[T]:
                     Self._hash_flba[width=flba_width[T]](
                         col.as_primitive[T](), hashes
@@ -231,8 +242,9 @@ struct ColumnWriter(Movable):
                     Self._hash_prim[phys=physical_type[T]](
                         col.as_primitive[T](), hashes
                     )
+                return True
 
-            vt.dispatch_primitive(hash_fixed)
+            _ = vt.dispatch_primitive(hash_fixed)
         else:
             # bool, and anything else marrow does not bloom-filter
             return False
@@ -385,10 +397,13 @@ struct ColumnWriter(Movable):
                 DeltaBinaryPacked.encode_blocks(Span(int32s), out)
         else:  # a byte-string column -- see `can_delta`
 
-            def delta_bytes[A: BytesArray](arr: A) raises {mut out, imm}:
+            def delta_bytes[
+                A: BytesArray
+            ](arr: A) raises {mut out, imm} -> Bool:
                 self._encode_bytes_delta(arr, out)
+                return True
 
-            col.dispatch_bytes(delta_bytes)
+            _ = col.dispatch_bytes(delta_bytes)
 
     # -----------------------------------------------------------------------
     # Page splitting — a column chunk is split into data pages of at most

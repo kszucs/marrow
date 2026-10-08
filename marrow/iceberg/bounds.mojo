@@ -15,6 +15,7 @@ mapping's alternatives (`large_string`, `large_binary`, narrower decimals).
 """
 
 from std.sys import size_of
+from std.sys.info import Endian
 
 from ..dtypes import DecimalType, DynType, PrimitiveType
 from ..errors import CorruptError, DynError, InvalidError, TypeError
@@ -148,7 +149,7 @@ def encode_bound(value: DynScalar) raises -> List[UInt8]:
             # `as_bytes`, not `LittleEndian.append`: that one shifts, so it
             # takes integers only, and floats land here too.
             var le = (
-                value.as_primitive[T]().value().as_bytes[big_endian=False]()
+                value.as_primitive[T]().value().as_bytes[endian=Endian.little]()
             )
             return _list_of(Span(le))
 

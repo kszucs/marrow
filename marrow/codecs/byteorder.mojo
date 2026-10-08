@@ -10,7 +10,7 @@ as little-endian bytes whatever the host's byte order.
 
 from std.bit import byte_swap
 from std.sys import size_of
-from std.sys.info import is_big_endian
+from std.sys.info import Endian
 from ..errors import CorruptError
 
 
@@ -44,7 +44,7 @@ struct LittleEndian:
             .unsafe_bitcast[Scalar[T]]()
             .unsafe_load[alignment=1](0)
         )
-        comptime if is_big_endian():
+        comptime if Endian.native() == Endian.big:
             return byte_swap(v)
         else:
             return v
@@ -58,7 +58,7 @@ struct LittleEndian:
         same way."""
         Self._check[T](len(data), pos)
         var v: Scalar[T]
-        comptime if is_big_endian():
+        comptime if Endian.native() == Endian.big:
             v = byte_swap(value)
         else:
             v = value
@@ -220,5 +220,5 @@ struct BigEndian:
     def put_signed[T: DType](mut out: List[UInt8], v: Scalar[T], width: Int):
         """Append the low `width` bytes of `v`, most significant first -- the
         inverse of `signed` when `v` fits in `width` bytes."""
-        var bytes = v.as_bytes[big_endian=True]()
+        var bytes = v.as_bytes[endian=Endian.big]()
         out.extend(Span(bytes)[size_of[Scalar[T]]() - width :])

@@ -6,10 +6,10 @@ single-value forms of `Leb128` and `Zigzag`.
 
 Byte order is asserted against explicit byte sequences rather than round-trips,
 so the tests would fail on a big-endian host if the reads ever became
-host-dependent. `SIMD.from_bytes[big_endian=False]` (which `fixed` is built on)
-is covered by the standard library's own `test_simd.mojo`; what is tested here
-is everything marrow adds on top — offsets, bounds checking, variable widths
-and LEB128, none of which exist in std.
+host-dependent. `SIMD.from_bytes[endian=Endian.little]` (which `fixed` is
+built on) is covered by the standard library's own `test_simd.mojo`; what is
+tested here is everything marrow adds on top — offsets, bounds checking,
+variable widths and LEB128, none of which exist in std.
 """
 
 from std.testing import assert_equal, assert_true, assert_raises

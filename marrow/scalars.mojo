@@ -26,7 +26,7 @@ ArrowScalar trait:
 """
 
 from std.collections import Array
-from std.sys.info import size_of
+from std.sys.info import Endian, size_of
 from std.utils import Variant
 
 from std.python import Python, PythonObject
@@ -276,7 +276,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
     ) where conforms_to(Self.T, Defaultable):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
-        self._value = value.as_bytes[big_endian=False]()
+        self._value = value.as_bytes[endian=Endian.little]()
         self._is_valid = True
 
     def __init__(
@@ -285,18 +285,18 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
         if value:
-            self._value = value.value().as_bytes[big_endian=False]()
+            self._value = value.value().as_bytes[endian=Endian.little]()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0).as_bytes[big_endian=False]()
+            self._value = Self.NativeScalar(0).as_bytes[endian=Endian.little]()
             self._is_valid = False
 
     def __init__(out self, value: Optional[Self.NativeScalar], dtype: Self.T):
         if value:
-            self._value = value.value().as_bytes[big_endian=False]()
+            self._value = value.value().as_bytes[endian=Endian.little]()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0).as_bytes[big_endian=False]()
+            self._value = Self.NativeScalar(0).as_bytes[endian=Endian.little]()
             self._is_valid = False
         self._dtype = dtype.copy()
 
@@ -1205,16 +1205,18 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         return self._v == other._v
 
     def write_to[W: Writer](self, mut writer: W):
-        def f[T: ArrowScalar](t: T) {mut writer, imm}:
+        def f[T: ArrowScalar](t: T) {mut writer, imm} -> Bool:
             t.write_to(writer)
+            return True
 
-        self._dispatch(f)
+        _ = self._dispatch(f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
-        def f[T: ArrowScalar](t: T) {mut writer, imm}:
+        def f[T: ArrowScalar](t: T) {mut writer, imm} -> Bool:
             t.write_repr_to(writer)
+            return True
 
-        self._dispatch(f)
+        _ = self._dispatch(f)
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""

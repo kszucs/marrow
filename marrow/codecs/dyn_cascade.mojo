@@ -151,28 +151,30 @@ struct DynCodec(Copyable, Movable, Writable):
         place, from the state `forward` started at, to values of `V` held as
         their bits in `W`."""
 
-        def f[C: Elementwise](c: C) {mut values, imm} -> None:
+        def f[C: Elementwise](c: C) {mut values, imm} -> Bool:
             comptime if C.takes[V]():
                 var s = state
                 for ref v in Span(values)[start:]:
                     v = bitcast[W](C.inverse[V](s, bitcast[C.Out[V]](v)))
             else:
                 abort("DynCodec.inverse: the codec does not take the values")
+            return True
 
-        self._elementwise(f)
+        _ = self._elementwise(f)
 
     def encode[
         V: DType, W: DType
     ](self, values: Span[Scalar[W], _], mut out: List[UInt8]) raises:
         """The active codec's `encode` over `values`, read as `V`."""
 
-        def f[C: Codec](c: C) raises {mut out, imm} -> None:
+        def f[C: Codec](c: C) raises {mut out, imm} -> Bool:
             comptime if C.takes[V]():
                 Self._encode[C, V](values, out)
             else:
                 abort("DynCodec.encode: the codec does not take the values")
+            return True
 
-        self._dispatch(f)
+        _ = self._dispatch(f)
 
     def decode[
         V: DType, W: DType
@@ -180,13 +182,14 @@ struct DynCodec(Copyable, Movable, Writable):
         """The active codec's `decode`, appending values of `V` to `out` as
         their bits in `W`."""
 
-        def f[C: Codec](c: C) raises {mut src, mut out, imm} -> None:
+        def f[C: Codec](c: C) raises {mut src, mut out, imm} -> Bool:
             comptime if C.takes[V]():
                 Self._decode[C, V](src, count, out)
             else:
                 abort("DynCodec.decode: the codec does not take the values")
+            return True
 
-        self._dispatch(f)
+        _ = self._dispatch(f)
 
     @staticmethod
     @no_inline

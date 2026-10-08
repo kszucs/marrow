@@ -1529,10 +1529,11 @@ struct DynType(
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        def f[T: DataType](t: T) {mut writer, imm}:
+        def f[T: DataType](t: T) {mut writer, imm} -> Bool:
             t.write_to(writer)
+            return True
 
-        self._dispatch(f)
+        _ = self._dispatch(f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)

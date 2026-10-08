@@ -387,22 +387,25 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         return self._dispatch(f)
 
     def reserve(mut self, additional: Int) raises:
-        def f[T: Builder](mut b: T) raises {imm}:
+        def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.reserve(additional)
+            return True
 
-        self._dispatch_mut(f)
+        _ = self._dispatch_mut(f)
 
     def append_null(mut self) raises:
-        def f[T: Builder](mut b: T) raises {imm}:
+        def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.append_null()
+            return True
 
-        self._dispatch_mut(f)
+        _ = self._dispatch_mut(f)
 
     def extend(mut self, arr: DynArray) raises:
-        def f[T: Builder](mut b: T) raises {imm}:
+        def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.extend(arr)
+            return True
 
-        self._dispatch_mut(f)
+        _ = self._dispatch_mut(f)
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
         def f[T: Builder](mut b: T) raises {imm} -> DynArray:
@@ -411,10 +414,11 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         return self._dispatch_mut(f)
 
     def reset(mut self) raises:
-        def f[T: Builder](mut b: T) raises {imm}:
+        def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.reset()
+            return True
 
-        self._dispatch_mut(f)
+        _ = self._dispatch_mut(f)
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
