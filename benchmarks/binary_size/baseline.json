@@ -1,5 +1,5 @@
 {
-  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Only AOT gates are recorded: the runtime-lane gates (Gates.RUNTIME in devkit/footprint.py) are not held to a floor and are built only by `devkit bench size compare --runtime`. Measured osx-arm64, 2026-10-07, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for joins as one JoinChain: query_join +38,592 (+2.15%), ibis's name rules, the equality classes, verifying the tree and lowering it by position; query_cli +19,584 (+0.59%), mostly the chain's rendering; the other gates +720 to +5,200 (at most +0.29%), the chain as a DynRelation member. Deltas are against the parent commit's recorded floors, same machine and mojo.",
+  "_comment": "__text baseline for the binary-size CI gate (see devkit bench size check and .github/workflows/binary_size.yml). Only AOT gates are recorded: the runtime-lane gates (Gates.RUNTIME in devkit/footprint.py) are not held to a floor and are built only by `devkit bench size compare --runtime`. Measured osx-arm64, 2026-10-07, on mojo 1.2.0.dev2026092105. Regenerate after an intentional size change with: pixi run -e dev python -m devkit bench size check --update. Re-recorded for joins as one JoinChain: query_join +38,592 (+2.15%), ibis's name rules, the equality classes, verifying the tree and lowering it by position; query_cli +19,584 (+0.59%), mostly the chain's rendering; the other gates +720 to +5,200 (at most +0.29%), the chain as a DynRelation member. Deltas are against the parent commit's recorded floors, same machine and mojo. 2026-10-10, mojo 1.2.0.dev2026100805: the seven floors above reproduce byte for byte, and six AOT programs that had none gained floors: query_arith, query_exprs, query_param, query_scan, query_scan_typed, query_sort. Until then `check` built only the programs named here, so those six were never compared.",
   "threshold_pct": 0.5,
   "gates": {
     "query_streaming": 1037864,
@@ -8,6 +8,12 @@
     "query_expr2_streaming": 1026728,
     "query_expr2_agg_fused": 1266340,
     "query_cli": 2361864,
-    "query_decimal_agg_fused": 1279140
+    "query_decimal_agg_fused": 1279140,
+    "query_arith": 1038544,
+    "query_exprs": 952968,
+    "query_param": 2125436,
+    "query_scan": 2057020,
+    "query_scan_typed": 2057020,
+    "query_sort": 929936
   }
 }

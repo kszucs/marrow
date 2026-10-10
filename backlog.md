@@ -632,19 +632,6 @@ feature".
 
 ---
 
-### 1.12 A finding not covered by any row above
-
-**The binary-size gate is blind to more than half its own programs.** Three
-times a plan has linked `kernels::cast` without needing it — through hashing,
-through `ParquetScan`, and through `sort_indices`, the last costing 694 cast
-symbols and about 3 MB in every AOT binary that sorted anything. Each was found
-by hand, because **no gate program sorts**: `benchmarks/binary_size/query_sort.mojo`
-exists but `baseline.json` has no `query_sort` entry, so the gate never builds
-or compares it. Fifteen sources, eight gated — `query_arith`, `query_exprs`,
-`query_param`, `query_runtime`, `query_scan`, `query_scan_typed` and
-`query_sort` are all ungated. Adding the baseline entries, not the programs, is
-the task, and until it is done the next instance is equally invisible.
-
 ### 1.13 Window `variance`, string `min`/`max` and `count_distinct` are O(n * frames)
 
 An aggregate with a `Windowable.over` (`kernels/aggregate.mojo`) runs over all
