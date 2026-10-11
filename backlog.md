@@ -714,7 +714,7 @@ statistics skip it; **(G)** dictionary logical nulls (§1.2).
 | Gather the join output through `TakeKernel.apply(StructArray)` or `.field(i)` (A) | `kernels/join.mojo:858` | a sliced side -- `LimitOperator` emits slices -- joins the parent's rows |
 | Split an imported struct with `.field(i)`; `to_table` reuses `RecordBatch.from_c` (A) | `c_data.mojo:1960`, `tabular.mojo:88` | a sliced struct imports at the parent's length |
 | `JOIN_ANY` with build-side existence kinds marks the whole matched range | `kernels/join.mojo:579, 655, 700` | `[1,1]` SEMI ANY `[1]` gives 1 row; ANTI and LEFT emit matched rows; the kernel's ANY docs contradict the plan layer's |
-| Compare dtype instances in every erased `extend` and in `concat` (E, C) | `builders.mojo:720, 1558, 1635, 1780, 1928, 2246`, `kernels/concat.mojo` | `concat([timestamp[s], timestamp[ms]])` is off by 1000x; mixed decimal scales merge; a family mismatch aborts |
+| Compare dtype instances in every erased `extend` and in `concat` (E, C) | `builders.mojo` (each erased `extend`, `DynBuilder.concat`) | `concat([timestamp[s], timestamp[ms]])` is off by 1000x; mixed decimal scales merge; a family mismatch aborts |
 | Rebase every node, not only the root, in `_BatchEncoder.write_array` (A) | `ipc.mojo:2004` | a struct or list over a sliced child is written from element 0 |
 | `Table.to_batches` compares chunk lengths, not just counts | `tabular.mojo` | chunks `[2,3]` and `[3,2]` give batches with unequal columns |
 | Equal-width signed vs unsigned widens to the next signed type, both lanes | `expr/comptime/rules.mojo:45`, `expr/runtime/values.mojo:1143` | `col(uint8) == lit(-1, int8)` matches 255; the runtime lane raises instead |
@@ -809,7 +809,7 @@ touches a kernel or the expression layer on `pixi run bench-size-check`.
 | Move `JoinOrder`/`PlannedJoin` beside `JoinRules`; `valid_min_max` into `kernels/aggregate`; `assert_values_equal` out of `utils/testing.mojo` | `expr/physical.mojo:2368`, `expr/estimates.mojo:37`, `utils/testing.mojo:36` | plan data in the physical layer, the cost model on the Parquet layer, utils on kernels |
 | One compression dispatch for Parquet, IPC and Avro; drop `CompressionLibs._sz` | `parquet/codecs.mojo`, `ipc.mojo:197`, `avro/file.mojo:51` | snappy is native in Avro and `dlopen`ed in Parquet; Avro decompresses zstd through libzstd and compresses natively |
 | Merge Parquet's flat `LeafBuilder` and leveled `LeveledSink` families into one per-type decode step | `parquet/reader.mojo:669-1965` | two copies of every encoding per physical type, with different bounds checks |
-| Move `RecordBatch.join`/`sort_by` and `ChunkedArray.combine_chunks` out of the core layer | `tabular.mojo`, `arrays.mojo` | core imports `kernels.join`, `sort`, `concat`; `execution.mojo:7` still claims the edge is gone |
+| Move `RecordBatch.join`/`sort_by` out of the core layer, or say `tabular` sits above the kernels | `tabular.mojo` | `tabular` imports `kernels.join` and `sort`; `execution.mojo:7` still claims the edge is gone. `arrays.mojo` no longer reaches the kernels: concatenation is `DynBuilder.concat` |
 
 Smaller duplicates, each a free helper: three bounds-checked byte cursors
 (`codecs/core.mojo` `Decoder`, `avro/binary.mojo` `AvroCursor`,
@@ -822,8 +822,7 @@ two serialized-bound decoders (`parquet/statistics.mojo`,
 places (`FixedSizeBinaryArray` wants a span accessor); four definitions of "a
 bare column" (`DynValue.read_column`, `Project._output_schema`,
 `Project.estimate`, `PushFilterBelowAggregate`); `ParquetScan` lacks the
-`with_pruners` `IcebergScan` has; the HLL register update twice
-(`kernels/distinct.mojo:124`, `aggregate.mojo:1795`); `AnyKernel.reduce` beside
+`with_pruners` `IcebergScan` has; `AnyKernel.reduce` beside
 `BoolReduceKernel.dispatch`; `ArrayLengthKernel` beside `LengthKernel`;
 `hex_digit` beside `utils/hex.mojo`; `mul_wide`'s GPU branch beside
 `mul_wide_portable`; the leaves' `ParamSpec` block fifteen times and column
@@ -832,8 +831,8 @@ re-copy their kernel output through the family's fused `evaluate` default; the
 validity-extend block seven times in `builders.mojo` and the slice null
 recount eight times in `arrays.mojo`. Test-only surface to keep or drop:
 `RapidSecret`/`AHash64`, `LeafSet` narrowing (every caller passes `all()`),
-the typed `case_when`/`coalesce`/`nullif`/`fill_null[T]` shims, typed
-`concat[T]`, `ThreadPool.scope`, `argparse`'s `get_float`/`get_bool`.
+the typed `case_when`/`coalesce`/`nullif`/`fill_null[T]` shims,
+`ThreadPool.scope`, `argparse`'s `get_float`/`get_bool`.
 
 Stale text that could mislead a fix: `CLAUDE.md` still describes
 `expr/bindings.mojo` (gone in `efdcd17a`), the `Decimal256Scalar` 64/32
@@ -869,6 +868,52 @@ hold, so every format that builds one checks it. Still written per format:
   `physical_type` and `flba_width` already compute them.
 - **The Parquet writer stores decimal128/256 as full 16/32-byte FLBA**; PyArrow
   writes `fixed_decimal_size(precision)` bytes. The reader accepts both.
+
+### 1.17 The kernel layer, simplified one step at a time
+
+**Epic: a simpler kernel layer reached by small steps on `main`, not by a
+rewrite.** Two rewrites (`refactor/kernel-contracts`, `refactor/compute`,
+designs in `research_notes/`) grew more machinery than they removed, because
+each had to cover every kernel family before any of it landed. Each step here
+is one finding and one commit, deletes more than it adds or says why, adds a
+trait or helper only when it replaces two copies and has two users, and keeps
+fusion, `bench-size-check` (against main's measured sizes) and the touched
+benchmarks flat. A step that needs a second new concept stops and is designed
+first.
+
+Done: HLL into `utils.HyperLogLog`; `Utf8`, `LikePattern` and `RegexPattern`
+into `utils/text.mojo`, with `LikeKernel`/`ILikeKernel` one
+`MatchLikeKernel[ignore_case]`; concatenation as one typed `Builder.concat`
+default plus `DynBuilder.concat` and `RecordBatch.concat`, deleting
+`kernels/concat.mojo`; the SQL string kernels stating their own signatures
+instead of a `StringOperands` carrier with `uses_*` flags.
+
+Looked at and kept: `JoinKind.parse`, `CalendarUnit.parse`, the window
+kernels' `name`/`params` -- each is a value type owning its own spelling, and
+moving the parser alone would split one vocabulary across two owners.
+
+Open, each needing a design before code:
+
+- **`arrays.mojo` imports the builders** for the value-list constructors,
+  the string-view `compact`, `combine_chunks` and `DynArray.as_type`; the
+  traits stay one-way (`Builder` names `Array`, never the reverse), and the
+  construction conveniences belong with the builders.
+- **`WallClock`** (`kernels/temporal.mojo`) mixes a time zone's scalar
+  arithmetic with whole-array mapping; its scalar half and `TimestampFormat`
+  belong in `utils/datetime.mojo`, and `ticks_per_second(dt)` on the dtype.
+- **Duplicated machinery**, next: the eight word-wise CTZ loops in
+  `kernels/filter.mojo` behind one set-bit walk; the allocation and validity
+  ladder repeated in every typed `apply` (the `Buffer.alloc_for` and rebased
+  validity rows of §1.15); `SumOp`/`MinOp`/`MaxOp` restating
+  `AddKernel`/`MinKernel`/`MaxKernel`'s `core`; a builder range-extend
+  (arrow-rs `MutableArrayData.extend(source, start, end)`) as the one output
+  path for take, filter and the conditionals.
+
+**`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
+`query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the
+floors recorded at `10204abe`. Not bisected;
+`d0fcd566` (native Brotli under Parquet) is the likely source. Either re-floor
+or recover it.
 
 ## 2. Missing capabilities, in detail
 
