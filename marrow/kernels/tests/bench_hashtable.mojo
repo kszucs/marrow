@@ -14,7 +14,8 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import DynArray
 from ...builders import UInt64Builder
 from ...dtypes import uint64
-from ...kernels.hashtable import SwissHashTable
+from ...kernels.hashtable import insert_hashes
+from ...utils import SwissHashTable
 from ...kernels.join import JoinHashTable
 from ...kernels.hashing import RapidHashKernel
 from ...utils import RapidHash64
@@ -76,7 +77,7 @@ def bench_hash_table_insert_100k(mut b: Benchmark) raises:
     def call() raises {imm}:
         var t = SwissHashTable()
         t.reserve(len(keys[0]))
-        var placed = t.insert_hashes(RapidHashKernel.dispatch(keys[0]))
+        var placed = insert_hashes(t, RapidHashKernel.dispatch(keys[0]))
         keep(len(placed.ids))
         keep(len(t))
 
@@ -91,7 +92,7 @@ def bench_hash_table_insert_1m(mut b: Benchmark) raises:
     def call() raises {imm}:
         var t = SwissHashTable()
         t.reserve(len(keys[0]))
-        var placed = t.insert_hashes(RapidHashKernel.dispatch(keys[0]))
+        var placed = insert_hashes(t, RapidHashKernel.dispatch(keys[0]))
         keep(len(placed.ids))
         keep(len(t))
 

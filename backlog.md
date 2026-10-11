@@ -70,6 +70,16 @@ make `ColumnPruning`'s rule depend on which source is below it, which is a
 worse rule than the uniform clamp — so the two halves land together or not at
 all.
 
+**`BufferView.filter` reads up to 7 bytes past a selection with a bit
+offset.** Its last partial word goes through `load_bits[DType.uint64]`, which
+always loads 8 bytes from the word's first byte; with an offset that puts that
+byte late in an 8-byte group, the load crosses the bitmap's end. The extra bits
+are masked off, so answers are right, but a FOREIGN or MAPPED selection has no
+padding behind it, and `-D ASSERT=all` aborts on it. `BufferView.expand` had
+the same shape and reads its tail through the bounded `load_packed[1](i, take)`;
+`filter` should do the same, pinned by a sweep over offsets 57, 61 and 63 like
+`test_expand_reads_no_byte_past_the_selection`.
+
 ### 1.2 Known-wrong answers
 
 - **A NULL dictionary entry joins NULL to NULL** (unconfirmed: found by
@@ -371,7 +381,7 @@ platforms are green.
 
 ### The Mojo LZ4 and Zstandard codecs — what is left
 
-`marrow/utils/lz4.mojo` and `marrow/utils/zstd/` run Parquet's LZ4, LZ4_RAW
+`marrow/compress/lz4.mojo` and `marrow/compress/zstd.mojo` run Parquet's LZ4, LZ4_RAW
 and ZSTD pages and Arrow IPC's LZ4_FRAME and ZSTD bodies, in both
 directions; a reader or writer made with `native_codecs=False` runs them
 through liblz4 and libzstd instead. Both compressors write their library's bytes: LZ4 blocks
@@ -397,7 +407,7 @@ library, under 1 being faster.
   text, 28% of the loop's samples are stack loads and stores, and small
   changes around it move that: a call anywhere in the loop, even in its
   rarely taken branch, took it to 36% and decoding 10-20% slower; the
-  guard at the top of `Zstd.decompress_into` is worth 13-25% on text and
+  guard at the top of `Zstd.decompress` is worth 13-25% on text and
   int64s, though the length check after the loop catches the same input.
   Cutting what the loop keeps live -- three FSE tables behind one base
   pointer, the bounds as end positions -- is the open fix, so its speed
@@ -416,10 +426,10 @@ library, under 1 being faster.
 ### The Mojo Snappy codec — what the experiment leaves open
 
 `marrow/utils/snappy.mojo` is a port of libsnappy 1.2.2. Its module docstring
-has the measurements. Parquet still calls libsnappy. Routing it through
-`Snappy` is two lines in `Compression.decompress_into` and
-`Compression.compress` (`parquet/codecs.mojo`); with that local patch all 279
-`marrow/parquet/tests` passed once, and `bench_parquet` read as parity.
+has the measurements. Parquet and Avro both run it by default; Parquet's
+`native_codecs=False` still reaches libsnappy. Switching Parquet over passed
+the size gate (`query_cli` 8 KB smaller), and `bench_parquet` read as parity
+under load.
 
 - **The reader should prefetch a chunk before decoding it.** A local file is
   memory-mapped and faulted in as the decoder touches it, so disk time and
@@ -431,14 +441,13 @@ has the measurements. Parquet still calls libsnappy. Routing it through
   every codec, uncompressed pages included.
 - **Pair decoding needs the reader to hand it pairs.** `PageReader._body`
   decompresses one page at a time into one scratch buffer. Using
-  `decompress_pair_into` means parsing the next page header before decoding
+  `decompress_pair` means parsing the next page header before decoding
   this page, and keeping two scratch buffers. Without the prefetch above it
   helps less from a cold mapping, and on incompressible pages it hurts:
   alternating between two regions of the file seems to defeat read-ahead.
   With the prefetch it reached 1.76x on `strings` and 1.92x on `ints` against
   plain libsnappy from cold disk.
-- **Before flipping the default:**
-  - Run the `query_cli` size gate with Parquet routed through `Snappy`.
+- **Not yet confirmed now that it is the default:**
   - Run `bench_parquet` on a quiet machine. The end-to-end runs so far were
     under a load average of 30-60, and they read as parity within the noise.
   - Get a Linux x86-64 run. There the stdlib's shuffle is `pshufb`; only
@@ -450,7 +459,7 @@ has the measurements. Parquet still calls libsnappy. Routing it through
   writer then copies it again into the file buffer, and the decompress
   methods take a raw `Pointer` destination. Taking `mut out: List[UInt8]` to
   append to, and a `Span` destination, as `Snappy.compress` and
-  `Snappy.decompress_into` do, would drop a copy and an allocation per page
+  `Snappy.decompress` do, would drop a copy and an allocation per page
   and take raw pointers out of every caller.
 - **`bulk_copy` (`buffers.mojo`) is measured on one caller only.** The
   stdlib's `unsafe_memcpy` is a 32-byte loop above 16 bytes and never calls
@@ -1300,25 +1309,31 @@ differentiator hiding inside a table-stakes item.
     wrong for a multi-gigabyte file on an object store.
   - **No `AvroScan`** in `marrow.expr`, and `AvroFile` does not implement
     `BatchReader`, so a plan cannot scan Avro.
-  - **Iceberg pruning stops at identity partitions.** The manifest model,
-    field-id projection (`marrow/iceberg/`), `Index.from_manifest` and Parquet
-    field ids exist; a non-identity partition transform (bucket, truncate,
-    year/month/day/hour) prunes nothing, and `Transform.apply` has no caller
-    outside its tests (§1.15).
-- **Codec chains, beyond the first twelve.** `marrow/codecs/` chains any
-  codec after any other whose output it takes, compiled and fused (`Cascade`)
-  or chosen at run time (`DynCascade`), a block at a time; the stream does not
-  name its codecs, so it is read with the chain that wrote it. Byte strings
-  take the `BinaryCodec`s Parquet's byte-array pages use. What is missing:
+  - **The Iceberg layer itself** -- the manifest-list / manifest model,
+    field-id projection and evolution over the decoded tables, and
+    `Index.from_iceberg_manifest` beside `Index.from_parquet`
+    (`marrow/expr/index.mojo`) -- is unwritten. So are field ids on the
+    *Parquet* reader, which Iceberg's data files need the same way.
+- **Codecs, beyond the first fifteen.** `marrow/codecs/` encodes a block of
+  values (a `BufferView`, or byte strings as offsets and data) to an
+  `Encoded` node -- byte streams and child nodes, nothing framed -- and back.
+  Maps (`Delta`, `Zigzag`, `Xor`, `Ordered`) fuse inside a `Cascade`;
+  structures (`Rle`, `Frequency`, `Dictionary`, `DeltaLengthByteArray`,
+  `DeltaByteArray`) take a codec per sub-stream; `DynCodec` / `DynCascade`
+  compose the same at run time. What is missing:
+  - **Serialization.** Nothing writes a node to bytes but Parquet's own
+    layouts; a marrow-native column or spill format needs one, and the chain
+    stored beside it.
   - **More codecs**: patched FOR and floating-point codecs (ALP, Chimp,
-    pseudodecimal), each one more `Codec` conformer.
-  - **One dictionary builder.** `codecs.Dictionary`, Parquet's dictionary
-    pages and `kernels.DictionaryEncoder` each map values to dense codes.
+    pseudodecimal), and the compressors (`Lz4`, `Zstd`, `Snappy`) as codecs
+    over a stream. Each is a `ValueCodec` or a `Map` and an arm of
+    `DynCodec`.
+  - **One dictionary builder.** `codecs.Dictionary` assigns fixed-width codes
+    through `SwissHashTable`; its byte strings, Parquet's byte-array pages and
+    `kernels.DictionaryEncoder` still each map values to codes their own way.
   - **A sampling picker**, as BtrBlocks has: trial encodes of a sample, the
-    smallest chain kept. The stream does not record its chain, so a picked
-    chain must be stored beside it.
-  - **A consumer.** Nothing but Parquet's kernels uses the chains; a
-    marrow-native column format or spill format would.
+    smallest composition kept.
+  - **Nulls.** Codecs see present values only; a consumer drops nulls first.
 
 #### 2.10 Operability
 

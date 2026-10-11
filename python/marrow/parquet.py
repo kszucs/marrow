@@ -32,8 +32,8 @@ def read_table(source, columns=None, binary_type=None, native_codecs=True):
         or ``binary_view()``. Columns annotated as strings read as the
         matching string type, e.g. ``string_view()``.
     native_codecs : bool, default True
-        Decode LZ4 and ZSTD pages in Mojo; ``False`` decodes them with
-        liblz4 and libzstd instead.
+        Decode LZ4, SNAPPY and ZSTD pages in Mojo; ``False`` decodes them
+        with liblz4, libsnappy and libzstd instead.
     """
     cols = list(columns) if columns is not None else None
     bt = binary_type if binary_type is not None else types.binary()
@@ -91,9 +91,9 @@ def write_table(
         it. With a large ``max_chunk_size`` and wide values, marrow will
         therefore write larger pages than Arrow C++ would for the same data.
     native_codecs : bool, default True
-        Compress LZ4 and ZSTD pages in Mojo; ``False`` compresses them with
-        liblz4 and libzstd instead -- the same bytes, with liblz4 1.10.0 and
-        libzstd 1.5.7.
+        Compress LZ4, SNAPPY and ZSTD pages in Mojo; ``False`` compresses
+        them with liblz4, libsnappy and libzstd instead -- the same bytes for
+        LZ4 and ZSTD, with liblz4 1.10.0 and libzstd 1.5.7.
     """
     try:
         version = _PAGE_VERSIONS[data_page_version]

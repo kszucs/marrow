@@ -55,6 +55,7 @@ from .errors import (
     debug_assert_lazy,
 )
 from .buffers import Buffer, Bitmap
+from .utils.byteorder import LittleEndian
 from .views import BufferView, BitmapView
 from std.builtin.rebind import downcast
 from std.os import abort
@@ -1222,13 +1223,9 @@ struct BinaryLikeArray[T: BinaryLikeType](BytesArray):
         )
 
     def sort_key(self, index: Int) -> UInt64:
+        # The first eight bytes, big-endian, zero-padded past a short value.
         var bytes = self.unsafe_get(UInt(index)).as_bytes()
-        var key = UInt64(0)
-        for k in range(8):
-            key <<= 8
-            if k < len(bytes):
-                key |= UInt64(bytes[k])
-        return key
+        return byte_swap(LittleEndian.partial[DType.uint64](bytes, 0))
 
     def type(self) -> DynType:
         return Self.T().to_dyn()

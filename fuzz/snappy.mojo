@@ -14,50 +14,54 @@ The input is a raw Snappy block. Two oracles beyond "does not crash":
 
 from std.os import abort
 
-from marrow.utils.compression import CompressionLibs
-from marrow.utils.snappy import Snappy
+from marrow.compress import LibSnappy, Snappy
 
 # A declared length past this is left to the native decoder alone: allocating
 # it for libsnappy would make one input cost a gigabyte.
 comptime MAX_DIFFERENTIAL = 1 << 22
 
 
-def fuzz_one(data: Span[UInt8, _]) raises:
-    var native = List[UInt8]()
-    var native_ok = True
+def _decoded[
+    native: Bool
+](data: Span[UInt8, _], declared: Int) -> Optional[List[UInt8]]:
+    """`data` decoded into the `declared` bytes it promises, natively or by
+    libsnappy, or nothing if the decoder refuses it."""
+    var out = List[UInt8](length=declared, fill=0)
     try:
-        Snappy.decompress(data, native)
+        comptime if native:
+            Snappy.decompress(data, Span(out))
+        else:
+            LibSnappy.decompress(data, Span(out))
     except:
-        native_ok = False
+        return None
+    return out^
 
+
+def fuzz_one(data: Span[UInt8, _]) raises:
     var declared = -1
     try:
         declared = Snappy.uncompressed_length(data)
     except:
         pass
+    if declared < 0 or declared > Snappy.max_decompressed_length(len(data)):
+        return
+    var native = _decoded[True](data, declared)
 
-    if declared >= 0 and declared <= MAX_DIFFERENTIAL:
-        var libs = CompressionLibs()
-        var reference = List[UInt8](length=declared, fill=0)
-        var reference_ok = True
-        try:
-            libs.snappy_decompress(data, reference.unsafe_ptr(), declared)
-        except:
-            reference_ok = False
-        if native_ok != reference_ok:
+    if declared <= MAX_DIFFERENTIAL:
+        var reference = _decoded[False](data, declared)
+        if Bool(native) != Bool(reference):
             abort(
                 "snappy: native "
-                + ("accepted" if native_ok else "rejected")
+                + ("accepted" if native else "rejected")
                 + " a block libsnappy "
-                + ("accepted" if reference_ok else "rejected")
+                + ("accepted" if reference else "rejected")
             )
-        if native_ok and native != reference:
+        if native and native.value() != reference.value():
             abort("snappy: native and libsnappy decoded different bytes")
 
-    if native_ok:
+    if native:
         var packed = List[UInt8]()
-        Snappy.compress(Span(native), packed)
-        var unpacked = List[UInt8]()
-        Snappy.decompress(Span(packed), unpacked)
-        if unpacked != native:
+        Snappy.compress(Span(native.value()), packed)
+        var unpacked = _decoded[True](Span(packed), len(native.value()))
+        if not unpacked or unpacked.value() != native.value():
             abort("snappy: compress then decompress changed the bytes")

@@ -12,9 +12,17 @@ from std.python import Python
 from std.os.path import join
 from ...utils.testing import ScratchDir
 from ...parquet import read_table
-from ...parquet.codecs import Compression
+from ...parquet.compression import Compression, Hadoop
 from ...errors import CorruptError, DynError
-from ...utils import CompressionLibs
+from ...compress import LibLz4, Lz4
+from ...utils.byteorder import BigEndian
+from ...compress.tests.codec_data import (
+    assert_bytes,
+    assert_canary,
+    canary,
+    shapes,
+    words,
+)
 
 
 def _delta_roundtrip(compression: String) raises:
@@ -252,27 +260,33 @@ def _sample() -> List[UInt8]:
 
 
 def _roundtrip(codec: Compression) raises:
-    var libs = CompressionLibs()
     var data = _sample()
-    var packed = codec.compress(libs, Span(data))
+    var packed = codec.compress(True, Span(data))
     var restored: List[UInt8] = [7]
-    codec.decompress_into(libs, Span(packed), len(data), restored)
+    codec.decompress_into(True, Span(packed), len(data), restored)
     assert_true(restored[1:] == data[:], "appended after what was there")
     assert_equal(restored[0], 7)
 
 
 def test_codecs_library_implementations() raises:
-    """LZ4, LZ4_RAW and ZSTD in Mojo and through liblz4 and libzstd: each
-    decodes what the other wrote."""
+    """LZ4, LZ4_RAW, SNAPPY and ZSTD in Mojo and through their libraries:
+    each decodes what the other wrote. BROTLI decodes both ways too, and is
+    written by libbrotli either way."""
     var data = _sample()
-    for codec in [Compression.ZSTD, Compression.LZ4, Compression.LZ4_RAW]:
+    for codec in [
+        Compression.ZSTD,
+        Compression.LZ4,
+        Compression.LZ4_RAW,
+        Compression.SNAPPY,
+        Compression.BROTLI,
+    ]:
         for written in [True, False]:
-            var writer = CompressionLibs(native=written)
-            var packed = codec.compress(writer, Span(data))
+            var packed = codec.compress(written, Span(data))
             for read_native in [True, False]:
-                var reader = CompressionLibs(native=read_native)
                 var restored = List[UInt8]()
-                codec.decompress_into(reader, Span(packed), len(data), restored)
+                codec.decompress_into(
+                    read_native, Span(packed), len(data), restored
+                )
                 assert_true(
                     restored == data,
                     String(
@@ -283,35 +297,42 @@ def test_codecs_library_implementations() raises:
 
 
 def test_codecs_needs_libs() raises:
-    """Only a codec a library runs opens the libraries: LZ4, LZ4_RAW and
-    ZSTD when they are not run in Mojo; Snappy, GZIP and Brotli always."""
+    """Only a codec a library decodes opens the libraries: BROTLI, LZ4,
+    LZ4_RAW, SNAPPY and ZSTD when they are not run in Mojo; GZIP always."""
     assert_false(Compression.UNCOMPRESSED.needs_libs(False))
-    for codec in [Compression.ZSTD, Compression.LZ4, Compression.LZ4_RAW]:
+    for codec in [
+        Compression.ZSTD,
+        Compression.LZ4,
+        Compression.LZ4_RAW,
+        Compression.SNAPPY,
+        Compression.BROTLI,
+    ]:
         assert_false(codec.needs_libs(True))
         assert_true(codec.needs_libs(False))
-    for codec in [Compression.SNAPPY, Compression.GZIP, Compression.BROTLI]:
-        assert_true(codec.needs_libs(True))
+    assert_true(Compression.GZIP.needs_libs(True))
 
 
 def test_decompress_refuses_sizes_the_page_cannot_hold() raises:
     """A page header's uncompressed size is checked against what the
     compressed bytes can decode to before it is allocated: as is for
-    UNCOMPRESSED, and LZ4's and ZSTD's own bounds."""
-    var libs = CompressionLibs()
+    UNCOMPRESSED, and each codec's own bound for the rest."""
     var data = _sample()
     for codec in [
         Compression.UNCOMPRESSED,
         Compression.ZSTD,
         Compression.LZ4,
         Compression.LZ4_RAW,
+        Compression.SNAPPY,
+        Compression.GZIP,
+        Compression.BROTLI,
     ]:
-        var packed = codec.compress(libs, Span(data))
+        var packed = codec.compress(True, Span(data))
         var most = codec.max_decompressed_length(len(packed))
         for size in [most + 1, 1 << 60]:
             var refused = False
             try:
                 var dst = List[UInt8]()
-                codec.decompress_into(libs, Span(packed), size, dst)
+                codec.decompress_into(True, Span(packed), size, dst)
             except e:
                 refused = DynError(e).isa[CorruptError]()
             assert_true(refused, String(t"codec {codec.code}: {size} accepted"))
@@ -358,3 +379,113 @@ def test_read_gzip() raises:
 
 def test_read_lz4() raises:
     _roundtrip_read("lz4")
+
+
+# ---------------------------------------------------------------------------
+# Hadoop framing, Parquet's deprecated LZ4
+# ---------------------------------------------------------------------------
+
+
+def _hadoop[
+    native: Bool = True
+](data: List[UInt8], cuts: List[Int] = []) raises -> List[UInt8]:
+    """`data` as Hadoop frames, a new one at each of `cuts` -- their blocks
+    liblz4's without `native`."""
+    var out = List[UInt8]()
+    var bounds = cuts.copy()
+    bounds.append(len(data))
+    var pos = 0
+    for end in bounds:
+        comptime if native:
+            Hadoop[Lz4].compress(Span(data)[pos:end], out)
+        else:
+            Hadoop[LibLz4].compress(Span(data)[pos:end], out)
+        pos = end
+    return out^
+
+
+def _block(data: List[UInt8]) raises -> List[UInt8]:
+    """`data` as a plain block, as Parquet C++ wrote before it framed one."""
+    var out = List[UInt8]()
+    Lz4.compress(Span(data), out)
+    return out^
+
+
+def _decode_hadoop[
+    native: Bool
+](src: List[UInt8], mut buf: List[UInt8], n: Int) raises:
+    comptime if native:
+        Hadoop[Lz4].decompress(Span(src), Span(buf)[:n])
+    else:
+        Hadoop[LibLz4].decompress(Span(src), Span(buf)[:n])
+
+
+def _expect_hadoop(src: List[UInt8], want: List[UInt8], what: String) raises:
+    """`src` decodes to exactly `want`, by `Lz4` and by liblz4, writing
+    nothing past it."""
+    var n = len(want)
+    var buf = canary(n)
+    _decode_hadoop[True](src, buf, n)
+    assert_bytes(List[UInt8](Span(buf)[:n]), want, what)
+    assert_canary(buf, n, what)
+    buf = canary(n)
+    _decode_hadoop[False](src, buf, n)
+    assert_bytes(List[UInt8](Span(buf)[:n]), want, what + " (liblz4)")
+    assert_canary(buf, n, what + " (liblz4)")
+
+
+def _rejects_hadoop(src: List[UInt8], n: Int, what: String) raises:
+    """`src` is refused into `n` bytes, by `Lz4` and by liblz4, and nothing
+    past them is written."""
+    comptime for native in [True, False]:
+        var buf = canary(n)
+        var accepted = True
+        try:
+            _decode_hadoop[native](src, buf, n)
+        except:
+            accepted = False
+        assert_true(not accepted, what + ": accepted")
+        assert_canary(buf, n, what)
+
+
+def test_parquet_lz4_hadoop_roundtrip() raises:
+    """One frame per input: its decompressed and compressed sizes, big-endian,
+    then the block."""
+    var all = shapes()
+    for n in range(0, 301, 13):
+        all.append(words(n, seed=UInt64(n)))
+    for i in range(len(all)):
+        var src = _hadoop(all[i])
+        assert_equal(
+            Int(BigEndian.fixed[DType.uint32](Span(src), 0)), len(all[i])
+        )
+        assert_equal(
+            Int(BigEndian.fixed[DType.uint32](Span(src), 4)), len(src) - 8
+        )
+        _expect_hadoop(src, all[i], String(t"input {i}"))
+        _expect_hadoop(_hadoop[False](all[i]), all[i], String(t"liblz4 {i}"))
+
+
+def test_parquet_lz4_hadoop_reads_what_writers_wrote() raises:
+    """A run of frames, as parquet-mr's codec writes a page over its buffer
+    size; a plain block, as Parquet C++ wrote before it framed them; and an
+    empty page either way."""
+    var data = words(300_000, seed=53)
+    _expect_hadoop(_hadoop(data, [100_000, 250_000]), data, "three frames")
+    _expect_hadoop(_hadoop(data, [0, 300_000]), data, "empty frames")
+    _expect_hadoop(_block(data), data, "plain block")
+    _expect_hadoop(_hadoop([]), [], "empty frame")
+    _expect_hadoop(_block([]), [], "empty block")
+
+
+def test_parquet_lz4_hadoop_rejects() raises:
+    var data = words(10_000, seed=59)
+    var n = len(data)
+    var src = _hadoop(data, [4_000])
+    _rejects_hadoop(src, n - 1, "short destination")
+    _rejects_hadoop(src, n + 1, "long destination")
+    var sizes = src.copy()
+    sizes[3] ^= 1  # the first frame's decompressed size
+    _rejects_hadoop(sizes, n, "frame size")
+    for cut in range(1, len(src), 61):
+        _rejects_hadoop(List[UInt8](Span(src)[:cut]), n, String(t"cut {cut}"))

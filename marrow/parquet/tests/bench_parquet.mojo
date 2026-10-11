@@ -332,3 +332,31 @@ def bench_read_small_snappy(mut b: Benchmark) raises:
 
 def bench_read_small_uncompressed(mut b: Benchmark) raises:
     _bench_read_small(b, "marrow_bench_small_none.parquet", "none")
+
+
+def bench_write_dict_strings_1m(mut b: Benchmark) raises:
+    """Write a low-cardinality string column dictionary-encoded, so the time
+    is the dictionary build over byte strings."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var n = 1_000_000
+    with ScratchDir() as dir:
+        var src = join(dir, "marrow_bench_dict_strings_src.parquet")
+        var dst = join(dir, "marrow_bench_dict_strings_dst.parquet")
+        var keys = np.char.add("key-", (np.arange(n) % 1000).astype("str"))
+        pq.write_table(
+            pa.table(Python.dict(s=pa.array(keys, type=pa.string()))),
+            src,
+            compression="none",
+        )
+        var table = read_table(src)
+        b.throughput(BenchMetric.elements, n)
+
+        @always_inline
+        def call() raises {imm}:
+            write_table(table, dst, compression=Compression.UNCOMPRESSED)
+
+        b.iter(call)
+        keep(dst)
+        keep(table.num_rows())

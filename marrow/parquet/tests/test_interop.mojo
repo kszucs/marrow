@@ -19,7 +19,7 @@ from std.python import Python, PythonObject
 from std.os.path import join
 from ...utils.testing import ScratchDir
 from ...parquet import read_table, write_table
-from ...parquet.codecs import Compression
+from ...parquet.compression import Compression
 from ...tabular import Table
 from ...c_data import CArrowArrayStream
 

@@ -86,6 +86,7 @@ from .dtypes import (
     year_month_interval,
 )
 from .errors import CorruptError, DynError, InvalidError, NotImplementedError
+from .utils.hex import hex_digit
 from .io import BufferSource
 from .schema import Schema
 from .tabular import RecordBatch
@@ -209,11 +210,13 @@ struct _Node[o: ImmOrigin](TrivialRegisterPassable):
         var text = self.value.string_slice().as_bytes()
         if hex:
             for i in range(len(text) // 2):
-                buf.unsafe_set[DType.uint8](
-                    at + i,
-                    Self.hex_digit(text[2 * i]) * 16
-                    + Self.hex_digit(text[2 * i + 1]),
-                )
+                var hi = hex_digit(text[2 * i])
+                var lo = hex_digit(text[2 * i + 1])
+                if hi < 0 or lo < 0:
+                    raise CorruptError(
+                        t"integration json: byte {i} of a hex value is not hex"
+                    )
+                buf.unsafe_set[DType.uint8](at + i, UInt8(hi * 16 + lo))
         else:
             for i in range(len(text)):
                 buf.unsafe_set[DType.uint8](at + i, text[i])
@@ -239,16 +242,6 @@ struct _Node[o: ImmOrigin](TrivialRegisterPassable):
             value = value * 10 + digit.cast[T]()
             i += 1
         return -value if negative else value
-
-    @staticmethod
-    def hex_digit(c: UInt8) raises -> UInt8:
-        if c >= UInt8(ord("0")) and c <= UInt8(ord("9")):
-            return c - UInt8(ord("0"))
-        elif c >= UInt8(ord("A")) and c <= UInt8(ord("F")):
-            return c - UInt8(ord("A")) + 10
-        elif c >= UInt8(ord("a")) and c <= UInt8(ord("f")):
-            return c - UInt8(ord("a")) + 10
-        raise CorruptError(t"integration json: byte {Int(c)} is not hex")
 
 
 # ---------------------------------------------------------------------------

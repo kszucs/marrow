@@ -16,6 +16,7 @@ writer mirrors the reader's structure.
 """
 
 
+from std.bit import bit_width
 from std.sys.info import Endian
 
 from ..errors import InternalError, NotImplementedError
@@ -39,23 +40,18 @@ from .chunker import ContentDefinedChunking, ContentDefinedChunker, Chunk
 from .gearhash import gearhash_table
 
 
-from .codecs import (
+from .compression import Compression
+from .encodings import (
     ByteStreamSplitValues,
-    Compression,
+    DeltaBinaryPackedEncoding,
+    DeltaByteArrayEncoding,
+    DeltaLengthEncoding,
     DictionaryValues,
     Encoding,
     PlainValues,
-    present_bytes,
-)
-from ..codecs import (
-    Bits,
-    DeltaBinaryPacked,
-    DeltaByteArray,
-    DeltaLengthByteArray,
-    Hybrid,
+    RleEncoding,
 )
 from ..utils import Crc32
-from ..utils import CompressionLibs
 from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import (
     SchemaMapping,
@@ -79,7 +75,7 @@ from .format import (
     ColumnIndex,
     PageLocation,
 )
-from ..codecs import LittleEndian
+from ..utils.byteorder import LittleEndian
 
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
 # A data page is flushed at whichever comes first: ~1 MiB of encoded value bytes
@@ -366,11 +362,11 @@ struct ColumnWriter(Movable):
         or DELTA_LENGTH_BYTE_ARRAY)."""
         var offsets = List[Int32]()
         var data = List[UInt8]()
-        present_bytes(arr, offsets, data)
+        PlainValues.present_bytes(arr, offsets, data)
         if self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY:
-            DeltaLengthByteArray.encode(Span(offsets), Span(data), out)
+            DeltaLengthEncoding.encode(Span(offsets), Span(data), out)
         else:  # DELTA_BYTE_ARRAY
-            DeltaByteArray.encode(Span(offsets), Span(data), out)
+            DeltaByteArrayEncoding.encode(Span(offsets), Span(data), out)
 
     def _encode_delta(self, col: DynArray, mut out: List[UInt8]) raises:
         """Delta-encode the present values per `self.encoding`."""
@@ -382,7 +378,7 @@ struct ColumnWriter(Movable):
             if vt == dt.int64:
                 var int64s = List[Int64]()
                 Self._present(col.as_int64(), int64s)
-                DeltaBinaryPacked.encode_blocks(Span(int64s), out)
+                DeltaBinaryPackedEncoding.encode(Span(int64s), out)
             elif vt == dt.int32:
                 Self._present(col.as_int32(), int32s)
             elif vt == dt.int8:
@@ -394,7 +390,7 @@ struct ColumnWriter(Movable):
                     t"parquet: cannot DELTA_BINARY_PACKED type {vt}"
                 )
             if vt != dt.int64:
-                DeltaBinaryPacked.encode_blocks(Span(int32s), out)
+                DeltaBinaryPackedEncoding.encode(Span(int32s), out)
         else:  # a byte-string column -- see `can_delta`
 
             def delta_bytes[
@@ -477,12 +473,12 @@ struct ColumnWriter(Movable):
         var dict_body: List[UInt8],
         num_dict: Int,
         mut out: List[UInt8],
-        mut codecs: CompressionLibs,
+        native: Bool,
     ) raises -> Tuple[Int, Int, Int]:
         """Write the shared dictionary page (PLAIN distinct values, compressed);
         return `(offset, uncompressed_incl_header, compressed_incl_header)`."""
         var offset = len(out)
-        var comp = self.compression.compress(codecs, Span(dict_body))
+        var comp = self.compression.compress(native, Span(dict_body))
         var ph = PageHeader.dictionary_page(len(dict_body), len(comp), num_dict)
         if self.write_crc:
             ph.crc = Int(Crc32.compute(Span(comp)))
@@ -500,7 +496,7 @@ struct ColumnWriter(Movable):
         null_count: Int,
         encoding: Encoding,
         mut out: List[UInt8],
-        mut codecs: CompressionLibs,
+        native: Bool,
     ) raises -> Tuple[Int, Int, Int]:
         """Serialize one v1/v2 data page into `out` from the already-encoded value
         + rep/def level bytes; return `(page_offset, uncompressed_incl_header,
@@ -514,7 +510,7 @@ struct ColumnWriter(Movable):
         if self.version == 2:
             var is_comp = self.compression != Compression.UNCOMPRESSED
             var comp_values = self.compression.compress(
-                codecs, Span(value_bytes)
+                native, Span(value_bytes)
             )
             var level_len = len(rep_bytes) + len(def_bytes)
             uncompressed_size = level_len + len(value_bytes)
@@ -551,7 +547,7 @@ struct ColumnWriter(Movable):
                 body.extend(Span(def_bytes))
             body.extend(Span(value_bytes))
             uncompressed_size = len(body)
-            var compressed = self.compression.compress(codecs, Span(body))
+            var compressed = self.compression.compress(native, Span(body))
             compressed_size = len(compressed)
             var ph = PageHeader.data_page(
                 uncompressed_size, compressed_size, num_values, encoding
@@ -573,7 +569,7 @@ struct ColumnWriter(Movable):
         rep_levels: List[Int32],
         path: List[String],
         mut out: List[UInt8],
-        mut codecs: CompressionLibs,
+        native: Bool,
         page_plan: List[Int],
     ) raises -> ColumnChunk:
         """Write one leaf column chunk, split into data pages. `def_levels` /
@@ -636,8 +632,8 @@ struct ColumnWriter(Movable):
             else:
                 chunk_distinct = num_dict
                 if num_dict > 0:  # one bit even for a one-entry dictionary
-                    dict_width = max(1, Bits.width(UInt64(num_dict - 1)))
-                var d = self._write_dict_page(dict_body^, num_dict, out, codecs)
+                    dict_width = max(1, Int(bit_width(UInt64(num_dict - 1))))
+                var d = self._write_dict_page(dict_body^, num_dict, out, native)
                 dict_page_offset = d[0]
                 total_uncompressed += d[1]
                 total_compressed += d[2]
@@ -711,13 +707,13 @@ struct ColumnWriter(Movable):
             var def_bytes = List[UInt8]()
             if max_rep >= 1:
                 var page_reps = Self._sub(reps, i0, i)
-                Hybrid.encode_runs(
-                    Span(page_reps), Bits.width(UInt64(max_rep)), rep_bytes
+                RleEncoding.write_runs(
+                    Span(page_reps), Int(bit_width(UInt64(max_rep))), rep_bytes
                 )
             if max_def >= 1:
                 var page_defs = Self._sub(defs, i0, i)
-                Hybrid.encode_runs(
-                    Span(page_defs), Bits.width(UInt64(max_def)), def_bytes
+                RleEncoding.write_runs(
+                    Span(page_defs), Int(bit_width(UInt64(max_def))), def_bytes
                 )
 
             # value bytes for this page
@@ -725,7 +721,7 @@ struct ColumnWriter(Movable):
             if encoding == Encoding.RLE_DICTIONARY:
                 value_bytes.append(UInt8(dict_width))
                 var page_indices = Self._sub(indices, p0, p)
-                Hybrid.encode_packed(
+                RleEncoding.write_runs(
                     Span(page_indices), dict_width, value_bytes
                 )
             else:
@@ -750,7 +746,7 @@ struct ColumnWriter(Movable):
                 page_null,
                 encoding,
                 out,
-                codecs,
+                native,
             )
             total_uncompressed += sp[1]
             total_compressed += sp[2]
@@ -871,7 +867,7 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
     """
 
     var out: BufferedSink[Self.S]
-    var codecs: CompressionLibs
+    var native_codecs: Bool
     var compression: Compression
     var version: Int  # data-page version: 1 (default) or 2
     var use_dictionary: Bool  # dictionary-encode eligible columns (else PLAIN)
@@ -902,7 +898,7 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
     ):
         self.out = BufferedSink(sink^)
         FileMetaData.write_magic(self.out.buffer())  # file header magic
-        self.codecs = CompressionLibs(native=native_codecs)
+        self.native_codecs = native_codecs
         self.compression = compression
         self.version = version
         self.use_dictionary = use_dictionary
@@ -1026,7 +1022,7 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
                     reps[gi],
                     [self.leaves[gi].name],
                     self.out.buffer(),
-                    self.codecs,
+                    self.native_codecs,
                     page_plan,
                 )
                 total += cc.meta_data.total_uncompressed_size
@@ -1192,9 +1188,9 @@ def write_table(
     wide values, marrow will therefore write larger pages than Arrow C++ would
     for the same data.
 
-    LZ4 and ZSTD pages are compressed in Mojo; `native_codecs=False`
-    compresses them with liblz4 and libzstd instead -- the same bytes, with
-    liblz4 1.10.0 and libzstd 1.5.7.
+    LZ4, SNAPPY and ZSTD pages are compressed in Mojo; `native_codecs=False`
+    compresses them with liblz4, libsnappy and libzstd instead -- the same
+    bytes for LZ4 and ZSTD, with liblz4 1.10.0 and libzstd 1.5.7.
     """
     var writer = FileWriter(
         DynSink.open(uri, options),

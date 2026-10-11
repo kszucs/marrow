@@ -20,7 +20,7 @@ from std.sys import size_of
 
 from ..errors import CorruptError, InvalidError
 from ..utils import hex_digit
-from ..codecs import BigEndian, LittleEndian, Leb128, Zigzag
+from ..utils.byteorder import BigEndian, Leb128, LittleEndian
 
 
 struct AvroCursor[origin: ImmOrigin](Movable):
@@ -45,9 +45,9 @@ struct AvroCursor[origin: ImmOrigin](Movable):
             )
 
     def long(mut self) raises CorruptError -> Int64:
-        var v, p = Leb128.read(self.data, self.pos)
+        var v, p = Leb128.read_signed(self.data, self.pos)
         self.pos = p
-        return Zigzag.decode_value[DType.int64](v)
+        return v
 
     def int(mut self) raises CorruptError -> Int32:
         var v = self.long()
@@ -187,7 +187,7 @@ struct AvroBytes(Movable, Sized):
         self._data.clear()
 
     def long(mut self, v: Int64):
-        Leb128.write(self._data, Zigzag.encode_value(v))
+        Leb128.write_signed(self._data, v)
 
     def int(mut self, v: Int32):
         self.long(Int64(v))

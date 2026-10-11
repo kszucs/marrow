@@ -17,7 +17,7 @@ from marrow.parquet import (
     write_table as _write_table,
 )
 from marrow.parquet.chunker import ContentDefinedChunking
-from marrow.parquet.codecs import Compression
+from marrow.parquet.compression import Compression
 from marrow.tabular import Table
 from marrow.dtypes import DynType
 

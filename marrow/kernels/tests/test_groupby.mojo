@@ -80,7 +80,8 @@ from ...dtypes import (
 from ...kernels.filter import take
 from ...kernels.cast import decode_dictionary
 from ...kernels.hashing import HashKernel, NULL_HASH_SENTINEL
-from ...kernels.hashtable import SwissHashTable
+from ...kernels.hashtable import insert_hashes
+from ...utils import SwissHashTable
 from ...utils import Fmix64, Hasher, RapidHash64, TruncatedHash64
 from ...execution import ExecContext
 from ...kernels.aggregate import (
@@ -1004,8 +1005,8 @@ def test_collisions_on_the_radix_path() raises:
     already sees too few distinct hashes."""
     var batches = _one(_int_keys(_BIG, 50_000))
     var distinct_hashes = SwissHashTable()
-    _ = distinct_hashes.insert_hashes(
-        HashKernel[TruncatedHash64[20]].dispatch(batches[0][0])
+    _ = insert_hashes(
+        distinct_hashes, HashKernel[TruncatedHash64[20]].dispatch(batches[0][0])
     )
     assert_true(len(distinct_hashes) < 50_000)
 

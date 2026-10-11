@@ -12,7 +12,7 @@ since a port is a derivative work. It is not owed for dependencies marrow merely
 uses and does not ship: the dev-time oracles (pyarrow, python-xxhash), the test
 and build tooling, and the compression codecs (zstd, snappy, lz4, zlib, brotli)
 which are opened at runtime via dlopen and never bundled. Snappy is also ported,
-in marrow/utils/snappy.mojo, and that port is listed below.
+in marrow/compress/snappy.mojo, and that port is listed below.
 
 A Mojo dependency is different: it is compiled into every binary that imports
 it, the Python extension included, so marrow redistributes it in that form and
@@ -91,9 +91,9 @@ xxHash -- BSD 2-Clause
 --------------------------------------------------------------------------------
 
 Snappy -- BSD 3-Clause
-    marrow/utils/snappy.mojo, `Snappy`, and marrow/utils/lz77.mojo, `LzCopy`:
+    marrow/compress/snappy.mojo, `Snappy`, and marrow/compress/lz77.mojo, `LzCopy`:
     ported from google/snappy 1.2.2 `snappy.cc` and `snappy-internal.h`.
-    marrow/utils/tests/test_snappy.mojo: edge cases following
+    marrow/compress/tests/test_snappy.mojo: edge cases following
     `snappy_unittest.cc`.
     https://github.com/google/snappy
 
@@ -129,15 +129,15 @@ Snappy -- BSD 3-Clause
 --------------------------------------------------------------------------------
 
 Zstandard -- BSD 3-Clause
-    marrow/utils/zstd/matcher.mojo, `FastMatcher`: ported from libzstd
-    1.5.7's `zstd_fast.c`; and marrow/utils/lz77.mojo, `match_length`, from
+    marrow/compress/zstd.mojo, `FastMatcher`: ported from libzstd
+    1.5.7's `zstd_fast.c`; and marrow/compress/lz77.mojo, `match_length`, from
     its `ZSTD_count`.
-    marrow/utils/zstd/fse.mojo, huffman.mojo and encoder.mojo: the encoders,
+    marrow/compress/fse.mojo, huffman.mojo and zstd.mojo: the encoders,
     ported from `fse_compress.c`, `huf_compress.c`, `zstd_compress.c`,
     `zstd_compress_literals.c`, `zstd_compress_sequences.c`, `hist.c` and
     `zstd_preSplit.c`; and the Huffman decoder's choice of table, from
     `huf_decompress.c`.
-    marrow/utils/tests/test_zstd.mojo: frames from libzstd 1.5.7's
+    marrow/compress/tests/test_zstd.mojo: frames from libzstd 1.5.7's
     `tests/golden-decompression` and `tests/golden-decompression-errors`.
     https://github.com/facebook/zstd
 
@@ -175,7 +175,7 @@ Zstandard -- BSD 3-Clause
 --------------------------------------------------------------------------------
 
 LZ4 -- BSD 2-Clause
-    marrow/utils/lz4.mojo: the compressor, ported from liblz4 1.10.0's
+    marrow/compress/lz4.mojo: the compressor, ported from liblz4 1.10.0's
     `lib/lz4.c` (`LZ4_compress_generic`) and the frame writer from
     `lib/lz4frame.c` (`LZ4F_compressFrame`).
     https://github.com/lz4/lz4
@@ -209,6 +209,40 @@ LZ4 -- BSD 2-Clause
 
 --------------------------------------------------------------------------------
 
+Brotli -- MIT
+    marrow/compress/brotli.mojo: the decoder, ported from google/brotli
+    1.2.0's `c/dec/decode.c`, `huffman.c` and `prefix.c`; the dictionary
+    transforms from `c/common/transform.c`; and the quality-1 encoder from
+    `c/enc/compress_fragment_two_pass.c`, `entropy_encode.c`,
+    `brotli_bit_stream.c`, `bit_cost.c` and `encode.c`.
+    marrow/compress/brotli_dictionary.mojo: the static dictionary
+    (`c/common/dictionary.bin`, `dictionary.c`), the transforms
+    (`transform.c`) and the literal context table (`context.c`).
+    marrow/compress/tests/test_brotli.mojo: streams from `tests/testdata`.
+    https://github.com/google/brotli
+
+    Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
 Apache Arrow -- Apache-2.0
     marrow/parquet/chunker.mojo, marrow/parquet/gearhash.mojo and
     marrow/parquet/tests/test_chunker.mojo: content-defined chunking, ported
@@ -216,7 +250,7 @@ Apache Arrow -- Apache-2.0
     `chunker_internal_generated.h`, and from Arrow Rust
     `parquet/src/column/chunker/cdc.rs`, with test vectors from
     `chunker_internal_test.cc`.
-    marrow/utils/lz4.mojo: `Lz4.decompress_hadoop_into`, ported from Arrow C++
+    marrow/parquet/compression.mojo: `Hadoop`, ported from Arrow C++
     `cpp/src/arrow/util/compression_lz4.cc` (`Lz4HadoopCodec`).
     marrow/parquet/tests/test_page_skip.mojo: one case ported from Arrow Rust
     `parquet/src/arrow/arrow_reader/selection/ranges.rs`.

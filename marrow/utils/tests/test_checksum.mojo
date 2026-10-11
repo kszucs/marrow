@@ -12,7 +12,7 @@ implementations to the references rather than to themselves.
 from std.testing import assert_equal, assert_true
 
 from ..checksum import Crc32, Crc32c
-from ...codecs.byteorder import LittleEndian
+from ..byteorder import LittleEndian
 
 
 def _bytes(s: String) -> List[UInt8]:

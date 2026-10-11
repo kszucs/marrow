@@ -7,7 +7,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.testing import assert_equal, assert_true, assert_false
 
 from ..buffers import Buffer, Bitmap
-from ..views import BufferView, BitmapView, reduce
+from ..views import BufferView, BitmapView, PackedGroup, prefix_sum, reduce
 
 
 @always_inline
@@ -1425,3 +1425,137 @@ def test_bounds_bufferview_filter_with_bit_offset() raises:
             )
             k += 1
     assert_true(k == out_len, String("kept ", k, ", want ", out_len))
+
+
+# ---------------------------------------------------------------------------
+# prefix_sum / BufferView.scan
+# ---------------------------------------------------------------------------
+
+
+def test_prefix_sum_register() raises:
+    var v = SIMD[DType.int32, 4](1, 2, 3, 4)
+    assert_true(
+        prefix_sum(v, Int32(10)) == SIMD[DType.int32, 4](11, 13, 16, 20)
+    )
+
+
+def test_prefix_sum_wraps() raises:
+    var v = SIMD[DType.int8, 2](1, 1)
+    assert_true(prefix_sum(v, Int8(127)) == SIMD[DType.int8, 2](-128, -127))
+
+
+def _check_scan[T: DType](n: Int, carry: Scalar[T]) raises:
+    var buf = Buffer.alloc_zeroed[T](n)
+    var expected = List[Scalar[T]]()
+    var p = carry
+    for i in range(n):
+        var x = Scalar[T]((i * 7 + 3) % 11) - Scalar[T](5)
+        buf.unsafe_set[T](i, x)
+        p += x
+        expected.append(p)
+    var view = buf.view[T](0, n)
+    var last = view.scan(carry)
+    assert_equal(last, p)
+    for i in range(n):
+        assert_equal(view[i], expected[i])
+
+
+def test_scan_lengths() raises:
+    for n in [0, 1, 7, 8, 63, 64, 65, 130, 1000]:
+        _check_scan[DType.int64](n, 0)
+        _check_scan[DType.int32](n, 100)
+        _check_scan[DType.float64](n, 0.5)
+
+
+def test_scan_chains_carry() raises:
+    var buf = Buffer.alloc_zeroed[DType.int64](100)
+    for i in range(100):
+        buf.unsafe_set[DType.int64](i, 1)
+    var c = buf.view[DType.int64](0, 37).scan(0)
+    c = buf.view[DType.int64](37, 63).scan(c)
+    assert_equal(c, 100)
+    assert_equal(buf.view[DType.int64]()[99], 100)
+
+
+def test_scan_empty_returns_carry() raises:
+    var buf = Buffer.alloc_zeroed[DType.int32](0)
+    assert_equal(buf.view[DType.int32](0, 0).scan(42), 42)
+
+
+# ---------------------------------------------------------------------------
+# BufferView.expand
+# ---------------------------------------------------------------------------
+
+
+def _check_expand(n: Int, offset: Int, pattern: Int) raises:
+    """`pattern` 0: none set; 1: all set; k > 1: every k-th set."""
+    var bm = Bitmap.alloc_zeroed(n + offset)
+    var set_count = 0
+    for i in range(n):
+        if pattern == 1 or (pattern > 1 and i % pattern == 0):
+            bm.set(offset + i)
+            set_count += 1
+    var dense = Buffer.alloc_zeroed[DType.int64](set_count)
+    for k in range(set_count):
+        dense.unsafe_set[DType.int64](k, Int64(k + 1))
+    var out = Buffer.alloc_zeroed[DType.int64](n)
+    var view = out.view[DType.int64](0, n)
+    # Pre-filled with garbage: unset positions must be cleared.
+    view.as_span().fill(-7)
+    var sel = bm.view(offset, n)
+    var taken = view.expand(sel, dense.view[DType.int64](0, set_count))
+    assert_equal(taken, set_count)
+    var k = 0
+    for i in range(n):
+        if sel[i]:
+            k += 1
+            assert_equal(view[i], Int64(k))
+        else:
+            assert_equal(view[i], 0)
+
+
+def test_expand_patterns() raises:
+    for n in [0, 1, 63, 64, 65, 130, 1000]:
+        for pattern in [0, 1, 2, 7, 64]:
+            _check_expand(n, 0, pattern)
+
+
+def test_expand_bitmap_offset() raises:
+    for n in [1, 64, 130]:
+        for pattern in [1, 3]:
+            _check_expand(n, 3, pattern)
+
+
+def test_expand_reads_no_byte_past_the_selection() raises:
+    """Offsets that put the last partial word's first byte late in an
+    8-byte group, on bitmaps with no bytes to spare past the view."""
+    for offset in [57, 61, 63]:
+        for n in [1, 2, 7, 63, 65, 449, 450, 451]:
+            for pattern in [1, 3]:
+                _check_expand(n, offset, pattern)
+
+
+# ---------------------------------------------------------------------------
+# PackedGroup
+# ---------------------------------------------------------------------------
+
+
+def test_packed_group_matches_load_packed() raises:
+    """Every width, through both the table path and the bit-by-bit fallback
+    (a group whose 16-byte loads would pass the end)."""
+    for width in range(65):
+        var mask = UInt64.MAX >> UInt64(64 - width) if width > 0 else UInt64(0)
+        var src = Buffer.alloc_zeroed[DType.uint64](8)
+        for j in range(8):
+            src.unsafe_set[DType.uint64](
+                j, (UInt64(j) * 0x9E3779B97F4A7C15) & mask
+            )
+        # `width` bytes hold the group exactly, which forces the fallback;
+        # 32 more let the two 16-byte loads of the table path fit.
+        for spare in [32, 0]:
+            var bytes = Buffer.alloc_zeroed[DType.uint8](max(width + spare, 1))
+            var bits = BitmapView(bytes.view[DType.uint8]().as_span())
+            PackedGroup.pack(bits, 0, src.view[DType.uint64](0, 8), 0, 8, width)
+            var got = PackedGroup(width).unpack(bytes.view[DType.uint8](), 0)
+            assert_true(got == bits.load_packed[8](0, width))
+            assert_true(got == src.view[DType.uint64]().load[8](0))

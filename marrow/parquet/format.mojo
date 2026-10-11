@@ -19,8 +19,8 @@ from std.bit import bit_width
 from std.memory import bitcast
 
 from ..errors import CorruptError
-from .codecs import Encoding
-from ..codecs import Leb128, Zigzag
+from .encodings import Encoding
+from ..utils.byteorder import Leb128, LittleEndian
 
 
 # ---------------------------------------------------------------------------
@@ -101,22 +101,22 @@ struct ThriftCompactReader[o: Origin[mut=False]](Movable):
         return value
 
     def read_i16(mut self) raises CorruptError -> Int16:
-        return Int16(Zigzag.decode_value[DType.int64](self.read_varint()))
+        return Int16(self.read_i64())
 
     def read_i32(mut self) raises CorruptError -> Int32:
-        return Int32(Zigzag.decode_value[DType.int64](self.read_varint()))
+        return Int32(self.read_i64())
 
     def read_i64(mut self) raises CorruptError -> Int64:
-        return Zigzag.decode_value[DType.int64](self.read_varint())
+        var value: Int64
+        value, self.pos = Leb128.read_signed(self.data, self.pos)
+        return value
 
     def read_byte(mut self) raises CorruptError -> Int8:
         return Int8(self._u8())
 
     def read_double(mut self) raises CorruptError -> Float64:
-        var bits: UInt64 = 0
-        for i in range(8):
-            var sh = UInt64(i * 8)
-            bits |= UInt64(self._u8()) << sh
+        var bits = LittleEndian.checked[DType.uint64](self.data, self.pos)
+        self.pos += 8
         return bitcast[DType.float64](bits)
 
     def read_bytes(mut self) raises CorruptError -> Span[UInt8, Self.o]:
@@ -262,19 +262,16 @@ struct ThriftCompactWriter(Movable):
         Leb128.write(self.buf, v)
 
     def write_i16(mut self, v: Int16):
-        self.write_varint(Zigzag.encode_value(Int64(v)))
+        Leb128.write_signed(self.buf, Int64(v))
 
     def write_i32(mut self, v: Int32):
-        self.write_varint(Zigzag.encode_value(Int64(v)))
+        Leb128.write_signed(self.buf, Int64(v))
 
     def write_i64(mut self, v: Int64):
-        self.write_varint(Zigzag.encode_value(v))
+        Leb128.write_signed(self.buf, v)
 
     def write_double(mut self, v: Float64):
-        var bits = UInt64(v.to_bits())
-        for i in range(8):
-            var sh = UInt64(i * 8)
-            self.buf.append(UInt8((bits >> sh) & 0xFF))
+        LittleEndian.append[DType.uint64](self.buf, UInt64(v.to_bits()))
 
     def write_bytes(mut self, data: Span[UInt8, _]):
         self.write_varint(UInt64(len(data)))
@@ -1679,12 +1676,7 @@ struct FileMetaData(Copyable, Movable):
             and tail[n - 1] == 0x31
         ):
             raise CorruptError("parquet: missing PAR1 footer magic")
-        return (
-            Int(tail[n - 8])
-            | (Int(tail[n - 7]) << 8)
-            | (Int(tail[n - 6]) << 16)
-            | (Int(tail[n - 5]) << 24)
-        )
+        return Int(LittleEndian.fixed[DType.uint32](tail, n - 8))
 
     @staticmethod
     def read_footer[
@@ -1715,6 +1707,5 @@ struct FileMetaData(Copyable, Movable):
         self.write(w)
         var meta_len = len(w.buf)
         out.extend(Span(w.buf))
-        for i in range(4):
-            out.append(UInt8((meta_len >> (i * 8)) & 0xFF))
+        LittleEndian.append[DType.uint32](out, UInt32(meta_len))
         Self.write_magic(out)

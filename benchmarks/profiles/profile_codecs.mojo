@@ -1,7 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot profiling driver for `marrow.utils.zstd` and `.lz4`.
+"""Single-shot profiling driver for `marrow.codecs.zstd` and `.lz4`.
 
 Runs one codec operation over one of the codec benchmarks' corpora in a
 loop, so a sampling profiler sees nothing but that:
@@ -25,8 +25,8 @@ from std.ffi import external_call
 from std.os.env import getenv
 from std.sys.info import CompilationTarget
 
-from marrow.utils import Lz4, Zstd
-from marrow.utils.tests.codec_data import LibLz4, LibZstd, corpus
+from marrow.compress import Lz4, Zstd
+from marrow.compress.tests.codec_data import ResolvedLz4, ResolvedZstd, corpus
 
 
 def _int(name: String, default: Int) raises -> Int:
@@ -46,15 +46,15 @@ def main() raises:
         print(t"profile_codecs: image at {hex(image)}")
 
     var data = corpus(kind, n)
-    var lib = LibZstd()
+    var lib = ResolvedZstd()
     var frame = lib.compress(Span(data), level)
-    var lz4 = LibLz4()
+    var lz4 = ResolvedLz4()
     var block = lz4.compress(Span(data))
     var out = List[UInt8](length=n, fill=0)
     var packed = List[UInt8](capacity=Zstd.max_compressed_length(n))
     for _ in range(iters):
         if op == "decompress":
-            Zstd.decompress_into(Span(frame), Span(out))
+            Zstd.decompress(Span(frame), Span(out))
         elif op == "lib_decompress":
             lib.decompress(Span(frame), Span(out))
         elif op == "compress":
@@ -64,12 +64,12 @@ def main() raises:
             packed.clear()
             _ = lib.compress_into(Span(data), packed, level)
         elif op == "lz4_decompress":
-            Lz4.decompress_block_into(Span(block), Span(out))
+            Lz4.decompress(Span(block), Span(out))
         elif op == "lz4_lib_decompress":
             lz4.decompress(Span(block), Span(out))
         elif op == "lz4_compress":
             packed.clear()
-            Lz4.compress_block(Span(data), packed)
+            Lz4.compress(Span(data), packed)
         elif op == "lz4_lib_compress":
             packed.clear()
             _ = lz4.compress_into(Span(data), packed)

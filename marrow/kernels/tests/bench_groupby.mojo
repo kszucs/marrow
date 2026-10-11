@@ -33,7 +33,8 @@ from ...dtypes import uint64
 from ...execution import ExecContext
 from ...kernels.dictionary import DictionaryEncoder
 from ...dtypes import DynType
-from ...kernels.hashtable import SwissHashTable
+from ...kernels.hashtable import insert_hashes
+from ...utils import SwissHashTable
 from ...utils import RapidHash64
 from ...utils.testing import Benchmark
 
@@ -439,7 +440,7 @@ def bench_groupby_anchor_swiss_insert_1m(mut b: Benchmark) raises:
     @always_inline
     def call() raises {imm}:
         var t = SwissHashTable()
-        _ = t.insert_hashes(hashes)
+        _ = insert_hashes(t, hashes)
         keep(len(t))
 
     b.iter(call)

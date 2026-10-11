@@ -3,7 +3,7 @@
 
 """`LibSpec`, `Dylib.open_spec` and `LibSet` -- declaring optional C libraries.
 
-Exercised against the real `Codecs` set from `compression.mojo` rather than a
+Exercised against the real `Codecs` set from `compress/core.mojo` rather than a
 copy of its specs: the sonames already exist in two places (there, and
 `python/marrow/compile.py` for the wheel), and a third would be a third thing
 to keep in step. `libzstd` is a hard dependency of the dev environment, so a
@@ -20,7 +20,7 @@ measured and reverted; `backlog.md` has the numbers.
 from std.os import setenv
 from std.testing import assert_equal, assert_true
 
-from ..compression import Codecs
+from ...compress import Codecs
 from ..dylib import Dylib, LibSpec
 
 

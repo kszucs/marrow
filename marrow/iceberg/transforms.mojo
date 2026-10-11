@@ -34,7 +34,7 @@ from ..dtypes import (
 )
 from ..errors import InvalidError, TypeError
 from ..kernels.temporal import ticks_per_second
-from ..codecs import LittleEndian
+from ..utils.byteorder import LittleEndian
 from ..utils import CivilDate, Epoch, floor_div
 from .bounds import min_big_endian
 from .types import parse_int, primitive_name

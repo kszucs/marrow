@@ -49,6 +49,6 @@ from .reader import (
 )
 from .writer import write_table
 from .chunker import ContentDefinedChunking
-from .codecs import Compression
+from .compression import Compression
 from ..utils import XxHash64
 from .bloom import SplitBlockBloomFilter

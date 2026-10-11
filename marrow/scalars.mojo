@@ -108,7 +108,7 @@ from .dtypes import (
     null,
     string,
 )
-from .codecs import LittleEndian
+from .utils.byteorder import LittleEndian
 
 # ---------------------------------------------------------------------------
 # ArrowScalar trait

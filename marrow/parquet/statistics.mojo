@@ -55,7 +55,7 @@ from .schema import (
     is_wide_decimal,
     has_plain_physical,
 )
-from ..codecs import BigEndian, LittleEndian
+from ..utils.byteorder import BigEndian, LittleEndian
 
 
 def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
@@ -114,8 +114,8 @@ struct Statistics:
         var r = valid_min_max(arr)
         if not r[2]:
             return False
-        LittleEndian.put_le(min_out, r[0].cast[DType.uint64](), width)
-        LittleEndian.put_le(max_out, r[1].cast[DType.uint64](), width)
+        LittleEndian.append(min_out, r[0].cast[DType.uint64](), width)
+        LittleEndian.append(max_out, r[1].cast[DType.uint64](), width)
         return True
 
     @staticmethod
@@ -134,8 +134,8 @@ struct Statistics:
         var zero = Scalar[T.native](0)
         var mn = -zero if r[0] == zero else r[0]
         var mx = zero if r[1] == zero else r[1]
-        LittleEndian.put_le(min_out, UInt64(mn.to_bits()), width)
-        LittleEndian.put_le(max_out, UInt64(mx.to_bits()), width)
+        LittleEndian.append(min_out, UInt64(mn.to_bits()), width)
+        LittleEndian.append(max_out, UInt64(mx.to_bits()), width)
         return True
 
     @staticmethod
@@ -152,11 +152,8 @@ struct Statistics:
         var r = valid_min_max(arr)
         if not r[2]:
             return False
-        var lo = r[0].as_bytes[endian=Endian.big]()
-        var hi = r[1].as_bytes[endian=Endian.big]()
-        for b in range(width):
-            min_out.append(lo[b])
-            max_out.append(hi[b])
+        BigEndian.put_signed(min_out, r[0], width)
+        BigEndian.put_signed(max_out, r[1], width)
         return True
 
     @staticmethod

@@ -65,9 +65,16 @@ from .builders import Int32Builder
 from .kernels.concat import concat as _concat
 from .kernels.hashing import KeyCompare
 from .kernels.filter import TakeKernel
-from .utils import CompressionLibs, Lz4, Zstd
+from .compress import (
+    LibLz4Frame,
+    LibZstd,
+    Lz4Frame,
+    Zstd,
+    compress_with,
+    decompress_with,
+)
 from . import dtypes as dt
-from .codecs import LittleEndian
+from .utils.byteorder import LittleEndian
 
 
 # ---------------------------------------------------------------------------
@@ -191,14 +198,9 @@ struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
         if len(src) > 0:
             LittleEndian.append[DType.int64](out, Int64(len(src)))
             if self == Self.LZ4_FRAME:
-                if native:
-                    Lz4.compress_frame(src, out)
-                else:
-                    CompressionLibs.lz4_compress_frame(src, out)
-            elif native:
-                Zstd.compress(src, out)
+                compress_with[Lz4Frame, LibLz4Frame](native, src, out)
             else:
-                CompressionLibs.zstd_compress(src, out)
+                compress_with[Zstd, LibZstd](native, src, out)
 
     def decompress(
         self, src: Span[UInt8, _], native: Bool = True
@@ -219,7 +221,7 @@ struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
             # Checked before allocating: the length comes from the file.
             var most: Int
             if self == Self.LZ4_FRAME:
-                most = Lz4.max_decompressed_length(len(payload))
+                most = Lz4Frame.max_decompressed_length(len(payload))
             else:
                 most = Zstd.max_decompressed_length(len(payload))
             if n < 0 or n > most:
@@ -233,20 +235,12 @@ struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
         elif n > 0:
             # A length of 0 is an empty buffer, whatever follows it: Arrow
             # Java writes one with nothing after it.
-            if native and self == Self.LZ4_FRAME:
-                Lz4.decompress_frame_into(payload, dst.as_span())
-            elif native:
-                Zstd.decompress_into(payload, dst.as_span())
+            if self == Self.LZ4_FRAME:
+                decompress_with[Lz4Frame, LibLz4Frame](
+                    native, payload, dst.as_span()
+                )
             else:
-                try:
-                    if self == Self.LZ4_FRAME:
-                        CompressionLibs.lz4_decompress_frame(
-                            payload, dst.as_span()
-                        )
-                    else:
-                        CompressionLibs.zstd_decompress(payload, dst.as_span())
-                except e:
-                    raise DynError(e)
+                decompress_with[Zstd, LibZstd](native, payload, dst.as_span())
         return buf^.to_immutable()
 
 

@@ -39,9 +39,10 @@ from std.python import Python
 from std.time import perf_counter_ns
 
 from marrow.io.local import BufferSource
-from marrow.utils import CompressionLibs, Snappy
+from marrow.compress import Snappy
+from marrow.compress import LibSnappy
 from marrow.utils.testing import ScratchDir
-from marrow.utils.tests.codec_data import LibSnappy, corpus
+from marrow.compress.tests.codec_data import ResolvedSnappy, corpus
 
 comptime PAGES = 8
 comptime PAGE = 1 << 20
@@ -88,11 +89,11 @@ struct Chunk:
 
 
 def _write_chunk(data: List[UInt8], path: String) raises -> Chunk:
-    var libs = CompressionLibs()
     var chunk = Chunk()
     var body = List[UInt8]()
     for p in range(PAGES):
-        var comp = libs.snappy_compress(Span(data)[p * PAGE : (p + 1) * PAGE])
+        var comp = List[UInt8]()
+        LibSnappy.compress(Span(data)[p * PAGE : (p + 1) * PAGE], comp)
         chunk.start.append(len(body))
         chunk.length.append(len(comp))
         body.extend(Span(comp))
@@ -105,7 +106,7 @@ def _run(
     variant: String,
     path: String,
     chunk: Chunk,
-    mut snappy: LibSnappy,
+    mut snappy: ResolvedSnappy,
     mut out: List[UInt8],
     mut odd: List[UInt8],
 ) raises -> Int:
@@ -134,7 +135,7 @@ def _run(
             )
     elif base == "native":
         for p in range(PAGES):
-            Snappy.decompress_into(
+            Snappy.decompress(
                 src.read_at(chunk.start[p], chunk.length[p]),
                 Span(out)[p * PAGE : (p + 1) * PAGE],
             )
@@ -143,7 +144,7 @@ def _run(
         # even pages into `out`, odd pages packed into `odd`.
         for p in range(0, PAGES, 2):
             var o = (p // 2) * PAGE
-            Snappy.decompress_pair_into(
+            Snappy.decompress_pair(
                 src.read_at(chunk.start[p], chunk.length[p]),
                 Span(out)[p * PAGE : (p + 1) * PAGE],
                 src.read_at(chunk.start[p + 1], chunk.length[p + 1]),
@@ -170,7 +171,7 @@ def main() raises:
         "native_pair+willneed",
     ]
     comptime LIB = 1  # `variants[LIB]`, what every ratio is against
-    var snappy = LibSnappy()
+    var snappy = ResolvedSnappy()
     var out = List[UInt8](length=PAGES * PAGE, fill=0)
     var odd = List[UInt8](length=PAGES // 2 * PAGE, fill=0)
     print(

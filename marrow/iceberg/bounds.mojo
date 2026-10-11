@@ -29,7 +29,7 @@ from ..scalars import (
     PrimitiveScalar,
     StringScalar,
 )
-from ..codecs import BigEndian, LittleEndian
+from ..utils.byteorder import BigEndian, LittleEndian
 from .types import primitive_name
 
 

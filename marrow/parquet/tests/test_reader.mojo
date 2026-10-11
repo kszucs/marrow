@@ -16,6 +16,7 @@ from ...utils.testing import ScratchDir
 from ...parquet import read_table, ParquetFile
 from ...io import BufferSource
 from ...tabular import Table
+from ...dtypes import binary_view
 
 
 # ---------------------------------------------------------------------------
@@ -1014,3 +1015,32 @@ def test_read_from_byte_source() raises:
         ref col_s = cs.as_string()
         assert_equal(String(col_s[0]), "apple")
         assert_equal(String(col_s[4]), "elder")
+
+
+def test_read_plain_byte_array_refuses_an_overrunning_length() raises:
+    """A PLAIN byte-array value whose length runs past its page is refused,
+    by the copying reader and the view reader alike."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = pa.table(
+        Python.dict(s=pa.array(Python.list("abc", "de", "f"), type=pa.binary()))
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_overrun.parquet")
+        pq.write_table(tbl, path, compression="none", use_dictionary=False)
+        var bi = Python.import_module("builtins")
+        var f = bi.open(path, "rb")
+        var raw = f.read()
+        f.close()
+        var value = Python.str("abc").encode()
+        var prefix = bi.bytes(Python.list(3, 0, 0, 0))
+        assert_true(Int(py=raw.count(prefix + value)) == 1)
+        var huge = bi.bytes(Python.list(0xF0, 0xFF, 0xFF, 0x7F))
+        raw = raw.replace(prefix + value, huge + value)
+        f = bi.open(path, "wb")
+        _ = f.write(raw)
+        f.close()
+        with assert_raises(contains="runs past"):
+            _ = read_table(path)
+        with assert_raises(contains="runs past"):
+            _ = read_table(path, binary_type=binary_view)

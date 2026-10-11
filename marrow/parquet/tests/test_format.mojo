@@ -46,7 +46,10 @@ from ...codecs import Zigzag
 def test_zigzag_roundtrip() raises:
     for v in [Int64(0), 1, -1, 2, -2, 63, -64, 2147483647, -2147483648]:
         assert_equal(
-            Zigzag.decode_value[DType.int64](Zigzag.encode_value(v)), v
+            Zigzag().backward[DType.int64, 1](
+                0, Zigzag().forward[DType.int64, 1](v)
+            ),
+            v,
         )
 
 

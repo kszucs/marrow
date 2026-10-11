@@ -427,11 +427,12 @@ Rules:
 - Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for
   computation. No naked pointer arithmetic in kernel or array code.
 - **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`,
-  `c_data.mojo`, `codecs/byteorder.mojo` and the layers that hand raw pointers
+  `c_data.mojo`, `utils/byteorder.mojo` and the layers that hand raw pointers
   to a `dlopen`ed C library** — `utils/dylib.mojo` (the shared marshalling
-  primitives), `utils/compression.mojo` with `parquet/reader.mojo` and
-  `parquet/codecs.mojo` for the page codecs, and `io/opendal.mojo` for the
-  object store — plus `utils/snappy.mojo`, a codec built from unchecked block
+  primitives), the `Lib*` compressors in `compress/` (each in its format's
+  module, deflate's in `compress/zlib.mojo`) with `parquet/reader.mojo` and
+  `parquet/compression.mojo` for the page codecs, and `io/opendal.mojo` for the
+  object store — plus `compress/snappy.mojo`, a codec built from unchecked block
   copies and shuffles. `utils/threads.mojo` holds raw pointers too, handing
   pthread objects and coroutine frames to libc, and it is the one module exempt
   from the two rules below: it casts origins to `MutUntrackedOrigin` for state
@@ -446,7 +447,7 @@ Rules:
   libraries — sonames and env overrides — and owns them behind a single
   process-global, opened on first use with the failure recorded rather than
   raised. Callers write `Codecs.handle["zstd"]()`, and the name is checked
-  against the set at compile time. `compression.mojo` declares six members,
+  against the set at compile time. `compress/core.mojo` declares six members,
   `io/opendal.mojo` one.
 
   **One global per module, not per library**, and the open path is
@@ -880,8 +881,12 @@ marrow/
 ├── execution.mojo        # ExecContext — threads, device, `stripe`, GPU_ENABLED
 ├── errors.mojo           # ArrowError + ErrorKind — the error taxonomy
 ├── io/                   # core (ByteSource/ByteSink), local, opendal, dispatch
-├── codecs/               # byte order, value codecs, Cascade, Fused
-├── utils/                # checksum, hashing, compression, datetime,
+├── codecs/               # the Codec trait, Cascade, Encoded, and the
+│                         #   column codecs
+├── compress/             # core (the Compressor trait, Codecs); Zstd, Lz4,
+│                         #   Snappy, Brotli, each beside its Lib* twin;
+│                         #   Huffman; zlib (LibGzip, LibDeflate)
+├── utils/                # byte order, bits, checksum, hashing, datetime,
 │                         #   dylib, uri, threads (ThreadPool, Thread, Mutex)
 │   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/
@@ -927,8 +932,8 @@ marrow/
 │   └── tests/
 ├── json/                 # NDJSON: types (shared kinds), reader (options,
 │   └── tests/            #   cursor, both passes), writer
-├── parquet/              # reader, writer, schema, format, codecs, bloom,
-│   └── tests/            # statistics
+├── parquet/              # reader, writer, schema, format, encodings,
+│   └── tests/            # compression, bloom, statistics
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # Python package + bindings (python/marrow/libmarrow.so)
 └── marrow/tests/         # Python test_*.py and bench_*.py

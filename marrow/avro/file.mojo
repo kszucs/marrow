@@ -30,13 +30,14 @@ from ..io import (
 from ..io.core import FOOTER_READ_SIZE
 from ..schema import Schema
 from ..tabular import RecordBatch, Table
-from ..utils import CompressionLibs, Crc32, Snappy, Zstd
+from ..compress import LibDeflate, LibZstd, Snappy, Zstd
+from ..utils import Crc32
 from .binary import AvroBytes, AvroCursor
 from .decoder import RecordDecoder
 from .encoder import RecordEncoder
 from .mapping import from_arrow, to_arrow
 from .schema import AvroSchema
-from ..codecs import BigEndian, LittleEndian
+from ..utils.byteorder import BigEndian, LittleEndian
 
 comptime MAGIC = "Obj\x01"
 comptime SCHEMA_KEY = "avro.schema"
@@ -96,17 +97,22 @@ struct AvroCodec(Equatable, ImplicitlyCopyable, Movable, Writable):
         if self == Self.NULL:
             return List[UInt8](src)
         elif self == Self.DEFLATE:
-            return CompressionLibs.deflate_decompress(src)
+            return LibDeflate.decompress_unsized(src)
         elif self == Self.ZSTANDARD:
-            return CompressionLibs.zstd_decompress_unsized(src)
+            return LibZstd.decompress_unsized(src)
         elif self == Self.SNAPPY:
             # A raw snappy block, then the big-endian CRC-32 of the
             # uncompressed bytes.
             if len(src) < 4:
                 raise CorruptError("avro: snappy block without its checksum")
             var body = src[: len(src) - 4]
-            var out = List[UInt8]()
-            Snappy.decompress(body, out)
+            var n = Snappy.uncompressed_length(body)
+            if n > Snappy.max_decompressed_length(len(body)):
+                raise CorruptError(
+                    t"avro: {len(body)} snappy bytes cannot hold {n}"
+                )
+            var out = List[UInt8](unsafe_uninit_length=n)
+            Snappy.decompress(body, Span(out))
             var expected = BigEndian.fixed[DType.uint32](src, len(src) - 4)
             if Crc32.compute(out) != expected:
                 raise CorruptError("avro: snappy block checksum mismatch")
@@ -118,7 +124,9 @@ struct AvroCodec(Equatable, ImplicitlyCopyable, Movable, Writable):
         if self == Self.NULL:
             return List[UInt8](src)
         elif self == Self.DEFLATE:
-            return CompressionLibs.deflate_compress(src)
+            var out = List[UInt8]()
+            LibDeflate.compress(src, out)
+            return out^
         elif self == Self.ZSTANDARD:
             var out = List[UInt8]()
             Zstd.compress(src, out)

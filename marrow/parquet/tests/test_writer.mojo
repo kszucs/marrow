@@ -16,7 +16,8 @@ from ...buffers import Buffer
 from ...io import FileSink, MemorySink
 from ...parquet.writer import FileWriter, MAX_ROWS_PER_PAGE
 from ...parquet.chunker import ContentDefinedChunking
-from ...parquet.codecs import Compression, Encoding
+from ...parquet.compression import Compression
+from ...parquet.encodings import Encoding
 from ...utils import Crc32
 from ...tabular import RecordBatch, Table, record_batch
 from ...c_data import CArrowArrayStream

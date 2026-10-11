@@ -15,12 +15,16 @@ a **miss** scans the whole view and is what a column with no zero costs, which
 is the common case; a **hit at the front** returns from the first chunk and is
 what the loop saves when there is one.
 
+`scan` and `expand` are the running sum and the inverse of `filter` that
+decoding builds on: a column of ones, and selections that keep every value,
+every other one and one in sixteen.
+
 Run with: pixi run -e dev pytest marrow/tests/bench_views.mojo --benchmark
 """
 
 from std.benchmark import BenchMetric, keep
 
-from ..buffers import Buffer
+from ..buffers import Bitmap, Buffer
 from ..utils.testing import Benchmark
 
 
@@ -71,3 +75,64 @@ def bench_contains_hit_first_chunk_1m(mut b: Benchmark) raises:
 
     b.iter(call)
     keep(buf)
+
+
+# --- scan and expand --------------------------------------------------------
+
+
+def _ones_int64(n: Int) raises -> Buffer[mut=True]:
+    var buf = Buffer.alloc_zeroed[DType.int64](n)
+    for i in range(n):
+        buf.unsafe_set[DType.int64](i, 1)
+    return buf^
+
+
+def bench_scan_int64_1m(mut b: Benchmark) raises:
+    comptime n = 1_000_000
+    var buf = _ones_int64(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() {mut buf}:
+        keep(buf.view[DType.int64](0, n).scan(0))
+
+    b.iter(call)
+    keep(buf)
+
+
+def _bench_expand(mut b: Benchmark, every: Int) raises:
+    """Every `every`-th position selected; 1 selects all."""
+    comptime n = 1_000_000
+    var bm = Bitmap.alloc_zeroed(n)
+    var count = 0
+    for i in range(0, n, every):
+        bm.set(i)
+        count += 1
+    var dense = _ones_int64(count)
+    var out = Buffer.alloc_zeroed[DType.int64](n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() {mut out, imm}:
+        keep(
+            out.view[DType.int64](0, n).expand(
+                bm.view(0, n), dense.view[DType.int64](0, count)
+            )
+        )
+
+    b.iter(call)
+    keep(bm)
+    keep(dense)
+    keep(out)
+
+
+def bench_expand_all_1m(mut b: Benchmark) raises:
+    _bench_expand(b, 1)
+
+
+def bench_expand_half_1m(mut b: Benchmark) raises:
+    _bench_expand(b, 2)
+
+
+def bench_expand_sparse_1m(mut b: Benchmark) raises:
+    _bench_expand(b, 16)

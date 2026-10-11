@@ -251,16 +251,16 @@ def dylib_closure(binary: Path) -> list[Path]:
 # --- Parquet compression codecs -------------------------------------------
 #
 # marrow's block codecs (zstd, snappy, lz4, zlib, brotli) are `dlopen`-ed at
-# runtime, not linked (see `marrow/utils/compression.mojo`), so `otool -L` /
+# runtime, not linked (see `marrow/compress/core.mojo`), so `otool -L` /
 # `ldd` — and therefore `dylib_closure()` above — cannot see them: a bundle
 # built from those alone silently drops every compression codec, and snappy
 # is pyarrow's default, so that broke reading most real Parquet files.
-# `marrow/utils/compression.mojo` also tries an executable-relative
+# `marrow/utils/dylib.mojo` also tries an executable-relative
 # candidate before the bare soname now (see its `_exe_dir`/`_with_exe_dir`),
 # which is what makes a copy staged here actually get found at runtime —
 # copying alone is necessary but not sufficient.
 #
-# Mirrors the `LibSpec` declarations in `marrow/utils/compression.mojo`.
+# Mirrors the `LibSpec` declarations in `marrow/compress/core.mojo`.
 # `devkit/tests/test_libspecs.py` fails if the two drift, so this is a
 # pointer rather than a promise.
 _CODEC_LIB_CANDIDATES: dict[str, list[str]] = {

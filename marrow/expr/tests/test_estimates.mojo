@@ -68,7 +68,7 @@ from ...kernels.join import (
     JoinKind,
 )
 from ...io import FileSink
-from ...parquet.codecs import Compression
+from ...parquet.compression import Compression
 from ...parquet.reader import PageBounds, ParquetFile
 from ...parquet.writer import FileWriter
 from ...scalars import (

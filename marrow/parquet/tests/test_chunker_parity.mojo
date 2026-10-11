@@ -67,7 +67,7 @@ from ...parquet import ParquetFile
 from ...parquet.writer import FileWriter
 from ...io import FileSink
 from ...parquet.chunker import ContentDefinedChunking
-from ...parquet.codecs import Compression
+from ...parquet.compression import Compression
 from .test_writer import _page_row_counts
 
 

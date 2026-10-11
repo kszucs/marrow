@@ -26,7 +26,7 @@ from ...dtypes import date32, string
 from ...io import FileSink
 from ...kernels.filter import take
 from ...parquet import ParquetFile, RowSelection, write_table
-from ...parquet.codecs import Compression
+from ...parquet.compression import Compression
 from ...parquet.writer import FileWriter
 from ...scalars import Date32Scalar, DynScalar, Int32Scalar, NullScalar
 from ...scalars import StringScalar

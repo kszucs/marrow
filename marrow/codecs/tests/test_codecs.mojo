@@ -1,74 +1,71 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every codec through one harness: edge cases and random columns round-trip
-bit for bit, every truncation of a stream is refused, and a type the codec
-does not take is refused."""
+"""Every codec round-trips bit for bit, alone and in cascades, its slots
+stored by cascades of their own; and a tree with a byte or a value cut away
+is refused or decodes to other values."""
 
 from std.memory import bitcast
 from std.testing import assert_equal, assert_raises, assert_true
-from std.utils.numerics import inf, nan, neg_inf
 
 from ...codecs import (
-    BinaryCodec,
+    Alp,
     BitPack,
-    Bits,
+    Buckets,
     ByteStreamSplit,
-    DynCascade,
+    ByteSwap,
+    Cascade,
+    Cast,
     Codec,
+    Compressed,
     Delta,
-    DeltaBinaryPacked,
-    DeltaByteArray,
-    DeltaLengthByteArray,
+    Gcd,
+    Gorilla,
     Dictionary,
+    Encoded,
+    FrameOfReference,
     Frequency,
-    Hybrid,
-    OrderPreserving,
-    PlainBinary,
-    Rle,
-    Varint,
+    Lengths,
+    Ordered,
+    Patch,
+    Plain,
+    Prefixes,
+    Runs,
     Xor,
     Zigzag,
 )
+from ...builders import array
+from ...compress import Huffman, Lz4, Snappy, Zstd
+from ...dtypes import Int64Type, int64
+from ...utils.integers import Unsigned
 from ...utils.testing import Rng
+from ...views import BufferView
 
 
-def _cascade[C: Codec]() raises -> DynCascade:
-    """`C` alone: an elementwise codec's values then stored plain."""
-    return DynCascade(C())
+# --- columns ------------------------------------------------------------------
 
 
-def _same[T: DType](a: List[Scalar[T]], b: List[Scalar[T]]) -> Bool:
-    """Equal bit for bit -- so a NaN equals itself and -0.0 is not 0.0."""
-    if len(a) != len(b):
-        return False
-    for i in range(len(a)):
-        if bitcast[Bits.unsigned[T]](a[i]) != bitcast[Bits.unsigned[T]](b[i]):
-            return False
-    return True
-
-
-def _cases[T: DType]() -> List[List[Scalar[T]]]:
-    """The empty column, single values, the extremes, runs and a sorted
-    column -- and for floats the values whose bits matter."""
-    var cases = List[List[Scalar[T]]]()
-    cases.append(List[Scalar[T]]())
-    cases.append([Scalar[T](0)])
-    cases.append([Scalar[T].MIN_FINITE])
-    cases.append([Scalar[T].MAX_FINITE])
-    cases.append(
+def _columns[T: DType]() -> List[List[Scalar[T]]]:
+    """The empty column, single values, the extremes, runs, a sorted column,
+    random bits -- and for floats the values whose bits matter."""
+    var cols = List[List[Scalar[T]]]()
+    cols.append(List[Scalar[T]]())
+    cols.append([Scalar[T](0)])
+    cols.append([Scalar[T].MIN_FINITE])
+    cols.append([Scalar[T].MAX_FINITE])
+    cols.append(
         [Scalar[T](0), Scalar[T].MAX_FINITE, Scalar[T].MIN_FINITE, Scalar[T](1)]
     )
     var runs = List[Scalar[T]]()
-    for i in range(40):
-        runs.append(Scalar[T]((i // 7) % 3))
-    cases.append(runs^)
+    for i in range(1000):
+        runs.append(Scalar[T]((i // 37) % 3))
+    cols.append(runs^)
     var sorted = List[Scalar[T]]()
-    for i in range(100):
+    for i in range(301):
         sorted.append(Scalar[T](i * 3))
-    cases.append(sorted^)
+    cols.append(sorted^)
     comptime if T.is_floating_point():
-        cases.append(
+        cols.append(
             [
                 Scalar[T](-0.0),
                 Scalar[T](0.0),
@@ -77,372 +74,15 @@ def _cases[T: DType]() -> List[List[Scalar[T]]]:
                 Scalar[T](0.0) / Scalar[T](0.0),
             ]
         )
-    return cases^
-
-
-def _random[T: DType](n: Int, seed: UInt64) -> List[Scalar[T]]:
-    """`n` values of random bits -- NaN payloads included, for floats."""
-    var rng = Rng(seed)
-    var out = List[Scalar[T]](capacity=n)
-    for _ in range(n):
-        out.append(bitcast[T](rng.next().cast[Bits.unsigned[T]]()))
-    return out^
-
-
-def _roundtrip[
-    C: Codec, T: DType
-](values: List[Scalar[T]], every_prefix: Bool) raises:
-    var chain = _cascade[C]()
-    var data = chain.encode[T](values)
-    var back = chain.decode[T](data)
-    assert_true(
-        _same(back, values),
-        String(
-            C.name(), "[", T, "] did not round-trip ", len(values), " values"
-        ),
-    )
-    if every_prefix:
-        for n in range(len(data)):
-            with assert_raises(contains="CorruptError"):
-                _ = chain.decode[T](Span(data)[:n])
-
-
-def _check[C: Codec, T: DType]() raises:
-    for ref values in _cases[T]():
-        _roundtrip[C, T](values, every_prefix=True)
-    _roundtrip[C, T](_random[T](10_000, 42), every_prefix=False)
-
-
-def _refuses[C: Codec, T: DType]() raises:
-    var one: List[Scalar[T]] = [Scalar[T](1)]
-    with assert_raises(contains="InvalidError"):
-        _ = _cascade[C]().encode[T](one)
-
-
-def test_codecs_bitpack() raises:
-    _check[BitPack, DType.uint8]()
-    _check[BitPack, DType.uint16]()
-    _check[BitPack, DType.uint32]()
-    _check[BitPack, DType.uint64]()
-    _check[BitPack, DType.int8]()
-    _check[BitPack, DType.int64]()
-    _check[BitPack, DType.float64]()
-
-
-def test_codecs_bitpack_widths() raises:
-    """Every width from 0 to 64, for both the SIMD and the scalar unpack."""
-    for w in range(65):
-        var values = List[UInt64]()
-        for i in range(37):
-            var top = UInt64(0) if w == 0 else (
-                UInt64.MAX if w == 64 else (UInt64(1) << UInt64(w)) - 1
-            )
-            values.append(top - UInt64(i % 3) if w > 1 else top)
-        _roundtrip[BitPack, DType.uint64](values, every_prefix=False)
-
-
-def test_codecs_bitpack_get() raises:
-    """Bits read least significant first, across a byte boundary, and past
-    the end as zero."""
-    var b: List[UInt8] = [0xB2]
-    assert_true(BitPack.get(Span(b), 0, 1) == 0)
-    assert_true(BitPack.get(Span(b), 1, 1) == 1)
-    assert_true(BitPack.get(Span(b), 0, 4) == 0x2)
-    assert_true(BitPack.get(Span(b), 4, 4) == 0xB)
-    assert_true(BitPack.get(Span(b), 0, 8) == 0xB2)
-    assert_true(BitPack.get(Span(b), 4, 8) == 0xB)
-    var c: List[UInt8] = [0xFF, 0x01]
-    assert_true(BitPack.get(Span(c), 4, 8) == 0x1F)
-    assert_true(BitPack.get(Span(c), 0, 0) == 0)
-
-
-def test_codecs_bitpack_pack_unpack() raises:
-    """`pack` keeps each value's low `width` bits and `unpack` reads them back
-    from any byte, for every width; `width` gives the narrowest."""
-    assert_true(Bits.width(0) == 0)
-    assert_true(Bits.width(1) == 1)
-    assert_true(Bits.width(2) == 2)
-    assert_true(Bits.width(7) == 3)
-    assert_true(Bits.width(8) == 4)
-    assert_true(Bits.width(255) == 8)
-    assert_true(Bits.width(UInt64.MAX) == 64)
-    var rng = Rng(3)
-    for w in range(65):
-        var mask = UInt64(0) if w == 0 else UInt64.MAX >> UInt64(64 - w)
-        var values = List[UInt64]()
-        for _ in range(29):
-            values.append(rng.next())
-        var data: List[UInt8] = [0xAB]
-        BitPack.pack(Span(values), w, data)
-        assert_true(len(data) == 1 + (29 * w + 7) // 8)
-        var back = List[UInt64]()
-        BitPack.unpack(Span(data), 1, w, 29, back)
-        for i in range(29):
-            assert_true(back[i] == values[i] & mask, String("width ", w))
-
-
-def test_codecs_bitpack_registers() raises:
-    """`pack_bools` and `unpack_lanes` invert each other, at every lane
-    count a bitmap uses and every width a word holds."""
-    var m = SIMD[DType.bool, 64](fill=False)
-    for j in range(0, 64, 3):
-        m[j] = True
-    var word = bitcast[DType.uint64, 1](Bits.pack_bools[64](m))
-    assert_true(word == 0x9249249249249249)
-    var back = Bits.unpack_lanes[DType.uint64, 64](word, 1)
-    for j in range(64):
-        assert_true((back[j] == 1) == m[j])
-    assert_true(Bits.pack_bools[8](SIMD[DType.bool, 8](fill=True)) == 0xFF)
-    var le: List[UInt8] = [0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01]
-    for w in range(1, 9):
-        var v = Bits.unpack_lanes[DType.uint64, 8](0x0123456789ABCDEF, w)
-        for j in range(8):
-            assert_true(v[j] == BitPack.get(Span(le), j * w, w))
-
-
-def test_codecs_varint() raises:
-    _check[Varint, DType.uint8]()
-    _check[Varint, DType.uint32]()
-    _check[Varint, DType.uint64]()
-    _check[Varint, DType.int64]()
-    _refuses[Varint, DType.float32]()
-
-
-def test_codecs_zigzag() raises:
-    _check[Zigzag, DType.int8]()
-    _check[Zigzag, DType.int16]()
-    _check[Zigzag, DType.int32]()
-    _check[Zigzag, DType.int64]()
-    _refuses[Zigzag, DType.uint32]()
-    _refuses[Zigzag, DType.float32]()
-
-
-def test_codecs_delta() raises:
-    _check[Delta, DType.int32]()
-    _check[Delta, DType.int64]()
-    _check[Delta, DType.uint8]()
-    _check[Delta, DType.uint64]()
-    _refuses[Delta, DType.float64]()
-
-
-def test_codecs_rle() raises:
-    _check[Rle, DType.uint8]()
-    _check[Rle, DType.int32]()
-    _check[Rle, DType.float64]()
-
-
-def test_codecs_byte_stream_split() raises:
-    _check[ByteStreamSplit, DType.uint16]()
-    _check[ByteStreamSplit, DType.int32]()
-    _check[ByteStreamSplit, DType.float32]()
-    _check[ByteStreamSplit, DType.float64]()
-
-
-def test_codecs_dictionary() raises:
-    _check[Dictionary, DType.uint8]()
-    _check[Dictionary, DType.int64]()
-    _check[Dictionary, DType.float32]()
-
-
-def test_codecs_frequency() raises:
-    _check[Frequency, DType.int16]()
-    _check[Frequency, DType.uint64]()
-    _check[Frequency, DType.float64]()
-
-
-def test_codecs_xor() raises:
-    _check[Xor, DType.int32]()
-    _check[Xor, DType.float32]()
-    _check[Xor, DType.float64]()
-
-
-def test_codecs_order_preserving() raises:
-    _check[OrderPreserving, DType.int8]()
-    _check[OrderPreserving, DType.int16]()
-    _check[OrderPreserving, DType.int32]()
-    _check[OrderPreserving, DType.int64]()
-    _check[OrderPreserving, DType.uint8]()
-    _check[OrderPreserving, DType.uint16]()
-    _check[OrderPreserving, DType.uint32]()
-    _check[OrderPreserving, DType.uint64]()
-    _check[OrderPreserving, DType.float16]()
-    _check[OrderPreserving, DType.float32]()
-    _check[OrderPreserving, DType.float64]()
-
-
-def _assert_keys_ordered[T: DType](values: List[Scalar[T]]) raises:
-    """`values` is strictly increasing, so its keys must be too, and each key
-    must decode back to its value."""
-    for i in range(len(values)):
-        var key = OrderPreserving.encode_value(values[i])
-        assert_true(
-            _same([OrderPreserving.decode_value[T](key)], [values[i]]),
-            String(T, " ", values[i], " did not round-trip"),
-        )
-        if i > 0:
-            assert_true(
-                OrderPreserving.encode_value(values[i - 1]) < key,
-                String(T, " ", values[i - 1], " < ", values[i]),
-            )
-
-
-def test_order_preserving_signed_integers() raises:
-    _assert_keys_ordered[DType.int8]([Int8.MIN, -1, 0, 1, Int8.MAX])
-    _assert_keys_ordered[DType.int16]([Int16.MIN, -300, 0, 300, Int16.MAX])
-    _assert_keys_ordered[DType.int32]([Int32.MIN, -1, 0, 1, Int32.MAX])
-    _assert_keys_ordered[DType.int64]([Int64.MIN, -1, 0, 1, Int64.MAX])
-
-
-def test_order_preserving_unsigned_integers() raises:
-    _assert_keys_ordered[DType.uint8]([0, 1, 128, UInt8.MAX])
-    _assert_keys_ordered[DType.uint64]([0, 1, UInt64(1) << 63, UInt64.MAX])
-
-
-def _assert_floats_ordered[T: DType]() raises:
-    """`-inf < negatives < -0.0 < 0.0 < positives < inf < NaN`: the zeros are
-    distinct keys, and a NaN with its sign clear sorts above `inf`."""
-    _assert_keys_ordered[T](
-        [
-            neg_inf[T](),
-            Scalar[T].MIN_FINITE,
-            Scalar[T](-1.5),
-            Scalar[T](-0.0),
-            Scalar[T](0.0),
-            Scalar[T](1.5),
-            Scalar[T].MAX_FINITE,
-            inf[T](),
-            nan[T](),
-        ]
-    )
-
-
-def test_order_preserving_floats() raises:
-    _assert_floats_ordered[DType.float16]()
-    _assert_floats_ordered[DType.float32]()
-    _assert_floats_ordered[DType.float64]()
-    _assert_keys_ordered[DType.float64]([-1e-300, -5e-324, 5e-324, 1e-300])
-
-
-def test_order_preserving_keys_are_zero_extended() raises:
-    assert_equal(OrderPreserving.encode_value(Int8.MIN), UInt64(0))
-    assert_equal(OrderPreserving.encode_value(Int8.MAX), UInt64(0xFF))
-    assert_equal(OrderPreserving.encode_value(Float32(0.0)), UInt64(1 << 31))
-
-
-def test_codecs_hybrid() raises:
-    _check[Hybrid, DType.uint8]()
-    _check[Hybrid, DType.uint32]()
-    _check[Hybrid, DType.uint64]()
-    _refuses[Hybrid, DType.int32]()
-    _refuses[Hybrid, DType.float32]()
-
-
-def test_codecs_hybrid_runs() raises:
-    """Both run kinds read back at every width a level or index takes, and
-    the two encoders write Parquet's bytes."""
-    for w in range(1, 33):
-        var top = UInt32.MAX >> UInt32(32 - w)
-        var values = List[UInt32]()
-        for i in range(83):
-            values.append(top if (i // 9) % 2 == 0 else UInt32(i) & top)
-        for packed in [False, True]:
-            var data = List[UInt8]()
-            if packed:
-                Hybrid.encode_packed(Span(values), w, data)
-            else:
-                Hybrid.encode_runs(Span(values), w, data)
-            var back = List[UInt32]()
-            var used = Hybrid.decode_runs(Span(data), w, len(values), back)
-            assert_true(used == len(data), String("width ", w))
-            assert_true(back == values, String("width ", w))
-            var ones = Hybrid.count_matches(
-                Span(data), w, len(values), UInt64(top)
-            )
-            var want = 0
-            for v in values:
-                if v == top:
-                    want += 1
-            assert_true(ones == want, String("width ", w))
-    # One bit-packed run of 0..7 at width 3, and its zero padding.
-    var eight: List[UInt8] = [0, 1, 2, 3, 4, 5, 6, 7]
-    var packed = List[UInt8]()
-    Hybrid.encode_packed(Span(eight), 3, packed)
-    var expected: List[UInt8] = [3, 0x88, 0xC6, 0xFA]
-    assert_true(packed == expected)
-    eight.append(5)
-    packed.clear()
-    Hybrid.encode_packed(Span(eight), 3, packed)
-    assert_true(len(packed) == 1 + 2 * 3)
-
-
-def test_codecs_hybrid_refuses_a_truncated_run() raises:
-    var values: List[UInt8] = [1, 2, 3, 4, 5, 6, 7, 1, 2]
-    var data = List[UInt8]()
-    Hybrid.encode_packed(Span(values), 3, data)
-    var out = List[UInt8]()
-    with assert_raises(contains="CorruptError"):
-        _ = Hybrid.decode_runs(Span(data)[: len(data) - 1], 3, 9, out)
-
-
-def test_codecs_delta_binary_packed() raises:
-    _check[DeltaBinaryPacked, DType.int8]()
-    _check[DeltaBinaryPacked, DType.int16]()
-    _check[DeltaBinaryPacked, DType.int32]()
-    _check[DeltaBinaryPacked, DType.int64]()
-    _refuses[DeltaBinaryPacked, DType.uint32]()
-    _refuses[DeltaBinaryPacked, DType.float64]()
-
-
-def test_codecs_delta_binary_packed_blocks() raises:
-    """Differences as wide as 64 bits, a last block that is not full, and
-    the stream's end where what follows it begins."""
-    var vals: List[Int64] = [Int64.MIN, Int64.MAX, 0, -1]
-    var x = Int64(1)
-    for i in range(300):
-        x = x * 6364136223846793005 + 1442695040888963407
-        vals.append(x >> Int64(i % 60))
-    var data = List[UInt8]()
-    DeltaBinaryPacked.encode_blocks(Span(vals), data)
-    data.append(0xAB)
-    var back = List[Int64]()
-    var end = DeltaBinaryPacked.decode_blocks(Span(data), 0, len(vals), back)
-    assert_true(back == vals)
-    assert_true(end == len(data) - 1)
-    var none = List[Int64]()
-    with assert_raises(contains="CorruptError"):
-        _ = DeltaBinaryPacked.decode_blocks(Span(data), 0, len(vals) + 1, none)
-
-
-def _column(
-    values: List[String], mut offsets: List[Int32], mut data: List[UInt8]
-):
-    offsets.append(Int32(len(data)))
-    for v in values:
-        data.extend(v.as_bytes())
-        offsets.append(Int32(len(data)))
-
-
-def _check_binary_column[
-    C: BinaryCodec
-](offsets: List[Int32], data: List[UInt8], every_prefix: Bool) raises:
-    var count = len(offsets) - 1
-    var out = List[UInt8]()
-    C.encode(Span(offsets), Span(data), out)
-    var back_offsets: List[Int32] = [0]
-    var back = List[UInt8]()
-    var end = C.decode(Span(out), 0, count, back_offsets, back)
-    assert_true(end == len(out), String(C.name()))
-    assert_true(back_offsets == offsets, String(C.name()))
-    assert_true(back == data, String(C.name()))
-    if every_prefix:
-        for n in range(len(out)):
-            var cut_offsets: List[Int32] = [0]
-            var cut = List[UInt8]()
-            with assert_raises(contains="CorruptError"):
-                _ = C.decode(Span(out)[:n], 0, count, cut_offsets, cut)
-
-
-def _check_binary[C: BinaryCodec]() raises:
+    var rng = Rng(7)
+    var noise = List[Scalar[T]]()
+    for _ in range(10_003):
+        noise.append(bitcast[T](rng.next().cast[Unsigned[T]]()))
+    cols.append(noise^)
+    return cols^
+
+
+def _strings() -> List[List[String]]:
     var cases = List[List[String]]()
     cases.append(List[String]())
     cases.append([String("")])
@@ -457,44 +97,554 @@ def _check_binary[C: BinaryCodec]() raises:
             String("b"),
         ]
     )
-    for ref values in cases:
-        var offsets = List[Int32]()
-        var data = List[UInt8]()
-        _column(values, offsets, data)
-        _check_binary_column[C](offsets, data, every_prefix=True)
-    # Bytes that are not UTF-8.
-    var odd_offsets: List[Int32] = [0, 4, 7]
-    var odd: List[UInt8] = [0xFF, 0x00, 0xC3, 0x28, 0x00, 0xC3, 0x28]
-    _check_binary_column[C](odd_offsets, odd, every_prefix=True)
-    # A thousand values sharing prefixes.
     var many = List[String]()
     for i in range(1000):
         many.append(String("row-", i // 10, "-", i * 7919 % 1000))
-    var offsets = List[Int32]()
+    cases.append(many^)
+    return cases^
+
+
+def _cut(node: Encoded) -> List[Encoded]:
+    """`node` with one thing taken away -- a node's last byte, or a
+    cascade's last value -- in every way there is."""
+    var out = List[Encoded]()
+    if node.size > 0:
+        var cut = node.copy()
+        cut.size -= 1
+        out.append(cut^)
+    if node.count > 0:
+        var cut = node.copy()
+        cut.count -= 1
+        out.append(cut^)
+    if len(node.children) == 0:
+        return out^
+    for i in range(len(node.children)):
+        for ref child in _cut(node.children[i]):
+            var cut = node.copy()
+            cut.children[i] = child.copy()
+            out.append(cut^)
+    return out^
+
+
+def _same[T: DType](a: List[Scalar[T]], b: List[Scalar[T]]) -> Bool:
+    """Equal bit for bit -- so a NaN equals itself and -0.0 is not 0.0."""
+    if len(a) != len(b):
+        return False
+    for i in range(len(a)):
+        if bitcast[Unsigned[T]](a[i]) != bitcast[Unsigned[T]](b[i]):
+            return False
+    return True
+
+
+def _decode[
+    T: DType, C: Codec
+](mut cascade: C, node: Encoded) raises -> List[Scalar[T]]:
+    var out = List[Scalar[T]](length=node.count, fill=0)
+    cascade.decode_into[T](node, BufferView(Span(out)))
+    return out^
+
+
+def check[T: DType, C: Codec](var cascade: C) raises:
+    """Every column round-trips, and a tree cut short is refused or decodes
+    to other values -- never read past."""
+    for ref values in _columns[T]():
+        var n = len(values)
+        var encoded = cascade.encode_view(BufferView(Span(values)))
+        assert_true(
+            _same(_decode[T](cascade, encoded), values),
+            String(T, " did not round-trip ", n),
+        )
+        if n > 0 and n < 400:
+            for ref cut in _cut(encoded):
+                try:
+                    var wrong = _decode[T](cascade, cut)
+                    assert_true(not _same(wrong, values), "a cut went unseen")
+                except e:
+                    assert_true("CorruptError" in String(e), String(e))
+
+
+def _column(
+    values: List[String], mut offsets: List[Int32], mut data: List[UInt8]
+):
+    offsets.append(Int32(len(data)))
+    for v in values:
+        data.extend(v.as_bytes())
+        offsets.append(Int32(len(data)))
+
+
+def _decode_bytes[
+    C: Codec
+](mut cascade: C, node: Encoded) raises -> Tuple[List[Int32], List[UInt8]]:
+    var offsets: List[Int32] = [0]
     var data = List[UInt8]()
-    _column(many, offsets, data)
-    _check_binary_column[C](offsets, data, every_prefix=False)
+    cascade.decode(node, offsets, data)
+    return (offsets^, data^)
 
 
-def test_codecs_plain_binary() raises:
-    _check_binary[PlainBinary]()
+def check_bytes[C: Codec](var cascade: C) raises:
+    """`check`, for byte strings."""
+    for ref values in _strings():
+        var offsets = List[Int32]()
+        var data = List[UInt8]()
+        _column(values, offsets, data)
+        var encoded = cascade.encode(Span(offsets), Span(data))
+        var back = _decode_bytes(cascade, encoded)
+        assert_true(back[0] == offsets and back[1] == data)
+        if len(values) > 0 and len(values) < 400:
+            for ref cut in _cut(encoded):
+                try:
+                    var wrong = _decode_bytes(cascade, cut)
+                    assert_true(
+                        not (wrong[0] == offsets and wrong[1] == data),
+                        "a cut went unseen",
+                    )
+                except e:
+                    assert_true("CorruptError" in String(e), String(e))
 
 
-def test_codecs_delta_length_byte_array() raises:
-    _check_binary[DeltaLengthByteArray]()
+# --- each codec ----------------------------------------------------------------
 
 
-def test_codecs_delta_byte_array() raises:
-    _check_binary[DeltaByteArray]()
+def test_codecs_plain() raises:
+    check[DType.float64](Plain())
+    check[DType.int8](Plain())
+    check[DType.uint64](Cascade[Plain]())
 
 
-def test_codecs_dictionary_build() raises:
-    """Values are told apart by their bits."""
-    var nan = Float64(0.0) / Float64(0.0)
-    var values: List[Float64] = [-0.0, 0.0, nan, nan, 1.0, 0.0]
-    var distinct = List[Float64]()
-    var codes = List[Int32]()
-    Dictionary.build(Span(values), distinct, codes)
-    assert_true(len(distinct) == 4)
-    var want: List[Int32] = [0, 1, 2, 2, 3, 1]
-    assert_true(codes == want)
+def test_codecs_byte_stream_split() raises:
+    check[DType.float32](Cascade[ByteStreamSplit]())
+    check[DType.float64](Cascade[ByteStreamSplit]())
+    check[DType.int64](Cascade[ByteStreamSplit]())
+
+
+def test_codecs_bitpack() raises:
+    check[DType.uint8](BitPack[]())
+    check[DType.uint32](Cascade[BitPack[]]())
+    check[DType.uint64](Cascade((BitPack(32),)))
+    check[DType.uint8](Cascade((BitPack(8),)))
+    check[DType.uint16](Cascade((BitPack(64),)))
+
+
+def test_codecs_reference() raises:
+    check[DType.uint32](Cascade[FrameOfReference[], Plain]())
+    check[DType.uint16](Cascade((FrameOfReference(128), Plain())))
+    check[DType.uint64](Cascade((FrameOfReference(256), BitPack(32))))
+    check[DType.uint8](Cascade((FrameOfReference(64), BitPack())))
+
+
+def test_codecs_frames_whole() raises:
+    """A lane's frames are whole registers, a store's whole groups, and
+    encoding takes the frames that divide a block."""
+    var one: List[UInt8] = [1]
+    for size in [32, 100, 384, 2048]:
+        var reference = Cascade((FrameOfReference(size), Plain()))
+        with assert_raises(contains="InvalidError"):
+            _ = reference.encode_view(BufferView(Span(one)))
+    var bitpack = Cascade((BitPack(12),))
+    with assert_raises(contains="InvalidError"):
+        _ = bitpack.encode_view(BufferView(Span(one)))
+
+
+def test_codecs_runs() raises:
+    check[DType.int64](Cascade[Runs[]]())
+    check[DType.float32](Cascade[Runs[]]())
+    check[DType.uint32](Cascade[Runs[BitPack[], BitPack[]]]())
+
+
+def test_codecs_dictionary() raises:
+    check[DType.float64](Cascade[Dictionary[], Plain]())
+    check[DType.int32](Cascade[Dictionary[], BitPack[]]())
+    check_bytes(Cascade[Dictionary[], Plain]())
+    check_bytes(Cascade[Dictionary[], BitPack[]]())
+
+
+def test_codecs_delta() raises:
+    check[DType.int64](Cascade[Delta, Plain]())
+    check[DType.int8](Cascade[Delta, Plain]())
+    check[DType.uint16](Cascade((Delta(UInt16(7)), Plain())))
+
+
+def test_codecs_xor() raises:
+    check[DType.float64](Cascade[Xor, Plain]())
+    check[DType.int16](Cascade[Xor, Plain]())
+
+
+def test_codecs_gcd() raises:
+    check[DType.uint32](Cascade[Gcd[], Plain]())
+    check[DType.uint64](Cascade((Gcd(64), BitPack())))
+
+
+def test_codecs_patch() raises:
+    check[DType.uint32](Cascade[Patch[], Plain]())
+    check[DType.uint64](Cascade((Patch(64), BitPack())))
+
+
+def test_codecs_alp() raises:
+    check[DType.float64](Cascade[Alp[], Plain]())
+    check[DType.float32](Cascade[Alp[], Plain]())
+
+
+def test_codecs_buckets() raises:
+    check[DType.uint64](Cascade[Buckets]())
+    check[DType.uint16](Cascade[Buckets]())
+
+
+def test_codecs_gorilla() raises:
+    check[DType.uint64](Cascade[Gorilla]())
+    check[DType.uint32](Cascade[Gorilla]())
+
+
+def test_codecs_compressed() raises:
+    check[DType.uint8](Cascade[Compressed[Huffman]]())
+    check[DType.uint8](Cascade[Compressed[Zstd]]())
+    check[DType.uint8](Cascade[Compressed[Lz4]]())
+    check[DType.uint8](Cascade[Compressed[Snappy]]())
+    check_bytes(Cascade[Lengths[Cascade[Compressed[Zstd]]], Plain]())
+    check_bytes(Cascade[Lengths[Cascade[Compressed[Huffman]]], Plain]())
+
+
+def test_codecs_frequency() raises:
+    check[DType.int64](Cascade[Frequency[]]())
+    check[DType.float32](Cascade((Frequency(64),)))
+
+
+def test_codecs_zigzag() raises:
+    check[DType.int32](Cascade[Zigzag, Plain]())
+    check[DType.int64](Cascade[Zigzag, Plain]())
+
+
+def test_codecs_ordered() raises:
+    check[DType.float32](Cascade[Ordered, Plain]())
+    check[DType.int16](Cascade[Ordered, Plain]())
+
+
+def test_codecs_cast() raises:
+    check[DType.int8](Cascade[Cast[DType.int32], Plain]())
+    check[DType.uint16](Cascade[Cast[DType.uint32], Plain]())
+    check[DType.int32](Cascade[Cast[DType.int64], Delta, Zigzag, BitPack[]]())
+
+
+def test_codecs_byte_swap() raises:
+    check[DType.int64](Cascade[ByteSwap, Plain]())
+    # Values wider than a block of scratch holds as `uint64`s.
+    var values = List[Int128]()
+    for i in range(3000):
+        values.append(Int128(i) << 100 | Int128(i))
+    var cascade = Cascade[ByteSwap, Plain]()
+    var e = cascade.encode_view(BufferView(Span(values)))
+    # The second value, big-endian: bit 100 in its fourth byte, 1 in its
+    # last.
+    var bytes = e[1].bytes()
+    assert_true(bytes[16 + 3] == 0x10 and bytes[16 + 15] == 1)
+    var back = List[Int128](length=len(values), fill=0)
+    cascade.decode_into[DType.int128](e, BufferView(Span(back)))
+    assert_true(back == values)
+
+
+def test_codecs_lengths() raises:
+    check_bytes(Cascade[Lengths[], Plain]())
+    check_bytes(Cascade[Lengths[], Delta, Zigzag, BitPack[]]())
+
+
+def test_codecs_prefixes() raises:
+    check_bytes(Cascade[Prefixes[], Plain]())
+    check_bytes(Cascade[Prefixes[], Zigzag, BitPack[]]())
+
+
+# --- cascades, after ClickHouse's codec chains ---------------------------------
+
+
+def test_cascade_delta() raises:
+    """CODEC(Delta): monotonic counters and timestamps."""
+    check[DType.int64](Cascade[Delta, Zigzag, BitPack[]]())
+    check[DType.int32](Cascade[Delta, Zigzag, BitPack[]]())
+
+
+def test_cascade_double_delta() raises:
+    """CODEC(DoubleDelta): timestamps at a near-constant interval."""
+    check[DType.int64](Cascade[Delta, Delta, Zigzag, BitPack[]]())
+    check[DType.int16](Cascade[Delta, Delta, Zigzag, BitPack[]]())
+
+
+def test_cascade_t64() raises:
+    """CODEC(T64): frame of reference, then the bits the range needs."""
+    check[DType.int64](Cascade[Ordered, FrameOfReference[], BitPack[]]())
+    check[DType.float32](Cascade[Ordered, FrameOfReference[], BitPack[]]())
+
+
+def test_cascade_t64_blocks() raises:
+    """T64 a frame of 64 values at a time."""
+    check[DType.int32](Cascade((Ordered(), FrameOfReference(64), BitPack(64))))
+    check[DType.float64](
+        Cascade((Ordered(), FrameOfReference(64), BitPack(64)))
+    )
+
+
+def test_cascade_delta_t64() raises:
+    """CODEC(Delta, T64) -- Parquet's DELTA_BINARY_PACKED after its first
+    value."""
+    check[DType.int64](
+        Cascade((Delta(), Ordered(), FrameOfReference(128), BitPack(32)))
+    )
+    check[DType.int32](
+        Cascade((Delta(), Ordered(), FrameOfReference(128), BitPack(32)))
+    )
+
+
+def test_cascade_double_delta_t64() raises:
+    check[DType.int64](
+        Cascade(
+            (Delta(), Delta(), Ordered(), FrameOfReference(128), BitPack(32))
+        )
+    )
+
+
+def test_cascade_zigzag() raises:
+    """Small signed integers, packed."""
+    check[DType.int8](Cascade[Zigzag, BitPack[]]())
+    check[DType.int64](Cascade[Zigzag, BitPack[]]())
+
+
+def test_cascade_low_cardinality() raises:
+    """LowCardinality: a dictionary, its codes packed."""
+    check[DType.float64](Cascade[Dictionary[], BitPack[]]())
+    check_bytes(Cascade[Dictionary[], BitPack[]]())
+
+
+def test_cascade_low_cardinality_runs() raises:
+    """LowCardinality whose codes repeat: Parquet's RLE_DICTIONARY."""
+    check[DType.int64](Cascade[Dictionary[], Runs[BitPack[], BitPack[]]]())
+    check_bytes(Cascade[Dictionary[], Runs[BitPack[], BitPack[]]]())
+
+
+def test_cascade_sparse() raises:
+    """Long runs of one value, the rest framed and packed."""
+    check[DType.int64](
+        Cascade[
+            Runs[
+                Cascade[Ordered, FrameOfReference[], BitPack[]],
+                Cascade[BitPack[]],
+            ]
+        ]()
+    )
+
+
+def test_cascade_float_planes() raises:
+    """Gauges: readings that repeat, as runs, their values' byte planes
+    apart."""
+    check[DType.float64](Cascade[Runs[ByteStreamSplit, BitPack[]]]())
+    check[DType.float32](Cascade[Runs[ByteStreamSplit, BitPack[]]]())
+
+
+def test_cascade_strings() raises:
+    """Byte strings: their lengths, or the prefixes they share, delta
+    packed."""
+    check_bytes(Cascade[Lengths[], Delta, Zigzag, BitPack[]]())
+    check_bytes(
+        Cascade(
+            (Lengths(), Delta(), Ordered(), FrameOfReference(128), BitPack(32))
+        )
+    )
+    check_bytes(Cascade[Prefixes[], Delta, Zigzag, BitPack[]]())
+
+
+def test_cascade_gorilla() raises:
+    """Gauges as Gorilla begins them: each float's bits xor the one
+    before, which leaves the bits that changed, packed."""
+    check[DType.float64](Cascade[Xor, BitPack[]]())
+    check[DType.float32](Cascade[Xor, BitPack[]]())
+
+
+def test_cascade_gcd() raises:
+    """CODEC(GCD): timestamps in whole seconds, as milliseconds."""
+    check[DType.int64](Cascade[Ordered, FrameOfReference[], Gcd[], BitPack[]]())
+
+
+def test_cascade_pfor() raises:
+    """PFOR: frame of reference, the widest values set apart, the rest
+    packed narrow."""
+    check[DType.int64](
+        Cascade[Ordered, FrameOfReference[], Patch[], BitPack[]]()
+    )
+
+
+def test_cascade_alp() raises:
+    """ALP: decimals as integers, framed and packed."""
+    check[DType.float64](
+        Cascade[Alp[], Ordered, FrameOfReference[], BitPack[]]()
+    )
+    var prices = List[Float64]()
+    for i in range(3000):
+        prices.append(Float64((i * 7919) % 100000) / 100)
+    var alp = Cascade[Alp[], Ordered, FrameOfReference[], BitPack[]]()
+    var encoded = alp.encode_view(BufferView(Span(prices)))
+    assert_equal(len(encoded[0][Alp[].POSITIONS].bytes()), 0)
+    assert_true(_same(_decode[DType.float64](alp, encoded), prices))
+
+
+def test_cascade_double_delta_buckets() raises:
+    """CODEC(DoubleDelta): the delta of the delta in a few widths."""
+    check[DType.int64](Cascade[Delta, Delta, Zigzag, Buckets]())
+    check[DType.int32](Cascade[Delta, Delta, Zigzag, Buckets]())
+
+
+def test_cascade_gorilla_bits() raises:
+    """CODEC(Gorilla): floats' bits xor the one before, in the window of
+    their meaningful bits."""
+    check[DType.float64](Cascade[Xor, Gorilla]())
+    check[DType.float32](Cascade[Xor, Gorilla]())
+
+
+def test_cascade_slots() raises:
+    """Slots stored by cascades of their own: the smallest values of each
+    frame delta-packed, the widths run-encoded."""
+    check[DType.int64](
+        Cascade(
+            (
+                Ordered(),
+                FrameOfReference(128, Cascade[Delta, BitPack[]]()),
+                BitPack(32, Runs()),
+            )
+        )
+    )
+
+
+def test_cascade_delta_byte_array() raises:
+    """Parquet's DELTA_BYTE_ARRAY: the prefixes delta-packed, the suffixes
+    as DELTA_LENGTH_BYTE_ARRAY."""
+    var dlba = Cascade(
+        (Lengths(), Delta(), Ordered(), FrameOfReference(128), BitPack(32))
+    )
+    check_bytes(
+        Cascade(
+            (
+                Prefixes(dlba^),
+                Delta(),
+                Ordered(),
+                FrameOfReference(128),
+                BitPack(32),
+            )
+        )
+    )
+
+
+# --- what the docstrings show -------------------------------------------------
+
+
+def _bytes(node: Encoded) -> List[UInt8]:
+    var out = List[UInt8]()
+    for v in node.bytes():
+        out.append(v)
+    return out^
+
+
+def _encode[
+    T: DType, C: Codec
+](var cascade: C, values: List[Scalar[T]]) raises -> Encoded:
+    return cascade.encode_view(BufferView(Span(values)))
+
+
+def test_codecs_docstring_examples() raises:
+    var bitpack = _encode(BitPack[](), [UInt8(0), 1, 3])
+    assert_true(_bytes(bitpack) == [UInt8(0x34), 0])
+    assert_true(_bytes(bitpack[BitPack[].WIDTHS]) == [UInt8(2)])
+
+    var zigzag = _encode(Cascade[Zigzag, Plain](), [Int8(0), -1, 1, -2])
+    assert_true(_bytes(zigzag[1]) == [UInt8(0), 1, 2, 3])
+
+    var delta = _encode(Cascade[Delta, Plain](), [Int8(10), 12, 15, 15])
+    assert_true(_bytes(delta[1]) == [UInt8(10), 2, 3, 0])
+
+    var reference = _encode(
+        Cascade[FrameOfReference[], Plain](), [UInt8(100), 101, 103]
+    )
+    assert_true(_bytes(reference[1]) == [UInt8(0), 1, 3])
+    assert_true(_bytes(reference[0][FrameOfReference[].LOWS]) == [UInt8(100)])
+
+    var bss = _encode(ByteStreamSplit(), [UInt16(0x0102), 0x0304])
+    assert_true(_bytes(bss) == [UInt8(2), 4, 1, 3])
+
+    var dictionary = _encode(
+        Cascade[Dictionary[], Plain](), [UInt8(5), 5, 9, 5]
+    )
+    assert_true(_bytes(dictionary[0][Dictionary[].DISTINCT]) == [UInt8(5), 9])
+    assert_true(dictionary[1].values[DType.uint32]()[2] == 1)
+
+    var runs = _encode(Runs[](), [UInt8(5), 5, 5, 1, 2, 2])
+    assert_true(_bytes(runs[Runs[].VALUES]) == [UInt8(5), 1, 2])
+    var lengths = runs[Runs[].LENGTHS].values[DType.uint64]()
+    assert_true(lengths[0] == 3 and lengths[1] == 1 and lengths[2] == 2)
+
+
+def test_codecs_alp_example() raises:
+    var alp = _encode(Cascade[Alp[], Plain](), [Float64(1.5), 2.25, 0.5])
+    var ints = alp[1].values[DType.int64]()
+    assert_true(ints[0] == 150 and ints[1] == 225 and ints[2] == 50)
+    assert_true(alp[0][Alp[].SCALES].values[DType.uint16]()[0] == 2 << 8)
+
+
+def test_codecs_parquet_delta_binary_packed() raises:
+    """Parquet's own example, 1 to 5 as DELTA_BINARY_PACKED: after the
+    first value, the deltas through `Delta(first), Ordered,
+    FrameOfReference(128), BitPack(32)`."""
+    var dbp = Cascade(
+        (Delta(Int32(1)), Ordered(), FrameOfReference(128), BitPack(32))
+    )
+    var deltas: List[Int32] = [2, 3, 4, 5]
+    var e = dbp.encode_view(BufferView(Span(deltas)))
+    # The smallest delta's key, and one width of 0 -- so no bytes.
+    assert_true(
+        e[2][FrameOfReference[].LOWS].values[DType.uint32]()[0] == 0x80000001
+    )
+    assert_true(_bytes(e[3][BitPack[].WIDTHS]) == [UInt8(0)])
+    assert_equal(len(e[3].bytes()), 0)
+    var back = _decode[DType.int32](dbp, e)
+    assert_true(back == [Int32(2), 3, 4, 5])
+
+
+# --- typed arrays at the edges ------------------------------------------------
+
+
+def test_codecs_arrays() raises:
+    """A column goes in and comes out as an array; `decode_into` writes
+    into any view, an array's buffer at an offset among them."""
+    var values = List[Int64]()
+    for i in range(3000):
+        values.append(Int64(i * 7 - (i % 13) * 1000))
+    var arr = array[Int64Type](values.copy(), int64)
+    var cascade = Cascade[Delta, Zigzag, BitPack[]]()
+    var node = cascade.encode(arr)
+    var back = cascade.decode(node, int64)
+    assert_equal(len(back), len(values))
+    for i in range(len(values)):
+        assert_true(back.values()[i] == values[i])
+    var wide = List[Int64](length=len(values) + 5, fill=0)
+    cascade.decode_into[DType.int64](node, BufferView(Span(wide))[5:])
+    assert_true(wide[0] == 0 and wide[5 + 42] == values[42])
+    # A sliced array is encoded where it lies.
+    var tail = cascade.encode(arr.slice(1000, 500))
+    var sliced = cascade.decode(tail, int64)
+    assert_true(sliced.values()[0] == values[1000])
+
+
+def test_codecs_arrays_plain_shares() raises:
+    """`Plain` keeps the values as they are: its node shares the array's
+    buffer, and decoding gives an array over the node's."""
+    var four: List[Int64] = [5, 6, 7, 8]
+    var arr = array[Int64Type](four^, int64).slice(1, 3)
+    var node = Encoded(arr)
+    var plain = Plain()
+    var back = plain.decode(node, int64)
+    assert_equal(back.offset, 1)
+    assert_true(back.values()[0] == 6 and back.values()[2] == 8)
+
+
+def test_codecs_arrays_refuse_nulls() raises:
+    var xs = List[Optional[Int]]()
+    xs.append(1)
+    xs.append(None)
+    xs.append(3)
+    var arr = array[Int64Type](xs^, int64)
+    var cascade = Cascade[Delta, Zigzag, BitPack[]]()
+    with assert_raises(contains="nulls"):
+        _ = cascade.encode(arr)

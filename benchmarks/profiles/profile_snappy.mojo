@@ -1,7 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot profiling driver for `marrow.utils.snappy`.
+"""Single-shot profiling driver for `marrow.codecs.snappy`.
 
 Runs one operation over one of `bench_snappy.mojo`'s 1 MiB corpora in a loop,
 so a sampling profiler sees nothing but that operation. Build it at `-O3`,
@@ -24,8 +24,9 @@ from std.ffi import external_call
 from std.os.env import getenv
 from std.sys.info import CompilationTarget
 
-from marrow.utils import CompressionLibs, Snappy
-from marrow.utils.tests.codec_data import LibSnappy, corpus
+from marrow.compress import Snappy
+from marrow.compress import LibSnappy
+from marrow.compress.tests.codec_data import ResolvedSnappy, corpus
 
 comptime N = 1 << 20
 
@@ -46,23 +47,24 @@ def main() raises:
     var data = corpus(kind, 2 * N)
     var a = List[UInt8](Span(data)[:N])
     var b = List[UInt8](Span(data)[N:])
-    var libs = CompressionLibs()
-    var ca = libs.snappy_compress(Span(a))
-    var cb = libs.snappy_compress(Span(b))
+    var ca = List[UInt8]()
+    LibSnappy.compress(Span(a), ca)
+    var cb = List[UInt8]()
+    LibSnappy.compress(Span(b), cb)
     var oa = List[UInt8](length=N, fill=0)
     var ob = List[UInt8](length=N, fill=0)
     var out = List[UInt8](capacity=Snappy.max_compressed_length(N))
     var lib_out = List[UInt8](length=Snappy.max_compressed_length(N), fill=0)
-    var lib = LibSnappy()
+    var lib = ResolvedSnappy()
 
     for _ in range(iters):
         if op == "compress":
             out.clear()
             Snappy.compress(Span(a), out)
         elif op == "decompress":
-            Snappy.decompress_into(Span(ca), Span(oa))
+            Snappy.decompress(Span(ca), Span(oa))
         elif op == "pair":
-            Snappy.decompress_pair_into(Span(ca), Span(oa), Span(cb), Span(ob))
+            Snappy.decompress_pair(Span(ca), Span(oa), Span(cb), Span(ob))
         elif op == "lib_compress":
             keep(lib.compress(Span(a), lib_out))
         elif op == "lib_decompress":

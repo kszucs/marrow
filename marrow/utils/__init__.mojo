@@ -4,7 +4,7 @@
 """Format-agnostic primitives shared across marrow.
 
 Each submodule is a self-contained block that depends on nothing in marrow
-but its errors and `marrow.codecs`' byte order -- no arrays, no dtypes, no
+but its errors -- no arrays, no dtypes, no
 execution context -- so it can be read, tested and lifted out on its own:
 
 | module | what |
@@ -12,13 +12,10 @@ execution context -- so it can be read, tested and lifted out on its own:
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
 | `decimal` | `float_to_decimal` — the exact unscaled decimal of a double |
 | `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div` — proleptic-Gregorian arithmetic |
+| `byteorder` | `LittleEndian`, `BigEndian`, `Leb128` — values as bytes and as varints |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
 | `hex` | `hex_digit` — one hexadecimal digit's value |
-| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32` |
-| `compression` | `CompressionLibs` — `dlopen`ed snappy / zlib / brotli, and libzstd / liblz4 where chosen over the Mojo codecs |
-| `snappy` | `Snappy` — Snappy raw-block compression, in Mojo |
-| `lz4` | `Lz4` — LZ4 block, frame and Hadoop-framed compression, in Mojo |
-| `zstd` | `Zstd` — Zstandard, writing libzstd's level-1 frames, in Mojo |
+| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32`; `SwissHashTable` — 64-bit hash to dense id |
 | `dylib` | `Dylib`, `LibSpec` — declaring and opening an optional C library |
 | `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
 | `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
@@ -34,16 +31,15 @@ module in the tree imports `marrow.utils`, and none of them should pull
 `..utils.testing` explicitly.
 
 This replaced a single 312-line `marrow/utils.mojo` that was four unrelated
-things, and a second `marrow/parquet/utils.mojo` that held the codec bindings —
-two modules named `utils`, neither describing its contents. Device capability
+things. Device capability
 (`GPU_ENABLED`, `has_accelerator_support`) went the other way, to
 `marrow.execution`, where `ExecContext` already owns every question about
 whether there is a device.
 """
 
 from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
+from .byteorder import BigEndian, Leb128, LittleEndian
 from .checksum import Crc32, Crc32c
-from .compression import CompressionLibs
 from .decimal import float_to_decimal
 from .datetime import (
     CivilDate,
@@ -62,10 +58,8 @@ from .hashing import (
     KeyHash,
     RapidHash64,
     RapidSecret,
+    SwissHashTable,
     TruncatedHash64,
     XxHash32,
     XxHash64,
 )
-from .lz4 import Lz4
-from .snappy import Snappy
-from .zstd import Zstd

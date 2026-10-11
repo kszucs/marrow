@@ -19,7 +19,7 @@ from std.bit import pop_count
 
 from std.hashlib._ahash import AHasher
 
-from ..compression import Codecs
+from ...compress import Codecs
 from ..hashing import (
     mul_fold,
     mul_wide,

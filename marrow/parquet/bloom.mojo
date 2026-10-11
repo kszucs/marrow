@@ -29,7 +29,7 @@ from .format import (
     TC_I32,
     TC_STRUCT,
 )
-from ..codecs import LittleEndian
+from ..utils.byteorder import LittleEndian
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ struct SplitBlockBloomFilter(Movable):
         """Serialize the bitset: each word little-endian, blocks contiguous."""
         var out = List[UInt8](capacity=len(self.words) * 4)
         for w in self.words:
-            LittleEndian.put_le(out, UInt64(w), 4)
+            LittleEndian.append(out, UInt64(w), 4)
         return out^
 
     @always_inline

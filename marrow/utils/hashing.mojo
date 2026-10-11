@@ -62,11 +62,19 @@ Reference vectors in `tests/test_hashing.mojo` were generated from those
 implementations; neither is vendored.
 """
 
-from std.bit import pop_count, rotate_bits_left
-from std.sys import get_defined_int
-from std.sys.info import is_gpu
+from std.bit import (
+    count_trailing_zeros,
+    next_power_of_two,
+    pop_count,
+    rotate_bits_left,
+)
 from std.hashlib._ahash import AHasher
-from ..codecs.byteorder import LittleEndian
+from std.memory import pack_bits
+from std.sys import get_defined_int, size_of
+from std.sys.info import is_gpu
+from ..buffers import Buffer
+from ..views import BufferView
+from .byteorder import LittleEndian
 
 
 @always_inline
@@ -1000,3 +1008,282 @@ comparing it. Byte strings hash with rapidhash either way.
 **Only those.** The Parquet bloom filter hashes to a spec (`XxHash64`), and
 `approx_count_distinct` decides on the hash by design, so a truncated hash
 would change its answer rather than test it. It names `Fmix64` directly."""
+
+
+# ---------------------------------------------------------------------------
+# SwissHashTable
+# ---------------------------------------------------------------------------
+
+
+comptime _GROUP_WIDTH: Int = 16
+"""Number of control bytes per group (matches Mojo Dict / abseil)."""
+
+comptime _CTRL_EMPTY: UInt8 = 0xFF
+"""Control byte for an empty slot."""
+
+comptime _PIPE_DEPTH: Int = 16
+"""Number of probes pipelined in a single batch (prefetch window)."""
+
+
+struct SwissHashTable(Copyable, Movable, Sized):
+    """Swiss Table from 64-bit hash to dense id (abseil / hashbrown layout).
+
+    Each id is handed out once, in order — 0, 1, 2, ... — and owns one slot and
+    one stored hash. ``insert_all`` / ``find_all`` are the batch paths
+    and treat equal hashes as one id. ``find_one`` walks every id holding a
+    hash and lets the caller's equality pick, and ``insert_new`` hands out an
+    id without looking, which is how a caller keeps two keys that collide
+    apart.
+
+    Storage::
+
+        ctrl    [ 0xFF | 0xFF | h2=0x3A | 0xFF | h2=0x1B | ... ]  capacity + 16 bytes
+        slots   [  --  |  --  |   id=0  |  --  |   id=1  | ... ]  capacity x 4 bytes
+        hashes  [ hash of id 0, hash of id 1, ... ]               one per id
+
+    A control byte is ``0xFF`` (empty) or a 7-bit fingerprint of the hash
+    (``_h2``). A probe loads 16 control bytes at once and SIMD-matches the
+    fingerprint, so one comparison checks 16 slots; a fingerprint match is
+    confirmed against the stored hash. Batch paths prefetch the control group
+    ``_PIPE_DEPTH`` hashes ahead.
+    """
+
+    comptime PREFETCH_DISTANCE = _PIPE_DEPTH
+    """How many hashes ahead a batch prefetches its control group."""
+
+    var _ctrl: Buffer[mut=True]
+    """Control bytes: one per slot, plus ``_GROUP_WIDTH`` mirrored at the end
+    so a SIMD load never runs past the array."""
+
+    var _slots: Buffer[mut=True]
+    """The id stored at each slot (Int32)."""
+
+    var _hashes: Buffer[mut=True]
+    """The hash of each id, indexed by id."""
+
+    var _capacity: Int
+    """Total number of slots (always a power of 2)."""
+
+    var _mask: Int
+    """``_capacity - 1``, for ``hash & _mask``."""
+
+    var _len: Int
+    """Ids handed out — also the number of occupied slots."""
+
+    var _max_len: Int
+    """Grow past this many ids: ``_capacity * 7 / 8``."""
+
+    def __init__(out self, capacity: Int = 0):
+        """An empty table sized for ``capacity`` ids without growing."""
+        var cap = Int(next_power_of_two(max(capacity * 2, _GROUP_WIDTH)))
+        self._capacity = cap
+        self._mask = cap - 1
+        self._len = 0
+        self._max_len = cap * 7 // 8
+        self._ctrl = Buffer.alloc_filled(cap + _GROUP_WIDTH, fill=_CTRL_EMPTY)
+        self._slots = Buffer.alloc_uninit[DType.int32](cap)
+        # One entry per slot: ids never exceed `_max_len < _capacity`.
+        self._hashes = Buffer.alloc_uninit[DType.uint64](cap)
+
+    def __len__(self) -> Int:
+        """How many ids have been handed out."""
+        return self._len
+
+    # --- probing ------------------------------------------------------------
+
+    @staticmethod
+    @always_inline
+    def _h2(h: UInt64) -> UInt8:
+        """A 7-bit fingerprint from bits ``48..54`` of ``h``, a value in
+        ``0x00..0x7F`` — disjoint from ``_CTRL_EMPTY (0xFF)``.
+
+        **Not the top bits, because those are spent.** `RadixPartitioner`
+        routes on the top ``num_bits``, so inside one partition every hash
+        shares them; a fingerprint taken from the top seven had one bit of
+        entropy in a 64-way split and matched half of every occupied slot.
+        Bits ``48..54`` stay clear of any partition count up to 2^9 and of the
+        slot index (``h & mask``) for any capacity under 2^48 — slot,
+        fingerprint and partition read disjoint bits.
+        """
+        return UInt8((h >> 48) & 0x7F)
+
+    @always_inline
+    def prefetch(self, h: UInt64):
+        """Start loading the control group ``h`` probes first — issued a few
+        hashes ahead, it hides the cache miss a lookup would otherwise wait
+        on."""
+        self._ctrl.view[DType.uint8]().prefetch_at(Int(h & UInt64(self._mask)))
+
+    @always_inline
+    def _id_at(self, slot: Int) -> Int:
+        return Int(self._slots.unsafe_get[DType.int32](slot))
+
+    @always_inline
+    def hash_of(self, id: Int) -> UInt64:
+        """The hash id ``id`` was handed out for."""
+        return self._hashes.unsafe_get[DType.uint64](id)
+
+    @always_inline
+    def _matches(self, pos: Int, h: UInt64) -> UInt16:
+        """Slots of the control group at ``pos`` whose fingerprint is ``h``'s.
+        """
+        var group = self._ctrl.view[DType.uint8]().load[_GROUP_WIDTH](pos)
+        return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](Self._h2(h))))
+
+    @always_inline
+    def _empties(self, pos: Int) -> UInt16:
+        """Empty slots of the control group at ``pos``."""
+        var group = self._ctrl.view[DType.uint8]().load[_GROUP_WIDTH](pos)
+        return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](_CTRL_EMPTY)))
+
+    @always_inline
+    def find(self, h: UInt64) -> Int:
+        """The first id holding ``h``, or ``-1``."""
+        var pos = Int(h & UInt64(self._mask))
+        while True:
+            var hits = self._matches(pos, h)
+            while hits != 0:
+                var id = self._id_at(
+                    (pos + count_trailing_zeros(Int(hits))) & self._mask
+                )
+                if self.hash_of(id) == h:
+                    return id
+                hits &= hits - 1
+            if self._empties(pos) != 0:
+                return -1
+            pos = (pos + _GROUP_WIDTH) & self._mask
+
+    @always_inline
+    def find_one[
+        Eq: def(Int) raises -> Bool
+    ](self, h: UInt64, eq: Eq) raises -> Int:
+        """The first id holding ``h`` that ``eq`` accepts, or ``-1`` — every
+        id holding ``h`` is offered, so ``eq`` can tell colliding keys apart.
+        """
+        var pos = Int(h & UInt64(self._mask))
+        while True:
+            var hits = self._matches(pos, h)
+            while hits != 0:
+                var id = self._id_at(
+                    (pos + count_trailing_zeros(Int(hits))) & self._mask
+                )
+                if self.hash_of(id) == h and eq(id):
+                    return id
+                hits &= hits - 1
+            if self._empties(pos) != 0:
+                return -1
+            pos = (pos + _GROUP_WIDTH) & self._mask
+
+    @always_inline
+    def _empty_slot(self, h: UInt64) -> Int:
+        """The first empty slot on ``h``'s probe sequence."""
+        var pos = Int(h & UInt64(self._mask))
+        while True:
+            var empties = self._empties(pos)
+            if empties != 0:
+                return (pos + count_trailing_zeros(Int(empties))) & self._mask
+            pos = (pos + _GROUP_WIDTH) & self._mask
+
+    @always_inline
+    def insert_new(mut self, h: UInt64) raises -> Int:
+        """Hand out the next id for ``h`` without looking for one it already
+        has, growing first if the table is at its load limit — for a hash the
+        caller knows is new (``insert_hashes``), or whose holders ``find_one``
+        just turned down. Also how ids already known to be distinct are
+        re-placed, where a lookup would be wasted work and wrong, since two of
+        them may share a hash."""
+        if self._len >= self._max_len:
+            self.reserve(self._capacity)
+        var slot = self._empty_slot(h)
+        var h2 = Self._h2(h)
+        self._ctrl.unsafe_set[DType.uint8](slot, h2)
+        if slot < _GROUP_WIDTH:
+            self._ctrl.unsafe_set[DType.uint8](self._capacity + slot, h2)
+        var id = self._len
+        self._slots.unsafe_set[DType.int32](slot, Int32(id))
+        self._hashes.unsafe_set[DType.uint64](id, h)
+        self._len += 1
+        return id
+
+    # --- capacity -----------------------------------------------------------
+
+    def reserve(mut self, n: Int) raises:
+        """Make room for ``n`` ids without growing again.
+
+        Growing re-places every id by its stored hash; ids and hashes stay
+        where they are.
+        """
+        var needed = Int(next_power_of_two(max(n * 2, _GROUP_WIDTH)))
+        if needed <= self._capacity:
+            return
+        var old_capacity = self._capacity
+        var old_ctrl = self._ctrl^
+        var old_slots = self._slots^
+        self._capacity = needed
+        self._mask = needed - 1
+        self._max_len = needed * 7 // 8
+        self._ctrl = Buffer.alloc_filled(
+            needed + _GROUP_WIDTH, fill=_CTRL_EMPTY
+        )
+        self._slots = Buffer.alloc_uninit[DType.int32](needed)
+        for slot in range(old_capacity):
+            if old_ctrl.unsafe_get[DType.uint8](slot) != _CTRL_EMPTY:
+                var id = Int(old_slots.unsafe_get[DType.int32](slot))
+                var h = self.hash_of(id)
+                var to = self._empty_slot(h)
+                var h2 = Self._h2(h)
+                self._ctrl.unsafe_set[DType.uint8](to, h2)
+                if to < _GROUP_WIDTH:
+                    self._ctrl.unsafe_set[DType.uint8](needed + to, h2)
+                self._slots.unsafe_set[DType.int32](to, Int32(id))
+        if needed * size_of[UInt64]() > len(self._hashes):
+            self._hashes.resize[DType.uint64](needed)
+
+    # --- batch --------------------------------------------------------------
+
+    def insert_all(
+        mut self,
+        hashes: BufferView[DType.uint64, _],
+        ids: BufferView[mut=True, DType.int32, _],
+        firsts: BufferView[mut=True, DType.int32, _],
+    ) raises -> Int:
+        """Write the id of every hash to ``ids``, handing out a new one to each
+        hash not seen before, and the position of each new id's first hash to
+        ``firsts``; return how many were new. Equal hashes get one id, and new
+        ids come in row order, so ``firsts`` increases. Grows as it goes;
+        ``reserve`` first when the number of distinct hashes is known."""
+        var n = len(hashes)
+        var created = 0
+        for i in range(min(_PIPE_DEPTH, n)):
+            self.prefetch(hashes[i])
+        for i in range(n):
+            var h = hashes[i]
+            if i + _PIPE_DEPTH < n:
+                self.prefetch(hashes[i + _PIPE_DEPTH])
+            var id = self.find(h)
+            if id == -1:
+                id = self.insert_new(h)
+                firsts.store[1](created, Int32(i))
+                created += 1
+            ids.store[1](i, Int32(id))
+        return created
+
+    def find_all(
+        self,
+        hashes: BufferView[DType.uint64, _],
+        ids: BufferView[mut=True, DType.int32, _],
+    ):
+        """Write the id of every hash to ``ids``, or ``-1`` where the table has
+        none."""
+        var n = len(hashes)
+        for i in range(min(_PIPE_DEPTH, n)):
+            self.prefetch(hashes[i])
+        for i in range(n):
+            var h = hashes[i]
+            if i + _PIPE_DEPTH < n:
+                self.prefetch(hashes[i + _PIPE_DEPTH])
+            ids.store[1](i, Int32(self.find(h)))
+
+    def hash_view(self) -> BufferView[DType.uint64, origin_of(self._hashes)]:
+        """The hash of every id, in id order."""
+        return self._hashes.view[DType.uint64](0, self._len)

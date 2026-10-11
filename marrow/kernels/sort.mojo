@@ -67,7 +67,7 @@ from ..dtypes import (
 from .cast import decode_dictionary
 from .core import Kernel
 from .numeric import EqKernel
-from ..codecs import OrderPreserving
+from ..utils.integers import ordered
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 from .filter import TakeKernel
@@ -127,7 +127,7 @@ fits in L1 per thread; wider passes would thrash the 512 KB L2 shared cache.
 
 struct KeySort[bits: Int]:
     """Orders `Int32` rows by `UInt64` keys whose order lives in their low
-    `bits` bits, as `OrderPreserving` encodes them.
+    `bits` bits, as `ordered` encodes them.
 
     Both algorithms answer the same, stable order: `radix` is stable by
     construction, and `packed` breaks every tie by the row index.
@@ -533,9 +533,9 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
     ](val: Scalar[T.native], ascending: Bool) -> UInt64:
         """`val`'s sort key, with -0.0 folded onto 0.0 so the two tie, and
         every NaN onto the one positive NaN, which encodes above `+inf`."""
-        var key = OrderPreserving.encode_value(
+        var key = ordered(
             EqKernel[nan_safe=True].canonical[T.native, 1](val)
-        )
+        ).cast[DType.uint64]()
         if ascending:
             return key
         else:

@@ -9,7 +9,13 @@ from std.testing import assert_equal, assert_true
 from ...arrays import Int32Array, UInt64Array
 from ...builders import UInt64Builder
 from ...execution import ExecContext
-from ...kernels.hashtable import HashIndex, SwissHashTable
+from ...kernels.hashtable import (
+    HashIndex,
+    find_hashes,
+    hashes_of,
+    insert_hashes,
+)
+from ...utils import SwissHashTable
 from ...utils import Fmix64
 
 
@@ -45,7 +51,7 @@ def test_insert_hashes_hands_out_ids_in_order() raises:
     """Equal hashes share an id; new ones are numbered in first-seen order,
     and each new id's first position is reported in id order."""
     var t = SwissHashTable()
-    var placed = t.insert_hashes(_hashes(100, 200, 100, 300, 200))
+    var placed = insert_hashes(t, _hashes(100, 200, 100, 300, 200))
     assert_true(_ids(placed.ids) == [0, 1, 0, 2, 1])
     assert_true(_ids(placed.firsts) == [0, 1, 3])
     assert_equal(len(t), 3)
@@ -53,7 +59,7 @@ def test_insert_hashes_hands_out_ids_in_order() raises:
 
 def test_insert_hashes_empty() raises:
     var t = SwissHashTable()
-    var placed = t.insert_hashes(_hashes())
+    var placed = insert_hashes(t, _hashes())
     assert_equal(len(placed.ids), 0)
     assert_equal(len(placed.firsts), 0)
     assert_equal(len(t), 0)
@@ -62,8 +68,8 @@ def test_insert_hashes_empty() raises:
 def test_insert_hashes_across_calls() raises:
     """An id is stable across calls."""
     var t = SwissHashTable()
-    _ = t.insert_hashes(_hashes(10, 20))
-    var placed = t.insert_hashes(_hashes(20, 30))
+    _ = insert_hashes(t, _hashes(10, 20))
+    var placed = insert_hashes(t, _hashes(20, 30))
     assert_true(_ids(placed.ids) == [1, 2])
     assert_true(_ids(placed.firsts) == [1])
 
@@ -73,9 +79,9 @@ def test_insert_hashes_with_high_bits() raises:
     regression for a signed shift in the fingerprint."""
     var t = SwissHashTable()
     var h = _spread(1000, 1000)
-    _ = t.insert_hashes(h)
+    _ = insert_hashes(t, h)
     assert_equal(len(t), 1000)
-    var found = t.find_hashes(h)
+    var found = find_hashes(t, h)
     for i in range(1000):
         assert_true(found.unsafe_get(i) >= 0)
 
@@ -85,15 +91,15 @@ def test_insert_hashes_grows_and_keeps_ids() raises:
     var t = SwissHashTable()
     var n = 100_000
     var h = _spread(n, n)
-    var first = t.insert_hashes(h)
+    var first = insert_hashes(t, h)
     assert_equal(len(t), n)
-    assert_true(first.ids == t.find_hashes(h))
+    assert_true(first.ids == find_hashes(t, h))
 
 
 def test_find_hashes_absent_is_minus_one() raises:
     var t = SwissHashTable()
-    _ = t.insert_hashes(_hashes(10, 20, 30))
-    assert_true(_ids(t.find_hashes(_hashes(20, 40, 10))) == [1, -1, 0])
+    _ = insert_hashes(t, _hashes(10, 20, 30))
+    assert_true(_ids(find_hashes(t, _hashes(20, 40, 10))) == [1, -1, 0])
     assert_equal(len(t), 3)
 
 
@@ -105,7 +111,7 @@ def test_insert_new_keeps_equal_hashes_apart() raises:
     assert_equal(t.insert_new(7), 1)
     assert_equal(t.insert_new(9), 2)
     assert_equal(len(t), 3)
-    var h = t.hashes()
+    var h = hashes_of(t)
     assert_true(h[0].value() == 7 and h[1].value() == 7 and h[2].value() == 9)
 
 

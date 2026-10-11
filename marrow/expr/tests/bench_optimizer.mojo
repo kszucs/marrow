@@ -43,7 +43,7 @@ from ...dtypes import Field, field, int64
 from ...io import FileSink
 from ...kernels.join import JOIN_INNER
 from ...scalars import Int64Scalar
-from ...parquet.codecs import Compression
+from ...parquet.compression import Compression
 from ...parquet.reader import ParquetFile
 from ...parquet.writer import FileWriter
 from ...schema import Schema, schema

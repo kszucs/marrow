@@ -33,7 +33,7 @@ _SPEC = re.compile(
 )
 
 _SOURCES = (
-    ("utils", "compression.mojo"),
+    ("compress", "core.mojo"),
     ("io", "opendal.mojo"),
 )
 

@@ -22,8 +22,8 @@ from std.ffi import external_call
 from std.os.env import getenv
 from std.sys.info import CompilationTarget
 
-from marrow.utils import Lz4, Zstd
-from marrow.utils.tests.codec_data import LibLz4, LibZstd, corpus
+from marrow.compress import Lz4, Zstd
+from marrow.compress.tests.codec_data import ResolvedLz4, ResolvedZstd, corpus
 
 
 def _cpu_ns() -> Int:
@@ -49,25 +49,25 @@ struct _Case(Movable):
 
     def __init__(out self, kind: String, n: Int) raises:
         self.data = corpus(kind, n)
-        self.lz4_block = LibLz4().compress(Span(self.data))
-        self.zstd_frame = LibZstd().compress(Span(self.data), 1)
+        self.lz4_block = ResolvedLz4().compress(Span(self.data))
+        self.zstd_frame = ResolvedZstd().compress(Span(self.data), 1)
         self.out = List[UInt8](length=n, fill=0)
         self.packed = List[UInt8](capacity=Zstd.max_compressed_length(n) + n)
 
 
 def _run(
-    op: String, native: Bool, mut c: _Case, lz4: LibLz4, zstd: LibZstd
+    op: String, native: Bool, mut c: _Case, lz4: ResolvedLz4, zstd: ResolvedZstd
 ) raises:
     """One call of `op` on one side."""
     if op == "lz4 compress":
         c.packed.clear()
         if native:
-            Lz4.compress_block(Span(c.data), c.packed)
+            Lz4.compress(Span(c.data), c.packed)
         else:
             keep(lz4.compress_into(Span(c.data), c.packed))
     elif op == "lz4 decompress":
         if native:
-            Lz4.decompress_block_into(Span(c.lz4_block), Span(c.out))
+            Lz4.decompress(Span(c.lz4_block), Span(c.out))
         else:
             lz4.decompress(Span(c.lz4_block), Span(c.out))
     elif op == "zstd compress":
@@ -78,7 +78,7 @@ def _run(
             keep(zstd.compress_into(Span(c.data), c.packed, 1))
     else:
         if native:
-            Zstd.decompress_into(Span(c.zstd_frame), Span(c.out))
+            Zstd.decompress(Span(c.zstd_frame), Span(c.out))
         else:
             zstd.decompress(Span(c.zstd_frame), Span(c.out))
     keep(c.out)
@@ -94,8 +94,8 @@ def main() raises:
     var rounds_env = getenv("MARROW_AB_ROUNDS", "")
     var rounds = Int(rounds_env) if rounds_env.byte_length() > 0 else 15
     var only = getenv("MARROW_AB_FILTER", "")
-    var lz4 = LibLz4()
-    var zstd = LibZstd()
+    var lz4 = ResolvedLz4()
+    var zstd = ResolvedZstd()
     var ops: List[String] = [
         "lz4 compress",
         "lz4 decompress",

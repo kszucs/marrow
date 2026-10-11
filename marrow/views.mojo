@@ -19,11 +19,12 @@ Method names follow Mojo's ``std.collections.bitset.BitSet`` conventions.
 """
 
 from std.sys.info import simd_byte_width, simd_width_of
-from std.sys import size_of
+from std.sys import bit_width_of, size_of
 from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.memory import bitcast
+from std.math import iota
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
@@ -36,12 +37,160 @@ from max.gpu.host import get_gpu_target
 from .errors import InvalidError, NotImplementedError
 from .buffers import Buffer, Bitmap, bulk_copy
 from .execution import ExecContext
-from .codecs.bits import Bits
+
+
+struct BitLanes:
+    """Bit-packing in registers -- no memory touched, no allocation, nothing
+    raised -- so a GPU kernel can call it as well as the CPU. A bitmap
+    load or store is one of these."""
+
+    @staticmethod
+    @always_inline
+    def pack_bools[
+        W: Int
+    ](mask: SIMD[DType.bool, W]) -> SIMD[DType.uint8, W // 8]:
+        """`W` bools as the `W / 8` bytes holding them, lane `i` at bit `i`
+        -- width-1 packing in registers, with no memory touched.
+
+        Each lane is cast to a `W`-bit integer, shifted by its index and the
+        lanes OR-reduced. `std.memory.pack_bits` -- one bitcast from
+        `<W x i1>`, which x86 lowers to `pmovmskb` -- is slower on ARM, which
+        has no mask-move instruction: it measured +12-15% on every bitmap-pack
+        benchmark there, with none faster. Re-measure on the target before
+        swapping it in."""
+        comptime T = Self._packed[W]()
+        var word = (mask.cast[T]() << iota[T, W]()).reduce_or()
+        return bitcast[DType.uint8, W // 8](word)
+
+    @staticmethod
+    @always_inline
+    def unpack_lanes[
+        D: DType, W: Int
+    ](word: Scalar[D], width: Int) -> SIMD[D, W]:
+        """The `W` values of `width` bits packed from bit 0 of `word`, lane
+        `j` from bit `j * width` -- unpacking in registers, with no memory
+        touched. `width` is at least 1, and `W * width` must not exceed
+        `word`'s bits."""
+        var mask = Scalar[D].MAX >> Scalar[D](bit_width_of[D]() - width)
+        return (SIMD[D, W](word) >> (iota[D, W]() * Scalar[D](width))) & mask
+
+    @staticmethod
+    @always_inline
+    def unpack_lanes[
+        D: DType, W: Int, width: Int
+    ](word: Scalar[D]) -> SIMD[D, W]:
+        """`unpack_lanes` for a `width` known at compile time, which folds
+        the shifts and the mask into constants."""
+        comptime assert W * width <= bit_width_of[D](), "the lanes overflow D"
+        var shifts = iota[D, W]()
+        comptime if width != 1:
+            shifts *= Scalar[D](width)
+        return (SIMD[D, W](word) >> shifts) & Scalar[D]((1 << width) - 1)
+
+    @staticmethod
+    def _packed[W: Int]() -> DType:
+        """The unsigned integer type of `W` bits, for `W` of 8, 16, 32 or
+        64."""
+        comptime assert (
+            W == 8 or W == 16 or W == 32 or W == 64
+        ), "W must be 8, 16, 32 or 64"
+        if W == 8:
+            return DType.uint8
+        elif W == 16:
+            return DType.uint16
+        elif W == 32:
+            return DType.uint32
+        return DType.uint64
 
 
 # ---------------------------------------------------------------------------
 # BufferView — typed element view
 # ---------------------------------------------------------------------------
+
+
+struct PackedGroup(TrivialRegisterPassable):
+    """Where each of eight values of one width sits in a group of `width`
+    bytes: the bytes holding it and the shift to its first bit. Up to 25
+    bits a value lies within four bytes, so a group unpacks with two 16-byte
+    loads, two table lookups and one shift."""
+
+    var width: Int
+    var second: Int
+    """The byte the second four values are read from."""
+    var low: SIMD[DType.uint8, 16]
+    """The four bytes each of the first four values is read from."""
+    var high: SIMD[DType.uint8, 16]
+    """The same for the second four, from `second` on."""
+    var shifts: SIMD[DType.uint32, 8]
+    var mask: SIMD[DType.uint32, 8]
+
+    def __init__(out self, width: Int):
+        # Entry `e` of a table is byte `e % 4` of value `e / 4`.
+        var w = UInt32(width)
+        var entry = iota[DType.uint32, 16]()
+        var first = ((entry >> 2) * w >> 3) + (entry & 3)
+        var second = (((entry >> 2) + 4) * w >> 3) + (entry & 3)
+        self.width = width
+        self.second = (4 * width) >> 3
+        self.low = min(first, 15).cast[DType.uint8]()
+        self.high = min(second - UInt32(self.second), 15).cast[DType.uint8]()
+        self.shifts = (iota[DType.uint32, 8]() * w) & 7
+        self.mask = SIMD[DType.uint32, 8]((UInt32(1) << min(w, 31)) - 1)
+
+    @staticmethod
+    @always_inline
+    def pack[
+        T: DType
+    ](
+        bits: BitmapView[mut=True, _],
+        at: Int,
+        src: BufferView[T, _],
+        lo: Int,
+        hi: Int,
+        width: Int,
+    ):
+        """Pack `src[lo:hi]`, at most eight values, as a group of `width`
+        bits each from bit `at`, the values short of eight zero."""
+        var group = SIMD[DType.uint64, 8](0)
+        if hi - lo == 8:
+            group = src.load[8](lo).cast[DType.uint64]()
+        else:
+            for j in range(hi - lo):
+                group[j] = src.unsafe_get(lo + j).cast[DType.uint64]()
+        bits.store_packed[8](at, group, width)
+
+    @always_inline
+    def unpack(
+        self, bytes: BufferView[DType.uint8, _], byte: Int
+    ) -> SIMD[DType.uint64, 8]:
+        """The eight values of the group from `byte`: by table lookups when
+        they are 25 bits at most and both loads stay in `bytes`, otherwise
+        bit by bit."""
+        if self.width <= 25 and byte + self.second + 16 <= len(bytes):
+            var first = bytes.load[16](byte)._dynamic_shuffle(self.low)
+            var second = bytes.load[16](byte + self.second)._dynamic_shuffle(
+                self.high
+            )
+            var words = bitcast[DType.uint32, 8](first.join(second))
+            return ((words >> self.shifts) & self.mask).cast[DType.uint64]()
+        return BitmapView(bytes.as_span()).load_packed[8](8 * byte, self.width)
+
+
+@always_inline
+def prefix_sum[
+    T: DType
+](v: SIMD[T, _], carry: Scalar[T]) -> SIMD[T, type_of(v).length]:
+    """The running sums of `v`'s lanes after `carry`: lane `j` is
+    `carry + v[0] + ... + v[j]`. Integers wrap."""
+    # Lane by lane: a log-step of shifted adds lowers each zero-filling
+    # shift to a shuffle and measured slower.
+    comptime W = type_of(v).length
+    var out = SIMD[T, W]()
+    var p = carry
+    comptime for j in range(W):
+        p += v[j]
+        out[j] = p
+    return out
 
 
 struct BufferView[
@@ -112,6 +261,14 @@ struct BufferView[
         return BufferView[Self.T, Self.origin](
             ptr=bytes.unsafe_ptr().unsafe_bitcast[Scalar[Self.T]](),
             length=len(bytes) // size_of[Scalar[Self.T]](),
+        )
+
+    @always_inline
+    def as_bytes(self) -> BufferView[DType.uint8, Self.origin]:
+        """The elements' bytes, in their native layout."""
+        return BufferView[DType.uint8, Self.origin](
+            ptr=self._data.unsafe_bitcast[UInt8](),
+            length=self._length * size_of[Scalar[Self.T]](),
         )
 
     # --- Sized ---
@@ -246,6 +403,24 @@ struct BufferView[
     ](self, index: Int, value: SIMD[Self.T, W],) where Self.mut:
         self._check_range(index, W)
         self._data.unsafe_mut_cast[True]().unsafe_store(index, value)
+
+    @always_inline
+    def load_unaligned[W: Int](self, index: Int) -> SIMD[Self.T, W]:
+        """`load`, from an address with no alignment -- a view `from_bytes`
+        over a byte stream. A typed load assumes `T`'s alignment, which x86
+        turns into an aligned move that faults on an odd address."""
+        self._check_range(index, W)
+        return self._data.unsafe_load[width=W, alignment=1](index)
+
+    @always_inline
+    def store_unaligned[
+        W: Int
+    ](self, index: Int, value: SIMD[Self.T, W]) where Self.mut:
+        """`store`, to an address with no alignment."""
+        self._check_range(index, W)
+        self._data.unsafe_mut_cast[True]().unsafe_store[alignment=1](
+            index, value
+        )
 
     @always_inline
     def gather[W: Int](self, offsets: SIMD[DType.int64, W]) -> SIMD[Self.T, W]:
@@ -472,6 +647,66 @@ struct BufferView[
         )
         return buf.to_immutable()
 
+    def scan(self, carry: Scalar[Self.T]) -> Scalar[Self.T] where Self.mut:
+        """Replace each element with the running sum through it, starting
+        from `carry`, and return the last sum: the carry for the view that
+        follows. Integers wrap."""
+        comptime W = cpu_lanes[Self.T]
+        var p = carry
+        var i = 0
+        while i + W <= len(self):
+            var sums = prefix_sum(self.load[W](i), p)
+            self.store[W](i, sums)
+            p = sums[W - 1]
+            i += W
+        while i < len(self):
+            p += self.unsafe_get(i)
+            self.unsafe_set(i, p)
+            i += 1
+        return p
+
+    def expand(
+        self, sel: BitmapView[_], dense: BufferView[Self.T, _]
+    ) -> Int where Self.mut:
+        """Spread `dense` over this view, the inverse of `filter`: the
+        `k`-th set bit of `sel` takes `dense[k]` and every unset position
+        becomes zero. `sel` is as long as this view and `dense` holds at
+        least as many values as `sel` has set bits; return how many values
+        were taken."""
+        debug_assert(
+            len(sel) == len(self),
+            "BufferView.expand: a selection of ",
+            len(sel),
+            " for ",
+            len(self),
+            " values",
+        )
+        comptime ALL_ONES = ~UInt64(0)
+        var n = len(self)
+        var k = 0
+        var i = 0
+        while i < n:
+            var take = min(64, n - i)
+            # A whole word's load stays in the view; a partial one may not,
+            # so the tail goes through the bounded, masking `load_packed`.
+            var word = (
+                sel.load_bits[DType.uint64](i) if take
+                == 64 else sel.load_packed[1](i, take)[0]
+            )
+            if word == ALL_ONES:
+                self.slice(i, 64).copy_from(dense.slice(k), 64)
+                k += 64
+            else:
+                self.slice(i, take).as_span().fill(0)
+                while word != 0:
+                    self.unsafe_set(
+                        i + Int(count_trailing_zeros(word)), dense.unsafe_get(k)
+                    )
+                    word &= word - 1
+                    k += 1
+            i += 64
+        return k
+
     def to_string_slice(self) -> StringSlice[Self.origin]:
         """Convert this byte view to a StringSlice with origin `self_o`."""
         return StringSlice(
@@ -607,6 +842,13 @@ struct BitmapView[
         self._data = ptr
         self._offset = offset
         self._length = length
+
+    @always_inline
+    def __init__(out self, bytes: Span[UInt8, Self.origin]):
+        """Every bit of `bytes`, least significant first."""
+        self._data = bytes.unsafe_ptr()
+        self._offset = 0
+        self._length = 8 * len(bytes)
 
     # --- Sized ---
 
@@ -940,7 +1182,7 @@ struct BitmapView[
                     D
                 ](64 - shift)
 
-        return Bits.unpack_lanes[D, W, 1](bits).cast[DType.bool]()
+        return BitLanes.unpack_lanes[D, W, 1](bits).cast[DType.bool]()
 
     @always_inline
     def load_bits[T: DType](self, index: Int) -> Scalar[T]:
@@ -976,6 +1218,102 @@ struct BitmapView[
             )
             result = result | (hi << Scalar[T](NBITS - bit_off))
         return result
+
+    # --- Packed values: `width` bits each, least significant first ---------
+
+    @always_inline
+    def _word(self, byte_index: Int) -> UInt64:
+        """The 8 bytes from ``byte_index`` (no ``_offset``) as a little-endian
+        word; bytes past the view's extent read as zero."""
+        var extent = self._byte_extent()
+        if byte_index + 8 <= extent:
+            return (
+                self._data.unsafe_offset(byte_index)
+                .unsafe_bitcast[UInt64]()
+                .unsafe_load[alignment=1]()
+            )
+        var w: UInt64 = 0
+        for b in range(max(0, extent - byte_index)):
+            w |= UInt64(self._data[unsafe_offset=byte_index + b]) << UInt64(
+                8 * b
+            )
+        return w
+
+    @always_inline
+    def load_packed[
+        W: Int
+    ](self, index: Int, width: Int) -> SIMD[DType.uint64, W]:
+        """The `W` values of `width` bits (0 to 64) packed from logical bit
+        ``index``, value ``j`` at bit ``index + j * width``. Bits past the
+        view read as zero."""
+        if width == 0:
+            return 0
+        var pos = self._offset + index
+        var mask = UInt64.MAX >> UInt64(64 - width)
+        if W * width + (pos & 7) <= 64:
+            # Every value fits one word.
+            var word = self._word(pos >> 3) >> UInt64(pos & 7)
+            return BitLanes.unpack_lanes[DType.uint64, W](word, width) & mask
+        var out = SIMD[DType.uint64, W](0)
+        if width <= 57 and ((pos + (W - 1) * width) >> 3) + 8 <= (
+            self._byte_extent()
+        ):
+            # Every value fits the word from its first byte, and every such
+            # word is in the view: one load a value, nothing checked.
+            comptime for j in range(W):
+                var p = pos + j * width
+                out[j] = (
+                    self._data.unsafe_offset(p >> 3)
+                    .unsafe_bitcast[UInt64]()
+                    .unsafe_load[alignment=1]()
+                    >> UInt64(p & 7)
+                ) & mask
+            return out
+        comptime for j in range(W):
+            var p = pos + j * width
+            var shift = p & 7
+            var v = self._word(p >> 3) >> UInt64(shift)
+            if shift + width > 64:
+                v |= self._word((p >> 3) + 8) << UInt64(64 - shift)
+            out[j] = v & mask
+        return out
+
+    @always_inline
+    def store_packed[
+        W: Int
+    ](
+        self, index: Int, values: SIMD[DType.uint64, W], width: Int
+    ) where Self.mut:
+        """Pack each value's low `width` bits (0 to 64) from logical bit
+        ``index`` on, value ``j`` at bit ``index + j * width``. The bits
+        below ``index`` in its byte are kept and the rest of the last byte
+        written is cleared, so values packed in order build a stream."""
+        if width == 0:
+            return
+        var pos = self._offset + index
+        var byte = pos >> 3
+        var acc_bits = pos & 7
+        var out = self._data.unsafe_mut_cast[True]()
+        var acc = UInt64(out[unsafe_offset=byte]) & (
+            (UInt64(1) << UInt64(acc_bits)) - 1
+        )
+        var mask = UInt64.MAX >> UInt64(64 - width)
+        comptime for j in range(W):
+            var v = values[j] & mask
+            acc |= v << UInt64(acc_bits)
+            acc_bits += width
+            if acc_bits >= 64:
+                self._check_byte_range(byte, 8)
+                out.unsafe_offset(byte).unsafe_bitcast[UInt64]().unsafe_store[
+                    alignment=1
+                ](acc)
+                byte += 8
+                acc_bits -= 64
+                acc = v >> UInt64(width - acc_bits) if acc_bits > 0 else 0
+        var tail = (acc_bits + 7) >> 3
+        self._check_byte_range(byte, tail)
+        for b in range(tail):
+            out[unsafe_offset=byte + b] = UInt8((acc >> UInt64(8 * b)) & 0xFF)
 
     # TODO: could be good idea to use std.sys.intrinsics.masked_load
     # --- Raw byte access ---
@@ -1030,7 +1368,7 @@ struct BitmapView[
     ](self, bit_index: Int, val: SIMD[DType.bool, W],) where Self.mut:
         """Bit-pack W bools and store into the bitmap at ``bit_index``.
 
-        - W divisible by 8: single `Bits.pack_bools` + bitcast store.
+        - W divisible by 8: single `BitLanes.pack_bools` + bitcast store.
         - W < 8: set/clear individual bits.
         """
         comptime assert (
@@ -1052,7 +1390,7 @@ struct BitmapView[
             var dst = self._data.unsafe_mut_cast[True]().unsafe_offset(
                 (bit_index >> 3)
             )
-            dst.unsafe_store(Bits.pack_bools[W](val))
+            dst.unsafe_store(BitLanes.pack_bools[W](val))
         else:
             var abs_pos = self._offset + bit_index
             var out = self._data.unsafe_mut_cast[True]()

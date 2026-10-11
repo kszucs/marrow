@@ -21,7 +21,7 @@ from ...utils.testing import ScratchDir
 from ...execution import ExecContext
 from ...io import ByteSource, Fetched, FileSink, BufferSource
 from ...parquet import ParquetFile, read_table, write_table
-from ...parquet.codecs import Compression
+from ...parquet.compression import Compression
 from ...parquet.writer import FileWriter
 from ...ipc import (
     RecordBatchFileReader,
