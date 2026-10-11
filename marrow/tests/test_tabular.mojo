@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for RecordBatch and Table abstractions."""
-from std.testing import assert_equal, assert_true
+from std.testing import assert_equal, assert_raises, assert_true
 from ..tabular import RecordBatch, Table
 from ..arrays import DynArray
 from ..schema import Schema
@@ -181,3 +181,41 @@ def test_record_batch_sort_by_puts_nulls_last_by_default() raises:
     assert_true(sorted.is_null(2))
     assert_equal(sorted.as_int64().unsafe_get(0), 1)
     assert_equal(sorted.as_int64().unsafe_get(1), 2)
+
+
+def _xy_batch(
+    var xs: List[Optional[Int]], var ys: List[Optional[Int]]
+) raises -> RecordBatch:
+    var schema = Schema(fields=[Field("x", int32), Field("y", int64)])
+    var columns: List[DynArray] = [array(xs^, int32), array(ys^, int64)]
+    return RecordBatch(schema=schema, columns=columns^)
+
+
+def test_record_batch_concat() raises:
+    var batches: List[RecordBatch] = [
+        _xy_batch([1, 2], [10, 20]),
+        _xy_batch([3], [30]),
+    ]
+    var out = RecordBatch.concat(batches)
+    assert_equal(out.num_rows(), 3)
+    assert_true(out.column(0).as_int32() == array([1, 2, 3], int32))
+    assert_true(out.column(1).as_int64() == array([10, 20, 30], int64))
+
+
+def test_record_batch_concat_empty() raises:
+    var schema = Schema(fields=[Field("x", int32), Field("y", int64)])
+    var out = RecordBatch.concat(List[RecordBatch](), schema)
+    assert_equal(out.num_rows(), 0)
+    assert_equal(out.num_columns(), 2)
+    with assert_raises(contains="without a schema"):
+        _ = RecordBatch.concat(List[RecordBatch]())
+
+
+def test_record_batch_concat_schema_mismatch_raises() raises:
+    var other = RecordBatch(
+        schema=Schema(fields=[Field("x", int32)]),
+        columns=[DynArray(array([4], int32))],
+    )
+    var batches: List[RecordBatch] = [_xy_batch([1], [10]), other^]
+    with assert_raises(contains="batch 1 has schema"):
+        _ = RecordBatch.concat(batches)

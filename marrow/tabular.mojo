@@ -15,7 +15,7 @@ from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .errors import InvalidError, KeyError, TypeError
 from .arrays import DynArray, ChunkedArray, StructArray
-from .builders import array
+from .builders import DynBuilder, array
 from .c_data import CArrowArray
 from .schema import Schema
 from .dtypes import struct_, Field
@@ -109,6 +109,40 @@ struct RecordBatch(
         for f in schema.fields:
             cols.append(array(f.dtype))
         return RecordBatch(schema=schema, columns=cols^)
+
+    @staticmethod
+    def concat(
+        batches: List[RecordBatch], schema: Optional[Schema] = None
+    ) raises -> RecordBatch:
+        """`batches` end to end in one batch, column by column.
+
+        Every batch must have `schema`, or the first batch's schema when none
+        is given. An empty list is the empty batch of `schema`, and raises
+        without one: there is nothing to read the columns' types from.
+        """
+        if len(batches) == 0:
+            if not schema:
+                raise InvalidError(
+                    "concat: cannot concatenate an empty list of record "
+                    "batches without a schema"
+                )
+            return RecordBatch.empty(schema.value())
+        var expected = (
+            schema.value().copy() if schema else batches[0].schema.copy()
+        )
+        for i in range(len(batches)):
+            if batches[i].schema != expected:
+                raise InvalidError(
+                    t"concat: batch {i} has schema {batches[i].schema}, "
+                    t"expected {expected}"
+                )
+        var columns = List[DynArray](capacity=len(expected.fields))
+        for c in range(len(expected.fields)):
+            var parts = List[DynArray](capacity=len(batches))
+            for ref b in batches:
+                parts.append(b.columns[c].copy())
+            columns.append(DynBuilder.concat(parts))
+        return RecordBatch(schema=expected, columns=columns^)
 
     def column(self, index: Int) -> ref[self.columns[index]] DynArray:
         """Returns the column at the given index."""
