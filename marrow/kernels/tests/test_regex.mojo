@@ -13,12 +13,12 @@ from std.testing import assert_raises, assert_true
 
 from ...builders import array, Int64Builder, LargeStringBuilder, StringBuilder
 from ...kernels.regex import (
-    RegexPattern,
     RegexpExtractKernel,
     RegexpMatchesKernel,
     RegexpReplaceKernel,
 )
 from ...kernels.string import StringOperands
+from ...utils import RegexPattern
 
 
 def _ops(

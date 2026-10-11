@@ -173,7 +173,7 @@ from .string import (
     StringLeKernel,
     StringGtKernel,
     StringGeKernel,
-    LikePattern,
+    MatchLikeKernel,
     LikeKernel,
     ILikeKernel,
 )

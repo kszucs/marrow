@@ -29,8 +29,8 @@ from ...kernels.string import (
     StringEqKernel,
     LikeKernel,
     ILikeKernel,
-    LikePattern,
 )
+from ...utils import LikePattern
 
 
 def _broadcast(pat: String, n: Int) raises -> StringArray:

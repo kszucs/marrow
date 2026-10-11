@@ -16,9 +16,9 @@ Three shapes, each following the tier scheme used by the numeric kernels
 - **Binary string predicate → bool** (`StartsWith`, `EndsWith`, `Contains`) —
   compare each element against a pattern element, producing a bit-packed
   `BoolArray`. Concrete kernels only define `predicate`.
-- **SQL pattern match → bool** (`Like`, `ILike`) — the predicate shape above
-  plus an array × scalar-pattern overload built on `LikePattern`, which
-  compiles the pattern once instead of per row.
+- **SQL pattern match → bool** (`MatchLikeKernel`) — the predicate shape
+  above plus an array × scalar-pattern overload over `utils.LikePattern`,
+  which compiles the pattern once instead of per row.
 
 Variable-width ops cannot lane-fuse the way numeric kernels do (there is no
 fixed W-wide lane), so the expression layer
@@ -55,6 +55,7 @@ from .core import Kernel
 from ..views import apply
 from ..execution import ExecContext
 from ..errors import InternalError, TypeError
+from ..utils import LikePattern, Utf8
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +455,7 @@ trait StringPredicateKernel(Kernel):
     Over text and binary alike, in any layout, as Arrow's comparisons,
     `starts_with`, `ends_with` and `match_substring` are. `LIKE` is the text
     operation of the family, and stays one through its own pattern
-    `dispatch`, which `LikePattern` guards.
+    `dispatch`, which `MatchLikeKernel` guards.
     """
 
     @staticmethod
@@ -631,394 +632,54 @@ struct StringGeKernel(StringPredicateKernel):
 # ---------------------------------------------------------------------------
 
 
-# Token sentinels for a compiled LIKE pattern. Non-negative tokens are literal
-# *bytes* of the UTF-8 encoded pattern; the two wildcards use negative
-# sentinels. Byte-wise literals let the matcher run straight over a row's
-# `as_bytes()` span with no per-row allocation: a multi-byte character expands
-# to consecutive byte tokens, so code-point boundaries stay aligned whenever a
-# literal run matches.
-comptime _LIKE_ANY = -1  # '%' — any run of characters (incl. empty)
-comptime _LIKE_ONE = -2  # '_' — exactly one character
-
-# Pattern shapes recognised at compile time. The four literal shapes cover the
-# patterns that dominate real workloads (cf. arrow-rs `Predicate::like`) and
-# reduce matching to an optimized substring primitive.
-comptime _LIKE_GENERAL = 0  # anything else — backtracking token match
-comptime _LIKE_EXACT = 1  # 'foo'  → ==
-comptime _LIKE_PREFIX = 2  # 'foo%' → startswith
-comptime _LIKE_SUFFIX = 3  # '%foo' → endswith
-comptime _LIKE_CONTAINS = 4  # '%foo%' → in
-
-comptime _PCT = UInt8(0x25)  # '%'
-comptime _UND = UInt8(0x5F)  # '_'
-comptime _BSL = UInt8(0x5C)  # '\'
+def _passthrough_validity[
+    A: BytesArray
+](array: A) raises -> Optional[Bitmap[mut=False]]:
+    """The operand's validity, offset-applied and owned — what a unary result
+    or a predicate against a constant returns, since a constant operand is
+    never null."""
+    var v = array.validity()
+    if v:
+        return v.value().to_owned()
+    return None
 
 
-struct Utf8:
-    """The character-vs-byte machinery this file runs on.
+struct MatchLikeKernel[ignore_case: Bool](StringPredicateKernel):
+    """SQL ``LIKE`` (``pc.match_like``): ``%`` = any run, ``_`` = any single
+    character, ``\\`` escapes, everything else literal. With `ignore_case` it
+    is ``ILIKE`` (``ignore_case=True``): both operands are lower-cased before
+    matching.
 
-    Six primitives that were six free functions with no shared home, and
-    between them roughly thirty call sites. Grouping them names the layer: the
-    SQL surface (`substr`, `left`, `lpad`, `trim`, `position`, `length`) counts
-    **code points**, `LengthKernel` counts bytes, and every one of the
-    character answers is an index clamp into `bounds` rather than a decode.
+    A pattern is compiled once per scalar, and once per run of equal pattern
+    texts in the array x array form: the runtime expression lane hands a
+    literal pattern over as n identical rows, and those collapse to one
+    compile."""
 
-    `bounds` is the one primitive the rest are built on: the byte offset of
-    every code point start plus the end offset, so a string of `c` characters
-    yields `c + 1` entries.
-
-    Nothing here changed shape when it moved -- same signatures, same bodies.
-    """
+    comptime name = "match_like_ci" if Self.ignore_case else "match_like"
 
     @staticmethod
-    @always_inline
-    def width(lead: UInt8) -> Int:
-        """Byte width of the UTF-8 sequence starting at this lead byte."""
-        if lead < 0x80:
-            return 1
-        elif lead < 0xE0:
-            return 2
-        elif lead < 0xF0:
-            return 3
-        else:
-            return 4
+    def predicate[
+        o1: Origin[mut=False], o2: Origin[mut=False]
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return LikePattern[Self.ignore_case](pat).matches(s)
 
     @staticmethod
-    def bounds(s: StringSlice) -> List[Int]:
-        """Byte offset of each code point in `s`, terminated by `len(s)`."""
-        var bytes = s.as_bytes()
-        var n = len(bytes)
-        var out = List[Int]()
-        var i = 0
-        while i < n:
-            out.append(i)
-            i += Self.width(bytes[i])
-        out.append(n)
-        return out^
-
-    @staticmethod
-    def count(s: StringSlice) -> Int:
-        """Number of UTF-8 code points in `s` — SQL's `length`."""
-        return len(Self.bounds(s)) - 1
-
-    @staticmethod
-    def slice(s: StringSlice, start: Int, end: Int) -> String:
-        """Bytes `[start, end)` of `s`, copied into a fresh `String`.
-
-        Both ends are assumed to sit on code point boundaries; every caller
-        derives them from `bounds`, so a multi-byte character is never split.
-        """
-        var bytes = s.as_bytes()
-        if end <= start:
-            return String()
-        var out = List[UInt8](capacity=end - start)
-        for i in range(start, end):
-            out.append(bytes[i])
-        return String(from_utf8_lossy=Span(out))
-
-    @staticmethod
-    def find(s: StringSlice, needle: StringSlice, var from_byte: Int) -> Int:
-        """Byte index of the first `needle` at or after `from_byte`, or -1.
-
-        The naive O(n*m) scan. `LikePattern` has the optimised shapes for the
-        pattern case; the literal searches here run once per row over short
-        strings and a smarter algorithm would be unverified complexity for no
-        measured win.
-
-        An **empty needle matches at `from_byte`**, which is what makes
-        `position('' IN 'abc')` answer 1 rather than 0 — the SQL convention,
-        and the trap a "found at index -1" implementation falls into.
-        """
-        var hay = s.as_bytes()
-        var pat = needle.as_bytes()
-        var n = len(hay)
-        var m = len(pat)
-        if from_byte < 0:
-            from_byte = 0
-        if m == 0:
-            return from_byte if from_byte <= n else -1
-        var i = from_byte
-        while i + m <= n:
-            var j = 0
-            while j < m and hay[i + j] == pat[j]:
-                j += 1
-            if j == m:
-                return i
-            i += 1
-        return -1
-
-    @staticmethod
-    def charset_has(chars: StringSlice, s: StringSlice, a: Int, b: Int) -> Bool:
-        """Is the code point occupying bytes `[a, b)` of `s` a member of
-        `chars`?
-
-        A *set* of characters, not a substring — `trim('  Ab  ', ' Ab')` strips
-        each of the three independently and answers the empty string. Comparing
-        whole code points rather than bytes is what keeps a multi-byte member
-        from matching half of a multi-byte character.
-        """
-        var cb = chars.as_bytes()
-        var sb = s.as_bytes()
-        var w = b - a
-        var i = 0
-        while i < len(cb):
-            var cw = Self.width(cb[i])
-            if cw == w and i + cw <= len(cb):
-                var same = True
-                for k in range(w):
-                    if cb[i + k] != sb[a + k]:
-                        same = False
-                        break
-                if same:
-                    return True
-            i += cw
-        return False
-
-
-# How one ILIKE row must be case-folded, decided by a single byte scan. Unicode
-# `lower()` costs microseconds per row, so it is worth avoiding for the common
-# ASCII row: on pure-ASCII input an ASCII fold is *identical* to the Unicode one
-# (no ASCII character folds outside ASCII), and an already-lower row needs none.
-comptime _FOLD_NONE = 0  # pure ASCII, no upper case — match as-is
-comptime _FOLD_ASCII = 1  # pure ASCII with upper case — cheap byte fold
-comptime _FOLD_UNICODE = 2  # non-ASCII — fall back to `lower()`
-
-
-struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
-    """A SQL ``LIKE`` pattern compiled once and matched against many rows.
-
-    ``%`` matches any run of characters, ``_`` exactly one, ``\\`` escapes the
-    next character to a literal (``\\%`` → literal ``%``), and a trailing
-    ``\\`` is dropped — pyarrow's ``match_like`` semantics.
-
-    Compilation classifies the pattern into one of the four literal shapes
-    (``foo``, ``foo%``, ``%foo``, ``%foo%``), which match via the optimized
-    string primitives, or falls back to a wildcard token stream. With
-    ``ignore_case`` the pattern is lower-cased once here and each row is
-    case-folded before matching (see `_fold_kind`), which is the only thing
-    that makes ``ILIKE`` differ from ``LIKE``.
-    """
-
-    var kind: Int
-    """One of the `_LIKE_*` shape constants."""
-
-    var literal: String
-    """Literal characters of the pattern, case-folded when `ignore_case`.
-
-    Meaningful for every shape but `_LIKE_GENERAL`.
-    """
-
-    var tokens: List[Int]
-    """Byte/wildcard token stream driving the `_LIKE_GENERAL` matcher."""
-
-    def __init__(out self, pattern: StringSlice):
-        self.kind = _LIKE_GENERAL
-        self.literal = String()
-        self.tokens = List[Int]()
-
-        comptime if Self.ignore_case:
-            var folded = pattern.lower()
-            self._compile(StringSlice(folded))
-        else:
-            self._compile(pattern)
-
-    def _compile(mut self, pattern: StringSlice):
-        """Tokenize `pattern` and classify it into a `_LIKE_*` shape."""
-        var bytes = pattern.as_bytes()
-        var n = len(bytes)
-        var literal = List[UInt8](capacity=n)
-        var leading_any = False  # pattern starts with '%'
-        var trailing_any = False  # pattern ends with '%'
-        var inner_wild = False  # any other '%' or any '_'
-        var i = 0
-        while i < n:
-            var b = bytes[i]
-            if b == _BSL:
-                # '\' escapes the next character; a trailing '\' is dropped.
-                if i + 1 < n:
-                    # A truncated sequence keeps the bytes it has.
-                    var w = min(Utf8.width(bytes[i + 1]), n - i - 1)
-                    for k in range(i + 1, i + 1 + w):
-                        self.tokens.append(Int(bytes[k]))
-                        literal.append(bytes[k])
-                    i += 1 + w
-                else:
-                    i += 1
-            elif b == _PCT:
-                if len(self.tokens) == 0:
-                    leading_any = True
-                elif i + 1 == n:
-                    trailing_any = True
-                else:
-                    inner_wild = True
-                self.tokens.append(_LIKE_ANY)
-                i += 1
-            elif b == _UND:
-                inner_wild = True
-                self.tokens.append(_LIKE_ONE)
-                i += 1
-            else:
-                var w = min(Utf8.width(b), n - i)
-                for k in range(i, i + w):
-                    self.tokens.append(Int(bytes[k]))
-                    literal.append(bytes[k])
-                i += w
-
-        if inner_wild:
-            self.kind = _LIKE_GENERAL
-        elif leading_any and trailing_any:
-            self.kind = _LIKE_CONTAINS
-        elif leading_any:
-            self.kind = _LIKE_SUFFIX
-        elif trailing_any:
-            self.kind = _LIKE_PREFIX
-        else:
-            self.kind = _LIKE_EXACT
-        self.literal = String(from_utf8_lossy=Span(literal))
-
-    def matches(self, s: StringSlice) -> Bool:
-        """Return True if `s` matches this pattern."""
-
-        comptime if Self.ignore_case:
-            var fold = Self._fold_kind(s)
-            if fold == _FOLD_NONE:
-                return self._matches_folded(s)
-            elif fold == _FOLD_ASCII:
-                var folded = Self._ascii_lower(s)
-                return self._matches_folded(StringSlice(folded))
-            else:
-                var folded = s.lower()
-                return self._matches_folded(StringSlice(folded))
-        else:
-            return self._matches_folded(s)
-
-    def _matches_folded(self, s: StringSlice) -> Bool:
-        """Match `s`, which the caller has already case-folded if needed."""
-        var lit = StringSlice(self.literal)
-        if self.kind == _LIKE_EXACT:
-            return s == lit
-        elif self.kind == _LIKE_PREFIX:
-            return s.startswith(lit)
-        elif self.kind == _LIKE_SUFFIX:
-            return s.endswith(lit)
-        elif self.kind == _LIKE_CONTAINS:
-            return lit in s
-        else:
-            return self._match_tokens(s)
-
-    @staticmethod
-    def _fold_kind(s: StringSlice) -> Int:
-        """Classify how `s` has to be case-folded for an ILIKE comparison."""
-        var bytes = s.as_bytes()
-        var kind = _FOLD_NONE
-        for i in range(len(bytes)):
-            var b = bytes[i]
-            if b >= 0x80:
-                return _FOLD_UNICODE
-            elif b >= 0x41 and b <= 0x5A:
-                kind = _FOLD_ASCII
-        return kind
-
-    @staticmethod
-    def _ascii_lower(s: StringSlice) -> String:
-        """An ASCII-lowercased copy of a pure-ASCII `s` (see `_fold_kind`)."""
-        var bytes = s.as_bytes()
-        var out = List[UInt8](capacity=len(bytes))
-        for i in range(len(bytes)):
-            var b = bytes[i]
-            out.append(b + 32 if b >= 0x41 and b <= 0x5A else b)
-        return String(from_utf8_lossy=Span(out))
-
-    def _match_tokens(self, text: StringSlice) -> Bool:
-        """Greedy matcher over a row's UTF-8 bytes and this pattern's tokens.
-
-        O(len(text) * len(tokens)) worst case, O(1) extra space via the classic
-        backtracking-on-star algorithm. Literal tokens advance one byte at a
-        time while ``_`` and ``%`` advance whole code points, so the text
-        cursor is always on a code-point boundary when a wildcard is consumed.
-        """
-        var bytes = text.as_bytes()
-        var n = len(bytes)
-        var m = len(self.tokens)
-        var i = 0  # byte cursor in text
-        var j = 0  # token cursor
-        var star_j = -1  # token index of the last '%' seen, or -1
-        var star_i = 0  # byte index matched against that '%'
-        while i < n:
-            if j < m and self.tokens[j] == Int(bytes[i]):
-                i += 1
-                j += 1
-            elif j < m and self.tokens[j] == _LIKE_ONE:
-                i += Utf8.width(bytes[i])
-                j += 1
-            elif j < m and self.tokens[j] == _LIKE_ANY:
-                star_j = j
-                star_i = i
-                j += 1
-            elif star_j != -1:
-                # backtrack: let the last '%' absorb one more character
-                j = star_j + 1
-                star_i += Utf8.width(bytes[star_i])
-                i = star_i
-            else:
-                return False
-        # trailing '%' tokens can match the empty remainder
-        while j < m and self.tokens[j] == _LIKE_ANY:
-            j += 1
-        return j == m
-
-    def match_array[A: BytesArray](self, array: A) raises -> BoolArray:
-        """This pattern over every element of `array`.
-
-        Compiled once, by whoever built it, so this is O(rows x pattern) work
-        at worst and O(rows) for the literal shapes — versus recompiling the
-        pattern per row through the array x array path.
-        """
-        var n = len(array)
-        var data = Bitmap.alloc_zeroed(n)
-        for i in range(n):
-            if array.is_valid(i) and self.matches(array.unsafe_get(UInt(i))):
-                data.set(i)
-        # Null input yields a null output element.
-        return BoolArray(
-            length=n,
-            nulls=array.null_count(),
-            offset=0,
-            bitmap=_passthrough_validity(array),
-            buffer=data.to_immutable(),
-        )
-
-    @staticmethod
-    def match_arrays[
+    def apply[
         L: BytesArray, R: BytesArray
     ](left: L, right: R) raises -> BoolArray:
-        """Array x array ``LIKE``, compiling the right operand once per *run*
-        of equal patterns instead of once per row.
-
-        `StringPredicateKernel.apply` calls `predicate` per row, and matching
-        needs a compiled pattern — so an array x array LIKE rebuilt the whole
-        pattern (a token list, a literal buffer and a `String`) for every
-        element. That is the shape the runtime expression lane produces: it
-        evaluates a literal by `DynScalar.to_array(num_rows)`, so a constant
-        pattern arrives as n identical rows and every one of those n compiles
-        was redundant.
-
-        Remembering the last pattern text collapses the constant case to a
-        single compile without special-casing it: a genuinely varying right
-        operand still recompiles, just only when the text actually changes,
-        and the memo costs one comparison against a string already in cache.
-        """
+        # Overrides the trait default, which would compile the pattern per row.
+        Self.expect_same_length(len(left), len(right))
         var n = len(left)
         var bm = Bitmap.intersect_views(left.validity(), right.validity())
         var data = Bitmap.alloc_zeroed(n)
-        var compiled = Self("")
+        var compiled = LikePattern[Self.ignore_case]("")
         var current = String()
         var primed = False
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):
                 var pat = right.unsafe_get(UInt(i))
                 if not primed or StringSlice(current) != pat:
-                    compiled = Self(pat)
+                    compiled = LikePattern[Self.ignore_case](pat)
                     current = String(pat)
                     primed = True
                 if compiled.matches(left.unsafe_get(UInt(i))):
@@ -1032,114 +693,48 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         )
 
     @staticmethod
-    def dispatch(
-        name: StringSlice, array: DynArray, pattern: StringSlice
-    ) raises -> DynArray:
-        """Type-erased entry point for the scalar-pattern overloads."""
-        var compiled = Self(pattern)
+    def apply[
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
+        var compiled = LikePattern[Self.ignore_case](pattern)
+        var n = len(array)
+        var data = Bitmap.alloc_zeroed(n)
+        for i in range(n):
+            if array.is_valid(i) and compiled.matches(
+                array.unsafe_get(UInt(i))
+            ):
+                data.set(i)
+        # Null input yields a null output element.
+        return BoolArray(
+            length=n,
+            nulls=array.null_count(),
+            offset=0,
+            bitmap=_passthrough_validity(array),
+            buffer=data.to_immutable(),
+        )
+
+    @staticmethod
+    def apply_scalar[
+        A: BytesArray
+    ](array: A, pattern: StringSlice) raises -> BoolArray:
+        return Self.apply(array, pattern)
+
+    @staticmethod
+    def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
         var dt = array.dtype()
         if dt.is_string_view():
-            return compiled.match_array(array.as_string_view()).to_dyn()
+            return Self.apply(array.as_string_view(), pattern).to_dyn()
         if not dt.is_string_like():
-            raise TypeError(t"{name}: expected a string array, got {dt}")
+            raise Self.error[TypeError](t"expected a string array, got {dt}")
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
-            return compiled.match_array(array.as_binary_like[T]()).to_dyn()
+            return Self.apply(array.as_binary_like[T](), pattern).to_dyn()
 
         return dt.dispatch_stringlike(leaf)
 
 
-def _passthrough_validity[
-    A: BytesArray
-](array: A) raises -> Optional[Bitmap[mut=False]]:
-    """The operand's validity, offset-applied and owned — what a unary result
-    or a predicate against a constant returns, since a constant operand is
-    never null."""
-    var v = array.validity()
-    if v:
-        return v.value().to_owned()
-    return None
-
-
-struct LikeKernel(StringPredicateKernel):
-    """SQL ``LIKE`` (``pc.match_like``): ``%`` = any run, ``_`` = any single
-    character, ``\\`` escapes, everything else literal, case-sensitive.
-
-    Two shapes: the inherited array × array `apply`/`dispatch` (general case,
-    one pattern per row) and the array × scalar-pattern `apply`/`dispatch`
-    below, which compiles the pattern once — `apply_scalar` is what the
-    expression layer calls for a constant pattern."""
-
-    comptime name = "match_like"
-
-    @staticmethod
-    def predicate[
-        o1: Origin[mut=False], o2: Origin[mut=False]
-    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
-        return LikePattern[False](pat).matches(s)
-
-    @staticmethod
-    def apply[
-        L: BytesArray, R: BytesArray
-    ](left: L, right: R) raises -> BoolArray:
-        # Overrides the trait default, which would compile the pattern per row.
-        Self.expect_same_length(len(left), len(right))
-        return LikePattern[False].match_arrays(left, right)
-
-    @staticmethod
-    def apply[
-        A: BytesArray
-    ](array: A, pattern: StringSlice) raises -> BoolArray:
-        return LikePattern[False](pattern).match_array(array)
-
-    @staticmethod
-    def apply_scalar[
-        A: BytesArray
-    ](array: A, pattern: StringSlice) raises -> BoolArray:
-        # Compile once, not once per row — which is the whole point of
-        # `LikePattern`, and had no non-test caller before this.
-        return Self.apply(array, pattern)
-
-    @staticmethod
-    def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
-        return LikePattern[False].dispatch(Self.name, array, pattern)
-
-
-struct ILikeKernel(StringPredicateKernel):
-    """Case-insensitive SQL ``LIKE`` (``pc.match_like`` with
-    ``ignore_case=True``): both operands are lower-cased before matching."""
-
-    comptime name = "match_like_ci"
-
-    @staticmethod
-    def predicate[
-        o1: Origin[mut=False], o2: Origin[mut=False]
-    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
-        return LikePattern[True](pat).matches(s)
-
-    @staticmethod
-    def apply[
-        L: BytesArray, R: BytesArray
-    ](left: L, right: R) raises -> BoolArray:
-        # Overrides the trait default, which would compile the pattern per row.
-        Self.expect_same_length(len(left), len(right))
-        return LikePattern[True].match_arrays(left, right)
-
-    @staticmethod
-    def apply[
-        A: BytesArray
-    ](array: A, pattern: StringSlice) raises -> BoolArray:
-        return LikePattern[True](pattern).match_array(array)
-
-    @staticmethod
-    def apply_scalar[
-        A: BytesArray
-    ](array: A, pattern: StringSlice) raises -> BoolArray:
-        return Self.apply(array, pattern)
-
-    @staticmethod
-    def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
-        return LikePattern[True].dispatch(Self.name, array, pattern)
+comptime LikeKernel = MatchLikeKernel[False]
+comptime ILikeKernel = MatchLikeKernel[True]
 
 
 # ---------------------------------------------------------------------------
