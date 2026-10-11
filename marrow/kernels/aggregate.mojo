@@ -79,16 +79,11 @@ from .groupby import Groups
 from .numeric import FloordivKernel, MaxKernel, MinKernel
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
-from .distinct import (
-    HLL_P,
-    HLL_P_GROUPED,
-    hll_estimate,
-    hll_update,
-)
+from .distinct import HLL_P
 from .dictionary import DictionaryEncoder
 from .hashing import HashKernel
 from .window import WindowExtents, WindowFrame
-from ..utils import Fmix64, KeyHash, Monoid, SegmentTree
+from ..utils import Fmix64, HyperLogLog, KeyHash, Monoid, SegmentTree
 
 
 # ---------------------------------------------------------------------------
@@ -1774,19 +1769,15 @@ struct ApproxDistinctCount[A: Array](AggKernel):
     comptime InArray = Self.A
     comptime OutArray = Int64Array
 
-    comptime _p = HLL_P_GROUPED
-    comptime _m = 1 << Self._p
-
-    var _registers: List[UInt8]
-    """`2**11` HLL registers per slot, or one `2**14` sketch."""
-    var _slots: Int
-    var _single: Bool
-    """Ungrouped: one sketch at the whole-array precision."""
+    var _groups: HyperLogLog[11]
+    """One sketch per slot: 2**11 registers, 2 KiB a group, bounds memory when
+    the group count is large."""
+    var _whole: HyperLogLog[HLL_P]
+    """Ungrouped: one sketch at the whole-array precision, else empty."""
 
     def __init__(out self, in_dtype: DynType) raises:
-        self._registers = List[UInt8]()
-        self._slots = 0
-        self._single = False
+        self._groups = HyperLogLog[11]()
+        self._whole = HyperLogLog[HLL_P]()
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1794,20 +1785,16 @@ struct ApproxDistinctCount[A: Array](AggKernel):
         return DynType(int64)
 
     def reserve(mut self, slots: Int) raises:
-        if self._single or slots <= self._slots:
-            return
-        while len(self._registers) < slots * Self._m:
-            self._registers.append(0)
-        self._slots = slots
+        if len(self._whole) == 0:
+            self._groups.grow(slots)
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         ref value = input
         var single = groups.is_single()
-        if single and not self._single:
-            self._single = True
-            self._registers = List[UInt8](length=1 << HLL_P, fill=0)
-            self._slots = 1
-        self.reserve(1 if single else groups.num_groups)
+        if single:
+            self._whole.grow(1)
+        else:
+            self.reserve(groups.num_groups)
         var has_null = value.null_count() > 0
         # `dispatch` and not `apply`: `apply` is overloaded per array family
         # and there is no `apply[A: Array]`, so a generic `A` selects none of
@@ -1823,22 +1810,16 @@ struct ApproxDistinctCount[A: Array](AggKernel):
                 continue
             var h = UInt64(hv[i])
             if single:
-                hll_update[HLL_P](self._registers, 0, h)
+                self._whole.add(0, h)
             else:
-                var g = Int(groups.ids.unsafe_get(i))
-                hll_update[Self._p](self._registers, g * Self._m, h)
+                self._groups.add(Int(groups.ids.unsafe_get(i)), h)
 
     def finish(mut self) raises -> Self.OutArray:
-        var out = Int64Builder(self._slots)
-        if self._single:
-            out.append(
-                Scalar[int64.native](hll_estimate[HLL_P](self._registers, 0))
-            )
+        if len(self._whole) > 0:
+            var out = Int64Builder(1)
+            out.append(Scalar[int64.native](self._whole.estimate(0)))
             return out.finish()
-        for g in range(self._slots):
-            out.append(
-                Scalar[int64.native](
-                    hll_estimate[Self._p](self._registers, g * Self._m)
-                )
-            )
+        var out = Int64Builder(len(self._groups))
+        for g in range(len(self._groups)):
+            out.append(Scalar[int64.native](self._groups.estimate(g)))
         return out.finish()

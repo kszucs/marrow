@@ -19,6 +19,7 @@ execution context -- so it can be read, tested and lifted out on its own:
 | `dylib` | `Dylib`, `LibSpec` — declaring and opening an optional C library |
 | `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
 | `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
+| `hll` | `HyperLogLog` — approximate distinct counts over 64-bit hashes |
 | `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
 
 The names are re-exported here, so `from ..utils import Crc32` is the
@@ -50,6 +51,7 @@ from .datetime import (
 )
 from .dylib import Dylib, LibSpec
 from .segment_tree import Monoid, SegmentTree
+from .hll import HyperLogLog
 from .hex import hex_digit
 from .hashing import (
     AHash64,
