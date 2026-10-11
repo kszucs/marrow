@@ -151,7 +151,6 @@ from ...kernels.string import (
     RightKernel,
     SplitPartKernel,
     StartsWithKernel,
-    StringOperands,
     StringPredicateKernel,
     StripKernel,
     SubstrKernel,
@@ -851,7 +850,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return ArrayLengthKernel.dispatch(a^)
 
         # The SQL function surface's *nullary* half — the functions whose only
-        # operand is the column, so their `StringOperands` is empty.
+        # operand is the column.
         #
         # Their argument-carrying siblings reach this lane too, and the way
         # they do is load-bearing: **an argument is a child node, never a
@@ -862,9 +861,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # extra — this lane has carried children since it was written. See
         # `_string_fn` below.
         if self._tag == "char_length":
-            return CharLengthKernel.dispatch(a^, StringOperands())
+            return CharLengthKernel.dispatch(a^)
         if self._tag == "ascii":
-            return AsciiKernel.dispatch(a^, StringOperands())
+            return AsciiKernel.dispatch(a^)
 
         if self._tag == "week":
             return WeekKernel.dispatch(a^)
@@ -1014,69 +1013,52 @@ struct RuntimeValue(Evaluable, Movable, Value):
         than makes. An argument is a child now, and children are the one thing
         this struct has always carried.
 
-        The operands are normalised to `utf8` and `int64` — the widths
-        `StringOperands`' defaults name — so this file instantiates the carrier
-        **once**. The comptime lane fills the same four slots with its own
-        types and casts nothing; paying a cast here is the same trade
-        `_arith` and `_compare` already make, and it keeps a
-        stringlike-by-integer dispatch cross product out of the interpreter.
+        The arguments are normalised to `utf8` and `int64`, the types each
+        kernel's erased `dispatch` takes, so this file instantiates every
+        kernel once. The comptime lane passes its own types and casts nothing;
+        paying a cast here is the same trade `_arith` and `_compare` already
+        make, and it keeps a stringlike-by-integer dispatch cross product out
+        of the interpreter.
         """
         if self._tag == "left":
-            var ops = StringOperands()
-            ops.count = Self._as_int64(kids[1])
-            return LeftKernel.dispatch(kids[0], ops)
+            return LeftKernel.dispatch(kids[0], Self._as_int64(kids[1]))
         if self._tag == "right":
-            var ops = StringOperands()
-            ops.count = Self._as_int64(kids[1])
-            return RightKernel.dispatch(kids[0], ops)
+            return RightKernel.dispatch(kids[0], Self._as_int64(kids[1]))
         if self._tag == "repeat":
-            var ops = StringOperands()
-            ops.count = Self._as_int64(kids[1])
-            return RepeatKernel.dispatch(kids[0], ops)
+            return RepeatKernel.dispatch(kids[0], Self._as_int64(kids[1]))
         if self._tag == "trim_chars":
-            var ops = StringOperands()
-            ops.text = Self._as_text(kids[1])
-            return TrimCharsKernel.dispatch(kids[0], ops)
+            return TrimCharsKernel.dispatch(kids[0], Self._as_text(kids[1]))
         if self._tag == "position":
-            var ops = StringOperands()
-            ops.text = Self._as_text(kids[1])
-            return PositionKernel.dispatch(kids[0], ops)
+            return PositionKernel.dispatch(kids[0], Self._as_text(kids[1]))
         if len(kids) == 3:
             if self._tag == "substr":
-                var ops = StringOperands()
-                ops.start = Self._as_int64(kids[1])
-                ops.count = Self._as_int64(kids[2])
-                return SubstrKernel.dispatch(kids[0], ops)
+                return SubstrKernel.dispatch(
+                    kids[0], Self._as_int64(kids[1]), Self._as_int64(kids[2])
+                )
             if self._tag == "lpad":
-                var ops = StringOperands()
-                ops.count = Self._as_int64(kids[1])
-                ops.text = Self._as_text(kids[2])
-                return LPadKernel.dispatch(kids[0], ops)
+                return LPadKernel.dispatch(
+                    kids[0], Self._as_int64(kids[1]), Self._as_text(kids[2])
+                )
             if self._tag == "rpad":
-                var ops = StringOperands()
-                ops.count = Self._as_int64(kids[1])
-                ops.text = Self._as_text(kids[2])
-                return RPadKernel.dispatch(kids[0], ops)
+                return RPadKernel.dispatch(
+                    kids[0], Self._as_int64(kids[1]), Self._as_text(kids[2])
+                )
             if self._tag == "replace":
-                var ops = StringOperands()
-                ops.text = Self._as_text(kids[1])
-                ops.alt = Self._as_text(kids[2])
-                return ReplaceKernel.dispatch(kids[0], ops)
+                return ReplaceKernel.dispatch(
+                    kids[0], Self._as_text(kids[1]), Self._as_text(kids[2])
+                )
             if self._tag == "split_part":
-                var ops = StringOperands()
-                ops.text = Self._as_text(kids[1])
-                ops.count = Self._as_int64(kids[2])
-                return SplitPartKernel.dispatch(kids[0], ops)
+                return SplitPartKernel.dispatch(
+                    kids[0], Self._as_text(kids[1]), Self._as_int64(kids[2])
+                )
             if self._tag == "regexp_extract":
-                var ops = StringOperands()
-                ops.text = Self._as_text(kids[1])
-                ops.count = Self._as_int64(kids[2])
-                return RegexpExtractKernel.dispatch(kids[0], ops)
+                return RegexpExtractKernel.dispatch(
+                    kids[0], Self._as_text(kids[1]), Self._as_int64(kids[2])
+                )
             if self._tag == "regexp_replace":
-                var ops = StringOperands()
-                ops.text = Self._as_text(kids[1])
-                ops.alt = Self._as_text(kids[2])
-                return RegexpReplaceKernel.dispatch(kids[0], ops)
+                return RegexpReplaceKernel.dispatch(
+                    kids[0], Self._as_text(kids[1]), Self._as_text(kids[2])
+                )
         return None
 
     @staticmethod
@@ -1785,7 +1767,7 @@ def ilike(var a: RuntimeValue, var pattern: String) -> RuntimeValue:
 # the nullary surface — they take no argument and never needed this.
 #
 # Every one of them is null-propagating in **every** argument position, which
-# is DuckDB's behaviour and the kernels' — see `StringOperands.is_valid`.
+# is DuckDB's behaviour and the kernels'.
 
 
 def substr(

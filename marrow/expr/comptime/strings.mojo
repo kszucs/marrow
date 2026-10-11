@@ -52,17 +52,17 @@ from ...kernels.string import (
     ConcatKernel,
     ContainsKernel,
     EndsWithKernel,
-    LPadKernel,
+    Pad,
     LeftKernel,
     PositionKernel,
-    RPadKernel,
     RepeatKernel,
     ReplaceKernel,
     RightKernel,
     SplitPartKernel,
-    StringArgKernel,
-    StringOperands,
-    StringMeasureKernel,
+    StringIntKernel,
+    StringTextIntKernel,
+    StringTextTextKernel,
+    StringToIntKernel,
     SubstrKernel,
     TrimCharsKernel,
     ILikeKernel,
@@ -358,131 +358,81 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
 
 
 # ---------------------------------------------------------------------------
-# StringFunction — string x args -> string, a breaker
+# The SQL string functions — breakers over each kernel's own signature
 # ---------------------------------------------------------------------------
 #
-# `Unused*` are the operands a signature does not have. Every node below
-# carries all four argument slots and its kernel says which of them it reads,
-# so `left(s, n)` still binds `T` and `U` to *something*. Reusing the two
-# literal leaves rather than inventing placeholder node types is deliberate:
-# they already exist in any binary that mentions a constant, so an unused slot
-# instantiates nothing new, and `comptime if` keeps their `bind` off every
-# path. `String()` and `0` are never read.
-comptime UnusedText = StringLiteral[StringType]
-comptime UnusedNumber = NumericLiteral[Int64Type]
+# `substr`, `left`, `right`, `repeat`, `lpad`, `rpad`, `replace`,
+# `regexp_replace`, `split_part`, `regexp_extract`, `trim(chars)` answer a
+# string; `char_length`, `ascii` and `position` an `int64`. Their arguments are
+# **operands**, so `substr(s, 2, 3)` and `substr(s, col("from"), col("len"))`
+# are one node with different operand types, and a literal operand broadcasts
+# once per batch. Each node binds its operands and runs its kernel's `apply`
+# once per batch, which is what makes it a breaker: the transform produces new
+# bytes, and `lane` borrows out of the result.
 
 
-struct StringFunction[
-    K: StringArgKernel,
-    A: StringValue,
-    T: StringValue,
-    U: StringValue,
-    S: NumericValue,
-    C: NumericValue,
-](StringValue, Unnamed):
-    """`substr`, `left`, `right`, `lpad`, `rpad`, `replace`, `split_part` and
-    `trim(chars)` — a string subject plus up to two argument **expressions**.
+def _text[
+    V: StringValue
+](value: V, batch: StructArray, bindings: Bindings) raises -> BinaryLikeArray[
+    V.Type
+]:
+    """`value` over `batch` as a column."""
+    return (
+        value.evaluate(batch, bindings)
+        .to_array(len(batch))
+        .as_type[BinaryLikeArray[V.Type]]()
+        .copy()
+    )
 
-    **The arguments are operands, not constants.** A constant field would make
-    `substr(s, 2, 3)` writable and `substr(s, col("start"), col("len"))`
-    unrepresentable, and would keep the whole family out of the runtime lane,
-    where a constant has nowhere to come from.
-    These are binary and ternary SQL functions that merely happen to be called
-    with literals most of the time; a literal operand stays `Shape.scalar` and
-    costs one broadcast in `bind`, which this node was paying for its subject
-    already.
 
-    **Four slots, two of each kind, and the kernel names the ones it reads.**
-    That is what lets one node cover `(str, int, int)`, `(str, str, str)`,
-    `(str, int, str)`, `(str, str, int)`, `(str, int)` and `(str, str)`
-    instead of six near-identical structs. `comptime if Self.K.uses_*` means an
-    unused slot is never bound, never materialised and never printed.
+def _number[
+    V: NumericValue
+](value: V, batch: StructArray, bindings: Bindings) raises -> PrimitiveArray[
+    V.Type
+]:
+    """`value` over `batch` as a column."""
+    return (
+        value.evaluate(batch, bindings)
+        .to_array(len(batch))
+        .as_type[PrimitiveArray[V.Type]]()
+        .copy()
+    )
 
-    A breaker for the same reason `StringUnary` is: the transform produces new
-    bytes, and `StringValue.lane` borrows from `Bound`, so `bind` runs the
-    kernel's null-propagating `apply` once per batch and `lane` borrows out of
-    the result. Being a breaker is also why boxing the operands would have been
-    defensible and typing them is still better: the node never fuses into a
-    parent either way, but typed operands keep each one's own subtree fused and
-    keep the kernel off any runtime dispatch.
-    """
+
+comptime TextLiteral = StringLiteral[StringType]
+"""The leaf a constant string argument becomes."""
+comptime IntLiteral = NumericLiteral[Int64Type]
+"""The leaf a constant integer argument becomes."""
+
+
+struct StringIntFunction[K: StringIntKernel, A: StringValue, C: NumericValue](
+    StringValue, Unnamed
+):
+    """`left`, `right` and `repeat`: a string and a count."""
 
     comptime Type = Self.A.Type
     comptime shape = Shape.columnar
     """Columnar even over scalar operands: the kernel runs over a column
-    regardless, so this reports what it does rather than what its operands are
-    — as `StringPredicate` and `StringConcat` do. It was `A.shape` while the
-    arguments were constants, which was only ever right because they could not
-    contribute a column of their own."""
+    regardless."""
     comptime Bound = BinaryLikeArray[Self.Type]
 
     var a: Self.A
-    var text: Self.T
-    var alt: Self.U
-    var start: Self.S
     var count: Self.C
 
-    def __init__(
-        out self,
-        var a: Self.A,
-        var text: Self.T,
-        var alt: Self.U,
-        var start: Self.S,
-        var count: Self.C,
-    ):
+    def __init__(out self, var a: Self.A, var count: Self.C):
         self.a = a^
-        self.text = text^
-        self.alt = alt^
-        self.start = start^
         self.count = count^
-
-    # -- Value --------------------------------------------------------------
 
     def dtype(self, schema: Schema) raises -> DynType:
         return self.a.dtype(schema)
 
-    # -- StringValue --------------------------------------------------------
-
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var n = len(batch)
-        var arr = self.a.evaluate(batch, bindings).to_array(n)
-        var ops = StringOperands[
-            Self.T.Type, Self.U.Type, Self.S.Type, Self.C.Type
-        ]()
-        comptime if Self.K.uses_text:
-            ops.text = (
-                self.text.evaluate(batch, bindings)
-                .to_array(n)
-                .as_type[BinaryLikeArray[Self.T.Type]]()
-                .copy()
-            )
-        comptime if Self.K.uses_alt:
-            ops.alt = (
-                self.alt.evaluate(batch, bindings)
-                .to_array(n)
-                .as_type[BinaryLikeArray[Self.U.Type]]()
-                .copy()
-            )
-        comptime if Self.K.uses_start:
-            ops.start = (
-                self.start.evaluate(batch, bindings)
-                .to_array(n)
-                .as_type[PrimitiveArray[Self.S.Type]]()
-                .copy()
-            )
-        comptime if Self.K.uses_count:
-            ops.count = (
-                self.count.evaluate(batch, bindings)
-                .to_array(n)
-                .as_type[PrimitiveArray[Self.C.Type]]()
-                .copy()
-            )
-        return Self.K.apply(arr.as_type[Self.Bound](), ops)
+        return Self.K.apply(
+            _text(self.a, batch, bindings), _number(self.count, batch, bindings)
+        )
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        # `K.apply` already intersected the subject's validity with every
-        # argument's, so the bound column is the whole answer — the same
-        # reading `ColumnBound` gives the nodes that can use it.
+        # The kernel already intersected every operand's validity.
         return bound.bitmap
 
     @always_inline
@@ -495,101 +445,295 @@ struct StringFunction[
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(Self.K.name, "(", self.a)
-        comptime if Self.K.uses_start:
-            writer.write(", ", self.start)
-        comptime if Self.K.uses_text:
-            writer.write(", ", self.text)
-        comptime if Self.K.uses_alt:
-            writer.write(", ", self.alt)
-        comptime if Self.K.uses_count:
-            writer.write(", ", self.count)
-        writer.write(")")
+        writer.write(Self.K.name, "(", self.a, ", ", self.count, ")")
 
 
-comptime Substr = StringFunction[SubstrKernel, _, UnusedText, UnusedText, _, _]
-comptime Left = StringFunction[
-    LeftKernel, _, UnusedText, UnusedText, UnusedNumber, _
-]
-comptime Right = StringFunction[
-    RightKernel, _, UnusedText, UnusedText, UnusedNumber, _
-]
-comptime LPad = StringFunction[LPadKernel, _, _, UnusedText, UnusedNumber, _]
-comptime RPad = StringFunction[RPadKernel, _, _, UnusedText, UnusedNumber, _]
-comptime Replace = StringFunction[
-    ReplaceKernel, _, _, _, UnusedNumber, UnusedNumber
-]
-comptime SplitPart = StringFunction[
-    SplitPartKernel, _, _, UnusedText, UnusedNumber, _
-]
-comptime RegexpExtract = StringFunction[
-    RegexpExtractKernel, _, _, UnusedText, UnusedNumber, _
-]
-comptime RegexpReplace = StringFunction[
-    RegexpReplaceKernel, _, _, _, UnusedNumber, UnusedNumber
-]
-comptime TrimChars = StringFunction[
-    TrimCharsKernel, _, _, UnusedText, UnusedNumber, UnusedNumber
-]
-comptime Repeat = StringFunction[
-    RepeatKernel, _, UnusedText, UnusedText, UnusedNumber, _
-]
-"""`repeat(s, n)` is `left`/`right`'s signature, so it is `left`/`right`'s
-node.
-
-It had one of its own, `StringRepeat`, for exactly one reason: it was the only
-member of this family whose argument was a *column*, back when the rest carried
-constants. Now that every argument is a column that is not a distinction, and
-`RepeatKernel` conforms to `StringIntKernel` alongside the other two."""
+comptime Left = StringIntFunction[LeftKernel, _, _]
+comptime Right = StringIntFunction[RightKernel, _, _]
+comptime Repeat = StringIntFunction[RepeatKernel, _, _]
 
 
-# ---------------------------------------------------------------------------
-# StringMeasure — string x args -> int64, a breaker
-# ---------------------------------------------------------------------------
-struct StringMeasure[K: StringMeasureKernel, A: StringValue, T: StringValue](
+struct Substr[A: StringValue, S: NumericValue, C: NumericValue](
+    StringValue, Unnamed
+):
+    """`substr(s, start, count)`."""
+
+    comptime Type = Self.A.Type
+    comptime shape = Shape.columnar
+    """Columnar even over scalar operands: the kernel runs over a column
+    regardless."""
+    comptime Bound = BinaryLikeArray[Self.Type]
+
+    var a: Self.A
+    var start: Self.S
+    var count: Self.C
+
+    def __init__(out self, var a: Self.A, var start: Self.S, var count: Self.C):
+        self.a = a^
+        self.start = start^
+        self.count = count^
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.a.dtype(schema)
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return SubstrKernel.apply(
+            _text(self.a, batch, bindings),
+            _number(self.start, batch, bindings),
+            _number(self.count, batch, bindings),
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # The kernel already intersected every operand's validity.
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # Widening a field borrow to the struct's origin, as `StringUnary` does.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            SubstrKernel.name,
+            "(",
+            self.a,
+            ", ",
+            self.start,
+            ", ",
+            self.count,
+            ")",
+        )
+
+
+struct StringPad[
+    on_left: Bool, A: StringValue, F: StringValue, W: NumericValue
+](StringValue, Unnamed):
+    """`lpad`/`rpad(s, width, fill)`."""
+
+    comptime Type = Self.A.Type
+    comptime shape = Shape.columnar
+    """Columnar even over scalar operands: the kernel runs over a column
+    regardless."""
+    comptime Bound = BinaryLikeArray[Self.Type]
+
+    var a: Self.A
+    var fill: Self.F
+    var width: Self.W
+
+    def __init__(out self, var a: Self.A, var fill: Self.F, var width: Self.W):
+        self.a = a^
+        self.fill = fill^
+        self.width = width^
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.a.dtype(schema)
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return Pad[Self.on_left].apply(
+            _text(self.a, batch, bindings),
+            _number(self.width, batch, bindings),
+            _text(self.fill, batch, bindings),
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # The kernel already intersected every operand's validity.
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # Widening a field borrow to the struct's origin, as `StringUnary` does.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[Wr: Writer](self, mut writer: Wr):
+        writer.write(
+            Pad[Self.on_left].name,
+            "(",
+            self.a,
+            ", ",
+            self.width,
+            ", ",
+            self.fill,
+            ")",
+        )
+
+
+comptime LPad = StringPad[True, _, _, _]
+comptime RPad = StringPad[False, _, _, _]
+
+
+struct StringTextTextFunction[
+    K: StringTextTextKernel, A: StringValue, X: StringValue, Y: StringValue
+](StringValue, Unnamed):
+    """`replace` and `regexp_replace`: a string, a pattern and a
+    replacement."""
+
+    comptime Type = Self.A.Type
+    comptime shape = Shape.columnar
+    """Columnar even over scalar operands: the kernel runs over a column
+    regardless."""
+    comptime Bound = BinaryLikeArray[Self.Type]
+
+    var a: Self.A
+    var x: Self.X
+    var y: Self.Y
+
+    def __init__(out self, var a: Self.A, var x: Self.X, var y: Self.Y):
+        self.a = a^
+        self.x = x^
+        self.y = y^
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.a.dtype(schema)
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return Self.K.apply(
+            _text(self.a, batch, bindings),
+            _text(self.x, batch, bindings),
+            _text(self.y, batch, bindings),
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # The kernel already intersected every operand's validity.
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # Widening a field borrow to the struct's origin, as `StringUnary` does.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ", ", self.x, ", ", self.y, ")")
+
+
+comptime Replace = StringTextTextFunction[ReplaceKernel, _, _, _]
+comptime RegexpReplace = StringTextTextFunction[RegexpReplaceKernel, _, _, _]
+
+
+struct StringTextIntFunction[
+    K: StringTextIntKernel, A: StringValue, X: StringValue, C: NumericValue
+](StringValue, Unnamed):
+    """`split_part` and `regexp_extract`: a string, a separator or pattern,
+    and an index."""
+
+    comptime Type = Self.A.Type
+    comptime shape = Shape.columnar
+    """Columnar even over scalar operands: the kernel runs over a column
+    regardless."""
+    comptime Bound = BinaryLikeArray[Self.Type]
+
+    var a: Self.A
+    var x: Self.X
+    var c: Self.C
+
+    def __init__(out self, var a: Self.A, var x: Self.X, var c: Self.C):
+        self.a = a^
+        self.x = x^
+        self.c = c^
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.a.dtype(schema)
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return Self.K.apply(
+            _text(self.a, batch, bindings),
+            _text(self.x, batch, bindings),
+            _number(self.c, batch, bindings),
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # The kernel already intersected every operand's validity.
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # Widening a field borrow to the struct's origin, as `StringUnary` does.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ", ", self.x, ", ", self.c, ")")
+
+
+comptime SplitPart = StringTextIntFunction[SplitPartKernel, _, _, _]
+comptime RegexpExtract = StringTextIntFunction[RegexpExtractKernel, _, _, _]
+
+
+struct TrimChars[A: StringValue, X: StringValue](StringValue, Unnamed):
+    """`trim(s, characters)`."""
+
+    comptime Type = Self.A.Type
+    comptime shape = Shape.columnar
+    """Columnar even over scalar operands: the kernel runs over a column
+    regardless."""
+    comptime Bound = BinaryLikeArray[Self.Type]
+
+    var a: Self.A
+    var chars: Self.X
+
+    def __init__(out self, var a: Self.A, var chars: Self.X):
+        self.a = a^
+        self.chars = chars^
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.a.dtype(schema)
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return TrimCharsKernel.apply(
+            _text(self.a, batch, bindings), _text(self.chars, batch, bindings)
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # The kernel already intersected every operand's validity.
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # Widening a field borrow to the struct's origin, as `StringUnary` does.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(TrimCharsKernel.name, "(", self.a, ", ", self.chars, ")")
+
+
+struct StringMeasure[K: StringToIntKernel, A: StringValue](
     ColumnBound, NumericValue, Unnamed
 ):
-    """`length` (characters), `position` and `ascii` — the string functions
-    that answer a number.
+    """`char_length` and `ascii`: a string measured as `int64`.
 
-    One argument slot rather than `StringFunction`'s four, because no measure
-    here reads more than a needle: `position(needle IN s)` uses it and
-    `char_length` and `ascii` bind `UnusedText` and never touch it. Adding
-    slots to match the other node would be symmetry for its own sake.
-
-    `int64`, where `StringLength` answers `int32`. That is not an
-    inconsistency: `StringLength` is Arrow's `utf8_length` and returns what
-    PyArrow returns, while these are the SQL spellings and SQL's `length` /
-    `position` / `ascii` are `BIGINT`. The two coexist because they are asked
-    by different vocabularies, and `char_length` and `length` are genuinely
-    different functions besides — bytes against characters.
-    """
+    `int64`, where `StringLength` answers `int32`: `StringLength` is Arrow's
+    `utf8_length`, while these are the SQL spellings, and SQL's `length` and
+    `ascii` are `BIGINT`."""
 
     comptime Type = Int64Type
     comptime shape = Shape.columnar
     comptime Bound = Int64Array
 
     var a: Self.A
-    var text: Self.T
 
-    def __init__(out self, var a: Self.A, var text: Self.T):
+    def __init__(out self, var a: Self.A):
         self.a = a^
-        self.text = text^
-
-    # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var n = len(batch)
-        var s = self.a.evaluate(batch, bindings).to_array(n)
-        var ops = StringOperands[Self.T.Type]()
-        comptime if Self.K.uses_text:
-            ops.text = (
-                self.text.evaluate(batch, bindings)
-                .to_array(n)
-                .as_type[BinaryLikeArray[Self.T.Type]]()
-                .copy()
-            )
-        return Self.K.apply(s.as_type[BinaryLikeArray[Self.A.Type]](), ops)
+        return Self.K.apply(_text(self.a, batch, bindings))
 
     @always_inline
     def lane[
@@ -598,15 +742,42 @@ struct StringMeasure[K: StringMeasureKernel, A: StringValue, T: StringValue](
         return bound.values().load[W](idx)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(Self.K.name, "(", self.a)
-        comptime if Self.K.uses_text:
-            writer.write(", ", self.text)
-        writer.write(")")
+        writer.write(Self.K.name, "(", self.a, ")")
 
 
-comptime CharLength = StringMeasure[CharLengthKernel, _, UnusedText]
-comptime Position = StringMeasure[PositionKernel, _, _]
-comptime Ascii = StringMeasure[AsciiKernel, _, UnusedText]
+comptime CharLength = StringMeasure[CharLengthKernel, _]
+comptime Ascii = StringMeasure[AsciiKernel, _]
+
+
+struct Position[A: StringValue, X: StringValue](
+    ColumnBound, NumericValue, Unnamed
+):
+    """`position(needle IN s)`, as `int64`."""
+
+    comptime Type = Int64Type
+    comptime shape = Shape.columnar
+    comptime Bound = Int64Array
+
+    var a: Self.A
+    var needle: Self.X
+
+    def __init__(out self, var a: Self.A, var needle: Self.X):
+        self.a = a^
+        self.needle = needle^
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return PositionKernel.apply(
+            _text(self.a, batch, bindings), _text(self.needle, batch, bindings)
+        )
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(PositionKernel.name, "(", self.a, ", ", self.needle, ")")
 
 
 # ---------------------------------------------------------------------------

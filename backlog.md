@@ -256,7 +256,7 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
   offsets array.
 - **The SQL argument functions cast through `string`**: `substr`, `left`,
   `right`, `repeat`, `lpad`/`rpad`, `replace`, `split_part` and
-  `trim(chars)` (`StringArgKernel.dispatch`). Each builds a new string per
+  `trim(chars)` (`kernels/string.mojo`'s `dispatch_text`). Each builds a new string per
   row anyway. The measures (`char_length`, `ascii`, `position`) read views
   natively.
 - **No header fast path for a string key in the offsets layout.** A

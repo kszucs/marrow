@@ -565,7 +565,7 @@ def test_a_null_string_function_argument_nulls_its_row() raises:
     column here makes row 1 null while row 0 keeps its answer.
 
     Row 2's *string* is null, so it was already null — the two sources of
-    nullity meet in `StringOperands.is_valid`."""
+    nullity meet in the kernel's per-row validity test."""
     var b = _sql_batch()
     var got = _strings(col("s", string).left(col("n", int64)), b)
     assert_equal(got[0].value(), "al")

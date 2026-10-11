@@ -11,36 +11,31 @@ one known-wrong answer the engine gives.
 
 from std.testing import assert_raises, assert_true
 
+from ...arrays import Int64Array, StringArray
 from ...builders import array, Int64Builder, LargeStringBuilder, StringBuilder
 from ...kernels.regex import (
     RegexpExtractKernel,
     RegexpMatchesKernel,
     RegexpReplaceKernel,
 )
-from ...kernels.string import StringOperands
 from ...utils import RegexPattern
 
 
-def _ops(
-    n: Int,
-    var text: String = String(),
-    var alt: String = String(),
-    count: Int = 0,
-) raises -> StringOperands[]:
-    """Constant arguments broadcast across `n` rows, as `Datum` splats a
-    literal."""
-    var tb = StringBuilder(capacity=n)
-    var ab = StringBuilder(capacity=n)
-    var cb = Int64Builder(capacity=n)
+def _ints(n: Int, value: Int) raises -> Int64Array:
+    """A constant integer argument broadcast across `n` rows, as `Datum`
+    splats a literal."""
+    var b = Int64Builder(capacity=n)
     for _ in range(n):
-        tb.append(text)
-        ab.append(alt)
-        cb.append(Int64(count))
-    var ops = StringOperands()
-    ops.text = tb.finish()
-    ops.alt = ab.finish()
-    ops.count = cb.finish()
-    return ops^
+        b.append(Int64(value))
+    return b.finish()
+
+
+def _texts(n: Int, value: String) raises -> StringArray:
+    """A constant string argument broadcast across `n` rows."""
+    var b = StringBuilder(capacity=n)
+    for _ in range(n):
+        b.append(value)
+    return b.finish()
 
 
 # --- regexp_matches --------------------------------------------------------
@@ -105,11 +100,11 @@ def test_regexp_matches_malformed_pattern_raises() raises:
 def test_regexp_extract_group() raises:
     var s = array(["a,b,c", "xyz", "", None, "12-345"])
     assert_true(
-        RegexpExtractKernel.apply(s, _ops(5, text="([a-z]+)", count=1))
+        RegexpExtractKernel.apply(s, _texts(5, "([a-z]+)"), _ints(5, 1))
         == array(["a", "xyz", "", None, ""])
     )
     assert_true(
-        RegexpExtractKernel.apply(s, _ops(5, text="(\\d+)-(\\d+)", count=2))
+        RegexpExtractKernel.apply(s, _texts(5, "(\\d+)-(\\d+)"), _ints(5, 2))
         == array(["", "", "", None, "345"])
     )
 
@@ -117,7 +112,9 @@ def test_regexp_extract_group() raises:
 def test_regexp_extract_group_zero_is_the_whole_match() raises:
     assert_true(
         RegexpExtractKernel.apply(
-            array(["x 12-345 y", "foobar"]), _ops(2, text="\\d+-\\d+|foobar")
+            array(["x 12-345 y", "foobar"]),
+            _texts(2, "\\d+-\\d+|foobar"),
+            _ints(2, 0),
         )
         == array(["12-345", "foobar"])
     )
@@ -125,7 +122,7 @@ def test_regexp_extract_group_zero_is_the_whole_match() raises:
 
 def test_regexp_extract_missing_group_is_empty() raises:
     assert_true(
-        RegexpExtractKernel.apply(array(["abc"]), _ops(1, text="(b)", count=5))
+        RegexpExtractKernel.apply(array(["abc"]), _texts(1, "(b)"), _ints(1, 5))
         == array([""])
     )
 
@@ -136,7 +133,7 @@ def test_regexp_extract_missing_group_is_empty() raises:
 def test_regexp_replace_first_match_only() raises:
     var s = array(["a,b,c", "xyz", "", None, "héllo wörld"])
     assert_true(
-        RegexpReplaceKernel.apply(s, _ops(5, text="[aeiou]", alt="_"))
+        RegexpReplaceKernel.apply(s, _texts(5, "[aeiou]"), _texts(5, "_"))
         == array(["_,b,c", "xyz", "", None, "héll_ wörld"])
     )
 
@@ -144,13 +141,15 @@ def test_regexp_replace_first_match_only() raises:
 def test_regexp_replace_group_references() raises:
     assert_true(
         RegexpReplaceKernel.apply(
-            array(["x 12-345 y"]), _ops(1, text="(\\d+)-(\\d+)", alt="\\2-\\1")
+            array(["x 12-345 y"]),
+            _texts(1, "(\\d+)-(\\d+)"),
+            _texts(1, "\\2-\\1"),
         )
         == array(["x 345-12 y"])
     )
     assert_true(
         RegexpReplaceKernel.apply(
-            array(["abc"]), _ops(1, text="b", alt="[\\0|\\\\]")
+            array(["abc"]), _texts(1, "b"), _texts(1, "[\\0|\\\\]")
         )
         == array(["a[b|\\]c"])
     )
@@ -158,7 +157,9 @@ def test_regexp_replace_group_references() raises:
 
 def test_regexp_replace_empty_match_inserts() raises:
     assert_true(
-        RegexpReplaceKernel.apply(array(["abc"]), _ops(1, text="x*", alt="_"))
+        RegexpReplaceKernel.apply(
+            array(["abc"]), _texts(1, "x*"), _texts(1, "_")
+        )
         == array(["_abc"])
     )
 
@@ -167,10 +168,11 @@ def test_regexp_replace_null_argument_is_null() raises:
     var repl = StringBuilder(capacity=2)
     repl.append("_")
     repl.append_null()
-    var ops = _ops(2, text="a")
-    ops.alt = repl.finish()
     assert_true(
-        RegexpReplaceKernel.apply(array(["a", "a"]), ops) == array(["_", None])
+        RegexpReplaceKernel.apply(
+            array(["a", "a"]), _texts(2, "a"), repl.finish()
+        )
+        == array(["_", None])
     )
 
 
@@ -183,7 +185,7 @@ def test_regexp_replace_optional_group_known_bug() raises:
     """
     assert_true(
         RegexpReplaceKernel.apply(
-            array(["foobar"]), _ops(1, text="(?:foo)?(bar)", alt="[\\1]")
+            array(["foobar"]), _texts(1, "(?:foo)?(bar)"), _texts(1, "[\\1]")
         )
         == array(["foo[bar]"])
     )

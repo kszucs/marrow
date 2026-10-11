@@ -196,8 +196,8 @@ from .strings import (
     Strip,
     Substr,
     TrimChars,
-    UnusedNumber,
-    UnusedText,
+    IntLiteral,
+    TextLiteral,
     Upper,
 )
 from .temporal import (
@@ -710,8 +710,8 @@ trait StringValue(ComptimeValue):
     # deliberate: these are the SQL spellings, and SQL's `length` is
     # `octet_length`'s sibling rather than its synonym.
     #
-    # Each is a wrapper over `StringFunction` or `StringMeasure`, whose
-    # arguments are **operands**: `substr(s, 2, 3)` and
+    # Each builds one of the string-function nodes, whose arguments are
+    # **operands**: `substr(s, 2, 3)` and
     # `substr(s, col("from", int64), col("len", int64))` are the same node with
     # different operand types. Each comes in two spellings — one taking plain
     # `Int` / `String` constants, which wraps them in the literal leaves, and
@@ -733,19 +733,15 @@ trait StringValue(ComptimeValue):
         the count and `substr(s, 0, 2)` yields one character, not two."""
         return Substr[Self, StartArg, CountArg](
             self.copy(),
-            UnusedText(String()),
-            UnusedText(String()),
             start.copy(),
             count.copy(),
         )
 
     def substr(
         self, start: Int, length: Int
-    ) -> Substr[Self, UnusedNumber, UnusedNumber]:
+    ) -> Substr[Self, IntLiteral, IntLiteral]:
         """SQL `substr(self, start, length)` with constant bounds."""
-        return self.substr(
-            UnusedNumber(Int64(start)), UnusedNumber(Int64(length))
-        )
+        return self.substr(IntLiteral(Int64(start)), IntLiteral(Int64(length)))
 
     def left[
         CountArg: NumericValue
@@ -754,15 +750,12 @@ trait StringValue(ComptimeValue):
         the last `|count|` when it is negative."""
         return Left[Self, CountArg](
             self.copy(),
-            UnusedText(String()),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
             count.copy(),
         )
 
-    def left(self, count: Int) -> Left[Self, UnusedNumber]:
+    def left(self, count: Int) -> Left[Self, IntLiteral]:
         """SQL `left(self, count)` with a constant count."""
-        return self.left(UnusedNumber(Int64(count)))
+        return self.left(IntLiteral(Int64(count)))
 
     def right[
         CountArg: NumericValue
@@ -771,15 +764,12 @@ trait StringValue(ComptimeValue):
         the first `|count|` when it is negative."""
         return Right[Self, CountArg](
             self.copy(),
-            UnusedText(String()),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
             count.copy(),
         )
 
-    def right(self, count: Int) -> Right[Self, UnusedNumber]:
+    def right(self, count: Int) -> Right[Self, IntLiteral]:
         """SQL `right(self, count)` with a constant count."""
-        return self.right(UnusedNumber(Int64(count)))
+        return self.right(IntLiteral(Int64(count)))
 
     def lpad[
         WidthArg: NumericValue, FillArg: StringValue
@@ -789,16 +779,14 @@ trait StringValue(ComptimeValue):
         return LPad[Self, FillArg, WidthArg](
             self.copy(),
             fill.copy(),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
             width.copy(),
         )
 
     def lpad(
         self, width: Int, var fill: String
-    ) -> LPad[Self, UnusedText, UnusedNumber]:
+    ) -> LPad[Self, TextLiteral, IntLiteral]:
         """SQL `lpad(self, width, fill)` with a constant width and fill."""
-        return self.lpad(UnusedNumber(Int64(width)), UnusedText(fill^))
+        return self.lpad(IntLiteral(Int64(width)), TextLiteral(fill^))
 
     def rpad[
         WidthArg: NumericValue, FillArg: StringValue
@@ -807,16 +795,14 @@ trait StringValue(ComptimeValue):
         return RPad[Self, FillArg, WidthArg](
             self.copy(),
             fill.copy(),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
             width.copy(),
         )
 
     def rpad(
         self, width: Int, var fill: String
-    ) -> RPad[Self, UnusedText, UnusedNumber]:
+    ) -> RPad[Self, TextLiteral, IntLiteral]:
         """SQL `rpad(self, width, fill)` with a constant width and fill."""
-        return self.rpad(UnusedNumber(Int64(width)), UnusedText(fill^))
+        return self.rpad(IntLiteral(Int64(width)), TextLiteral(fill^))
 
     def replace[
         PatArg: StringValue, ReplArg: StringValue
@@ -829,15 +815,13 @@ trait StringValue(ComptimeValue):
             self.copy(),
             pattern.copy(),
             replacement.copy(),
-            UnusedNumber(Int64(0)),
-            UnusedNumber(Int64(0)),
         )
 
     def replace(
         self, var pattern: String, var replacement: String
-    ) -> Replace[Self, UnusedText, UnusedText]:
+    ) -> Replace[Self, TextLiteral, TextLiteral]:
         """SQL `replace` with a constant pattern and replacement."""
-        return self.replace(UnusedText(pattern^), UnusedText(replacement^))
+        return self.replace(TextLiteral(pattern^), TextLiteral(replacement^))
 
     def split_part[
         SepArg: StringValue, IndexArg: NumericValue
@@ -847,16 +831,14 @@ trait StringValue(ComptimeValue):
         return SplitPart[Self, SepArg, IndexArg](
             self.copy(),
             sep.copy(),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
             index.copy(),
         )
 
     def split_part(
         self, var sep: String, index: Int
-    ) -> SplitPart[Self, UnusedText, UnusedNumber]:
+    ) -> SplitPart[Self, TextLiteral, IntLiteral]:
         """SQL `split_part` with a constant separator and index."""
-        return self.split_part(UnusedText(sep^), UnusedNumber(Int64(index)))
+        return self.split_part(TextLiteral(sep^), IntLiteral(Int64(index)))
 
     def strip[
         SetArg: StringValue
@@ -870,20 +852,17 @@ trait StringValue(ComptimeValue):
         return TrimChars[Self, SetArg](
             self.copy(),
             characters.copy(),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
-            UnusedNumber(Int64(0)),
         )
 
-    def strip(self, var characters: String) -> TrimChars[Self, UnusedText]:
+    def strip(self, var characters: String) -> TrimChars[Self, TextLiteral]:
         """SQL `trim(self, characters)` with a constant character set."""
-        return self.strip(UnusedText(characters^))
+        return self.strip(TextLiteral(characters^))
 
     def char_length(self) -> CharLength[Self]:
         """SQL `length(self)` — **characters** as `int64`, where `length()`
         above answers bytes as `int32`. `héllo wörld` is 11 here and 13
         there."""
-        return CharLength[Self](self.copy(), UnusedText(String()))
+        return CharLength[Self](self.copy())
 
     def position[
         TextArg: StringValue
@@ -894,14 +873,14 @@ trait StringValue(ComptimeValue):
         different fact and the one `is_valid` records."""
         return Position[Self, TextArg](self.copy(), needle.copy())
 
-    def position(self, var needle: String) -> Position[Self, UnusedText]:
+    def position(self, var needle: String) -> Position[Self, TextLiteral]:
         """SQL `position(needle IN self)` with a constant needle."""
-        return self.position(UnusedText(needle^))
+        return self.position(TextLiteral(needle^))
 
     def ascii(self) -> Ascii[Self]:
         """SQL `ascii(self)` — the first character's code point, 0 for the
         empty string. Decodes UTF-8: a leading `é` answers 233, not 0xC3."""
-        return Ascii[Self](self.copy(), UnusedText(String()))
+        return Ascii[Self](self.copy())
 
     def repeat[
         CountArg: NumericValue
@@ -910,15 +889,12 @@ trait StringValue(ComptimeValue):
         negative counts both give the empty string."""
         return Repeat[Self, CountArg](
             self.copy(),
-            UnusedText(String()),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
             n.copy(),
         )
 
-    def repeat(self, n: Int) -> Repeat[Self, UnusedNumber]:
+    def repeat(self, n: Int) -> Repeat[Self, IntLiteral]:
         """SQL `repeat(self, n)` with a constant count."""
-        return self.repeat(UnusedNumber(Int64(n)))
+        return self.repeat(IntLiteral(Int64(n)))
 
     def __add__[Rhs: StringValue](self, o: Rhs) -> StringConcat[Self, Rhs]:
         """SQL `||` — concatenation that **propagates null**, so a null
@@ -961,9 +937,9 @@ trait StringValue(ComptimeValue):
 
     def regexp_matches(
         self, var pattern: String
-    ) -> RegexpMatches[Self, UnusedText]:
+    ) -> RegexpMatches[Self, TextLiteral]:
         """`regexp_matches` with a constant pattern."""
-        return self.regexp_matches(UnusedText(pattern^))
+        return self.regexp_matches(TextLiteral(pattern^))
 
     def regexp_extract[
         PatArg: StringValue, GroupArg: NumericValue
@@ -976,17 +952,15 @@ trait StringValue(ComptimeValue):
         return RegexpExtract[Self, PatArg, GroupArg](
             self.copy(),
             pattern.copy(),
-            UnusedText(String()),
-            UnusedNumber(Int64(0)),
             group.copy(),
         )
 
     def regexp_extract(
         self, var pattern: String, group: Int
-    ) -> RegexpExtract[Self, UnusedText, UnusedNumber]:
+    ) -> RegexpExtract[Self, TextLiteral, IntLiteral]:
         """`regexp_extract` with a constant pattern and group."""
         return self.regexp_extract(
-            UnusedText(pattern^), UnusedNumber(Int64(group))
+            TextLiteral(pattern^), IntLiteral(Int64(group))
         )
 
     def regexp_replace[
@@ -1001,16 +975,14 @@ trait StringValue(ComptimeValue):
             self.copy(),
             pattern.copy(),
             replacement.copy(),
-            UnusedNumber(Int64(0)),
-            UnusedNumber(Int64(0)),
         )
 
     def regexp_replace(
         self, var pattern: String, var replacement: String
-    ) -> RegexpReplace[Self, UnusedText, UnusedText]:
+    ) -> RegexpReplace[Self, TextLiteral, TextLiteral]:
         """`regexp_replace` with a constant pattern and replacement."""
         return self.regexp_replace(
-            UnusedText(pattern^), UnusedText(replacement^)
+            TextLiteral(pattern^), TextLiteral(replacement^)
         )
 
     # -- aggregates ---------------------------------------------------------

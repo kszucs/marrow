@@ -9,12 +9,24 @@ the runtime lane hands a literal pattern over as n identical rows, and those
 collapse to one compile.
 """
 
-from ..arrays import BinaryLikeArray, BoolArray, BytesArray
+from ..arrays import (
+    BinaryLikeArray,
+    BoolArray,
+    BytesArray,
+    DynArray,
+    Int64Array,
+    PrimitiveArray,
+    StringArray,
+)
 from ..builders import BinaryLikeBuilder, BoolBuilder
 from ..dtypes import PrimitiveType, StringLikeType
-from ..errors import InternalError
 from ..utils import RegexPattern
-from .string import StringArgKernel, StringOperands, StringPredicateKernel
+from .string import (
+    StringPredicateKernel,
+    StringTextIntKernel,
+    StringTextTextKernel,
+    dispatch_text,
+)
 
 
 struct RegexpMatchesKernel(StringPredicateKernel):
@@ -69,89 +81,85 @@ struct RegexpMatchesKernel(StringPredicateKernel):
         return out.finish()
 
 
-struct RegexpExtractKernel(StringArgKernel):
+struct RegexpExtractKernel(StringTextIntKernel):
     """DuckDB `regexp_extract(s, pattern, group)`: capture group `group` of
     the first match. A row that does not match answers `''`, not null."""
 
     comptime name = "regexp_extract"
-    comptime uses_text = True
-    comptime uses_alt = False
-    comptime uses_start = False
-    comptime uses_count = True
 
     @staticmethod
     def apply[
-        T: StringLikeType,
-        //,
-        OT: StringLikeType,
-        OA: StringLikeType,
-        OS: PrimitiveType,
-        OC: PrimitiveType,
+        T: StringLikeType, P: StringLikeType, G: PrimitiveType
     ](
-        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+        array: BinaryLikeArray[T],
+        pattern: BinaryLikeArray[P],
+        group: PrimitiveArray[G],
     ) raises -> BinaryLikeArray[T]:
-        if not ops.text:
-            raise InternalError("missing operand: text")
-        if not ops.count:
-            raise InternalError("missing operand: count")
-        ref patterns = ops.text.value()
-        ref groups = ops.count.value()
         var n = len(array)
         var builder = BinaryLikeBuilder[T](capacity=n)
         var compiled = RegexPattern()
         for i in range(n):
-            if array.is_valid(i) and ops.is_valid(i):
-                compiled.use(patterns.unsafe_get(UInt(i)))
+            if array.is_valid(i) and pattern.is_valid(i) and group.is_valid(i):
+                compiled.use(pattern.unsafe_get(UInt(i)))
                 builder.append(
                     compiled.extract(
                         array.unsafe_get(UInt(i)),
-                        Int(groups.values().unsafe_get(i)),
+                        Int(group.values().unsafe_get(i)),
                     )
                 )
             else:
                 builder.append_null()
         return builder.finish()
 
+    @staticmethod
+    def dispatch(
+        array: DynArray, pattern: StringArray, group: Int64Array
+    ) raises -> DynArray:
+        def run[
+            T: StringLikeType
+        ](s: BinaryLikeArray[T]) raises {imm} -> DynArray:
+            return Self.apply(s, pattern, group).to_dyn()
 
-struct RegexpReplaceKernel(StringArgKernel):
+        return dispatch_text[Self](array, run)
+
+
+struct RegexpReplaceKernel(StringTextTextKernel):
     """DuckDB `regexp_replace(s, pattern, repl)`: the **first** match only,
     where the literal `replace` replaces every occurrence. `\\1`..`\\9` in
     `repl` insert a capture group."""
 
     comptime name = "regexp_replace"
-    comptime uses_text = True
-    comptime uses_alt = True
-    comptime uses_start = False
-    comptime uses_count = False
 
     @staticmethod
     def apply[
-        T: StringLikeType,
-        //,
-        OT: StringLikeType,
-        OA: StringLikeType,
-        OS: PrimitiveType,
-        OC: PrimitiveType,
+        T: StringLikeType, P: StringLikeType, R: StringLikeType
     ](
-        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+        array: BinaryLikeArray[T],
+        pattern: BinaryLikeArray[P],
+        repl: BinaryLikeArray[R],
     ) raises -> BinaryLikeArray[T]:
-        if not ops.text:
-            raise InternalError("missing operand: text")
-        if not ops.alt:
-            raise InternalError("missing operand: alt")
-        ref patterns = ops.text.value()
-        ref repls = ops.alt.value()
         var n = len(array)
         var builder = BinaryLikeBuilder[T](capacity=n)
         var compiled = RegexPattern()
         for i in range(n):
-            if array.is_valid(i) and ops.is_valid(i):
-                compiled.use(patterns.unsafe_get(UInt(i)))
+            if array.is_valid(i) and pattern.is_valid(i) and repl.is_valid(i):
+                compiled.use(pattern.unsafe_get(UInt(i)))
                 builder.append(
                     compiled.replace(
-                        array.unsafe_get(UInt(i)), repls.unsafe_get(UInt(i))
+                        array.unsafe_get(UInt(i)), repl.unsafe_get(UInt(i))
                     )
                 )
             else:
                 builder.append_null()
         return builder.finish()
+
+    @staticmethod
+    def dispatch(
+        array: DynArray, pattern: StringArray, repl: StringArray
+    ) raises -> DynArray:
+        def run[
+            T: StringLikeType
+        ](s: BinaryLikeArray[T]) raises {imm} -> DynArray:
+            return Self.apply(s, pattern, repl).to_dyn()
+
+        return dispatch_text[Self](array, run)
