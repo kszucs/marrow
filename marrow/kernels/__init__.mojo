@@ -3,49 +3,25 @@
 
 """Compute kernels for marrow.
 
-Re-exports the compute surface from the submodules so callers can
-``import marrow.kernels as mk`` and use e.g. ``mk.AddKernel.dispatch``,
-``mk.filter``, ``mk.cast``, ``mk.concat`` directly.
+Re-exports the compute surface so callers can ``import marrow.kernels as mk``
+and use e.g. ``mk.AddKernel.dispatch``, ``mk.filter`` or ``mk.cast``.
+Concatenation is not a kernel: it is ``DynBuilder.concat`` and each typed
+builder's ``concat``.
 
-**An aggregate is not applied like that, and the example used to say it was.**
-This docstring advertised ``mk.SumKernel.dispatch``; ``SumFold`` (as it is now
-spelled) is ``Widening[SumOp]``, a ``FoldKernel``, which has no ``dispatch``,
-no ``reduce`` and no ``apply`` — it is an *algebra* (identity / combine /
-finalize) and names no array type at all. What applies one to a column is
-``Fold[K, V]``, an ``AggKernel``, driven ``reserve`` / ``update`` / ``finish``
-or in one call through ``AggKernel.grouped``. Both levels plus ``Foldable`` are
-re-exported below, so the family's actual entry points are reachable from this
-namespace rather than only its building blocks.
+A name ending ``Kernel`` is something you *apply* to arrays. A ``*Fold`` (such
+as ``SumFold``, ``Widening[SumOp]``) is an algebra you *drive*: ``Fold[K, V]``,
+an ``AggKernel``, applies one to a column through ``reserve`` / ``update`` /
+``finish``, or in one call through ``AggKernel.grouped``.
 
-**The ``*Fold`` suffix is what makes that distinction visible**, and it is why
-the whole-array folds no longer end in ``Kernel``: a name ending ``Kernel``
-here is something you *apply*, and a fold is something you *drive*.
+Two things are reached through their own submodule rather than this namespace:
 
-**The boundary, and why there is one.** Everything a caller *computes with* is
-re-exported here: the element-wise kernels, the aggregates, and the
-free-function verbs. Two things are deliberately not, and both are reached
-through their own submodule rather than through this namespace:
-
-  - **The `*Op` building blocks** — `MinOp`, `MaxOp`, `SumOp`, `ProductOp`.
-    They are the algebras the folds are assembled from, not things a caller
-    applies.
-
-    This entry used to read "`MinKernel` / `MaxKernel`, because the name means
-    two different things": `numeric.MinKernel` is the element-wise binary
-    minimum of two arrays, `aggregate.MinKernel` was `MinMax[MinOp]`, a
-    whole-array fold, and a flat namespace could hold neither. Renaming the
-    folds to `MinFold` / `MaxFold` dissolved the collision, so both are now
-    re-exported and the workaround is gone.
+  - **The `*Op` building blocks** — `MinOp`, `MaxOp`, `SumOp`, `ProductOp`,
+    the algebras the folds are assembled from.
   - **The hash and partition machinery** — `dictionary`, `join`,
-    `hashtable`, `hashing`, `partition`. These are implementation modules that
-    `expr` composes, not kernels a caller applies to an array.
-
-This used to be neither: the docstring promised direct use of every submodule
-while seven of nineteen were actually re-exported, so `mk.cast` worked and
-`mk.concat` did not, with nothing saying why.
+    `hashtable`, `hashing`, `partition`, which `expr` composes.
 
 Submodules — element-wise first, then the ones that reshape or combine rows:
-  - `numeric.mojo` — binary arithmetic and comparison (one family since Q0.7)
+  - `numeric.mojo` — binary arithmetic and comparison
   - `boolean.mojo` — logical ops and validity predicates, Kleene semantics
   - `string.mojo` — string predicates and transforms, incl. LIKE / ILIKE
   - `temporal.mojo` — date/time field extraction and truncation
@@ -57,16 +33,11 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `distinct.mojo` — exact and approximate distinct counts
   - `filter.mojo` — selection, take, drop_null
   - `sort.mojo` — sort and sort_indices
-  - `concat.mojo` — concatenation
   - `core.mojo` — the `Kernel` root trait
   - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
   - *not re-exported* — `dictionary.mojo` / `join.mojo` / `hashtable.mojo` /
     `hashing.mojo` / `partition.mojo` (the hash machinery group-by, join and
     `is_in` share)
-
-`ExecContext` is re-exported here for convenience but lives in
-`marrow/execution.mojo`: it is a thread-count/device policy object that imports
-nothing from marrow, and `views.mojo` and `tabular.mojo` need it too.
 """
 
 from marrow.dtypes import (
@@ -203,7 +174,6 @@ from .conditional import (
 )
 from .nested import ArrayLengthKernel, ArrayContainsKernel
 from .cast import CastKernel, cast
-from .concat import concat
 from .core import Kernel
 from .groupby import Groups
 from .distinct import (

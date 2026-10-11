@@ -77,7 +77,6 @@ from ..logical import (
 )
 from ..logical import Bindings
 from ...execution import ExecContext
-from ...kernels.concat import concat
 from ...kernels.groupby import Groups
 from ...kernels.window import WindowExtents, WindowFrame
 from ...arrays import DynArray

@@ -149,6 +149,29 @@ trait Builder(Deinitable, Movable, Sized):
     def extend(mut self, arr: DynArray) raises:
         ...
 
+    def extend(mut self, arr: Self.ArrayType) raises:
+        ...
+
+    def __init__(out self, *, like: Self.ArrayType, capacity: Int = 0) raises:
+        """An empty builder of `like`'s dtype, with room for `capacity`
+        elements."""
+        ...
+
+    @staticmethod
+    def concat(arrays: List[Self.ArrayType]) raises -> Self.ArrayType:
+        """`arrays`, which share a dtype, end to end in one array."""
+        if len(arrays) == 0:
+            raise InvalidError(
+                "concat: cannot concatenate an empty list of arrays"
+            )
+        var n = 0
+        for ref a in arrays:
+            n += len(a)
+        var b = Self(like=arrays[0], capacity=n)
+        for ref a in arrays:
+            b.extend(a)
+        return b.finish()
+
     def finish(
         mut self, *, shrink_to_fit: Bool = True
     ) raises -> Self.ArrayType:
@@ -407,6 +430,21 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
 
         _ = self._dispatch_mut(f)
 
+    @staticmethod
+    def concat(arrays: List[DynArray]) raises -> DynArray:
+        """`arrays`, which share a dtype, end to end in one array."""
+        if len(arrays) == 0:
+            raise InvalidError(
+                "concat: cannot concatenate an empty list of arrays"
+            )
+        var n = 0
+        for ref a in arrays:
+            n += a.length()
+        var b = Self(arrays[0].dtype(), n)
+        for ref a in arrays:
+            b.extend(a)
+        return b.finish()
+
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
         def f[T: Builder](mut b: T) raises {imm} -> DynArray:
             return b.finish(shrink_to_fit=shrink_to_fit).to_dyn()
@@ -628,6 +666,11 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
         self = PrimitiveBuilder[NT](NT(), capacity, zeroed=zeroed)
 
     def __init__(
+        out self, *, like: PrimitiveArray[Self.T], capacity: Int = 0
+    ) raises:
+        self = Self(like.dtype.copy(), capacity)
+
+    def __init__(
         out self, dtype: Self.T, capacity: Int = 0, *, zeroed: Bool = True
     ):
         """Create a builder with an explicit dtype (required for temporal and decimal).
@@ -815,6 +858,11 @@ struct BinaryLikeBuilder[T: BinaryLikeType](BytesBuilder):
     var _offsets: Buffer[mut=True]
     var _values: Buffer[mut=True]
 
+    def __init__(
+        out self, *, like: BinaryLikeArray[Self.T], capacity: Int = 0
+    ) raises:
+        self = Self(capacity)
+
     def __init__(out self, capacity: Int = 0, bytes_capacity: Int = 0):
         var offsets = Buffer.alloc_zeroed[Self.T.offset](capacity + 1)
         offsets.unsafe_set[Self.T.offset](0, 0)
@@ -890,6 +938,9 @@ struct BinaryLikeBuilder[T: BinaryLikeType](BytesBuilder):
             raise TypeError(
                 t"BinaryLikeBuilder.extend: expected a binary-like, got {dt}"
             )
+
+    def extend(mut self, arr: BinaryLikeArray[Self.T]) raises:
+        self.extend[Self.T](arr)
 
     def extend[U: BinaryLikeType](mut self, arr: BinaryLikeArray[U]) raises:
         """Bulk-append all elements from an existing BinaryLikeArray."""
@@ -1045,6 +1096,11 @@ struct BinaryViewLikeBuilder[T: BinaryViewLikeType](BytesBuilder):
     """The in-progress data block; its index is `len(_blocks)`."""
     var _block_used: Int
     var _next_block_size: Int
+
+    def __init__(
+        out self, *, like: BinaryViewLikeArray[Self.T], capacity: Int = 0
+    ) raises:
+        self = Self(capacity)
 
     def __init__(out self, capacity: Int = 0):
         self._length = 0
@@ -1234,6 +1290,9 @@ struct BinaryViewLikeBuilder[T: BinaryViewLikeType](BytesBuilder):
                 t" {dt}"
             )
 
+    def extend(mut self, arr: BinaryViewLikeArray[Self.T]) raises:
+        self.extend[Self.T](arr)
+
     def extend[
         U: BinaryViewLikeType
     ](mut self, arr: BinaryViewLikeArray[U]) raises:
@@ -1333,6 +1392,17 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
     var _offsets: Buffer[mut=True]
     var _child: DynBuilder
 
+    def __init__(
+        out self, *, like: ListLikeArray[Self.T], capacity: Int = 0
+    ) raises:
+        var item: Field
+        comptime if Self.T.offset == DType.int32:
+            item = like.dtype.as_list().value_field().copy()
+        else:
+            item = like.dtype.as_large_list().value_field().copy()
+        var child = DynBuilder(item.dtype)
+        self = Self(item^, child^, capacity)
+
     def __init__(out self, var child: DynBuilder, capacity: Int = 0):
         """A list of `child`'s values, under the default nullable `item`
         element field."""
@@ -1429,6 +1499,9 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
             raise TypeError(
                 t"ListLikeBuilder.extend: expected a list-like, got {dt}"
             )
+
+    def extend(mut self, arr: ListLikeArray[Self.T]) raises:
+        self.extend[Self.T](arr)
 
     def extend[U: ListLikeType](mut self, arr: ListLikeArray[U]) raises:
         """Bulk-append all elements from an existing ListLikeArray."""
@@ -1529,6 +1602,9 @@ struct MapBuilder(Builder):
     var _inner: ListBuilder
     var _dtype: DynType
 
+    def __init__(out self, *, like: MapArray, capacity: Int = 0) raises:
+        self = Self(like.dtype.as_map(), capacity)
+
     def __init__(out self, dtype: MapType, capacity: Int = 0) raises:
         var entries = StructBuilder(
             [dtype.key_field(), dtype.item_field()], capacity
@@ -1560,8 +1636,11 @@ struct MapBuilder(Builder):
         self._inner.append_valid()
 
     def extend(mut self, arr: DynArray) raises:
+        self.extend(arr.as_map())
+
+    def extend(mut self, arr: MapArray) raises:
         # Feed the map to the inner ListBuilder as a plain list of its entries.
-        self._inner.extend(arr.as_map().to_list())
+        self._inner.extend(arr.to_list())
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> MapArray:
         return self._inner.finish(shrink_to_fit=shrink_to_fit).to_map(
@@ -1591,6 +1670,12 @@ struct FixedSizeListBuilder(Builder):
     var _null_count: Int
     var _bitmap: Bitmap[mut=True]
     var _child: DynBuilder
+
+    def __init__(
+        out self, *, like: FixedSizeListArray, capacity: Int = 0
+    ) raises:
+        ref fsl = like.dtype.as_fixed_size_list()
+        self = Self(DynBuilder(fsl.value_type()), fsl.size, capacity)
 
     def __init__(
         out self, var child: DynBuilder, list_size: Int, capacity: Int = 0
@@ -1716,6 +1801,9 @@ struct StructBuilder(Builder):
     var _null_count: Int
     var _bitmap: Bitmap[mut=True]
     var _children: List[DynBuilder]
+
+    def __init__(out self, *, like: StructArray, capacity: Int = 0) raises:
+        self = Self(like.dtype.as_struct().fields.copy(), capacity)
 
     def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
         var children = List[DynBuilder](capacity=len(fields))
@@ -1866,6 +1954,14 @@ struct DictionaryBuilder(Builder):
     var _indices: DynBuilder
     var _values: DynArray
 
+    def __init__(out self, *, like: DictionaryArray, capacity: Int = 0) raises:
+        ref dt = like.type().as_dictionary()
+        self = Self(
+            DynBuilder(dt.index_type(), capacity),
+            array(dt.value_type()),
+            dt.ordered,
+        )
+
     def __init__(
         out self,
         var indices_builder: DynBuilder,
@@ -1946,7 +2042,11 @@ struct DictionaryBuilder(Builder):
                 t"DictionaryBuilder.extend: expected DictionaryArray, got: "
                 t"{arr.dtype()}"
             )
-        ref src = arr.as_dictionary()
+        self.extend(arr.as_dictionary())
+
+    def extend(mut self, arr: DictionaryArray) raises:
+        """Append ``arr``'s values; see the erased overload."""
+        ref src = arr
         var entries = src.dictionary()
         var shift = len(self._values)
         if shift == 0 and self._indices.length() == 0:
@@ -2040,6 +2140,9 @@ struct NullBuilder(Builder):
 
     var _length: Int
 
+    def __init__(out self, *, like: NullArray, capacity: Int = 0) raises:
+        self = Self(capacity)
+
     def __init__(out self, capacity: Int = 0):
         self._length = 0
 
@@ -2063,6 +2166,9 @@ struct NullBuilder(Builder):
             raise TypeError("NullBuilder.extend: expected a null array")
         self._length += len(arr)
 
+    def extend(mut self, arr: NullArray) raises:
+        self._length += len(arr)
+
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> NullArray:
         var n = self._length
         self._length = 0
@@ -2083,6 +2189,11 @@ struct FixedSizeBinaryBuilder(Builder):
     var _null_count: Int
     var _bitmap: Bitmap[mut=True]
     var _buffer: Buffer[mut=True]
+
+    def __init__(
+        out self, *, like: FixedSizeBinaryArray, capacity: Int = 0
+    ) raises:
+        self = Self(like.byte_width, capacity)
 
     def __init__(out self, byte_width: Int, capacity: Int = 0):
         self._byte_width = byte_width
@@ -2142,30 +2253,30 @@ struct FixedSizeBinaryBuilder(Builder):
             )
         self.extend(arr.as_fixed_size_binary())
 
-    def extend(mut self, b: FixedSizeBinaryArray) raises:
-        if b.byte_width != self._byte_width:
+    def extend(mut self, arr: FixedSizeBinaryArray) raises:
+        if arr.byte_width != self._byte_width:
             raise TypeError(
                 t"FixedSizeBinaryBuilder.extend: byte_width mismatch "
-                t"{b.byte_width} vs {self._byte_width}"
+                t"{arr.byte_width} vs {self._byte_width}"
             )
-        self.reserve(b.length)
+        self.reserve(arr.length)
         var dst_start = self._length * self._byte_width
-        var src_start = b.offset * self._byte_width
-        var n_bytes = b.length * self._byte_width
+        var src_start = arr.offset * self._byte_width
+        var n_bytes = arr.length * self._byte_width
         for i in range(n_bytes):
             self._buffer.unsafe_set[DType.uint8](
-                dst_start + i, b.buffer.unsafe_get[DType.uint8](src_start + i)
+                dst_start + i, arr.buffer.unsafe_get[DType.uint8](src_start + i)
             )
-        if b.null_count() != 0:
-            if b.bitmap:
-                var bm = b.bitmap.value()
+        if arr.null_count() != 0:
+            if arr.bitmap:
+                var bm = arr.bitmap.value()
                 self._bitmap.extend(
-                    bm.view(b.offset, b.length), self._length, b.length
+                    bm.view(arr.offset, arr.length), self._length, arr.length
                 )
-            self._null_count += b.null_count()
+            self._null_count += arr.null_count()
         else:
-            self._bitmap.set_range(self._length, b.length, True)
-        self._length += b.length
+            self._bitmap.set_range(self._length, arr.length, True)
+        self._length += arr.length
 
     def finish(
         mut self, *, shrink_to_fit: Bool = True
@@ -2206,6 +2317,9 @@ struct BoolBuilder(Builder):
     var _null_count: Int
     var _bitmap: Bitmap[mut=True]
     var _buffer: Bitmap[mut=True]
+
+    def __init__(out self, *, like: BoolArray, capacity: Int = 0) raises:
+        self = Self(capacity)
 
     def __init__(out self, capacity: Int = 0):
         self._length = 0
@@ -2250,18 +2364,18 @@ struct BoolBuilder(Builder):
     def extend(mut self, arr: DynArray) raises:
         self.extend(arr.as_bool())
 
-    def extend(mut self, b: BoolArray) raises:
-        self.reserve(b.length)
-        self._buffer.extend(b.values(), self._length, b.length)
-        if b.null_count() != 0:
-            if b.bitmap:
+    def extend(mut self, arr: BoolArray) raises:
+        self.reserve(arr.length)
+        self._buffer.extend(arr.values(), self._length, arr.length)
+        if arr.null_count() != 0:
+            if arr.bitmap:
                 self._bitmap.extend(
-                    b.validity().value(), self._length, b.length
+                    arr.validity().value(), self._length, arr.length
                 )
-            self._null_count += b.null_count()
+            self._null_count += arr.null_count()
         else:
-            self._bitmap.set_range(self._length, b.length, True)
-        self._length += b.length
+            self._bitmap.set_range(self._length, arr.length, True)
+        self._length += arr.length
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> BoolArray:
         var n = self._length

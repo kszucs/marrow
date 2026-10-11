@@ -3217,7 +3217,6 @@ struct ChunkedArray(Copyable, Movable, Writable):
 
     def combine_chunks(var self) raises -> DynArray:
         """Combines all chunks into a single array."""
-        from .kernels.concat import concat
         from .builders import DynBuilder
 
         if len(self.chunks) == 0:
@@ -3228,7 +3227,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
             return builder.finish()
         if len(self.chunks) == 1:
             return self.chunks[0].copy()
-        return concat(self.chunks)
+        return DynBuilder.concat(self.chunks)
 
 
 # ---------------------------------------------------------------------------

@@ -111,7 +111,6 @@ from ..logical import (
 from .values import RuntimeValue
 from ..logical import Bindings
 from ...execution import ExecContext
-from ...kernels.concat import concat
 from std.memory import ArcPointer
 
 from ...kernels.groupby import Groups

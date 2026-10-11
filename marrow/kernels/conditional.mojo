@@ -30,12 +30,11 @@ Cross-checked against PyArrow ``pc.case_when``, ``pc.coalesce``,
 
 from ..arrays import DynArray, BoolArray, PrimitiveArray
 from ..scalars import DynScalar
-from ..builders import Int32Builder
+from ..builders import DynBuilder, Int32Builder
 from ..dtypes import PrimitiveType
 from .core import Kernel
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
-from .concat import concat
 from .filter import TakeKernel
 from .numeric import equal
 
@@ -115,7 +114,7 @@ struct Selection:
     def gather(mut self, ctx: ExecContext) raises -> DynArray:
         """Resolve every recorded decision: one `concat`, one `take`."""
         var length = self._length
-        var big = concat(self._candidates, ctx)
+        var big = DynBuilder.concat(self._candidates)
         var sel = self._sel.finish()
         var idx = Int32Builder(capacity=length)
         for i in range(length):

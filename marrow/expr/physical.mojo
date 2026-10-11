@@ -49,11 +49,10 @@ from ..buffers import Bitmap
 from ..scalars import ArrowScalar, DynScalar, NullScalar
 from std.builtin.rebind import downcast
 from std.utils import Variant
-from ..builders import Int32Builder, nulls
+from ..builders import DynBuilder, Int32Builder, nulls
 from ..dtypes import Field, field, null, struct_
 from ..kernels.aggregate import AggKernel, Windowable
 from ..kernels.conditional import case_when
-from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import TakeKernel, filter
 from ..kernels.groupby import Groups
@@ -592,7 +591,7 @@ struct Pipeline(Operator):
         # still a *well-formed* batch — `RecordBatch.empty` gives one
         # zero-length column per field, so anything walking columns by schema
         # index stays in bounds.
-        var result = _concat_batches(out, schema, ExecContext.serial())
+        var result = _concat_batches(out, schema)
         # Several morsels were concatenated, and that compacts sparse view
         # columns already; a single one is returned as it is, so its view
         # columns are compacted here -- a result must not keep the pages it
@@ -1045,7 +1044,7 @@ struct SortOperator(Operator):
         self._emitted = True
 
         var schema = Schema.from_dtype(self._batches[0].dtype)
-        var whole = _concat_batches(self._batches, schema, self._ctx)
+        var whole = _concat_batches(self._batches, schema)
 
         var order = Optional[Int32Array](None)
         for k in range(len(self._keys) - 1, -1, -1):
@@ -1157,9 +1156,7 @@ struct WindowOperator(Operator):
             return None
         self._emitted = True
 
-        var whole = _concat_batches(
-            self._batches, self._input_schema, self._ctx
-        )
+        var whole = _concat_batches(self._batches, self._input_schema)
         var n = len(whole)
 
         var columns = List[DynArray]()
@@ -1454,7 +1451,7 @@ struct JoinOperator(Operator):
                 parts.append(b.value().struct_array())
             else:
                 break
-        var side = _concat_batches(parts, self._build_schema.copy(), self._ctx)
+        var side = _concat_batches(parts, self._build_schema.copy())
         self._index = HashJoin[KeyHash](
             side, self._build_keys, self._ctx.copy()
         )
@@ -1508,9 +1505,7 @@ struct JoinOperator(Operator):
         self._ensure_built()
         if not self._blocks_on_probe_side():
             return None
-        var whole = _concat_batches(
-            self._buffered, self._probe_schema.copy(), self._ctx
-        )
+        var whole = _concat_batches(self._buffered, self._probe_schema.copy())
         return Datum(self._probe(whole).to_dyn())
 
 
@@ -1656,7 +1651,7 @@ def _struct_of(
 
 
 def _concat_batches(
-    batches: List[StructArray], schema: Schema, ctx: ExecContext
+    batches: List[StructArray], schema: Schema
 ) raises -> StructArray:
     """Join both phases need one contiguous side; this is where that happens.
 
@@ -1672,7 +1667,7 @@ def _concat_batches(
     var parts = List[DynArray](capacity=len(batches))
     for ref b in batches:
         parts.append(b.copy().to_dyn())
-    return concat(parts^, ctx).as_struct().copy()
+    return DynBuilder.concat(parts).as_struct().copy()
 
 
 struct ParquetScanOperator(Operator):
@@ -2258,7 +2253,9 @@ struct PerFrameEvaluator[V: Value](FrameEvaluator):
             which.append(Int32(len(answers) - 1))
             prev_lo = lo
             prev_hi = hi
-        return TakeKernel.dispatch(concat(answers^, ctx), which.finish(), ctx)
+        return TakeKernel.dispatch(
+            DynBuilder.concat(answers), which.finish(), ctx
+        )
 
 
 struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):

@@ -418,7 +418,7 @@ def concat_arrays(arrays):
     arrays = [a if isinstance(a, Array) else array(a) for a in arrays]
     if not arrays:
         raise ValueError("concat_arrays: needs at least one array")
-    return Array.wrap(_ma.concat([unwrap(a) for a in arrays], _serial()))
+    return Array.wrap(_ma.concat([unwrap(a) for a in arrays]))
 
 
 def concat_tables(tables):

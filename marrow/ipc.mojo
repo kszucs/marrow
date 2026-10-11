@@ -61,10 +61,8 @@ from .io import (
 )
 from .schema import Schema
 from .tabular import RecordBatch
-from .builders import Int32Builder
-from .kernels.concat import concat as _concat
+from .builders import DynBuilder
 from .kernels.hashing import KeyCompare
-from .kernels.filter import TakeKernel
 from .compress import (
     LibLz4Frame,
     LibZstd,
@@ -1926,16 +1924,15 @@ struct _BatchEncoder(Movable):
         field on the wire. The encoder writes whole value buffers under the
         slice's declared length and the decoder hardcodes `offset=0`, so a
         sliced column would round-trip as the parent's *first* `length`
-        elements. Gathering `0..n` produces a dense copy for every layout,
-        nested children included, and is paid only when `offset != 0`.
+        elements. A builder copies the slice densely for every layout, nested
+        children included, and is paid only when `offset != 0`.
         """
         var data = arr.to_data()
         if data.offset == 0:
             return data^
-        var idx = Int32Builder(capacity=len(arr))
-        for i in range(len(arr)):
-            idx.append(Int32(i))
-        return TakeKernel.dispatch(arr, idx.finish()).to_data()
+        var b = DynBuilder(arr.dtype(), len(arr))
+        b.extend(arr)
+        return b.finish().to_data()
 
     def write_array(mut self, root: ArrayData) raises:
         var stack = List[ArrayData]()
@@ -2663,7 +2660,7 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
                         var merged = List[DynArray]()
                         merged.append(dict_values[dict_id].copy())
                         merged.append(values^)
-                        dict_values[dict_id] = _concat(merged)
+                        dict_values[dict_id] = DynBuilder.concat(merged)
                     else:
                         dict_values[dict_id] = values^
             elif Int(header_type) == Int(_HEADER_RECORD_BATCH):

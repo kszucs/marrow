@@ -16,6 +16,7 @@ in the file that performs it.
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import BoolArray, DynArray
+from marrow.builders import DynBuilder
 from marrow.scalars import BoolScalar
 from marrow.errors import InvalidError
 from marrow.dtypes import DynType, bool_, int32
@@ -235,13 +236,13 @@ def _divide(
     return out^
 
 
-def _concat(arrays: PythonObject, ctx: PythonObject) raises -> PythonObject:
+def _concat(arrays: PythonObject) raises -> PythonObject:
     """Concatenate arrays of one dtype into a single array."""
     var n = Int(py=arrays.__len__())
     var out = List[DynArray](capacity=n)
     for i in range(n):
         out.append(DynArray(py=arrays[i]))
-    return mk.concat(out, ExecContext(py=ctx)).to_python_object()
+    return DynBuilder.concat(out).to_python_object()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

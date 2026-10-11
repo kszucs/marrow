@@ -8,7 +8,7 @@ from std.testing import (
     assert_raises,
 )
 
-from ...arrays import (
+from ..arrays import (
     DictionaryArray,
     DynArray,
     PrimitiveArray,
@@ -19,8 +19,10 @@ from ...arrays import (
     StructArray,
     ChunkedArray,
 )
-from ...builders import (
+from ..builders import (
     array,
+    BoolBuilder,
+    DynBuilder,
     arange,
     PrimitiveBuilder,
     BinaryLikeBuilder,
@@ -32,9 +34,8 @@ from ...builders import (
     Int32Builder,
     Float32Builder,
 )
-from ...dtypes import *
-from ...kernels.cast import decode_dictionary
-from ...kernels.concat import concat
+from ..dtypes import *
+from ..kernels.cast import decode_dictionary
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ def test_concat_primitive() raises:
         array([1, 2], int32),
         array([3, 4, 5], int32),
     ]
-    var tmp = concat(arrs)
+    var tmp = DynBuilder.concat(arrs)
     ref result = tmp.as_int32()
     assert_equal(result.length, 5)
     assert_equal(result[0].value(), 1)
@@ -59,7 +60,7 @@ def test_concat_primitive() raises:
 
 def test_concat_single() raises:
     var arrs: List[DynArray] = [array([10, 20, 30], int32)]
-    var tmp = concat(arrs)
+    var tmp = DynBuilder.concat(arrs)
     ref result = tmp.as_int32()
     assert_equal(result.length, 3)
     assert_equal(result[0].value(), 10)
@@ -69,7 +70,7 @@ def test_concat_single() raises:
 def test_concat_empty_list_raises() raises:
     var arrs = List[DynArray]()
     with assert_raises():
-        _ = concat(arrs)
+        _ = DynBuilder.concat(arrs)
 
 
 def test_concat_with_nulls() raises:
@@ -84,7 +85,7 @@ def test_concat_with_nulls() raises:
         b1.finish().to_dyn(),
         b2.finish().to_dyn(),
     ]
-    var tmp_with_nulls = concat(arrs)
+    var tmp_with_nulls = DynBuilder.concat(arrs)
     ref result = tmp_with_nulls.as_int32()
     assert_equal(result.length, 5)
     assert_equal(result.null_count(), 2)
@@ -104,7 +105,7 @@ def test_concat_with_offset() raises:
     var s1 = a.slice(1, 3)  # [1, 2, 3], offset=1
     var s2 = a.slice(4, 1)  # [4], offset=4
     var arrs: List[DynArray] = [s1^, s2^]
-    var tmp_offset = concat(arrs)
+    var tmp_offset = DynBuilder.concat(arrs)
     ref result = tmp_offset.as_int32()
     assert_equal(result.length, 4)
     assert_equal(result[0].value(), 1)
@@ -124,7 +125,7 @@ def test_concat_with_offset_and_nulls() raises:
         (sliced^).to_dyn(),
         array([4], int32),
     ]
-    var tmp_offset_nulls = concat(arrs)
+    var tmp_offset_nulls = DynBuilder.concat(arrs)
     ref result = tmp_offset_nulls.as_int32()
     assert_equal(result.length, 3)
     assert_equal(result.null_count(), 1)
@@ -145,7 +146,7 @@ def test_concat_bool() raises:
         array([True, False, True]).to_dyn(),
         array([False, True]).to_dyn(),
     ]
-    var tmp_bool = concat(arrs)
+    var tmp_bool = DynBuilder.concat(arrs)
     ref result = tmp_bool.as_bool()
     assert_equal(result.length, 5)
     assert_true(result[0].value())
@@ -160,7 +161,7 @@ def test_concat_bool_with_offset() raises:
     var a = array([True, False, True, False])
     var sliced = a.slice(1, 3)
     var arrs: List[DynArray] = [(sliced^).to_dyn(), array([True]).to_dyn()]
-    var tmp_bool_offset = concat(arrs)
+    var tmp_bool_offset = DynBuilder.concat(arrs)
     ref result = tmp_bool_offset.as_bool()
     assert_equal(result.length, 4)
     assert_false(result[0].value())
@@ -184,7 +185,7 @@ def test_concat_string() raises:
         s1.finish().to_dyn(),
         s2.finish().to_dyn(),
     ]
-    var tmp_str = concat(arrs)
+    var tmp_str = DynBuilder.concat(arrs)
     ref result = tmp_str.as_string()
     assert_equal(result.length, 3)
     assert_equal(result[0].to_string(), "hello")
@@ -203,7 +204,7 @@ def test_concat_string_with_nulls() raises:
         s1.finish().to_dyn(),
         s2.finish().to_dyn(),
     ]
-    var tmp_str_nulls = concat(arrs)
+    var tmp_str_nulls = DynBuilder.concat(arrs)
     ref result = tmp_str_nulls.as_string()
     assert_equal(result.length, 4)
     assert_equal(result.null_count(), 1)
@@ -243,7 +244,7 @@ def test_concat_list() raises:
         lb1.finish().to_dyn(),
         lb2.finish().to_dyn(),
     ]
-    var tmp_list = concat(arrs)
+    var tmp_list = DynBuilder.concat(arrs)
     ref result = tmp_list.as_list()
     assert_equal(result.length, 3)
     var raw_elem0 = result[0].value()
@@ -279,7 +280,7 @@ def test_concat_list_with_nulls() raises:
         lb1.finish().to_dyn(),
         lb2.finish().to_dyn(),
     ]
-    var tmp_list_nulls = concat(arrs)
+    var tmp_list_nulls = DynBuilder.concat(arrs)
     ref result = tmp_list_nulls.as_list()
     assert_equal(result.length, 3)
     assert_equal(result.null_count(), 1)
@@ -319,7 +320,7 @@ def test_concat_fixed_size_list() raises:
         fsl1.finish().to_dyn(),
         fsl2.finish().to_dyn(),
     ]
-    var tmp_fsl = concat(arrs)
+    var tmp_fsl = DynBuilder.concat(arrs)
     ref result = tmp_fsl.as_fixed_size_list()
     assert_equal(result.length, 3)
     var raw_fsl_elem0 = result[0].value()
@@ -358,7 +359,7 @@ def test_concat_fixed_size_list_with_offset() raises:
         (sliced^).to_dyn(),
         fsl2.finish().to_dyn(),
     ]
-    var tmp_fsl_offset = concat(arrs)
+    var tmp_fsl_offset = DynBuilder.concat(arrs)
     ref result = tmp_fsl_offset.as_fixed_size_list()
     assert_equal(result.length, 3)
     var raw_fsl_off_elem0 = result[0].value()
@@ -397,7 +398,7 @@ def test_concat_struct() raises:
         sb1.finish().to_dyn(),
         sb2.finish().to_dyn(),
     ]
-    var tmp_struct = concat(arrs)
+    var tmp_struct = DynBuilder.concat(arrs)
     ref result = tmp_struct.as_struct()
     assert_equal(result.length, 3)
     ref id_data = result.unsafe_get("id")
@@ -458,7 +459,7 @@ def _assert_bytes_concat[T: BinaryLikeType]() raises:
         _bytes_array[T](["ccc"]),
         _bytes_array[T](["", "dddd"]),
     ]
-    var result = concat(arrs)
+    var result = DynBuilder.concat(arrs)
     ref r = result.as_binary_like[T]()
     assert_equal(r.length, 5)
     assert_equal(r[0].to_string(), "a")
@@ -485,7 +486,7 @@ def test_concat_binary_with_nulls() raises:
     b.append_null()
     b.append("y")
     var arrs: List[DynArray] = [a.finish(), b.finish()]
-    var result = concat(arrs)
+    var result = DynBuilder.concat(arrs)
     ref r = result.as_binary_like[BinaryType]()
     assert_equal(r.length, 4)
     assert_equal(r.null_count(), 2)
@@ -511,8 +512,8 @@ def test_combine_chunks_binary() raises:
     assert_equal(r[2].to_string(), "r")
 
 
-from ...arrays import StringViewArray
-from ...builders import StringViewBuilder
+from ..arrays import StringViewArray
+from ..builders import StringViewBuilder
 
 
 def test_concat_string_view() raises:
@@ -530,7 +531,7 @@ def test_concat_string_view() raises:
     var arrs = List[DynArray]()
     arrs.append(a1^.to_dyn())
     arrs.append(a2.slice(1).to_dyn())
-    var out = concat(arrs)
+    var out = DynBuilder.concat(arrs)
     ref v = out.as_string_view()
     assert_equal(len(v), 4)
     assert_equal(v.null_count(), 1)
@@ -556,7 +557,7 @@ def test_concat_dictionaries_with_different_dictionaries() raises:
         array[Int32Type]([0, 1, None, 0], int32), array(["x", "y"])
     )
     var b = DictionaryArray.from_arrays(array([1, 0], int32), array(["z", "x"]))
-    var out = concat([a^.to_dyn(), b^.to_dyn()])
+    var out = DynBuilder.concat([a^.to_dyn(), b^.to_dyn()])
     assert_true(out.dtype().is_dictionary())
     assert_equal(len(out), 6)
     assert_equal(
@@ -572,7 +573,9 @@ def test_concat_dictionaries_sharing_a_dictionary() raises:
     var whole = DictionaryArray.from_arrays(
         array([2, 0, 1, 2], int32), array(["p", "q", "r"])
     )
-    var out = concat([whole.slice(0, 2).to_dyn(), whole.slice(2, 2).to_dyn()])
+    var out = DynBuilder.concat(
+        [whole.slice(0, 2).to_dyn(), whole.slice(2, 2).to_dyn()]
+    )
     assert_equal(
         String(decode_dictionary(out.as_dictionary())),
         String(array(["r", "p", "q", "r"])),
@@ -597,4 +600,57 @@ def test_concat_dictionaries_beyond_their_index_type_raise() raises:
             )
         )
     with assert_raises(contains="do not fit its index type"):
-        _ = concat(parts)
+        _ = DynBuilder.concat(parts)
+
+
+# ---------------------------------------------------------------------------
+# typed concat — the builder of the arrays' own type
+# ---------------------------------------------------------------------------
+
+
+def test_concat_typed_primitive() raises:
+    var whole = array([1, 2, 3, 4, 5], int32)
+    var parts: List[PrimitiveArray[Int32Type]] = [
+        whole.slice(0, 2),
+        whole.slice(2, 3),
+    ]
+    assert_true(Int32Builder.concat(parts) == whole)
+
+
+def test_concat_typed_bool() raises:
+    var parts: List[BoolArray] = [
+        array([True, False]),
+        array([False, True, True]),
+    ]
+    var out = BoolBuilder.concat(parts)
+    assert_true(out == array([True, False, False, True, True]))
+
+
+def test_concat_typed_string() raises:
+    var parts: List[StringArray] = [
+        array(["a", "bc"]),
+        array(["", "def"]),
+    ]
+    var out = StringBuilder.concat(parts)
+    assert_true(out == array(["a", "bc", "", "def"]))
+
+
+def test_concat_typed_struct() raises:
+    # The nested builders are built for the first array's dtype.
+    var parts = List[StructArray]()
+    for start in range(2):
+        var sb = StructBuilder([field("id", int32)])
+        sb.field_builder(0).as_int32().append(Int32(start * 10))
+        sb.field_builder(0).as_int32().append(Int32(start * 10 + 1))
+        sb.append_valid()
+        sb.append_valid()
+        parts.append(sb.finish())
+    var out = StructBuilder.concat(parts)
+    assert_equal(len(out), 4)
+    ref ids = out.unsafe_get("id").as_int32()
+    assert_true(ids == array([0, 1, 10, 11], int32))
+
+
+def test_concat_typed_empty_list_raises() raises:
+    with assert_raises(contains="empty list"):
+        _ = Int32Builder.concat(List[PrimitiveArray[Int32Type]]())
