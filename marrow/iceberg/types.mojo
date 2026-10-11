@@ -37,6 +37,7 @@ id under `FIELD_ID_KEY`, and their names are the ones pyiceberg gives them —
 from emberjson import Value as Json
 
 from ..dtypes import (
+    Decimal128Type,
     DecimalType,
     DynType,
     Field,
@@ -74,7 +75,7 @@ from .document import (
 comptime UUID_BYTES = 16
 """How many bytes an Iceberg `uuid` holds."""
 
-comptime MAX_DECIMAL_PRECISION = 38
+comptime MAX_DECIMAL_PRECISION = Decimal128Type.max_precision
 """The most digits an Iceberg `decimal(P, S)` may declare."""
 
 

@@ -46,7 +46,7 @@ def _round_trip(value: DynScalar, expected: List[UInt8]) raises:
     assert_true(encode_bound(decoded) == expected)
 
 
-def _decimal(unscaled: Int, precision: Int, scale: Int) -> DynScalar:
+def _decimal(unscaled: Int, precision: Int, scale: Int) raises -> DynScalar:
     return PrimitiveScalar[Decimal128Type](
         Int128(unscaled), decimal128(precision, scale)
     )
@@ -176,11 +176,13 @@ def test_iceberg_bound_wrong_length() raises:
     with assert_raises(contains="CorruptError"):
         _ = decode_bound(fixed_size_binary_(16), Span(three))
     var empty = List[UInt8]()
+    var narrow = decimal128(9, 2)
     with assert_raises(contains="CorruptError"):
-        _ = decode_bound(decimal128(9, 2), Span(empty))
+        _ = decode_bound(narrow, Span(empty))
     var seventeen = List[UInt8](length=17, fill=0)
+    var wide = decimal128(38, 2)
     with assert_raises(contains="CorruptError"):
-        _ = decode_bound(decimal128(38, 2), Span(seventeen))
+        _ = decode_bound(wide, Span(seventeen))
 
 
 def test_iceberg_bound_rejects() raises:

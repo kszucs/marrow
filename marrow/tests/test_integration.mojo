@@ -148,6 +148,17 @@ def test_integration_json_time_width_must_match_its_unit() raises:
     )
 
 
+def test_integration_json_decimal_precision_must_fit_its_width() raises:
+    _raises(
+        (
+            '{"schema": {"fields": [{"name": "d", "nullable": true, "type":'
+            ' {"name": "decimal", "precision": 39, "scale": 2, "bitWidth":'
+            ' 128}, "children": []}]}}'
+        ),
+        "precision 39 is outside 1..38",
+    )
+
+
 def test_integration_json_union_is_not_supported() raises:
     _raises(
         (

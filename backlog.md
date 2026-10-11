@@ -787,8 +787,8 @@ decimal wider than its storage overruns `BigEndian.signed`
 (`parquet/schema.mojo:789`); a bare `repeated` field reads one row per element
 (`parquet/schema.mojo:1027`); `tiles_chunk` accepts a negative page size
 (`parquet/format.mojo:1318`); a short `row_selections` drops trailing rows
-(`parquet/reader.mojo:3033`); IPC maps unknown int, decimal and time
-`bitWidth`s to a default where C Data refuses (`ipc.mojo:1675`); the
+(`parquet/reader.mojo:3033`); IPC maps an unknown int
+`bitWidth` to a default where C Data refuses (`ipc.mojo:1675`); the
 DELTA_BINARY_PACKED header's miniblock layout is not validated
 (`codecs/delta_binary_packed.mojo:114`); the codec cascades `reserve` an
 unvalidated count (`codecs/core.mojo:292`); `integration.binary()` writes at a
@@ -809,7 +809,6 @@ touches a kernel or the expression layer on `pixi run bench-size-check`.
 | Move `JoinOrder`/`PlannedJoin` beside `JoinRules`; `valid_min_max` into `kernels/aggregate`; `assert_values_equal` out of `utils/testing.mojo` | `expr/physical.mojo:2368`, `expr/estimates.mojo:37`, `utils/testing.mojo:36` | plan data in the physical layer, the cost model on the Parquet layer, utils on kernels |
 | One compression dispatch for Parquet, IPC and Avro; drop `CompressionLibs._sz` | `parquet/codecs.mojo`, `ipc.mojo:197`, `avro/file.mojo:51` | snappy is native in Avro and `dlopen`ed in Parquet; Avro decompresses zstd through libzstd and compresses natively |
 | Merge Parquet's flat `LeafBuilder` and leveled `LeveledSink` families into one per-type decode step | `parquet/reader.mojo:669-1965` | two copies of every encoding per physical type, with different bounds checks |
-| One dtype <-> wire table (time units, decimal precision per width) for C Data, IPC, archery JSON, Parquet, Avro and Iceberg | the six format modules | six ladders, two of them duplicated inside `c_data.mojo` and `ipc.mojo` |
 | Move `RecordBatch.join`/`sort_by` and `ChunkedArray.combine_chunks` out of the core layer | `tabular.mojo`, `arrays.mojo` | core imports `kernels.join`, `sort`, `concat`; `execution.mojo:7` still claims the edge is gone |
 
 Smaller duplicates, each a free helper: three bounds-checked byte cursors
@@ -843,6 +842,33 @@ variant cause, "ten arms" in `DynRelation._dispatch` (16), `uri` under
 `sql.mojo`; in code, `numeric.mojo:33` recommends the offset-unaware
 `Bitmap.intersect`, `_common_type` is called symmetric, and
 `optimizer.mojo:1987` lists rules that exist as deliberately absent.
+
+### 1.16 Format type mappings — what is still written per format
+
+A decimal type now refuses, at construction, a precision its width cannot
+hold, so every format that builds one checks it. Still written per format:
+
+- **What counts as UTC disagrees four ways.** Parquet treats any non-empty
+  timezone as UTC (`_set_leaf_physical`), Avro treats only `""` as local,
+  Iceberg's `_is_utc` accepts `UTC`/`Etc/UTC`/`Z`/`+00:00`, and
+  `WallClock.is_utc` accepts `""`/`UTC`/`Etc/UTC`/`Z`. Parquet and Avro are
+  right to call any zoned column an instant; Iceberg's and the kernels' sets
+  are the two that should agree and do not (`+00:00`, `""`).
+- **Unit spellings and the time width.** C Data reads its letters through a
+  private table; archery JSON (`SECOND`, …), Avro (`millis`, …) and Iceberg
+  (`_ns`) keep ladders, and C Data, IPC and archery JSON each pick time32 or
+  time64 from the unit.
+- **The decimal width ladder** (32/64/128/256 from a runtime bit width) is
+  written in C Data, IPC and archery JSON.
+- **Parquet's unit ladders** (`_time_unit`, `_set_leaf_physical`) stay hand
+  written: its Thrift ids start at milliseconds and `-1` means absent, so a
+  four-entry table would need a sentinel that reads back as a unit.
+- **Integer and float width ladders** in C Data and IPC — three copies in IPC
+  alone (field, dictionary index, writer).
+- **`parquet/statistics.mojo` restates physical widths by hand** where
+  `physical_type` and `flba_width` already compute them.
+- **The Parquet writer stores decimal128/256 as full 16/32-byte FLBA**; PyArrow
+  writes `fixed_decimal_size(precision)` bytes. The reader accepts both.
 
 ## 2. Missing capabilities, in detail
 

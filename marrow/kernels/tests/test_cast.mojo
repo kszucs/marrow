@@ -1019,23 +1019,26 @@ def test_cast_map_casts_the_entry_values() raises:
 def test_cast_float_to_decimal_overflow_raises_under_safe() raises:
     """1e38 scaled by 10^2 is 1e40, far outside int128."""
     var f: DynArray = array([1.0e38], float64)
+    var dec = decimal128(38, 2)
     with assert_raises():
-        _ = cast(f, decimal128(38, 2), safe=True)
+        _ = cast(f, dec, safe=True)
 
 
 def test_cast_decimal_upscale_overflow_raises_under_safe() raises:
     """12345 at scale 6 is 12_345_000_000, past decimal32's int32 backing."""
     var i: DynArray = array([12345], int64)
+    var dec = decimal32(9, 6)
     with assert_raises():
-        _ = cast(i, decimal32(9, 6), safe=True)
+        _ = cast(i, dec, safe=True)
 
 
 def test_cast_decimal_downscale_truncation_raises_under_safe() raises:
     """1.234 at scale 3 cannot be held at scale 1 — the `34` is discarded."""
     var f: DynArray = array([1.234], float64)
     var d3 = cast(f, decimal64(18, 3), safe=False)
+    var d1 = decimal64(18, 1)
     with assert_raises():
-        _ = cast(d3, decimal64(18, 1), safe=True)
+        _ = cast(d3, d1, safe=True)
 
 
 def test_cast_decimal_downscale_exact_passes_under_safe() raises:
@@ -1321,8 +1324,9 @@ def test_decimal_cast_past_target_precision_raises() raises:
     # 7 digits into a declared precision of 5. delta == 0, so every
     # storage-width check passes and only the digit bound can catch it.
     var wide = cast(array([1_000_000], int64), decimal128(38, 0))
+    var narrow = decimal128(5, 0)
     with assert_raises():
-        _ = cast(wide, decimal128(5, 0), True)
+        _ = cast(wide, narrow, True)
 
 
 def test_decimal_cast_within_target_precision_passes() raises:

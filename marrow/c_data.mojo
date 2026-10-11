@@ -23,6 +23,8 @@ import std.math as math
 
 from max.gpu.host import DeviceContext
 from .dtypes import (
+    DecimalType,
+    TimeUnit,
     ArrayLayout,
     DynType,
     Field,
@@ -55,11 +57,9 @@ from .dtypes import (
     binary_view,
     string_view,
     microsecond,
-    millisecond,
     month_day_nano_interval,
     nanosecond,
     null,
-    second,
     string,
     struct_,
     time32,
@@ -252,6 +252,57 @@ def _decode_c_metadata(
         head += Int(v_len)
         result[k^] = v^
     return result^
+
+
+@fieldwise_init
+struct _UnitNames(ImplicitlyCopyable):
+    """What a format string calls each `TimeUnit`, read in both directions."""
+
+    var second: StaticString
+    var millisecond: StaticString
+    var microsecond: StaticString
+    var nanosecond: StaticString
+
+    def _names(self) -> Array[StaticString, 4]:
+        return [
+            self.second,
+            self.millisecond,
+            self.microsecond,
+            self.nanosecond,
+        ]
+
+    def name(self, unit: TimeUnit) -> StaticString:
+        return self._names()[unit.value]
+
+    def unit(self, name: StringSlice) -> Optional[TimeUnit]:
+        var names = self._names()
+        for i in range(4):
+            if names[i] == name:
+                return TimeUnit(i)
+        return None
+
+
+comptime _TIME = _UnitNames("tts", "ttm", "ttu", "ttn")
+comptime _TIMESTAMP = _UnitNames("tss", "tsm", "tsu", "tsn")
+comptime _DURATION = _UnitNames("tDs", "tDm", "tDu", "tDn")
+
+
+def _unit_type(fmt: StringSlice) raises NotImplementedError -> DynType:
+    """The time, timestamp or duration type format string `fmt` names."""
+    var time = _TIME.unit(fmt)
+    if time:
+        var unit = time.value()
+        if unit == microsecond or unit == nanosecond:
+            return time64(unit)
+        return time32(unit)
+    var dur = _DURATION.unit(fmt)
+    if dur:
+        return duration(dur.value())
+    if fmt.byte_length() >= 4 and fmt[byte=3] == ":":
+        var ts = _TIMESTAMP.unit(fmt[byte=:3])
+        if ts:
+            return timestamp(ts.value(), String(fmt[byte=4:]))
+    raise NotImplementedError(t"Unknown format: {fmt}")
 
 
 def _format_int(fmt: StringSlice, text: StringSlice) raises InvalidError -> Int:
@@ -493,57 +544,30 @@ struct CArrowSchema(Copyable, Movable):
         elif dtype.is_date64():
             fmt = "tdm"
         elif dtype.is_time32():
-            var u = dtype.as_time32().unit
-            if u == second:
-                fmt = "tts"
-            else:
-                fmt = "ttm"
+            fmt = _TIME.name(dtype.as_time32().unit)
         elif dtype.is_time64():
-            var u = dtype.as_time64().unit
-            if u == microsecond:
-                fmt = "ttu"
-            else:
-                fmt = "ttn"
+            fmt = _TIME.name(dtype.as_time64().unit)
         elif dtype.is_timestamp():
             ref ts = dtype.as_timestamp()
-            var uc: String
-            if ts.unit == second:
-                uc = "s"
-            elif ts.unit == millisecond:
-                uc = "m"
-            elif ts.unit == microsecond:
-                uc = "u"
-            else:
-                uc = "n"
-            fmt = {"ts", uc, ":", ts.timezone}
+            fmt = {_TIMESTAMP.name(ts.unit), ":", ts.timezone}
         elif dtype.is_duration():
-            var u = dtype.as_duration().unit
-            if u == second:
-                fmt = "tDs"
-            elif u == millisecond:
-                fmt = "tDm"
-            elif u == microsecond:
-                fmt = "tDu"
-            else:
-                fmt = "tDn"
+            fmt = _DURATION.name(dtype.as_duration().unit)
         elif dtype.is_year_month_interval():
             fmt = "tiM"
         elif dtype.is_day_time_interval():
             fmt = "tiD"
         elif dtype.is_month_day_nano_interval():
             fmt = "tin"
-        elif dtype.is_decimal32():
-            ref d = dtype.as_decimal32()
-            fmt = {"d:", d.precision(), ",", d.scale(), ",32"}
-        elif dtype.is_decimal64():
-            ref d = dtype.as_decimal64()
-            fmt = {"d:", d.precision(), ",", d.scale(), ",64"}
-        elif dtype.is_decimal128():
-            ref d = dtype.as_decimal128()
-            fmt = {"d:", d.precision(), ",", d.scale()}
-        elif dtype.is_decimal256():
-            ref d = dtype.as_decimal256()
-            fmt = {"d:", d.precision(), ",", d.scale(), ",256"}
+        elif dtype.is_decimal():
+
+            def decimal[T: DecimalType](d: T) raises {} -> String:
+                var fmt = String(t"d:{d.precision()},{d.scale()}")
+                # decimal128 keeps the legacy form, which has no width.
+                if d.bit_width() != 128:
+                    fmt += String(",", d.bit_width())
+                return fmt^
+
+            fmt = dtype.dispatch_decimal(decimal)
         elif dtype.is_struct():
             fmt = "+s"
             ref st = dtype.as_struct()
@@ -882,38 +906,10 @@ struct CArrowSchema(Copyable, Movable):
             return date32()
         elif fmt == "tdm":
             return date64()
-        elif fmt == "tts":
-            return time32(second)
-        elif fmt == "ttm":
-            return time32(millisecond)
-        elif fmt == "ttu":
-            return time64(microsecond)
-        elif fmt == "ttn":
-            return time64(nanosecond)
-        elif fmt.startswith("tss:"):
-            return timestamp(
-                second, String(String(fmt).removeprefix("tss:"))
-            ).to_dyn()
-        elif fmt.startswith("tsm:"):
-            return timestamp(
-                millisecond, String(String(fmt).removeprefix("tsm:"))
-            ).to_dyn()
-        elif fmt.startswith("tsu:"):
-            return timestamp(
-                microsecond, String(String(fmt).removeprefix("tsu:"))
-            ).to_dyn()
-        elif fmt.startswith("tsn:"):
-            return timestamp(
-                nanosecond, String(String(fmt).removeprefix("tsn:"))
-            ).to_dyn()
-        elif fmt == "tDs":
-            return duration(second)
-        elif fmt == "tDm":
-            return duration(millisecond)
-        elif fmt == "tDu":
-            return duration(microsecond)
-        elif fmt == "tDn":
-            return duration(nanosecond)
+        elif (
+            fmt.startswith("tt") or fmt.startswith("ts") or fmt.startswith("tD")
+        ):
+            return _unit_type(fmt)
         elif fmt == "tiM":
             return year_month_interval()
         elif fmt == "tiD":
@@ -950,33 +946,17 @@ struct CArrowSchema(Copyable, Movable):
             var bit_width = 128  # default for legacy format without bitwidth
             if len(parts) == 3:
                 bit_width = _format_int(fmt, parts[2])
-            # The largest precision each width holds, as Arrow C++'s
-            # `Decimal*Type::Make` checks it.
-            var max_precision: Int
-            if bit_width == 32:
-                max_precision = 9
-            elif bit_width == 64:
-                max_precision = 18
-            elif bit_width == 128:
-                max_precision = 38
-            elif bit_width == 256:
-                max_precision = 76
-            else:
-                raise InvalidError(
-                    t"c_data: unsupported decimal bit width in '{fmt}'"
-                )
-            if precision < 1 or precision > max_precision:
-                raise InvalidError(
-                    t"c_data: decimal precision out of range in '{fmt}'"
-                )
             if bit_width == 32:
                 return decimal32(precision, scale)
             elif bit_width == 64:
                 return decimal64(precision, scale)
+            elif bit_width == 128:
+                return decimal128(precision, scale)
             elif bit_width == 256:
                 return decimal256(precision, scale)
-            else:
-                return decimal128(precision, scale)
+            raise InvalidError(
+                t"c_data: unsupported decimal bit width in '{fmt}'"
+            )
         else:
             raise NotImplementedError(t"Unknown format: {fmt}")
 

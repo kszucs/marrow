@@ -794,7 +794,7 @@ struct SchemaMapping(Movable):
                 return dt.decimal32(el.precision, el.scale)
             elif pt == PhysicalType.INT64:
                 return dt.decimal64(el.precision, el.scale)
-            elif el.precision <= 38:
+            elif el.precision <= dt.Decimal128Type.max_precision:
                 return dt.decimal128(el.precision, el.scale)
             else:
                 return dt.decimal256(el.precision, el.scale)
@@ -1271,24 +1271,22 @@ struct SchemaMapping(Movable):
         elif dtype.is_decimal():
             el.converted_type = ConvertedType.DECIMAL
             el.logical_type = LogicalType.DECIMAL
-            if dtype.is_decimal32():
+
+            def decimal[
+                T: dt.DecimalType
+            ](d: T) raises {} -> Tuple[Int, Int, Int]:
+                return (d.byte_width(), d.precision(), d.scale())
+
+            var width, precision, scale = dtype.dispatch_decimal(decimal)
+            el.precision = precision
+            el.scale = scale
+            if width == 4:
                 el.type = PhysicalType.INT32
-                el.precision = dtype.as_decimal32().precision()
-                el.scale = dtype.as_decimal32().scale()
-            elif dtype.is_decimal64():
+            elif width == 8:
                 el.type = PhysicalType.INT64
-                el.precision = dtype.as_decimal64().precision()
-                el.scale = dtype.as_decimal64().scale()
-            elif dtype.is_decimal128():
-                el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
-                el.type_length = 16
-                el.precision = dtype.as_decimal128().precision()
-                el.scale = dtype.as_decimal128().scale()
             else:
                 el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
-                el.type_length = 32
-                el.precision = dtype.as_decimal256().precision()
-                el.scale = dtype.as_decimal256().scale()
+                el.type_length = width
         elif dtype.is_float16():
             # FLOAT16 is a FIXED_LEN_BYTE_ARRAY(2) holding the IEEE half bits.
             el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY

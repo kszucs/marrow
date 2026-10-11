@@ -39,6 +39,8 @@ resolution.
 """
 
 from ..dtypes import (
+    Decimal128Type,
+    DecimalType,
     FIELD_ID_KEY,
     DynType,
     Field,
@@ -163,15 +165,18 @@ def decimal_type(schema: AvroSchema) raises -> Optional[DynType]:
     var s = schema.scale
     if p < 1 or s < 0 or s > p:
         return None
-    if schema.kind == AvroKind.FIXED and p > _max_precision(schema.size):
+    # How many bytes a precision needs does not depend on the width.
+    if (
+        schema.kind == AvroKind.FIXED
+        and decimal256(p, s).fixed_size() > schema.size
+    ):
         return None
-    if p <= 38:
-        return decimal128(p, s).to_dyn()
-    if p <= 76:
+    try:
+        if p <= Decimal128Type.max_precision:
+            return decimal128(p, s).to_dyn()
         return decimal256(p, s).to_dyn()
-    raise NotImplementedError(
-        t"avro: decimal precision {p} exceeds Arrow's 76 digits"
-    )
+    except e:
+        raise NotImplementedError(t"avro: {e.message()}")
 
 
 def arrow_type(schema: AvroSchema) raises -> DynType:
@@ -266,32 +271,6 @@ def _map_type(var key: Field, var value: Field) -> DynType:
     ).to_dyn()
 
 
-def _precision_scale(dtype: DynType) -> Tuple[Int, Int]:
-    """A decimal128 or decimal256 type's precision and scale."""
-    if dtype.is_decimal128():
-        ref d = dtype.as_decimal128()
-        return (d.precision(), d.scale())
-    ref d = dtype.as_decimal256()
-    return (d.precision(), d.scale())
-
-
-def _max_precision(size: Int) -> Int:
-    """The most decimal digits a `size`-byte two's-complement integer holds:
-    floor(log10(2^(8 size - 1) - 1))."""
-    if size <= 0:
-        return 0
-    return Int(Float64(8 * size - 1) * 0.30102999566398120)
-
-
-def _min_bytes(precision: Int) -> Int:
-    """The fewest bytes whose two's complement holds every `precision`-digit
-    integer -- the `fixed` size Iceberg requires of a decimal."""
-    var n = 1
-    while _max_precision(n) < precision:
-        n += 1
-    return n
-
-
 # ---------------------------------------------------------------------------
 # Arrow -> Avro
 # ---------------------------------------------------------------------------
@@ -361,12 +340,15 @@ def _from_type(f: Field, namespace: String) raises -> AvroSchema:
             logical=("local-timestamp-" if local else "timestamp-") + unit,
         )
     elif dt.is_decimal128() or dt.is_decimal256():
-        var p, sc = _precision_scale(dt)
-        var s = AvroSchema.fixed(path, _min_bytes(p))
-        s.logical = "decimal"
-        s.precision = p
-        s.scale = sc
-        return s^
+
+        def fixed[T: DecimalType](d: T) raises {imm} -> AvroSchema:
+            var s = AvroSchema.fixed(path, d.fixed_size())
+            s.logical = "decimal"
+            s.precision = d.precision()
+            s.scale = d.scale()
+            return s^
+
+        return dt.dispatch_decimal(fixed)
     elif dt.is_month_day_nano_interval():
         var s = AvroSchema.fixed(path, 12)
         s.logical = "duration"
@@ -445,7 +427,13 @@ def writes_as(dtype: DynType, avro: AvroSchema) raises -> Bool:
     if (dtype.is_decimal128() or dtype.is_decimal256()) and (
         expected.is_decimal128() or expected.is_decimal256()
     ):
-        return _precision_scale(dtype) == _precision_scale(expected)
+
+        def digits[T: DecimalType](d: T) raises {} -> Tuple[Int, Int]:
+            return (d.precision(), d.scale())
+
+        return dtype.dispatch_decimal(digits) == expected.dispatch_decimal(
+            digits
+        )
     return dtype == expected
 
 

@@ -203,6 +203,15 @@ trait DecimalType(PrimitiveType):
         """How many of those digits follow the decimal point."""
         ...
 
+    def fixed_size(self) -> Int:
+        """The fewest bytes whose two's complement holds every value of this
+        precision -- the same at any width."""
+        var n = 1
+        # floor(log10(2^(8 n - 1) - 1)) digits fit in n bytes.
+        while Int(Float64(8 * n - 1) * 0.30102999566398120) < self.precision():
+            n += 1
+        return n
+
 
 # ---------------------------------------------------------------------------
 # Concrete zero-size Arrow type structs
@@ -256,7 +265,14 @@ struct _DecimalType[T: DType](DecimalType):
     var _precision: Int
     var _scale: Int
 
-    def __init__(out self, precision: Int, scale: Int = 0):
+    def __init__(out self, precision: Int, scale: Int = 0) raises InvalidError:
+        """A decimal of `precision` digits, `scale` of them after the point;
+        refuses a precision outside `1..max_precision`."""
+        if precision < 1 or precision > Self.max_precision:
+            raise InvalidError(
+                t"decimal{bit_width_of[Self.T]()}: precision {precision} is"
+                t" outside 1..{Self.max_precision}"
+            )
         self._precision = precision
         self._scale = scale
 
@@ -387,6 +403,19 @@ struct TimeUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
     def __init__(out self, value: Int):
         self.value = value
 
+    def __init__(out self, name: StringSlice) raises InvalidError:
+        """The unit Arrow spells `name`: "s", "ms", "us" or "ns"."""
+        if name == "s":
+            self.value = 0
+        elif name == "ms":
+            self.value = 1
+        elif name == "us":
+            self.value = 2
+        elif name == "ns":
+            self.value = 3
+        else:
+            raise InvalidError(t"unknown time unit '{name}'")
+
     def to_string(self) -> String:
         if self.value == 0:
             return "s"
@@ -396,6 +425,14 @@ struct TimeUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
             return "us"
         else:
             return "ns"
+
+    @staticmethod
+    def from_value(value: Int) -> Optional[TimeUnit]:
+        """The unit numbered `value`, 0 for seconds through 3 for nanoseconds,
+        or `None` outside that range."""
+        if value < 0 or value > 3:
+            return None
+        return TimeUnit(value)
 
     def fraction_digits(self) -> Int:
         """Decimal digits below the second: 0, 3, 6 or 9."""
@@ -1760,26 +1797,38 @@ def map_(
     )
 
 
-def decimal32(precision: Int, scale: Int = 0) -> Decimal32Type:
-    """Construct a decimal32 type. Equivalent to PyArrow's ``pa.decimal32(precision, scale)``.
+def decimal32(
+    precision: Int, scale: Int = 0
+) raises InvalidError -> Decimal32Type:
+    """Construct a decimal32 type. Equivalent to PyArrow's ``pa.decimal32(precision, scale)``,
+    which refuses a precision outside 1..9.
     """
     return Decimal32Type(precision, scale)
 
 
-def decimal64(precision: Int, scale: Int = 0) -> Decimal64Type:
-    """Construct a decimal64 type. Equivalent to PyArrow's ``pa.decimal64(precision, scale)``.
+def decimal64(
+    precision: Int, scale: Int = 0
+) raises InvalidError -> Decimal64Type:
+    """Construct a decimal64 type. Equivalent to PyArrow's ``pa.decimal64(precision, scale)``,
+    which refuses a precision outside 1..18.
     """
     return Decimal64Type(precision, scale)
 
 
-def decimal128(precision: Int, scale: Int = 0) -> Decimal128Type:
-    """Construct a decimal128 type. Equivalent to PyArrow's ``pa.decimal128(precision, scale)``.
+def decimal128(
+    precision: Int, scale: Int = 0
+) raises InvalidError -> Decimal128Type:
+    """Construct a decimal128 type. Equivalent to PyArrow's ``pa.decimal128(precision, scale)``,
+    which refuses a precision outside 1..38.
     """
     return Decimal128Type(precision, scale)
 
 
-def decimal256(precision: Int, scale: Int = 0) -> Decimal256Type:
-    """Construct a decimal256 type. Equivalent to PyArrow's ``pa.decimal256(precision, scale)``.
+def decimal256(
+    precision: Int, scale: Int = 0
+) raises InvalidError -> Decimal256Type:
+    """Construct a decimal256 type. Equivalent to PyArrow's ``pa.decimal256(precision, scale)``,
+    which refuses a precision outside 1..76.
     """
     return Decimal256Type(precision, scale)
 

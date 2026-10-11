@@ -121,8 +121,6 @@ comptime _DATE_UNIT_DAY: UInt16 = 0
 comptime _DATE_UNIT_MILLISECOND: UInt16 = 1
 comptime _TIME_UNIT_SECOND: UInt16 = 0
 comptime _TIME_UNIT_MILLISECOND: UInt16 = 1
-comptime _TIME_UNIT_MICROSECOND: UInt16 = 2
-comptime _TIME_UNIT_NANOSECOND: UInt16 = 3
 
 
 def _magic() -> List[UInt8]:
@@ -768,17 +766,6 @@ struct _IpcEncoder(Movable):
         self._fb = _FlatbufWriter(capacity)
 
     @staticmethod
-    def _time_unit_to_wire(unit: dt.TimeUnit) -> UInt16:
-        if unit == dt.second:
-            return _TIME_UNIT_SECOND
-        elif unit == dt.millisecond:
-            return _TIME_UNIT_MILLISECOND
-        elif unit == dt.microsecond:
-            return _TIME_UNIT_MICROSECOND
-        else:
-            return _TIME_UNIT_NANOSECOND
-
-    @staticmethod
     def encode_schema(schema: Schema) raises -> List[UInt8]:
         var enc = _IpcEncoder(256)
         var schema_pos = enc._write_schema_table(schema)
@@ -1116,7 +1103,7 @@ struct _IpcEncoder(Movable):
             else:
                 unit = dtype.as_time64().unit
                 bw = 64
-            var ipc_unit = _IpcEncoder._time_unit_to_wire(unit)
+            var ipc_unit = UInt16(unit.value)
             var ts = self._fb.offset()
             var bw_at = self._fb.prepend_i32(bw)
             var u_at = self._fb.prepend_u16(ipc_unit)
@@ -1126,7 +1113,7 @@ struct _IpcEncoder(Movable):
             return self._fb.write_table(flds, ts)
         elif dtype.is_timestamp():
             ref tstype = dtype.as_timestamp()
-            var ipc_unit = _IpcEncoder._time_unit_to_wire(tstype.unit)
+            var ipc_unit = UInt16(tstype.unit.value)
             var ts = self._fb.offset()
             var tz_at: Optional[UInt32] = None
             if tstype.timezone:
@@ -1140,7 +1127,7 @@ struct _IpcEncoder(Movable):
             return self._fb.write_table(flds, ts)
         elif dtype.is_duration():
             var unit = dtype.as_duration().unit
-            var ipc_unit = _IpcEncoder._time_unit_to_wire(unit)
+            var ipc_unit = UInt16(unit.value)
             var ts = self._fb.offset()
             var u_at = self._fb.prepend_u16(ipc_unit)
             var flds = List[_FieldOffset]()
@@ -1160,38 +1147,19 @@ struct _IpcEncoder(Movable):
             flds.append(_FieldOffset(0, u_at))
             return self._fb.write_table(flds, ts)
         elif dtype.is_decimal():
-            var precision: Int32
-            var scale: Int32
-            var bit_width: Int32
-            if dtype.is_decimal32():
-                ref d = dtype.as_decimal32()
-                precision = Int32(d.precision())
-                scale = Int32(d.scale())
-                bit_width = 32
-            elif dtype.is_decimal64():
-                ref d = dtype.as_decimal64()
-                precision = Int32(d.precision())
-                scale = Int32(d.scale())
-                bit_width = 64
-            elif dtype.is_decimal128():
-                ref d = dtype.as_decimal128()
-                precision = Int32(d.precision())
-                scale = Int32(d.scale())
-                bit_width = 128
-            else:
-                ref d = dtype.as_decimal256()
-                precision = Int32(d.precision())
-                scale = Int32(d.scale())
-                bit_width = 256
-            var ts = self._fb.offset()
-            var bw_at = self._fb.prepend_i32(bit_width)
-            var scale_at = self._fb.prepend_i32(scale)
-            var prec_at = self._fb.prepend_i32(precision)
-            var flds = List[_FieldOffset]()
-            flds.append(_FieldOffset(0, prec_at))
-            flds.append(_FieldOffset(1, scale_at))
-            flds.append(_FieldOffset(2, bw_at))
-            return self._fb.write_table(flds, ts)
+
+            def decimal[T: dt.DecimalType](d: T) raises {mut self} -> UInt32:
+                var ts = self._fb.offset()
+                var bw_at = self._fb.prepend_i32(Int32(d.bit_width()))
+                var scale_at = self._fb.prepend_i32(Int32(d.scale()))
+                var prec_at = self._fb.prepend_i32(Int32(d.precision()))
+                var flds = List[_FieldOffset]()
+                flds.append(_FieldOffset(0, prec_at))
+                flds.append(_FieldOffset(1, scale_at))
+                flds.append(_FieldOffset(2, bw_at))
+                return self._fb.write_table(flds, ts)
+
+            return dtype.dispatch_decimal(decimal)
         elif dtype.is_dictionary():
             return self._write_type_table(dtype.as_dictionary().value_type())
         else:
@@ -1395,15 +1363,12 @@ struct _IpcDecoder(Movable):
         return self._r.read_bool(db_pos, 2, False)
 
     @staticmethod
-    def _wire_to_time_unit(v: UInt16) -> dt.TimeUnit:
-        if v == _TIME_UNIT_SECOND:
-            return dt.second
-        elif v == _TIME_UNIT_MILLISECOND:
-            return dt.millisecond
-        elif v == _TIME_UNIT_MICROSECOND:
-            return dt.microsecond
-        else:
-            return dt.nanosecond
+    def _wire_to_time_unit(v: UInt16) raises CorruptError -> dt.TimeUnit:
+        # The flatbuffer `TimeUnit` enum numbers the units as Arrow does.
+        var unit = dt.TimeUnit.from_value(Int(v))
+        if not unit:
+            raise CorruptError(t"ipc: unknown time unit {v}")
+        return unit.value()
 
     def _read_kv_vec(
         self, table_pos: UInt32, slot: Int
@@ -1663,10 +1628,12 @@ struct _IpcDecoder(Movable):
                 dtype = dt.decimal32(precision, scale)
             elif bit_width == 64:
                 dtype = dt.decimal64(precision, scale)
+            elif bit_width == 128:
+                dtype = dt.decimal128(precision, scale)
             elif bit_width == 256:
                 dtype = dt.decimal256(precision, scale)
             else:
-                dtype = dt.decimal128(precision, scale)
+                raise CorruptError(t"ipc: no {bit_width}-bit decimal type")
         elif type_type == _TYPE_INT:
             var tp = self._r.read_table(fp, 3)
             var bw = Int(self._r.read_i32(tp, 0, 32))
@@ -1757,10 +1724,13 @@ struct _IpcDecoder(Movable):
             var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_MILLISECOND)
             var bw = Int(self._r.read_i32(tp, 1, 32))
             var unit = _IpcDecoder._wire_to_time_unit(unit_v)
-            if bw == 32:
-                dtype = dt.time32(unit)
-            else:
+            var wide = unit == dt.microsecond or unit == dt.nanosecond
+            if bw != (64 if wide else 32):
+                raise CorruptError(t"ipc: a {bw}-bit time in {unit}")
+            if wide:
                 dtype = dt.time64(unit)
+            else:
+                dtype = dt.time32(unit)
         elif type_type == _TYPE_TIMESTAMP:
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_SECOND)

@@ -78,7 +78,7 @@ from .core import Kernel
 from .groupby import Groups
 from .numeric import FloordivKernel, MaxKernel, MinKernel
 from ..execution import ExecContext
-from ..errors import TypeError
+from ..errors import InvalidError, TypeError
 from .distinct import (
     HLL_P,
     HLL_P_GROUPED,
@@ -167,7 +167,9 @@ trait FoldKernel(Kernel):
         ...
 
     @staticmethod
-    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
         """The accumulator's dtype **as a value**, given the input column's.
 
         `AccType` names the type; this names the instance, and the two are not
@@ -335,7 +337,9 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
         return Self.Op.identity[T]()
 
     @staticmethod
-    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
         # The accumulator names its own type, so the input's dtype says
         # nothing: int64, uint64 or float64, all `Defaultable`.
         return Self.AccType[V]()
@@ -419,7 +423,9 @@ struct MinMax[Op: MinMaxOp](FoldKernel):
             return Self.Op.identity[T]()
 
     @staticmethod
-    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
         # The accumulator *is* the input column, so its unit, timezone,
         # precision and scale come from the column and nowhere else.
         return dtype.copy()
@@ -454,7 +460,9 @@ struct CountFold(FoldKernel):
         return Scalar[T](0)
 
     @staticmethod
-    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
         return Int64Type()
 
     @always_inline
@@ -480,7 +488,9 @@ struct MeanFold(ArithmeticAgg):
         return Scalar[T](0)
 
     @staticmethod
-    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
         return Float64Type()
 
     @always_inline
@@ -522,7 +532,9 @@ struct DecimalFold[mean: Bool](DecimalAgg):
         return Scalar[T](0)
 
     @staticmethod
-    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
         # `V` is bound on `PrimitiveType` by `FoldKernel`; `check_domain` has
         # already refused anything but a decimal (`DecimalAgg`).
         var scale = rebind[downcast[V, DecimalType]](dtype).scale()

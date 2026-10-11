@@ -16,6 +16,7 @@ from ...logical import DynRelation, DynValue
 from ....arrays import DynArray
 from ....builders import array
 from ....dtypes import (
+    Decimal128Type,
     DynType,
     decimal128,
     decimal256,
@@ -70,8 +71,14 @@ def _assert_text(column: DynArray, expected: List[Optional[String]]) raises:
             assert_true(not got[i], String(t"row {i}: expected null"))
 
 
-comptime A = decimal128(10, 2)
-comptime B = decimal128(5, 1)
+def _a() raises -> Decimal128Type:
+    """Column `a`'s dtype."""
+    return decimal128(10, 2)
+
+
+def _b() raises -> Decimal128Type:
+    """Column `b`'s dtype."""
+    return decimal128(5, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +87,7 @@ comptime B = decimal128(5, 1)
 
 
 def test_fused_decimal_add_aligns_scales() raises:
-    var e = col("a", A) + col("b", B)
+    var e = col("a", _a()) + col("b", _b())
     var plan = _sales().project(["x", "t"], [e, e.cast(string)])
     var out = plan.execute()
     assert_true(out.columns[0].dtype() == DynType(decimal128(11, 2)))
@@ -94,8 +101,8 @@ def test_fused_decimal_subtract_and_multiply() raises:
         .project(
             ["d", "p"],
             [
-                (col("a", A) - col("b", B)).cast(string),
-                (col("a", A) * col("b", B)).cast(string),
+                (col("a", _a()) - col("b", _b())).cast(string),
+                (col("a", _a()) * col("b", _b())).cast(string),
             ],
         )
         .execute()
@@ -105,16 +112,16 @@ def test_fused_decimal_subtract_and_multiply() raises:
 
 
 def test_fused_decimal_multiply_type() raises:
-    var plan = _sales().project(["p"], [col("a", A) * col("b", B)])
+    var plan = _sales().project(["p"], [col("a", _a()) * col("b", _b())])
     assert_true(plan.schema().fields[0].dtype == DynType(decimal128(16, 3)))
 
 
 def test_fused_decimal_divide_truncates_and_nulls_zero() raises:
-    var plan = _sales().project(["q"], [col("a", A) / col("b", B)])
+    var plan = _sales().project(["q"], [col("a", _a()) / col("b", _b())])
     assert_true(plan.schema().fields[0].dtype == DynType(decimal128(16, 7)))
     var out = (
         _sales()
-        .project(["q"], [(col("a", A) / col("b", B)).cast(string)])
+        .project(["q"], [(col("a", _a()) / col("b", _b())).cast(string)])
         .execute()
     )
     _assert_text(out.columns[0], ["0.5000000", None, None, "0.0050000"])
@@ -123,7 +130,9 @@ def test_fused_decimal_divide_truncates_and_nulls_zero() raises:
 def test_fused_decimal_literal_operand() raises:
     var out = (
         _sales()
-        .project(["x"], [(col("a", A) * lit(3, decimal128(1, 0))).cast(string)])
+        .project(
+            ["x"], [(col("a", _a()) * lit(3, decimal128(1, 0))).cast(string)]
+        )
         .execute()
     )
     _assert_text(out.columns[0], ["4.50", None, "-3.75", "0.03"])
@@ -134,7 +143,7 @@ def test_fused_decimal_scalar_shape() raises:
         _sales()
         .project(
             ["x"],
-            [(lit(150, A) + lit(25, B)).cast(string)],
+            [(lit(150, _a()) + lit(25, _b())).cast(string)],
         )
         .execute()
     )
@@ -143,7 +152,7 @@ def test_fused_decimal_scalar_shape() raises:
 
 def test_fused_decimal256_add() raises:
     var w = lit(15, decimal256(40, 1))
-    var plan = _sales().project(["x"], [(col("a", A) + w).cast(string)])
+    var plan = _sales().project(["x"], [(col("a", _a()) + w).cast(string)])
     _assert_text(plan.execute().columns[0], ["3.00", None, "0.25", "1.51"])
 
 
@@ -151,7 +160,9 @@ def test_fused_decimal_precision_overflow_raises() raises:
     """Raised when the plan is built — the projection's schema needs the
     result type — not on the first batch."""
     with assert_raises(contains="out of range [1, 38]: 39"):
-        _ = _sales().project(["x"], [col("a", A) + lit(1, decimal128(38, 2))])
+        _ = _sales().project(
+            ["x"], [col("a", _a()) + lit(1, decimal128(38, 2))]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +176,8 @@ def test_fused_decimal_compare_across_scales() raises:
         .project(
             ["eq", "lt"],
             [
-                col("a", A) == lit(15, B),
-                col("a", A) < col("b", B),
+                col("a", _a()) == lit(15, _b()),
+                col("a", _a()) < col("b", _b()),
             ],
         )
         .execute()
@@ -178,8 +189,8 @@ def test_fused_decimal_compare_across_scales() raises:
 def test_fused_decimal_filter() raises:
     var out = (
         _sales()
-        .filter(col("a", A) > lit(0, decimal128(1, 0)))
-        .project(["a"], [col("a", A).cast(string)])
+        .filter(col("a", _a()) > lit(0, decimal128(1, 0)))
+        .project(["a"], [col("a", _a()).cast(string)])
         .execute()
     )
     _assert_text(out.columns[0], ["1.50", "0.01"])
@@ -205,8 +216,8 @@ def test_fused_decimal_rescale() raises:
         .project(
             ["up", "down"],
             [
-                col("a", A).cast(decimal128(12, 4)).cast(string),
-                col("a", A).cast(decimal128(10, 1)).cast(string),
+                col("a", _a()).cast(decimal128(12, 4)).cast(string),
+                col("a", _a()).cast(decimal128(10, 1)).cast(string),
             ],
         )
         .execute()
@@ -220,7 +231,7 @@ def test_fused_decimal_to_numeric() raises:
         _sales()
         .project(
             ["f", "i"],
-            [col("a", A).cast(float64), col("a", A).cast(int64)],
+            [col("a", _a()).cast(float64), col("a", _a()).cast(int64)],
         )
         .execute()
     )
@@ -236,8 +247,8 @@ def test_fused_numeric_to_decimal() raises:
         .project(
             ["f", "g"],
             [
-                col("f", float64).cast(A).cast(string),
-                col("g", int64).cast(A).cast(string),
+                col("f", float64).cast(_a()).cast(string),
+                col("g", int64).cast(_a()).cast(string),
             ],
         )
         .execute()
@@ -249,15 +260,16 @@ def test_fused_numeric_to_decimal() raises:
 def test_fused_string_to_decimal_nulls_what_does_not_parse() raises:
     var out = (
         _sales()
-        .project(["d"], [col("s", string).cast(A).cast(string)])
+        .project(["d"], [col("s", string).cast(_a()).cast(string)])
         .execute()
     )
     _assert_text(out.columns[0], ["1.50", None, None, "-0.50"])
 
 
 def test_fused_decimal_checked_cast_is_refused() raises:
+    var to = decimal128(12, 4)
     with assert_raises(contains="no checked cast"):
-        _ = col("a", A).cast(decimal128(12, 4), safe=True)
+        _ = col("a", _a()).cast(to, safe=True)
 
 
 # ---------------------------------------------------------------------------
@@ -268,18 +280,18 @@ def test_fused_decimal_checked_cast_is_refused() raises:
 def test_fused_decimal_sum_and_mean() raises:
     var plan = _sales().aggregate(
         [
-            col("a", A).sum().alias("s"),
-            col("a", A).mean().alias("m"),
-            col("a", A).min().alias("lo"),
-            col("a", A).max().alias("hi"),
-            col("a", A).count().alias("n"),
+            col("a", _a()).sum().alias("s"),
+            col("a", _a()).mean().alias("m"),
+            col("a", _a()).min().alias("lo"),
+            col("a", _a()).max().alias("hi"),
+            col("a", _a()).count().alias("n"),
         ],
         List[DynValue](),
     )
     var out = plan.execute()
     assert_true(plan.schema() == out.schema)
     assert_true(out.columns[0].dtype() == DynType(decimal128(38, 2)))
-    assert_true(out.columns[2].dtype() == DynType(A))
+    assert_true(out.columns[2].dtype() == DynType(_a()))
     var text = (
         table(out^)
         .project(
@@ -287,8 +299,8 @@ def test_fused_decimal_sum_and_mean() raises:
             [
                 col("s", decimal128(38, 2)).cast(string),
                 col("m", decimal128(38, 2)).cast(string),
-                col("lo", A).cast(string),
-                col("hi", A).cast(string),
+                col("lo", _a()).cast(string),
+                col("hi", _a()).cast(string),
             ],
         )
         .execute()
@@ -301,7 +313,7 @@ def test_fused_decimal_sum_and_mean() raises:
 
 def test_fused_decimal_sum_grouped_and_of_an_expression() raises:
     var plan = _sales().aggregate(
-        [(col("a", A) * col("b", B)).sum().alias("s")],
+        [(col("a", _a()) * col("b", _b())).sum().alias("s")],
         [col("g", int64)],
     )
     var out = plan.execute()

@@ -7,7 +7,6 @@ from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from std.memory import ArcPointer
 import marrow.dtypes as dt
-from marrow.errors import InvalidError
 
 
 def _field_name(py_self: PythonObject) raises -> PythonObject:
@@ -165,25 +164,27 @@ def date64() raises -> PythonObject:
 
 def time32(unit: PythonObject) raises -> PythonObject:
     """Create a time32 DataType."""
-    return dt.time32(_parse_time_unit(unit)).to_dyn().to_python_object()
+    return dt.time32(dt.TimeUnit(String(py=unit))).to_dyn().to_python_object()
 
 
 def time64(unit: PythonObject) raises -> PythonObject:
     """Create a time64 DataType."""
-    return dt.time64(_parse_time_unit(unit)).to_dyn().to_python_object()
+    return dt.time64(dt.TimeUnit(String(py=unit))).to_dyn().to_python_object()
 
 
 def timestamp(unit: PythonObject, tz: PythonObject) raises -> PythonObject:
     """Create a timestamp DataType."""
     var tz_str = "" if tz is None else String(py=tz)
     return (
-        dt.timestamp(_parse_time_unit(unit), tz_str).to_dyn().to_python_object()
+        dt.timestamp(dt.TimeUnit(String(py=unit)), tz_str)
+        .to_dyn()
+        .to_python_object()
     )
 
 
 def duration(unit: PythonObject) raises -> PythonObject:
     """Create a duration DataType."""
-    return dt.duration(_parse_time_unit(unit)).to_dyn().to_python_object()
+    return dt.duration(dt.TimeUnit(String(py=unit))).to_dyn().to_python_object()
 
 
 def year_month_interval() raises -> PythonObject:
@@ -199,20 +200,6 @@ def day_time_interval() raises -> PythonObject:
 def month_day_nano_interval() raises -> PythonObject:
     """Create a month_day_nano_interval DataType."""
     return dt.month_day_nano_interval().to_dyn().to_python_object()
-
-
-def _parse_time_unit(unit: PythonObject) raises -> dt.TimeUnit:
-    var s = String(py=unit)
-    if s == "s":
-        return dt.second
-    elif s == "ms":
-        return dt.millisecond
-    elif s == "us":
-        return dt.microsecond
-    elif s == "ns":
-        return dt.nanosecond
-    else:
-        raise InvalidError(t"Unknown time unit: {s}")
 
 
 def field(

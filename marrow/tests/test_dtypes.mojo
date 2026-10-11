@@ -1,7 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-from std.testing import assert_equal, assert_true, assert_false
+from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from .. import dtypes as dt
 from ..dtypes import *
 
@@ -645,3 +645,40 @@ def test_field_id() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_time_unit_from_name() raises:
+    for unit in [second, millisecond, microsecond, nanosecond]:
+        assert_true(TimeUnit(unit.to_string()) == unit)
+    with assert_raises(contains="InvalidError: unknown time unit 'min'"):
+        _ = TimeUnit("min")
+
+
+def test_time_unit_from_value() raises:
+    assert_true(TimeUnit.from_value(0).value() == second)
+    assert_true(TimeUnit.from_value(3).value() == nanosecond)
+    assert_false(TimeUnit.from_value(-1))
+    assert_false(TimeUnit.from_value(4))
+
+
+def test_decimal_factories_check_precision() raises:
+    assert_equal(decimal32(9, 2).precision(), 9)
+    assert_equal(decimal256(76, -3).scale(), -3)
+    with assert_raises(contains="InvalidError: decimal32: precision 10"):
+        _ = decimal32(10, 0)
+    with assert_raises(contains="decimal64: precision 19 is outside 1..18"):
+        _ = decimal64(19, 0)
+    with assert_raises(contains="outside 1..38"):
+        _ = decimal128(0, 0)
+    with assert_raises(contains="outside 1..76"):
+        _ = decimal256(77, 0)
+
+
+def test_decimal_fixed_size() raises:
+    # The most digits n bytes hold: 2, 4, 6, 9, ..., 38 at 16, 76 at 32.
+    assert_equal(decimal128(2, 0).fixed_size(), 1)
+    assert_equal(decimal128(3, 0).fixed_size(), 2)
+    assert_equal(decimal32(9, 0).fixed_size(), 4)
+    assert_equal(decimal128(38, 0).fixed_size(), 16)
+    assert_equal(decimal256(39, 0).fixed_size(), 17)
+    assert_equal(decimal256(76, 0).fixed_size(), 32)

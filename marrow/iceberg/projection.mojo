@@ -31,6 +31,7 @@ from emberjson import Value as Json
 from ..arrays import ArrayData, DynArray
 from ..builders import Int32Builder, nulls
 from ..dtypes import (
+    DecimalType,
     DynType,
     Field,
     field_index,
@@ -424,23 +425,11 @@ def _promotes(src: DynType, dst: DynType) raises -> Bool:
     elif src.is_float32():
         return dst.is_float64()
     elif src.is_decimal() and dst.is_decimal():
-        var from_ps = _precision_scale(src)
-        var to_ps = _precision_scale(dst)
-        return to_ps[1] == from_ps[1] and to_ps[0] >= from_ps[0]
+
+        def digits[T: DecimalType](d: T) raises {} -> Tuple[Int, Int]:
+            return (d.precision(), d.scale())
+
+        var have = src.dispatch_decimal(digits)
+        var want = dst.dispatch_decimal(digits)
+        return want[1] == have[1] and want[0] >= have[0]
     return False
-
-
-def _precision_scale(dtype: DynType) -> Tuple[Int, Int]:
-    """A decimal type's precision and scale, of any width: a Parquet file
-    stores a narrow decimal in an INT32 or INT64."""
-    if dtype.is_decimal32():
-        ref d = dtype.as_decimal32()
-        return (d.precision(), d.scale())
-    elif dtype.is_decimal64():
-        ref d = dtype.as_decimal64()
-        return (d.precision(), d.scale())
-    elif dtype.is_decimal128():
-        ref d = dtype.as_decimal128()
-        return (d.precision(), d.scale())
-    ref d = dtype.as_decimal256()
-    return (d.precision(), d.scale())

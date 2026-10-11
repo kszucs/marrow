@@ -119,10 +119,12 @@ def test_decimal_promotion_wide() raises:
 
 
 def test_decimal_promotion_precision_overflow() raises:
+    var full = decimal128(38, 2)
     with assert_raises(contains="out of range [1, 38]: 39"):
-        _ = DecimalPromotion.add(decimal128(38, 2), decimal128(38, 2))
+        _ = DecimalPromotion.add(full, full)
+    var half = decimal128(20, 1)
     with assert_raises(contains="out of range [1, 38]: 41"):
-        _ = DecimalPromotion.multiply(decimal128(20, 1), decimal128(20, 1))
+        _ = DecimalPromotion.multiply(half, half)
 
 
 def test_decimal_promotion_compare_moves_to_256() raises:
@@ -200,12 +202,14 @@ def test_string_to_decimal_grammar() raises:
 
 
 def test_string_to_decimal_rejects() raises:
+    var cents = decimal128(10, 2)
     with assert_raises(contains="data loss"):
-        _ = _dec(["1.555"], decimal128(10, 2))
+        _ = _dec(["1.555"], cents)
     with assert_raises(contains="not a decimal number"):
-        _ = _dec([" 1.5"], decimal128(10, 2))
+        _ = _dec([" 1.5"], cents)
+    var whole = decimal128(10, 0)
     with assert_raises(contains="does not fit its precision"):
-        _ = _dec(["12345678901"], decimal128(10, 0))
+        _ = _dec(["12345678901"], whole)
 
 
 def test_string_to_decimal_unsafe_nulls() raises:

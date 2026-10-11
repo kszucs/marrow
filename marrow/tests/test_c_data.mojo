@@ -1365,6 +1365,7 @@ def test_import_refuses_malformed_format_parameters() raises:
         "d:0,2",
         "d:10,2,32",
         "d:5,2,128,1",
+        "d:77,0,256",
     ]
     for fmt in leaves:
         with assert_raises(contains="InvalidError"):
@@ -1377,6 +1378,28 @@ def test_import_refuses_malformed_format_parameters() raises:
     assert_equal(
         _schema_with_format(int32, "d:38,2").to_dtype(), decimal128(38, 2)
     )
+
+
+def test_temporal_formats_round_trip() raises:
+    var dtypes: List[DynType] = [
+        time32(second).to_dyn(),
+        time32(millisecond).to_dyn(),
+        time64(microsecond).to_dyn(),
+        time64(nanosecond).to_dyn(),
+        timestamp(second).to_dyn(),
+        timestamp(millisecond, "UTC").to_dyn(),
+        timestamp(nanosecond, "+05:30").to_dyn(),
+        duration(microsecond).to_dyn(),
+    ]
+    for dtype in dtypes:
+        assert_equal(CArrowSchema.from_dtype(dtype).to_dtype(), dtype)
+    assert_equal(
+        _schema_with_format(int64, "tsu:+05:30").to_dtype(),
+        timestamp(microsecond, "+05:30").to_dyn(),
+    )
+    for fmt in ["ttx", "tsx:UTC", "tsu", "tDx"]:
+        with assert_raises(contains="NotImplementedError"):
+            _ = _schema_with_format(int64, fmt).to_dtype()
 
 
 def test_import_refuses_a_null_format() raises:
