@@ -53,8 +53,9 @@ struct RegexPattern(Movable):
     def use(mut self, pattern: StringSlice) raises:
         """Make `pattern` the compiled one, unless it already is."""
         if not self.compiled or StringSlice(self.text) != pattern:
-            self.text = String(pattern)
-            self.compiled = CompiledRegex(self.text)
+            var text = String(pattern)
+            self.compiled = CompiledRegex(text)
+            self.text = text^
 
     @no_inline
     def _first_match[

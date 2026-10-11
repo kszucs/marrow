@@ -456,3 +456,24 @@ def test_interop_map() raises:
         )
     )
     _all_shapes(t)
+
+
+def test_interop_nulls_then_dictionary_pages() raises:
+    """Pages with nulls, then dictionary pages without any: the later
+    pages' rows must read back valid."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var values = Python.evaluate(
+        "[None if (i < 5000 and i % 7 == 0) else i % 50 for i in range(20000)]"
+    )
+    var t = pa.table(Python.dict(i=pa.array(values, type=pa.int64())))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nulls_then_dict.parquet")
+        pq.write_table(
+            t,
+            path,
+            compression="none",
+            use_dictionary=True,
+            data_page_size=1024,
+        )
+        _assert_equiv(_to_pyarrow(read_table(path)), pq.read_table(path))

@@ -64,16 +64,27 @@ def hll_estimate[p: Int](registers: List[UInt8], base: Int) -> Int64:
     return Int64(Int(estimate + 0.5))
 
 
-comptime _HLL_P = 14
-"""Whole-array HyperLogLog precision: 2**14 = 16384 registers → ~0.65% error."""
+@always_inline
+def hll_update[p: Int](mut registers: List[UInt8], base: Int, h: UInt64):
+    """Fold hash ``h`` into the ``2**p`` registers at ``registers[base:]``."""
+    var idx = base + Int(h >> UInt64(64 - p))
+    var rho = hll_rho[p](h)
+    if rho > registers[idx]:
+        registers[idx] = rho
+
+
+comptime HLL_P = 14
+"""Single-sketch HyperLogLog precision: 2**14 = 16384 registers → ~0.65%
+error -- a whole array, or an aggregate with no grouping."""
 
 comptime HLL_P_GROUPED = 11
 """Per-group HyperLogLog precision: 2**11 = 2048 registers (2 KiB/group,
 ~2.3% standard error) — bounds memory when the group count is large.
 
-Public, with `hll_rho` and `hll_estimate`, because the streaming aggregate in
-`aggregate.mojo` keeps registers of this width between morsels and finalises
-them itself. The sketch is the shared thing; the loop over morsels is not."""
+Public, with `hll_update` and `hll_estimate`, because the streaming aggregate
+in `aggregate.mojo` keeps registers of this width between morsels and
+finalises them itself. The sketch is the shared thing; the loop over morsels
+is not."""
 
 
 # ---------------------------------------------------------------------------
@@ -113,9 +124,8 @@ def approx_count_distinct(
     standard error independent of the input size — the trade for
     ``count_distinct`` when an exact hash set would be too large. Nulls excluded.
     """
-    comptime p = _HLL_P
-    comptime m = 1 << p
-    var registers = List[UInt8](length=m, fill=0)
+    comptime p = HLL_P
+    var registers = List[UInt8](length=1 << p, fill=0)
 
     var hv = HashKernel[Fmix64].dispatch(array, ctx).values()
     var n = len(array)
@@ -124,10 +134,6 @@ def approx_count_distinct(
     for i in range(n):
         if has_null and not array.is_valid(i):
             continue
-        var h = UInt64(hv[i])
-        var idx = Int(h >> (64 - p))
-        var rho = hll_rho[p](h)
-        if rho > registers[idx]:
-            registers[idx] = rho
+        hll_update[p](registers, 0, UInt64(hv[i]))
 
     return Int64Scalar(hll_estimate[p](registers, 0))

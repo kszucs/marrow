@@ -80,9 +80,10 @@ from .numeric import FloordivKernel, MaxKernel, MinKernel
 from ..execution import ExecContext
 from ..errors import TypeError
 from .distinct import (
+    HLL_P,
     HLL_P_GROUPED,
     hll_estimate,
-    hll_rho,
+    hll_update,
 )
 from .dictionary import DictionaryEncoder
 from .hashing import HashKernel
@@ -1424,7 +1425,9 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
     the shape of that contract, not the mathematics.
     """
 
-    comptime name = STDDEV if Self.root else VARIANCE
+    comptime name = (
+        STDDEV_SAMP if Self.ddof == 1 else STDDEV
+    ) if Self.root else (VAR_SAMP if Self.ddof == 1 else VARIANCE)
     comptime InArray = PrimitiveArray[Self.V]
     comptime OutArray = Float64Array
 
@@ -1747,7 +1750,9 @@ struct DistinctCount[A: Array](AggKernel):
 
 struct ApproxDistinctCount[A: Array](AggKernel):
     """`APPROX_COUNT_DISTINCT(x)`: a HyperLogLog estimate per slot, with
-    `2**11` registers each (~2.3% standard error). Nulls are excluded.
+    `2**11` registers each (~2.3% standard error) -- or, with no grouping,
+    one `2**14` sketch (~0.65%), the estimate `approx_count_distinct` gives.
+    Nulls are excluded.
 
     Not a fold, and no merge: two sketches of the same rows do not add. It
     streams, keeping O(slots * 2**11) registers, never O(rows).
@@ -1761,12 +1766,15 @@ struct ApproxDistinctCount[A: Array](AggKernel):
     comptime _m = 1 << Self._p
 
     var _registers: List[UInt8]
-    """`2**11` HLL registers per slot."""
+    """`2**11` HLL registers per slot, or one `2**14` sketch."""
     var _slots: Int
+    var _single: Bool
+    """Ungrouped: one sketch at the whole-array precision."""
 
     def __init__(out self, in_dtype: DynType) raises:
         self._registers = List[UInt8]()
         self._slots = 0
+        self._single = False
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1774,7 +1782,7 @@ struct ApproxDistinctCount[A: Array](AggKernel):
         return DynType(int64)
 
     def reserve(mut self, slots: Int) raises:
-        if slots <= self._slots:
+        if self._single or slots <= self._slots:
             return
         while len(self._registers) < slots * Self._m:
             self._registers.append(0)
@@ -1783,6 +1791,10 @@ struct ApproxDistinctCount[A: Array](AggKernel):
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         ref value = input
         var single = groups.is_single()
+        if single and not self._single:
+            self._single = True
+            self._registers = List[UInt8](length=1 << HLL_P, fill=0)
+            self._slots = 1
         self.reserve(1 if single else groups.num_groups)
         var has_null = value.null_count() > 0
         # `dispatch` and not `apply`: `apply` is overloaded per array family
@@ -1798,14 +1810,19 @@ struct ApproxDistinctCount[A: Array](AggKernel):
             if has_null and not value.is_valid(i):
                 continue
             var h = UInt64(hv[i])
-            var g = 0 if single else Int(groups.ids.unsafe_get(i))
-            var idx = g * Self._m + Int(h >> (64 - Self._p))
-            var rho = hll_rho[Self._p](h)
-            if rho > self._registers[idx]:
-                self._registers[idx] = rho
+            if single:
+                hll_update[HLL_P](self._registers, 0, h)
+            else:
+                var g = Int(groups.ids.unsafe_get(i))
+                hll_update[Self._p](self._registers, g * Self._m, h)
 
     def finish(mut self) raises -> Self.OutArray:
         var out = Int64Builder(self._slots)
+        if self._single:
+            out.append(
+                Scalar[int64.native](hll_estimate[HLL_P](self._registers, 0))
+            )
+            return out.finish()
         for g in range(self._slots):
             out.append(
                 Scalar[int64.native](

@@ -51,7 +51,7 @@ import std.math as math
 from ..views import BitmapView, cpu_lanes, reduce
 from .core import Kernel
 from ..execution import ExecContext
-from ..errors import IndexError, TypeError
+from ..errors import IndexError, InvalidError, TypeError
 
 
 struct FilterKernel(Kernel):
@@ -933,6 +933,8 @@ struct TakeKernel(Kernel):
         """
         var n = len(indices)
         var has_null_indices = indices.null_count() > 0
+        if not has_null_indices and array.null_count() == 0:
+            return Self._take_present(array, indices)
         var builder = BinaryLikeBuilder[T](capacity=n)
         for i in range(n):
             if has_null_indices and not indices.is_valid(i):
@@ -942,6 +944,53 @@ struct TakeKernel(Kernel):
             else:
                 builder.append_null()
         return builder.finish()
+
+    @staticmethod
+    def _take_present[
+        T: BinaryLikeType
+    ](array: BinaryLikeArray[T], indices: Int32Array) raises -> BinaryLikeArray[
+        T
+    ]:
+        """`take` with no nulls on either side: the offsets first, by a
+        running sum of the gathered lengths, then one copy a string into a
+        buffer of exactly their size."""
+        comptime O = T.offset
+        var n = len(indices)
+        var src_off = array.offsets.view[O](array.offset)
+        var idx = indices.values()
+        var offsets = Buffer.alloc_uninit[O](n + 1)
+        var dst_off = offsets.view[O](0, n + 1)
+        dst_off.unsafe_set(0, 0)
+        # Summed in `Int`: the output may outgrow `O` even when no input
+        # does, and is then refused before anything is allocated.
+        var total = 0
+        for i in range(n):
+            var k = Int(idx.unsafe_get(i))
+            total += Int(src_off.unsafe_get(k + 1) - src_off.unsafe_get(k))
+            dst_off.unsafe_set(i + 1, Scalar[O](total))
+        if total > Int(Scalar[O].MAX):
+            raise Self.error[InvalidError](
+                t"{total} bytes overflow {O} offsets"
+            )
+        var size = total
+        var bytes = Buffer.alloc_uninit[DType.uint8](size)
+        var dst = bytes.view[DType.uint8](0, size)
+        var src = array.values.view[DType.uint8]()
+        for i in range(n):
+            var k = Int(idx.unsafe_get(i))
+            var at = Int(dst_off.unsafe_get(i))
+            var m = Int(dst_off.unsafe_get(i + 1)) - at
+            dst.slice(at, m).copy_from(
+                src.slice(Int(src_off.unsafe_get(k)), m), m
+            )
+        return BinaryLikeArray[T](
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            offsets=offsets^.to_immutable(),
+            values=bytes^.to_immutable(),
+        )
 
     @staticmethod
     def apply(

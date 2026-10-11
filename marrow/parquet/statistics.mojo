@@ -56,6 +56,7 @@ from .schema import (
     has_plain_physical,
 )
 from ..utils.byteorder import BigEndian, LittleEndian
+from ..views import cpu_lanes
 
 
 def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
@@ -76,9 +77,45 @@ def valid_min_max[
     """The smallest and largest valid value of `arr` in `T`'s native order, and
     whether there was one. `skip_nan` excludes NaN — floats only: a bound is
     read as a proof, and a NaN maximum would prove `x > 5` false."""
+    comptime N = T.native
+    comptime if not N.is_floating_point():
+        # Integers have no NaN and no signed zero, so lanes may meet in
+        # any order: a SIMD sweep, the invalid lanes masked to a bound.
+        comptime W = cpu_lanes[N]
+        var values = arr.values()
+        var n = len(values)
+        var masked = arr.null_count() > 0
+        var lo_lanes = SIMD[N, W](Scalar[N].MAX)
+        var hi_lanes = SIMD[N, W](Scalar[N].MIN)
+        var seen_lanes = SIMD[DType.bool, W](fill=False)
+        var at = 0
+        while at + W <= n:
+            var v = values.load[W](at)
+            var ok = SIMD[DType.bool, W](fill=True)
+            if masked:
+                ok = arr.bitmap.value().view(arr.offset, n).load[W](at)
+            lo_lanes = min(lo_lanes, ok.select(v, SIMD[N, W](Scalar[N].MAX)))
+            hi_lanes = max(hi_lanes, ok.select(v, SIMD[N, W](Scalar[N].MIN)))
+            seen_lanes |= ok
+            at += W
+        var low = lo_lanes.reduce_min()
+        var high = hi_lanes.reduce_max()
+        var found = seen_lanes.reduce_or()
+        while at < n:
+            if not masked or arr.is_valid(at):
+                var v = values[at]
+                low = min(low, v)
+                high = max(high, v)
+                found = True
+            at += 1
+        if not found:
+            return (Scalar[N](0), Scalar[N](0), False)
+        return (low, high, True)
+    # Floats keep the ordered scan: which of NaN, `-0.0` and `0.0` a
+    # bound holds depends on the order the values are met in.
     var seen = False
-    var mn = Scalar[T.native](0)
-    var mx = Scalar[T.native](0)
+    var mn = Scalar[N](0)
+    var mx = Scalar[N](0)
     for i in range(len(arr)):
         if arr.is_valid(i):
             var v = arr[i].value()

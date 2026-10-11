@@ -9,10 +9,11 @@ an offset slice, `large_string`, the group and replacement edge cases, and the
 one known-wrong answer the engine gives.
 """
 
-from std.testing import assert_true
+from std.testing import assert_raises, assert_true
 
 from ...builders import array, Int64Builder, LargeStringBuilder, StringBuilder
 from ...kernels.regex import (
+    RegexPattern,
     RegexpExtractKernel,
     RegexpMatchesKernel,
     RegexpReplaceKernel,
@@ -186,3 +187,14 @@ def test_regexp_replace_optional_group_known_bug() raises:
         )
         == array(["foo[bar]"])
     )
+
+
+def test_regex_pattern_memo_survives_a_failed_compile() raises:
+    """A pattern that failed to compile is not remembered as compiled: using
+    it again raises again rather than matching with the previous regex."""
+    var p = RegexPattern()
+    p.use("a")
+    with assert_raises():
+        p.use("(")
+    with assert_raises():
+        p.use("(")

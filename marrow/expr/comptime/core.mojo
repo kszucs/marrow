@@ -74,9 +74,7 @@ from ...kernels.aggregate import (
     MEAN,
     MIN,
     PRODUCT,
-    STDDEV,
     SUM,
-    VARIANCE,
 )
 from ..index import Index, keep_every
 from .aggregates import (
@@ -417,8 +415,8 @@ trait PrimitiveValue(ComptimeValue):
         return CountDistinct[Self](self.copy(), Nothing())
 
     def approx_count_distinct(self) -> ApproxCountDistinct[Self]:
-        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
-        standard error, nulls excluded."""
+        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, nulls
+        excluded: ~0.65% standard error with no grouping, ~2.3% per group."""
         return ApproxCountDistinct[Self](self.copy(), Nothing())
 
     comptime Bound: Copyable & Deinitable
@@ -566,8 +564,8 @@ trait StringValue(ComptimeValue):
         return StringCountDistinct[Self](self.copy(), Nothing())
 
     def approx_count_distinct(self) -> StringApproxCountDistinct[Self]:
-        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
-        standard error, nulls excluded."""
+        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, nulls
+        excluded: ~0.65% standard error with no grouping, ~2.3% per group."""
         return StringApproxCountDistinct[Self](self.copy(), Nothing())
 
     comptime Bound: Copyable & Deinitable
@@ -1187,7 +1185,9 @@ trait NumericValue(PrimitiveValue):
         `(col("a", int64) * 2).variance()` compiles the multiply into one loop
         and only the dispersion materialises.
         """
-        return Variance[ddof, Self](self.copy(), Nothing(), String(VARIANCE))
+        return Variance[ddof, Self](
+            self.copy(), Nothing(), String(Variance[ddof, Self].Agg.name)
+        )
 
     def stddev[ddof: Int = 0](self) -> StdDev[ddof, Self]:
         """`STDDEV_POP(self)` by default, `STDDEV_SAMP(self)` at `ddof=1`.
@@ -1195,7 +1195,9 @@ trait NumericValue(PrimitiveValue):
         The square root of `variance[ddof]()`, computed from the same Welford
         state rather than by aggregating twice.
         """
-        return StdDev[ddof, Self](self.copy(), Nothing(), String(STDDEV))
+        return StdDev[ddof, Self](
+            self.copy(), Nothing(), String(StdDev[ddof, Self].Agg.name)
+        )
 
     # -- operators ----------------------------------------------------------
     # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`

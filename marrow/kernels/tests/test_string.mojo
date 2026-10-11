@@ -29,6 +29,7 @@ from ...kernels.string import (
     StringEqKernel,
     LikeKernel,
     ILikeKernel,
+    LikePattern,
 )
 
 
@@ -552,3 +553,15 @@ def test_concat_kernel_string_view() raises:
     assert_equal(v[0].value(), "apple!")
     assert_false(v.is_valid(1))
     assert_equal(v[2].value(), "a value longer than twelve and more")
+
+
+def test_like_pattern_with_a_truncated_sequence() raises:
+    """A pattern ending inside a multi-byte sequence -- reachable from a binary
+    column through the typed entry -- compiles without reading past its end,
+    escaped or not."""
+    var raw: List[UInt8] = [0x61, 0xE2]
+    var compiled = LikePattern[False](StringSlice(unsafe_from_utf8=Span(raw)))
+    assert_false(compiled.matches("b"))
+    var escaped: List[UInt8] = [0x5C, 0xE2]
+    var esc = LikePattern[False](StringSlice(unsafe_from_utf8=Span(escaped)))
+    assert_false(esc.matches("b"))

@@ -45,6 +45,9 @@ from ...dtypes import (
 from ...buffers import Bitmap
 from ...kernels.filter import FilterKernel, TakeKernel, filter, take, drop_null
 from ...execution import ExecContext
+from ...arrays import BinaryLikeArray
+from ...builders import BinaryLikeBuilder
+from ...dtypes import BinaryLikeType, BinaryType, LargeStringType, StringType
 
 
 # ---------------------------------------------------------------------------
@@ -1042,3 +1045,49 @@ def test_take_string_view() raises:
     assert_false(v.is_valid(2))
     assert_equal(v[3].value(), "two is longer than twelve")
     v.validate()
+
+
+def _strings[T: BinaryLikeType](n: Int) raises -> BinaryLikeArray[T]:
+    var b = BinaryLikeBuilder[T](n)
+    for i in range(n):
+        b.append(String("x") * ((i * 7919) % 13))
+    return b.finish()
+
+
+def _check_take_strings[T: BinaryLikeType](src: BinaryLikeArray[T]) raises:
+    var n = len(src)
+    var ib = Int32Builder(2 * n)
+    for i in range(2 * n):
+        ib.append(Int32((i * 31) % n))
+    var idx = ib.finish()
+    var got = TakeKernel.apply(src, idx)
+    assert_equal(len(got), len(idx))
+    assert_equal(got.null_count(), 0)
+    for i in range(len(idx)):
+        assert_equal(
+            String(got.unsafe_get(UInt(i))),
+            String(src.unsafe_get(UInt(Int(idx.values()[i])))),
+        )
+
+
+def test_take_strings_no_nulls() raises:
+    """String, large string and binary; empty strings; a sliced source
+    whose first offset is not zero; and no indices at all."""
+    _check_take_strings(_strings[StringType](100))
+    _check_take_strings(_strings[LargeStringType](100))
+    _check_take_strings(_strings[BinaryType](100))
+    _check_take_strings(_strings[StringType](100).slice(7, 50))
+    _check_take_strings(_strings[StringType](0))
+
+
+def test_take_strings_offset_overflow() raises:
+    """A take whose output passes 32-bit offsets is refused before anything
+    is allocated, as Arrow does, rather than wrapping."""
+    var b = BinaryLikeBuilder[StringType](1)
+    b.append(String("x") * 1024)
+    var src = b.finish()
+    var ib = Int32Builder(2_100_000)
+    for _ in range(2_100_000):
+        ib.append(0)
+    with assert_raises(contains="offset"):
+        _ = TakeKernel.apply(src, ib.finish())

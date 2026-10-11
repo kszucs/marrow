@@ -23,6 +23,7 @@ from ...builders import (
     PrimitiveBuilder,
     Int64Builder,
     Int32Builder,
+    StringBuilder,
 )
 from ...dtypes import int64, Int64Type
 from ...kernels.filter import FilterKernel, TakeKernel
@@ -257,6 +258,26 @@ def bench_take_nulls_1m(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 1_000_000)
     var idx = _indices_with_nulls(1_000_000)
     b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(TakeKernel.apply(arr, idx, ExecContext.serial())))
+
+    b.iter(call)
+    keep(arr)
+    keep(idx)
+
+
+def bench_take_strings_100k(mut b: Benchmark) raises:
+    """Strings of 0 to 30 bytes, gathered by a scattered permutation: the
+    presized path, one copy a string."""
+    comptime n = 100_000
+    var sb = StringBuilder(n)
+    for i in range(n):
+        sb.append(String("s") * ((i * 7919) % 31))
+    var arr = sb.finish()
+    var idx = _shuffled_indices(n)
+    b.throughput(BenchMetric.elements, n)
 
     @always_inline
     def call() raises {imm}:

@@ -411,8 +411,7 @@ struct ColumnWriter(Movable):
     def _sub(src: List[Int32], a: Int, b: Int) -> List[Int32]:
         """A copy of `src[a:b]` (the per-page level / index slice)."""
         var out = List[Int32](capacity=b - a)
-        for i in range(a, b):
-            out.append(src[i])
+        out.extend(Span(src)[a:b])
         return out^
 
     def _phys_width(self) -> Int:
@@ -832,7 +831,7 @@ struct ColumnWriter(Movable):
 # ---------------------------------------------------------------------------
 
 
-def _flat_def_levels(values: DynArray, max_def: Int) -> List[Int32]:
+def _flat_def_levels(values: DynArray, max_def: Int) raises -> List[Int32]:
     """Definition levels for a flat leaf, one per row: `max_def` where the
     row is valid, `max_def - 1` otherwise. A flat leaf (no repeated group or
     nullable struct above it) is never Dremel-shredded, so this is the only
@@ -841,11 +840,19 @@ def _flat_def_levels(values: DynArray, max_def: Int) -> List[Int32]:
     `ColumnWriter.write` -- previously each synthesized the same array under
     a differently spelled condition, and the two could drift out of
     agreement."""
-    var defs = List[Int32](capacity=values.length())
-    for i in range(values.length()):
-        defs.append(
-            Int32(max_def) if values.is_valid(i) else Int32(max_def - 1)
-        )
+    var n = values.length()
+    var defs = List[Int32](length=n, fill=Int32(max_def))
+    if values.null_count() > 0:
+        # The validity read once from the array, not a dispatch a row.
+        var data = values.to_data()
+        if data.bitmap:
+            var bits = data.bitmap.value().view(data.offset, n)
+            for i in range(n):
+                if not bits[i]:
+                    defs[i] = Int32(max_def - 1)
+        else:
+            for i in range(n):
+                defs[i] = Int32(max_def - 1)
     return defs^
 
 

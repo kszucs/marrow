@@ -2042,3 +2042,19 @@ def test_join_table_null_keys_match_nothing() raises:
 def test_join_table_large() raises:
     var keys = _range_keys(1_000_000)
     assert_equal(len(_join_pairs(keys, keys)), 1_000_000)
+
+
+def test_join_any_existence_reads_every_build_row() raises:
+    """JOIN_ANY keeps one build row per probe row, but whether a build row
+    has a match is not that choice: both left rows share the matched key."""
+    var left = _int32_struct([1, 1], [10, 20])
+    var right = _int32_struct([1], [100])
+    for side in [BUILD_LEFT, BUILD_RIGHT]:
+        var anti = hash_join(
+            left, right, _left_on(), _right_on(), JOIN_ANTI, JOIN_ANY, side
+        )
+        assert_equal(len(anti), 0)
+        var semi = hash_join(
+            left, right, _left_on(), _right_on(), JOIN_SEMI, JOIN_ANY, side
+        )
+        assert_equal(len(semi), 2)

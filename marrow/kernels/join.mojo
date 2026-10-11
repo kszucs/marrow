@@ -652,13 +652,18 @@ struct HashJoin[Hash: Hasher = KeyHash]:
         `build_side.physical(kind)`; `_assemble` and `_output_dtype` get both.
         """
         var keys = Self._key_columns(data, key_indices)
+        var physical = build_side.physical(kind)
+        # Whether a build row has a match is not which match a probe row
+        # keeps: SEMI and ANTI over the build side read every match, JOIN_ANY
+        # or not.
+        var existence = physical == JOIN_SEMI or physical == JOIN_ANTI
         var matched = self._table.candidates(
             keys,
-            single_match=strictness == JOIN_ANY,
+            single_match=strictness == JOIN_ANY and not existence,
             ctx=self._ctx.for_batch(len(data)),
         )
         var final = self._emit_unmatched(
-            matched^, len(data), build_side.physical(kind), strictness
+            matched^, len(data), physical, strictness
         )
         return self._assemble(data, final, kind, build_side)
 

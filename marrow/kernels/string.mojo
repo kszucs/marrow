@@ -836,7 +836,8 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
             if b == _BSL:
                 # '\' escapes the next character; a trailing '\' is dropped.
                 if i + 1 < n:
-                    var w = Utf8.width(bytes[i + 1])
+                    # A truncated sequence keeps the bytes it has.
+                    var w = min(Utf8.width(bytes[i + 1]), n - i - 1)
                     for k in range(i + 1, i + 1 + w):
                         self.tokens.append(Int(bytes[k]))
                         literal.append(bytes[k])
@@ -857,7 +858,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
                 self.tokens.append(_LIKE_ONE)
                 i += 1
             else:
-                var w = Utf8.width(b)
+                var w = min(Utf8.width(b), n - i)
                 for k in range(i, i + w):
                     self.tokens.append(Int(bytes[k]))
                     literal.append(bytes[k])

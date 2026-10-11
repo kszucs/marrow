@@ -22,7 +22,7 @@ present values come out of an Arrow array and go back into one:
 """
 
 from std.memory import bitcast
-from std.sys import size_of
+from std.sys import bit_width_of, size_of
 
 from ..arrays import (
     BoolArray,
@@ -207,6 +207,10 @@ struct RleEncoding(Codec):
         return Encoded(bytes=Span(out))
 
     def start[T: DType](mut self, ref node: Encoded, count: Int) raises:
+        if self.width > bit_width_of[T]():
+            raise CorruptError(
+                t"parquet: {count} RLE values of {self.width} bits"
+            )
         self.node = node.copy()
         self.runs = RleRuns()
         self.unpacked.start(count)
@@ -295,6 +299,8 @@ struct RleEncoding(Codec):
         """Append the first `count` values of the runs in `data`, `width`
         bits each; return where the runs read end. A run past `count` is
         read whole, as a packed run's padding is."""
+        if width > bit_width_of[T]():
+            raise CorruptError(t"parquet: {count} RLE values of {width} bits")
         var base = len(out)
         out.resize(unsafe_uninit_length=base + count)
         var dst = BufferView(Span(out))[base:]
@@ -305,6 +311,18 @@ struct RleEncoding(Codec):
         if not runs.fill[T](BufferView(data), PackedGroup(width), dst):
             raise CorruptError("parquet: truncated RLE runs")
         return runs.pos
+
+    @staticmethod
+    def read_codes[
+        T: DType
+    ](data: Span[UInt8, _], count: Int, mut out: List[Scalar[T]]) raises:
+        """Append a data page's first `count` dictionary codes: their width
+        in a byte, then their runs."""
+        if len(data) == 0:
+            if count > 0:
+                raise CorruptError("parquet: a dictionary page with no codes")
+            return
+        _ = Self.read_runs[T](data[1:], Int(data[0]), count, out)
 
     @staticmethod
     def count(
@@ -396,7 +414,7 @@ struct DeltaBinaryPackedEncoding:
 
     @staticmethod
     def decode[
-        T: DType
+        T: DType, exact: Bool = False
     ](data: Span[UInt8, _], count: Int, mut out: List[Scalar[T]]) raises -> Int:
         """Append the first `count` values of the blocks at the start of
         `data`; return where the last miniblock read ends. The blocks' parts
@@ -412,7 +430,9 @@ struct DeltaBinaryPackedEncoding:
         total, pos = Leb128.read(data, pos)
         var first_z: UInt64
         first_z, pos = Leb128.read(data, pos)
-        if UInt64(count) > total:
+        # A byte-array page's bytes follow every length the stream holds,
+        # so there the count must be the stream's.
+        if UInt64(count) > total or (exact and UInt64(count) != total):
             raise CorruptError(
                 t"parquet: {count} values from a stream of {total}"
             )
@@ -420,6 +440,7 @@ struct DeltaBinaryPackedEncoding:
             miniblocks == 0
             or miniblocks > block_size
             or block_size > UInt64(1 << 31)
+            or block_size % miniblocks != 0
             or (block_size // miniblocks) % UInt64(BitPack.GROUP) != 0
         ):
             raise CorruptError(
@@ -503,7 +524,7 @@ struct DeltaLengthEncoding:
         """Append the `count` byte strings at the start of `src` to `data`,
         and where each ends to `offsets`; return the bytes read."""
         var lengths = List[Int32](capacity=count)
-        var pos = DeltaBinaryPackedEncoding.decode[DType.int32](
+        var pos = DeltaBinaryPackedEncoding.decode[DType.int32, exact=True](
             src, count, lengths
         )
         var total = Self.total(lengths, len(src) - pos)
@@ -567,11 +588,11 @@ struct DeltaByteArrayEncoding:
         """Append the `count` byte strings at the start of `src` to `data`,
         and where each ends to `offsets`; return the bytes read."""
         var prefixes = List[Int32](capacity=count)
-        var pos = DeltaBinaryPackedEncoding.decode[DType.int32](
+        var pos = DeltaBinaryPackedEncoding.decode[DType.int32, exact=True](
             src, count, prefixes
         )
         var lengths = List[Int32](capacity=count)
-        pos += DeltaBinaryPackedEncoding.decode[DType.int32](
+        pos += DeltaBinaryPackedEncoding.decode[DType.int32, exact=True](
             src[pos:], count, lengths
         )
         var total = DeltaLengthEncoding.total(lengths, len(src) - pos)
@@ -769,7 +790,9 @@ struct DictionaryValues:
         their runs -- into `dst`, each the value of `dict`, the chunk's
         dictionary as `read_page` gave it, it names."""
         if len(values) == 0:
-            raise CorruptError("parquet: a dictionary page with no codes")
+            if count > 0:
+                raise CorruptError("parquet: a dictionary page with no codes")
+            return
         # A `Dictionary` node, its distinct values `Plain`'s slot, then
         # the store's.
         var tree = Encoded(
@@ -1132,7 +1155,12 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         if self.is_plain():
             return PlainValues.decode_bool(values, num_present)
         elif self == Self.RLE:
-            var length = Int(LittleEndian.fixed[DType.uint32](values, 0))
+            var length = Int(LittleEndian.checked[DType.uint32](values, 0))
+            if length > len(values) - 4:
+                raise CorruptError(
+                    t"parquet: {length} bytes of RLE booleans in a page of"
+                    t" {len(values) - 4}"
+                )
             var decoded = List[Int32](capacity=num_present)
             _ = RleEncoding.read_runs[DType.int32](
                 values[4 : 4 + length], 1, num_present, decoded
