@@ -366,7 +366,7 @@ def test_import_of_a_non_producer_is_a_type_error():
     from marrow import libmarrow
 
     with pytest.raises(TypeError, match="cannot convert"):
-        libmarrow.concat([object()], None)
+        libmarrow.concat([object()])
 
 
 if __name__ == "__main__":
