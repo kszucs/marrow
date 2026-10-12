@@ -164,6 +164,8 @@ trait Builder(Deinitable, Movable, Sized):
             raise InvalidError(
                 "concat: cannot concatenate an empty list of arrays"
             )
+        if len(arrays) == 1:
+            return arrays[0].copy()
         var n = 0
         for ref a in arrays:
             n += len(a)
@@ -437,6 +439,8 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
             raise InvalidError(
                 "concat: cannot concatenate an empty list of arrays"
             )
+        if len(arrays) == 1:
+            return arrays[0].copy()
         var n = 0
         for ref a in arrays:
             n += a.length()

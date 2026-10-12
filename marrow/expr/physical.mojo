@@ -49,7 +49,7 @@ from ..buffers import Bitmap
 from ..scalars import ArrowScalar, DynScalar, NullScalar
 from std.builtin.rebind import downcast
 from std.utils import Variant
-from ..builders import DynBuilder, Int32Builder, nulls
+from ..builders import DynBuilder, Int32Builder, StructBuilder, nulls
 from ..dtypes import Field, field, null, struct_
 from ..kernels.aggregate import AggKernel, Windowable
 from ..kernels.conditional import case_when
@@ -591,7 +591,11 @@ struct Pipeline(Operator):
         # still a *well-formed* batch — `RecordBatch.empty` gives one
         # zero-length column per field, so anything walking columns by schema
         # index stays in bounds.
-        var result = _concat_batches(out, schema)
+        var result: StructArray
+        if len(out) == 0:
+            result = RecordBatch.empty(schema).to_struct_array()
+        else:
+            result = StructBuilder.concat(out)
         # Several morsels were concatenated, and that compacts sparse view
         # columns already; a single one is returned as it is, so its view
         # columns are compacted here -- a result must not keep the pages it
@@ -1043,8 +1047,7 @@ struct SortOperator(Operator):
             return None
         self._emitted = True
 
-        var schema = Schema.from_dtype(self._batches[0].dtype)
-        var whole = _concat_batches(self._batches, schema)
+        var whole = StructBuilder.concat(self._batches)
 
         var order = Optional[Int32Array](None)
         for k in range(len(self._keys) - 1, -1, -1):
@@ -1156,7 +1159,7 @@ struct WindowOperator(Operator):
             return None
         self._emitted = True
 
-        var whole = _concat_batches(self._batches, self._input_schema)
+        var whole = StructBuilder.concat(self._batches)
         var n = len(whole)
 
         var columns = List[DynArray]()
@@ -1362,22 +1365,9 @@ struct JoinOperator(Operator):
 
     var _build_schema: Schema
     """The **build** input's own fields — not this stage's, and not
-    necessarily the left side's.
-
-    A separate field because the two genuinely differ and confusing them is a
-    wrong answer rather than a crash. It was a `_build_schema()` *method*
-    returning `self._schema.copy()`, whose docstring described a
-    "`len(left_keys)`-agnostic prefix of the output schema" that neither it nor
-    anything else computed. `_concat_batches` reads a schema only when it is
-    handed **no** batches, and then builds an empty batch from it — so a build
-    side that yielded nothing was indexed as if it had the join's output
-    columns. For an inner or left join that is the left fields plus a run of
-    all-null right ones, and `probe` then hands `_struct_of` more children than
-    the output dtype has fields.
-
-    Invisible today only because `_concat_batches` short-circuits at
-    `len(batches) == 1`, which is every build side that produced exactly one
-    batch."""
+    necessarily the left side's. It describes an empty build side: read as the
+    join's output columns instead, an inner or left join would index the left
+    fields plus a run of all-null right ones."""
 
     var _probe_schema: Schema
     """The **probe** input's own fields. Same argument, and the same latent
@@ -1451,7 +1441,11 @@ struct JoinOperator(Operator):
                 parts.append(b.value().struct_array())
             else:
                 break
-        var side = _concat_batches(parts, self._build_schema.copy())
+        var side: StructArray
+        if len(parts) == 0:
+            side = RecordBatch.empty(self._build_schema).to_struct_array()
+        else:
+            side = StructBuilder.concat(parts)
         self._index = HashJoin[KeyHash](
             side, self._build_keys, self._ctx.copy()
         )
@@ -1505,7 +1499,11 @@ struct JoinOperator(Operator):
         self._ensure_built()
         if not self._blocks_on_probe_side():
             return None
-        var whole = _concat_batches(self._buffered, self._probe_schema.copy())
+        var whole: StructArray
+        if len(self._buffered) == 0:
+            whole = RecordBatch.empty(self._probe_schema).to_struct_array()
+        else:
+            whole = StructBuilder.concat(self._buffered)
         return Datum(self._probe(whole).to_dyn())
 
 
@@ -1648,26 +1646,6 @@ def _struct_of(
         bitmap=None,
         children=columns^,
     )
-
-
-def _concat_batches(
-    batches: List[StructArray], schema: Schema
-) raises -> StructArray:
-    """Join both phases need one contiguous side; this is where that happens.
-
-    `schema` describes **the side being concatenated**, not the join's output,
-    and it is read only when `batches` is empty — the one case where there is
-    no array to take a dtype from. Handing it the output schema is what
-    `JoinOperator._build_schema` used to do, and it is wrong whenever the two
-    differ."""
-    if len(batches) == 1:
-        return batches[0].copy()
-    if len(batches) == 0:
-        return RecordBatch.empty(schema).to_struct_array()
-    var parts = List[DynArray](capacity=len(batches))
-    for ref b in batches:
-        parts.append(b.copy().to_dyn())
-    return DynBuilder.concat(parts).as_struct().copy()
 
 
 struct ParquetScanOperator(Operator):
