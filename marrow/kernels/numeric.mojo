@@ -59,7 +59,7 @@ from ..dtypes import (
 from .core import Kernel
 from .boolean import NotKernel, XorKernel
 from .string import StringEqKernel
-from ..execution import ExecContext, GPU_ENABLED
+from ..execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -104,14 +104,7 @@ trait BinaryKernel(Kernel):
         comptime native = T.native
         var length = len(left)
         var bm = Bitmap.intersect_views(left.validity(), right.validity())
-        var buf: Buffer[mut=True]
-        comptime if GPU_ENABLED:
-            if ctx.is_gpu():
-                buf = Buffer.alloc_device[native](ctx.device.value(), length)
-            else:
-                buf = Buffer.alloc_zeroed[native](length)
-        else:
-            buf = Buffer.alloc_zeroed[native](length)
+        var buf = ctx.alloc_buffer[native](length)
         apply[native, native, Self.core[native, _]](
             left.values(), right.values(), buf.view[native](0, length), ctx
         )
@@ -183,14 +176,7 @@ trait UnaryKernel(Kernel):
     ) raises -> PrimitiveArray[T]:
         comptime native = T.native
         var length = len(array)
-        var buf: Buffer[mut=True]
-        comptime if GPU_ENABLED:
-            if ctx.is_gpu():
-                buf = Buffer.alloc_device[native](ctx.device.value(), length)
-            else:
-                buf = Buffer.alloc_zeroed[native](length)
-        else:
-            buf = Buffer.alloc_zeroed[native](length)
+        var buf = ctx.alloc_buffer[native](length)
         apply[native, native, Self.core[native, _]](
             array.values(), buf.view[native](0, length), ctx
         )
@@ -600,13 +586,7 @@ def _binary_cmp[
     var length = len(left)
     var bm = Bitmap.intersect_views(left.validity(), right.validity())
 
-    var result: Bitmap[mut=True]
-    comptime if GPU_ENABLED:
-        result = Bitmap.alloc_device(
-            ctx.device.value(), length
-        ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
-    else:
-        result = Bitmap.alloc_uninit(length)
+    var result = ctx.alloc_bitmap(length)
     apply[native, func](left.values(), right.values(), result.view(), ctx)
     return BoolArray(
         length=length,

@@ -38,6 +38,7 @@ from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys import has_accelerator, CompilationTarget, get_defined_bool
 
+from .buffers import Bitmap, Buffer
 from .utils.threads import ThreadPool
 
 
@@ -265,6 +266,21 @@ struct ExecContext(
     def is_gpu(self) -> Bool:
         """True when work should be dispatched to the GPU."""
         return Bool(self.device)
+
+    def alloc_buffer[T: DType](self, length: Int) raises -> Buffer[mut=True]:
+        """An uninitialised buffer of `length` `T`s where this context runs:
+        on its device when it has one, on the host otherwise."""
+        comptime if GPU_ENABLED:
+            if self.is_gpu():
+                return Buffer.alloc_device[T](self.device.value(), length)
+        return Buffer.alloc_uninit[T](length)
+
+    def alloc_bitmap(self, length: Int) raises -> Bitmap[mut=True]:
+        """An uninitialised bitmap of `length` bits where this context runs."""
+        comptime if GPU_ENABLED:
+            if self.is_gpu():
+                return Bitmap.alloc_device(self.device.value(), length)
+        return Bitmap.alloc_uninit(length)
 
     def thread_pool(self) -> ArcPointer[ThreadPool]:
         """The pool CPU work runs on: ``pool`` if set, else the shared one."""

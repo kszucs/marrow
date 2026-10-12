@@ -96,7 +96,7 @@ from ..utils import (
     split_days,
     truncate_div,
 )
-from ..execution import ExecContext, GPU_ENABLED
+from ..execution import ExecContext
 from ..errors import InternalError, InvalidError, NotImplementedError, TypeError
 from .filter import TakeKernel
 
@@ -253,14 +253,7 @@ struct NumericCastKernel(CastKernel):
         comptime Out = To.native
         var length = len(array)
 
-        var buf: Buffer[mut=True]
-        comptime if GPU_ENABLED:
-            if ctx.is_gpu():
-                buf = Buffer.alloc_device[Out](ctx.device.value(), length)
-            else:
-                buf = Buffer.alloc_uninit[Out](length)
-        else:
-            buf = Buffer.alloc_uninit[Out](length)
+        var buf = ctx.alloc_buffer[Out](length)
         var dst = buf.view[Out](0, length)
 
         comptime if safe and Self.needs_check[In, Out]():
@@ -732,13 +725,7 @@ struct NumToBoolKernel(CastKernel):
         From: NumericType
     ](array: PrimitiveArray[From], ctx: ExecContext) raises -> BoolArray:
         var length = len(array)
-        var result: Bitmap[mut=True]
-        comptime if GPU_ENABLED:
-            result = Bitmap.alloc_device(
-                ctx.device.value(), length
-            ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
-        else:
-            result = Bitmap.alloc_uninit(length)
+        var result = ctx.alloc_bitmap(length)
         apply[From.native, Self.core[From.native, _]](
             array.values(), result.view(), ctx
         )
@@ -783,14 +770,7 @@ struct BoolToNumKernel(CastKernel):
     ](array: BoolArray, ctx: ExecContext) raises -> PrimitiveArray[To]:
         comptime Out = To.native
         var length = len(array)
-        var buf: Buffer[mut=True]
-        comptime if GPU_ENABLED:
-            if ctx.is_gpu():
-                buf = Buffer.alloc_device[Out](ctx.device.value(), length)
-            else:
-                buf = Buffer.alloc_uninit[Out](length)
-        else:
-            buf = Buffer.alloc_uninit[Out](length)
+        var buf = ctx.alloc_buffer[Out](length)
         apply[Out, Self.core[Out, _]](
             array.values(), buf.view[Out](0, length), ctx
         )

@@ -66,7 +66,7 @@ from .cast import decode_dictionary
 from .numeric import EqKernel
 from .core import Kernel
 from ..utils import Hasher, RapidHash64
-from ..execution import ExecContext, GPU_ENABLED
+from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 from ..dtypes import (
     BinaryLikeType,
@@ -307,14 +307,7 @@ struct HashKernel[H: Hasher](Kernel):
         no per-kernel stripe logic here.
         """
         var n = len(keys)
-        var buf: Buffer[mut=True]
-        comptime if GPU_ENABLED:
-            if ctx.is_gpu():
-                buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
-            else:
-                buf = Buffer.alloc_uninit[uint64.native](n)
-        else:
-            buf = Buffer.alloc_uninit[uint64.native](n)
+        var buf = ctx.alloc_buffer[uint64.native](n)
 
         var dst = buf.view[uint64.native](0, n)
         var validity = keys.validity()
@@ -376,16 +369,7 @@ struct HashKernel[H: Hasher](Kernel):
                 buffer=buf^.to_immutable(),
             )
         else:
-            var buf: Buffer[mut=True]
-            comptime if GPU_ENABLED:
-                if ctx.is_gpu():
-                    buf = Buffer.alloc_device[uint64.native](
-                        ctx.device.value(), n
-                    )
-                else:
-                    buf = Buffer.alloc_uninit[uint64.native](n)
-            else:
-                buf = Buffer.alloc_uninit[uint64.native](n)
+            var buf = ctx.alloc_buffer[uint64.native](n)
 
             var dst = buf.view[uint64.native](0, n)
             var validity = keys.validity()
@@ -474,16 +458,7 @@ struct HashKernel[H: Hasher](Kernel):
         var result = Self.dispatch(keys.field(0), ctx)
         for k in range(1, num_fields):
             var field_hashes = Self.dispatch(keys.field(k), ctx)
-            var buf: Buffer[mut=True]
-            comptime if GPU_ENABLED:
-                if ctx.is_gpu():
-                    buf = Buffer.alloc_device[uint64.native](
-                        ctx.device.value(), n
-                    )
-                else:
-                    buf = Buffer.alloc_uninit[uint64.native](n)
-            else:
-                buf = Buffer.alloc_uninit[uint64.native](n)
+            var buf = ctx.alloc_buffer[uint64.native](n)
             apply[uint64.native, uint64.native, Self.H.combine_lanes[...]](
                 result.values(),
                 field_hashes.values(),
