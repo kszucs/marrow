@@ -47,7 +47,7 @@ from ...kernels.temporal import (
     AssumeTimezoneKernel,
     CalendarUnit,
     ConvertTimezoneKernel,
-    WallClock,
+    localise,
     DateTruncKernel,
     DayKernel,
     DayNameKernel,
@@ -129,9 +129,7 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
         # bound *is* the column: `Self.A.Bound` is opaque at this point —
         # declared `Copyable & Deinitable` — so it cannot be handed to a kernel
         # that wants a `PrimitiveArray`. Only the family's `Type` projects.
-        var t = WallClock.localise(
-            self.a.evaluate(batch, bindings).to_array(len(batch))
-        )
+        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
         return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
@@ -241,9 +239,7 @@ struct TemporalExtract64[K: TemporalExtract64Kernel, A: TemporalValue](
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = WallClock.localise(
-            self.a.evaluate(batch, bindings).to_array(len(batch))
-        )
+        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
         return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
@@ -291,9 +287,7 @@ struct LastDay[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = WallClock.localise(
-            self.a.evaluate(batch, bindings).to_array(len(batch))
-        )
+        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
         return LastDayKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
@@ -332,9 +326,7 @@ struct TemporalName[K: TemporalNameKernel, A: TemporalValue](
     # -- StringValue --------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = WallClock.localise(
-            self.a.evaluate(batch, bindings).to_array(len(batch))
-        )
+        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
         return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:

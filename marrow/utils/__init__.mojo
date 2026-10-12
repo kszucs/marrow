@@ -11,7 +11,7 @@ execution context -- so it can be read, tested and lifted out on its own:
 |---|---|
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
 | `decimal` | `float_to_decimal` — the exact unscaled decimal of a double |
-| `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div` — proleptic-Gregorian arithmetic |
+| `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div` — proleptic-Gregorian arithmetic; `WallClock`, `TimestampFormat` — time zones |
 | `byteorder` | `LittleEndian`, `BigEndian`, `Leb128` — values as bytes and as varints |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
 | `hex` | `hex_digit` — one hexadecimal digit's value |
@@ -46,6 +46,8 @@ from .decimal import float_to_decimal
 from .datetime import (
     CivilDate,
     Epoch,
+    TimestampFormat,
+    WallClock,
     floor_div,
     split_days,
     truncate_div,

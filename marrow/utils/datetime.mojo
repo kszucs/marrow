@@ -1,27 +1,35 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Proleptic-Gregorian calendar arithmetic.
+"""Proleptic-Gregorian calendar arithmetic, and time zones on top of it.
 
-A **leaf module**: it imports nothing from `marrow`, which is the property every
-other module under `utils/` has and the reason this one can be shared by
-`kernels/temporal.mojo`, `kernels/cast.mojo` and `parquet/reader.mojo` without
-any of them depending on each other. Before this existed, the civil-date
-algorithms lived inside `kernels/temporal.mojo` as private free functions, and
-`parquet/reader.mojo` carried its own epoch constants.
+Shared by `kernels/temporal.mojo`, `kernels/cast.mojo` and
+`parquet/reader.mojo` without any of them depending on each other. The calendar
+half imports nothing; `WallClock` and `TimestampFormat` add the tz database
+(morrow) and marrow's error kinds, nothing above them.
 
 Everything here is integer arithmetic on a **day count** — days since
 1970-01-01, the unit every Arrow date and timestamp reduces to. The
 *resolution* lookups (`TimeUnit` -> ticks per second, dtype -> nanoseconds per
-tick) deliberately stay in `kernels/temporal.mojo`: they are keyed on
-`marrow.dtypes` types, and importing those here would cost the leaf property
-for two small ladders.
+tick) stay in `kernels/temporal.mojo`: they are keyed on `marrow.dtypes`
+types, which this module does not import.
+
+`WallClock` turns a zoned timestamp's UTC ticks into wall-clock ticks and
+back; zones come from morrow, which reads the system tz database once per zone
+per process and resolves a skipped wall-clock time with the offset before it
+and a repeated one as its earlier instant, as ICU and DuckDB do.
+`TimestampFormat` writes one as text.
 
 **Shaped for hot loops.** `CivilDate` is three `Int`s with no heap state and no
 validity, so it is register-passable and trivially copyable; every method is
 `@always_inline`. The extraction kernels call these once per element, so a
 non-inlined call or a heap allocation here would show up as a per-row cost.
 """
+
+
+from morrow import TimeZone
+
+from ..errors import IOError, KeyError
 
 
 @always_inline
@@ -422,3 +430,139 @@ struct Iso8601[fraction_digits: Int]:
             if fraction != 0:
                 writer.write(".")
                 _write_padded(writer, fraction, Self.fraction_digits)
+
+
+struct WallClock(Copyable, Movable):
+    """A time zone and the tick rate of the timestamps read in it."""
+
+    var zone: TimeZone
+    var ticks_per_second: Int
+
+    def __init__(out self, var zone: TimeZone, ticks_per_second: Int):
+        self.zone = zone^
+        self.ticks_per_second = ticks_per_second
+
+    @staticmethod
+    def is_utc(name: StringSlice) -> Bool:
+        """Whether a timestamp's `timezone` names UTC, whose wall clock is its
+        UTC time."""
+        return name == "" or name == "UTC" or name == "Etc/UTC" or name == "Z"
+
+    @staticmethod
+    def load_zone(name: String) raises -> TimeZone:
+        """The zone a timestamp's `timezone` names: UTC, a fixed `+HH:MM`
+        offset (the spelling Arrow allows), or an IANA name."""
+        if Self.is_utc(name):
+            return TimeZone(0, "UTC")
+        try:
+            if name.startswith("+") or name.startswith("-"):
+                return TimeZone.from_utc(name)
+            return TimeZone.from_name(name)
+        except e:
+            raise KeyError(t"tz: unknown time zone '{name}' ({e})")
+
+    @staticmethod
+    def of(zone: String, ticks_per_second: Int) raises -> Optional[WallClock]:
+        """The clock timestamps in `zone` are read on; None for a naive or UTC
+        zone, which needs no conversion."""
+        if Self.is_utc(zone):
+            return None
+        return WallClock(Self.load_zone(zone), ticks_per_second)
+
+    def offset_at(self, utc_seconds: Int) raises -> Int:
+        """Seconds east of UTC at the instant `utc_seconds`."""
+        try:
+            return self.zone.at(utc_seconds).offset
+        except e:
+            raise IOError(t"tz: {self.zone}: {e}")
+
+    def to_local(self, ticks: Int) raises -> Int:
+        """UTC ticks to wall-clock ticks, keeping the sub-second part."""
+        var secs = floor_div(ticks, self.ticks_per_second)
+        return ticks + self.offset_at(secs) * self.ticks_per_second
+
+    def to_utc(self, ticks: Int) raises -> Int:
+        """Wall-clock ticks to UTC ticks, `to_local`'s inverse."""
+        var tps = self.ticks_per_second
+        var local = floor_div(ticks, tps)
+        var days = floor_div(local, 86400)
+        var tod = local - days * 86400
+        var c = CivilDate.from_days(days)
+        var offset: Int
+        try:
+            offset = self.zone.resolve(
+                c.year, c.month, c.day, tod // 3600, (tod // 60) % 60, tod % 60
+            ).offset
+        except e:
+            raise IOError(t"tz: {self.zone}: {e}")
+        return ticks - offset * tps
+
+
+struct TimestampFormat(Copyable, Movable):
+    """How one timestamp type is written as text, DuckDB's spelling:
+    `2021-06-15 14:30:45`, a fraction only when non-zero and without trailing
+    zeros, and for a zoned timestamp its wall-clock time followed by the
+    offset — `+02`, or `+05:30` when the offset has minutes."""
+
+    var clock: Optional[WallClock]
+    """None for a naive or UTC timestamp, whose wall clock is UTC."""
+    var zoned: Bool
+    """Whether to write an offset; true for UTC too, which writes `+00`."""
+    var ticks_per_second: Int
+    var digits: Int
+    """Fraction digits one tick needs: 0, 3, 6 or 9."""
+
+    def __init__(out self, zone: String, ticks_per_second: Int) raises:
+        """The format of timestamps in `zone` ("" for naive) stored at
+        `ticks_per_second`."""
+        self.clock = WallClock.of(zone, ticks_per_second)
+        self.zoned = Bool(zone)
+        self.ticks_per_second = ticks_per_second
+        self.digits = 0
+        var scale = self.ticks_per_second
+        while scale > 1:
+            scale //= 10
+            self.digits += 1
+
+    def write(self, mut out: String, ticks: Int) raises:
+        """Append the timestamp `ticks` to `out`."""
+        var tps = self.ticks_per_second
+        var secs = floor_div(ticks, tps)
+        var frac = ticks - secs * tps
+        var offset = self.clock.value().offset_at(secs) if self.clock else 0
+        var local = secs + offset
+        var days = floor_div(local, 86400)
+        var tod = local - days * 86400
+        var c = CivilDate.from_days(days)
+        Self._pad(out, c.year, 4)
+        out += "-"
+        Self._pad(out, c.month, 2)
+        out += "-"
+        Self._pad(out, c.day, 2)
+        out += " "
+        Self._pad(out, tod // 3600, 2)
+        out += ":"
+        Self._pad(out, (tod // 60) % 60, 2)
+        out += ":"
+        Self._pad(out, tod % 60, 2)
+        if frac != 0:
+            var width = self.digits
+            while frac % 10 == 0:
+                frac //= 10
+                width -= 1
+            out += "."
+            Self._pad(out, frac, width)
+        if self.zoned:
+            out += "-" if offset < 0 else "+"
+            Self._pad(out, abs(offset) // 3600, 2)
+            if abs(offset) % 3600 != 0:
+                out += ":"
+                Self._pad(out, (abs(offset) // 60) % 60, 2)
+
+    @staticmethod
+    def _pad(mut out: String, value: Int, width: Int):
+        """`value` in decimal, zero-padded to `width` digits."""
+        var digits = String(value)
+        for _ in range(width - digits.byte_length()):
+            out += "0"
+        out += digits

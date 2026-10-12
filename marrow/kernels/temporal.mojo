@@ -69,11 +69,10 @@ from ..dtypes import (
     TimestampType,
     TimeUnit,
 )
-from ..errors import IOError, InternalError, InvalidError, KeyError, TypeError
+from ..errors import InternalError, InvalidError, TypeError
 from .core import Kernel
-from morrow import TimeZone
 
-from ..utils import CivilDate, floor_div
+from ..utils import CivilDate, WallClock, floor_div
 
 
 # ---------------------------------------------------------------------------
@@ -90,10 +89,7 @@ def _unit_tps(u: TimeUnit) -> Int:
 
 def ticks_per_second(dt: DynType) raises -> Int:
     """Ticks per second for a temporal dtype whose one tick is <= 1 second
-    (date64, timestamp, time32, time64, duration).
-
-    Public because `cast.mojo` derives nanoseconds-per-tick from it. That
-    direction is the only one: `temporal` imports nothing from `cast`."""
+    (date64, timestamp, time32, time64, duration)."""
     if dt.is_date64():
         return 1_000  # milliseconds
     elif dt.is_timestamp():
@@ -107,129 +103,69 @@ def ticks_per_second(dt: DynType) raises -> Int:
     raise TypeError(t"temporal: {dt} has no sub-second tick resolution")
 
 
-struct WallClock(Copyable, Movable):
-    """A time zone and the tick rate of the timestamps read in it: what turns
-    a zoned timestamp's UTC ticks into wall-clock ticks, and back.
+# ---------------------------------------------------------------------------
+# Time zones over arrays
+# ---------------------------------------------------------------------------
 
-    Zones come from morrow, which reads the system tz database once per zone
-    per process and resolves a skipped wall-clock time with the offset before
-    it and a repeated one as its earlier instant, as ICU and DuckDB do.
-    """
 
-    var zone: TimeZone
-    var ticks_per_second: Int
+def _is_zoned(dt: DynType) -> Bool:
+    """Whether `dt` is a timestamp whose wall clock is not UTC."""
+    return dt.is_timestamp() and not WallClock.is_utc(
+        dt.as_timestamp().timezone
+    )
 
-    def __init__(out self, var zone: TimeZone, ticks_per_second: Int):
-        self.zone = zone^
-        self.ticks_per_second = ticks_per_second
 
-    # -- zones -------------------------------------------------------------
+def _clock(dt: DynType) raises -> Optional[WallClock]:
+    """The clock `dt`'s fields are read on: None for anything but a zoned
+    timestamp."""
+    if not dt.is_timestamp():
+        return None
+    ref ts = dt.as_timestamp()
+    return WallClock.of(ts.timezone, _unit_tps(ts.unit))
 
-    @staticmethod
-    def is_utc(name: StringSlice) -> Bool:
-        """Whether a timestamp's `timezone` names UTC, whose wall clock is its
-        UTC time."""
-        return name == "" or name == "UTC" or name == "Etc/UTC" or name == "Z"
 
-    @staticmethod
-    def is_zoned(dt: DynType) -> Bool:
-        """Whether `dt` is a timestamp whose wall clock is not UTC."""
-        return dt.is_timestamp() and not Self.is_utc(dt.as_timestamp().timezone)
-
-    @staticmethod
-    def load_zone(name: String) raises -> TimeZone:
-        """The zone a timestamp's `timezone` names: UTC, a fixed `+HH:MM`
-        offset (the spelling Arrow allows), or an IANA name."""
-        if Self.is_utc(name):
-            return TimeZone(0, "UTC")
-        try:
-            if name.startswith("+") or name.startswith("-"):
-                return TimeZone.from_utc(name)
-            return TimeZone.from_name(name)
-        except e:
-            raise KeyError(t"tz: unknown time zone '{name}' ({e})")
-
-    @staticmethod
-    def of(dt: DynType) raises -> Optional[WallClock]:
-        """The clock a timestamp's fields are read on; None for a naive or UTC
-        one, which needs no conversion."""
-        if not Self.is_zoned(dt):
-            return None
-        ref ts = dt.as_timestamp()
-        return WallClock(Self.load_zone(ts.timezone), _unit_tps(ts.unit))
-
-    # -- one value ---------------------------------------------------------
-
-    def offset_at(self, utc_seconds: Int) raises -> Int:
-        """Seconds east of UTC at the instant `utc_seconds`."""
-        try:
-            return self.zone.at(utc_seconds).offset
-        except e:
-            raise IOError(t"tz: {self.zone}: {e}")
-
-    def to_local(self, ticks: Int) raises -> Int:
-        """UTC ticks to wall-clock ticks, keeping the sub-second part."""
-        var secs = floor_div(ticks, self.ticks_per_second)
-        return ticks + self.offset_at(secs) * self.ticks_per_second
-
-    def to_utc(self, ticks: Int) raises -> Int:
-        """Wall-clock ticks to UTC ticks, `to_local`'s inverse."""
-        var tps = self.ticks_per_second
-        var local = floor_div(ticks, tps)
-        var days = floor_div(local, 86400)
-        var tod = local - days * 86400
-        var c = CivilDate.from_days(days)
-        var offset: Int
-        try:
-            offset = self.zone.resolve(
-                c.year, c.month, c.day, tod // 3600, (tod // 60) % 60, tod % 60
-            ).offset
-        except e:
-            raise IOError(t"tz: {self.zone}: {e}")
-        return ticks - offset * tps
-
-    # -- whole arrays ------------------------------------------------------
-
-    def map[
-        to_utc: Bool
-    ](self, array: DynArray, var to: DynType) raises -> DynArray:
-        """Every tick of a timestamp array moved onto this clock, or off it
-        with `to_utc`, typed `to`."""
-        var data = array.to_data()
-        var n = data.length
-        var out = Buffer.alloc_uninit[DType.int64](n)
-        var dst = out.view[DType.int64](0, n)
-        var src = data.buffers[0].view[DType.int64](data.offset, n)
-        for i in range(n):
-            var raw = Int(src.unsafe_get(i))
-            comptime if to_utc:
-                raw = self.to_utc(raw)
-            else:
-                raw = self.to_local(raw)
-            dst.unsafe_set(i, Int64(raw))
-        return DynArray.from_data(
-            ArrayData(like=data, dtype=to^, buffers=[out.to_immutable()])
+def _shift[
+    to_utc: Bool
+](clock: WallClock, array: DynArray, var to: DynType) raises -> DynArray:
+    """Every tick of a timestamp array moved onto `clock`, or off it with
+    `to_utc`, typed `to`."""
+    var data = array.to_data()
+    var n = data.length
+    var out = Buffer.alloc_uninit[DType.int64](n)
+    var dst = out.view[DType.int64](0, n)
+    var src = data.buffers[0].view[DType.int64](data.offset, n)
+    for i in range(n):
+        var raw = Int(src.unsafe_get(i))
+        comptime if to_utc:
+            raw = clock.to_utc(raw)
+        else:
+            raw = clock.to_local(raw)
+        dst.unsafe_set(i, Int64(raw))
+    return DynArray.from_data(
+        ArrayData(
+            like=data,
+            dtype=to^,
+            buffers=[out.to_immutable()],
         )
+    )
 
-    @staticmethod
-    @no_inline
-    def localise(array: DynArray) raises -> DynArray:
-        """A zoned timestamp's wall-clock times, as a naive timestamp of the
-        same unit — what every field extractor reads. Any other array comes
-        back as itself, an O(1) copy.
 
-        The extractors' `dispatch` and the expression nodes call this on the
-        erased array; the typed `apply[T]` overloads read the values as they
-        are, UTC for a zoned timestamp. Localising in the typed loops instead,
-        which are instantiated per kernel and per temporal type, is 3x the
-        `__text`."""
-        var dt = array.dtype()
-        var clock = Self.of(dt)
-        if not clock:
-            return array.copy()
-        return clock.value().map[False](
-            array, DynType(TimestampType(dt.as_timestamp().unit))
-        )
+@no_inline
+def localise(array: DynArray) raises -> DynArray:
+    """A zoned timestamp's wall-clock times, as a naive timestamp of the same
+    unit — what every field extractor reads. Any other array comes back as
+    itself, an O(1) copy.
+
+    The extractors' `dispatch` and the expression nodes call this on the erased
+    array; the typed `apply[T]` overloads read the values as they are, UTC for
+    a zoned timestamp."""
+    var dt = array.dtype()
+    var clock = _clock(dt)
+    if not clock:
+        return array.copy()
+    return _shift[False](
+        clock.value(), array, DynType(TimestampType(dt.as_timestamp().unit))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +181,10 @@ def _extract[
     ``component``, and write an ``Int32Array`` with the input's validity."""
     var dt = array.type()
     debug_assert(
-        not WallClock.is_zoned(dt),
+        not _is_zoned(dt),
         (
             "_extract: a zoned timestamp reaches the typed loop; call"
-            " WallClock.localise first"
+            " localise first"
         ),
     )
     var is_date = dt.is_date32() or dt.is_date64()
@@ -298,7 +234,7 @@ trait TemporalExtractKernel(Kernel):
     @staticmethod
     def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> Int32Array:
         """The field of every element. A zoned timestamp must go through
-        `WallClock.localise` first, as `dispatch` does; the typed loop never
+        `localise` first, as `dispatch` does; the typed loop never
         reads a zone, and asserts as much under `ASSERT=all`."""
         return _extract[T, Self.component](array, Self.calendar, Self.name)
 
@@ -323,7 +259,7 @@ trait TemporalExtractKernel(Kernel):
         if not dt.is_temporal():
             raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
-        var local = WallClock.localise(array)
+        var local = localise(array)
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(local.as_primitive[T]()).to_dyn()
@@ -634,7 +570,7 @@ struct DateTruncKernel(Kernel):
         var data = array.to_data()
         var n = data.length
         var width = dt.byte_width()
-        var clock = WallClock.of(dt)
+        var clock = _clock(dt)
         var tps = 1 if dt.is_date32() else ticks_per_second(dt)
 
         if unit.is_calendar():
@@ -692,10 +628,10 @@ def _extract64[
     """`_extract`, writing `int64`. See that function for the normalisation."""
     var dt = array.type()
     debug_assert(
-        not WallClock.is_zoned(dt),
+        not _is_zoned(dt),
         (
             "_extract64: a zoned timestamp reaches the typed loop; call"
-            " WallClock.localise first"
+            " localise first"
         ),
     )
     var is_date = dt.is_date32() or dt.is_date64()
@@ -747,7 +683,7 @@ trait TemporalExtract64Kernel(Kernel):
         if not dt.is_temporal():
             raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
-        var local = WallClock.localise(array)
+        var local = localise(array)
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(local.as_primitive[T]()).to_dyn()
@@ -881,7 +817,7 @@ struct LastDayKernel(Kernel):
         if not dt.is_temporal():
             raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
-        var local = WallClock.localise(array)
+        var local = localise(array)
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(local.as_primitive[T]()).to_dyn()
@@ -960,10 +896,10 @@ def _extract_name[
     null rather than writing a placeholder."""
     var dt = array.type()
     debug_assert(
-        not WallClock.is_zoned(dt),
+        not _is_zoned(dt),
         (
             "_extract_name: a zoned timestamp reaches the typed loop; call"
-            " WallClock.localise first"
+            " localise first"
         ),
     )
     if not (dt.is_date32() or dt.is_date64() or dt.is_timestamp()):
@@ -1001,7 +937,7 @@ trait TemporalNameKernel(Kernel):
         if not dt.is_temporal():
             raise Self.error[TypeError](t"expected a temporal array, got {dt}")
 
-        var local = WallClock.localise(array)
+        var local = localise(array)
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(local.as_primitive[T]()).to_dyn()
@@ -1060,7 +996,7 @@ struct AssumeTimezoneKernel(Kernel):
             # A naive timestamp is already read as UTC: nothing moves.
             return ConvertTimezoneKernel.apply(array, zone)
         var clock = WallClock(WallClock.load_zone(zone), _unit_tps(ts.unit))
-        return clock.map[True](array, DynType(TimestampType(ts.unit, zone)))
+        return _shift[True](clock, array, DynType(TimestampType(ts.unit, zone)))
 
 
 struct ConvertTimezoneKernel(Kernel):

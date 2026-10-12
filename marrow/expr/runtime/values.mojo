@@ -163,6 +163,7 @@ from ...kernels.string import (
     StringLtKernel,
     StringNeKernel,
 )
+from ...utils import WallClock
 from ...kernels.temporal import (
     AssumeTimezoneKernel,
     CalendarUnit,
@@ -183,7 +184,6 @@ from ...kernels.temporal import (
     SecondKernel,
     WeekKernel,
     YearKernel,
-    WallClock,
 )
 from ...dtypes import (
     DecimalType,

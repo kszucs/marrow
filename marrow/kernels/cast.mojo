@@ -87,7 +87,7 @@ from ..dtypes import (
     binary,
 )
 from .core import Kernel
-from .temporal import WallClock, ticks_per_second
+from .temporal import localise, ticks_per_second
 from ..utils import (
     CivilDate,
     Epoch,
@@ -95,6 +95,7 @@ from ..utils import (
     floor_div,
     split_days,
     truncate_div,
+    TimestampFormat,
 )
 from ..execution import ExecContext
 from ..errors import InternalError, InvalidError, NotImplementedError, TypeError
@@ -944,7 +945,7 @@ struct TemporalCastKernel(CastKernel):
         dropping the time of day for a date is the conversion itself and never
         raises."""
         var src = array.dtype()
-        var local = WallClock.localise(array)
+        var local = localise(array)
         var data = local.to_data()
         var ns_from = Self.ns_per_tick(src)
         var per_day = Int64(Epoch.NANOS_PER_DAY) // ns_from
@@ -1251,74 +1252,6 @@ struct NumToStringKernel(CastKernel):
         return b.finish()
 
 
-struct TimestampFormat(Copyable, Movable):
-    """How one timestamp type is written as text, DuckDB's spelling:
-    `2021-06-15 14:30:45`, a fraction only when non-zero and without trailing
-    zeros, and for a zoned timestamp its wall-clock time followed by the
-    offset — `+02`, or `+05:30` when the offset has minutes."""
-
-    var clock: Optional[WallClock]
-    """None for a naive or UTC timestamp, whose wall clock is UTC."""
-    var zoned: Bool
-    """Whether to write an offset; true for UTC too, which writes `+00`."""
-    var ticks_per_second: Int
-    var digits: Int
-    """Fraction digits one tick needs: 0, 3, 6 or 9."""
-
-    def __init__(out self, dtype: TimestampType) raises:
-        self.clock = WallClock.of(DynType(dtype.copy()))
-        self.zoned = Bool(dtype.timezone)
-        self.ticks_per_second = ticks_per_second(DynType(dtype.copy()))
-        self.digits = 0
-        var scale = self.ticks_per_second
-        while scale > 1:
-            scale //= 10
-            self.digits += 1
-
-    def write(self, mut out: String, ticks: Int) raises:
-        """Append the timestamp `ticks` to `out`."""
-        var tps = self.ticks_per_second
-        var secs = floor_div(ticks, tps)
-        var frac = ticks - secs * tps
-        var offset = self.clock.value().offset_at(secs) if self.clock else 0
-        var local = secs + offset
-        var days = floor_div(local, 86400)
-        var tod = local - days * 86400
-        var c = CivilDate.from_days(days)
-        Self._pad(out, c.year, 4)
-        out += "-"
-        Self._pad(out, c.month, 2)
-        out += "-"
-        Self._pad(out, c.day, 2)
-        out += " "
-        Self._pad(out, tod // 3600, 2)
-        out += ":"
-        Self._pad(out, (tod // 60) % 60, 2)
-        out += ":"
-        Self._pad(out, tod % 60, 2)
-        if frac != 0:
-            var width = self.digits
-            while frac % 10 == 0:
-                frac //= 10
-                width -= 1
-            out += "."
-            Self._pad(out, frac, width)
-        if self.zoned:
-            out += "-" if offset < 0 else "+"
-            Self._pad(out, abs(offset) // 3600, 2)
-            if abs(offset) % 3600 != 0:
-                out += ":"
-                Self._pad(out, (abs(offset) // 60) % 60, 2)
-
-    @staticmethod
-    def _pad(mut out: String, value: Int, width: Int):
-        """`value` in decimal, zero-padded to `width` digits."""
-        var digits = String(value)
-        for _ in range(width - digits.byte_length()):
-            out += "0"
-        out += digits
-
-
 struct TimestampToStringKernel(CastKernel):
     """Format a timestamp array as text, as `TimestampFormat` spells it."""
 
@@ -1346,7 +1279,9 @@ struct TimestampToStringKernel(CastKernel):
     def apply[
         To: StringLikeType
     ](array: TimestampArray) raises -> BinaryLikeArray[To]:
-        var format = TimestampFormat(array.dtype)
+        var format = TimestampFormat(
+            array.dtype.timezone, ticks_per_second(DynType(array.dtype.copy()))
+        )
         var src = array.values()
         var n = len(array)
         # 19 bytes of date and time, room for a microsecond fraction and an
