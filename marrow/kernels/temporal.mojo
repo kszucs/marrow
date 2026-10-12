@@ -208,15 +208,7 @@ struct WallClock(Copyable, Movable):
                 raw = self.to_local(raw)
             dst.unsafe_set(i, Int64(raw))
         return DynArray.from_data(
-            ArrayData(
-                dtype=to^,
-                length=n,
-                nulls=data.nulls,
-                offset=0,
-                bitmap=data.owned_validity(),
-                buffers=[out.to_immutable()],
-                children=[],
-            )
+            ArrayData(like=data, dtype=to^, buffers=[out.to_immutable()])
         )
 
     @staticmethod
@@ -283,15 +275,8 @@ def _extract[
         dst.unsafe_set(i, component(days, tod))
 
     # A null input element yields a null output element.
-    var vbm: Optional[Bitmap[mut=False]] = None
-    if array.bitmap:
-        var v = array.bitmap.value().view(array.offset, n)
-        vbm = v.union(v).to_immutable()
     return Int32Array(
-        length=n,
-        nulls=array.nulls,
-        offset=0,
-        bitmap=vbm^,
+        like=array,
         buffer=out.to_immutable(),
     )
 
@@ -568,19 +553,11 @@ def _trunc[
             raw = clock.value().to_utc(raw)
         dst.unsafe_set(i, Scalar[N](raw))
 
-    var vbm: Optional[Bitmap[mut=False]] = None
-    if data.bitmap:
-        var v = data.bitmap.value().view(data.offset, n)
-        vbm = v.union(v).to_immutable()
     return DynArray.from_data(
         ArrayData(
+            like=data,
             dtype=dt.copy(),
-            length=n,
-            nulls=data.nulls,
-            offset=0,
-            bitmap=vbm^,
             buffers=[out.to_immutable()],
-            children=[],
         )
     )
 
@@ -628,19 +605,11 @@ def _trunc_calendar[
             floored = clock.value().to_utc(floored)
         dst.unsafe_set(i, Scalar[N](floored))
 
-    var vbm: Optional[Bitmap[mut=False]] = None
-    if data.bitmap:
-        var v = data.bitmap.value().view(data.offset, n)
-        vbm = v.union(v).to_immutable()
     return DynArray.from_data(
         ArrayData(
+            like=data,
             dtype=dt.copy(),
-            length=n,
-            nulls=data.nulls,
-            offset=0,
-            bitmap=vbm^,
             buffers=[out.to_immutable()],
-            children=[],
         )
     )
 
@@ -751,15 +720,8 @@ def _extract64[
         var tod = total - days * 86400  # [0, 86400)
         dst.unsafe_set(i, component(days, tod))
 
-    var vbm: Optional[Bitmap[mut=False]] = None
-    if array.bitmap:
-        var v = array.bitmap.value().view(array.offset, n)
-        vbm = v.union(v).to_immutable()
     return Int64Array(
-        length=n,
-        nulls=array.nulls,
-        offset=0,
-        bitmap=vbm^,
+        like=array,
         buffer=out.to_immutable(),
     )
 

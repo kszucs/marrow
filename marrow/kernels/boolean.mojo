@@ -135,8 +135,7 @@ def _validity_ones(arr: BoolArray) raises -> Bitmap[mut=False]:
     valid). Lets the Kleene formulas treat both operands uniformly."""
     var v = arr.validity()
     if v:
-        # OR the view with itself to materialize a fresh offset-0 copy.
-        return v.value().union(v.value()).to_immutable()
+        return v.value().to_owned()
     else:
         return (~Bitmap.alloc_zeroed(len(arr)).view()).to_immutable()
 
@@ -252,16 +251,7 @@ struct NotKernel(BoolUnaryKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         # NOT flips the data; nulls propagate unchanged (NOT NULL = NULL).
-        var bm: Optional[Bitmap[mut=False]] = None
-        if arr.bitmap:
-            bm = _validity_ones(arr)
-        return BoolArray(
-            length=len(arr),
-            nulls=arr.null_count(),
-            offset=0,
-            bitmap=bm^,
-            buffer=(~arr.values()).to_immutable(),
-        )
+        return BoolArray(like=arr, buffer=(~arr.values()).to_immutable())
 
 
 struct XorKernel(BoolBinaryKernel):
@@ -351,11 +341,6 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
     def core[T: DType, W: Int](x: SIMD[T, W]) -> SIMD[DType.bool, W]:
         ...
 
-    @always_inline
-    @staticmethod
-    def keep[W: Int](v: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-        return v
-
     @staticmethod
     def apply(
         arr: DynArray, ctx: ExecContext = ExecContext.serial()
@@ -373,17 +358,8 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
             apply[T.native, Self.core[T.native, _]](
                 prim.values(), result.view(), ctx
             )
-            var vbm: Optional[Bitmap[]] = None
-            var validity = prim.validity()
-            if validity:
-                var vout = Bitmap.alloc_uninit(n)
-                apply[Self.keep](validity.value(), vout.view())
-                vbm = vout.to_immutable()
             return BoolArray(
-                length=n,
-                nulls=prim.null_count(),
-                offset=0,
-                bitmap=vbm^,
+                like=prim,
                 buffer=result.to_immutable(),
             )
 

@@ -921,6 +921,26 @@ def test_add_on_sliced_input_keeps_the_slice_s_own_nulls() raises:
     assert_true(out.is_valid(2))
 
 
+def test_unary_on_sliced_input_keeps_the_slice_s_own_nulls() raises:
+    """A unary kernel's output is `offset=0` too, so it must rebase the
+    input's validity rather than share the parent's bitmap as it is."""
+    var parent = _nulls_at_front(5, 2)
+    var sliced = parent.slice(2, 3)  # [2, 3, 4], no nulls
+    var out = NegKernel.apply[Int32Type](sliced)
+    assert_equal(out.null_count(), 0)
+    assert_true(out == array([-2, -3, -4], int32))
+
+    var b = Int32Builder(4)
+    b.append(Scalar[int32.native](0))
+    b.append(Scalar[int32.native](1))
+    b.append_null()  # parent index 2 -> slice index 1
+    b.append(Scalar[int32.native](3))
+    var nulled = NegKernel.apply[Int32Type](b.finish().slice(1, 3))
+    assert_true(nulled.is_valid(0))
+    assert_false(nulled.is_valid(1))
+    assert_true(nulled.is_valid(2))
+
+
 def test_add_sliced_when_only_one_side_has_a_bitmap() raises:
     """`Bitmap.intersect` returns the *other* bitmap when one side is None, so
     the single-sided path skipped offsetting entirely."""

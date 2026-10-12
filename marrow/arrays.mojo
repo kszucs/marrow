@@ -300,6 +300,25 @@ struct ArrayData(Copyable, Equatable, Movable):
         self.buffers = buffers^
         self.children = children^
 
+    def __init__(
+        out self,
+        *,
+        like: ArrayData,
+        var dtype: DynType,
+        var buffers: List[Buffer[mut=False]],
+    ) raises:
+        """A flat `dtype` layout over `buffers` with `like`'s length and nulls,
+        indexed from 0."""
+        self = Self(
+            dtype=dtype^,
+            length=like.length,
+            nulls=like.nulls,
+            offset=0,
+            bitmap=like.owned_validity(),
+            buffers=buffers^,
+            children=[],
+        )
+
     def __eq__(self, other: Self) -> Bool:
         """Structural equality of the layout's fields.
 
@@ -636,6 +655,20 @@ struct BoolArray(Array):
             buffer=Bitmap.alloc_zeroed(0).to_immutable(),
         )
 
+    def __init__[
+        A: Array
+    ](out self, *, like: A, buffer: Bitmap[mut=False]) raises:
+        """`buffer`'s values with `like`'s length and nulls: what a predicate
+        returns over an input it tests value by value."""
+        var data = like.to_data()
+        self = Self(
+            length=data.length,
+            nulls=data.nulls,
+            offset=0,
+            bitmap=data.owned_validity(),
+            buffer=buffer,
+        )
+
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
             raise InvalidError("BoolArray requires exactly one buffer")
@@ -862,6 +895,29 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             bitmap=bitmap,
             buffer=buffer,
         )
+
+    def __init__[
+        A: Array
+    ](out self, *, like: A, dtype: Self.T, buffer: Buffer[mut=False]) raises:
+        """`buffer`'s values, typed `dtype`, with `like`'s length and nulls:
+        what a kernel returns when it maps an input value by value."""
+        var data = like.to_data()
+        self = Self(
+            dtype.copy(),
+            length=data.length,
+            nulls=data.nulls,
+            offset=0,
+            bitmap=data.owned_validity(),
+            buffer=buffer,
+        )
+
+    def __init__[
+        DT: NumericType, A: Array
+    ](
+        out self: PrimitiveArray[DT], *, like: A, buffer: Buffer[mut=False]
+    ) raises:
+        """`buffer`'s values with `like`'s length and nulls."""
+        self = PrimitiveArray[DT](like=like, dtype=DT(), buffer=buffer)
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:

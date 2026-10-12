@@ -281,10 +281,7 @@ struct NumericCastKernel(CastKernel):
             apply[In, Out, Self.core[In, Out, _]](array.values(), dst, ctx)
 
         return PrimitiveArray[To](
-            length=length,
-            nulls=array.nulls,
-            offset=0,
-            bitmap=_rebased_validity(array.bitmap, array.offset, length),
+            like=array,
             buffer=buf.to_immutable(),
         )
 
@@ -333,23 +330,6 @@ struct NumericCastKernel(CastKernel):
 # and an integer target is always scale 0, so `DecimalToIntKernel` only ever scales
 # *down*. The fat version could not express that — it had to test `delta` at
 # runtime on every path.
-
-
-def _rebased_validity(
-    bitmap: Optional[Bitmap[mut=False]], offset: Int, length: Int
-) raises -> Optional[Bitmap[mut=False]]:
-    """The source's validity bitmap, indexed from 0 instead of from `offset`.
-
-    Every cast that allocates a fresh values buffer starts it at 0 while
-    sharing the source's bitmap, which is indexed from the source's own
-    offset. For a sliced input the two disagree and every null lands on the
-    wrong row. An offset-0 source shares as before; anything else pays one
-    copy, which is what `ArrayData.owned_validity` documents itself as being
-    for.
-    """
-    if offset == 0 or not bitmap:
-        return bitmap.copy()
-    return bitmap.value().view(offset, length).to_owned()
 
 
 def _digit_bound[T: DType](precision: Int) -> Scalar[T]:
@@ -405,13 +385,9 @@ def _map_decimal[
             dst.store[1](i, op(src.load[1](i)))
     return DynArray.from_data(
         ArrayData(
+            like=data,
             dtype=to.copy(),
-            length=n,
-            nulls=data.nulls,
-            offset=0,
-            bitmap=_rebased_validity(data.bitmap, data.offset, n),
             buffers=[out.to_immutable()],
-            children=[],
         )
     )
 
@@ -767,10 +743,7 @@ struct NumToBoolKernel(CastKernel):
             array.values(), result.view(), ctx
         )
         return BoolArray(
-            length=length,
-            nulls=array.nulls,
-            offset=0,
-            bitmap=_rebased_validity(array.bitmap, array.offset, length),
+            like=array,
             buffer=result.to_immutable(),
         )
 
@@ -822,10 +795,7 @@ struct BoolToNumKernel(CastKernel):
             array.values(), buf.view[Out](0, length), ctx
         )
         return PrimitiveArray[To](
-            length=length,
-            nulls=array.nulls,
-            offset=0,
-            bitmap=_rebased_validity(array.bitmap, array.offset, length),
+            like=array,
             buffer=buf.to_immutable(),
         )
 
@@ -1062,13 +1032,9 @@ struct TemporalCastKernel(CastKernel):
         apply[DType.int64, DstN](src, buf.view[DstN](0, length), split, ctx)
         return DynArray.from_data(
             ArrayData(
+                like=data,
                 dtype=to.copy(),
-                length=length,
-                nulls=data.nulls,
-                offset=0,
-                bitmap=_rebased_validity(data.bitmap, data.offset, length),
                 buffers=[buf.to_immutable()],
-                children=[],
             )
         )
 
@@ -1128,13 +1094,9 @@ struct TemporalCastKernel(CastKernel):
             apply[SrcN, DstN](src, buf.view[DstN](0, length), scale, ctx)
         return DynArray.from_data(
             ArrayData(
+                like=data,
                 dtype=to.copy(),
-                length=length,
-                nulls=data.nulls,
-                offset=0,
-                bitmap=_rebased_validity(data.bitmap, data.offset, length),
                 buffers=[buf.to_immutable()],
-                children=[],
             )
         )
 

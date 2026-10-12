@@ -70,15 +70,8 @@ struct ArrayLengthKernel(Kernel):
         vectorize[width](n, lane)
 
         # Propagate the input's validity: a null list yields a null length.
-        var vbm: Optional[Bitmap[mut=False]] = None
-        var validity = array.validity()
-        if validity:
-            vbm = validity.value().union(validity.value()).to_immutable()
         return Int32Array(
-            length=n,
-            nulls=array.null_count(),
-            offset=0,
-            bitmap=vbm^,
+            like=array,
             buffer=out.to_immutable(),
         )
 
@@ -134,10 +127,8 @@ struct ArrayContainsKernel(Kernel):
         ref child = list.values().as_primitive[V]()
         var offs = list.offsets.view[off](list.offset)
         var data = Bitmap.alloc_zeroed(n)
-        var valid = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if list.is_valid(i):
-                valid.set(i)
                 if elem.is_valid(i):
                     var lo = Int(offs.load[1](i))
                     var hi = Int(offs.load[1](i + 1))
@@ -146,17 +137,7 @@ struct ArrayContainsKernel(Kernel):
                         if child.is_valid(j) and child.unsafe_get(j) == target:
                             data.set(i)
                             break
-        var nulls = list.null_count()
-        var bm: Optional[Bitmap[]] = None
-        if nulls > 0:
-            bm = valid.to_immutable()
-        return BoolArray(
-            length=n,
-            nulls=nulls,
-            offset=0,
-            bitmap=bm^,
-            buffer=data.to_immutable(),
-        )
+        return BoolArray(like=list, buffer=data.to_immutable())
 
     @staticmethod
     def dispatch(

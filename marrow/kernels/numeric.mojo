@@ -195,11 +195,8 @@ trait UnaryKernel(Kernel):
             array.values(), buf.view[native](0, length), ctx
         )
         return PrimitiveArray[T](
-            dtype=array.dtype.copy(),
-            length=length,
-            nulls=array.null_count(),
-            offset=0,
-            bitmap=array.bitmap,
+            like=array,
+            dtype=array.dtype,
             buffer=buf.to_immutable(),
         )
 

@@ -3636,3 +3636,92 @@ def test_sort_key_orders_as_the_bytes_do() raises:
     # Equal keys decide nothing: "abcdefgh" and its longer sibling tie.
     assert_equal(v.sort_key(4), v.sort_key(5))
     assert_true(v.sort_key(5) < v.sort_key(6))
+
+
+# ---------------------------------------------------------------------------
+# `like=` — a result with its input's length and nulls, indexed from 0
+# ---------------------------------------------------------------------------
+
+
+def _one_null_slice() raises -> Int32Array:
+    """`[1, null, 3]`, sliced out of `[0, 1, null, 3, 4]`: a null that sits
+    at index 1 of the slice and index 2 of its parent."""
+    var b = Int32Builder(5)
+    b.append(Int32(0))
+    b.append(Int32(1))
+    b.append_null()
+    b.append(Int32(3))
+    b.append(Int32(4))
+    return b.finish().slice(1, 3)
+
+
+def _int64s(*values: Int) -> Buffer[mut=False]:
+    var buf = Buffer.alloc_zeroed[DType.int64](len(values))
+    for i in range(len(values)):
+        buf.unsafe_set[DType.int64](i, Int64(values[i]))
+    return buf.to_immutable()
+
+
+def test_primitive_array_like_rebases_the_nulls() raises:
+    var out = Int64Array(like=_one_null_slice(), buffer=_int64s(10, 0, 30))
+    assert_equal(len(out), 3)
+    assert_equal(out.offset, 0)
+    assert_equal(out.null_count(), 1)
+    assert_true(out.is_valid(0))
+    assert_false(out.is_valid(1))
+    assert_true(out.is_valid(2))
+    assert_equal(out[0].value(), 10)
+    assert_equal(out[2].value(), 30)
+
+
+def test_primitive_array_like_of_an_all_valid_input_has_no_bitmap() raises:
+    var out = Int64Array(like=array([1, 2], int32), buffer=_int64s(5, 6))
+    assert_equal(out.null_count(), 0)
+    assert_false(Bool(out.bitmap))
+    assert_true(out == array([5, 6], int64))
+
+
+def test_primitive_array_like_takes_an_explicit_dtype() raises:
+    var ms = timestamp(TimeUnit("ms"), "UTC")
+    var out = PrimitiveArray[TimestampType](
+        like=_one_null_slice(), dtype=ms, buffer=_int64s(1, 2, 3)
+    )
+    assert_true(out.dtype == ms)
+    assert_false(out.is_valid(1))
+
+
+def test_primitive_array_like_another_layout() raises:
+    var b = StringBuilder(3)
+    b.append("a")
+    b.append_null()
+    b.append("ccc")
+    var strings = b.finish().slice(1, 2)  # [null, "ccc"]
+    var out = Int64Array(like=strings, buffer=_int64s(0, 3))
+    assert_false(out.is_valid(0))
+    assert_true(out.is_valid(1))
+    assert_equal(out[1].value(), 3)
+
+
+def test_bool_array_like_rebases_the_nulls() raises:
+    var bits = Bitmap.alloc_zeroed(3)
+    bits.set(2)
+    var out = BoolArray(like=_one_null_slice(), buffer=bits.to_immutable())
+    assert_equal(len(out), 3)
+    assert_equal(out.null_count(), 1)
+    assert_false(out.is_valid(1))
+    assert_false(out[0].value())
+    assert_true(out[2].value())
+
+
+def test_array_data_like_rebases_the_nulls() raises:
+    var data = ArrayData(
+        like=_one_null_slice().to_data(),
+        dtype=DynType(int64),
+        buffers=[_int64s(7, 8, 9)],
+    )
+    assert_equal(data.length, 3)
+    assert_equal(data.offset, 0)
+    assert_equal(data.nulls, 1)
+    var out = DynArray.from_data(data^).as_int64().copy()
+    assert_false(out.is_valid(1))
+    assert_equal(out[2].value(), 9)

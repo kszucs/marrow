@@ -110,15 +110,8 @@ struct LengthKernel(Kernel):
         apply[DType.int32](out.view[DType.int32](0, n), producer, ctx)
 
         # Propagate the input's validity: a null string yields a null length.
-        var vbm: Optional[Bitmap[mut=False]] = None
-        if array.bitmap:
-            var v = array.bitmap.value().view(array.offset, n)
-            vbm = v.union(v).to_immutable()
         return Int32Array(
-            length=n,
-            nulls=array.null_count(),
-            offset=0,
-            bitmap=vbm^,
+            like=array,
             buffer=out.to_immutable(),
         )
 
@@ -137,10 +130,7 @@ struct LengthKernel(Kernel):
         for i in range(n):
             out.unsafe_set[DType.int32](i, Int32(array.view_length(i)))
         return Int32Array(
-            length=n,
-            nulls=array.null_count(),
-            offset=0,
-            bitmap=_passthrough_validity(array),
+            like=array,
             buffer=out.to_immutable(),
         )
 
@@ -513,10 +503,7 @@ trait StringPredicateKernel(Kernel):
         # Validity is the left operand's: a constant right operand is never
         # null, so `Bitmap.intersect(l, None)` reduces to `l`.
         return BoolArray(
-            length=n,
-            nulls=array.null_count(),
-            offset=0,
-            bitmap=_passthrough_validity(array),
+            like=array,
             buffer=data.to_immutable(),
         )
 
@@ -633,18 +620,6 @@ struct StringGeKernel(StringPredicateKernel):
 # ---------------------------------------------------------------------------
 
 
-def _passthrough_validity[
-    A: BytesArray
-](array: A) raises -> Optional[Bitmap[mut=False]]:
-    """The operand's validity, offset-applied and owned — what a unary result
-    or a predicate against a constant returns, since a constant operand is
-    never null."""
-    var v = array.validity()
-    if v:
-        return v.value().to_owned()
-    return None
-
-
 struct MatchLikeKernel[ignore_case: Bool](StringPredicateKernel):
     """SQL ``LIKE`` (``pc.match_like``): ``%`` = any run, ``_`` = any single
     character, ``\\`` escapes, everything else literal. With `ignore_case` it
@@ -707,10 +682,7 @@ struct MatchLikeKernel[ignore_case: Bool](StringPredicateKernel):
                 data.set(i)
         # Null input yields a null output element.
         return BoolArray(
-            length=n,
-            nulls=array.null_count(),
-            offset=0,
-            bitmap=_passthrough_validity(array),
+            like=array,
             buffer=data.to_immutable(),
         )
 
