@@ -52,7 +52,7 @@ from std.utils import Variant
 from ..builders import DynBuilder, Int32Builder, StructBuilder, nulls
 from ..dtypes import Field, field, null, struct_
 from ..kernels.aggregate import AggKernel, Windowable
-from ..kernels.conditional import case_when
+from ..kernels.conditional import CaseWhenKernel
 from ..execution import ExecContext
 from ..kernels.filter import FilterKernel, TakeKernel
 from ..kernels.groupby import Groups
@@ -2152,7 +2152,7 @@ struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
             var admitted = self._where.value().push(
                 Morsel.ungrouped(sorted.copy())
             )
-            operand = case_when(
+            operand = CaseWhenKernel.dispatch(
                 [admitted.value().to_array(n).as_bool().copy()], [operand^]
             )
         return F.over(

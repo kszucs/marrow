@@ -81,10 +81,12 @@ from ...kernels.decimal import (
     DecimalPromotion,
     DecimalSubKernel,
 )
-from ...kernels.conditional import case_when as case_when_kernel
-from ...kernels.conditional import coalesce as coalesce_kernel
-from ...kernels.conditional import fill_null as fill_null_kernel
-from ...kernels.conditional import nullif as nullif_kernel
+from ...kernels.conditional import (
+    CaseWhenKernel,
+    CoalesceKernel,
+    FillNullKernel,
+    NullifKernel,
+)
 from ...kernels.membership import IsInKernel
 from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 from ...kernels.numeric import (
@@ -619,7 +621,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
                 return Datum(d.take())
 
         if self._tag == "coalesce":
-            return Datum(coalesce_kernel(Self._unified(kids^)))
+            return Datum(CoalesceKernel.dispatch(Self._unified(kids^)))
         if self._tag == "case_when":
             var has_else = len(kids) % 2 == 1
             var n = (len(kids) - 1) // 2 if has_else else len(kids) // 2
@@ -641,7 +643,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             var vals = List[DynArray](capacity=n)
             for i in range(n):
                 vals.append(branches[i].copy())
-            return Datum(case_when_kernel(conds, vals, otherwise^))
+            return Datum(CaseWhenKernel.dispatch(conds, vals, otherwise^))
         raise InternalError(t"evaluate: unknown runtime node '{self._tag}'")
 
     @staticmethod
@@ -725,8 +727,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
         var dt = divisor.dtype()
         if dt.is_decimal():
-            return nullif_kernel(divisor, dt.dispatch_decimal(decimal))
-        return nullif_kernel(divisor, dt.dispatch_numeric(numeric))
+            return NullifKernel.dispatch(divisor, dt.dispatch_decimal(decimal))
+        return NullifKernel.dispatch(divisor, dt.dispatch_numeric(numeric))
 
     @staticmethod
     def _arith[
@@ -1000,10 +1002,10 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # `float_col.fill_null(0)` raises on a literal that infers `int64`.
         if self._tag == "nullif":
             var pair = Self._unified([l^, r^])
-            return nullif_kernel(pair[0], pair[1])
+            return NullifKernel.dispatch(pair[0], pair[1])
         if self._tag == "fill_null":
             var pair = Self._unified([l^, r^])
-            return fill_null_kernel(pair[0], pair[1])
+            return FillNullKernel.dispatch(pair[0], pair[1])
         return None
 
     def _string_fn(self, kids: List[DynArray]) raises -> Optional[DynArray]:

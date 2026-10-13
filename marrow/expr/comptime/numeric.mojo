@@ -57,8 +57,8 @@ from ...kernels.conditional import (
     BinaryConditionalKernel,
     CoalesceKernel,
     FillNullKernel,
+    CaseWhenKernel,
     NullifKernel,
-    case_when,
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
@@ -524,7 +524,7 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
     """`CASE WHEN cond THEN then ELSE otherwise END`, over numeric branches.
 
     **Not element-wise fused, deliberately.** `bind` computes the whole result
-    through `kernels.conditional.case_when` and `lane` reads it back, so the
+    through `CaseWhenKernel.apply` and `lane` reads it back, so the
     `Bound` is the answer rather than the operands. the previous expression
     package's `CaseWhen` does
     the same thing for the same reason: which branch supplies a row depends on
@@ -569,16 +569,20 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
         conditions.append(
             self.cond.evaluate(batch, bindings).to_array(n).as_bool().copy()
         )
-        var values = List[DynArray]()
-        values.append(self.then.evaluate(batch, bindings).to_array(n))
-        var else_ = Optional(
-            self.otherwise.evaluate(batch, bindings).to_array(n)
-        )
-        return (
-            case_when(conditions, values, else_^)
-            .as_primitive[Self.Type]()
+        var values = List[PrimitiveArray[Self.Type]]()
+        values.append(
+            self.then.evaluate(batch, bindings)
+            .to_array(n)
+            .as_type[PrimitiveArray[Self.Type]]()
             .copy()
         )
+        var else_ = Optional(
+            self.otherwise.evaluate(batch, bindings)
+            .to_array(n)
+            .as_type[PrimitiveArray[Self.Type]]()
+            .copy()
+        )
+        return CaseWhenKernel.apply(conditions, values, else_^)
 
     @always_inline
     def lane[
@@ -757,13 +761,11 @@ struct ConditionalBinary[
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var n = len(batch)
-        return (
-            Self.K.combine(
-                self.l.evaluate(batch, bindings).to_array(n),
-                self.r.evaluate(batch, bindings).to_array(n),
-            )
-            .as_primitive[Self.Type]()
-            .copy()
+        var l = self.l.evaluate(batch, bindings).to_array(n)
+        var r = self.r.evaluate(batch, bindings).to_array(n)
+        return Self.K.apply(
+            l.as_type[PrimitiveArray[Self.Type]](),
+            r.as_type[PrimitiveArray[Self.Type]](),
         )
 
     @always_inline

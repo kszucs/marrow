@@ -164,13 +164,9 @@ from .temporal import (
 from .conditional import (
     Selection,
     CaseWhenKernel,
-    case_when,
     CoalesceKernel,
-    coalesce,
     NullifKernel,
-    nullif,
     FillNullKernel,
-    fill_null,
 )
 from .nested import ArrayLengthKernel, ArrayContainsKernel
 from .cast import CastArm, CastKernel

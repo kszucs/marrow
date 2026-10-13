@@ -23,7 +23,12 @@ from ...builders import array, StringBuilder
 from ...dtypes import Int64Type, int64, int32, float64
 from ...scalars import Int64Scalar
 
-from ...kernels.conditional import case_when, coalesce, nullif, fill_null
+from ...kernels.conditional import (
+    CaseWhenKernel,
+    CoalesceKernel,
+    FillNullKernel,
+    NullifKernel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +73,7 @@ def test_case_when_two_branches_with_else() raises:
 
     # row2: c0 null -> treated as false -> c1 true -> v1[2]
     # row3: no cond true -> else
-    var r = case_when(conds, vals, else_^)
+    var r = CaseWhenKernel.dispatch(conds, vals, else_^)
     assert_true(r.as_int64() == array([10, 21, 22, 33, 14], int64))
     assert_equal(r.null_count(), 0)
 
@@ -84,7 +89,7 @@ def test_case_when_selected_value_null_propagates() raises:
     vals.append(v0.copy())
     var else_: DynArray = e.copy()
 
-    var r = case_when(conds, vals, else_^)
+    var r = CaseWhenKernel.dispatch(conds, vals, else_^)
     # row0: c0 true but v0[0] is null -> null
     assert_true(r.as_int64() == array([None, 5], int64))
     assert_equal(r.null_count(), 1)
@@ -99,7 +104,7 @@ def test_case_when_no_else_is_null() raises:
     var vals = List[DynArray]()
     vals.append(v0.copy())
 
-    var r = case_when(conds, vals)
+    var r = CaseWhenKernel.dispatch(conds, vals)
     # row1: no match, no else -> null
     assert_true(r.as_int64() == array([7, None], int64))
     assert_equal(r.null_count(), 1)
@@ -116,7 +121,7 @@ def test_case_when_string() raises:
     vals.append(v0.copy())
     var else_: DynArray = e.copy()
 
-    var r = case_when(conds, vals, else_^)
+    var r = CaseWhenKernel.dispatch(conds, vals, else_^)
     # ["a", else "y", c0 null -> else "z"]
     var expected = _strs(["a", "y", "z"], [True, True, True])
     assert_true(r.as_string() == expected)
@@ -133,7 +138,7 @@ def test_case_when_typed_overload() raises:
     vals.append(v0.copy())
 
     # typed overload -> returns Int64Array directly
-    var r = case_when[Int64Type](conds, vals, e.copy())
+    var r = CaseWhenKernel.apply[Int64Type](conds, vals, e.copy())
     assert_true(r == array([1, 8, 3], int64))
 
 
@@ -152,7 +157,7 @@ def test_coalesce_three_arrays() raises:
     arrays.append(b.copy())
     arrays.append(c.copy())
 
-    var r = coalesce(arrays)
+    var r = CoalesceKernel.dispatch(arrays)
     # last row: all null -> null
     assert_true(r.as_int64() == array([1, 2, 3, None], int64))
     assert_equal(r.null_count(), 1)
@@ -168,7 +173,7 @@ def test_coalesce_prefers_first_non_null() raises:
     arrays.append(b.copy())
     arrays.append(c.copy())
 
-    var r = coalesce(arrays)
+    var r = CoalesceKernel.dispatch(arrays)
     assert_true(r.as_int64() == array([1, 10, 3], int64))
     assert_equal(r.null_count(), 0)
 
@@ -181,7 +186,7 @@ def test_coalesce_string() raises:
     arrays.append(a.copy())
     arrays.append(b.copy())
 
-    var r = coalesce(arrays)
+    var r = CoalesceKernel.dispatch(arrays)
     var expected = _strs(["x", "y", ""], [True, True, False])
     assert_true(r.as_string() == expected)
     assert_equal(r.null_count(), 1)
@@ -198,7 +203,7 @@ def test_nullif_basic() raises:
     var aa: DynArray = a.copy()
     var bb: DynArray = b.copy()
 
-    var r = nullif(aa, bb)
+    var r = NullifKernel.dispatch(aa, bb)
     # null where a == b (rows 0 and 2)
     assert_true(r.as_int64() == array([None, 2, None, 4], int64))
     assert_equal(r.null_count(), 2)
@@ -210,7 +215,7 @@ def test_nullif_with_nulls() raises:
     var aa: DynArray = a.copy()
     var bb: DynArray = b.copy()
 
-    var r = nullif(aa, bb)
+    var r = NullifKernel.dispatch(aa, bb)
     # row0: 1==1 -> null; row1: a null -> keep (null); row2: b null -> keep 3
     assert_true(r.as_int64() == array([None, None, 3], int64))
     assert_equal(r.null_count(), 2)
@@ -222,7 +227,7 @@ def test_nullif_string() raises:
     var aa: DynArray = a.copy()
     var bb: DynArray = b.copy()
 
-    var r = nullif(aa, bb)
+    var r = NullifKernel.dispatch(aa, bb)
     var expected = _strs(["", "b", ""], [False, True, False])
     assert_true(r.as_string() == expected)
     assert_equal(r.null_count(), 2)
@@ -231,7 +236,7 @@ def test_nullif_string() raises:
 def test_nullif_typed_overload() raises:
     var a = array([5, 6, 7], int64)
     var b = array([5, 0, 7], int64)
-    var r = nullif(a.copy(), b.copy())  # typed -> Int64Array
+    var r = NullifKernel.apply(a.copy(), b.copy())  # typed -> Int64Array
     assert_true(r == array([None, 6, None], int64))
 
 
@@ -246,7 +251,7 @@ def test_fill_null_array() raises:
     var aa: DynArray = a.copy()
     var ff: DynArray = fill.copy()
 
-    var r = fill_null(aa, ff)
+    var r = FillNullKernel.dispatch(aa, ff)
     assert_true(r.as_int64() == array([1, 20, 3, 40], int64))
     assert_equal(r.null_count(), 0)
 
@@ -257,7 +262,7 @@ def test_fill_null_array_with_null_fill() raises:
     var aa: DynArray = a.copy()
     var ff: DynArray = fill.copy()
 
-    var r = fill_null(aa, ff)
+    var r = FillNullKernel.dispatch(aa, ff)
     # row1: a null and fill null -> stays null
     assert_true(r.as_int64() == array([1, None, 3, 40], int64))
     assert_equal(r.null_count(), 1)
@@ -267,7 +272,7 @@ def test_fill_null_scalar() raises:
     var a = array([1, None, 3, None], int64)
     var aa: DynArray = a.copy()
 
-    var r = fill_null(aa, Int64Scalar(99).to_dyn())
+    var r = FillNullKernel.dispatch(aa, Int64Scalar(99).to_dyn())
     assert_true(r.as_int64() == array([1, 99, 3, 99], int64))
     assert_equal(r.null_count(), 0)
 
@@ -278,7 +283,7 @@ def test_fill_null_string_array() raises:
     var aa: DynArray = a.copy()
     var ff: DynArray = fill.copy()
 
-    var r = fill_null(aa, ff)
+    var r = FillNullKernel.dispatch(aa, ff)
     var expected = _strs(["a", "Y", "c"], [True, True, True])
     assert_true(r.as_string() == expected)
     assert_equal(r.null_count(), 0)
@@ -286,7 +291,7 @@ def test_fill_null_string_array() raises:
 
 def test_fill_null_typed_scalar() raises:
     var a = array([1, None, 3], int64)
-    var r = fill_null(a.copy(), Int64(0))  # typed -> Int64Array
+    var r = FillNullKernel.apply(a.copy(), Int64(0))  # typed -> Int64Array
     assert_true(r == array([1, 0, 3], int64))
 
 
@@ -306,13 +311,13 @@ def test_case_when_condition_count_mismatch_raises() raises:
     vals.append(v0.copy())
     vals.append(v1.copy())
     with assert_raises():
-        _ = case_when(conds, vals)
+        _ = CaseWhenKernel.dispatch(conds, vals)
 
 
 def test_coalesce_empty_raises() raises:
     var arrays = List[DynArray]()
     with assert_raises():
-        _ = coalesce(arrays)
+        _ = CoalesceKernel.dispatch(arrays)
 
 
 def test_nullif_dtype_mismatch_raises() raises:
@@ -321,7 +326,7 @@ def test_nullif_dtype_mismatch_raises() raises:
     var aa: DynArray = a.copy()
     var bb: DynArray = b.copy()
     with assert_raises():
-        _ = nullif(aa, bb)
+        _ = NullifKernel.dispatch(aa, bb)
 
 
 def test_fill_null_length_mismatch_raises() raises:
@@ -330,4 +335,4 @@ def test_fill_null_length_mismatch_raises() raises:
     var aa: DynArray = a.copy()
     var ff: DynArray = fill.copy()
     with assert_raises():
-        _ = fill_null(aa, ff)
+        _ = FillNullKernel.dispatch(aa, ff)
