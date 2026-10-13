@@ -21,6 +21,7 @@ from ..arrays import DynArray
 from ..dtypes import DynType
 from ..scalars import Int64Scalar
 from ..execution import ExecContext
+from .core import Kernel
 from .dictionary import DictionaryEncoder
 from .hashing import HashKernel
 from ..utils import Fmix64, HyperLogLog
@@ -36,9 +37,7 @@ error -- a whole array, or an aggregate with no grouping."""
 # ---------------------------------------------------------------------------
 
 
-def count_distinct(
-    array: DynArray, ctx: ExecContext = ExecContext.serial()
-) raises -> Int64Scalar:
+struct CountDistinctKernel(Kernel):
     """Exact count of distinct non-null values (SQL ``COUNT(DISTINCT x)``,
     PyArrow's ``only_valid``).
 
@@ -47,36 +46,48 @@ def count_distinct(
     large and distinct column on radix-partitioned tables. NULL is one key to
     the encoder, so it is taken off when present.
     """
-    var types = List[DynType]()
-    types.append(array.dtype())
-    var encoder = DictionaryEncoder(types^, ctx.copy())
-    var columns = List[DynArray]()
-    columns.append(array.copy())
-    _ = encoder.encode(columns)
-    var n = len(encoder)
-    if array.null_count() > 0:
-        n -= 1
-    return Int64Scalar(Int64(n))
+
+    comptime name = "count_distinct"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
+    ) raises -> Int64Scalar:
+        var types = List[DynType]()
+        types.append(array.dtype())
+        var encoder = DictionaryEncoder(types^, ctx.copy())
+        var columns = List[DynArray]()
+        columns.append(array.copy())
+        _ = encoder.encode(columns)
+        var n = len(encoder)
+        if array.null_count() > 0:
+            n -= 1
+        return Int64Scalar(Int64(n))
 
 
-def approx_count_distinct(
-    array: DynArray, ctx: ExecContext = ExecContext.serial()
-) raises -> Int64Scalar:
+struct ApproxCountDistinctKernel(Kernel):
     """Approximate count of distinct non-null values via HyperLogLog.
 
     A fixed 16 KiB sketch (2**14 registers) estimates cardinality with ~0.65%
     standard error independent of the input size — the trade for
     ``count_distinct`` when an exact hash set would be too large. Nulls excluded.
     """
-    var sketch = HyperLogLog[HLL_P](1)
 
-    var hv = HashKernel[Fmix64].dispatch(array, ctx).values()
-    var n = len(array)
-    var has_null = array.null_count() > 0
+    comptime name = "approx_count_distinct"
 
-    for i in range(n):
-        if has_null and not array.is_valid(i):
-            continue
-        sketch.add(0, UInt64(hv[i]))
+    @staticmethod
+    def dispatch(
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
+    ) raises -> Int64Scalar:
+        var sketch = HyperLogLog[HLL_P](1)
 
-    return Int64Scalar(sketch.estimate(0))
+        var hv = HashKernel[Fmix64].dispatch(array, ctx).values()
+        var n = len(array)
+        var has_null = array.null_count() > 0
+
+        for i in range(n):
+            if has_null and not array.is_valid(i):
+                continue
+            sketch.add(0, UInt64(hv[i]))
+
+        return Int64Scalar(sketch.estimate(0))

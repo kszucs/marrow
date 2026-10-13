@@ -176,10 +176,7 @@ from .nested import ArrayLengthKernel, ArrayContainsKernel
 from .cast import CastKernel, cast
 from .core import Kernel
 from .groupby import Groups
-from .distinct import (
-    count_distinct,
-    approx_count_distinct,
-)
+from .distinct import ApproxCountDistinctKernel, CountDistinctKernel
 from .filter import FilterKernel, TakeKernel
 from .membership import IsInKernel
 from .sort import SortIndices, SortKernel

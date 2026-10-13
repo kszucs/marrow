@@ -939,7 +939,7 @@ def test_a_filtered_fused_subtree_still_folds_without_materialising() raises:
 # A reducer names itself by what it computes
 # ---------------------------------------------------------------------------
 
-from ....kernels.distinct import approx_count_distinct
+from ....kernels.distinct import ApproxCountDistinctKernel
 
 
 def test_dispersion_is_named_by_its_ddof() raises:
@@ -958,7 +958,9 @@ def test_ungrouped_approx_count_distinct_is_the_function() raises:
     """With no grouping the aggregate estimates as the function does, at the
     same precision -- one answer for one question."""
     var values = arange[Int64Type](0, 60_000)
-    var expected = approx_count_distinct(values.copy().to_dyn()).value()
+    var expected = ApproxCountDistinctKernel.dispatch(
+        values.copy().to_dyn()
+    ).value()
     var batch = record_batch([values^.to_dyn()], names=["v"])
     var plan = table(batch^).aggregate(
         [col("v", int64).approx_count_distinct()], List[DynValue]()

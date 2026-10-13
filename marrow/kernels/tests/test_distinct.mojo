@@ -6,23 +6,26 @@ from std.testing import assert_equal, assert_true
 from ...arrays import DynArray
 from ...builders import array, nulls, Int64Builder, StringBuilder
 from ...dtypes import int32, int64, string
-from ...kernels.distinct import count_distinct, approx_count_distinct
+from ...kernels.distinct import (
+    ApproxCountDistinctKernel,
+    CountDistinctKernel,
+)
 from ...execution import ExecContext
 
 
 def test_count_distinct_basic() raises:
     var a: DynArray = array([1, 2, 2, 3, 3, 3], int32)
-    assert_equal(count_distinct(a).value(), 3)
+    assert_equal(CountDistinctKernel.dispatch(a).value(), 3)
 
 
 def test_count_distinct_all_unique() raises:
     var a: DynArray = array([10, 20, 30, 40], int64)
-    assert_equal(count_distinct(a).value(), 4)
+    assert_equal(CountDistinctKernel.dispatch(a).value(), 4)
 
 
 def test_count_distinct_all_same() raises:
     var a: DynArray = array([7, 7, 7, 7, 7], int32)
-    assert_equal(count_distinct(a).value(), 1)
+    assert_equal(CountDistinctKernel.dispatch(a).value(), 1)
 
 
 def test_count_distinct_excludes_nulls() raises:
@@ -34,17 +37,17 @@ def test_count_distinct_excludes_nulls() raises:
     b.append(2)
     b.append_null()
     b.append(3)
-    assert_equal(count_distinct(b.finish()).value(), 3)
+    assert_equal(CountDistinctKernel.dispatch(b.finish()).value(), 3)
 
 
 def test_count_distinct_empty() raises:
     var a: DynArray = array(int32)
-    assert_equal(count_distinct(a).value(), 0)
+    assert_equal(CountDistinctKernel.dispatch(a).value(), 0)
 
 
 def test_count_distinct_all_null() raises:
     var a: DynArray = nulls(5, int64)
-    assert_equal(count_distinct(a).value(), 0)
+    assert_equal(CountDistinctKernel.dispatch(a).value(), 0)
 
 
 def test_count_distinct_strings() raises:
@@ -54,7 +57,7 @@ def test_count_distinct_strings() raises:
     b.append("apple")
     b.append("cherry")
     b.append("banana")
-    assert_equal(count_distinct(b.finish()).value(), 3)
+    assert_equal(CountDistinctKernel.dispatch(b.finish()).value(), 3)
 
 
 def _distinct_int64(n: Int, distinct: Int) raises -> DynArray:
@@ -68,14 +71,14 @@ def _distinct_int64(n: Int, distinct: Int) raises -> DynArray:
 def test_approx_small_is_exact_regime() raises:
     """Linear counting keeps small cardinalities essentially exact."""
     var a = _distinct_int64(1000, 50)
-    assert_equal(approx_count_distinct(a).value(), 50)
+    assert_equal(ApproxCountDistinctKernel.dispatch(a).value(), 50)
 
 
 def test_approx_large_within_tolerance() raises:
     """~0.65% standard error → within 2% on 100k distinct values."""
     var true_distinct = 100_000
     var a = _distinct_int64(true_distinct, true_distinct)
-    var est = Int(approx_count_distinct(a).value())
+    var est = Int(ApproxCountDistinctKernel.dispatch(a).value())
     var err = Float64(abs(est - true_distinct)) / Float64(true_distinct)
     assert_true(err < 0.02)
 
@@ -90,7 +93,7 @@ def test_approx_excludes_nulls() raises:
             b.append_null()
         else:
             b.append(Int64(i % 50))
-    var est = Int(approx_count_distinct(b.finish()).value())
+    var est = Int(ApproxCountDistinctKernel.dispatch(b.finish()).value())
     assert_true(abs(est - 50) <= 1)
 
 
@@ -105,5 +108,9 @@ def test_count_distinct_parallel_matches_serial() raises:
         else:
             b.append(Int64(i % 5000))
     var a: DynArray = b.finish()
-    assert_equal(count_distinct(a, ExecContext.serial()).value(), 5000)
-    assert_equal(count_distinct(a, ExecContext.parallel(4)).value(), 5000)
+    assert_equal(
+        CountDistinctKernel.dispatch(a, ExecContext.serial()).value(), 5000
+    )
+    assert_equal(
+        CountDistinctKernel.dispatch(a, ExecContext.parallel(4)).value(), 5000
+    )

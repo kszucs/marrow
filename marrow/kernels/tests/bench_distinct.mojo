@@ -10,7 +10,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import DynArray
 from ...builders import Int64Builder, StringBuilder
 from ...execution import ExecContext
-from ...kernels.distinct import count_distinct
+from ...kernels.distinct import CountDistinctKernel
 from ...utils.testing import Benchmark
 
 comptime _N = 1_000_000
@@ -40,7 +40,7 @@ def _bench_count_distinct(
 
     @always_inline
     def call() raises {imm}:
-        keep(count_distinct(values, ctx.copy()).value())
+        keep(CountDistinctKernel.dispatch(values, ctx.copy()).value())
 
     b.iter(call)
     keep(values)

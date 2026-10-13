@@ -20,7 +20,7 @@ from ..arrays import DynArray
 from ..dtypes import BinaryLikeType, PrimitiveType
 from ..execution import ExecContext
 from ..io import DynSource
-from ..kernels.distinct import approx_count_distinct
+from ..kernels.distinct import ApproxCountDistinctKernel
 from ..parquet.reader import LeafSet, ParquetFile
 from ..scalars import DynScalar, NullScalar
 from ..schema import Schema
@@ -118,7 +118,9 @@ def summarize(
 
         var ndv = Approx.unknown()
         try:
-            var distinct = Int(approx_count_distinct(column, ctx).value())
+            var distinct = Int(
+                ApproxCountDistinctKernel.dispatch(column, ctx).value()
+            )
             ndv = Approx.estimated(min(distinct, rows - nulls))
         except:
             pass
