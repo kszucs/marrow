@@ -30,7 +30,7 @@ from ..io import (
 from ..io.core import FOOTER_READ_SIZE
 from ..schema import Schema
 from ..tabular import RecordBatch, Table
-from ..compress import LibDeflate, LibZstd, Snappy, Zstd
+from ..compress import Method
 from ..utils import Crc32
 from .binary import AvroBytes, AvroCursor
 from .decoder import RecordDecoder
@@ -92,51 +92,51 @@ struct AvroCodec(Equatable, ImplicitlyCopyable, Movable, Writable):
     def _unsupported(self) -> NotImplementedError:
         return NotImplementedError(t"avro: the {self} codec is not supported")
 
-    def decompress(self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        """A block's records, uncompressed."""
+    def method(self) raises NotImplementedError -> Method:
+        """The method this codec's blocks are compressed with."""
         if self == Self.NULL:
-            return List[UInt8](src)
+            return Method.NONE
         elif self == Self.DEFLATE:
-            return LibDeflate.decompress_unsized(src)
-        elif self == Self.ZSTANDARD:
-            return LibZstd.decompress_unsized(src)
+            return Method.DEFLATE
         elif self == Self.SNAPPY:
+            return Method.SNAPPY
+        elif self == Self.ZSTANDARD:
+            return Method.ZSTD
+        raise self._unsupported()
+
+    def decompress(
+        self, src: Span[UInt8, _], native: Bool = True
+    ) raises -> List[UInt8]:
+        """A block's records, uncompressed. Without `native`, libsnappy or
+        libzstd decompresses them."""
+        var body = src
+        if self == Self.SNAPPY:
             # A raw snappy block, then the big-endian CRC-32 of the
             # uncompressed bytes.
             if len(src) < 4:
                 raise CorruptError("avro: snappy block without its checksum")
-            var body = src[: len(src) - 4]
-            var n = Snappy.uncompressed_length(body)
-            if n > Snappy.max_decompressed_length(len(body)):
-                raise CorruptError(
-                    t"avro: {len(body)} snappy bytes cannot hold {n}"
-                )
-            var out = List[UInt8](unsafe_uninit_length=n)
-            Snappy.decompress(body, Span(out))
+            body = src[: len(src) - 4]
+        var out = self.method().decompress_unsized[
+            Method.NONE, Method.DEFLATE, Method.SNAPPY, Method.ZSTD
+        ](native, body)
+        if self == Self.SNAPPY:
             var expected = BigEndian.fixed[DType.uint32](src, len(src) - 4)
             if Crc32.compute(out) != expected:
                 raise CorruptError("avro: snappy block checksum mismatch")
-            return out^
-        raise self._unsupported()
+        return out^
 
-    def compress(self, src: Span[UInt8, _]) raises -> List[UInt8]:
-        """A block's records, compressed."""
-        if self == Self.NULL:
-            return List[UInt8](src)
-        elif self == Self.DEFLATE:
-            var out = List[UInt8]()
-            LibDeflate.compress(src, out)
-            return out^
-        elif self == Self.ZSTANDARD:
-            var out = List[UInt8]()
-            Zstd.compress(src, out)
-            return out^
-        elif self == Self.SNAPPY:
-            var out = List[UInt8]()
-            Snappy.compress(src, out)
+    def compress(
+        self, src: Span[UInt8, _], native: Bool = True
+    ) raises -> List[UInt8]:
+        """A block's records, compressed. Without `native`, libsnappy or
+        libzstd compresses them."""
+        var out = List[UInt8]()
+        self.method().compress[
+            Method.NONE, Method.DEFLATE, Method.SNAPPY, Method.ZSTD
+        ](native, src, out)
+        if self == Self.SNAPPY:
             BigEndian.append[DType.uint32](out, Crc32.compute(src))
-            return out^
-        raise self._unsupported()
+        return out^
 
 
 struct _Header(Movable):

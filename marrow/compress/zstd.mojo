@@ -42,7 +42,13 @@ from ..utils.hashing import XxHash64
 from ..views import BufferView
 from ..utils.bits import BitReader, BitWriter
 from ..utils.byteorder import LittleEndian
-from .core import Compressor, append_uninit, library, reserve_more
+from .core import (
+    Compressor,
+    UnsizedDecompressor,
+    append_uninit,
+    library,
+    reserve_more,
+)
 from .fse import (
     MAX_WEIGHT,
     Alphabet,
@@ -59,7 +65,7 @@ from .huffman import (
     LiteralsHeader,
     min_gain,
 )
-from .lz77 import LzCopy, match_length
+from .lz77 import LzCopy, hash_bytes, match_length
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +144,8 @@ struct FrameHeader(ImplicitlyCopyable, Movable):
             )
             if fcs_size == 2:
                 content += 256
+            if content < 0:
+                raise CorruptError("zstd: a frame content size over 2^63")
             ip += fcs_size
         if single:
             window = content
@@ -708,17 +716,6 @@ struct FastMatcher(Movable):
         self._rep1 = self._next1
         self._rep2 = self._next2
 
-    @always_inline
-    def _hash[width: Int](self, src: Span[UInt8, _], pos: Int) -> Int:
-        """The table slot for the `width` bytes at `pos`, read as 8 --
-        `ZSTD_hash5Ptr` to `ZSTD_hash7Ptr`."""
-        comptime prime = UInt64(889523592379) if width == 5 else (
-            UInt64(227718039650203) if width == 6 else UInt64(58295818150454627)
-        )
-        var u = LittleEndian.fixed[DType.uint64](src, pos)
-        var h = (u << UInt64(64 - 8 * width)) * prime
-        return Int(h >> UInt64(64 - self._log))
-
     def compress(
         mut self,
         src: Span[mut=False, UInt8, _],
@@ -779,8 +776,8 @@ struct FastMatcher(Movable):
             var ip3 = ip2 + 1
             if ip3 >= limit:
                 break
-            var hash0 = self._hash[width](src, ip0)
-            var hash1 = self._hash[width](src, ip1)
+            var hash0 = hash_bytes[width](src, ip0, self._log)
+            var hash1 = hash_bytes[width](src, ip1, self._log)
             var candidate = Int(table.unsafe_get(hash0))
             var current: Int
             var match0 = 0
@@ -810,7 +807,7 @@ struct FastMatcher(Movable):
                     break
                 candidate = Int(table.unsafe_get(hash1))
                 hash0 = hash1
-                hash1 = self._hash[width](src, ip2)
+                hash1 = hash_bytes[width](src, ip2, self._log)
                 ip0 = ip1
                 ip1 = ip2
                 ip2 = ip3
@@ -823,7 +820,7 @@ struct FastMatcher(Movable):
                     break
                 candidate = Int(table.unsafe_get(hash1))
                 hash0 = hash1
-                hash1 = self._hash[width](src, ip2)
+                hash1 = hash_bytes[width](src, ip2, self._log)
                 ip0 = ip1
                 ip1 = ip2
                 ip2 = ip0 + step
@@ -858,10 +855,11 @@ struct FastMatcher(Movable):
             anchor = ip0
             if ip0 <= limit:
                 table.unsafe_set(
-                    self._hash[width](src, current + 2), UInt32(current + 2)
+                    hash_bytes[width](src, current + 2, self._log),
+                    UInt32(current + 2),
                 )
                 table.unsafe_set(
-                    self._hash[width](src, ip0 - 2), UInt32(ip0 - 2)
+                    hash_bytes[width](src, ip0 - 2, self._log), UInt32(ip0 - 2)
                 )
                 # The offset before the last one, straight after it.
                 while (
@@ -873,7 +871,9 @@ struct FastMatcher(Movable):
                         match_length(src, ip0 + 4, ip0 + 4 - rep2, end) + 4
                     )
                     rep1, rep2 = rep2, rep1
-                    table.unsafe_set(self._hash[width](src, ip0), UInt32(ip0))
+                    table.unsafe_set(
+                        hash_bytes[width](src, ip0, self._log), UInt32(ip0)
+                    )
                     # Without literals, a first repeat is the one before.
                     out.match(1, run)
                     ip0 += run
@@ -1234,6 +1234,49 @@ struct Zstd(Compressor):
         return n * (BLOCK_MAX // (BlockHeader.SIZE + 1))
 
     @staticmethod
+    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
+        """The sum of the content sizes the frames in `src` declare, or None
+        when one of them leaves it out. Skippable frames hold none; no
+        frames hold nothing."""
+        var bound = Self.max_decompressed_length(len(src))
+        var total = 0
+        var ip = 0
+        while ip < len(src):
+            if len(src) - ip < 4:
+                raise CorruptError(t"zstd: {len(src) - ip} bytes after a frame")
+            var magic = LittleEndian.fixed[DType.uint32](src, ip)
+            if magic & 0xFFFFFFF0 == Self._SKIPPABLE:
+                if len(src) - ip < 8:
+                    raise CorruptError("zstd: truncated skippable frame")
+                var size = Int(LittleEndian.fixed[DType.uint32](src, ip + 4))
+                if size > len(src) - ip - 8:
+                    raise CorruptError("zstd: truncated skippable frame")
+                ip += 8 + size
+            elif magic == Self.MAGIC:
+                ip += 4
+                var header = FrameHeader.read(src, ip)
+                if header.content < 0:
+                    return None
+                if header.content > bound - total:
+                    raise CorruptError(
+                        t"zstd: {len(src)} bytes of frames cannot hold"
+                        t" {total} and {header.content} more"
+                    )
+                total += header.content
+                while True:
+                    var block = BlockHeader.read(src, ip)
+                    ip += BlockHeader.SIZE + block.payload()
+                    if block.last:
+                        break
+                if header.checksum:
+                    ip += 4
+                if ip > len(src):
+                    raise CorruptError("zstd: truncated frame")
+            else:
+                raise CorruptError(t"zstd: bad frame magic {hex(magic)}")
+        return total
+
+    @staticmethod
     def compress(
         src: Span[mut=False, UInt8, _], mut dst: List[UInt8]
     ) raises DynError:
@@ -1369,13 +1412,14 @@ struct Zstd(Compressor):
 comptime _Opaque = OpaquePointer[MutUntrackedOrigin]
 
 
-struct LibZstd(Compressor):
+struct LibZstd(UnsizedDecompressor):
     """Zstandard through libzstd: `ZSTD_compress` at level 1 and
     `ZSTD_decompress`."""
 
     @staticmethod
-    def max_decompressed_length(n: Int) -> Int:
-        return Zstd.max_decompressed_length(n)
+    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
+        """What `Zstd.content_length` reads: the same format."""
+        return Zstd.content_length(src)
 
     @staticmethod
     def compress(

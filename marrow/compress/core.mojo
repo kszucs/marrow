@@ -12,19 +12,22 @@ are the package's shared implementation, not an API.
 
 from std.ffi import _DLHandle
 
-from ..errors import DynError
+from ..errors import CorruptError, DynError
 from ..utils.dylib import LibSet, LibSpec
 
 
 trait Compressor:
     """Bytes to fewer bytes and back, the bytes alone. The size of what
-    was compressed is the caller's to keep."""
+    was compressed is the caller's to keep, unless the format records it:
+    `content_length`."""
 
     @staticmethod
-    def max_decompressed_length(n: Int) -> Int:
-        """The most bytes `n` compressed bytes decode to: what a reader
-        checks a length it was given against, before allocating it."""
-        ...
+    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
+        """The length `src` declares it decompresses to, or None when the
+        format or this stream leaves it out. A declaration `src` cannot
+        hold is refused rather than reported, so a reader may allocate
+        what it is told."""
+        return None
 
     @staticmethod
     def compress(
@@ -63,6 +66,33 @@ def decompress_with[
         Native.decompress(src, dst)
     else:
         Library.decompress(src, dst)
+
+
+trait UnsizedDecompressor(Compressor):
+    """A compressor that decompresses a stream of unknown length, growing
+    its output as it goes."""
+
+    @staticmethod
+    def decompress_unsized(src: Span[UInt8, _]) raises DynError -> List[UInt8]:
+        """`src`, decompressed, however long that turns out."""
+        ...
+
+
+def decompress_unsized_with[
+    Native: Compressor, Library: UnsizedDecompressor
+](native: Bool, src: Span[UInt8, _]) raises DynError -> List[UInt8]:
+    """`src` decompressed to the length it turns out to have: by `Native`
+    into exactly the length the stream declares, when `native` and it
+    declares one, or else by `Library`, streaming."""
+    if native:
+        var n = Native.content_length(src)
+        if n:
+            if n.value() < 0:
+                raise CorruptError(t"declared length {n.value()} is negative")
+            var out = List[UInt8](unsafe_uninit_length=n.value())
+            Native.decompress(src, Span(out))
+            return out^
+    return Library.decompress_unsized(src)
 
 
 comptime Codecs = LibSet[

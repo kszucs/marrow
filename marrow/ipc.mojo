@@ -63,14 +63,7 @@ from .schema import Schema
 from .tabular import RecordBatch
 from .builders import DynBuilder
 from .kernels.hashing import KeyCompare
-from .compress import (
-    LibLz4Frame,
-    LibZstd,
-    Lz4Frame,
-    Zstd,
-    compress_with,
-    decompress_with,
-)
+from .compress import Method
 from . import dtypes as dt
 from .utils.byteorder import LittleEndian
 
@@ -181,6 +174,12 @@ struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
             return Self.ZSTD
         raise InvalidError(t"ipc: unknown body compression '{name}'")
 
+    def method(self) -> Method:
+        """The method this codec's buffers are compressed with."""
+        if self == Self.LZ4_FRAME:
+            return Method.LZ4_FRAME
+        return Method.ZSTD
+
     def compress(
         self,
         src: Span[mut=False, UInt8, _],
@@ -193,10 +192,9 @@ struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
         libzstd compresses it."""
         if len(src) > 0:
             LittleEndian.append[DType.int64](out, Int64(len(src)))
-            if self == Self.LZ4_FRAME:
-                compress_with[Lz4Frame, LibLz4Frame](native, src, out)
-            else:
-                compress_with[Zstd, LibZstd](native, src, out)
+            self.method().compress[Method.LZ4_FRAME, Method.ZSTD](
+                native, src, out
+            )
 
     def decompress(
         self, src: Span[UInt8, _], native: Bool = True
@@ -215,11 +213,7 @@ struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
             n = len(payload)
         else:
             # Checked before allocating: the length comes from the file.
-            var most: Int
-            if self == Self.LZ4_FRAME:
-                most = Lz4Frame.max_decompressed_length(len(payload))
-            else:
-                most = Zstd.max_decompressed_length(len(payload))
+            var most = self.method().max_decompressed_length(len(payload))
             if n < 0 or n > most:
                 raise CorruptError(
                     t"ipc: a compressed buffer of {n} bytes in {len(payload)}"
@@ -231,12 +225,9 @@ struct BodyCompression(Equatable, ImplicitlyCopyable, Movable):
         elif n > 0:
             # A length of 0 is an empty buffer, whatever follows it: Arrow
             # Java writes one with nothing after it.
-            if self == Self.LZ4_FRAME:
-                decompress_with[Lz4Frame, LibLz4Frame](
-                    native, payload, dst.as_span()
-                )
-            else:
-                decompress_with[Zstd, LibZstd](native, payload, dst.as_span())
+            self.method().decompress[Method.LZ4_FRAME, Method.ZSTD](
+                native, payload, dst.as_span()
+            )
         return buf^.to_immutable()
 
 

@@ -31,7 +31,7 @@ from std.testing import assert_equal, assert_true
 from ..core import Codecs
 from ...errors import CorruptError, NotImplementedError
 from ...utils.hashing import XxHash32
-from ..lz4 import Lz4, Lz4Frame
+from ..lz4 import LibLz4Frame, Lz4, Lz4Frame
 from ...utils.testing import Rng, ScratchDir
 from .codec_data import (
     ResolvedLz4,
@@ -633,3 +633,49 @@ def test_utils_lz4_frame_checks_what_it_declares() raises:
         _expect[_FRAME](frame, data, "sized")
         _rejects[_FRAME](frame, n - 1, "content size, short destination")
         _rejects[_FRAME](frame, n + 1, "content size, long destination")
+
+
+def _with_size(frame: List[UInt8], n: Int) -> List[UInt8]:
+    """`frame` with a content size of `n` in its descriptor."""
+    var out = List[UInt8](Span(frame)[:6])
+    out[4] |= 0x08
+    LittleEndian.append[DType.uint64](out, UInt64(n))
+    out.append(UInt8((XxHash32.hash(Span(out)[4:]) >> 8) & 0xFF))
+    out.extend(Span(frame)[7:])
+    return out^
+
+
+def test_utils_lz4_frame_content_length() raises:
+    """A frame declares its size only when its descriptor says so --
+    `compress` and liblz4 leave it out -- and a declared size is read the
+    same through `LibLz4Frame` and decodes."""
+    var data = words(100_000)
+    var frame = List[UInt8]()
+    Lz4Frame.compress(Span(data), frame)
+    assert_true(not Lz4Frame.content_length(Span(frame)))
+    assert_true(not LibLz4Frame.content_length(Span(frame)))
+    var sized = _with_size(frame, len(data))
+    assert_equal(Lz4Frame.content_length(Span(sized)).value(), len(data))
+    assert_equal(LibLz4Frame.content_length(Span(sized)).value(), len(data))
+    _expect[_FRAME](sized, data, "sized")
+
+
+def test_utils_lz4_frame_content_length_corrupt() raises:
+    """A short frame, a bad magic, and a size the frame cannot hold are
+    refused, not reported."""
+    var frame = List[UInt8]()
+    Lz4Frame.compress(Span(words(1000)), frame)
+    var bad = frame.copy()
+    bad[0] ^= 1
+    var cases = [
+        List[UInt8](Span(frame)[:5]),
+        bad^,
+        _with_size(frame, 1 << 40),
+        List[UInt8](Span(_with_size(frame, 1000))[:10]),
+    ]
+    for i in range(len(cases)):
+        try:
+            _ = Lz4Frame.content_length(Span(cases[i]))
+            assert_true(False, String(t"case {i} accepted"))
+        except e:
+            assert_true(e.isa[CorruptError](), String(e))

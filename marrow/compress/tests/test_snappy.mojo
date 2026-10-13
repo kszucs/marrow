@@ -73,9 +73,7 @@ def _compress_hashing[crc32c: Bool](data: List[UInt8]) raises -> List[UInt8]:
 def _decompress(comp: List[UInt8]) raises -> List[UInt8]:
     """`comp` into the length it declares, refused past what it can hold --
     as a reader with no length of its own decodes a stream."""
-    var n = Snappy.uncompressed_length(Span(comp))
-    if n > Snappy.max_decompressed_length(len(comp)):
-        raise Error(t"{len(comp)} bytes cannot hold {n}")
+    var n = Snappy.content_length(Span(comp)).value()
     var out = List[UInt8](length=n, fill=0)
     Snappy.decompress(Span(comp), Span(out))
     return out^
@@ -87,7 +85,7 @@ def _roundtrip(data: List[UInt8], what: String) raises:
         len(comp) <= Snappy.max_compressed_length(len(data)),
         what + ": exceeds max_compressed_length",
     )
-    assert_equal(Snappy.uncompressed_length(Span(comp)), len(data), what)
+    assert_equal(Snappy.content_length(Span(comp)).value(), len(data), what)
     _expect(comp, data, what)
 
 
@@ -311,7 +309,7 @@ def _rejects(stream: List[UInt8], what: String) raises:
         pass
     var n = 64
     try:
-        n = Snappy.uncompressed_length(Span(stream))
+        n = Snappy.content_length(Span(stream)).value()
     except:
         pass
     var exact = List[UInt8](length=n, fill=0)
@@ -330,7 +328,7 @@ def test_utils_snappy_rejects_bad_varints() raises:
     # 5th byte >= 16 overflows 32 bits.
     _rejects([0xFB, 0xFF, 0xFF, 0xFF, 0x7F], "overflowing varint")
     with assert_raises():
-        _ = Snappy.uncompressed_length(Span([UInt8(0x80), 0x80]))
+        _ = Snappy.content_length(Span([UInt8(0x80), 0x80]))
 
 
 def test_utils_snappy_rejects_bad_copies() raises:
@@ -388,14 +386,12 @@ def test_utils_snappy_rejects_wrong_destination() raises:
 def test_utils_snappy_decompress_refuses_an_impossible_length() raises:
     """A copy-2 tag turns 3 bytes into 64, the most any tag does, so a stream
     declaring more than 22x its own size is past `max_decompressed_length`
-    -- refused before its length is allocated -- and the densest valid
-    stream is within it and decodes."""
+    -- `content_length` refuses it before its length is allocated -- and the
+    densest valid stream is within it and decodes."""
     var bomb = _stream(1 << 30)
     _literal(bomb, Span(words(1)))
-    assert_true(
-        Snappy.uncompressed_length(Span(bomb))
-        > Snappy.max_decompressed_length(len(bomb))
-    )
+    with assert_raises(contains="cannot hold"):
+        _ = Snappy.content_length(Span(bomb))
 
     var copies = 1000
     var dense = _stream(1 + 64 * copies)
@@ -541,3 +537,12 @@ def test_utils_snappy_pair_rejects_either_corrupt_stream() raises:
     var b = List[UInt8](length=n, fill=0)
     with assert_raises():
         Snappy.decompress_pair(Span(good), Span(short), Span(good), Span(b))
+
+
+def test_utils_snappy_content_length() raises:
+    """A stream always declares its length, read the same through
+    `LibSnappy`."""
+    var data = words(1000)
+    var comp = _compress(data)
+    assert_equal(Snappy.content_length(Span(comp)).value(), len(data))
+    assert_equal(LibSnappy.content_length(Span(comp)).value(), len(data))

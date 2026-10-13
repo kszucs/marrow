@@ -455,10 +455,8 @@ under load.
 - **The compressor's 5-10% gap on tag-heavy data** (`ints`, `strings`) is not
   algorithmic. Its disassembly has the same CRC hash, 16-position probe and
   `rbit`/`clz` match finder as libsnappy. That gap was not chased.
-- **Parquet's `Compression.compress` returns a fresh list per page, for
-  every codec** (`parquet/compression.mojo`). The writer then copies it
-  again into the file buffer. Taking `mut out: List[UInt8]` to append to, as
-  `Snappy.compress` does, would drop a copy and an allocation per page.
+- **Done:** Parquet's writer compresses each page into one reused list, and
+  an uncompressed page skips the codec (`ColumnWriter._pack`).
 - **`bulk_copy` (`buffers.mojo`) is measured on one caller only.** The
   stdlib's `unsafe_memcpy` is a 32-byte loop above 16 bytes and never calls
   libc; handing copies of 256 bytes or more to libc `memcpy` took Snappy

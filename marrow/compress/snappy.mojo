@@ -746,9 +746,13 @@ struct Snappy(Compressor):
         return 22 * n
 
     @staticmethod
-    def uncompressed_length(src: Span[UInt8, _]) raises CorruptError -> Int:
-        """The length a stream declares, from its varint preamble."""
-        return Self._preamble(src)[0]
+    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
+        """The length a stream declares, from its varint preamble: always
+        there."""
+        var n = Self._preamble(src)[0]
+        if n > Self.max_decompressed_length(len(src)):
+            raise CorruptError(t"snappy: {len(src)} bytes cannot hold {n}")
+        return n
 
     @staticmethod
     def _preamble(src: Span[UInt8, _]) raises CorruptError -> Tuple[Int, Int]:
@@ -850,8 +854,9 @@ struct LibSnappy(Compressor):
     """Snappy through libsnappy: `snappy_compress` and `snappy_uncompress`."""
 
     @staticmethod
-    def max_decompressed_length(n: Int) -> Int:
-        return Snappy.max_decompressed_length(n)
+    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
+        """What `Snappy.content_length` reads: the same format."""
+        return Snappy.content_length(src)
 
     @staticmethod
     def compress(

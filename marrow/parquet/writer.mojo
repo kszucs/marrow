@@ -100,6 +100,8 @@ struct ColumnWriter(Movable):
     var encoding: Encoding  # value encoding: PLAIN, RLE_DICTIONARY, DELTA_*
     var write_bloom: Bool  # build a bloom filter for this column chunk
     var write_crc: Bool  # attach a CRC-32 checksum to every page
+    var packed: List[UInt8]
+    """The page body as it goes into the file, reused page to page."""
 
     def __init__(
         out self,
@@ -116,6 +118,7 @@ struct ColumnWriter(Movable):
         self.encoding = encoding
         self.write_bloom = write_bloom
         self.write_crc = write_crc
+        self.packed = List[UInt8]()
 
     def _encode_values(self, col: DynArray, mut body: List[UInt8]) raises:
         """Dispatch on the leaf's Arrow type to the right `PlainValues` encoder (the
@@ -467,8 +470,17 @@ struct ColumnWriter(Movable):
             return MAX_ROWS_PER_PAGE
         return max(1, num_rows * DEFAULT_DATA_PAGE_SIZE // est)
 
+    def _pack(mut self, var body: List[UInt8], native: Bool) raises:
+        """Leave `body` as it goes into the file in `self.packed`: as is when
+        uncompressed, else compressed into the reused list."""
+        if self.compression == Compression.UNCOMPRESSED:
+            self.packed = body^
+        else:
+            self.packed.clear()
+            self.compression.compress(native, Span(body), self.packed)
+
     def _write_dict_page(
-        self,
+        mut self,
         var dict_body: List[UInt8],
         num_dict: Int,
         mut out: List[UInt8],
@@ -477,16 +489,18 @@ struct ColumnWriter(Movable):
         """Write the shared dictionary page (PLAIN distinct values, compressed);
         return `(offset, uncompressed_incl_header, compressed_incl_header)`."""
         var offset = len(out)
-        var comp = self.compression.compress(native, Span(dict_body))
-        var ph = PageHeader.dictionary_page(len(dict_body), len(comp), num_dict)
+        var raw_len = len(dict_body)
+        self._pack(dict_body^, native)
+        var comp_len = len(self.packed)
+        var ph = PageHeader.dictionary_page(raw_len, comp_len, num_dict)
         if self.write_crc:
-            ph.crc = Int(Crc32.compute(Span(comp)))
+            ph.crc = Int(Crc32.compute(Span(self.packed)))
         var header_len = ph.append_to(out)
-        out.extend(Span(comp))
-        return (offset, header_len + len(dict_body), header_len + len(comp))
+        out.extend(Span(self.packed))
+        return (offset, header_len + raw_len, header_len + comp_len)
 
     def _serialize_data_page(
-        self,
+        mut self,
         var value_bytes: List[UInt8],
         var rep_bytes: List[UInt8],
         var def_bytes: List[UInt8],
@@ -508,12 +522,10 @@ struct ColumnWriter(Movable):
         var header_len: Int
         if self.version == 2:
             var is_comp = self.compression != Compression.UNCOMPRESSED
-            var comp_values = self.compression.compress(
-                native, Span(value_bytes)
-            )
             var level_len = len(rep_bytes) + len(def_bytes)
             uncompressed_size = level_len + len(value_bytes)
-            compressed_size = level_len + len(comp_values)
+            self._pack(value_bytes^, native)
+            compressed_size = level_len + len(self.packed)
             var ph = PageHeader.data_page_v2(
                 uncompressed_size,
                 compressed_size,
@@ -530,12 +542,12 @@ struct ColumnWriter(Movable):
                 var c = Crc32()
                 c.update(Span(rep_bytes))
                 c.update(Span(def_bytes))
-                c.update(Span(comp_values))
+                c.update(Span(self.packed))
                 ph.crc = Int(c.value())
             header_len = ph.append_to(out)
             out.extend(Span(rep_bytes))
             out.extend(Span(def_bytes))
-            out.extend(Span(comp_values))
+            out.extend(Span(self.packed))
         else:
             var body = List[UInt8]()
             if self.leaf.max_rep >= 1:
@@ -546,15 +558,15 @@ struct ColumnWriter(Movable):
                 body.extend(Span(def_bytes))
             body.extend(Span(value_bytes))
             uncompressed_size = len(body)
-            var compressed = self.compression.compress(native, Span(body))
-            compressed_size = len(compressed)
+            self._pack(body^, native)
+            compressed_size = len(self.packed)
             var ph = PageHeader.data_page(
                 uncompressed_size, compressed_size, num_values, encoding
             )
             if self.write_crc:
-                ph.crc = Int(Crc32.compute(Span(compressed)))
+                ph.crc = Int(Crc32.compute(Span(self.packed)))
             header_len = ph.append_to(out)
-            out.extend(Span(compressed))
+            out.extend(Span(self.packed))
         return (
             page_offset,
             header_len + uncompressed_size,
@@ -562,7 +574,7 @@ struct ColumnWriter(Movable):
         )
 
     def write(
-        self,
+        mut self,
         values: DynArray,
         def_levels: List[Int32],
         rep_levels: List[Int32],

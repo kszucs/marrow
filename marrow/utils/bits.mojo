@@ -156,9 +156,10 @@ struct BitReader[m: Bool, //, o: Origin[mut=m]](TrivialRegisterPassable):
 
 
 struct BitWriter[o: MutOrigin](Movable):
-    """A zstd bitstream written in place: each field above the last, low
-    bits first, and on `close` the end mark `BitReader` starts below --
-    libzstd's `BIT_CStream_t`. At most 63 bits may be pending between
+    """A bitstream written in place: each field above the last, low bits
+    first -- libzstd's `BIT_CStream_t`, and what a Brotli stream's commands
+    are written with. `close` adds the end mark a zstd stream ends with and
+    `BitReader` starts below. At most 63 bits may be pending between
     `flush`es.
 
     The destination is the caller's, sized up front to its bound on the
@@ -179,6 +180,26 @@ struct BitWriter[o: MutOrigin](Movable):
         self._pos = at
         self._bits = 0
         self._n = 0
+
+    def __init__(out self, dst: Span[UInt8, Self.o], *, bit: Int):
+        """For a stream continuing at bit `bit` of `dst`, the bits below it
+        kept."""
+        self._dst = dst
+        self._pos = bit >> 3
+        self._n = bit & 7
+        self._bits = UInt64(dst[self._pos]) & (
+            (UInt64(1) << UInt64(self._n)) - 1
+        )
+
+    def bit(self) -> Int:
+        """The bits the stream holds, from the start of `dst`; once flushed,
+        they are all in `dst`."""
+        return 8 * self._pos + self._n
+
+    @always_inline
+    def pending(self) -> Int:
+        """The bits held past the last whole byte `flush` stored."""
+        return self._n
 
     @always_inline
     def add(mut self, value: Int, n: Int):

@@ -14,7 +14,8 @@ bytes, a shuffle-built pattern for an overlapping copy, and an exact byte
 loop for the end of the output. The fast ones write up to 63 bytes past the
 copy -- a caller keeps `LzCopy.SLOP` free -- and read a source that may
 overlap the destination, which neither `unsafe_memcpy` nor `memmove` allows.
-`match_length` is the compressors' match extension. Each codec's match
+`hash_bytes` is the multiplicative hash of the 5 to 7 bytes the Zstandard and
+LZ4 match finders index, and `match_length` their match extension. Each codec's match
 finder is its own library's, in its own module.
 
 The names here are public so the codecs can call them, but `marrow.compress`
@@ -173,3 +174,16 @@ def match_length(src: Span[UInt8, _], var a: Int, var b: Int, end: Int) -> Int:
         a += 1
         b += 1
     return a - start
+
+
+@always_inline
+def hash_bytes[width: Int](src: Span[UInt8, _], pos: Int, bits: Int) -> Int:
+    """The table slot, of `bits` bits, for the `width` (5 to 7) bytes at `pos`
+    -- `ZSTD_hash5Ptr` to `ZSTD_hash7Ptr`, and `LZ4_hash5`. The bytes are read
+    as 8, shifted up so the rest falls away, and multiplied by a prime."""
+    comptime assert 5 <= width <= 7, "hash_bytes: width must be 5 to 7"
+    comptime prime = UInt64(889523592379) if width == 5 else (
+        UInt64(227718039650203) if width == 6 else UInt64(58295818150454627)
+    )
+    var u = LittleEndian.fixed[DType.uint64](src, pos)
+    return Int(((u << UInt64(64 - 8 * width)) * prime) >> UInt64(64 - bits))

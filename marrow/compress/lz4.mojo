@@ -56,7 +56,7 @@ from ..errors import (
 )
 from ..views import BufferView
 from ..utils.hashing import XxHash32
-from .lz77 import LzCopy, match_length
+from .lz77 import LzCopy, hash_bytes, match_length
 from .core import Compressor, append_uninit, library, reserve_more
 from ..utils.byteorder import LittleEndian
 
@@ -104,8 +104,7 @@ struct _Matcher[small: Bool](Movable):
             var v = LittleEndian.fixed[DType.uint32](src, pos)
             return Int((v * 2654435761) >> UInt32(32 - (_HASH_LOG + 1)))
         else:
-            var v = LittleEndian.fixed[DType.uint64](src, pos)
-            return Int(((v << 24) * 889523592379) >> UInt64(64 - _HASH_LOG))
+            return hash_bytes[5](src, pos, _HASH_LOG)
 
     @staticmethod
     @always_inline
@@ -579,6 +578,26 @@ struct Lz4Frame(Compressor):
         return Lz4.max_decompressed_length(n)
 
     @staticmethod
+    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
+        """The content size the frame's descriptor declares, or None when
+        it leaves it out -- as `compress` does, and Arrow C++."""
+        if len(src) < 7:
+            raise CorruptError(t"lz4: a {len(src)}-byte frame is too short")
+        var magic = LittleEndian.fixed[DType.uint32](src, 0)
+        if magic == Self._LEGACY_MAGIC:
+            raise NotImplementedError("lz4: the legacy frame format")
+        if magic != Self._MAGIC:
+            raise CorruptError(t"lz4: bad frame magic {hex(magic)}")
+        if Int(src[4]) & Self._CONTENT_SIZE == 0:
+            return None
+        if len(src) < 14:
+            raise CorruptError("lz4: truncated frame header")
+        var n = Int(LittleEndian.fixed[DType.uint64](src, 6))
+        if n < 0 or n > Self.max_decompressed_length(len(src)):
+            raise CorruptError(t"lz4: a {len(src)}-byte frame cannot hold {n}")
+        return n
+
+    @staticmethod
     def compress(
         src: Span[mut=False, UInt8, _], mut dst: List[UInt8]
     ) raises DynError:
@@ -755,10 +774,6 @@ struct LibLz4(Compressor):
     `LZ4_decompress_safe`."""
 
     @staticmethod
-    def max_decompressed_length(n: Int) -> Int:
-        return Lz4.max_decompressed_length(n)
-
-    @staticmethod
     def compress(
         src: Span[mut=False, UInt8, _], mut dst: List[UInt8]
     ) raises DynError:
@@ -804,8 +819,9 @@ struct LibLz4Frame(Compressor):
     """`LZ4F_VERSION`, which a decompression context is made for."""
 
     @staticmethod
-    def max_decompressed_length(n: Int) -> Int:
-        return Lz4Frame.max_decompressed_length(n)
+    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
+        """What `Lz4Frame.content_length` reads: the same format."""
+        return Lz4Frame.content_length(src)
 
     @staticmethod
     def compress(

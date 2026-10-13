@@ -32,9 +32,9 @@ from std.testing import assert_true
 
 from ...errors import CorruptError, NotImplementedError
 from ...views import BufferView
-from ..core import Codecs
+from ..core import Codecs, decompress_unsized_with
 from ...utils.testing import Rng, ScratchDir
-from ..zstd import Zstd
+from ..zstd import LibZstd, Zstd
 from ..huffman import HuffmanTable
 from .codec_data import (
     ResolvedZstd,
@@ -686,3 +686,102 @@ def test_utils_zstd_others_decode_ours() raises:
             assert_bytes(Path(back).read_bytes(), all[i], String(t"pa {i}"))
             _ = py["cli"]("zstd", py_list(["-d"]), packed, back)
             assert_bytes(Path(back).read_bytes(), all[i], String(t"cli {i}"))
+
+
+def _without_size(frame: List[UInt8]) -> List[UInt8]:
+    """`frame`, one segment with a 1-byte content size -- what `Zstd.compress`
+    writes for under 256 bytes -- with the size left out and a 1 KiB window
+    in its place: the same length, the same blocks."""
+    var out = frame.copy()
+    out[4] = 0x00  # no content size, not one segment
+    out[5] = 0x00  # window descriptor: 1 KiB
+    return out^
+
+
+def test_utils_zstd_content_length_declared() raises:
+    """A frame's declared size, summed over frames and past skippable ones,
+    the same through `LibZstd`; no frames hold nothing."""
+    var a = words(200)
+    var b = words(100_000, seed=5)
+    var stream = _compress(a)
+    LittleEndian.append[DType.uint32](stream, 0x184D2A5F)  # skippable
+    LittleEndian.append[DType.uint32](stream, 3)
+    stream.extend([UInt8(1), 2, 3])
+    stream.extend(_compress(b))
+    var want = len(a) + len(b)
+    assert_true(Zstd.content_length(Span(stream)).value() == want)
+    assert_true(LibZstd.content_length(Span(stream)).value() == want)
+    assert_true(Zstd.content_length(Span(List[UInt8]())).value() == 0)
+
+
+def test_utils_zstd_content_length_unknown() raises:
+    """A frame that leaves its size out has none, and still decodes into
+    the right length."""
+    var data = words(200)
+    var frame = _without_size(_compress(data))
+    assert_true(not Zstd.content_length(Span(frame)))
+    assert_true(not LibZstd.content_length(Span(frame)))
+    _expect(frame, data, "without a size")
+
+
+def _declaring(sizes: List[UInt64]) -> List[UInt8]:
+    """One frame per size, each declaring it in 8 bytes around an empty
+    last raw block."""
+    var out = List[UInt8]()
+    for size in sizes:
+        out.extend([UInt8(0x28), 0xB5, 0x2F, 0xFD, 0xE0])
+        LittleEndian.append[DType.uint64](out, size)
+        out.extend([UInt8(1), 0, 0])
+    return out^
+
+
+def test_utils_zstd_content_length_corrupt() raises:
+    """A bad magic, a truncated frame, a size its bytes cannot hold --
+    alone or summed over frames -- and a size past 2^63 are refused, not
+    reported."""
+    var frame = _compress(words(200))
+    var bad = frame.copy()
+    bad[0] ^= 1
+    # Two frames each within what their bytes can hold, together past it.
+    var most = Zstd.max_decompressed_length(len(_declaring([0, 0])))
+    var half = UInt64(most // 2 + 1)
+    var cases = [
+        _declaring([half, half]),
+        bad^,
+        List[UInt8](Span(frame)[: len(frame) - 2]),
+        _declaring([1 << 40]),
+        # Frames that would wrap the sum, each refused on its own.
+        _declaring([0x7FFF_FFFF_FFFF_FFFF, 0x7FFF_FFFF_FFFF_FFFF]),
+        _declaring([1 << 62, 1 << 62, 1 << 62, 1 << 62]),
+        # A size past 2^63, which would read as negative.
+        _declaring([UInt64(1) << 63]),
+    ]
+    for i in range(len(cases)):
+        try:
+            _ = Zstd.content_length(Span(cases[i]))
+            assert_true(False, String(t"case {i} accepted"))
+        except e:
+            assert_true(e.isa[CorruptError](), String(e))
+
+
+def test_utils_zstd_decompress_unsized_with() raises:
+    """Natively into the declared size, and through libzstd's streaming
+    decoder when the frame declares none or `native` is off."""
+    var data = words(200)
+    var frame = _compress(data)
+    var unsized = _without_size(frame)
+    assert_bytes(
+        decompress_unsized_with[Zstd, LibZstd](True, Span(frame)),
+        data,
+        "native, sized",
+    )
+    assert_bytes(
+        decompress_unsized_with[Zstd, LibZstd](True, Span(unsized)),
+        data,
+        "native, unsized",
+    )
+    assert_bytes(
+        decompress_unsized_with[Zstd, LibZstd](False, Span(frame)),
+        data,
+        "library",
+    )

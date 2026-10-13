@@ -31,7 +31,6 @@ which writes at quality 11.
 from std.bit import bit_reverse, bit_width
 from std.builtin.globals import global_constant
 from std.math import log2
-from std.memory import bitcast
 
 from ..errors import CorruptError, DynError, InternalError
 from ..views import BufferView
@@ -51,6 +50,7 @@ from .brotli_dictionary import (
     UPPERCASE_FIRST,
     copy_word,
 )
+from ..utils.bits import BitWriter
 from ..utils.byteorder import LittleEndian
 from .core import Compressor, append_uninit, library
 from .lz77 import LzCopy, match_length
@@ -1479,47 +1479,13 @@ struct _BitStream(Movable):
         self.buf[self.ix >> 3] = 0
 
 
-struct _BitCursor[o: MutOrigin](TrivialRegisterPassable):
-    """A run of writes into a `_BitStream`'s bytes from bit `ix` on, the
-    pending bits held in a register and stored eight bytes at a time --
-    what a loop writing many short codes keeps its stream in."""
-
-    var _out: BufferView[DType.uint8, Self.o]
-    var _pos: Int
-    var _acc: UInt64
-    var _n: Int
-
-    def __init__(out self, dst: BufferView[DType.uint8, Self.o], ix: Int):
-        self._out = dst
-        self._pos = ix >> 3
-        self._n = ix & 7
-        self._acc = UInt64(dst.unsafe_get(self._pos)) & (
-            (UInt64(1) << UInt64(self._n)) - 1
-        )
-
-    @always_inline
-    def put(mut self, n: Int, bits: UInt64):
-        """Append the `n` (at most 24) bits of `bits`, which has no others
-        set."""
-        self._acc |= bits << UInt64(self._n)
-        self._n += n
-        if self._n >= 40:
-            self._store()
-            var k = self._n >> 3
-            self._pos += k
-            self._acc >>= UInt64(8 * k)
-            self._n &= 7
-
-    @always_inline
-    def _store(self):
-        self._out.store_unaligned[8](
-            self._pos, bitcast[DType.uint8, 8](self._acc)
-        )
-
-    def finish(mut self) -> Int:
-        """Store what is pending; return the bits the stream now holds."""
-        self._store()
-        return 8 * self._pos + self._n
+@always_inline
+def _put(mut w: BitWriter[_], value: Int, n: Int):
+    """Append a code or extra bits, at most 24, flushing once 40 are
+    pending: a branch every few codes rather than a store every one."""
+    w.add_fitting(value, n)
+    if w.pending() >= 40:
+        w.flush()
 
 
 def _store_meta_block_header(mut w: _BitStream, n: Int, uncompressed: Bool):
@@ -1826,16 +1792,6 @@ def _fast_log2(v: Int) -> Float64:
 
 
 @always_inline
-def _load64(src: BufferView[DType.uint8, _], p: Int) -> UInt64:
-    return bitcast[DType.uint64, 1](src.load_unaligned[8](p))
-
-
-@always_inline
-def _load32(src: BufferView[DType.uint8, _], p: Int) -> UInt32:
-    return bitcast[DType.uint32, 1](src.load_unaligned[4](p))
-
-
-@always_inline
 def _hash_of(v: UInt64, shift: Int, min_match: Int) -> Int:
     """The table slot of the `min_match` bytes at the bottom of `v`."""
     return Int(
@@ -1847,7 +1803,9 @@ def _hash_of(v: UInt64, shift: Int, min_match: Int) -> Int:
 def _is_match(
     src: BufferView[DType.uint8, _], a: Int, b: Int, min_match: Int
 ) -> Bool:
-    if _load32(src, a) != _load32(src, b):
+    if LittleEndian.fixed[DType.uint32](src.as_span(), a) != LittleEndian.fixed[
+        DType.uint32
+    ](src.as_span(), b):
         return False
     if min_match == 4:
         return True
@@ -1964,7 +1922,7 @@ def _rehash(
     which its output depends on."""
     var cur: Int
     if min_match == 4:
-        var v = _load64(src, ip - 3)
+        var v = LittleEndian.fixed[DType.uint64](src.as_span(), ip - 3)
         cur = _hash_of(v >> 24, shift, 4)
         table.unsafe_get(_hash_of(v, shift, 4)) = Int32(ip - 3)
         table.unsafe_get(_hash_of(v >> 8, shift, 4)) = Int32(ip - 2)
@@ -1972,11 +1930,11 @@ def _rehash(
             ip - 1
         )
     else:
-        var v = _load64(src, ip - 5)
+        var v = LittleEndian.fixed[DType.uint64](src.as_span(), ip - 5)
         table.unsafe_get(_hash_of(v, shift, 6)) = Int32(ip - 5)
         table.unsafe_get(_hash_of(v >> 8, shift, 6)) = Int32(ip - 4)
         table.unsafe_get(_hash_of(v >> 16, shift, 6)) = Int32(ip - 3)
-        v = _load64(src, ip - 2)
+        v = LittleEndian.fixed[DType.uint64](src.as_span(), ip - 2)
         cur = _hash_of(v >> 16, shift, 6)
         table.unsafe_get(_hash_of(v, shift, 6)) = Int32(ip - 2)
         table.unsafe_get(_hash_of(v >> 8, shift, 6)) = Int32(ip - 1)
@@ -2008,7 +1966,11 @@ def _create_commands(
         var len_limit = min(block_size - min_match, input_size - 16)
         var ip_limit = start + len_limit
         ip += 1
-        var next_hash = _hash_of(_load64(src, ip), shift, min_match)
+        var next_hash = _hash_of(
+            LittleEndian.fixed[DType.uint64](src.as_span(), ip),
+            shift,
+            min_match,
+        )
         while True:
             var skip = 32
             var next_ip = ip
@@ -2024,7 +1986,11 @@ def _create_commands(
                 next_ip = ip + step
                 if next_ip > ip_limit:
                     break
-                next_hash = _hash_of(_load64(src, next_ip), shift, min_match)
+                next_hash = _hash_of(
+                    LittleEndian.fixed[DType.uint64](src.as_span(), next_ip),
+                    shift,
+                    min_match,
+                )
                 candidate = ip - last_distance
                 if _is_match(src, ip, candidate, min_match) and candidate < ip:
                     table.unsafe_get(hash) = Int32(ip)
@@ -2077,7 +2043,11 @@ def _create_commands(
             if not more:
                 break
             ip += 1
-            next_hash = _hash_of(_load64(src, ip), shift, min_match)
+            next_hash = _hash_of(
+                LittleEndian.fixed[DType.uint64](src.as_span(), ip),
+                shift,
+                min_match,
+            )
     if next_emit < ip_end:
         out.insert(src, next_emit, ip_end)
 
@@ -2249,27 +2219,30 @@ struct _TwoPass(Movable):
         var lit_bits = Span(self.lit_bits)
         var cmd_depth = Span(self.cmd_depth)
         var cmd_bits = Span(self.cmd_bits)
-        var bits = _BitCursor(BufferView(Span(w.buf)), w.ix)
+        var bits = BitWriter(Span(w.buf), bit=w.ix)
         var lit = 0
         for i in range(num_commands):
             var cmd = commands.unsafe_get(i)
             var code = Int(cmd & 0xFF)
             var extra = cmd >> 8
-            bits.put(
+            _put(
+                bits,
+                Int(cmd_bits.unsafe_get(code)),
                 Int(cmd_depth.unsafe_get(code)),
-                UInt64(cmd_bits.unsafe_get(code)),
             )
-            bits.put(Int(extras.unsafe_get(code)), UInt64(extra))
+            _put(bits, Int(extra), Int(extras.unsafe_get(code)))
             if code < 24:
                 var insert = Int(offsets.unsafe_get(code) + extra)
                 for _ in range(insert):
                     var b = Int(literals.unsafe_get(lit))
-                    bits.put(
+                    _put(
+                        bits,
+                        Int(lit_bits.unsafe_get(b)),
                         Int(lit_depth.unsafe_get(b)),
-                        UInt64(lit_bits.unsafe_get(b)),
                     )
                     lit += 1
-        w.ix = bits.finish()
+        bits.flush()
+        w.ix = bits.bit()
 
     def _store_command_codes(mut self, mut w: _BitStream):
         """libbrotli's `BuildAndStoreCommandPrefixCode`: codes for the 64
@@ -2414,10 +2387,6 @@ struct Brotli(Compressor):
 struct LibBrotli(Compressor):
     """Brotli through libbrotli: `BrotliEncoderCompress` at quality 11,
     window 22, and `BrotliDecoderDecompress`."""
-
-    @staticmethod
-    def max_decompressed_length(n: Int) -> Int:
-        return Brotli.max_decompressed_length(n)
 
     @staticmethod
     def compress(

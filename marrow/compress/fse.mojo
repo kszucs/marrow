@@ -374,19 +374,18 @@ struct Distribution(Movable):
         var log = self.log
         var n = len(norm)
         var size = 1 << log
-        var bits = log - 5
-        var count_bits = 4
         var remaining = size + 1
         var threshold = size
         var width = log + 1
         var symbol = 0
         var after_zero = False
 
-        @always_inline
-        def emit16(mut out: List[UInt8], mut bits: Int):
-            out.append(UInt8(bits & 0xFF))
-            out.append(UInt8((bits >> 8) & 0xFF))
-            bits >>= 16
+        # Room for the most the fields can take: a count is at most
+        # `log + 1` bits and a zero costs under one bit.
+        var first = len(out)
+        out.resize(first + (n * (log + 3) + 7) // 8 + 8, 0)
+        var fields = BitCursor(Span(out), 8 * first)
+        fields.put(UInt64(log - 5), 4)
 
         while symbol < n and remaining > 1:
             if after_zero:
@@ -397,17 +396,11 @@ struct Distribution(Movable):
                     break
                 while symbol >= start + 24:
                     start += 24
-                    bits += 0xFFFF << count_bits
-                    emit16(out, bits)
+                    fields.put(0xFFFF, 16)
                 while symbol >= start + 3:
                     start += 3
-                    bits += 3 << count_bits
-                    count_bits += 2
-                bits += (symbol - start) << count_bits
-                count_bits += 2
-                if count_bits > 16:
-                    emit16(out, bits)
-                    count_bits -= 16
+                    fields.put(3, 2)
+                fields.put(UInt64(symbol - start), 2)
             var count = Int(norm[symbol])
             symbol += 1
             var top = (2 * threshold - 1) - remaining
@@ -415,22 +408,18 @@ struct Distribution(Movable):
             count += 1
             if count >= threshold:
                 count += top
-            bits += count << count_bits
-            count_bits += width - Int(count < top)
+            fields.put(UInt64(count), width - Int(count < top))
             after_zero = count == 1
             if remaining < 1:
+                out.shrink(first)
                 raise CorruptError("zstd: an FSE distribution over its size")
             while remaining < threshold:
                 width -= 1
                 threshold >>= 1
-            if count_bits > 16:
-                emit16(out, bits)
-                count_bits -= 16
         if remaining != 1:
+            out.shrink(first)
             raise CorruptError("zstd: an FSE distribution short of its size")
-        out.append(UInt8(bits & 0xFF))
-        if count_bits > 8:
-            out.append(UInt8((bits >> 8) & 0xFF))
+        out.shrink((fields.at + 7) >> 3)
 
     @staticmethod
     def optimal_log(max_log: Int, total: Int, top: Int, minus: Int = 2) -> Int:

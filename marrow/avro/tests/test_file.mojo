@@ -406,6 +406,29 @@ def test_avro_write_roundtrip_under_each_codec() raises:
             )
 
 
+def test_avro_codec_native_and_library() raises:
+    """Each codec's blocks decode whichever of marrow's codec or the system
+    library wrote them."""
+    var data = List[UInt8]()
+    for i in range(5000):
+        data.append(UInt8((i * 7 + (i // 13)) & 0xFF))
+    for codec in [
+        AvroCodec.NULL,
+        AvroCodec.DEFLATE,
+        AvroCodec.SNAPPY,
+        AvroCodec.ZSTANDARD,
+    ]:
+        for written in [True, False]:
+            var block = codec.compress(Span(data), written)
+            for reader in [True, False]:
+                assert_true(
+                    codec.decompress(Span(block), reader) == data,
+                    String(
+                        codec, ": native writer ", written, ", reader ", reader
+                    ),
+                )
+
+
 def test_avro_write_converts_dictionary_and_decimal_width() raises:
     """A dictionary column is written as its strings, and a decimal256 whose
     precision fits 128 bits reads back as the decimal128 Avro's precision

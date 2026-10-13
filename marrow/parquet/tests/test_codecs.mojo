@@ -12,9 +12,9 @@ from std.python import Python
 from std.os.path import join
 from ...utils.testing import ScratchDir
 from ...parquet import read_table
-from ...parquet.compression import Compression, Hadoop
+from ...parquet.compression import Compression
 from ...errors import CorruptError, DynError
-from ...compress import LibLz4, Lz4
+from ...compress import Hadoop, LibLz4, Lz4
 from ...utils.byteorder import BigEndian
 from ...compress.tests.codec_data import (
     assert_bytes,
@@ -261,7 +261,8 @@ def _sample() -> List[UInt8]:
 
 def _roundtrip(codec: Compression) raises:
     var data = _sample()
-    var packed = codec.compress(True, Span(data))
+    var packed = List[UInt8]()
+    codec.compress(True, Span(data), packed)
     var restored: List[UInt8] = [7]
     codec.decompress_into(True, Span(packed), len(data), restored)
     assert_true(restored[1:] == data[:], "appended after what was there")
@@ -281,7 +282,8 @@ def test_codecs_library_implementations() raises:
         Compression.BROTLI,
     ]:
         for written in [True, False]:
-            var packed = codec.compress(written, Span(data))
+            var packed = List[UInt8]()
+            codec.compress(written, Span(data), packed)
             for read_native in [True, False]:
                 var restored = List[UInt8]()
                 codec.decompress_into(
@@ -326,8 +328,9 @@ def test_decompress_refuses_sizes_the_page_cannot_hold() raises:
         Compression.GZIP,
         Compression.BROTLI,
     ]:
-        var packed = codec.compress(True, Span(data))
-        var most = codec.max_decompressed_length(len(packed))
+        var packed = List[UInt8]()
+        codec.compress(True, Span(data), packed)
+        var most = codec.method().max_decompressed_length(len(packed))
         for size in [most + 1, 1 << 60]:
             var refused = False
             try:
