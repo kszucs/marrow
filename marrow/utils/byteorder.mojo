@@ -27,11 +27,7 @@ struct LittleEndian:
         # One wide load, and unaligned: a byte span promises no alignment,
         # and an aligned load of an `int128` faults on x86-64.
         Self._check[T](len(data), pos)
-        var v = (
-            BufferView[T, data.origin]
-            .from_bytes(data[pos:])
-            .load_unaligned[1](0)
-        )
+        var v = Self._at[T](data, pos).load_unaligned[1](0)
         comptime if Endian.native() == Endian.big:
             return byte_swap(v)
         else:
@@ -50,8 +46,19 @@ struct LittleEndian:
             v = byte_swap(value)
         else:
             v = value
-        BufferView[T, data.origin].from_bytes(data[pos:]).store_unaligned[1](
-            0, v
+        Self._at[T](data, pos).store_unaligned[1](0, v)
+
+    @staticmethod
+    @always_inline
+    def _at[
+        T: DType
+    ](data: Span[UInt8, _], pos: Int) -> BufferView[T, data.origin]:
+        """The `T` at byte `pos`, as a one-element view. Built from the
+        address, not from `data[pos:]`: a slice is bounds-checked in every
+        build, and `fixed` and `store` leave their bound to `_check`."""
+        var at = data.unsafe_ptr().unsafe_offset(pos)
+        return BufferView[T, data.origin](
+            ptr=at.unsafe_bitcast[Scalar[T]](), length=1
         )
 
     @staticmethod

@@ -344,7 +344,7 @@ struct _CodeReader(Movable):
         the entries used."""
         var hskip = br.fetch(2)
         if hskip == 1:
-            return Self._simple(br, table, base, alphabet)
+            return self._simple(br, table, base, alphabet)
         var cl = Array[UInt8, 18](fill=0)
         var space = 32
         var codes = 0
@@ -435,14 +435,16 @@ struct _CodeReader(Movable):
         for k in range(symbol, alphabet):
             lengths[k] = 0
 
-    @staticmethod
     def _simple(
+        mut self,
         mut br: _BitReader[_],
         mut table: List[UInt32],
         base: Int,
         alphabet: Int,
     ) raises CorruptError -> Int:
-        """A code of one to four symbols, given as the symbols."""
+        """A code of one to four symbols, given as the symbols. Their count
+        -- and for four, one more bit -- fixes their lengths in the order
+        given, and the code is the canonical one of those lengths."""
         var n = br.fetch(2) + 1
         var width = bit_width(alphabet - 1)
         var v = Array[Int, 4](fill=0)
@@ -454,47 +456,20 @@ struct _CodeReader(Movable):
             for k in range(i + 1, n):
                 if v[i] == v[k]:
                     raise CorruptError("brotli: a simple code repeats a symbol")
-        var size: Int
         if n == 1:
-            table[base] = _entry(v[0], 0)
-            size = 1
-        elif n == 2:
-            table[base] = _entry(min(v[0], v[1]), 1)
-            table[base + 1] = _entry(max(v[0], v[1]), 1)
-            size = 2
-        elif n == 3:
-            table[base] = _entry(v[0], 1)
-            table[base + 2] = _entry(v[0], 1)
-            table[base + 1] = _entry(min(v[1], v[2]), 2)
-            table[base + 3] = _entry(max(v[1], v[2]), 2)
-            size = 4
-        elif br.fetch(1) == 0:
-            for i in range(3):
-                for k in range(i + 1, 4):
-                    if v[k] < v[i]:
-                        var t = v[k]
-                        v[k] = v[i]
-                        v[i] = t
-            table[base] = _entry(v[0], 2)
-            table[base + 2] = _entry(v[1], 2)
-            table[base + 1] = _entry(v[2], 2)
-            table[base + 3] = _entry(v[3], 2)
-            size = 4
-        else:
-            var lo = min(v[2], v[3])
-            var hi = max(v[2], v[3])
-            for k in range(0, 8, 2):
-                table[base + k] = _entry(v[0], 1)
-            table[base + 1] = _entry(v[1], 2)
-            table[base + 5] = _entry(v[1], 2)
-            table[base + 3] = _entry(lo, 3)
-            table[base + 7] = _entry(hi, 3)
-            size = 8
-        while size < 1 << _ROOT_BITS:
-            for k in range(size):
-                table[base + size + k] = table[base + k]
-            size <<= 1
-        return size
+            for k in range(1 << _ROOT_BITS):
+                table[base + k] = _entry(v[0], 0)
+            return 1 << _ROOT_BITS
+        var given: Array[UInt8, 4] = [1, 1, 0, 0]
+        if n == 3:
+            given = [1, 2, 2, 0]
+        elif n == 4:
+            given = [1, 2, 3, 3] if br.fetch(1) == 1 else [2, 2, 2, 2]
+        var lengths = Span(self._lengths)[:alphabet]
+        lengths.fill(0)
+        for i in range(n):
+            lengths[v[i]] = given[i]
+        return _build(lengths, table, base, _ROOT_BITS, self._sorted)
 
     def context_map(
         mut self,
@@ -1894,7 +1869,7 @@ struct _Commands[co: MutOrigin, lo: MutOrigin](TrivialRegisterPassable):
 
     @always_inline
     def push(mut self, cmd: Int):
-        self.commands[self.nc] = UInt32(cmd)
+        self.commands.unsafe_get(self.nc) = UInt32(cmd)
         self.nc += 1
 
     @always_inline
@@ -1991,20 +1966,22 @@ def _rehash(
     if min_match == 4:
         var v = _load64(src, ip - 3)
         cur = _hash_of(v >> 24, shift, 4)
-        table[_hash_of(v, shift, 4)] = Int32(ip - 3)
-        table[_hash_of(v >> 8, shift, 4)] = Int32(ip - 2)
-        table[_hash_of(v >> 16 if exact else v, shift, 4)] = Int32(ip - 1)
+        table.unsafe_get(_hash_of(v, shift, 4)) = Int32(ip - 3)
+        table.unsafe_get(_hash_of(v >> 8, shift, 4)) = Int32(ip - 2)
+        table.unsafe_get(_hash_of(v >> 16 if exact else v, shift, 4)) = Int32(
+            ip - 1
+        )
     else:
         var v = _load64(src, ip - 5)
-        table[_hash_of(v, shift, 6)] = Int32(ip - 5)
-        table[_hash_of(v >> 8, shift, 6)] = Int32(ip - 4)
-        table[_hash_of(v >> 16, shift, 6)] = Int32(ip - 3)
+        table.unsafe_get(_hash_of(v, shift, 6)) = Int32(ip - 5)
+        table.unsafe_get(_hash_of(v >> 8, shift, 6)) = Int32(ip - 4)
+        table.unsafe_get(_hash_of(v >> 16, shift, 6)) = Int32(ip - 3)
         v = _load64(src, ip - 2)
         cur = _hash_of(v >> 16, shift, 6)
-        table[_hash_of(v, shift, 6)] = Int32(ip - 2)
-        table[_hash_of(v >> 8, shift, 6)] = Int32(ip - 1)
-    var candidate = Int(table[cur])
-    table[cur] = Int32(ip)
+        table.unsafe_get(_hash_of(v, shift, 6)) = Int32(ip - 2)
+        table.unsafe_get(_hash_of(v >> 8, shift, 6)) = Int32(ip - 1)
+    var candidate = Int(table.unsafe_get(cur))
+    table.unsafe_get(cur) = Int32(ip)
     return candidate
 
 
@@ -2050,10 +2027,10 @@ def _create_commands(
                 next_hash = _hash_of(_load64(src, next_ip), shift, min_match)
                 candidate = ip - last_distance
                 if _is_match(src, ip, candidate, min_match) and candidate < ip:
-                    table[hash] = Int32(ip)
+                    table.unsafe_get(hash) = Int32(ip)
                 else:
-                    candidate = Int(table[hash])
-                    table[hash] = Int32(ip)
+                    candidate = Int(table.unsafe_get(hash))
+                    table.unsafe_get(hash) = Int32(ip)
                     if not _is_match(src, ip, candidate, min_match):
                         continue
                 if ip - candidate > _MAX_DISTANCE:
@@ -2217,11 +2194,11 @@ struct _TwoPass(Movable):
         if Float64(num_literals) < 0.98 * size:
             return True
         var max_cost = size * 8 * 0.98 / 43
-        for i in range(256):
-            self.lit_histo[i] = 0
+        var histo = Span(self.lit_histo)
+        histo.fill(0)
         var i = 0
         while i < len(block):
-            self.lit_histo[Int(block[i])] += 1
+            histo.unsafe_get(Int(block.unsafe_get(i))) += 1
             i += 43
         var sum = 0
         var cost = Float64(0)
@@ -2240,14 +2217,15 @@ struct _TwoPass(Movable):
     ):
         """libbrotli's `StoreCommands`: the literal, command and distance
         codes, then each command with its literals."""
-        for i in range(256):
-            self.lit_histo[i] = 0
-        for i in range(128):
-            self.cmd_depth[i] = 0
-            self.cmd_bits[i] = 0
-            self.cmd_histo[i] = 0
+        var lit_histo = Span(self.lit_histo)
+        var cmd_histo = Span(self.cmd_histo)
+        lit_histo.fill(0)
+        cmd_histo.fill(0)
+        Span(self.cmd_depth).fill(0)
+        Span(self.cmd_bits).fill(0)
+        var literals = Span(self.literals)
         for i in range(num_literals):
-            self.lit_histo[Int(self.literals[i])] += 1
+            lit_histo.unsafe_get(Int(literals.unsafe_get(i))) += 1
         _store_tree_fast(
             Span(self.lit_histo),
             num_literals,
@@ -2257,8 +2235,9 @@ struct _TwoPass(Movable):
             Span(self.lit_bits),
             w,
         )
+        var commands = Span(self.commands)
         for i in range(num_commands):
-            self.cmd_histo[Int(self.commands[i] & 0xFF)] += 1
+            cmd_histo.unsafe_get(Int(commands.unsafe_get(i) & 0xFF)) += 1
         self.cmd_histo[1] += 1
         self.cmd_histo[2] += 1
         self.cmd_histo[64] += 1
@@ -2266,8 +2245,6 @@ struct _TwoPass(Movable):
         self._store_command_codes(w)
         ref extras = global_constant[_EXTRA_BITS]()
         ref offsets = global_constant[_INSERT_OFFSET]()
-        var commands = Span(self.commands)
-        var literals = Span(self.literals)
         var lit_depth = Span(self.lit_depth)
         var lit_bits = Span(self.lit_bits)
         var cmd_depth = Span(self.cmd_depth)

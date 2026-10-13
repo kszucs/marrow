@@ -325,9 +325,11 @@ struct HuffmanTable(Movable):
         round -- `HUF_decompress4X2_usingDTable_internal_fast_c_loop`. The
         last stream, the shortest, advances at least 5 a round, so one limit
         on it bounds the rounds every stream has room for, instead of eight
-        checks a round. A valid stream has the bits for every symbol it has
-        room for; a corrupt one reads zeros past its start and fails
-        `finished`.
+        checks a round; the bytes each stream has left above its start bound
+        them too, so a round refills without checking where a stream stands,
+        and what is left goes to `_finish_pairs`. A valid stream has the bits
+        for every symbol it has room for; a corrupt one reads zeros past its
+        start there and fails `finished`.
 
         Never inlined, nor is `_four_singles`: four streams hold more state
         than there are registers, and which values spill depends on the code
@@ -352,14 +354,21 @@ struct HuffmanTable(Movable):
         var o4 = 0
         while True:
             var room = min(min(seg - o1, seg - o2), min(seg - o3, last - o4))
-            var limit = o4 + 5 * (room // 10)
-            if o4 == limit:
+            # As in `_four_singles`, the rounds every stream has the bytes to
+            # refill unchecked for.
+            var bytes = min(
+                min(r1.headroom(), r2.headroom()),
+                min(r3.headroom(), r4.headroom()),
+            )
+            var rounds = min(room // 10, bytes // 7 + 1)
+            if bytes < 0 or rounds <= 0:
                 break
+            var limit = o4 + 5 * rounds
             while o4 < limit:
-                r1.refill()
-                r2.refill()
-                r3.refill()
-                r4.refill()
+                r1.refill_fast()
+                r2.refill_fast()
+                r3.refill_fast()
+                r4.refill_fast()
                 comptime for _ in range(5):
                     o1 = Self._pair(pairs, r1, d1, o1)
                     o2 = Self._pair(pairs, r2, d2, o2)
@@ -383,8 +392,9 @@ struct HuffmanTable(Movable):
         """The four streams that start at 6, `a`, `b` and `c` of `src`, one
         symbol a lookup, in lockstep. Five symbols of at most 11 bits are 55
         of the 57 bits a refill readies, or of all the stream has left --
-        libzstd's fast loop takes as many, and bounds it by the output alone,
-        as `_four_pairs` does."""
+        libzstd's fast loop takes as many, and bounds it, as `_four_pairs`
+        does, by the output and by the bytes each stream has left above its
+        start, so a round refills without checking where a stream stands."""
         var seg = (n + 3) // 4
         var last = n - 3 * seg
         var r1 = BitReader(src[6:a])
@@ -398,17 +408,28 @@ struct HuffmanTable(Movable):
         var table = BufferView(Span(self._entries))
         var log = self.log
         var i = 0
-        while i + 5 <= last:
-            r1.refill()
-            r2.refill()
-            r3.refill()
-            r4.refill()
-            comptime for k in range(5):
-                d1.unsafe_set(i + k, Self._symbol(table, r1, log))
-                d2.unsafe_set(i + k, Self._symbol(table, r2, log))
-                d3.unsafe_set(i + k, Self._symbol(table, r3, log))
-                d4.unsafe_set(i + k, Self._symbol(table, r4, log))
-            i += 5
+        # A round takes at most 55 bits, 7 bytes, from each stream: as many
+        # rounds as every stream has room for refill unchecked, as libzstd's
+        # fast loop does, and the rest of each stream goes to `_finish`.
+        while True:
+            var room = min(
+                min(r1.headroom(), r2.headroom()),
+                min(r3.headroom(), r4.headroom()),
+            )
+            var rounds = min((last - i) // 5, room // 7 + 1)
+            if room < 0 or rounds <= 0:
+                break
+            for _ in range(rounds):
+                r1.refill_fast()
+                r2.refill_fast()
+                r3.refill_fast()
+                r4.refill_fast()
+                comptime for k in range(5):
+                    d1.unsafe_set(i + k, Self._symbol(table, r1, log))
+                    d2.unsafe_set(i + k, Self._symbol(table, r2, log))
+                    d3.unsafe_set(i + k, Self._symbol(table, r3, log))
+                    d4.unsafe_set(i + k, Self._symbol(table, r4, log))
+                i += 5
         self._finish(r1, d1, i, seg)
         self._finish(r2, d2, i, seg)
         self._finish(r3, d3, i, seg)

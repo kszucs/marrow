@@ -11,7 +11,7 @@ a buffer reused across calls; libbrotli's entry points are resolved once
 (`ResolvedBrotli`). Throughput counts one element per uncompressed byte.
 
 Run with:
-    pixi run -e dev pytest marrow/codecs/tests/bench_brotli.mojo --benchmark --competition
+    pixi run -e dev pytest marrow/compress/tests/bench_brotli.mojo --benchmark --competition
 """
 
 from std.benchmark import BenchMetric, keep

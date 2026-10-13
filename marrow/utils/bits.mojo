@@ -126,6 +126,22 @@ struct BitReader[m: Bool, //, o: Origin[mut=m]](TrivialRegisterPassable):
             self._bits = word << UInt64(self._used) if self._used < 64 else 0
 
     @always_inline
+    def refill_fast(mut self):
+        """`refill` for a reader whose stream start is at least 8 bytes
+        behind it, which `headroom` tells: no check of where it stands."""
+        self._ptr -= self._used >> 3
+        self._used &= 7
+        self._bits = LittleEndian.fixed[DType.uint64](
+            self._src, self._ptr
+        ) << UInt64(self._used)
+
+    @always_inline
+    def headroom(self) -> Int:
+        """The bytes refills may step back before `refill_fast` is no
+        longer safe; negative when it is not now."""
+        return self._ptr - 8
+
+    @always_inline
     def full(self) -> Bool:
         """Whether a `refill` now leaves at least 57 bits ready."""
         return self._ptr >= 8
