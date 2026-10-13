@@ -8,7 +8,7 @@ bug.
 """
 
 from marrow.io import BufferSource
-from marrow.parquet import ParquetFile
+from marrow.formats.parquet import ParquetFile
 
 
 def fuzz_one(data: Span[UInt8, _]) raises:

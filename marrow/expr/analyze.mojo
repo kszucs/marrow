@@ -21,7 +21,7 @@ from ..dtypes import BinaryLikeType, PrimitiveType
 from ..execution import ExecContext
 from ..io import DynSource
 from ..kernels.distinct import ApproxCountDistinctKernel
-from ..parquet.reader import LeafSet, ParquetFile
+from ..formats.parquet.reader import LeafSet, ParquetFile
 from ..scalars import DynScalar, NullScalar
 from ..schema import Schema
 from ..tabular import RecordBatch

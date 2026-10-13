@@ -464,7 +464,7 @@ class Fuzzer:
 # ---------------------------------------------------------------------------
 
 
-#: Where a failed `debug_assert` points: `At: ./marrow/ipc.mojo:2007:30:`.
+#: Where a failed `debug_assert` points: `At: ./marrow/formats/ipc/reader.mojo:2007:30:`.
 ASSERT_AT = re.compile(r"At: \.?/?(marrow/[\w/]+\.mojo:\d+)")
 #: A symbolized frame in marrow: `in marrow::ipc::_BatchDecoder::read_array(...) ipc.mojo:2018`.
 MARROW_FRAME = re.compile(

@@ -111,7 +111,7 @@ def test_a_too_old_clang_is_reported_as_such(tmp_path):
 
 
 ASSERT_OUTPUT = """\
-At: ./marrow/ipc.mojo:2007:30: Assert Error: index 0 is out of bounds, valid range is 0 to -1
+At: ./marrow/formats/ipc/reader.mojo:2007:30: Assert Error: index 0 is out of bounds, valid range is 0 to -1
 ==1== ERROR: libFuzzer: deadly signal
     #7 0x1 in marrow::ipc::_BatchDecoder::read_array(marrow::ipc::_BatchDecoder) dtypes.mojo
 SUMMARY: libFuzzer: deadly signal
@@ -128,7 +128,7 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow arrays.mojo:1145 in write_to
 
 def test_an_assert_is_bucketed_by_message_and_line():
     assert signature(ASSERT_OUTPUT) == (
-        "index N is out of bounds, valid range is N to N @ marrow/ipc.mojo:2007"
+        "index N is out of bounds, valid range is N to N @ marrow/formats/ipc/reader.mojo:2007"
     )
 
 

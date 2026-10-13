@@ -25,9 +25,9 @@ from ...dtypes import DynType, Field, FIELD_ID_KEY, float64, int32, int64
 from ...dtypes import date32, string
 from ...io import FileSink
 from ...kernels.filter import TakeKernel
-from ...parquet import ParquetFile, RowSelection, write_table
-from ...parquet.compression import Compression
-from ...parquet.writer import FileWriter
+from ...formats.parquet import ParquetFile, RowSelection, write_table
+from ...formats.parquet.compression import Compression
+from ...formats.parquet.writer import FileWriter
 from ...scalars import Date32Scalar, DynScalar, Int32Scalar, NullScalar
 from ...scalars import StringScalar
 from ...schema import Schema

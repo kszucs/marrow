@@ -1,0 +1,1306 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native Arrow → Parquet writer.
+
+`FileWriter` orchestrates the file: header magic, one `RowGroup` per
+`row_group_size` rows written -- each flushed to the sink once encoded -- then
+the footer. `ColumnWriter` owns one leaf column chunk — splitting it into data
+pages (RLE rep/def levels + encoded values) of at most ~1 MiB /
+`MAX_ROWS_PER_PAGE` rows on record boundaries, compressing each, and producing
+the `ColumnMetaData` plus the per-page OffsetIndex / ColumnIndex. A shared dictionary page (when dictionary-encoded)
+precedes the data pages. `version` selects the page format: v1 (levels + values
+compressed together) or v2 (levels stored uncompressed ahead of the compressed
+values). Value encoding is dispatched by Arrow type to typed methods, so the
+writer mirrors the reader's structure.
+"""
+
+
+from std.bit import bit_width
+from std.sys.info import Endian
+
+from ...errors import InternalError, InvalidError, NotImplementedError
+from ..core import BatchWriter
+from ...kernels.cast import TemporalCastKernel
+from ...arrays import (
+    DynArray,
+    PrimitiveArray,
+    BytesArray,
+)
+from ...io import (
+    BufferedSink,
+    ByteSink,
+    FileSink,
+    DynSink,
+    StorageOptions,
+)
+from ...dtypes import PrimitiveType, NumericType
+from ... import dtypes as dt
+from ...schema import Schema
+from ...tabular import Table, RecordBatch
+from .chunker import ContentDefinedChunking, ContentDefinedChunker, Chunk
+from .gearhash import gearhash_table
+
+
+from .compression import Compression
+from .encodings import (
+    ByteStreamSplitValues,
+    DeltaBinaryPackedEncoding,
+    DeltaByteArrayEncoding,
+    DeltaLengthEncoding,
+    DictionaryValues,
+    Encoding,
+    PlainValues,
+)
+from ...codecs import Rle
+from ...utils import Crc32
+from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
+from .schema import (
+    SchemaMapping,
+    LeafColumn,
+    SchemaNode,
+    physical_type,
+    is_wide_decimal,
+    flba_width,
+    has_plain_physical,
+)
+from .statistics import Statistics
+from .format import (
+    PageHeader,
+    PhysicalType,
+    KeyValue,
+    ColumnMetaData,
+    ColumnChunk,
+    RowGroup,
+    FileMetaData,
+    OffsetIndex,
+    ColumnIndex,
+    PageLocation,
+)
+from ...utils.byteorder import LittleEndian
+
+comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
+# A data page is flushed at whichever comes first: ~1 MiB of encoded value bytes
+# or 20 000 rows (matching arrow-cpp `data_pagesize` / `max_rows_per_page` and
+# arrow-rs `DEFAULT_PAGE_SIZE` / `DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT`).
+comptime DEFAULT_DATA_PAGE_SIZE: Int = 1 << 20
+comptime MAX_ROWS_PER_PAGE: Int = 20_000
+# Above this dictionary-page byte size a column falls back to PLAIN — the
+# dictionary would be as large as the raw values (PyArrow's default limit).
+comptime _DICT_PAGE_LIMIT: Int = 1 << 20
+
+
+# ---------------------------------------------------------------------------
+# ColumnWriter — encode one leaf column chunk into the output buffer
+# ---------------------------------------------------------------------------
+
+
+struct ColumnWriter(Movable):
+    var leaf: LeafColumn
+    var compression: Compression
+    var version: Int  # data-page version: 1 or 2
+    var encoding: Encoding  # value encoding: PLAIN, RLE_DICTIONARY, DELTA_*
+    var write_bloom: Bool  # build a bloom filter for this column chunk
+    var write_crc: Bool  # attach a CRC-32 checksum to every page
+    var packed: List[UInt8]
+    """The page body as it goes into the file, reused page to page."""
+
+    def __init__(
+        out self,
+        var leaf: LeafColumn,
+        compression: Compression,
+        version: Int = 1,
+        encoding: Encoding = Encoding.PLAIN,
+        write_bloom: Bool = False,
+        write_crc: Bool = False,
+    ):
+        self.leaf = leaf^
+        self.compression = compression
+        self.version = version
+        self.encoding = encoding
+        self.write_bloom = write_bloom
+        self.write_crc = write_crc
+        self.packed = List[UInt8]()
+
+    def _encode_values(self, col: DynArray, mut body: List[UInt8]) raises:
+        """Dispatch on the leaf's Arrow type to the right `PlainValues` encoder (the
+        writer's mirror of the reader's decode dispatch)."""
+        ref vt = self.leaf.dtype
+        if vt == dt.bool_:
+            PlainValues.encode_bool(col.as_bool(), body)
+        elif vt.is_fixed_size_binary():
+            PlainValues.encode_fixed_size_binary(
+                col.as_fixed_size_binary(), body
+            )
+        elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
+
+            def encode_bytes[
+                A: BytesArray
+            ](arr: A) raises {mut body, imm} -> Bool:
+                PlainValues.encode_bytes(arr, body)
+                return True
+
+            _ = col.dispatch_bytes(encode_bytes)
+        elif has_plain_physical(vt):
+
+            def encode_fixed[
+                T: dt.PrimitiveType
+            ](witness: T) raises {mut body, imm} -> Bool:
+                PlainValues.encode_primitive[
+                    phys=physical_type[T], big_endian=is_wide_decimal[T]
+                ](col.as_primitive[T](), body)
+                return True
+
+            _ = vt.dispatch_primitive(encode_fixed)
+        else:
+            raise NotImplementedError(t"parquet: cannot write column type {vt}")
+
+    # -----------------------------------------------------------------------
+    # Dictionary encoding — build the distinct-value dictionary (PLAIN page) and
+    # the per-present-value indices (RLE_DICTIONARY data page). Indices cover the
+    # non-null values only, exactly like the PLAIN encoders; the definition
+    # levels place the nulls, so this composes with the flat and leveled paths.
+    # -----------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------
+    # Bloom filter — XXH64-hash every present value's physical bytes (numeric /
+    # temporal / small-decimal little-endian, decimal128/256 big-endian FLBA, or
+    # raw byte-array / fixed-size-binary bytes) into a split-block filter sized
+    # for the column's distinct count.
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _hash_prim[
+        store: PrimitiveType, phys: DType
+    ](arr: PrimitiveArray[store], mut hashes: List[UInt64]) raises:
+        """Hash each present value's little-endian `phys`-width bytes — the
+        INT32/INT64/FLOAT/DOUBLE physical encoding shared by numeric, temporal,
+        and small-decimal columns."""
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = (
+                    arr[i].value().cast[phys]().as_bytes[endian=Endian.little]()
+                )
+                hashes.append(XxHash64.hash(Span(b)))
+
+    @staticmethod
+    def _hash_flba[
+        store: PrimitiveType, width: Int
+    ](arr: PrimitiveArray[store], mut hashes: List[UInt64]) raises:
+        """Hash each present decimal value's big-endian two's-complement
+        `width`-byte FIXED_LEN_BYTE_ARRAY encoding (matching the value encoding).
+        """
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = arr[i].value().as_bytes[endian=Endian.big]()
+                hashes.append(XxHash64.hash(Span(b)[0:width]))
+
+    @staticmethod
+    def _hash_bytes[A: BytesArray](arr: A, mut hashes: List[UInt64]) raises:
+        for i in range(len(arr)):
+            if arr.is_valid(i):
+                hashes.append(XxHash64.hash(arr.unsafe_get(UInt(i)).as_bytes()))
+
+    def _hash_fixed_size_binary(
+        self, col: DynArray, mut hashes: List[UInt64]
+    ) raises:
+        """Hash each present fixed-size-binary value's raw bytes."""
+        ref fsb = col.as_fixed_size_binary()
+        for i in range(len(fsb)):
+            if fsb.is_valid(i):
+                hashes.append(XxHash64.hash(Span(fsb[i].value())))
+
+    def _bloom_hashes(
+        self, col: DynArray, mut hashes: List[UInt64]
+    ) raises -> Bool:
+        """XXH64 of each present value's physical bytes; False for a type marrow
+        does not bloom-filter (bool).
+
+        The dtype ladder that used to live here mirrored `_encode_values`
+        arm-for-arm; both now consult `_phys` / `_wide_decimal` instead."""
+        ref vt = self.leaf.dtype
+        if vt.is_fixed_size_binary():
+            self._hash_fixed_size_binary(col, hashes)
+        elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
+
+            def hash_bytes[
+                A: BytesArray
+            ](arr: A) raises {mut hashes, imm} -> Bool:
+                Self._hash_bytes(arr, hashes)
+                return True
+
+            _ = col.dispatch_bytes(hash_bytes)
+        elif has_plain_physical(vt):
+
+            def hash_fixed[
+                T: dt.PrimitiveType
+            ](witness: T) raises {mut hashes, imm} -> Bool:
+                comptime if is_wide_decimal[T]:
+                    Self._hash_flba[width=flba_width[T]](
+                        col.as_primitive[T](), hashes
+                    )
+                else:
+                    Self._hash_prim[phys=physical_type[T]](
+                        col.as_primitive[T](), hashes
+                    )
+                return True
+
+            _ = vt.dispatch_primitive(hash_fixed)
+        else:
+            # bool, and anything else marrow does not bloom-filter
+            return False
+        return True
+
+    def _bloom_bytes(self, col: DynArray) raises -> List[UInt8]:
+        """The serialized split-block bloom filter for `col`, or an empty list
+        when the column has no bloom-filterable values. Sized to the distinct
+        hash count (deduped) so low-cardinality columns stay small."""
+        var hashes = List[UInt64]()
+        if not self._bloom_hashes(col, hashes) or len(hashes) == 0:
+            return List[UInt8]()
+        var seen = Dict[UInt64, Bool]()
+        for h in hashes:
+            seen[h] = True
+        var bf = SplitBlockBloomFilter.with_ndv(len(seen))
+        for h in hashes:
+            bf.insert_hash(h)
+        return bf.to_bytes()
+
+    @staticmethod
+    def can_bloom(dtype: dt.DynType) -> Bool:
+        """Whether a column of `dtype` is bloom-filtered when enabled — integer,
+        floating-point, byte-array, temporal, decimal, and fixed-size-binary
+        columns (everything with a stable physical byte encoding except bool).
+        """
+        return (
+            dtype.is_integer()
+            or dtype.is_floating_point()
+            or dtype.is_binary_like()
+            or dtype.is_string_view()
+            or dtype.is_binary_view()
+            or dtype.is_temporal()
+            or dtype.is_decimal()
+            or dtype.is_fixed_size_binary()
+        )
+
+    @staticmethod
+    def can_dictionary(dtype: dt.DynType) -> Bool:
+        """Whether a column of `dtype` is dictionary-encoded when requested —
+        numeric and byte-array columns (bool and unsupported types stay PLAIN).
+        """
+        return (
+            dtype.is_integer()
+            or dtype.is_floating_point()
+            or dtype.is_binary_like()
+            or dtype.is_string_view()
+            or dtype.is_binary_view()
+        )
+
+    # -----------------------------------------------------------------------
+    # Delta encoding — DELTA_BINARY_PACKED (signed ints) and DELTA_BYTE_ARRAY /
+    # DELTA_LENGTH_BYTE_ARRAY (strings), over the present values only.
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _present[
+        store: NumericType, T: DType
+    ](arr: PrimitiveArray[store], mut out: List[Scalar[T]]) raises:
+        """The present values of `arr`, as `T`."""
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                out.append(arr[i].value().cast[T]())
+
+    @staticmethod
+    def can_delta(dtype: dt.DynType, encoding: Encoding) -> Bool:
+        """Whether `encoding` (a DELTA_* variant) applies to `dtype`."""
+        if encoding == Encoding.DELTA_BINARY_PACKED:
+            return dtype.is_signed_integer()
+        elif (
+            encoding == Encoding.DELTA_BYTE_ARRAY
+            or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
+        ):
+            return (
+                dtype.is_binary_like()
+                or dtype.is_string_view()
+                or dtype.is_binary_view()
+            )
+        return False
+
+    @staticmethod
+    def can_bss(dtype: dt.DynType) -> Bool:
+        """BYTE_STREAM_SPLIT applies to floating-point columns."""
+        return dtype.is_floating_point()
+
+    @staticmethod
+    def supports(encoding: Encoding, dtype: dt.DynType) -> Bool:
+        """Whether `encoding` is a valid value encoding for a column of `dtype`.
+        PLAIN is always valid; the others require a compatible type."""
+        if encoding == Encoding.PLAIN:
+            return True
+        elif encoding == Encoding.RLE_DICTIONARY:
+            return Self.can_dictionary(dtype)
+        elif encoding == Encoding.BYTE_STREAM_SPLIT:
+            return Self.can_bss(dtype)
+        else:
+            return Self.can_delta(dtype, encoding)
+
+    def _encode_bss(self, col: DynArray, mut out: List[UInt8]) raises:
+        """BYTE_STREAM_SPLIT-encode the present float values."""
+        ref vt = self.leaf.dtype
+        if vt == dt.float32:
+            ByteStreamSplitValues.encode[dt.Float32Type, DType.float32](
+                col.as_float32(), out
+            )
+        elif vt == dt.float64:
+            ByteStreamSplitValues.encode[dt.Float64Type, DType.float64](
+                col.as_float64(), out
+            )
+        else:
+            raise NotImplementedError(
+                t"parquet: cannot BYTE_STREAM_SPLIT type {vt}"
+            )
+
+    def _encode_bytes_delta[
+        A: BytesArray
+    ](self, arr: A, mut out: List[UInt8]) raises:
+        """Delta-encode a byte-array column per `self.encoding` (DELTA_BYTE_ARRAY
+        or DELTA_LENGTH_BYTE_ARRAY)."""
+        var offsets = List[Int32]()
+        var data = List[UInt8]()
+        PlainValues.present_bytes(arr, offsets, data)
+        if self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY:
+            DeltaLengthEncoding.encode(Span(offsets), Span(data), out)
+        else:  # DELTA_BYTE_ARRAY
+            DeltaByteArrayEncoding.encode(Span(offsets), Span(data), out)
+
+    def _encode_delta(self, col: DynArray, mut out: List[UInt8]) raises:
+        """Delta-encode the present values per `self.encoding`."""
+        ref vt = self.leaf.dtype
+        if self.encoding == Encoding.DELTA_BINARY_PACKED:
+            # In the physical type: INT32 for the narrower integers too, so
+            # the differences wrap as every other writer's do.
+            var int32s = List[Int32]()
+            if vt == dt.int64:
+                var int64s = List[Int64]()
+                Self._present(col.as_int64(), int64s)
+                DeltaBinaryPackedEncoding.encode(Span(int64s), out)
+            elif vt == dt.int32:
+                Self._present(col.as_int32(), int32s)
+            elif vt == dt.int8:
+                Self._present(col.as_int8(), int32s)
+            elif vt == dt.int16:
+                Self._present(col.as_int16(), int32s)
+            else:
+                raise InternalError(
+                    t"parquet: cannot DELTA_BINARY_PACKED type {vt}"
+                )
+            if vt != dt.int64:
+                DeltaBinaryPackedEncoding.encode(Span(int32s), out)
+        else:  # a byte-string column -- see `can_delta`
+
+            def delta_bytes[
+                A: BytesArray
+            ](arr: A) raises {mut out, imm} -> Bool:
+                self._encode_bytes_delta(arr, out)
+                return True
+
+            _ = col.dispatch_bytes(delta_bytes)
+
+    # -----------------------------------------------------------------------
+    # Page splitting — a column chunk is split into data pages of at most
+    # ~1 MiB of encoded values / MAX_ROWS_PER_PAGE rows, each on a record
+    # boundary. One dictionary page (if any) is shared by all data pages.
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _sub(src: List[Int32], a: Int, b: Int) -> List[Int32]:
+        """A copy of `src[a:b]` (the per-page level / index slice)."""
+        var out = List[Int32](capacity=b - a)
+        out.extend(Span(src)[a:b])
+        return out^
+
+    def _phys_width(self) -> Int:
+        """Physical byte width of a fixed-width value (0 for BYTE_ARRAY / BOOL).
+        """
+        ref p = self.leaf.physical
+        if p == PhysicalType.INT32 or p == PhysicalType.FLOAT:
+            return 4
+        elif p == PhysicalType.INT64 or p == PhysicalType.DOUBLE:
+            return 8
+        elif p == PhysicalType.FIXED_LEN_BYTE_ARRAY:
+            return self.leaf.type_length
+        else:
+            return 0
+
+    @staticmethod
+    def _bytes_total[A: BytesArray](arr: A) raises -> Int:
+        var total = 0
+        for i in range(len(arr)):
+            if arr.is_valid(i):
+                total += len(arr.unsafe_get(UInt(i)).as_bytes()) + 4
+        return total
+
+    def _rows_per_page(
+        self,
+        values: DynArray,
+        encoding: Encoding,
+        dict_width: Int,
+        num_rows: Int,
+        num_present: Int,
+    ) raises -> Int:
+        """Rows per data page from the estimated encoded value bytes alone --
+        the row count whose bytes fill `DEFAULT_DATA_PAGE_SIZE`, not yet
+        capped by `MAX_ROWS_PER_PAGE`. `write` applies that cap once, at the
+        call site, alongside the CDC row cap. The estimate is values-only
+        (dictionary indices are `bit_width` bits each, byte arrays their
+        measured length, everything else its physical width).
+        """
+        var est: Int
+        if encoding == Encoding.RLE_DICTIONARY:
+            est = num_present * max(1, (dict_width + 7) // 8)
+        elif self.leaf.physical == PhysicalType.BOOLEAN:
+            est = (num_present + 7) // 8
+        elif self.leaf.physical == PhysicalType.BYTE_ARRAY:
+
+            def total[A: BytesArray](arr: A) raises {imm} -> Int:
+                return Self._bytes_total(arr)
+
+            est = values.dispatch_bytes(total)
+        else:
+            est = num_present * self._phys_width()
+        if est <= 0 or num_rows == 0:
+            return MAX_ROWS_PER_PAGE
+        return max(1, num_rows * DEFAULT_DATA_PAGE_SIZE // est)
+
+    def _pack(mut self, var body: List[UInt8], native: Bool) raises:
+        """Leave `body` as it goes into the file in `self.packed`: as is when
+        uncompressed, else compressed into the reused list."""
+        if self.compression == Compression.UNCOMPRESSED:
+            self.packed = body^
+        else:
+            self.packed.clear()
+            self.compression.compress(native, Span(body), self.packed)
+
+    def _write_dict_page(
+        mut self,
+        var dict_body: List[UInt8],
+        num_dict: Int,
+        mut out: List[UInt8],
+        native: Bool,
+    ) raises -> Tuple[Int, Int, Int]:
+        """Write the shared dictionary page (PLAIN distinct values, compressed);
+        return `(offset, uncompressed_incl_header, compressed_incl_header)`,
+        `offset` being the page's index in `out`."""
+        var offset = len(out)
+        var raw_len = len(dict_body)
+        self._pack(dict_body^, native)
+        var comp_len = len(self.packed)
+        var ph = PageHeader.dictionary_page(raw_len, comp_len, num_dict)
+        if self.write_crc:
+            ph.crc = Int(Crc32.compute(Span(self.packed)))
+        var header_len = ph.append_to(out)
+        out.extend(Span(self.packed))
+        return (offset, header_len + raw_len, header_len + comp_len)
+
+    def _serialize_data_page(
+        mut self,
+        var value_bytes: List[UInt8],
+        var rep_bytes: List[UInt8],
+        var def_bytes: List[UInt8],
+        num_values: Int,
+        num_rows: Int,
+        null_count: Int,
+        encoding: Encoding,
+        mut out: List[UInt8],
+        native: Bool,
+    ) raises -> Tuple[Int, Int, Int]:
+        """Serialize one v1/v2 data page into `out` from the already-encoded value
+        + rep/def level bytes; return `(page_offset, uncompressed_incl_header,
+        compressed_incl_header)`, `page_offset` being the page's index in `out`.
+        v1 length-prefixes each level stream ahead of the values (all compressed
+        together); v2 keeps the levels uncompressed ahead of the (optionally
+        compressed) values."""
+        var page_offset = len(out)
+        var uncompressed_size: Int
+        var compressed_size: Int
+        var header_len: Int
+        if self.version == 2:
+            var is_comp = self.compression != Compression.UNCOMPRESSED
+            var level_len = len(rep_bytes) + len(def_bytes)
+            uncompressed_size = level_len + len(value_bytes)
+            self._pack(value_bytes^, native)
+            compressed_size = level_len + len(self.packed)
+            var ph = PageHeader.data_page_v2(
+                uncompressed_size,
+                compressed_size,
+                num_values,
+                null_count,
+                num_rows,
+                len(def_bytes),
+                is_comp,
+                rep_levels_byte_length=len(rep_bytes),
+                encoding=encoding,
+            )
+            if self.write_crc:
+                # v2 checksums the (uncompressed) levels then compressed values
+                var c = Crc32()
+                c.update(Span(rep_bytes))
+                c.update(Span(def_bytes))
+                c.update(Span(self.packed))
+                ph.crc = Int(c.value())
+            header_len = ph.append_to(out)
+            out.extend(Span(rep_bytes))
+            out.extend(Span(def_bytes))
+            out.extend(Span(self.packed))
+        else:
+            var body = List[UInt8]()
+            if self.leaf.max_rep >= 1:
+                LittleEndian.append[DType.uint32](body, UInt32(len(rep_bytes)))
+                body.extend(Span(rep_bytes))
+            if self.leaf.max_def >= 1:
+                LittleEndian.append[DType.uint32](body, UInt32(len(def_bytes)))
+                body.extend(Span(def_bytes))
+            body.extend(Span(value_bytes))
+            uncompressed_size = len(body)
+            self._pack(body^, native)
+            compressed_size = len(self.packed)
+            var ph = PageHeader.data_page(
+                uncompressed_size, compressed_size, num_values, encoding
+            )
+            if self.write_crc:
+                ph.crc = Int(Crc32.compute(Span(self.packed)))
+            header_len = ph.append_to(out)
+            out.extend(Span(self.packed))
+        return (
+            page_offset,
+            header_len + uncompressed_size,
+            header_len + compressed_size,
+        )
+
+    def write(
+        mut self,
+        values: DynArray,
+        def_levels: List[Int32],
+        rep_levels: List[Int32],
+        path: List[String],
+        mut out: List[UInt8],
+        base: Int,
+        native: Bool,
+        page_plan: List[Int],
+    ) raises -> ColumnChunk:
+        """Write one leaf column chunk, split into data pages. `def_levels` /
+        `rep_levels` are always pre-populated by the caller: either
+        Dremel-shredded by `SchemaNode.shred_levels` (a leveled list/map/
+        nullable-struct column) or synthesized from the leaf array's own
+        validity by `_flat_def_levels` (a flat column) --
+        `FileWriter._write_row_group` is the single call site for the latter,
+        shared with the content-defined chunker. Values are dictionary/PLAIN/
+        DELTA/BSS-encoded; a shared dictionary page (if any) precedes the data
+        pages. Produces the per-page OffsetIndex + ColumnIndex on the chunk.
+
+        `page_plan`, when non-empty, is the content-defined chunker's per-chunk
+        level-count boundaries and replaces the byte-estimate `_rows_per_page`
+        sizing. `MAX_ROWS_PER_PAGE` still bounds every physical page inside a
+        chunk -- a default-sized CDC chunk of int64 alone holds 32K-131K
+        values, well past the 20 000-row cap, so it fires on essentially every
+        chunk and one chunk commonly becomes several pages.
+
+        `base` is the file position of `out[0]`. The pages are appended to
+        `out`, and every offset the chunk records -- `dictionary_page_offset`,
+        `data_page_offset`, `file_offset`, each `PageLocation.offset` -- is
+        `base` plus the page's index in `out`, so `out` may be a staging
+        buffer whose earlier bytes have already left for the sink."""
+        var max_def = self.leaf.max_def
+        var max_rep = self.leaf.max_rep
+        var slot_def = self.leaf.slot_def
+
+        # ---- per-slot definition/repetition levels: borrow the caller's
+        # lists, which outlive this call ----
+        ref defs = def_levels
+        ref reps = rep_levels
+
+        var num_values = len(defs)
+        var num_present = 0
+        for d in defs:
+            if Int(d) == max_def:
+                num_present += 1
+        var null_count_total = num_values - num_present
+        var num_rows = num_values
+        if max_rep >= 1:
+            num_rows = 0
+            for r in reps:
+                if Int(r) == 0:
+                    num_rows += 1
+
+        # ---- dictionary: build once, write the shared dictionary page ----
+        var encoding = self.encoding
+        var indices = List[Int32]()
+        var dict_width = 0
+        var dict_page_offset = -1
+        var total_uncompressed = 0
+        var total_compressed = 0
+        # Distinct non-null value count, known only for a dictionary-encoded
+        # chunk (the dictionary size); -1 leaves Statistics.distinct_count absent.
+        var chunk_distinct = -1
+        if encoding == Encoding.RLE_DICTIONARY:
+            var dict_body = List[UInt8]()
+            var num_dict = DictionaryValues.encode(
+                self.leaf.dtype, values, dict_body, indices
+            )
+            if len(dict_body) > _DICT_PAGE_LIMIT:
+                # High-cardinality: the dictionary would exceed PLAIN, fall back.
+                encoding = Encoding.PLAIN
+                indices = List[Int32]()
+            else:
+                chunk_distinct = num_dict
+                if num_dict > 0:  # one bit even for a one-entry dictionary
+                    dict_width = max(1, Int(bit_width(UInt64(num_dict - 1))))
+                var d = self._write_dict_page(dict_body^, num_dict, out, native)
+                dict_page_offset = base + d[0]
+                total_uncompressed += d[1]
+                total_compressed += d[2]
+
+        # Content-defined chunking: `page_plan[k]` is the level count of CDC
+        # chunk `k`; absent (CDC off), it is normalised here to one chunk
+        # spanning every level, so the boundary-advance below needs no
+        # separate has-a-plan branch. `row_cap` still bounds every physical
+        # page inside a chunk -- a chunk bigger than `MAX_ROWS_PER_PAGE` (the
+        # common case) splits into several pages, and only once the slot
+        # cursor reaches the chunk's own boundary does the plan advance to
+        # the next chunk.
+        #
+        # `row_cap` and `chunk_end` are irreducibly different units: `row_cap`
+        # counts **records** (an encoded-byte budget), `chunk_end` counts
+        # **levels** (a content-hash boundary) -- that is why they stay two
+        # separate numbers rather than folding into one list.
+        var has_plan = len(page_plan) > 0
+        var plan = page_plan.copy()
+        var row_cap = MAX_ROWS_PER_PAGE
+        if not has_plan:
+            plan.append(num_values)
+            row_cap = min(
+                row_cap,
+                self._rows_per_page(
+                    values, encoding, dict_width, num_rows, num_present
+                ),
+            )
+        var plan_idx = 0
+        var chunk_end = plan[0]
+
+        # ---- emit data pages ----
+        var page_locs = List[PageLocation]()
+        var cix = ColumnIndex()
+        var can_column_index = True
+        var first_data_offset = -1
+        var i = 0  # slot cursor
+        var e = 0  # element cursor into `values`
+        var p = 0  # present cursor into `indices`
+        var rows_before = 0
+        while i < num_values or len(page_locs) == 0:
+            var i0 = i
+            var e0 = e
+            var p0 = p
+            var page_rows = 0
+            while i < num_values and page_rows < row_cap and i < chunk_end:
+                # consume one whole record (rep == 0 starts a new record)
+                if Int(defs[i]) >= slot_def:
+                    e += 1
+                if Int(defs[i]) == max_def:
+                    p += 1
+                i += 1
+                while i < num_values and not (
+                    max_rep == 0 or Int(reps[i]) == 0
+                ):
+                    if Int(defs[i]) >= slot_def:
+                        e += 1
+                    if Int(defs[i]) == max_def:
+                        p += 1
+                    i += 1
+                page_rows += 1
+            if i >= chunk_end and plan_idx + 1 < len(plan):
+                plan_idx += 1
+                chunk_end += plan[plan_idx]
+            var page_num_values = i - i0
+            var page_present = p - p0
+            var page_null = page_num_values - page_present
+
+            # levels for this page
+            var rep_bytes = List[UInt8]()
+            var def_bytes = List[UInt8]()
+            if max_rep >= 1:
+                var page_reps = Self._sub(reps, i0, i)
+                Rle.write_runs(
+                    Span(page_reps), Int(bit_width(UInt64(max_rep))), rep_bytes
+                )
+            if max_def >= 1:
+                var page_defs = Self._sub(defs, i0, i)
+                Rle.write_runs(
+                    Span(page_defs), Int(bit_width(UInt64(max_def))), def_bytes
+                )
+
+            # value bytes for this page
+            var value_bytes = List[UInt8]()
+            if encoding == Encoding.RLE_DICTIONARY:
+                value_bytes.append(UInt8(dict_width))
+                var page_indices = Self._sub(indices, p0, p)
+                Rle.write_runs(Span(page_indices), dict_width, value_bytes)
+            else:
+                var page_vals = values.slice(e0, e - e0)
+                if (
+                    encoding == Encoding.DELTA_BINARY_PACKED
+                    or encoding == Encoding.DELTA_BYTE_ARRAY
+                    or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
+                ):
+                    self._encode_delta(page_vals, value_bytes)
+                elif encoding == Encoding.BYTE_STREAM_SPLIT:
+                    self._encode_bss(page_vals, value_bytes)
+                else:
+                    self._encode_values(page_vals, value_bytes)
+
+            var sp = self._serialize_data_page(
+                value_bytes^,
+                rep_bytes^,
+                def_bytes^,
+                page_num_values,
+                page_rows,
+                page_null,
+                encoding,
+                out,
+                native,
+            )
+            total_uncompressed += sp[1]
+            total_compressed += sp[2]
+            if first_data_offset < 0:
+                first_data_offset = base + sp[0]
+
+            # OffsetIndex: this page's location and its first (row-group-relative)
+            # row.
+            var loc = PageLocation()
+            loc.offset = base + sp[0]
+            loc.compressed_page_size = len(out) - sp[0]
+            loc.first_row_index = rows_before
+            page_locs.append(loc^)
+
+            # ColumnIndex: per-page bounds. A page with no present value is a null
+            # page (empty bounds); a present page without stats disables the index.
+            var pmin = List[UInt8]()
+            var pmax = List[UInt8]()
+            var has_mm = Statistics.min_max(
+                self.leaf.dtype, values.slice(e0, e - e0), pmin, pmax
+            )
+            if page_present == 0:
+                cix.null_pages.append(True)
+                cix.min_values.append(List[UInt8]())
+                cix.max_values.append(List[UInt8]())
+            elif has_mm:
+                cix.null_pages.append(False)
+                cix.min_values.append(pmin^)
+                cix.max_values.append(pmax^)
+            else:
+                can_column_index = False
+                cix.null_pages.append(False)
+                cix.min_values.append(List[UInt8]())
+                cix.max_values.append(List[UInt8]())
+            cix.null_counts.append(page_null)
+
+            rows_before += page_rows
+
+        # ---- chunk metadata ----
+        var meta = ColumnMetaData()
+        meta.type = self.leaf.physical.code
+        for pth in path:
+            meta.path_in_schema.append(pth)
+        meta.codec = self.compression.code
+        meta.num_values = num_values
+        meta.total_uncompressed_size = total_uncompressed
+        meta.total_compressed_size = total_compressed
+        meta.data_page_offset = first_data_offset
+        var encs: List[Int] = [Encoding.RLE.code]
+        if dict_page_offset >= 0:
+            meta.dictionary_page_offset = dict_page_offset
+            encs.append(Encoding.PLAIN.code)
+        encs.append(encoding.code)
+        meta.encodings = encs^
+        if max_def >= 1:
+            meta.null_count = null_count_total
+        meta.distinct_count = chunk_distinct
+        var cmin = List[UInt8]()
+        var cmax = List[UInt8]()
+        if Statistics.min_max(self.leaf.dtype, values, cmin, cmax):
+            meta.has_min_max = True
+            meta.min_value = cmin^
+            meta.max_value = cmax^
+
+        var cc = ColumnChunk()
+        cc.file_offset = (
+            dict_page_offset if dict_page_offset >= 0 else first_data_offset
+        )
+        cc.meta_data = meta^
+        var oi = OffsetIndex()
+        oi.page_locations = page_locs^
+        cc.offset_index_out = oi^
+        cix.boundary_order = 0  # UNORDERED (per-page ordering not computed)
+        cc.column_index_out = cix^
+        cc.write_column_index = can_column_index
+        if self.write_bloom:
+            cc.bloom_bytes = self._bloom_bytes(values)
+        return cc^
+
+
+# ---------------------------------------------------------------------------
+# FileWriter — header, row groups, footer
+# ---------------------------------------------------------------------------
+
+
+def _flat_def_levels(values: DynArray, max_def: Int) raises -> List[Int32]:
+    """Definition levels for a flat leaf, one per row: `max_def` where the
+    row is valid, `max_def - 1` otherwise. A flat leaf (no repeated group or
+    nullable struct above it) is never Dremel-shredded, so this is the only
+    place its def levels exist. `FileWriter._write_row_group` calls this once
+    per leaf and shares the result between the content-defined chunker and
+    `ColumnWriter.write` -- previously each synthesized the same array under
+    a differently spelled condition, and the two could drift out of
+    agreement."""
+    var n = values.length()
+    var defs = List[Int32](length=n, fill=Int32(max_def))
+    if values.null_count() > 0:
+        # The validity read once from the array, not a dispatch a row.
+        var data = values.to_data()
+        if data.bitmap:
+            var bits = data.bitmap.value().view(data.offset, n)
+            for i in range(n):
+                if not bits[i]:
+                    defs[i] = Int32(max_def - 1)
+        else:
+            for i in range(n):
+                defs[i] = Int32(max_def - 1)
+    return defs^
+
+
+struct FileWriter[S: ByteSink = FileSink](BatchWriter):
+    """Writes a Parquet file to any `ByteSink`, one row group at a time.
+
+    Batches are buffered until `row_group_size` rows are pending; that many
+    are then encoded as one row group and flushed to the sink, so memory is
+    bounded by a row group (plus the batch that filled it), not by the file.
+    `close` encodes what is left, then the bloom filters, the page index and
+    the footer, and commits the sink. A writer dropped without `close`
+    commits nothing.
+
+    Row groups start every `row_group_size` rows of the concatenated input,
+    however it was split into batches, so feeding the same rows in any
+    batching writes the same bytes.
+    """
+
+    var out: BufferedSink[Self.S]
+    var native_codecs: Bool
+    var compression: Compression
+    var version: Int  # data-page version: 1 (default) or 2
+    var use_dictionary: Bool  # dictionary-encode eligible columns (else PLAIN)
+    var encoding: Optional[Encoding]  # global forced encoding for eligible cols
+    var column_encodings: Dict[String, Encoding]  # per-column overrides by name
+    var write_bloom_filter: Bool  # build bloom filters for eligible columns
+    var write_page_checksum: Bool  # attach a CRC-32 to every page
+    var schema: Schema
+    """The Arrow schema every written batch must have."""
+    var row_group_size: Int
+    """Rows per row group; only the last one may be shorter."""
+    var nodes: List[SchemaNode]
+    var leaves: List[LeafColumn]
+    var content_defined_chunking: Optional[ContentDefinedChunking]
+    """How to derive data page boundaries from a rolling hash instead of a row
+    count / byte estimate, or `None` for the existing default sizing."""
+    var gearhash: List[UInt64]
+    """The 16 KiB gear hash table, materialized once per file and lent to
+    every chunker call -- never copied per chunker or per value."""
+    var fmeta: FileMetaData
+    """The footer, gathering one `RowGroup` per encoded row group."""
+    var pending: List[RecordBatch]
+    """Batches not yet encoded, fewer than `row_group_size` rows in all
+    between calls."""
+    var pending_rows: Int
+    var closed: Bool
+
+    def __init__(
+        out self,
+        var sink: Self.S,
+        schema: Schema,
+        compression: Compression,
+        version: Int = 1,
+        use_dictionary: Bool = True,
+        var encoding: Optional[Encoding] = None,
+        var column_encodings: Dict[String, Encoding] = {},
+        write_bloom_filter: Bool = False,
+        write_page_checksum: Bool = False,
+        var content_defined_chunking: Optional[ContentDefinedChunking] = None,
+        native_codecs: Bool = True,
+        row_group_size: Int = DEFAULT_ROW_GROUP_SIZE,
+    ) raises:
+        if row_group_size < 1:
+            raise InvalidError(
+                t"FileWriter: row_group_size must be positive, got"
+                t" {row_group_size}"
+            )
+        var ps = SchemaMapping.from_arrow(schema)
+        self.out = BufferedSink(sink^)
+        FileMetaData.write_magic(self.out.buffer())  # file header magic
+        self.native_codecs = native_codecs
+        self.compression = compression
+        self.version = version
+        self.use_dictionary = use_dictionary
+        self.encoding = encoding^
+        self.column_encodings = column_encodings^
+        self.write_bloom_filter = write_bloom_filter
+        self.write_page_checksum = write_page_checksum
+        self.schema = schema.copy()
+        self.row_group_size = row_group_size
+        self.nodes = ps.nodes.copy()
+        self.leaves = ps.leaves.copy()
+        self.content_defined_chunking = content_defined_chunking^
+        # Content-defined chunking: the 16 KiB gearhash table is materialized
+        # once per file and lent (never copied) to every `chunks()` call. The
+        # chunkers themselves are per row group -- see `_write_row_group`.
+        self.gearhash = List[UInt64]()
+        if self.content_defined_chunking:
+            self.gearhash = gearhash_table()
+
+        self.fmeta = FileMetaData()
+        self.fmeta.version = version
+        self.fmeta.schema = ps.elements.copy()
+        self.fmeta.num_rows = 0
+        self.fmeta.created_by = "marrow"
+        # Preserve the schema's key/value metadata. PyArrow's `ARROW:schema` is
+        # dropped: it pins the exact Arrow types, but marrow writes (and readers
+        # infer) types from the Parquet schema, so re-emitting a foreign
+        # ARROW:schema would make the file self-inconsistent.
+        for entry in schema.metadata.items():
+            if entry.key != "ARROW:schema":
+                self.fmeta.key_value_metadata.append(
+                    KeyValue(entry.key, entry.value)
+                )
+        self.pending = List[RecordBatch]()
+        self.pending_rows = 0
+        self.closed = False
+
+    def _encoding_for(self, leaf: LeafColumn) raises -> Encoding:
+        """The value encoding for a leaf, most specific first: a per-column
+        override, then the global `encoding`, then RLE_DICTIONARY when
+        dictionaries are enabled, else PLAIN. An override that does not apply to
+        the column type falls through rather than erroring."""
+        if leaf.name in self.column_encodings:
+            var e = self.column_encodings[leaf.name]
+            if ColumnWriter.supports(e, leaf.dtype):
+                return e
+        if self.encoding and ColumnWriter.supports(
+            self.encoding.value(), leaf.dtype
+        ):
+            return self.encoding.value()
+        if self.use_dictionary and ColumnWriter.can_dictionary(leaf.dtype):
+            return Encoding.RLE_DICTIONARY
+        return Encoding.PLAIN
+
+    def _write_row_group(mut self, batch: RecordBatch) raises -> RowGroup:
+        # Content-defined chunking: one chunker per leaf, **built fresh for this
+        # row group**. The rolling-hash state carries across the pages and the
+        # `chunks()` calls within a row group and is deliberately dropped at its
+        # end, which is where Arrow C++ puts the boundary too: its
+        # `content_defined_chunker_` is a member of `ColumnWriterImpl`
+        # (`column_writer.cc`), and `RowGroupSerializer` builds a new column
+        # writer for every row group. Hoisting this into `write()` to make the
+        # state column-global reads like the stronger guarantee and is simply a
+        # different chunking -- it moves every boundary past row group 0 off
+        # Arrow C++'s, which `test_chunker_parity.mojo` catches.
+        var chunkers = List[ContentDefinedChunker]()
+        if self.content_defined_chunking:
+            var opts = self.content_defined_chunking.value().copy()
+            chunkers = List[ContentDefinedChunker](capacity=len(self.leaves))
+            for ref leaf in self.leaves:
+                chunkers.append(
+                    ContentDefinedChunker(
+                        opts, leaf.max_def, leaf.max_rep, leaf.slot_def
+                    )
+                )
+
+        # `out` is the staging buffer, which holds only what was written since
+        # the last flush; `base` is the file position of its first byte.
+        var base = self.out.tell() - len(self.out.buffer())
+        var columns = List[ColumnChunk]()
+        var total = 0
+        for ci in range(len(self.nodes)):
+            var col_leaves = List[Int]()
+            self.nodes[ci].collect_leaf_indices(col_leaves)
+            var leaf_values = List[DynArray]()
+            self.nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_values)
+
+            # Per-leaf rep/def levels: empty for a flat column (each leaf's
+            # levels are synthesized below from its own validity), Dremel-
+            # shredded when the column contains a repeated (list/map) group
+            # or a nullable struct.
+            var defs = List[List[Int32]]()
+            var reps = List[List[Int32]]()
+            for _ in range(len(self.leaves)):
+                defs.append(List[Int32]())
+                reps.append(List[Int32]())
+            if self.nodes[ci].needs_levels():
+                self.nodes[ci].shred_levels(
+                    batch.columns[ci], self.leaves, defs, reps
+                )
+
+            for k in range(len(col_leaves)):
+                var gi = col_leaves[k]
+                # A leaf written in another unit (`SchemaMapping._written_type`)
+                # is cast to it; the cast raises where the scale overflows.
+                ref leaf_type = self.leaves[gi].dtype
+                if leaf_type.is_temporal() and not (
+                    leaf_values[k].dtype() == leaf_type
+                ):
+                    leaf_values[k] = TemporalCastKernel.dispatch(
+                        leaf_values[k], leaf_type
+                    )
+
+                # A flat leaf (required or nullable) is never Dremel-shredded,
+                # so its def levels only exist here -- synthesized once and
+                # shared below by the content-defined chunker and
+                # `ColumnWriter.write`, which used to each synthesize the same
+                # array under a differently spelled condition.
+                if len(defs[gi]) == 0:
+                    defs[gi] = _flat_def_levels(
+                        leaf_values[k], self.leaves[gi].max_def
+                    )
+
+                # Content-defined chunking: the per-page level-count plan for
+                # this leaf, from this row group's chunker. Empty (the
+                # default) unless CDC is enabled, in which case
+                # `ColumnWriter.write` falls back to its byte-estimate sizing.
+                var page_plan = List[Int]()
+                if self.content_defined_chunking:
+                    ref chunker = chunkers[gi]
+                    for c in chunker.chunks(
+                        self.gearhash, leaf_values[k], defs[gi], reps[gi]
+                    ):
+                        page_plan.append(c.num_levels)
+
+                var ccw = ColumnWriter(
+                    self.leaves[gi].copy(),
+                    self.compression,
+                    self.version,
+                    self._encoding_for(self.leaves[gi]),
+                    self.write_bloom_filter
+                    and ColumnWriter.can_bloom(self.leaves[gi].dtype),
+                    self.write_page_checksum,
+                )
+                var cc = ccw.write(
+                    leaf_values[k],
+                    defs[gi],
+                    reps[gi],
+                    [self.leaves[gi].name],
+                    self.out.buffer(),
+                    base,
+                    self.native_codecs,
+                    page_plan,
+                )
+                total += cc.meta_data.total_uncompressed_size
+                columns.append(cc^)
+
+        var rg = RowGroup()
+        rg.total_byte_size = total
+        rg.num_rows = batch.num_rows()
+        rg.columns = columns^
+        return rg^
+
+    def write(mut self, batch: RecordBatch) raises:
+        """Append `batch`'s rows. Every full `row_group_size` rows pending are
+        encoded as a row group and flushed to the sink."""
+        if self.closed:
+            raise InvalidError("write: the Parquet writer is closed")
+        if batch.schema != self.schema:
+            raise InvalidError(
+                t"write: batch has schema {batch.schema}, expected"
+                t" {self.schema}"
+            )
+        if batch.num_rows() == 0:
+            return
+        self.pending.append(batch.copy())
+        self.pending_rows += batch.num_rows()
+        while self.pending_rows >= self.row_group_size:
+            var rows = self._take_pending()
+            var rest = rows.num_rows() - self.row_group_size
+            self._write_and_flush(rows.slice(0, self.row_group_size))
+            if rest > 0:
+                self.pending.append(rows.slice(self.row_group_size, rest))
+            self.pending_rows = rest
+
+    def write(mut self, table: Table) raises:
+        """Append `table`'s rows, batch by batch."""
+        for batch in table.to_batches():
+            self.write(batch)
+
+    def close(mut self) raises:
+        """Encode the rows still pending, then the bloom filters, the page
+        index and the footer, and commit the sink. A file nothing was written
+        to holds one empty row group. Closing twice is a no-op."""
+        if self.closed:
+            return
+        self.closed = True
+        if self.pending_rows > 0 or len(self.fmeta.row_groups) == 0:
+            self._write_and_flush(self._take_pending())
+
+        # bloom filters, then the page index — both written after the page data,
+        # before the footer; the footer's ColumnChunks point back at them.
+        self._write_bloom_filters()
+        self._write_page_index()
+        self.fmeta.write_footer(self.out.buffer())
+        self.out.close()
+
+    def _take_pending(mut self) raises -> RecordBatch:
+        """The pending batches as one, leaving none pending."""
+        var rows: RecordBatch
+        if len(self.pending) == 1:
+            rows = self.pending[0].copy()
+        else:
+            rows = RecordBatch.concat(self.pending, self.schema)
+        self.pending.clear()
+        self.pending_rows = 0
+        return rows^
+
+    def _write_and_flush(mut self, batch: RecordBatch) raises:
+        """Encode `batch` as one row group and hand its bytes to the sink."""
+        var rg = self._write_row_group(batch)
+        self.fmeta.num_rows += batch.num_rows()
+        self.fmeta.row_groups.append(rg^)
+        self.out.flush()
+
+    def _write_bloom_filters(mut self) raises:
+        """Emit each chunk's bloom filter (BloomFilterHeader + bitset) and record
+        its offset/length on the ColumnMetaData. Chunks with no bloom bytes (a
+        non-eligible type, or bloom filters disabled) are skipped."""
+        for rg in range(len(self.fmeta.row_groups)):
+            for ci in range(len(self.fmeta.row_groups[rg].columns)):
+                var nbytes = len(
+                    self.fmeta.row_groups[rg].columns[ci].bloom_bytes
+                )
+                if nbytes == 0:
+                    continue
+                var offset = self.out.tell()
+                var hdr = BloomFilterHeader()
+                hdr.num_bytes = nbytes
+                var hlen = hdr.append_to(self.out.buffer())
+                self.out.buffer().extend(
+                    Span(self.fmeta.row_groups[rg].columns[ci].bloom_bytes)
+                )
+                self.fmeta.row_groups[rg].columns[
+                    ci
+                ].meta_data.bloom_filter_offset = offset
+                self.fmeta.row_groups[rg].columns[
+                    ci
+                ].meta_data.bloom_filter_length = (hlen + nbytes)
+
+    def _write_page_index(mut self) raises:
+        """Serialize the per-page OffsetIndex (always) and ColumnIndex (when the
+        chunk's pages all carry bounds or are null pages) that `ColumnWriter.write`
+        produced, then record their file offsets on the chunk."""
+        for rg in range(len(self.fmeta.row_groups)):
+            for ci in range(len(self.fmeta.row_groups[rg].columns)):
+                if self.fmeta.row_groups[rg].columns[ci].write_column_index:
+                    var cix = (
+                        self.fmeta.row_groups[rg]
+                        .columns[ci]
+                        .column_index_out.copy()
+                    )
+                    var coff = self.out.tell()
+                    var clen = cix.append_to(self.out.buffer())
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].column_index_offset = coff
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].column_index_length = clen
+
+                var oix = (
+                    self.fmeta.row_groups[rg]
+                    .columns[ci]
+                    .offset_index_out.copy()
+                )
+                if len(oix.page_locations) > 0:
+                    var ooff = self.out.tell()
+                    var olen = oix.append_to(self.out.buffer())
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].offset_index_offset = ooff
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].offset_index_length = olen
+
+
+def write_table(
+    table: Table,
+    uri: String,
+    compression: Compression = Compression.SNAPPY,
+    version: Int = 1,
+    use_dictionary: Bool = True,
+    var encoding: Optional[Encoding] = None,
+    var column_encodings: Dict[String, Encoding] = {},
+    write_bloom_filter: Bool = False,
+    write_page_checksum: Bool = False,
+    var content_defined_chunking: Optional[ContentDefinedChunking] = None,
+    options: StorageOptions = StorageOptions(),
+    native_codecs: Bool = True,
+) raises:
+    """Write a Marrow `Table` to a Parquet file at `uri`.
+
+    `uri` is a path or a URL — `out.parquet`, `s3://bucket/key.parquet`, and so
+    on; see `read_table` for the schemes and `StorageOptions` for how service
+    configuration is resolved. Nothing is published until the write completes,
+    locally by writing a temp file and renaming it, remotely because an
+    unfinished upload does not exist. `version` selects the data-page
+    format: 1 (default) or 2 (levels stored uncompressed ahead of the values).
+    `use_dictionary` (default True, like PyArrow) dictionary-encodes numeric and
+    string columns; set False to force PLAIN.
+
+    Encoding is chosen per leaf, most specific first: `column_encodings` (a name
+    -> `Encoding` map) overrides `encoding` (a single global default), which
+    overrides the dictionary/PLAIN default. Supported value encodings:
+    RLE_DICTIONARY, DELTA_BINARY_PACKED (signed ints), DELTA_BYTE_ARRAY /
+    DELTA_LENGTH_BYTE_ARRAY (strings), BYTE_STREAM_SPLIT (floats), and PLAIN. An
+    override that does not fit a column's type is ignored for that column.
+
+    `write_bloom_filter` (default False) builds a split-block bloom filter for
+    every integer, floating-point, and byte-array column, letting readers prove a
+    value's absence without scanning.
+
+    `write_page_checksum` (default False, like PyArrow) attaches a CRC-32 to
+    every page header, which the reader verifies to detect corruption.
+
+    `content_defined_chunking` (default None, off) derives data page boundaries
+    from a rolling hash over each column's values instead of a row count/byte
+    estimate, so an edit early in a column stops shifting every page after it --
+    useful when the file is stored in a content-addressable store. Only the
+    writer is aware of it; readers are unaffected.
+
+    A content-defined chunk is still capped at `MAX_ROWS_PER_PAGE` (20 000)
+    rows, matching Arrow C++'s default -- but unlike Arrow C++, marrow applies
+    no *encoded-byte* cap inside a chunk: Arrow C++'s comes from an
+    encoder-internal running total, which a writer that picks page boundaries
+    before encoding has no counterpart for. With a large `max_chunk_size` and
+    wide values, marrow will therefore write larger pages than Arrow C++ would
+    for the same data.
+
+    LZ4, SNAPPY and ZSTD pages are compressed in Mojo; `native_codecs=False`
+    compresses them with liblz4, libsnappy and libzstd instead -- the same
+    bytes for LZ4 and ZSTD, with liblz4 1.10.0 and libzstd 1.5.7.
+    """
+    var writer = FileWriter(
+        DynSink.open(uri, options),
+        table.schema,
+        compression,
+        version,
+        use_dictionary,
+        encoding^,
+        column_encodings^,
+        write_bloom_filter,
+        write_page_checksum,
+        content_defined_chunking^,
+        native_codecs,
+    )
+    writer.write(table)
+    writer.close()

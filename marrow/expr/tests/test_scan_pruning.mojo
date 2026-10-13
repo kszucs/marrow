@@ -24,7 +24,7 @@ from ...utils.testing import ScratchDir
 from ...dtypes import Int64Type, field, int64, string_view
 from ...execution import ExecContext
 from ...schema import schema
-from ...parquet.reader import ParquetFile
+from ...formats.parquet.reader import ParquetFile
 from ...scalars import Int64Scalar
 from ...tabular import Table
 from ..logical import Bindings

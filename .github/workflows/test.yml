@@ -72,7 +72,7 @@ jobs:
           - part: core
             selections: |
               marrow/tests
-              marrow/parquet/tests marrow/utils/tests
+              marrow/formats/parquet/tests marrow/formats/ipc/tests marrow/utils/tests
               fuzz
               marrow/kernels/tests
               golden python
@@ -190,7 +190,7 @@ jobs:
           - name: kernels
             paths: marrow/kernels/tests
           - name: core
-            paths: marrow/tests marrow/parquet/tests marrow/utils/tests
+            paths: marrow/tests marrow/formats/parquet/tests marrow/formats/ipc/tests marrow/utils/tests
     steps:
       - uses: actions/checkout@v7
 

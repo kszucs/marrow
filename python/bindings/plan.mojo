@@ -54,11 +54,11 @@ from expressions import (
 )
 from marrow.kernels.join import JOIN_ALL, JOIN_ANY, JoinKind
 from marrow.io import DynSource
-from marrow.parquet import ParquetFile
+from marrow.formats.parquet import ParquetFile
 from marrow.expr.builders import scan_json as _scan_json
 from marrow.expr.builders import scan_iceberg as _scan_iceberg
 from marrow.io.uri import StorageOptions
-from marrow.json import open_json
+from marrow.formats.json import open_json
 from marrow.datasets import DataFiles, HubDataset, load_dataset as _load_dataset
 from marrow.schema import Schema
 from marrow.expr.sql import Catalog, sql as _sql

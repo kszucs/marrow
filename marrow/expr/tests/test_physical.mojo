@@ -25,7 +25,7 @@ from ...execution import ExecContext
 from ...kernels.join import JOIN_INNER, JOIN_LEFT, JOIN_SEMI
 from ...dtypes import field
 from ...schema import schema
-from ...parquet.writer import write_table
+from ...formats.parquet.writer import write_table
 from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue

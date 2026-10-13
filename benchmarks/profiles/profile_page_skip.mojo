@@ -14,7 +14,7 @@ backlog item that turns on exactly that distinction.
 Two standing facts change how the output reads. A local `ByteSource` is
 `Buffer.mmap_file`, so a trimmed fetch skips no I/O and only the decode saving
 is visible here -- the byte saving is asserted instead, by the recorder tests in
-`marrow/parquet/tests/test_page_io.mojo`. And the default corpus is
+`marrow/formats/parquet/tests/test_page_io.mojo`. And the default corpus is
 uncompressed, so an all-present page decodes to a memcpy: point
 `MARROW_PROFILE_PATH` at a snappy file to see skipping win. What this driver
 found, and what is still open, is in `backlog.md`.
@@ -36,7 +36,7 @@ from std.os.env import getenv
 from std.os.path import join
 from std.python import Python
 
-from marrow.parquet import ParquetFile, RowSelection
+from marrow.formats.parquet import ParquetFile, RowSelection
 from marrow.utils.testing import ScratchDir
 
 

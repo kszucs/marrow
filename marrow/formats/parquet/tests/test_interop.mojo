@@ -1,0 +1,481 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+"""Cross-compatibility tests: Marrow and PyArrow must read each other's Parquet.
+
+Three shapes, run over a range of types and codecs:
+
+  A. Marrow reads a PyArrow-written file   — the broad read surface.
+  B. PyArrow reads a Marrow-written file    — the writer surface.
+  C. Marrow round-trips its own file        — the writer surface.
+
+Equality is checked column-by-column — the type string (which is
+nullability-agnostic) plus the values (`to_pylist`) — so it tolerates the
+chunk-boundary and field-metadata differences that `pa.Table.equals` rejects.
+"""
+
+from std.testing import assert_true, assert_equal
+from std.python import Python, PythonObject
+from std.os.path import join
+from ....utils.testing import ScratchDir
+from ...parquet import read_table, write_table
+from ...parquet.compression import Compression
+from ....tabular import Table
+from ....c_data import CArrowArrayStream
+
+
+# ---------------------------------------------------------------------------
+# Bridges between the two implementations
+# ---------------------------------------------------------------------------
+
+
+def _to_marrow(py_tbl: PythonObject) raises -> Table:
+    """PyArrow table -> Marrow Table via the Arrow C stream interface."""
+    var caps = py_tbl.__arrow_c_stream__(Python.none())
+    return CArrowArrayStream.from_pycapsule(caps).to_table()
+
+
+def _to_pyarrow(var t: Table) raises -> PythonObject:
+    """Marrow Table -> PyArrow table via the Arrow C stream interface."""
+    var pa = Python.import_module("pyarrow")
+    var schema = t.schema.copy()
+    var batches = t.to_batches()
+    var caps = CArrowArrayStream.from_batches(schema^, batches^).to_pycapsule()
+    return pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
+
+
+def _norm_type(t: PythonObject) raises -> String:
+    """Normalize Arrow-only type distinctions that Parquet does not preserve, so
+    marrow's read and pyarrow's read compare equal: the `large_*` variants
+    collapse to their base type (pyarrow only restores `large_string` from its
+    private `ARROW:schema` metadata, which marrow ignores), the LIST element
+    field name is arbitrary (marrow calls it `item`, pyarrow `element`), and
+    nested field-name annotations pyarrow renders as ` ('name')` (map key/value,
+    struct fields) are stripped since those names come from the same metadata.
+    """
+    var re = Python.import_module("re")
+    var stripped = re.sub(
+        PythonObject(" \\('[^']*'\\)"), PythonObject(""), t.__str__()
+    )
+    var s = String(stripped)
+    return (
+        s.replace("large_", "").replace("item: ", "").replace("element: ", "")
+    )
+
+
+def _values(col: PythonObject) raises -> PythonObject:
+    """Column values as a Python list. `to_pylist()` on nanosecond timestamps /
+    times raises without pandas, so those are compared as their raw integers."""
+    var pt = Python.import_module("pyarrow.types")
+    var pa = Python.import_module("pyarrow")
+    if Bool(pt.is_timestamp(col.type)) or Bool(pt.is_time64(col.type)):
+        if String(col.type.unit) == "ns":
+            return col.cast(pa.int64()).to_pylist()
+    return col.to_pylist()
+
+
+def _assert_equiv(got: PythonObject, want: PythonObject) raises:
+    """Assert two PyArrow tables hold the same columns and values, ignoring
+    chunk boundaries and field-level metadata (nullability)."""
+    var ncols = Int(py=want.num_columns)
+    assert_equal(Int(py=got.num_columns), ncols)
+    assert_true(Bool(got.column_names == want.column_names), "column names")
+    for i in range(ncols):
+        var g = got.column(i)
+        var w = want.column(i)
+        assert_equal(_norm_type(g.type), _norm_type(w.type))
+        assert_true(Bool(_values(g) == _values(w)), "values differ")
+
+
+# ---------------------------------------------------------------------------
+# The three shapes
+# ---------------------------------------------------------------------------
+
+
+def _marrow_reads_pyarrow(want: PythonObject, compression: String) raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_iop_a.parquet")
+        pq.write_table(want, path, compression=compression)
+        # Oracle is PyArrow's *own* read of the same file: Parquet erases some
+        # Arrow-only distinctions (large_string -> string, etc.), so both readers
+        # should agree with each other, not necessarily with the pre-write table.
+        _assert_equiv(_to_pyarrow(read_table(path)), pq.read_table(path))
+
+
+def _pyarrow_reads_marrow(want: PythonObject, codec: Compression) raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_iop_b.parquet")
+        write_table(_to_marrow(want), path, compression=codec)
+        _assert_equiv(pq.read_table(path), want)
+
+
+def _marrow_roundtrip(want: PythonObject, codec: Compression) raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_iop_c.parquet")
+        write_table(_to_marrow(want), path, compression=codec)
+        _assert_equiv(_to_pyarrow(read_table(path)), want)
+
+
+def _marrow_reads_file(path: String) raises:
+    """Marrow and PyArrow agree on a file neither of them wrote."""
+    var pq = Python.import_module("pyarrow.parquet")
+    _assert_equiv(_to_pyarrow(read_table(path)), pq.read_table(path))
+
+
+def _all_shapes(want: PythonObject) raises:
+    """Full matrix for types the writer supports."""
+    _marrow_reads_pyarrow(want, "none")
+    _marrow_reads_pyarrow(want, "snappy")
+    _marrow_reads_pyarrow(want, "zstd")
+    _marrow_reads_pyarrow(want, "lz4")
+    _pyarrow_reads_marrow(want, Compression.UNCOMPRESSED)
+    _pyarrow_reads_marrow(want, Compression.SNAPPY)
+    _pyarrow_reads_marrow(want, Compression.ZSTD)
+    _pyarrow_reads_marrow(want, Compression.LZ4_RAW)
+    _pyarrow_reads_marrow(want, Compression.LZ4)
+    _marrow_roundtrip(want, Compression.UNCOMPRESSED)
+    _marrow_roundtrip(want, Compression.SNAPPY)
+    _marrow_roundtrip(want, Compression.ZSTD)
+    _marrow_roundtrip(want, Compression.LZ4_RAW)
+    _marrow_roundtrip(want, Compression.LZ4)
+
+
+def _read_only(want: PythonObject) raises:
+    """Read surface only (writer does not yet emit these types)."""
+    _marrow_reads_pyarrow(want, "none")
+    _marrow_reads_pyarrow(want, "snappy")
+    _marrow_reads_pyarrow(want, "zstd")
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_interop_primitives() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            i32=pa.array(Python.list(1, 2, 3, -4), type=pa.int32()),
+            i64=pa.array(Python.list(10, 20, 30, 40), type=pa.int64()),
+            f64=pa.array(Python.list(1.5, 2.5, 3.5, 4.5), type=pa.float64()),
+            b=pa.array(Python.list(True, False, True, False), type=pa.bool_()),
+            s=pa.array(Python.list("a", "bb", "ccc", "dddd")),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_nullable() raises:
+    var pa = Python.import_module("pyarrow")
+    var n = Python.none()
+    var t = pa.table(
+        Python.dict(
+            i=pa.array(Python.list(1, n, 3, n, 5), type=pa.int64()),
+            f=pa.array(Python.list(n, 2.0, n, 4.0, n), type=pa.float64()),
+            b=pa.array(Python.list(True, n, False, n, True), type=pa.bool_()),
+            s=pa.array(Python.list("x", n, "z", n, "w")),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_narrow_ints() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            i8=pa.array(Python.list(-1, 2, -3), type=pa.int8()),
+            i16=pa.array(Python.list(1000, -2000, 3000), type=pa.int16()),
+            u8=pa.array(Python.list(1, 200, 3), type=pa.uint8()),
+            u16=pa.array(Python.list(1, 2, 60000), type=pa.uint16()),
+            u32=pa.array(Python.list(1, 2, 3000000000), type=pa.uint32()),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_struct() raises:
+    var pa = Python.import_module("pyarrow")
+    var fields = Python.list(
+        pa.field("a", pa.int64()), pa.field("b", pa.string())
+    )
+    var t = pa.table(
+        Python.dict(
+            s=pa.array(
+                Python.list(
+                    Python.dict(a=1, b="one"),
+                    Python.dict(a=2, b="two"),
+                    Python.dict(a=3, b="three"),
+                ),
+                type=pa.struct(fields),
+            ),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_empty() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            i=pa.array(Python.list(), type=pa.int64()),
+            s=pa.array(Python.list(), type=pa.string()),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_parquet_testing_lz4() raises:
+    """The LZ4 files from apache/parquet-testing: code-5 pages Hadoop-framed by
+    parquet-mr and unframed by early Parquet C++, and LZ4_RAW pages."""
+    for name in [
+        "hadoop_lz4_compressed",
+        "non_hadoop_lz4_compressed",
+        "lz4_raw_compressed",
+    ]:
+        _marrow_reads_file(
+            "marrow/formats/parquet/tests/data/" + name + ".parquet"
+        )
+
+
+def test_interop_zstd_levels() raises:
+    """ZSTD pages pyarrow writes from its fastest level to its strongest."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(40000)
+    var t = pa.table(
+        Python.dict(
+            a=pa.array(idx * 7 % 1000),
+            b=pa.array((idx % 251).astype("float64") / 3),
+            c=pa.array(np.char.add("row-", (idx % 977).astype("str"))),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_zstd_levels.parquet")
+        for level in [-1, 1, 3, 9, 19, 22]:
+            pq.write_table(t, path, compression="zstd", compression_level=level)
+            _marrow_reads_file(path)
+
+
+def test_interop_library_codecs() raises:
+    """LZ4, LZ4_RAW and ZSTD pages through liblz4 and libzstd instead of the
+    Mojo codecs, in v1 and v2 pages: whichever wrote them, either reads them
+    and pyarrow agrees; and pyarrow's and parquet-testing's pages read
+    through the libraries too."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(40000)
+    var t = pa.table(
+        Python.dict(
+            a=pa.array(idx * 7 % 1000),
+            b=pa.array((idx % 251).astype("float64") / 3),
+            c=pa.array(np.char.add("row-", (idx % 977).astype("str"))),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_library_codecs.parquet")
+        for codec in [Compression.ZSTD, Compression.LZ4, Compression.LZ4_RAW]:
+            for version in [1, 2]:
+                for written in [True, False]:
+                    write_table(
+                        _to_marrow(t),
+                        path,
+                        compression=codec,
+                        version=version,
+                        native_codecs=written,
+                    )
+                    _assert_equiv(pq.read_table(path), t)
+                    for read_native in [True, False]:
+                        _assert_equiv(
+                            _to_pyarrow(
+                                read_table(path, native_codecs=read_native)
+                            ),
+                            t,
+                        )
+        for name in ["zstd", "lz4"]:
+            pq.write_table(t, path, compression=name)
+            _assert_equiv(
+                _to_pyarrow(read_table(path, native_codecs=False)),
+                pq.read_table(path),
+            )
+    for name in [
+        "hadoop_lz4_compressed",
+        "non_hadoop_lz4_compressed",
+        "lz4_raw_compressed",
+    ]:
+        var file = "marrow/formats/parquet/tests/data/" + name + ".parquet"
+        _assert_equiv(
+            _to_pyarrow(read_table(file, native_codecs=False)),
+            pq.read_table(file),
+        )
+
+
+def test_interop_dictionary_read() raises:
+    # low-cardinality columns -> PyArrow keeps RLE_DICTIONARY, exercising the
+    # SIMD bit-unpack + gather read path across every codec.
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(5000)
+    var t = pa.table(
+        Python.dict(
+            a=pa.array(idx % 7),
+            b=pa.array((idx % 13).astype("float64")),
+            c=pa.array(np.where(idx % 3 == 0, "yes", "no")),
+        )
+    )
+    _marrow_reads_pyarrow(t, "none")
+    _marrow_reads_pyarrow(t, "snappy")
+    _marrow_reads_pyarrow(t, "zstd")
+    _marrow_reads_pyarrow(t, "gzip")
+    _marrow_reads_pyarrow(t, "lz4")
+
+
+def test_interop_temporal() raises:
+    # Temporal types now round-trip both directions (INT32/INT64 + LogicalType).
+    var pa = Python.import_module("pyarrow")
+    var dt = Python.import_module("datetime")
+    var n = Python.none()
+    var t = pa.table(
+        Python.dict(
+            d=pa.array(
+                Python.list(dt.date(2020, 1, 1), n, dt.date(2021, 6, 15)),
+                type=pa.date32(),
+            ),
+            ts_us=pa.array(Python.list(1, 2, n), type=pa.timestamp("us")),
+            ts_ns=pa.array(Python.list(10, n, 20), type=pa.timestamp("ns")),
+            ts_tz=pa.array(
+                Python.list(1, n, 3), type=pa.timestamp("us", tz="UTC")
+            ),
+            tm=pa.array(Python.list(5, 6, n), type=pa.time64("us")),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_decimal() raises:
+    # FIXED_LEN_BYTE_ARRAY decimals, both directions (big-endian FLBA).
+    var pa = Python.import_module("pyarrow")
+    var dec = Python.import_module("decimal")
+    var n = Python.none()
+    var t = pa.table(
+        Python.dict(
+            d128=pa.array(
+                Python.list(dec.Decimal("1.23"), n, dec.Decimal("-4.56")),
+                type=pa.decimal128(9, 2),
+            ),
+            d256=pa.array(
+                Python.list(dec.Decimal("123.456"), dec.Decimal("-7.890"), n),
+                type=pa.decimal256(40, 3),
+            ),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            fsb=pa.array(
+                Python.list(
+                    Python.str("abc").encode(),
+                    Python.none(),
+                    Python.str("xyz").encode(),
+                ),
+                type=pa.binary(3),
+            ),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_binary_read() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            b=pa.array(
+                Python.list(
+                    Python.str("ab").encode(),
+                    Python.none(),
+                    Python.str("cd").encode(),
+                ),
+                type=pa.binary(),
+            ),
+            ls=pa.array(
+                Python.list("big", Python.none(), "string"),
+                type=pa.large_string(),
+            ),
+        )
+    )
+    _read_only(t)
+
+
+def test_interop_list() raises:
+    # Lists now round-trip both directions (Dremel shred on write).
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            li=pa.array(
+                Python.list(
+                    Python.list(1, 2, 3),
+                    Python.list(),
+                    Python.none(),
+                    Python.list(4, 5),
+                ),
+                type=pa.list_(pa.int64()),
+            ),
+            ls=pa.array(
+                Python.list(
+                    Python.list("a", "bb"),
+                    Python.none(),
+                    Python.list("ccc"),
+                    Python.list(),
+                ),
+                type=pa.list_(pa.string()),
+            ),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_map() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            m=pa.array(
+                Python.list(
+                    Python.dict(a=1, b=2),
+                    Python.dict(),
+                    Python.none(),
+                    Python.dict(c=3),
+                ),
+                type=pa.map_(pa.string(), pa.int64()),
+            ),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_nulls_then_dictionary_pages() raises:
+    """Pages with nulls, then dictionary pages without any: the later
+    pages' rows must read back valid."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var values = Python.evaluate(
+        "[None if (i < 5000 and i % 7 == 0) else i % 50 for i in range(20000)]"
+    )
+    var t = pa.table(Python.dict(i=pa.array(values, type=pa.int64())))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nulls_then_dict.parquet")
+        pq.write_table(
+            t,
+            path,
+            compression="none",
+            use_dictionary=True,
+            data_page_size=1024,
+        )
+        _assert_equiv(_to_pyarrow(read_table(path)), pq.read_table(path))

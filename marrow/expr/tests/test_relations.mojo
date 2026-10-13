@@ -55,7 +55,7 @@ from ..optimizer import (
 )
 from ...dtypes import Field, field
 from ...schema import Schema, schema
-from ...parquet.writer import write_table
+from ...formats.parquet.writer import write_table
 from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue

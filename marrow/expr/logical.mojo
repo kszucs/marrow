@@ -121,10 +121,10 @@ from .physical import (
     UnionOperator,
     WindowOperator,
 )
-from ..avro import AvroFormat
+from ..formats.avro import AvroFormat
 from ..formats import Format
-from ..ipc import IpcFormat
-from ..json import JsonFormat
+from ..formats.ipc import IpcFormat
+from ..formats.json import JsonFormat
 
 
 # ---------------------------------------------------------------------------

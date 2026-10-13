@@ -6,7 +6,7 @@
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.errors import InvalidError
-from marrow.ipc import (
+from marrow.formats.ipc import (
     BodyCompression,
     read_ipc_file as _ipc_read_file,
     read_ipc_stream as _ipc_read_stream,

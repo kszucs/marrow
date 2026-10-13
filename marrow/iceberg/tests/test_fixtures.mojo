@@ -16,7 +16,7 @@ from ...arrays import StructArray
 from ...builders import array
 from ...dtypes import DynType, Field, FIELD_ID_KEY, float64, int32, int64
 from ...dtypes import string, struct_
-from ...parquet import ParquetFile
+from ...formats.parquet import ParquetFile
 from ...schema import Schema
 
 comptime EVOLVED_V1 = (

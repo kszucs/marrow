@@ -38,7 +38,7 @@ from ...scalars import Date32Scalar, DynScalar, Int64Scalar
 from ..logical import Bindings
 from ..builders import col, lit, param
 from ..index import ColumnZones, Index
-from ...parquet.reader import PageBounds
+from ...formats.parquet.reader import PageBounds
 from ..logical import DynValue
 from ..runtime.values import and_, column, eq, gt, literal
 

@@ -34,7 +34,7 @@ from ..kernels.join import (
 )
 from ..scalars import DynScalar, NullScalar, PrimitiveScalar
 from ..schema import Schema
-from ..parquet.statistics import valid_min_max
+from ..formats.parquet.statistics import valid_min_max
 from .index import ColumnZones, Index
 
 

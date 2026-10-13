@@ -1,0 +1,2314 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+from std.memory import ArcPointer
+from std.testing import assert_equal, assert_true, assert_false, assert_raises
+from std.math import isnan, isinf
+from std.python import Python, PythonObject
+from std.os.path import join
+from ....utils.testing import ScratchDir
+from ...parquet import (
+    ParquetFile,
+    read_table,
+    write_table,
+    read_page_index,
+)
+from ....buffers import Buffer
+from ....io import ByteSink, FileSink, MemorySink
+from ...parquet.writer import FileWriter, MAX_ROWS_PER_PAGE
+from ...parquet.chunker import ContentDefinedChunking
+from ...parquet.compression import Compression
+from ...parquet.encodings import Encoding
+from ....utils import Crc32
+from ....tabular import RecordBatch, Table, record_batch
+from ....c_data import CArrowArrayStream
+from ....arrays import (
+    BoolArray,
+    DynArray,
+    LargeListArray,
+    ListArray,
+    StructArray,
+)
+from ....builders import Int64Builder, array
+from ....dtypes import Field, Int64Type, float64, int32, int64, field
+
+
+def _to_marrow(py: PythonObject) raises -> Table:
+    """A PyArrow table -> marrow Table via the Arrow C stream interface."""
+    return CArrowArrayStream.from_pycapsule(
+        py.__arrow_c_stream__(Python.none())
+    ).to_table()
+
+
+def _ints(n: Int) raises -> PythonObject:
+    """`0 .. n-1` as a Python list, for building a PyArrow array from.
+
+    Deliberately not `numpy.arange`. PyArrow wraps a numpy array's buffer
+    zero-copy, and numpy aligns to 16 bytes where `Buffer.from_foreign`
+    asserts 64 -- so every `_to_marrow` of a numpy-backed column aborts the
+    whole shared test binary, reporting all 54 cases in this file as failed
+    with no hint of which one did it. A list-backed array gets a PyArrow
+    allocation, which is 64-aligned. macOS survived it on alignment luck;
+    Linux did not, on any run.
+
+    The underlying gap is marrow's, not this file's: the C Data Interface
+    calls alignment "recommended, but not required", so the import should
+    copy a buffer it cannot use rather than assert. Tracked in
+    docs/backlog.md."""
+    var out = Python.list()
+    for i in range(n):
+        out.append(i)
+    return out^
+
+
+def _one_col(col: PythonObject) raises -> Table:
+    """Single-column ("x") marrow Table from a PyArrow array."""
+    var pa = Python.import_module("pyarrow")
+    return _to_marrow(pa.table({"x": col}))
+
+
+def _v2_roundtrip(codec: Compression) raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _to_marrow(
+        pa.table(
+            {
+                "i": pa.array([1, None, 3, None, 5], type=pa.int64()),
+                "s": pa.array(["a", "b", None, "d", "e"]),
+            }
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_v2.parquet")
+        var w = FileWriter(FileSink(path), t.schema, codec, version=2)
+        w.write(t)
+        w.close()
+
+        # the file declares format version 2
+        var pf = pq.ParquetFile(path)
+        assert_equal(Int(py=pf.metadata.format_version[0]), 2)
+
+        # PyArrow reads marrow's v2 pages (validates the DataPageV2 layout)
+        var back = pq.read_table(path)
+        assert_true(Bool(back.column(0).to_pylist() == [1, None, 3, None, 5]))
+        assert_true(
+            Bool(back.column(1).to_pylist() == ["a", "b", None, "d", "e"])
+        )
+
+        # marrow round-trips (exercises the PAGE_DATA_V2 read branch)
+        var mback = read_table(path)
+        var b = mback.to_batches()[0].copy()
+        assert_equal(b.columns[0].copy().as_int64().null_count(), 2)
+        assert_equal(b.columns[0].copy().as_int64()[4].value(), 5)
+        assert_equal(String(b.columns[1].copy().as_string()[0]), "a")
+
+
+def test_write_v2_snappy() raises:
+    _v2_roundtrip(Compression.SNAPPY)
+
+
+def test_write_v2_uncompressed() raises:
+    _v2_roundtrip(Compression.UNCOMPRESSED)
+
+
+def test_multiple_row_groups() raises:
+    # 2500 rows, row_group_size 1000 -> 3 row groups
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array(_ints(2500), type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_rg.parquet")
+        var w = FileWriter(
+            FileSink(path), t.schema, Compression.SNAPPY, row_group_size=1000
+        )
+        w.write(t)
+        w.close()
+
+        # pyarrow sees 3 row groups
+        var pq = Python.import_module("pyarrow.parquet")
+        var pf = pq.ParquetFile(path)
+        assert_equal(Int(py=pf.metadata.num_row_groups), 3)
+        assert_equal(Int(py=pf.metadata.num_rows), 2500)
+
+        # marrow reads all rows back
+        var back = read_table(path)
+        assert_equal(back.num_rows(), 2500)
+        var b = back.to_batches()
+        var total = 0
+        for ref bat in b:
+            total += bat.num_rows()
+        assert_equal(total, 2500)
+
+
+def test_null_count_statistic() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _one_col(pa.array([1, None, 3, None, 5], type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_stats.parquet")
+        write_table(t, path)
+        var pf = pq.ParquetFile(path)
+        var stats = pf.metadata.row_group(0).column(0).statistics
+        assert_equal(Int(py=stats.null_count), 2)
+
+
+# ---------------------------------------------------------------------------
+# min/max statistics — PyArrow reads the bounds marrow writes. Covers the
+# logical orderings that matter: signed vs unsigned ints, IEEE floats (with
+# negatives), and byte-wise string ordering. The writer also emits column_orders
+# (TypeDefinedOrder), so PyArrow trusts the unsigned/byte-array bounds.
+# ---------------------------------------------------------------------------
+
+
+def _col_stats(path: String, col: Int) raises -> PythonObject:
+    var pq = Python.import_module("pyarrow.parquet")
+    return pq.ParquetFile(path).metadata.row_group(0).column(col).statistics
+
+
+def test_minmax_signed_int() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array([5, -1, None, 9, -3], type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_int.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_equal(Int(py=s.min), -3)
+        assert_equal(Int(py=s.max), 9)
+        assert_equal(Int(py=s.null_count), 1)
+
+
+def test_minmax_unsigned_int() raises:
+    # unsigned ordering: 3e9 > 1 even though it is negative as signed int32
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array([1, 3000000000, 2], type=pa.uint32()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_uint.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_equal(Int(py=s.min), 1)
+        assert_equal(Int(py=s.max), 3000000000)
+
+
+def test_minmax_temporal() raises:
+    var pa = Python.import_module("pyarrow")
+    var dt = Python.import_module("datetime")
+    var t = _one_col(pa.array([10, 3, 7, None, 1], type=pa.timestamp("us")))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_ts.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        # min value 1us / max value 10us after the epoch
+        assert_true(Bool(s.min == dt.datetime(1970, 1, 1, 0, 0, 0, 1)))
+        assert_true(Bool(s.max == dt.datetime(1970, 1, 1, 0, 0, 0, 10)))
+        assert_equal(Int(py=s.null_count), 1)
+
+
+def test_minmax_decimal128() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(["1.50", "-3.25", "2.00", None, "0.75"]).cast(
+            pa.decimal128(5, 2)
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_dec.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_equal(String(py=s.min), "-3.25")
+        assert_equal(String(py=s.max), "2.00")
+
+
+def test_minmax_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(
+            Python.list(
+                Python.str("zoo").encode(),
+                Python.str("abc").encode(),
+                Python.none(),
+                Python.str("mno").encode(),
+            ),
+            type=pa.binary(),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_bin.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_true(Bool(s.min == Python.str("abc").encode()))
+        assert_true(Bool(s.max == Python.str("zoo").encode()))
+
+
+def test_minmax_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(
+            Python.list(
+                Python.str("yy").encode(),
+                Python.str("aa").encode(),
+                Python.str("mm").encode(),
+                Python.none(),
+            ),
+            type=pa.binary(2),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_fsb.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_true(Bool(s.min == Python.str("aa").encode()))
+        assert_true(Bool(s.max == Python.str("yy").encode()))
+
+
+def test_minmax_float_with_negatives() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array([1.5, -2.5, 3.25, None], type=pa.float64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_float.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_true(Float64(py=s.min) == -2.5)
+        assert_true(Float64(py=s.max) == 3.25)
+
+
+def test_minmax_string_lexicographic() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array(["banana", "apple", "cherry", None]))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_str.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_equal(String(py=s.min), "apple")
+        assert_equal(String(py=s.max), "cherry")
+        assert_equal(Int(py=s.null_count), 1)
+
+
+def test_minmax_absent_for_all_null() raises:
+    # an all-null column carries null_count but no min/max bound
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array([None, None, None], type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_mm_allnull.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_false(Bool(py=s.has_min_max))
+        assert_equal(Int(py=s.null_count), 3)
+
+
+def test_narrow_int_roundtrip() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _to_marrow(
+        pa.table(
+            {
+                "a": pa.array([-1, 2, -3], type=pa.int8()),
+                "b": pa.array([10, 20, 30], type=pa.uint16()),
+            }
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_narrow.parquet")
+        write_table(t, path)
+        var back = read_table(path)
+        var bat = back.to_batches()[0].copy()
+        var ca = bat.columns[0].copy()
+        assert_equal(ca.as_int8()[0].value(), -1)
+        assert_equal(ca.as_int8()[2].value(), -3)
+        var cb = bat.columns[1].copy()
+        assert_equal(cb.as_uint16()[2].value(), 30)
+
+
+def test_write_empty_table() raises:
+    # a zero-row table must write a valid file and read back empty
+    var pa = Python.import_module("pyarrow")
+    var t = _to_marrow(
+        pa.table(
+            {
+                "i": pa.array([], type=pa.int64()),
+                "s": pa.array([], type=pa.string()),
+            }
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_empty.parquet")
+        write_table(t, path)
+
+        # pyarrow reads it: 0 rows, schema preserved
+        var pq = Python.import_module("pyarrow.parquet")
+        var pf = pq.ParquetFile(path)
+        assert_equal(Int(py=pf.metadata.num_rows), 0)
+
+        var back = read_table(path)
+        assert_equal(back.num_rows(), 0)
+        assert_equal(back.num_columns(), 2)
+
+
+def test_write_all_null_roundtrip() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array([None, None, None, None, None], type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_allnull.parquet")
+        write_table(t, path)
+        var back = read_table(path)
+        var c = back.to_batches()[0].copy().columns[0].copy()
+        assert_equal(c.as_int64().null_count(), 5)
+
+        # pyarrow agrees the column is entirely null
+        var pq = Python.import_module("pyarrow.parquet")
+        assert_equal(Int(py=pq.read_table(path).column(0).null_count), 5)
+
+
+def test_write_float_special_roundtrip() raises:
+    # NaN / +Inf / -Inf must survive marrow write -> read byte-exact
+    var pa = Python.import_module("pyarrow")
+    var m = Python.import_module("math")
+    var t = _one_col(
+        pa.array(
+            Python.list(m.nan, m.inf, -m.inf, -0.0, 3.25),
+            type=pa.float64(),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_fspecial.parquet")
+        write_table(t, path)
+        var back = read_table(path)
+        var c = back.to_batches()[0].copy().columns[0].copy()
+        ref f = c.as_float64()
+        assert_true(isnan(f[0].value()))
+        assert_true(isinf(f[1].value()) and f[1].value() > 0)
+        assert_true(isinf(f[2].value()) and f[2].value() < 0)
+        assert_true(f[4].value() == 3.25)
+
+
+# ---------------------------------------------------------------------------
+# Nested write — lists and maps (Dremel shredding). Oracle: PyArrow reads back
+# marrow's written file and must match the original.
+# ---------------------------------------------------------------------------
+
+
+def _check_write(want: PythonObject, compression: Compression) raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nested_write.parquet")
+        write_table(t, path, compression)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
+            "PyArrow read of marrow's write mismatched the original",
+        )
+
+
+def _list_table(data: PythonObject, dtype: PythonObject) raises -> PythonObject:
+    var pa = Python.import_module("pyarrow")
+    return pa.table({"v": pa.array(data, type=dtype)})
+
+
+def test_write_list_int() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table([[1, 2, 3], [], None, [4, 5]], pa.list_(pa.int64())),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_list_int_snappy() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    # each row is list(range(i % 6)), or None every 7th row
+    var data = Python.list()
+    for i in range(80):
+        if i % 7 == 0:
+            data.append(Python.none())
+        else:
+            data.append(np.arange(i % 6).tolist())
+    _check_write(_list_table(data, pa.list_(pa.int32())), Compression.SNAPPY)
+
+
+def test_write_list_string() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            [["a", "bb"], [], None, ["ccc", None, "d"]], pa.list_(pa.string())
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_list_of_list() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            [[[1, 2], [3]], [], None, [[4], []]],
+            pa.list_(pa.list_(pa.int64())),
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_map_string_int() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            [{"a": 1, "b": 2}, {}, None, {"c": 3}],
+            pa.map_(pa.string(), pa.int64()),
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_map_nullable_values() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            [{"a": 1, "b": None}, {"c": 3}, None],
+            pa.map_(pa.string(), pa.int64()),
+        ),
+        Compression.SNAPPY,
+    )
+
+
+def test_write_map_int_key() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            [{1: "x", 2: "y"}, None, {3: "z"}],
+            pa.map_(pa.int32(), pa.string()),
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_map_multichunk() raises:
+    # A map Table with several chunks exercises combine_chunks -> concat ->
+    # MapBuilder before the write.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var mt = pa.map_(pa.string(), pa.int64())
+    var b1 = pa.RecordBatch.from_arrays(
+        [pa.array([{"a": 1}, {}], type=mt)], names=["v"]
+    )
+    var b2 = pa.RecordBatch.from_arrays(
+        [pa.array([None, {"b": 2, "c": 3}], type=mt)], names=["v"]
+    )
+    var want = pa.Table.from_batches([b1, b2])
+    assert_true(Bool(want.column(0).num_chunks > 1))
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_map_multichunk.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
+            "multi-chunk map write mismatch",
+        )
+
+
+def test_write_list_v2() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = _list_table([[1, 2], [], None, [3]], pa.list_(pa.int64()))
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nested_write_v2.parquet")
+        var w = FileWriter(
+            FileSink(path), t.schema, Compression.UNCOMPRESSED, version=2
+        )
+        w.write(t)
+        w.close()
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
+            "v2 nested write mismatch",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Encodings on write — dictionary (default), delta, byte-stream-split.
+# ---------------------------------------------------------------------------
+
+
+def _col_encodings(path: String, col: Int) raises -> PythonObject:
+    var pq = Python.import_module("pyarrow.parquet")
+    return pq.ParquetFile(path).metadata.row_group(0).column(col).encodings
+
+
+def test_write_dictionary_encoding() raises:
+    # A low-cardinality column dictionary-encodes by default; pyarrow sees the
+    # RLE_DICTIONARY encoding and reads back the exact values.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var strs = Python.list("a", "b", "a", "a", "c", "b") * 20
+    var ints = Python.list(1, 2, 1, 1, 3, 2) * 20
+    var t = _to_marrow(
+        pa.table({"s": pa.array(strs), "i": pa.array(ints, type=pa.int64())})
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_dict.parquet")
+        write_table(
+            t, path, Compression.UNCOMPRESSED
+        )  # use_dictionary defaults True
+
+        assert_true(
+            "DICTIONARY" in String(_col_encodings(path, 0)),
+            "string column not dictionary-encoded",
+        )
+        assert_true(
+            "DICTIONARY" in String(_col_encodings(path, 1)),
+            "int column not dictionary-encoded",
+        )
+
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).to_pylist() == strs),
+            "dict string values mismatch",
+        )
+        assert_true(
+            Bool(back.column(1).to_pylist() == ints), "dict int values mismatch"
+        )
+
+
+def test_write_dictionary_disabled_is_plain() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array(["a", "b", "a", "c"]))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_plain.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED, use_dictionary=False)
+        assert_false(
+            "DICTIONARY" in String(_col_encodings(path, 0)),
+            "expected PLAIN, got a dictionary",
+        )
+
+
+def test_write_dictionary_nullable() raises:
+    # nulls are placed by the definition levels; only present values are indexed.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _one_col(pa.array(["x", None, "y", "x", None, "y"]))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_dict_null.parquet")
+        write_table(t, path, Compression.SNAPPY)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(
+                back.column(0).to_pylist() == ["x", None, "y", "x", None, "y"]
+            ),
+            "nullable dict values mismatch",
+        )
+
+
+def _encoding_check(
+    col: PythonObject, encoding: Encoding, want_enc: String
+) raises:
+    """Write a single column ("x") with a forced value encoding, assert PyArrow
+    sees that encoding and both PyArrow and marrow read back the values."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table({"x": col})
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_enc.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED, encoding=encoding)
+        assert_true(
+            want_enc in String(_col_encodings(path, 0)),
+            "expected " + want_enc + " encoding",
+        )
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
+            "value mismatch (PyArrow read of marrow's write)",
+        )
+        # marrow also reads its own output
+        var mback = read_table(path)
+        var mpa = pa.RecordBatchReader._import_from_c_capsule(
+            CArrowArrayStream.from_batches(
+                mback.schema.copy(), mback.to_batches()
+            ).to_pycapsule()
+        ).read_all()
+        assert_true(
+            Bool(mpa.column(0).to_pylist() == want.column(0).to_pylist()),
+            "value mismatch (marrow round-trip)",
+        )
+
+
+def test_write_delta_binary_packed_int() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array([1, 3, 6, 10, 15, 21, -4, 100, None, 7], type=pa.int64()),
+        Encoding.DELTA_BINARY_PACKED,
+        "DELTA_BINARY_PACKED",
+    )
+
+
+def test_write_delta_int32_narrow() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array(_ints(200), type=pa.int32()),
+        Encoding.DELTA_BINARY_PACKED,
+        "DELTA_BINARY_PACKED",
+    )
+
+
+def test_write_delta_byte_array_string() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array(
+            ["apple", "apply", "apricot", None, "banana", "band", "bandana"]
+        ),
+        Encoding.DELTA_BYTE_ARRAY,
+        "DELTA_BYTE_ARRAY",
+    )
+
+
+def test_write_delta_length_byte_array_string() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array(["a", "bb", "ccc", "dddd", None, "ef"]),
+        Encoding.DELTA_LENGTH_BYTE_ARRAY,
+        "DELTA_LENGTH_BYTE_ARRAY",
+    )
+
+
+def test_write_byte_stream_split_float() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array([1.5, -2.25, 3.0, None, 100.125, 0.0], type=pa.float64()),
+        Encoding.BYTE_STREAM_SPLIT,
+        "BYTE_STREAM_SPLIT",
+    )
+
+
+def test_write_byte_stream_split_float32() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array([1.0, 2.5, -3.75, 4.0], type=pa.float32()),
+        Encoding.BYTE_STREAM_SPLIT,
+        "BYTE_STREAM_SPLIT",
+    )
+
+
+def test_write_per_column_encoding() raises:
+    # column_encodings overrides per column; other columns keep the default dict.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        {
+            "i": pa.array([1, 2, 3, 4, 5], type=pa.int64()),
+            "s": pa.array(["a", "b", "a", "c", "a"]),
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_percol.parquet")
+        var enc_map = Dict[String, Encoding]()
+        enc_map["i"] = Encoding.DELTA_BINARY_PACKED
+        write_table(
+            t, path, Compression.UNCOMPRESSED, column_encodings=enc_map^
+        )
+        assert_true(
+            "DELTA_BINARY_PACKED" in String(_col_encodings(path, 0)),
+            "column i should be delta",
+        )
+        assert_true(
+            "DICTIONARY" in String(_col_encodings(path, 1)),
+            "column s should keep the default dictionary",
+        )
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).to_pylist() == want.column(0).to_pylist())
+        )
+        assert_true(
+            Bool(back.column(1).to_pylist() == want.column(1).to_pylist())
+        )
+
+
+def test_write_dictionary_high_cardinality_falls_back() raises:
+    # > 131072 distinct int64 makes the dictionary page exceed 1 MB, so the
+    # column falls back to PLAIN instead of a dictionary larger than the data.
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array(_ints(140000), type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_hicard.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)  # dictionary requested
+        assert_false(
+            "DICTIONARY" in String(_col_encodings(path, 0)),
+            "high-cardinality column should fall back to PLAIN",
+        )
+        var back = read_table(path)
+        assert_equal(back.num_rows(), 140000)
+
+
+# ---------------------------------------------------------------------------
+# Temporal write — date/time/timestamp (incl. nanoseconds and timezone, which
+# need the LogicalType union, not just the legacy ConvertedType).
+# ---------------------------------------------------------------------------
+
+
+def test_write_temporal() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var d = Python.import_module("datetime")
+    var want = pa.table(
+        {
+            "date": pa.array(
+                [d.date(2020, 1, 1), None, d.date(2021, 6, 15)],
+                type=pa.date32(),
+            ),
+            "ts_ms": pa.array([10, 20, 30], type=pa.timestamp("ms")),
+            "ts_us": pa.array([1000, None, 2000], type=pa.timestamp("us")),
+            "ts_ns": pa.array([1, 2, 3], type=pa.timestamp("ns")),
+            "ts_tz": pa.array(
+                [100, 200, 300], type=pa.timestamp("us", tz="UTC")
+            ),
+            "time_ms": pa.array([1, 2, 3], type=pa.time32("ms")),
+            "time_us": pa.array([5, 6, 7], type=pa.time64("us")),
+            "time_ns": pa.array([8, 9, 10], type=pa.time64("ns")),
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_temporal.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+
+        # PyArrow reads back every type (unit + tz preserved) and every value.
+        var back = pq.read_table(path)
+        for i in range(Int(py=want.num_columns)):
+            assert_true(
+                Bool(back.schema.field(i).type == want.schema.field(i).type),
+                "temporal type mismatch at column " + String(i),
+            )
+            assert_true(
+                Bool(back.column(i).equals(want.column(i))),
+                "temporal value mismatch at column " + String(i),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Decimal + fixed-size-binary write (FIXED_LEN_BYTE_ARRAY).
+# ---------------------------------------------------------------------------
+
+
+def test_write_decimal128() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var dec = Python.import_module("decimal")
+    var want = pa.table(
+        {
+            "d": pa.array(
+                [dec.Decimal("1.23"), None, dec.Decimal("-45.67")],
+                type=pa.decimal128(10, 2),
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_decimal.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.schema.field(0).type == want.schema.field(0).type),
+            "decimal type mismatch",
+        )
+        assert_true(
+            Bool(back.column(0).equals(want.column(0))),
+            "decimal value mismatch",
+        )
+
+
+def test_write_decimal256() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var dec = Python.import_module("decimal")
+    var want = pa.table(
+        {
+            "d": pa.array(
+                [dec.Decimal("123456789.123456789"), dec.Decimal("-1")],
+                type=pa.decimal256(50, 9),
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_decimal256.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).equals(want.column(0))), "dec256 mismatch"
+        )
+
+
+def test_write_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        {
+            "b": pa.array(
+                Python.list(
+                    Python.str("abc").encode(),
+                    Python.none(),
+                    Python.str("xyz").encode(),
+                ),
+                type=pa.binary(3),
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_fsb.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.schema.field(0).type == want.schema.field(0).type),
+            "fixed_size_binary type mismatch",
+        )
+        assert_true(Bool(back.column(0).equals(want.column(0))), "fsb mismatch")
+
+
+def test_write_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        {
+            "b": pa.array(
+                Python.list(
+                    Python.str("abc").encode(),
+                    Python.none(),
+                    Python.str("xyz").encode(),
+                    Python.str("").encode(),
+                ),
+                type=pa.binary(),
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_binary.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).equals(want.column(0))), "binary mismatch"
+        )
+
+
+def test_write_large_binary_and_string() raises:
+    # large_binary / large_string carry no distinct Parquet physical type, so
+    # they land as BYTE_ARRAY and read back as binary / string — the values must
+    # match after a cast.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        {
+            "lb": pa.array(
+                Python.list(
+                    Python.str("hello").encode(),
+                    Python.str("world").encode(),
+                    Python.none(),
+                ),
+                type=pa.large_binary(),
+            ),
+            "ls": pa.array(
+                Python.list("aa", "bb", Python.none()), type=pa.large_string()
+            ),
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_large.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var back = pq.read_table(path)
+        assert_true(
+            Bool(back.column(0).cast(pa.large_binary()).equals(want.column(0))),
+            "large_binary mismatch",
+        )
+        assert_true(
+            Bool(back.column(1).cast(pa.large_string()).equals(want.column(1))),
+            "large_string mismatch",
+        )
+
+
+def _compression_roundtrip(
+    codec: Compression, py_name: String, check_name: Bool = True
+) raises:
+    """marrow writes with `codec`; PyArrow reads it back, marrow reads it back,
+    and marrow reads a PyArrow file written with the same codec."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    # compressible payload so the codec actually kicks in
+    var ints = Python.list()
+    var strs = Python.list()
+    for i in range(500):
+        ints.append(i % 17)
+        strs.append(Python.str("val_") + Python.str(i % 23))
+    var want = pa.table(
+        {"i": pa.array(ints, type=pa.int32()), "s": pa.array(strs)}
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_comp.parquet")
+        write_table(t, path, codec, use_dictionary=False)
+
+        # PyArrow reads marrow's compressed pages, with the right codec advertised
+        # (the deprecated LZ4 code-5 is displayed as "UNKNOWN" by PyArrow, which
+        # only names the codecs it still writes — the decompress path still works).
+        var pf = pq.ParquetFile(path)
+        if check_name:
+            assert_equal(
+                String(py=pf.metadata.row_group(0).column(0).compression),
+                py_name,
+            )
+        var back = pq.read_table(path)
+        assert_true(Bool(back.column(0).equals(want.column(0))), "int mismatch")
+        assert_true(Bool(back.column(1).equals(want.column(1))), "str mismatch")
+
+        # marrow round-trips its own file
+        var mback = read_table(path)
+        assert_equal(mback.num_rows(), 500)
+
+        # marrow reads a PyArrow file written with the same codec
+        var pypath = join(dir, "pyarrow_comp.parquet")
+        pq.write_table(
+            want, pypath, compression=py_name.lower(), use_dictionary=False
+        )
+        var mpy = read_table(pypath)
+        var b = mpy.to_batches()[0].copy()
+        assert_equal(b.columns[0].copy().as_int32()[3].value(), 3)
+
+
+def test_compression_gzip() raises:
+    _compression_roundtrip(Compression.GZIP, "GZIP")
+
+
+def test_compression_brotli() raises:
+    _compression_roundtrip(Compression.BROTLI, "BROTLI")
+
+
+def test_compression_lz4() raises:
+    # PyArrow displays the deprecated code-5 LZ4 as "UNKNOWN"; skip the name
+    # check and rely on the round-trip (its `compression='lz4'` is LZ4_RAW).
+    _compression_roundtrip(Compression.LZ4, "LZ4", check_name=False)
+
+
+def test_compression_zstd() raises:
+    _compression_roundtrip(Compression.ZSTD, "ZSTD")
+
+
+def _page_rows(path: String, col: Int) raises -> Int:
+    """Total rows across a column's data pages (must equal the row count)."""
+    var pbs = ParquetFile(path).page_bounds()
+    var total = 0
+    for p in range(len(pbs[0][col])):
+        total += pbs[0][col][p].copy().num_rows
+    return total
+
+
+def test_page_split_flat() raises:
+    # 50 000 rows > the 20 000 rows-per-page cap -> multiple data pages
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var ints = Python.list()
+    for i in range(50000):
+        ints.append(i)
+    var want = pa.table(Python.dict(i=pa.array(ints, type=pa.int64())))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_split_flat.parquet")
+        write_table(_to_marrow(want), path, use_dictionary=False)
+
+        # PyArrow reads every row back
+        assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
+        # marrow round-trips
+        assert_equal(read_table(path).num_rows(), 50000)
+
+        # the chunk is split into >1 page and the pages tile all rows
+        var pbs = ParquetFile(path).page_bounds()
+        assert_true(len(pbs[0][0]) > 1)
+        assert_equal(_page_rows(path, 0), 50000)
+        # per-page bounds are populated; first page starts at value 0
+        assert_equal(pbs[0][0][0].copy().min.value().as_int64().value(), 0)
+
+        # OffsetIndex first_row_index is a cumulative, increasing sequence
+        var pi = read_page_index(path)
+        ref oi = pi[0][0].offset_index.value()
+        var expected = 0
+        for k in range(len(oi.page_locations)):
+            assert_equal(oi.page_locations[k].first_row_index, expected)
+            expected += pbs[0][0][k].copy().num_rows
+
+
+def test_page_split_dictionary() raises:
+    # low-cardinality strings, dictionary-encoded: one shared dictionary page
+    # followed by several RLE_DICTIONARY data pages
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var strs = Python.list()
+    for i in range(50000):
+        strs.append(Python.str("k") + Python.str(i % 100))
+    var want = pa.table(Python.dict(s=pa.array(strs)))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_split_dict.parquet")
+        write_table(_to_marrow(want), path, use_dictionary=True)
+
+        assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
+        assert_equal(read_table(path).num_rows(), 50000)
+        var pbs = ParquetFile(path).page_bounds()
+        assert_true(len(pbs[0][0]) > 1)
+        assert_equal(_page_rows(path, 0), 50000)
+        # a single dictionary page precedes the data pages
+        var cc = pq.ParquetFile(path).metadata.row_group(0).column(0)
+        assert_true(Bool(cc.dictionary_page_offset < cc.data_page_offset))
+
+
+def test_writer_float16_roundtrip() raises:
+    # float16 is physically FIXED_LEN_BYTE_ARRAY(2) + FLOAT16 logical; verify
+    # both encodings round-trip through marrow write and read, incl. nulls and
+    # the signed-zero-normalised min/max statistic.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        Python.dict(
+            h=pa.array(
+                Python.list(1.5, 2.5, 3.0, Python.none(), 4.5, -0.0),
+                type=pa.float16(),
+            )
+        )
+    )
+    # a marrow float16 Table via PyArrow write -> marrow read (a list-backed
+    # PyArrow array's buffer is 64-byte aligned, unlike a numpy-backed one that
+    # the C-import would reject).
+    with ScratchDir() as dir:
+        var src = join(dir, "marrow_f16_src.parquet")
+        pq.write_table(want, src, use_dictionary=False)
+        var mt = read_table(src)
+        for use_dict in [False, True]:
+            var path = join(dir, "marrow_f16.parquet")
+            write_table(mt, path, use_dictionary=use_dict)
+            # pyarrow reads marrow's file back to a halffloat column
+            var back = pq.read_table(path)
+            assert_true(Bool(back.schema.field(0).type == pa.float16()))
+            assert_true(
+                Bool(back.column(0).to_pylist() == want.column(0).to_pylist())
+            )
+            # marrow reads its own file
+            assert_equal(read_table(path).num_rows(), 6)
+            # statistics: min normalises to -0.0 (0x8000), max is 4.5 (0x4480)
+            var s = (
+                pq.ParquetFile(path).metadata.row_group(0).column(0).statistics
+            )
+            assert_true(
+                Bool(
+                    s.min
+                    == Python.import_module("builtins").bytes(
+                        Python.list(0, 0x80)
+                    )
+                )
+            )
+            assert_true(
+                Bool(
+                    s.max
+                    == Python.import_module("builtins").bytes(
+                        Python.list(0x80, 0x44)
+                    )
+                )
+            )
+            assert_equal(Int(py=s.null_count), 1)
+
+
+def test_key_value_metadata() raises:
+    # user schema metadata round-trips; PyArrow's ARROW:schema is dropped on
+    # write (marrow writes its own Parquet schema).
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var md = Python.dict()
+    md[Python.str("hello").encode()] = Python.str("world").encode()
+    md[Python.str("team").encode()] = Python.str("marrow").encode()
+    var sch = pa.schema(Python.list(pa.field("x", pa.int64()))).with_metadata(
+        md
+    )
+    var want = pa.table(
+        Python.dict(x=pa.array(Python.list(1, 2, 3))), schema=sch
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_kv.parquet")
+        pq.write_table(want, path)
+
+        # marrow surfaces the file's key/value metadata on the schema
+        var t = read_table(path)
+        assert_equal(t.schema.metadata["hello"], String("world"))
+        assert_equal(t.schema.metadata["team"], String("marrow"))
+
+        # marrow writes it back; PyArrow reads the user keys, ARROW:schema is gone
+        var dst = join(dir, "marrow_kv_out.parquet")
+        write_table(t, dst)
+        var back = pq.read_table(dst)
+        assert_true(
+            Bool(
+                back.schema.metadata[Python.str("hello").encode()]
+                == Python.str("world").encode()
+            )
+        )
+        assert_false(
+            Bool(Python.str("ARROW:schema").encode() in back.schema.metadata)
+        )
+
+
+def _decimal_int_backed(patype: PythonObject, phys: String) raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var vals = pa.array(
+        Python.list("1.50", "-3.25", "2.00", Python.none(), "0.75")
+    ).cast(patype)
+    var t = _one_col(vals)
+    with ScratchDir() as dir:
+        var a = join(dir, "marrow_dec_a.parquet")
+        write_table(t, a, use_dictionary=False)
+        # marrow encodes decimal32/decimal64 with the integer physical type
+        assert_equal(
+            String(
+                py=pq.ParquetFile(a)
+                .metadata.row_group(0)
+                .column(0)
+                .physical_type
+            ),
+            phys,
+        )
+        # marrow must read its own int-backed decimal correctly (not as a big-endian
+        # FLBA): read -> write -> PyArrow-read must recover the original values.
+        var b = join(dir, "marrow_dec_b.parquet")
+        write_table(read_table(a), b, use_dictionary=False)
+        assert_true(
+            Bool(pq.read_table(b).column(0).to_pylist() == vals.to_pylist())
+        )
+
+
+def test_decimal_int_backed_roundtrip() raises:
+    var pa = Python.import_module("pyarrow")
+    _decimal_int_backed(pa.decimal32(9, 2), "INT32")
+    _decimal_int_backed(pa.decimal64(15, 2), "INT64")
+
+
+def test_distinct_count_statistic() raises:
+    # a dictionary-encoded chunk knows its distinct (non-null) value count — the
+    # dictionary size — and writes it as Statistics.distinct_count; a PLAIN chunk
+    # leaves it absent.
+    var pa = Python.import_module("pyarrow")
+    var ints = Python.list()
+    for i in range(300):
+        ints.append(i % 40)
+    var t = _one_col(pa.array(ints, type=pa.int64()))
+
+    with ScratchDir() as dir:
+        var dpath = join(dir, "marrow_distinct.parquet")
+        write_table(t, dpath, use_dictionary=True)
+        assert_equal(Int(py=_col_stats(dpath, 0).distinct_count), 40)
+
+        var ppath = join(dir, "marrow_distinct_plain.parquet")
+        write_table(t, ppath, use_dictionary=False)
+        assert_false(Bool(_col_stats(ppath, 0).distinct_count))  # None
+
+
+def test_page_checksum() raises:
+    # write_page_checksum attaches a CRC-32 to every page. The check vector
+    # locks the algorithm; PyArrow's verified read proves the written CRC is
+    # correct; marrow reading its own file exercises the verify path.
+    assert_equal(Int(Crc32.compute(String("123456789").as_bytes())), 0xCBF43926)
+
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _one_col(pa.array(_ints(200), type=pa.int64()))
+    with ScratchDir() as dir:
+        for ver in [1, 2]:
+            var path = join(dir, "marrow_crc.parquet")
+            var w = FileWriter(
+                FileSink(path),
+                t.schema,
+                Compression.SNAPPY,
+                version=ver,
+                write_page_checksum=True,
+            )
+            w.write(t)
+            w.close()
+            # PyArrow verifies the checksum -> marrow's CRC matches the spec
+            var back = pq.read_table(path, page_checksum_verification=True)
+            assert_equal(Int(py=back.num_rows), 200)
+            # marrow reads its own checksummed file (runs the verify branch)
+            assert_equal(read_table(path).num_rows(), 200)
+
+
+def test_parquet_sink_memory_bytes_match_file() raises:
+    """The same table written to a `MemorySink` and to a `FileSink` produces
+    identical bytes.
+
+    This is what makes the sink seam real rather than nominal: the writer emits
+    one byte stream and the backend only decides where it lands. It also pins
+    the thing a streaming rewrite would break first — every `data_page_offset`,
+    `PageLocation.offset`, bloom-filter offset and page-index offset is an
+    absolute file position, so a backend that disagreed about where it was
+    would show up here as a byte mismatch rather than as a file PyArrow cannot
+    open.
+    """
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _to_marrow(
+        pa.table(
+            {
+                "i": pa.array([1, 2, 3, 4, 5, 6, 7, 8], type=pa.int64()),
+                "s": pa.array(["a", "bb", "ccc", "d", "ee", "f", "gg", "h"]),
+            }
+        )
+    )
+
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_parquet_sink_equivalence.parquet")
+        var fw = FileWriter(
+            FileSink(path),
+            t.schema,
+            Compression.SNAPPY,
+            write_bloom_filter=True,
+            row_group_size=3,
+        )
+        fw.write(t)
+        fw.close()
+
+        var mw = FileWriter(
+            MemorySink(),
+            t.schema,
+            Compression.SNAPPY,
+            write_bloom_filter=True,
+            row_group_size=3,
+        )
+        mw.write(t)
+        mw.close()
+
+        ref from_memory = mw.out.sink().bytes()
+        var mapped = Buffer.mmap_file(path)
+        var n = mapped.mapped_size()
+        assert_equal(len(from_memory), n)
+        var from_file = mapped.view[DType.uint8](0, n).as_span()
+        for i in range(n):
+            assert_equal(from_memory[i], from_file[i])
+
+        # And those bytes are a Parquet file, not two copies of one mistake.
+        assert_equal(Int(py=pq.read_table(path).num_rows), 8)
+
+
+# ---------------------------------------------------------------------------
+# Content-defined chunking (CDC) — data page boundaries from a rolling hash
+# over each column's `(def_level, rep_level, value)` stream instead of a row
+# count / byte estimate. Only the writer is aware of it; a reader cannot tell
+# a CDC file from a default one, so every check here is on the page layout.
+# ---------------------------------------------------------------------------
+
+
+def _page_row_counts(path: String, rg: Int, col: Int) raises -> List[Int]:
+    """Per-page row counts for one (row group, leaf column) -- the shape
+    `ColumnWriter.write`'s page-splitting loop produced."""
+    var pbs = ParquetFile(path).page_bounds()
+    var out = List[Int](capacity=len(pbs[rg][col]))
+    for p in range(len(pbs[rg][col])):
+        out.append(pbs[rg][col][p].copy().num_rows)
+    return out^
+
+
+def test_cdc_changes_page_layout_and_reads_back_identically() raises:
+    """CDC-derived page boundaries differ from the byte-estimate default for
+    the same data, and the file still reads back every row correctly."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var n = 25_000
+    var want = pa.table({"x": pa.array(_ints(n), type=pa.int64())})
+    var t = _to_marrow(want)
+
+    with ScratchDir() as dir:
+        var path_off = join(dir, "marrow_cdc_off.parquet")
+        var w_off = FileWriter(
+            FileSink(path_off),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
+        )
+        w_off.write(t)
+        w_off.close()
+
+        var path_on = join(dir, "marrow_cdc_on.parquet")
+        var w_on = FileWriter(
+            FileSink(path_on),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
+            content_defined_chunking=ContentDefinedChunking(512, 4096, 0),
+        )
+        w_on.write(t)
+        w_on.close()
+
+        var rows_off = _page_row_counts(path_off, 0, 0)
+        var rows_on = _page_row_counts(path_on, 0, 0)
+        assert_true(
+            rows_off != rows_on, "CDC produced the same page layout as CDC off"
+        )
+        # a tiny CDC size envelope cuts far more often than the default estimate
+        assert_true(len(rows_on) > len(rows_off))
+
+        assert_true(
+            Bool(pq.read_table(path_on).column(0).equals(want.column(0)))
+        )
+        assert_equal(read_table(path_on).num_rows(), n)
+
+
+def test_cdc_page_split_respects_max_rows_per_page() raises:
+    """A default-sized CDC chunk of int64 (256 KiB-1 MiB) holds 32K-131K
+    values, far past MAX_ROWS_PER_PAGE -- so the writer's page loop must keep
+    splitting inside a chunk, not stop at CDC's own (much wider) boundaries."""
+    var pa = Python.import_module("pyarrow")
+    var n = 200_000
+    var t = _one_col(pa.array(_ints(n), type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_cdc_maxrows.parquet")
+        var w = FileWriter(
+            FileSink(path),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
+            content_defined_chunking=ContentDefinedChunking(),
+        )
+        w.write(t)
+        w.close()
+
+        var rows = _page_row_counts(path, 0, 0)
+        assert_true(len(rows) > 1)
+        var total = 0
+        for r in rows:
+            assert_true(
+                r <= MAX_ROWS_PER_PAGE,
+                "a CDC page exceeded MAX_ROWS_PER_PAGE: " + String(r),
+            )
+            total += r
+        assert_equal(total, n)
+
+
+def test_cdc_empty_table_emits_one_page() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(pa.array(Python.list(), type=pa.int64()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_cdc_empty.parquet")
+        var w = FileWriter(
+            FileSink(path),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            content_defined_chunking=ContentDefinedChunking(),
+        )
+        w.write(t)
+        w.close()
+
+        var rows = _page_row_counts(path, 0, 0)
+        assert_equal(len(rows), 1)
+        assert_equal(rows[0], 0)
+        assert_equal(read_table(path).num_rows(), 0)
+
+
+def test_cdc_no_zero_length_first_page() raises:
+    """A hard cut that fires on the very first value must not turn into a
+    zero-length data page. `_calculate` (`chunker.mojo`) used to append a
+    `Chunk` unconditionally on every cut, including one landing at level 0 --
+    see `test_chunker_flat_required_no_zero_length_first_chunk` for the
+    chunker-level pin. Every string element below is longer than
+    `max_chunk_size`, so the very first value alone trips the hard cut."""
+    var pa = Python.import_module("pyarrow")
+    var n = 80
+    var strs = Python.list()
+    for i in range(n):
+        strs.append(
+            Python.str("this-value-is-much-longer-than-the-cdc-max-chunk-size-")
+            + Python.str(i)
+        )
+    var t = _one_col(pa.array(strs, type=pa.string()))
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_cdc_zero_first_page.parquet")
+        var w = FileWriter(
+            FileSink(path),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
+            content_defined_chunking=ContentDefinedChunking(0, 8, -1),
+        )
+        w.write(t)
+        w.close()
+
+        var rows = _page_row_counts(path, 0, 0)
+        assert_true(
+            len(rows) > 1, "expected several pages, got " + String(len(rows))
+        )
+        var total = 0
+        for r in rows:
+            assert_true(r > 0, "a CDC page had zero rows")
+            total += r
+        assert_equal(total, n)
+        assert_equal(read_table(path).num_rows(), n)
+
+
+def test_cdc_string_and_nullable_roundtrip() raises:
+    """CDC must chunk more than int64: a string column (the binary-like
+    dispatch) and a nullable column (definition levels feed the rolling hash,
+    synthesized in `_write_row_group` for a flat leaf that is never
+    Dremel-shredded) both round-trip with CDC on."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var n = 4_000
+    var strs = Python.list()
+    var ints = Python.list()
+    for i in range(n):
+        strs.append(Python.str("row-") + Python.str(String(i)))
+        if i % 5 == 0:
+            ints.append(Python.none())
+        else:
+            ints.append(i)
+    var want = pa.table(
+        {
+            "s": pa.array(strs, type=pa.string()),
+            "i": pa.array(ints, type=pa.int64()),
+        }
+    )
+    var t = _to_marrow(want)
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_cdc_mixed.parquet")
+        var w = FileWriter(
+            FileSink(path),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
+            content_defined_chunking=ContentDefinedChunking(512, 4096, 0),
+        )
+        w.write(t)
+        w.close()
+
+        assert_true(Bool(pq.read_table(path).equals(want)))
+        var back = read_table(path)
+        assert_equal(back.num_rows(), n)
+
+
+def test_nested_row_group_leaf_slicing() raises:
+    """Every row group after the first must write *its own* leaf values.
+
+    Splitting a table into row groups slices each column, and Arrow slices a
+    nested array by moving the container's offset and leaving its children
+    whole -- so `list.values()` and `struct.children[i]` still span the entire
+    column. `ColumnWriter.write` walks the leaf array positionally from element
+    0, so until `SchemaNode.collect_leaf_arrays` narrowed the child, every row
+    group after the first wrote row group 0's leaf values underneath its own,
+    correct, levels. PyArrow rejected the resulting `list<int64>` outright
+    ("Unexpected end of stream") and silently misread the structs.
+
+    Three row groups, so the third is checked and not just the second; and
+    every leaf value is distinct, so a shifted read cannot land on the right
+    answer by accident.
+    """
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+
+    var n = 300
+    var lists = Python.list()
+    var plain = Python.list()
+    var opt = Python.list()
+    var nxt = 0
+    for i in range(n):
+        if i % 7 == 0:
+            lists.append(Python.none())  # null list
+        elif i % 7 == 1:
+            lists.append(Python.list())  # present, but empty
+        else:
+            var sub = Python.list()
+            for _ in range(1 + (i % 3)):
+                sub.append(nxt)
+                nxt += 1
+            lists.append(sub)
+        plain.append(Python.dict(a=1000 + i))
+        if i % 5 == 0:
+            opt.append(Python.none())  # null struct
+        else:
+            opt.append(Python.dict(a=2000 + i))
+
+    var want = pa.table(
+        {
+            "l": pa.array(lists, type=pa.list_(pa.int64())),
+            "s": pa.array(plain, type=pa.struct({"a": pa.int64()})),
+            "o": pa.array(opt, type=pa.struct({"a": pa.int64()})),
+        }
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_nested_row_groups.parquet")
+        var t = _to_marrow(want)
+        var w = FileWriter(
+            FileSink(path),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
+            row_group_size=100,
+        )
+        w.write(t)
+        w.close()
+
+        assert_equal(ParquetFile(path).num_row_groups(), 3)
+        assert_true(Bool(pq.read_table(path).equals(want)))
+        assert_equal(read_table(path).num_rows(), n)
+
+
+# ---------------------------------------------------------------------------
+# string_view / binary_view: written as BYTE_ARRAY, read back as either layout
+# ---------------------------------------------------------------------------
+
+from ....dtypes import string_view, binary_view, large_binary, int32
+from ....dtypes import string as string_dt
+
+
+def _view_values(n: Int) raises -> PythonObject:
+    """Short, long and null values, so both inline and out-of-line views and
+    several data pages appear."""
+    var out = Python.list()
+    for i in range(n):
+        if i % 11 == 0:
+            out.append(Python.none())
+        elif i % 3 == 0:
+            out.append("value number " + String(i) + " is long")
+        else:
+            out.append("v" + String(i % 50))
+    return out^
+
+
+def _assert_view_file(path: String, expected: PythonObject) raises:
+    """pyarrow reads what marrow wrote; marrow reads it as `string` by
+    default and as `string_view` when asked."""
+    var pq = Python.import_module("pyarrow.parquet")
+    var got = pq.read_table(path).column("x").to_pylist()
+    assert_true(got == expected)
+
+    var plain = read_table(path)
+    assert_true(plain.schema.fields[0].dtype == string_dt)
+
+    var views = read_table(path, binary_type=binary_view)
+    assert_true(views.schema.fields[0].dtype == string_view)
+    var i = 0
+    for ref batch in views.to_batches():
+        ref col = batch.columns[0].as_string_view()
+        col.validate()
+        for j in range(len(col)):
+            if expected[i] is Python.none():
+                assert_false(col.is_valid(j))
+            else:
+                assert_equal(col[j].value(), String(py=expected[i]))
+            i += 1
+    assert_equal(i, len(expected))
+
+
+def test_string_view_write_dictionary() raises:
+    var pa = Python.import_module("pyarrow")
+    var values = _view_values(5000)
+    var t = _one_col(pa.array(values, type=pa.string_view()))
+    with ScratchDir() as dir:
+        var path = join(dir, "sv_dict.parquet")
+        write_table(t, path)
+        _assert_view_file(path, values)
+
+
+def test_string_view_write_plain_and_delta() raises:
+    var pa = Python.import_module("pyarrow")
+    var values = _view_values(3000)
+    var t = _one_col(pa.array(values, type=pa.string_view()))
+    with ScratchDir() as dir:
+        var plain = join(dir, "sv_plain.parquet")
+        write_table(t, plain, use_dictionary=False)
+        _assert_view_file(plain, values)
+        var dba = join(dir, "sv_dba.parquet")
+        write_table(t, dba, encoding=Encoding.DELTA_BYTE_ARRAY)
+        _assert_view_file(dba, values)
+        var dlba = join(dir, "sv_dlba.parquet")
+        write_table(t, dlba, encoding=Encoding.DELTA_LENGTH_BYTE_ARRAY)
+        _assert_view_file(dlba, values)
+
+
+def test_string_view_statistics() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(
+            Python.list("pear", None, "apple is a long value", "zucchini"),
+            type=pa.string_view(),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "sv_stats.parquet")
+        write_table(t, path)
+        var s = _col_stats(path, 0)
+        assert_equal(String(py=s.min), "apple is a long value")
+        assert_equal(String(py=s.max), "zucchini")
+        assert_equal(Int(py=s.null_count), 1)
+
+
+def test_binary_type_read_option() raises:
+    """`binary_type` maps un-annotated BYTE_ARRAY to itself and STRING to the
+    matching string type, nested leaves included."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            b=pa.array(
+                Python.evaluate(
+                    "[b'a', None, b'bytes beyond the inline limit']"
+                )
+            ),
+            l=pa.array(
+                Python.evaluate(
+                    "[['x', 'a long list element value'], None, []]"
+                ),
+                type=pa.list_(pa.string()),
+            ),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "binary_type.parquet")
+        pq.write_table(t, path, store_schema=False)
+        var views = read_table(path, binary_type=binary_view)
+        assert_true(views.schema.fields[0].dtype == binary_view)
+        ref l = views.to_batches()[0].columns[1].as_list()
+        assert_true(l.values().dtype() == string_view)
+        var large = read_table(path, binary_type=large_binary)
+        assert_true(large.schema.fields[0].dtype == large_binary)
+
+        var raised = False
+        try:
+            _ = read_table(path, binary_type=int32)
+        except:
+            raised = True
+        assert_true(raised)
+
+
+from ...parquet.reader import LeafSet, leaf_of
+from ....dtypes import StringViewType, Int64Type
+
+
+def test_parquet_file_binary_type_with_narrowed_leaves() raises:
+    """`ParquetFile(binary_type=...)` directly, compiled for exactly the view
+    leaf it will see."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            s=pa.array(Python.list("a", None, "a value longer than twelve")),
+            n=pa.array(Python.list(1, 2, 3), type=pa.int64()),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "narrowed.parquet")
+        pq.write_table(t, path, store_schema=False)
+        var f = ParquetFile[
+            leaves=leaf_of[StringViewType]() | leaf_of[Int64Type]()
+        ](path, binary_type=binary_view)
+        var got = f.read()
+        assert_true(got.schema.fields[0].dtype == string_view)
+        ref col = got.to_batches()[0].columns[0].as_string_view()
+        assert_false(col.is_valid(1))
+        assert_equal(col[2].value(), "a value longer than twelve")
+
+
+from ....schema import Schema
+from ....dtypes import Field, list_
+
+
+def test_declared_schema_picks_the_layout_per_column() raises:
+    """A declared schema decides each named column's string layout, leaf by
+    leaf: a top-level view does not turn a nested list into views, a nested
+    view needs no top-level one, and an undeclared column falls back to
+    `binary_type`."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            s=pa.array(Python.list("a", None, "a value longer than twelve")),
+            u=pa.array(Python.list("x", "y", "z")),
+            tags=pa.array(
+                Python.evaluate(
+                    "[['p', 'a long list element value'], None, []]"
+                ),
+                type=pa.list_(pa.string()),
+            ),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "declared.parquet")
+        pq.write_table(t, path, store_schema=False)
+
+        var top = ParquetFile(
+            path,
+            schema=Schema(
+                fields=[
+                    Field("s", string_view),
+                    Field("tags", list_(string_dt)),
+                ]
+            ),
+        ).read()
+        assert_true(top.schema.fields[0].dtype == string_view)
+        assert_true(top.schema.fields[1].dtype == string_dt)
+        assert_true(top.schema.fields[2].dtype == list_(string_dt))
+        ref s = top.to_batches()[0].columns[0].as_string_view()
+        assert_equal(s[2].value(), "a value longer than twelve")
+
+        var nested = ParquetFile(
+            path, schema=Schema(fields=[Field("tags", list_(string_view))])
+        ).read()
+        assert_true(nested.schema.fields[0].dtype == string_dt)
+        assert_true(nested.schema.fields[2].dtype == list_(string_view))
+        ref tags = nested.to_batches()[0].columns[2].as_list()
+        assert_equal(
+            tags.values().as_string_view()[1].value(),
+            "a long list element value",
+        )
+
+
+from ...parquet.reader import RowSelection
+
+
+def test_view_decode_adopts_only_pages_with_long_values() raises:
+    """A page or dictionary is taken as a data buffer at the first selected
+    row too long to inline, and not before -- holding it would only keep it
+    alive -- in every page shape the decoder sees: PLAIN from the source,
+    PLAIN decompressed, and a dictionary. A row selection that leaves the long
+    row out leaves the page out too."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            short=pa.array(Python.list("a", None, "twelve bytes")),
+            long=pa.array(Python.list("a", None, "thirteen bytes")),
+        )
+    )
+    with ScratchDir() as dir:
+        var path = join(dir, "inline.parquet")
+        for dictionary in [False, True]:
+            for codec in ["none", "snappy"]:
+                pq.write_table(
+                    t, path, use_dictionary=dictionary, compression=codec
+                )
+                var got = ParquetFile(path, binary_type=binary_view).read()
+                var batch = got.to_batches()[0].copy()
+                var short = batch.columns[0].as_string_view().copy()
+                var long = batch.columns[1].as_string_view().copy()
+                assert_equal(len(short.buffers), 0)
+                assert_equal(short[2].value(), "twelve bytes")
+                assert_equal(len(long.buffers), 1)
+                assert_equal(long[2].value(), "thirteen bytes")
+                assert_false(long[1].is_valid())
+
+                var keep: List[Bool] = [True, True, False]
+                var selections: List[RowSelection] = [RowSelection(keep^)]
+                var groups: List[Int] = [0]
+                var head = ParquetFile(path, binary_type=binary_view).read(
+                    row_groups=Optional(groups^),
+                    row_selections=Optional(selections^),
+                )
+                var unselected = (
+                    head.to_batches()[0].columns[1].as_string_view().copy()
+                )
+                assert_equal(len(unselected), 2)
+                assert_equal(len(unselected.buffers), 0)
+                assert_equal(unselected[0].value(), "a")
+
+
+def test_view_decode_matches_string_decode() raises:
+    """The zero-copy view decoder against the copying string one, over a
+    pyarrow file with dictionary pages, a PLAIN fallback past the dictionary
+    limit, nulls, several row groups, and a row selection."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var values = Python.list()
+    for i in range(6000):
+        if i % 13 == 0:
+            values.append(Python.none())
+        elif i % 2 == 0:
+            values.append("k" + String(i % 7))
+        else:
+            values.append("a high-cardinality value number " + String(i))
+    var t = pa.table(Python.dict(s=pa.array(values, type=pa.string())))
+    with ScratchDir() as dir:
+        var path = join(dir, "view_decode.parquet")
+        pq.write_table(
+            t,
+            path,
+            row_group_size=2500,
+            data_page_size=4096,
+            dictionary_pagesize_limit=8192,
+        )
+        var f = ParquetFile(path)
+        var plain = f.read()
+        var views = ParquetFile(path, binary_type=binary_view).read()
+
+        var keep = List[Bool](length=2500, fill=False)
+        for i in range(0, 2500, 3):
+            keep[i] = True
+        var selections: List[RowSelection] = [RowSelection(keep^)]
+        var groups: List[Int] = [1]
+        var sel_plain = f.read(
+            row_groups=Optional(groups.copy()),
+            row_selections=Optional(selections.copy()),
+        )
+        var sel_views = ParquetFile(path, binary_type=binary_view).read(
+            row_groups=Optional(groups^), row_selections=Optional(selections^)
+        )
+
+        for pair in [
+            (plain.copy(), views.copy()),
+            (sel_plain.copy(), sel_views.copy()),
+        ]:
+            ref a = pair[0]
+            ref b = pair[1]
+            assert_equal(a.num_rows(), b.num_rows())
+            var ab = a.to_batches()
+            var bb = b.to_batches()
+            var i = 0
+            var j = 0
+            var ai = 0
+            var bi = 0
+            while i < len(ab) and j < len(bb):
+                ref sa = ab[i].columns[0].as_string()
+                ref sb = bb[j].columns[0].as_string_view()
+                sb.validate()
+                assert_equal(sa.is_valid(ai), sb.is_valid(bi))
+                if sa.is_valid(ai):
+                    assert_equal(
+                        sa[ai].value(),
+                        sb[bi].value(),
+                    )
+                ai += 1
+                bi += 1
+                if ai == len(sa):
+                    i += 1
+                    ai = 0
+                if bi == len(sb):
+                    j += 1
+                    bi = 0
+
+
+# ---------------------------------------------------------------------------
+# Single-case round trips: each writes one shape and reads it back with marrow
+# ---------------------------------------------------------------------------
+
+
+def _table(var column: DynArray) raises -> Table:
+    """A one-column ("c") table holding `column` as its only chunk."""
+    var batch = record_batch([column^], names=["c"])
+    var schema = batch.schema.copy()
+    return Table.from_batches(schema, [batch^])
+
+
+def _to_pa(t: Table) raises -> PythonObject:
+    """A marrow Table -> PyArrow table via the Arrow C stream interface."""
+    var pa = Python.import_module("pyarrow")
+    var caps = CArrowArrayStream.from_batches(
+        t.schema.copy(), t.to_batches()
+    ).to_pycapsule()
+    return pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
+
+
+def _pylist(t: Table) raises -> PythonObject:
+    """Column 0 of `t` as a Python list."""
+    return _to_pa(t).column(0).to_pylist()
+
+
+def _assert_roundtrips(t: Table) raises:
+    """Write `t` as one row group and again in row groups of two rows --
+    every group after the first a slice with a non-zero offset -- and check
+    marrow reads back the same values from both."""
+    var want = _pylist(t)
+    for row_group_size in [t.num_rows(), 2]:
+        with ScratchDir() as dir:
+            var path = join(dir, "case.parquet")
+            var w = FileWriter(
+                FileSink(path),
+                t.schema,
+                Compression.UNCOMPRESSED,
+                row_group_size=row_group_size,
+            )
+            w.write(t)
+            w.close()
+            var got = _pylist(read_table(path))
+            assert_true(Bool(got == want), String(got, " != ", want))
+
+
+def test_write_large_list() raises:
+    # [[1, 2], None, [], [3], [None, 4, 5]]
+    var values: DynArray = array[Int64Type]([1, 2, 3, None, 4, 5], int64)
+    var offsets = array([0, 2, 2, 2, 3, 6], int64)
+    var mask = array([False, True, False, False, False])
+    var col = LargeListArray.from_arrays(offsets, values^, mask^)
+    _assert_roundtrips(_table(col^))
+
+
+def test_write_large_list_in_struct() raises:
+    # {xs: ["a"]}, {xs: None}, {xs: ["b", "c"]}, {xs: []}
+    var strings: DynArray = array(["a", "b", "c"])
+    var offsets = array([0, 1, 1, 3, 3], int64)
+    var mask = array([False, True, False, False])
+    var xs: DynArray = LargeListArray.from_arrays(offsets, strings^, mask^)
+    var fields: List[Field] = [field("xs", xs.dtype())]
+    var col = StructArray.from_arrays([xs^], fields)
+    _assert_roundtrips(_table(col^))
+
+
+def test_write_one_entry_dictionary() raises:
+    # One distinct value builds a one-entry dictionary, whose indices still
+    # need a 1-bit run: at width 0 no run is written and PyArrow refuses the
+    # file. The last column spans two data pages.
+    var pq = Python.import_module("pyarrow.parquet")
+    var many = Int64Builder()
+    for _ in range(MAX_ROWS_PER_PAGE + 10_001):
+        many.append(7)
+    var cols: List[DynArray] = [
+        array([7], int64),
+        array(["x", None, "x"]),
+        many.finish(),
+    ]
+    for col in cols:
+        var t = _table(col.copy())
+        var want = _pylist(t)
+        with ScratchDir() as dir:
+            var path = join(dir, "one_entry.parquet")
+            write_table(t, path, Compression.UNCOMPRESSED)
+            var meta = pq.ParquetFile(path).metadata.row_group(0).column(0)
+            assert_true(
+                Bool(String(meta.encodings).find("RLE_DICTIONARY") >= 0)
+            )
+            assert_true(Bool(pq.read_table(path).column(0).to_pylist() == want))
+            assert_true(Bool(_pylist(read_table(path)) == want))
+
+
+def test_write_dictionary_signed_zero() raises:
+    # 0.0 and -0.0 compare equal but are different values: a dictionary keyed
+    # by equality gave -0.0 the entry of the 0.0 before it, sign lost.
+    var xs: List[Optional[Float64]] = [0.0, -0.0, None, -0.0, 0.0]
+    var col = array(xs, float64)
+    with ScratchDir() as dir:
+        var path = join(dir, "signed_zero.parquet")
+        write_table(_table(col^), path, Compression.UNCOMPRESSED)
+        var got = read_table(path).combine_chunks().columns[0].copy()
+        ref back = got.as_float64()
+        assert_equal(back.null_count(), 1)
+        var signs = List[Int]()
+        for i in [0, 1, 3, 4]:
+            assert_equal(back[i].value(), 0.0)
+            signs.append(Int(back[i].value().to_bits() >> 63))
+        assert_equal(signs, [0, 1, 1, 0])
+
+
+def _struct_of_list(nullable: Bool) raises -> Table:
+    """{xs: [1, 2]}, <row 1>, {xs: []}, {xs: None}, {xs: [3]} -- row 1 a null
+    struct when `nullable`, else {xs: None}."""
+    var ints: DynArray = array([1, 2, 3], int64)
+    var list_nulls = array([False, True, False, True, False])
+    var xs: DynArray = ListArray.from_arrays(
+        array([0, 2, 2, 2, 2, 3], int32), ints^, list_nulls^
+    )
+    var fields: List[Field] = [field("xs", xs.dtype())]
+    var mask: Optional[BoolArray] = None
+    if nullable:
+        mask = array([False, True, False, False, False])
+    var col: DynArray = StructArray.from_arrays([xs^], fields, mask^)
+    var schema = Schema(fields=[Field("c", col.dtype(), nullable=nullable)])
+    var batch = RecordBatch(schema, [col^])
+    return Table.from_batches(schema, [batch^])
+
+
+def test_write_null_struct_over_list() raises:
+    # A nullable struct holding a list is an OPTIONAL group, one definition
+    # level above the list's; a non-nullable one stays REQUIRED.
+    var pq = Python.import_module("pyarrow.parquet")
+    for nullable in [True, False]:
+        var t = _struct_of_list(nullable)
+        with ScratchDir() as dir:
+            var path = join(dir, "struct_list.parquet")
+            write_table(t, path, Compression.UNCOMPRESSED)
+            var leaf = pq.ParquetFile(path).schema.column(0)
+            assert_equal(
+                Int(py=leaf.max_definition_level), 4 if nullable else 3
+            )
+            var got = read_table(path)
+            assert_equal(
+                got.combine_chunks().columns[0].null_count(),
+                1 if nullable else 0,
+            )
+            assert_true(Bool(_pylist(got) == _pylist(t)))
+
+
+def test_write_seconds_as_milliseconds() raises:
+    # Parquet has no second unit: timestamp[s] and time32[s] are written in
+    # milliseconds, values scaled, and read back in milliseconds.
+    var pa = Python.import_module("pyarrow")
+    var secs = Python.list(-86_400, 0, Python.none(), 1_700_000_000)
+    var day = Python.list(0, 1, Python.none(), 86_399)
+    var given = pa.table(
+        Python.dict(
+            ts=pa.array(secs, pa.timestamp("s")),
+            tz=pa.array(secs, pa.timestamp("s", "UTC")),
+            t32=pa.array(day, pa.time32("s")),
+        )
+    )
+    var want = pa.table(
+        Python.dict(
+            ts=given.column("ts").cast(pa.timestamp("ms")),
+            tz=given.column("tz").cast(pa.timestamp("ms", "UTC")),
+            t32=given.column("t32").cast(pa.time32("ms")),
+        )
+    )
+    var t = _to_marrow(given)
+    with ScratchDir() as dir:
+        var path = join(dir, "seconds.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var got = _to_pa(read_table(path))
+        for name in ["ts", "tz", "t32"]:
+            assert_true(
+                Bool(got.column(name).equals(want.column(name))),
+                String(got.column(name)),
+            )
+
+
+# Arrow leaves the offsets of a null slot unspecified, so a null list -- or a
+# list under a null struct -- may still span child values. They are not
+# written: every value after them would land on the wrong level.
+
+
+def _list_with_hidden_values() raises -> DynArray:
+    """[[1, 2], None (spans 3, 4), [5], None (spans 6)]."""
+    return ListArray.from_arrays(
+        array([0, 2, 4, 5, 6], int32),
+        array([1, 2, 3, 4, 5, 6], int64),
+        array([False, True, False, True]),
+    )
+
+
+def _struct_with_hidden_values() raises -> DynArray:
+    """[{xs: [1, 2]}, None (xs spans 3, 4), {xs: [5, 6]}]: the list itself is
+    valid at the null struct's slot."""
+    var xs: DynArray = ListArray.from_arrays(
+        array([0, 2, 4, 6], int32), array([1, 2, 3, 4, 5, 6], int64)
+    )
+    var fields: List[Field] = [field("xs", xs.dtype())]
+    return StructArray.from_arrays([xs^], fields, array([False, True, False]))
+
+
+def test_write_null_list_spanning_values() raises:
+    _assert_roundtrips(_table(_list_with_hidden_values()))
+
+
+def test_write_null_struct_spanning_list_values() raises:
+    _assert_roundtrips(_table(_struct_with_hidden_values()))
+
+
+def test_write_null_list_spanning_lists() raises:
+    # [[[1, 2], None (spans 3, 4)], None (spans [[5]]), [[6]]]
+    var inner = ListArray.from_arrays(
+        array([0, 2, 4, 5, 6], int32),
+        array([1, 2, 3, 4, 5, 6], int64),
+        array([False, True, False, False]),
+    )
+    var outer = ListArray.from_arrays(
+        array([0, 2, 3, 4], int32), inner^, array([False, True, False])
+    )
+    _assert_roundtrips(_table(outer^))
+
+
+def test_write_null_list_spanning_structs() raises:
+    # [[{xs: [1, 2]}], None (spans [None]), [{xs: [5, 6]}]]
+    var outer = ListArray.from_arrays(
+        array([0, 1, 2, 3], int32),
+        _struct_with_hidden_values(),
+        array([False, True, False]),
+    )
+    _assert_roundtrips(_table(outer^))
+
+
+def test_write_null_map_spanning_entries() raises:
+    # [{1: "a"}, None (spans {2: "b", 3: "c"}), {4: "d"}]
+    var map_col = ListArray.from_arrays(
+        array([0, 1, 3, 4], int32),
+        array([1, 2, 3, 4], int64),
+        array(["a", "b", "c", "d"]),
+        mask=array([False, True, False]),
+    )
+    _assert_roundtrips(_table(map_col^))
+
+
+# ---------------------------------------------------------------------------
+# Streaming: row groups reach the sink as they are encoded.
+# ---------------------------------------------------------------------------
+
+
+struct _RecordingSink(ByteSink):
+    """A `MemorySink` that remembers the length of every `write` and whether
+    it was committed, shared with the test through `ArcPointer`s."""
+
+    var _bytes: ArcPointer[List[UInt8]]
+    var _writes: ArcPointer[List[Int]]
+    var _closed: ArcPointer[Bool]
+
+    def __init__(
+        out self,
+        var bytes: ArcPointer[List[UInt8]],
+        var writes: ArcPointer[List[Int]],
+        var closed: ArcPointer[Bool],
+    ):
+        self._bytes = bytes^
+        self._writes = writes^
+        self._closed = closed^
+
+    def write[o: Origin[mut=False]](mut self, data: Span[UInt8, o]) raises:
+        self._writes[].append(len(data))
+        self._bytes[].extend(data)
+
+    def close(mut self) raises:
+        self._closed[] = True
+
+
+def _streaming_table() raises -> Table:
+    """1,000 rows of nullable ints, strings and lists of ints."""
+    var pa = Python.import_module("pyarrow")
+    var ints = Python.list()
+    var strs = Python.list()
+    var lists = Python.list()
+    for i in range(1_000):
+        ints.append(Python.none() if i % 7 == 3 else PythonObject(i % 97))
+        strs.append(
+            Python.none() if i % 5 == 1 else PythonObject("s" + String(i % 13))
+        )
+        var l = Python.list()
+        for j in range(i % 4):
+            l.append(i + j)
+        lists.append(Python.none() if i % 6 == 0 else l)
+    return _to_marrow(
+        pa.table(
+            {
+                "i": pa.array(ints, type=pa.int64()),
+                "s": pa.array(strs),
+                "l": pa.array(lists, type=pa.list_(pa.int64())),
+            }
+        )
+    )
+
+
+def _in_batches(t: Table, size: Int) raises -> List[RecordBatch]:
+    """`t`'s rows as consecutive batches of `size` (the last one shorter)."""
+    var all = t.combine_chunks()
+    var out = List[RecordBatch]()
+    var start = 0
+    while start < all.num_rows():
+        var n = min(size, all.num_rows() - start)
+        out.append(all.slice(start, n))
+        start += n
+    return out^
+
+
+def test_parquet_writer_flushes_each_row_group() raises:
+    """Each full row group reaches the sink during `write`, before `close`."""
+    var bytes = ArcPointer(List[UInt8]())
+    var writes = ArcPointer(List[Int]())
+    var closed = ArcPointer(False)
+    var t = _streaming_table()
+    var w = FileWriter(
+        _RecordingSink(bytes, writes, closed),
+        t.schema,
+        Compression.SNAPPY,
+        write_bloom_filter=True,
+        row_group_size=300,
+    )
+    for b in _in_batches(t, 100):
+        w.write(b)
+
+    # 1,000 rows in groups of 300: three are flushed, 100 rows still pending.
+    assert_equal(len(writes[]), 3)
+    assert_false(closed[])
+    # The first flush starts with the header magic.
+    var magic: List[UInt8] = [0x50, 0x41, 0x52, 0x31]
+    assert_true(bytes[][:4] == magic)
+
+    w.close()
+    # The last row group, then the bloom filters, page index and footer.
+    assert_equal(len(writes[]), 5)
+    assert_true(closed[])
+    var total = 0
+    for n in writes[]:
+        total += n
+    assert_equal(total, len(bytes[]))
+
+
+def test_parquet_writer_batches_match_write_table() raises:
+    """However the rows are split into batches, the bytes are the same."""
+    var t = _streaming_table()
+    with ScratchDir() as dir:
+        # One row group: `write_table` against 37-row batches.
+        var path = join(dir, "marrow_streaming_write_table.parquet")
+        write_table(t, path)
+        var batched = FileWriter(MemorySink(), t.schema, Compression.SNAPPY)
+        for b in _in_batches(t, 37):
+            batched.write(b)
+        batched.close()
+        var mapped = Buffer.mmap_file(path)
+        var n = mapped.mapped_size()
+        ref got = batched.out.sink().bytes()
+        assert_equal(len(got), n)
+        var want = mapped.view[DType.uint8](0, n).as_span()
+        for i in range(n):
+            assert_equal(got[i], want[i])
+
+    # Four row groups, with bloom filters: the whole table against 37-row
+    # batches, whose boundaries straddle every row group's.
+    var whole = FileWriter(
+        MemorySink(),
+        t.schema,
+        Compression.SNAPPY,
+        write_bloom_filter=True,
+        row_group_size=300,
+    )
+    whole.write(t)
+    whole.close()
+    var pieces = FileWriter(
+        MemorySink(),
+        t.schema,
+        Compression.SNAPPY,
+        write_bloom_filter=True,
+        row_group_size=300,
+    )
+    for b in _in_batches(t, 37):
+        pieces.write(b)
+    pieces.close()
+    assert_true(whole.out.sink().bytes() == pieces.out.sink().bytes())
+
+
+def test_parquet_writer_streamed_reads_back() raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _streaming_table()
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_streaming_read_back.parquet")
+        var w = FileWriter(
+            FileSink(path), t.schema, Compression.ZSTD, row_group_size=300
+        )
+        for b in _in_batches(t, 64):
+            w.write(b)
+        w.close()
+
+        var f = ParquetFile(path)
+        assert_equal(f.num_row_groups(), 4)
+        assert_true(f.read().combine_chunks() == t.combine_chunks())
+        var back = pq.read_table(path)
+        assert_equal(Int(py=back.num_rows), 1_000)
+
+
+def test_parquet_writer_close_is_final() raises:
+    """Closing twice is a no-op, a write after `close` raises, and a writer
+    nothing was written to still makes a valid, empty file."""
+    var t = _streaming_table()
+    var w = FileWriter(MemorySink(), t.schema, Compression.SNAPPY)
+    w.close()
+    var size = len(w.out.sink().bytes())
+    w.close()
+    assert_equal(len(w.out.sink().bytes()), size)
+    with assert_raises(contains="closed"):
+        w.write(t)
+
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_streaming_empty.parquet")
+        var e = FileWriter(FileSink(path), t.schema, Compression.SNAPPY)
+        e.close()
+        var f = ParquetFile(path)
+        assert_equal(f.num_row_groups(), 1)
+        assert_equal(f.read().num_rows(), 0)

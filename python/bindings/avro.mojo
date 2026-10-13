@@ -3,14 +3,14 @@
 
 """Python bindings for the Avro object container reader/writer.
 
-Thin marshaling over `marrow.avro.read_avro` / `write_avro`: the friendly API
+Thin marshaling over `marrow.formats.avro.read_avro` / `write_avro`: the friendly API
 lives in pure Python; these entry points stay strict.
 """
 
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
-from marrow.avro import AvroCodec, read_avro, write_avro
+from marrow.formats.avro import AvroCodec, read_avro, write_avro
 from marrow.tabular import Table
 
 

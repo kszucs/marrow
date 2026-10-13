@@ -35,9 +35,9 @@ from ..errors import DynError, InvalidError, NotImplementedError
 from ..execution import ExecContext
 from ..formats import BatchWriter
 from ..io import DynSink
-from ..ipc import RecordBatchFileWriter
-from ..parquet.compression import Compression
-from ..parquet.writer import FileWriter
+from ..formats.ipc import RecordBatchFileWriter
+from ..formats.parquet.compression import Compression
+from ..formats.parquet.writer import FileWriter
 from ..tabular import RecordBatch
 from ..utils.argparse import ArgumentParser, ParsedArgs
 from .logical import Bindings, ParamSpec

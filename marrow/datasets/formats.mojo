@@ -7,9 +7,9 @@ from ..errors import InvalidError, NotImplementedError
 from ..expr.builders import scan, scan_ipc, scan_json
 from ..expr.logical import DynRelation
 from ..io import DynSource
-from ..ipc import RecordBatchFileReader
-from ..json import open_json
-from ..parquet.reader import ParquetFile
+from ..formats.ipc import RecordBatchFileReader
+from ..formats.json import open_json
+from ..formats.parquet.reader import ParquetFile
 
 
 struct FileFormat(Equatable, ImplicitlyCopyable, Movable, Writable):

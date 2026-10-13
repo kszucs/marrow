@@ -1,0 +1,3893 @@
+# Copyright 2024 Szűcs Krisztián
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native Parquet deserialization → Arrow: the full read path.
+
+`read_table` memory-maps the file, reads the footer metadata, and decodes each
+selected column chunk's pages into an Arrow leaf array via a `ColumnReader`,
+folding the results back into the Arrow type tree with `SchemaNode.assemble`.
+Predicate pushdown skips whole row groups (`row_groups`) and individual pages
+(`row_selections`). The column-decode engine — `Page`, `PageReader`,
+`LeafBuilder` and its concrete builders, and `ColumnReader` — lives here too, so
+this module is the entire deserialization layer; the metadata / statistics /
+page-index readers reuse the same footer decode without touching column data.
+"""
+
+from std.memory import ArcPointer
+from std.builtin.rebind import downcast
+from std.bit import bit_width
+from std.sys import size_of
+
+from ...errors import (
+    CorruptError,
+    IndexError,
+    InvalidError,
+    NotImplementedError,
+)
+from ...arrays import ArrayData, BinaryViewLikeArray, DynArray
+from ...buffers import Buffer, Bitmap
+from ...views import BufferView
+from ...execution import ExecContext
+from ...builders import (
+    BinaryBuilder,
+    BinaryLikeBuilder,
+    BinaryViewLikeBuilder,
+    BoolBuilder,
+    BytesBuilder,
+    FixedSizeBinaryBuilder,
+    LargeBinaryBuilder,
+    LargeStringBuilder,
+    PrimitiveBuilder,
+    StringBuilder,
+)
+from ...schema import Schema
+from ...tabular import Table, RecordBatch
+from ..core import BatchReader, Format
+from ...scalars import DynScalar
+from ... import dtypes as dt
+from ...dtypes import (
+    BinaryLikeType,
+    BinaryViewLikeType,
+    StringViewLikeType,
+    DataType,
+    DecimalType,
+    Field,
+    NumericType,
+    PrimitiveType,
+    StringLikeType,
+    TemporalType,
+)
+
+from ...codecs import Encoded, Rle
+from ...compress import Codecs
+from .compression import Compression
+from .encodings import DictionaryValues, Encoding, PlainValues
+from ...utils import Epoch, Crc32
+from .bloom import SplitBlockBloomFilter, BloomFilterHeader
+from ...io import (
+    FOOTER_READ_SIZE,
+    BufferSource,
+    ByteSource,
+    DynSource,
+    Fetched,
+    StorageOptions,
+)
+from .schema import (
+    SchemaMapping,
+    DecodedLeaf,
+    LeafColumn,
+    NODE_LEAF,
+    Projection,
+)
+from .statistics import Statistics
+from .format import (
+    FileMetaData,
+    ThriftCompactReader,
+    ColumnChunk,
+    ColumnIndex,
+    OffsetIndex,
+    ColumnMetaData,
+    PageHeader,
+    PageLocation,
+    PageType,
+    PhysicalType,
+)
+from ...utils.byteorder import BigEndian, LittleEndian
+
+
+# ---------------------------------------------------------------------------
+# Page — one decoded page
+# ---------------------------------------------------------------------------
+
+
+struct Page[o: Origin[mut=False]](Movable):
+    """A decoded page. `body` is a *view* — into the mmap for uncompressed pages
+    (zero copy) or into the `PageReader`'s reused scratch for compressed pages —
+    not an owned buffer, so no per-page allocation. `dictionary` marks the
+    column chunk's dictionary page (vs a data page)."""
+
+    var dictionary: Bool
+    var body: Span[UInt8, Self.o]
+    var def_levels: List[Int32]
+    var rep_levels: List[Int32]  # only populated for repeated (list) leaves
+    var value_offset: Int
+    var num_present: Int
+    var encoding: Encoding
+    var num_values: Int
+    var owner: Optional[Buffer[mut=False]]
+    """The buffer `body` was decompressed into, when the reader was asked to
+    give each page its own (`PageReader.owns_bodies`): `body` then starts at
+    its first byte, and a decoder may keep pointing into it after the page.
+    `None` for a body in the reused scratch or in the source."""
+
+    def __init__(
+        out self,
+        *,
+        body: Span[UInt8, Self.o],
+        num_values: Int,
+        num_present: Int,
+        value_offset: Int = 0,
+        encoding: Encoding = Encoding.PLAIN,
+        var rep_levels: List[Int32] = [],
+        var def_levels: List[Int32] = [],
+        dictionary: Bool = False,
+        var owner: Optional[Buffer[mut=False]] = None,
+    ):
+        self.dictionary = dictionary
+        self.owner = owner^
+        self.body = body
+        self.def_levels = def_levels^
+        self.rep_levels = rep_levels^
+        self.value_offset = value_offset
+        self.num_present = num_present
+        self.encoding = encoding
+        self.num_values = num_values
+
+    @staticmethod
+    def dictionary_page[
+        po: Origin[mut=False]
+    ](body: Span[UInt8, po], num_values: Int) -> Page[po]:
+        """The column chunk's dictionary page — carries only its distinct values;
+        no levels, no present/null distinction."""
+        return Page(
+            body=body,
+            num_values=num_values,
+            num_present=num_values,
+            dictionary=True,
+        )
+
+    def all_present(self) -> Bool:
+        return self.num_present == self.num_values
+
+    def scatter[
+        Body: def(Bool, Bool, Int) raises -> None,
+    ](
+        self,
+        max_def: Int,
+        runs: Optional[List[Tuple[Int, Int]]],
+        body: Body,
+    ) raises:
+        """Walk this page's `num_values` output slots — the flat skeleton every
+        `LeafBuilder` shares.
+
+        For each row `body(present, selected, vi)` fires with whether the slot
+        holds a present value (`present_at`), whether the selection keeps it,
+        and the running index into the page's decoded present values (advanced
+        on every present slot, regardless of the selection). Only the per-slot
+        placement differs across leaves, and that lives in `body`.
+
+        `runs` is page-relative and ascending, so it is walked with a cursor
+        rather than indexed: `None` selects every slot, which is the whole-page
+        path. It used to be a `List[Bool]` the selection materialised per page
+        and every caller then copied again -- two page-length allocations to
+        answer what a handful of ranges already said.
+
+        A free `_walk_slots(page, ...)` before this; walking a page's slots is
+        the page's own business, and it already needed nothing but `self`.
+        """
+        var vi = 0
+        var ri = 0
+        for row in range(self.num_values):
+            var present_here = self.present_at(row, max_def)
+            var selected = True
+            if runs:
+                ref rs = runs.value()
+                while ri < len(rs) and rs[ri][1] <= row:
+                    ri += 1
+                selected = ri < len(rs) and rs[ri][0] <= row
+            body(present_here, selected, vi)
+            if present_here:
+                vi += 1
+
+    def present_at(self, row: Int, max_def: Int) -> Bool:
+        """Whether output `row` holds a present value: the whole page is present,
+        or its definition level reaches the leaf's max (a value slot, not a
+        null). The def-level scatter every `LeafBuilder` shares pivots on this.
+        """
+        return self.all_present() or Int(self.def_levels[row]) == max_def
+
+    def is_plain(self) -> Bool:
+        return self.encoding.is_plain()
+
+    def is_dictionary(self) -> Bool:
+        return self.encoding.is_dictionary()
+
+    def values(self) -> Span[UInt8, Self.o]:
+        """The value bytes (after any level prefix)."""
+        return self.body[self.value_offset :]
+
+
+# ---------------------------------------------------------------------------
+# PageReader — iterate the pages of one column chunk: locate each page, read its
+# Thrift header, decompress the body, and decode the definition/repetition
+# levels, so the LeafBuilders below only ever see already-decoded pages.
+# ---------------------------------------------------------------------------
+
+
+struct PageReader[o: Origin[mut=False]](Movable):
+    """Iterates the pages of **one column chunk**.
+
+    `data` is the chunk's own bytes — exactly the range `meta.byte_range()`
+    names — and `pos` is relative to it, so the reader never addresses the file
+    as a whole. That is what lets a `ByteSource` fetch a chunk at a time instead
+    of having to hand out a whole-file span."""
+
+    var segs: List[Span[UInt8, Self.o]]
+    """The chunk's bytes, as the ranges the caller actually fetched.
+
+    One segment covering the whole chunk in the ordinary case. With a selection
+    and an `OffsetIndex` it is the dictionary page and the selected pages, and
+    the gaps between them were never read — which is only sound because a page
+    is skipped from the *index*, so stepping over one touches no bytes."""
+
+    var seg_at: List[Int]
+    """Each segment's chunk-relative start, parallel to `segs`."""
+
+    var meta: ColumnMetaData
+    var leaf: LeafColumn
+    var pos: Int  # chunk-relative offset of the next page header
+    var produced: Int  # data-page values yielded so far
+    var scratch: List[UInt8]  # reused decompression buffer for compressed pages
+    var owns_bodies: Bool
+    """Decompress each v1 PLAIN data page into a buffer of its own, carried
+    as `Page.owner`, instead of the reused scratch -- for a decoder whose
+    output points into the page. Off by default: every other decoder copies
+    out of the page and is better served by one reused buffer."""
+
+    var locs: OffsetIndex
+    """Where each *data* page starts, from the `OffsetIndex` — empty when the
+    file has none, or when the caller has no use for them.
+
+    **This is what the offset index is for.** Without it, stepping over a page
+    means parsing its header to learn its size, and asking how many rows it
+    holds means parsing that header a second time — for a page that is about to
+    be skipped, both parses exist only to compute two numbers the index already
+    wrote down. A dictionary page is *not* listed here (the index covers data
+    pages only), so a position before the first entry is one, and falls back to
+    the header."""
+
+    var page_i: Int
+    """Which entry of `locs` comes next. Only meaningful when `locs` is
+    non-empty, and only advanced past data pages."""
+
+    def __init__(
+        out self,
+        var segs: List[Span[UInt8, Self.o]],
+        var seg_at: List[Int],
+        var meta: ColumnMetaData,
+        var leaf: LeafColumn,
+        var locs: OffsetIndex = OffsetIndex(),
+    ):
+        self.segs = segs^
+        self.seg_at = seg_at^
+        # Chunk-relative and always starting at the chunk, even when the first
+        # segment does not: an unfetched leading page is stepped over from the
+        # index, which touches none of its bytes, so the cursor has to walk the
+        # whole chunk logically while only ever *reading* inside a segment.
+        self.pos = 0
+        # Rebased once, so every later comparison is `offset == pos` rather
+        # than a subtraction on the hot path.
+        var chunk_start = meta.byte_range()[0]
+        for i in range(locs.num_pages()):
+            locs.page_locations[i].offset -= chunk_start
+        self.meta = meta^
+        self.leaf = leaf^
+        self.produced = 0
+        self.scratch = List[UInt8]()
+        self.owns_bodies = False
+        self.locs = locs^
+        self.page_i = 0
+
+    def _indexed(self) -> Bool:
+        """Whether the next page is a data page this reader can locate without
+        reading its header."""
+        return (
+            self.page_i < self.locs.num_pages()
+            and self.locs.page_locations[self.page_i].offset == self.pos
+        )
+
+    def _seg(self, at: Int) -> Tuple[Int, Int]:
+        """`(segment, offset within it)` for a chunk-relative position.
+
+        A page never straddles two segments — each is a whole number of pages —
+        so the segment holding a page's first byte holds all of it.
+        """
+        for i in range(len(self.segs) - 1, -1, -1):
+            if self.seg_at[i] <= at:
+                return (i, at - self.seg_at[i])
+        return (0, at)
+
+    def _sync(mut self):
+        """Point `pos` at the next data page.
+
+        In indexed mode the position comes from the index rather than from
+        accumulating page sizes, which is what lets the reader jump over pages
+        whose bytes are not present at all.
+        """
+        if self.page_i < self.locs.num_pages():
+            self.pos = self.locs.page_locations[self.page_i].offset
+
+    def _indexed_rows(self) -> Int:
+        """The current data page's row count, from the index."""
+        # `meta.num_values` is the row count for a flat leaf, and `locs` is
+        # cleared for a leveled one, so this only ever runs where they agree —
+        # the same equivalence `has_next` already relies on.
+        return self.locs.page_rows(self.page_i, self.meta.num_values)
+
+    def _body(
+        mut self,
+        comp: Span[UInt8, Self.o],
+        uncompressed_size: Int,
+        native: Bool,
+    ) raises -> Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]:
+        """A view of the page body: the source bytes directly for uncompressed
+        pages, or the reused scratch after decompressing.
+
+        The two arms have genuinely different origins — the byte source's, and
+        this reader's own scratch — so the result is their *union*. That union
+        is why this used to launder both through an `ImmUntrackedOrigin`: the
+        return needed one type, and dropping the tracking was the only way to
+        get one. It is not: `origin_of(a, b)` expresses exactly this, and now
+        the compiler knows a page body borrows from whichever of the two it
+        actually came from."""
+        var codec = Compression(self.meta.codec)
+        if codec == Compression.UNCOMPRESSED:
+            return rebind[
+                Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+            ](comp)
+        self.scratch.clear()
+        codec.decompress_into(native, comp, uncompressed_size, self.scratch)
+        return rebind[Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]](
+            Span(self.scratch)
+        )
+
+    def has_next(self) -> Bool:
+        return self.produced < self.meta.num_values
+
+    def _advance(mut self, nv: Int) raises CorruptError:
+        """Count a data page's `nv` values, refusing a page that claims more
+        than the column chunk has left: the builders allocate for the
+        chunk's values, not for what a page says."""
+        if nv < 0 or nv > self.meta.num_values - self.produced:
+            raise CorruptError(
+                t"parquet: a page of {nv} values with"
+                t" {self.meta.num_values - self.produced} left in the chunk"
+            )
+        self.produced += nv
+
+    def _data_page_v1[
+        bo: Origin[mut=False]
+    ](
+        self,
+        var body: Span[UInt8, bo],
+        num_values: Int,
+        encoding: Encoding,
+        var owner: Optional[Buffer[mut=False]] = None,
+    ) raises -> Page[bo]:
+        """Decode a v1 data page's leading rep/def level streams and build the
+        `Page` — the single construction site for v1 pages (no field-by-field
+        mutation)."""
+        var reps = List[Int32]()
+        var defs = List[Int32]()
+        var num_present = num_values
+        var cursor = 0
+        var leveled = self.leaf.max_rep >= 1
+        if leveled:
+            var levels = _v1_levels(body, cursor)
+            cursor += 4 + len(levels)
+            reps = List[Int32]()
+            _ = Rle.read_runs[DType.int32](
+                levels,
+                Int(bit_width(UInt64(self.leaf.max_rep))),
+                num_values,
+                reps,
+            )
+        if self.leaf.max_def >= 1:
+            var bw = Int(bit_width(UInt64(self.leaf.max_def)))
+            var levels = _v1_levels(body, cursor)
+            cursor += 4 + len(levels)
+            if leveled:
+                # nested columns need the full def levels to rebuild offsets
+                defs = List[Int32]()
+                _ = Rle.read_runs[DType.int32](levels, bw, num_values, defs)
+                var present = 0
+                for d in defs:
+                    if Int(d) == self.leaf.max_def:
+                        present += 1
+                num_present = present
+            else:
+                # flat: count present in O(1) for the all-present run; only
+                # materialize the level list when there are actually nulls.
+                num_present = Rle.count(
+                    levels, bw, num_values, UInt64(self.leaf.max_def)
+                )
+                if num_present != num_values:
+                    defs = List[Int32]()
+                    _ = Rle.read_runs[DType.int32](levels, bw, num_values, defs)
+        return Page(
+            body=body,
+            num_values=num_values,
+            num_present=num_present,
+            value_offset=cursor,
+            encoding=encoding,
+            rep_levels=reps^,
+            def_levels=defs^,
+            owner=owner^,
+        )
+
+    def next(
+        mut self, native: Bool
+    ) raises -> Page[origin_of(Self.o, origin_of(self.scratch))]:
+        # Consuming a data page advances the index cursor as well as `pos`;
+        # `_indexed` compares the two, so letting them drift would silently fall
+        # back to header parsing for the rest of the chunk.
+        var indexed = self._indexed()
+        if indexed:
+            self.page_i += 1
+        var si, off = self._seg(self.pos)
+        var read = PageHeader.read_at(self.segs[si], off)
+        ref ph = read[0]
+        var body = off + read[1]
+        var comp = self.segs[si][body : body + ph.compressed_page_size]
+        # A page is its header plus its body. `PageHeader.compressed_page_size`
+        # is the body alone, where the `OffsetIndex` field of the same name
+        # covers both -- which is why the seek path steps by that one directly.
+        self.pos += read[1] + ph.compressed_page_size
+        # A dictionary page is not in the index, so consuming one leaves `pos`
+        # at whatever follows it in the file — which need not be a page that was
+        # fetched. Re-point from the index either way.
+        self._sync()
+
+        # Verify the optional page checksum: for both v1 and v2 the CRC covers
+        # exactly the on-disk body (v1's compressed blob; v2's uncompressed
+        # levels + compressed values), which is `comp`.
+        if ph.crc >= 0 and Int(Crc32.compute(comp)) != ph.crc:
+            raise CorruptError("parquet: page CRC-32 mismatch (corrupt data)")
+
+        if ph.type == PageType.DICTIONARY:
+            return Page[
+                origin_of(Self.o, origin_of(self.scratch))
+            ].dictionary_page(
+                self._body(comp, ph.uncompressed_page_size, native),
+                ph.dictionary_page_header.value().num_values,
+            )
+
+        if ph.type == PageType.DATA:
+            ref dph = ph.data_page_header.value()
+            self._advance(dph.num_values)
+            var codec = Compression(self.meta.codec)
+            # Only a PLAIN page's values are bytes a view can point at; a
+            # dictionary-index or delta page is decoded into fresh storage and
+            # is better served by the reused scratch.
+            if (
+                self.owns_bodies
+                and dph.encoding.is_plain()
+                and codec != Compression.UNCOMPRESSED
+            ):
+                var owned = codec.decompress_owned(
+                    native, comp, ph.uncompressed_page_size
+                )
+                # `body` borrows from `owned`, which the page carries with it;
+                # the origin is the reader's, as for a scratch body.
+                var body = rebind[
+                    Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+                ](owned.view[DType.uint8]().as_span())
+                return self._data_page_v1(
+                    body, dph.num_values, dph.encoding, owned^
+                )
+            return self._data_page_v1(
+                self._body(comp, ph.uncompressed_page_size, native),
+                dph.num_values,
+                dph.encoding,
+            )
+        elif ph.type == PageType.DATA_V2:
+            # v2 keeps the (uncompressed) levels ahead of the (maybe compressed)
+            # values; assemble both into scratch, the values decoded straight
+            # after the levels, then view it.
+            ref dph2 = ph.data_page_header_v2.value()
+            var lvl_len = (
+                dph2.repetition_levels_byte_length
+                + dph2.definition_levels_byte_length
+            )
+            self.scratch.clear()
+            self.scratch.extend(comp[0:lvl_len])
+            if dph2.is_compressed:
+                Compression(self.meta.codec).decompress_into(
+                    native,
+                    comp[lvl_len:],
+                    ph.uncompressed_page_size - lvl_len,
+                    self.scratch,
+                )
+            else:
+                self.scratch.extend(comp[lvl_len:])
+
+            var body = rebind[
+                Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+            ](Span(self.scratch))
+            var reps = List[Int32]()
+            var defs = List[Int32]()
+            if (
+                self.leaf.max_rep >= 1
+                and dph2.repetition_levels_byte_length > 0
+            ):
+                reps = List[Int32]()
+                _ = Rle.read_runs[DType.int32](
+                    body[0 : dph2.repetition_levels_byte_length],
+                    Int(bit_width(UInt64(self.leaf.max_rep))),
+                    dph2.num_values,
+                    reps,
+                )
+            var cursor = dph2.repetition_levels_byte_length
+            if (
+                self.leaf.max_def >= 1
+                and dph2.definition_levels_byte_length > 0
+            ):
+                defs = List[Int32]()
+                _ = Rle.read_runs[DType.int32](
+                    body[cursor : cursor + dph2.definition_levels_byte_length],
+                    Int(bit_width(UInt64(self.leaf.max_def))),
+                    dph2.num_values,
+                    defs,
+                )
+            # A required column has no levels to place a null with, and
+            # `PageHeader` already refused a count outside the page.
+            if len(defs) == 0 and dph2.num_nulls > 0:
+                raise CorruptError(
+                    t"parquet: a v2 page of {dph2.num_nulls} nulls and no"
+                    t" definition levels"
+                )
+            # Present values are the levels at max_def. The header's
+            # `num_nulls` is no substitute under a list: writers disagree on
+            # whether an empty or null list counts as a null.
+            var num_present = dph2.num_values
+            if len(defs) > 0:
+                num_present = 0
+                for d in defs:
+                    if Int(d) == self.leaf.max_def:
+                        num_present += 1
+            self._advance(dph2.num_values)
+            return Page(
+                body=body,
+                num_values=dph2.num_values,
+                num_present=num_present,
+                value_offset=lvl_len,
+                encoding=dph2.encoding,
+                rep_levels=reps^,
+                def_levels=defs^,
+            )
+        else:
+            raise NotImplementedError("parquet: unexpected page type")
+
+    def peek(self) raises -> Tuple[Bool, Int]:
+        """Inspect the next page without consuming it: `(is_dictionary,
+        num_values)`. Lets the caller decide, from the page's row count, whether
+        to decode, skip, or partially select it before paying the decode.
+
+        Answered from the `OffsetIndex` when there is one, which is the point of
+        having it: a page the caller then skips is never parsed at all.
+        """
+        if self._indexed():
+            return (False, self._indexed_rows())
+        var si, off = self._seg(self.pos)
+        var read = PageHeader.read_at(self.segs[si], off)
+        ref ph = read[0]
+        if ph.type == PageType.DICTIONARY:
+            return (True, ph.dictionary_page_header.value().num_values)
+        elif ph.type == PageType.DATA:
+            return (False, ph.data_page_header.value().num_values)
+        elif ph.type == PageType.DATA_V2:
+            return (False, ph.data_page_header_v2.value().num_values)
+        else:
+            raise NotImplementedError("parquet: unexpected page type")
+
+    def skip_next(mut self) raises -> Int:
+        """Advance past the next data page without decompressing or decoding it
+        (the row-skip fast path); return the number of rows skipped.
+
+        With an `OffsetIndex` this is a seek: the page's size and row count are
+        both recorded, so nothing of the page is read. Without one it costs a
+        header parse — the second for this page, since `peek` already paid for
+        one.
+        """
+        if self._indexed():
+            var nv = self._indexed_rows()
+            self._advance(nv)
+            self.page_i += 1
+            self._sync()
+            return nv
+
+        var si, off = self._seg(self.pos)
+        var read = PageHeader.read_at(self.segs[si], off)
+        ref ph = read[0]
+        self.pos += read[1] + ph.compressed_page_size
+        var nv: Int
+        if ph.type == PageType.DATA:
+            nv = ph.data_page_header.value().num_values
+        elif ph.type == PageType.DATA_V2:
+            nv = ph.data_page_header_v2.value().num_values
+        else:
+            raise NotImplementedError("parquet: skip_next on a non-data page")
+        self._advance(nv)
+        return nv
+
+
+def _v1_levels[
+    o: Origin[mut=False]
+](body: Span[UInt8, o], cursor: Int) raises CorruptError -> Span[UInt8, o]:
+    """The level stream at `cursor` of a v1 data page body: a 4-byte
+    little-endian length, then that many bytes of RLE."""
+    if cursor + 4 > len(body):
+        raise CorruptError("parquet: data page ends inside a level length")
+    var length = Int(LittleEndian.fixed[DType.uint32](body, cursor))
+    if length > len(body) - cursor - 4:
+        raise CorruptError(
+            t"parquet: data page levels of {length} bytes run past the page"
+            t" body"
+        )
+    return body[cursor + 4 : cursor + 4 + length]
+
+
+# ---------------------------------------------------------------------------
+# LeafBuilder — accumulates decoded pages into one Arrow array
+# ---------------------------------------------------------------------------
+
+
+def _finish_primitive(
+    var values: Buffer[mut=True],
+    var bitmap: Bitmap[mut=True],
+    wpos: Int,
+    null_count: Int,
+    var dtype: dt.DynType,
+) raises -> DynArray:
+    """Freeze a fixed-width builder's storage into an `DynArray` — the shared
+    tail of every primitive-backed leaf (numeric, temporal, decimal): one values
+    buffer, a validity bitmap only when a null occurred, length `wpos`."""
+    var buffers = List[Buffer[mut=False]]()
+    buffers.append(values^.to_immutable())
+    var bm: Optional[Bitmap[mut=False]] = None
+    if null_count > 0:
+        bm = bitmap^.to_immutable(length=wpos)
+    return DynArray.from_data(
+        ArrayData(
+            dtype=dtype^,
+            length=wpos,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm^,
+            buffers=buffers^,
+            children=List[ArrayData](),
+        )
+    )
+
+
+def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
+    """Decode a 12-byte INT96 timestamp to nanoseconds since the Unix epoch: the
+    first 8 bytes are the little-endian nanoseconds within the day, the last 4
+    the little-endian Julian day number. The shared flat/leveled INT96 decode.
+    """
+    var nanos_of_day = LittleEndian.fixed[DType.int64](span, off)
+    var julian_day = LittleEndian.fixed[DType.int32](span, off + 8)
+    return (
+        nanos_of_day
+        + Int64(Int(julian_day) - Epoch.JULIAN_DAY) * Epoch.NANOS_PER_DAY
+    )
+
+
+def _read_dictionary_codes(
+    values: Span[UInt8, _], count: Int, size: Int, mut out: List[Int32]
+) raises:
+    """Append a dictionary-encoded page's first `count` codes, refusing a page
+    whose codes name a value past the chunk's `size`-entry dictionary."""
+    var base = len(out)
+    Rle.read_codes[DType.int32](values, count, out)
+    # As unsigned, a negative code is past any dictionary too.
+    var top = UInt32(0)
+    for i in range(base, len(out)):
+        top = max(top, out[i].cast[DType.uint32]())
+    if len(out) > base and Int(top) >= size:
+        raise CorruptError("parquet: dictionary index out of range")
+
+
+def _check_fixed_dictionary(
+    body: Span[UInt8, _], count: Int, width: Int
+) raises:
+    """Refuse a dictionary page whose `count` values of `width` bytes do not
+    fit in its `body`, before they are read out of it."""
+    if count * width > len(body):
+        raise CorruptError(
+            "parquet: a dictionary page holds fewer values than it says"
+        )
+
+
+def _check_int96(span: Span[UInt8, _], count: Int) raises:
+    """Refuse a page or dictionary whose `count` INT96 values do not fit in
+    `span`, before `_int96_nanos` reads them."""
+    if count * 12 > len(span):
+        raise CorruptError(
+            "parquet: an INT96 page holds fewer values than it says"
+        )
+
+
+trait LeafBuilder(Deinitable, Movable):
+    """Accumulates the values of a column chunk, page by page, into an array."""
+
+    def consume(mut self, var page: Page) raises:
+        ...
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        """Append only the rows of `page` where `mask[row]` is set (page-relative
+        row index) — used for a data page partially covered by a row selection.
+        """
+        ...
+
+    def finish(deinit self) raises -> DynArray:
+        ...
+
+
+@no_inline
+def _short_page() raises:
+    """One raise for every leaf builder's check that a page holds the values
+    its header counts: the check is copied into each value type's builder,
+    the error once."""
+    raise CorruptError("parquet: a page holds fewer values than it says")
+
+
+struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
+    LeafBuilder
+):
+    """Fixed-width values decoded straight into a contiguous buffer.
+
+    `phys_dt` is the Parquet physical width read from the file, `store_dt` the
+    Arrow storage width. When they match (the common case, incl. temporal types)
+    a whole all-present PLAIN page is one bulk_copy; when they differ (dt.int8/16 stored
+    as physical INT32) each value is read wide and narrowed.
+    """
+
+    comptime SAME = Self.store_dt == Self.phys_dt
+
+    var dtype: dt.DynType
+    var max_def: Int
+    var num_rows: Int
+    var values: Buffer[mut=True]
+    var bitmap: Bitmap[mut=True]
+    var has_bitmap: Bool  # materialized only once a null actually appears
+    var dict: Encoded
+    """The chunk's dictionary, read once and shared by its pages."""
+    var wpos: Int
+    var null_count: Int
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.dtype = leaf.dtype.copy()
+        self.max_def = leaf.max_def
+        self.num_rows = num_rows
+        self.values = Buffer.alloc_uninit[Self.store_dt](num_rows)
+        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
+        self.has_bitmap = False
+        self.dict = Encoded()
+        self.wpos = 0
+        self.null_count = 0
+
+    def _ensure_bitmap(mut self):
+        """Allocate the validity bitmap on first null, backfilling all values
+        written so far as valid (they were present). No-op if already built."""
+        if not self.has_bitmap:
+            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
+            self.bitmap.set_range(0, self.wpos, True)
+            self.has_bitmap = True
+
+    def _scatter(
+        mut self,
+        page: Page,
+        present: BufferView[Self.store_dt, _],
+        runs: Optional[List[Tuple[Int, Int]]] = None,
+    ) raises:
+        """Place `page.num_present` contiguous decoded values into the output
+        buffer, honoring definition levels — one bulk_copy when the page is
+        all-present and fully selected, else a per-row scatter that materializes
+        the validity bitmap. With `runs`, only the rows they select are placed
+        (the page-boundary partial-page path). Every encoding funnels its decoded
+        present values through here."""
+        if not runs and page.all_present():
+            if page.num_present > len(present):
+                _short_page()
+            self.values.view[Self.store_dt](self.wpos).copy_from(
+                present, page.num_present
+            )
+            if self.has_bitmap:
+                self.bitmap.set_range(self.wpos, page.num_present, True)
+            self.wpos += page.num_present
+            return
+        self._ensure_bitmap()
+        if not runs:
+            # Every row kept: the levels mark the valid slots, and the
+            # present values spread over them in one pass.
+            var n = page.num_values
+            if page.num_present > len(present):
+                _short_page()
+            var bits = self.bitmap.view(self.wpos, n)
+            for row in range(n):
+                if Int(page.def_levels[row]) == self.max_def:
+                    bits.set(row)
+            var taken = self.values.view[Self.store_dt](self.wpos, n).expand(
+                self.bitmap.view(self.wpos, n), present
+            )
+            if taken != page.num_present:
+                _short_page()
+            self.null_count += n - taken
+            self.wpos += n
+            return
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            # Derived here, not captured: the view traces to `self.values`, so
+            # a captured copy would alias the mut capture of `self`.
+            var out = self.values.view[Self.store_dt]()
+            if selected:
+                if present_here:
+                    out.unsafe_set(self.wpos, present[vi])
+                    self.bitmap.set(self.wpos)
+                else:
+                    out.unsafe_set(self.wpos, 0)
+                    self.null_count += 1
+                self.wpos += 1
+
+        page.scatter(self.max_def, runs, place)
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            comptime if Self.SAME:
+                var stored = BufferView[Self.store_dt].from_bytes(page.body)
+                if page.num_values > len(stored):
+                    _short_page()
+                self.dict = Encoded(stored.as_span()[: page.num_values])
+            else:
+                self.dict = DictionaryValues.read_page[
+                    Self.store_dt, Self.phys_dt
+                ](page.body, page.num_values)
+            return
+
+        var vspan = page.values()
+        if page.is_plain() and Self.SAME:
+            # fast path: PLAIN stores only present values, contiguous and already
+            # the store width — scatter straight from the page (no copy).
+            self._scatter(page, BufferView[Self.store_dt].from_bytes(vspan))
+        elif page.is_dictionary() and page.all_present():
+            # fast path: fused index-decode + gather straight to the output.
+            DictionaryValues.decode_into[Self.store_dt](
+                vspan,
+                page.num_values,
+                self.dict,
+                self.values.view[Self.store_dt]()[
+                    self.wpos : self.wpos + page.num_values
+                ],
+            )
+            # A page before may have had nulls: these rows are valid.
+            if self.has_bitmap:
+                self.bitmap.set_range(self.wpos, page.num_values, True)
+            self.wpos += page.num_values
+        else:
+            # every other encoding (narrow PLAIN, nullable dict, DELTA,
+            # BYTE_STREAM_SPLIT) shares one decoder with the nested path.
+            var present = List[Scalar[Self.store_dt]](capacity=page.num_present)
+            page.encoding.decode_primitive[Self.store_dt, Self.phys_dt](
+                page.values(), page.num_present, self.dict, present
+            )
+            self._scatter(page, BufferView(Span(present)))
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        # Decode every present value through the general per-encoding decoder
+        # (PLAIN / dictionary / DELTA / BYTE_STREAM_SPLIT), then place only the
+        # rows `mask` selects. Partial pages are the page-boundary minority, so
+        # skipping `consume`'s fast paths here costs little.
+        var present = List[Scalar[Self.store_dt]](capacity=page.num_present)
+        page.encoding.decode_primitive[Self.store_dt, Self.phys_dt](
+            page.values(), page.num_present, self.dict, present
+        )
+        self._scatter(page, BufferView(Span(present)), runs.copy())
+
+    def finish(deinit self) raises -> DynArray:
+        return _finish_primitive(
+            self.values^,
+            self.bitmap^,
+            self.wpos,
+            self.null_count,
+            self.dtype^,
+        )
+
+
+struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
+    """Variable-length byte values into any byte-string builder: string or
+    binary, 32- or 64-bit offsets, or views. Bytes are appended verbatim, so
+    the same leaf serves UTF-8 and dt.binary."""
+
+    var builder: Self.B
+    var max_def: Int
+    var dict_body: List[UInt8]
+    var dict_off: List[Int]
+    var dict_len: List[Int]
+
+    def __init__(out self, var builder: Self.B, leaf: LeafColumn):
+        self.builder = builder^
+        self.max_def = leaf.max_def
+        self.dict_body = List[UInt8]()
+        self.dict_off = List[Int]()
+        self.dict_len = List[Int]()
+
+    def _append(mut self, span: Span[UInt8, _]) raises:
+        self.builder.append(StringSlice(unsafe_from_utf8=span))
+
+    def _scatter_values(
+        mut self,
+        page: Page,
+        offsets: List[Int32],
+        data: List[UInt8],
+        runs: Optional[List[Tuple[Int, Int]]] = None,
+    ) raises:
+        """Append the decoded present values honoring definition levels — the
+        shared placement path for the materializing encodings (dictionary,
+        DELTA_*). With `mask`, only the selected rows are appended."""
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if selected:
+                if present_here:
+                    self._append(
+                        Span(data)[Int(offsets[vi]) : Int(offsets[vi + 1])]
+                    )
+                else:
+                    self.builder.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def _place_plain(
+        mut self,
+        page: Page,
+        vspan: Span[UInt8, _],
+        runs: Optional[List[Tuple[Int, Int]]] = None,
+    ) raises:
+        """PLAIN in place: walk the length-prefixed present values, appending or
+        emitting nulls by def level. With `mask`, only selected rows are kept.
+        The byte cursor advances past every present value (even masked-out ones)
+        since PLAIN stores no offsets."""
+        var bpos = 0
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, mut bpos, imm}:
+            if present_here:
+                var start, n = PlainValues.locate(vspan, bpos)
+                if selected:
+                    self._append(vspan[start : start + n])
+            elif selected:
+                self.builder.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def _place_dictionary(
+        mut self,
+        page: Page,
+        vspan: Span[UInt8, _],
+        runs: Optional[List[Tuple[Int, Int]]] = None,
+    ) raises:
+        """Dictionary indices, each value copied straight out of the
+        dictionary page's bytes -- once, into storage sized up front."""
+        var indices = List[Int32]()
+        _read_dictionary_codes(
+            vspan, page.num_present, len(self.dict_len), indices
+        )
+        var total = 0
+        for i in range(len(indices)):
+            total += self.dict_len[Int(indices[i])]
+        self.builder.reserve(page.num_values)
+        self.builder.reserve_bytes(total)
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if selected:
+                if present_here:
+                    var idx = Int(indices[vi])
+                    var start = self.dict_off[idx]
+                    self.builder.append(
+                        StringSlice(
+                            unsafe_from_utf8=Span(self.dict_body)[
+                                start : start + self.dict_len[idx]
+                            ]
+                        )
+                    )
+                else:
+                    self.builder.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            DictionaryValues.decode_page_bytes(
+                page.body,
+                page.num_values,
+                self.dict_body,
+                self.dict_off,
+                self.dict_len,
+            )
+            return
+
+        var vspan = page.values()
+        if page.is_plain():
+            # The page's bytes bound its values' (each carries a 4-byte length
+            # on top), so the storage is sized once rather than doubled.
+            self.builder.reserve(page.num_values)
+            self.builder.reserve_bytes(len(vspan))
+            self._place_plain(page, vspan)
+        elif page.encoding.is_dictionary():
+            self._place_dictionary(page, vspan)
+        else:
+            # dictionary and DELTA_* share one decoder with the nested path.
+            var offsets: List[Int32] = [0]
+            var data = List[UInt8]()
+            page.encoding.decode_bytes(
+                page.values(),
+                page.num_present,
+                offsets,
+                data,
+            )
+            self._scatter_values(page, offsets, data)
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        var vspan = page.values()
+        if page.is_plain():
+            self._place_plain(page, vspan, runs.copy())
+        elif page.encoding.is_dictionary():
+            self._place_dictionary(page, vspan, runs.copy())
+        else:
+            var offsets: List[Int32] = [0]
+            var data = List[UInt8]()
+            page.encoding.decode_bytes(
+                page.values(),
+                page.num_present,
+                offsets,
+                data,
+            )
+            self._scatter_values(page, offsets, data, runs.copy())
+
+    def finish(deinit self) raises -> DynArray:
+        var b = self.builder^
+        var out: DynArray = b.finish()
+        return out^
+
+
+struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
+    """A flat byte-array leaf decoded straight into views, no value copied.
+
+    A dictionary page becomes one data buffer and every row decoded from it a
+    16-byte view into that buffer, so a dictionary-encoded column costs a view
+    per row whatever its values' lengths. A PLAIN page is the data buffer its
+    rows point into: the page's own decompressed body when the reader gave it
+    one (`PageReader.owns_bodies`), else its value bytes taken in one copy,
+    since a scratch body is overwritten by the next page. DELTA_* pages
+    reconstruct their values and are appended as `ByteArrayLeafBuilder` does.
+
+    Either kind of page becomes a data buffer at the first *selected* row too
+    long to inline, and not before: a row that fits is copied into its view,
+    so a page whose selected rows all fit is never held.
+    """
+
+    comptime INLINE_SIZE = BinaryViewLikeArray[Self.T].INLINE_SIZE
+
+    var builder: BinaryViewLikeBuilder[Self.T]
+    var max_def: Int
+    var dict_buffer: Int32
+    """The dictionary's index among the builder's data buffers once a row
+    has pointed into it, else -1."""
+    var dict_bytes: Buffer[mut=False]
+    var dict_off: List[Int]
+    var dict_len: List[Int]
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.builder = BinaryViewLikeBuilder[Self.T](num_rows)
+        self.max_def = leaf.max_def
+        self.dict_buffer = -1
+        self.dict_bytes = Buffer.alloc_zeroed[DType.uint8](0).to_immutable()
+        self.dict_off = List[Int]()
+        self.dict_len = List[Int]()
+
+    @staticmethod
+    def _owned(bytes: Span[UInt8, _]) -> Buffer[mut=False]:
+        var buffer = Buffer.alloc_uninit[DType.uint8](len(bytes))
+        buffer.view[DType.uint8](0, len(bytes)).copy_from(bytes)
+        return buffer^.to_immutable()
+
+    def _consume(
+        mut self, var page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
+        if page.dictionary:
+            # The dictionary's bytes, out of the page once per chunk.
+            self.dict_bytes = Self._owned(page.body)
+            self.dict_buffer = -1
+            DictionaryValues.byte_offsets(
+                page.body, page.num_values, self.dict_off, self.dict_len
+            )
+            return
+
+        self.builder.reserve(page.num_values)
+        var vspan = page.values()
+        if page.is_plain():
+            # The page becomes a data buffer at the first value too long to
+            # inline. `base` is where the values start inside that buffer.
+            var owner = page.owner.copy()
+            var value_offset = page.value_offset
+            var at = Int32(-1)
+            var base = 0
+            var bpos = 0
+
+            def place_plain(
+                present_here: Bool, selected: Bool, vi: Int
+            ) raises {mut self, mut at, mut base, mut bpos, imm}:
+                if present_here:
+                    var start, n = PlainValues.locate(vspan, bpos)
+                    if selected:
+                        if at < 0 and n > Self.INLINE_SIZE:
+                            if owner:
+                                at = self.builder.adopt(owner.value())
+                                base = value_offset
+                            else:
+                                at = self.builder.adopt(Self._owned(vspan))
+                        self.builder.unsafe_append_in(
+                            StringSlice(
+                                unsafe_from_utf8=vspan[start : start + n]
+                            ),
+                            at,
+                            Int32(base + start),
+                        )
+                elif selected:
+                    self.builder.unsafe_append_null()
+
+            page.scatter(self.max_def, runs, place_plain)
+        elif page.encoding.is_dictionary():
+            var indices = List[Int32]()
+            _read_dictionary_codes(
+                vspan, page.num_present, len(self.dict_len), indices
+            )
+
+            def place_dict(
+                present_here: Bool, selected: Bool, vi: Int
+            ) raises {mut self, imm}:
+                if selected:
+                    if present_here:
+                        var idx = Int(indices[vi])
+                        var start = self.dict_off[idx]
+                        var n = self.dict_len[idx]
+                        if self.dict_buffer < 0 and n > Self.INLINE_SIZE:
+                            self.dict_buffer = self.builder.adopt(
+                                self.dict_bytes
+                            )
+                        self.builder.unsafe_append_in(
+                            self.dict_bytes.slice(start, n).to_string_slice(),
+                            self.dict_buffer,
+                            Int32(start),
+                        )
+                    else:
+                        self.builder.unsafe_append_null()
+
+            page.scatter(self.max_def, runs, place_dict)
+        else:
+            var offsets: List[Int32] = [0]
+            var data = List[UInt8]()
+            page.encoding.decode_bytes(
+                vspan,
+                page.num_present,
+                offsets,
+                data,
+            )
+
+            def place_copied(
+                present_here: Bool, selected: Bool, vi: Int
+            ) raises {mut self, imm}:
+                if selected:
+                    if present_here:
+                        self.builder.append(
+                            StringSlice(
+                                unsafe_from_utf8=Span(data)[
+                                    Int(offsets[vi]) : Int(offsets[vi + 1])
+                                ]
+                            )
+                        )
+                    else:
+                        self.builder.append_null()
+
+            page.scatter(self.max_def, runs, place_copied)
+
+    def consume(mut self, var page: Page) raises:
+        self._consume(page^, None)
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._consume(page^, runs.copy())
+
+    def finish(deinit self) raises -> DynArray:
+        var b = self.builder^
+        var out: DynArray = b.finish()
+        return out^
+
+
+struct _FixedWidthAcc[native: DType](Movable):
+    """Shared output bookkeeping for the per-value fixed-width leaf builders
+    (decimal, INT96): a `native`-typed values buffer, a validity bitmap
+    materialized lazily on the first null (backfilling prior values as valid), a
+    write cursor, and the null count. The builders own the per-page decode and
+    funnel each decoded value through `append_present` / `append_null`."""
+
+    var num_rows: Int
+    var values: Buffer[mut=True]
+    var bitmap: Bitmap[mut=True]
+    var has_bitmap: Bool
+    var wpos: Int
+    var null_count: Int
+
+    def __init__(out self, num_rows: Int):
+        self.num_rows = num_rows
+        self.values = Buffer.alloc_uninit[Self.native](num_rows)
+        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
+        self.has_bitmap = False
+        self.wpos = 0
+        self.null_count = 0
+
+    def ensure_bitmap(mut self):
+        if not self.has_bitmap:
+            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
+            self.bitmap.set_range(0, self.wpos, True)
+            self.has_bitmap = True
+
+    def append_present(mut self, v: Scalar[Self.native]):
+        self.values.unsafe_set[Self.native](self.wpos, v)
+        if self.has_bitmap:
+            self.bitmap.set(self.wpos)
+        self.wpos += 1
+
+    def append_null(mut self):
+        self.ensure_bitmap()
+        self.values.unsafe_set[Self.native](self.wpos, Scalar[Self.native](0))
+        self.null_count += 1
+        self.wpos += 1
+
+    def finish(deinit self, var dtype: dt.DynType) raises -> DynArray:
+        return _finish_primitive(
+            self.values^, self.bitmap^, self.wpos, self.null_count, dtype^
+        )
+
+
+struct DecimalLeafBuilder[native: DType](LeafBuilder):
+    """FIXED_LEN_BYTE_ARRAY decimals (decimal128 -> int128, decimal256 -> int256).
+
+    Each value is big-endian two's-complement of the schema's `type_length`
+    bytes — which PyArrow minimises per precision, so it may be narrower than the
+    16/32-byte storage — sign-extended into the native width. PLAIN and
+    RLE_DICTIONARY only, the encodings PyArrow emits for decimals."""
+
+    comptime FULL = size_of[Scalar[Self.native]]()
+
+    var dtype: dt.DynType
+    var max_def: Int
+    var width: Int
+    var acc: _FixedWidthAcc[Self.native]
+    var dict: List[Scalar[Self.native]]
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.dtype = leaf.dtype.copy()
+        self.max_def = leaf.max_def
+        self.width = leaf.type_length
+        self.acc = _FixedWidthAcc[Self.native](num_rows)
+        self.dict = List[Scalar[Self.native]]()
+
+    def _decode_be(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.native]:
+        """Big-endian, sign-extended from `width` bytes to the native width."""
+        return BigEndian.signed[Self.native](span[off : off + self.width])
+
+    def _place(
+        mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
+        var vspan = page.values()
+        var idx = List[Int32]()
+        var is_dict = page.is_dictionary()
+        # DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT are decoded up-front into a
+        # contiguous width-byte buffer; PLAIN reads `vspan` in place (no copy).
+        var decoded = List[UInt8]()
+        var use_decoded = False
+        if is_dict:
+            idx = List[Int32]()
+            _read_dictionary_codes(vspan, page.num_present, len(self.dict), idx)
+        elif not page.is_plain():
+            decoded = page.encoding.decode_flba(
+                vspan, page.num_present, self.width
+            )
+            use_decoded = True
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if selected:
+                if present_here:
+                    if is_dict:
+                        self.acc.append_present(self.dict[Int(idx[vi])])
+                    elif use_decoded:
+                        self.acc.append_present(
+                            self._decode_be(Span(decoded), vi * self.width)
+                        )
+                    else:
+                        self.acc.append_present(
+                            self._decode_be(vspan, vi * self.width)
+                        )
+                else:
+                    self.acc.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            var span = page.body
+            _check_fixed_dictionary(span, page.num_values, self.width)
+            for i in range(page.num_values):
+                self.dict.append(self._decode_be(span, i * self.width))
+        else:
+            self._place(page, None)
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._place(page, runs.copy())
+
+    def finish(deinit self) raises -> DynArray:
+        return self.acc^.finish(self.dtype^)
+
+
+struct Int96LeafBuilder(LeafBuilder):
+    """Legacy INT96 timestamps (12 bytes each) -> `int64` nanoseconds. PLAIN and
+    RLE_DICTIONARY, the encodings INT96 ever uses. Mirrors `DecimalLeafBuilder`,
+    decoding each fixed-width value with `_int96_nanos` instead of big-endian.
+    """
+
+    var dtype: dt.DynType  # timestamp(ns)
+    var max_def: Int
+    var acc: _FixedWidthAcc[DType.int64]
+    var dict: List[Int64]
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.dtype = leaf.dtype.copy()
+        self.max_def = leaf.max_def
+        self.acc = _FixedWidthAcc[DType.int64](num_rows)
+        self.dict = List[Int64]()
+
+    def _place(
+        mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
+        var vspan = page.values()
+        var idx = List[Int32]()
+        var is_dict = page.is_dictionary()
+        if is_dict:
+            idx = List[Int32]()
+            _read_dictionary_codes(vspan, page.num_present, len(self.dict), idx)
+        elif page.is_plain():
+            _check_int96(vspan, page.num_present)
+        else:
+            raise NotImplementedError("parquet: unsupported INT96 encoding")
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if selected:
+                if present_here:
+                    if is_dict:
+                        self.acc.append_present(self.dict[Int(idx[vi])])
+                    else:
+                        self.acc.append_present(_int96_nanos(vspan, vi * 12))
+                else:
+                    self.acc.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            var span = page.body
+            _check_int96(span, page.num_values)
+            for i in range(page.num_values):
+                self.dict.append(_int96_nanos(span, i * 12))
+        else:
+            self._place(page, None)
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._place(page, runs.copy())
+
+    def finish(deinit self) raises -> DynArray:
+        return self.acc^.finish(self.dtype^)
+
+
+struct FixedSizeBinaryLeafBuilder(LeafBuilder):
+    """FIXED_LEN_BYTE_ARRAY raw bytes -> FixedSizeBinaryArray. PLAIN and
+    RLE_DICTIONARY, the encodings PyArrow emits."""
+
+    var builder: FixedSizeBinaryBuilder
+    var max_def: Int
+    var width: Int
+    var dict_body: List[UInt8]  # concatenated dict values, `width` bytes each
+    var dict_count: Int
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.width = leaf.type_length
+        self.builder = FixedSizeBinaryBuilder(self.width, num_rows)
+        self.max_def = leaf.max_def
+        self.dict_body = List[UInt8]()
+        self.dict_count = 0
+
+    def _place(
+        mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
+    ) raises:
+        var vspan = page.values()
+        var idx = List[Int32]()
+        var is_dict = page.is_dictionary()
+        # DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT are decoded up-front into a
+        # contiguous width-byte buffer; PLAIN reads `vspan` in place (no copy).
+        var decoded = List[UInt8]()
+        var use_decoded = False
+        if is_dict:
+            idx = List[Int32]()
+            _read_dictionary_codes(
+                vspan, page.num_present, self.dict_count, idx
+            )
+        elif not page.is_plain():
+            decoded = page.encoding.decode_flba(
+                vspan, page.num_present, self.width
+            )
+            use_decoded = True
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if selected:
+                if present_here:
+                    if is_dict:
+                        var o = Int(idx[vi]) * self.width
+                        self.builder.append(
+                            Span(self.dict_body)[o : o + self.width]
+                        )
+                    elif use_decoded:
+                        var o = vi * self.width
+                        self.builder.append(Span(decoded)[o : o + self.width])
+                    else:
+                        var o = vi * self.width
+                        self.builder.append(vspan[o : o + self.width])
+                else:
+                    self.builder.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            _check_fixed_dictionary(page.body, page.num_values, self.width)
+            self.dict_body = List[UInt8]()
+            self.dict_body.extend(page.body)
+            self.dict_count = page.num_values
+        else:
+            self._place(page, None)
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        self._place(page, runs.copy())
+
+    def finish(deinit self) raises -> DynArray:
+        var b = self.builder^
+        var out: DynArray = b.finish()
+        return out^
+
+
+struct BoolLeafBuilder(LeafBuilder):
+    """Bit-packed PLAIN booleans."""
+
+    var builder: BoolBuilder
+    var max_def: Int
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.builder = BoolBuilder(num_rows)
+        self.max_def = leaf.max_def
+
+    def _place(
+        mut self,
+        page: Page,
+        vspan: Span[UInt8, _],
+        runs: Optional[List[Tuple[Int, Int]]] = None,
+    ) raises:
+        """Unpack the bit-packed present booleans honoring def levels; with
+        `mask`, only selected rows are appended. `vi` is the present-value index,
+        which for a bit-packed PLAIN page is exactly the bit offset."""
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if present_here:
+                var byte = vspan[vi >> 3]
+                var b = (byte >> UInt8(vi & 7)) & 1
+                if selected:
+                    self.builder.append(b == 1)
+            elif selected:
+                self.builder.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def _place_values(
+        mut self,
+        page: Page,
+        values: List[Bool],
+        runs: Optional[List[Tuple[Int, Int]]] = None,
+    ) raises:
+        """Scatter already-decoded present booleans (the RLE path) honoring def
+        levels; with `runs`, only selected rows are appended."""
+
+        def place(
+            present_here: Bool, selected: Bool, vi: Int
+        ) raises {mut self, imm}:
+            if selected:
+                if present_here:
+                    self.builder.append(values[vi])
+                else:
+                    self.builder.append_null()
+
+        page.scatter(self.max_def, runs, place)
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            raise NotImplementedError(
+                "parquet: dictionary-encoded bool not supported"
+            )
+        if page.is_plain():
+            self._place(page, page.values())
+        else:
+            # RLE booleans (arrow's DataPage v2) share the nested decoder.
+            self._place_values(
+                page, page.encoding.decode_bool(page.values(), page.num_present)
+            )
+
+    def consume_selected(
+        mut self, var page: Page, runs: List[Tuple[Int, Int]]
+    ) raises:
+        if page.is_plain():
+            self._place(page, page.values(), runs.copy())
+        else:
+            self._place_values(
+                page,
+                page.encoding.decode_bool(page.values(), page.num_present),
+                runs.copy(),
+            )
+
+    def finish(deinit self) raises -> DynArray:
+        var b = self.builder^
+        var out: DynArray = b.finish()
+        return out^
+
+
+# ---------------------------------------------------------------------------
+# LeafSet — which leaf kinds a decode path is compiled for
+# ---------------------------------------------------------------------------
+
+
+struct LeafSet(ImplicitlyCopyable, Movable):
+    """The set of Arrow leaf kinds a `ColumnReader` is compiled to decode.
+
+    `ColumnReader._dispatch` is a ladder of ~20 arms, each instantiating its own
+    `LeafBuilder` and decode loop, and it is instantiated twice (flat and
+    leveled). Because the leaf's dtype is a *runtime* value, every arm is
+    reachable — so a scan that only ever reads `int64` and `string` still links
+    the builders for bool, binary, every other integer width, both float widths,
+    the temporal types and all four decimals. Measured on the `query_scan` gate:
+    24 `PrimitiveLeafBuilder` instantiations for a two-type schema, and a
+    Parquet scan roughly doubling a minimal AOT binary (Q4.6).
+
+    An AOT query knows its schema when it is compiled. `LeafSet` is how it says
+    so: each bit enables one arm, and `comptime if` drops the rest before they
+    are ever instantiated. `all()` is the default and compiles the full ladder,
+    so the dynamic lane is unchanged.
+
+    A file containing a leaf the set excludes raises at decode time rather than
+    decoding it wrongly — the error names the missing kind and the parameter.
+    """
+
+    var mask: UInt32
+
+    def __init__(out self, mask: UInt32):
+        self.mask = mask
+
+    def __or__(self, other: Self) -> Self:
+        return Self(self.mask | other.mask)
+
+    def has(self, other: Self) -> Bool:
+        """Whether every kind in `other` is enabled here."""
+        return (self.mask & other.mask) == other.mask
+
+    @staticmethod
+    def all() -> Self:
+        return Self(0xFFFFFFFF)
+
+
+# One bit per `_dispatch` arm. Narrow ints share INT32 storage in Parquet but
+# each is its own arm (and its own `PrimitiveLeafBuilder`), so each gets a bit.
+comptime LEAF_INT8 = LeafSet(1 << 0)
+comptime LEAF_INT16 = LeafSet(1 << 1)
+comptime LEAF_INT32 = LeafSet(1 << 2)
+comptime LEAF_INT64 = LeafSet(1 << 3)
+comptime LEAF_UINT8 = LeafSet(1 << 4)
+comptime LEAF_UINT16 = LeafSet(1 << 5)
+comptime LEAF_UINT32 = LeafSet(1 << 6)
+comptime LEAF_UINT64 = LeafSet(1 << 7)
+comptime LEAF_FLOAT16 = LeafSet(1 << 8)
+comptime LEAF_FLOAT32 = LeafSet(1 << 9)
+comptime LEAF_FLOAT64 = LeafSet(1 << 10)
+comptime LEAF_BOOL = LeafSet(1 << 11)
+comptime LEAF_STRING = LeafSet(1 << 12)
+comptime LEAF_LARGE_STRING = LeafSet(1 << 13)
+comptime LEAF_BINARY = LeafSet(1 << 14)
+comptime LEAF_LARGE_BINARY = LeafSet(1 << 15)
+comptime LEAF_TEMPORAL32 = LeafSet(1 << 16)
+comptime LEAF_TEMPORAL64 = LeafSet(1 << 17)
+comptime LEAF_DECIMAL32 = LeafSet(1 << 18)
+comptime LEAF_DECIMAL64 = LeafSet(1 << 19)
+comptime LEAF_DECIMAL128 = LeafSet(1 << 20)
+comptime LEAF_DECIMAL256 = LeafSet(1 << 21)
+comptime LEAF_FIXED_SIZE_BINARY = LeafSet(1 << 22)
+comptime LEAF_INT96 = LeafSet(1 << 23)
+comptime LEAF_STRING_VIEW = LeafSet(1 << 24)
+comptime LEAF_BINARY_VIEW = LeafSet(1 << 25)
+
+
+def leaf_of[T: DataType]() -> LeafSet:
+    """The bit for `T` — say which **types** a read will see, not which bits.
+
+    `LeafSet.all()` is the runtime-dispatching default; this is how a caller
+    that knows its schema at compile time narrows it without hand-picking
+    constants:
+
+        read_table[leaf_of[Int64Type]() | leaf_of[StringType]()](path)
+
+    The dtype is already a comptime parameter throughout the fused lane —
+    `col("a", int64)` is a `NumericColumn[Int64Type]` — so this is the move the
+    kernels already make: resolve the type at elaboration and let the branches
+    that cannot be reached fold away.
+
+    One generic, not one overload per family. `downcast[T, Trait]` is a comptime
+    **type alias**, so `downcast[T, Trait].native` reads the member with no
+    bound on `Trait` at all; only `downcast[T, Trait]()`, which *constructs* a
+    value, needs `Defaultable`. `TemporalType`/`DecimalType` are not
+    `Defaultable`, which is why an earlier version of this split into four
+    overloads — that reason was wrong.
+
+    Order matters: temporal and decimal are `PrimitiveType` but not
+    `NumericType`, and `StringLikeType` refines `BinaryLikeType`, so the
+    narrower family has to be tested first in each pair.
+    """
+    comptime if conforms_to(T, TemporalType):
+        comptime if downcast[T, TemporalType].native == DType.int32:
+            return LEAF_TEMPORAL32
+        else:
+            return LEAF_TEMPORAL64
+    elif conforms_to(T, DecimalType):
+        comptime native = downcast[T, DecimalType].native
+        comptime if native == DType.int32:
+            return LEAF_DECIMAL32
+        elif native == DType.int64:
+            return LEAF_DECIMAL64
+        elif native == DType.int128:
+            return LEAF_DECIMAL128
+        else:
+            return LEAF_DECIMAL256
+    elif conforms_to(T, StringViewLikeType):
+        return LEAF_STRING_VIEW
+    elif conforms_to(T, BinaryViewLikeType):
+        return LEAF_BINARY_VIEW
+    elif conforms_to(T, StringLikeType):
+        comptime if downcast[T, StringLikeType].offset == DType.int32:
+            return LEAF_STRING
+        else:
+            return LEAF_LARGE_STRING
+    elif conforms_to(T, BinaryLikeType):
+        comptime if downcast[T, BinaryLikeType].offset == DType.int32:
+            return LEAF_BINARY
+        else:
+            return LEAF_LARGE_BINARY
+    elif conforms_to(T, NumericType):
+        comptime native = downcast[T, NumericType].native
+        comptime if native == DType.bool:
+            return LEAF_BOOL
+        elif native == DType.int8:
+            return LEAF_INT8
+        elif native == DType.int16:
+            return LEAF_INT16
+        elif native == DType.int32:
+            return LEAF_INT32
+        elif native == DType.int64:
+            return LEAF_INT64
+        elif native == DType.uint8:
+            return LEAF_UINT8
+        elif native == DType.uint16:
+            return LEAF_UINT16
+        elif native == DType.uint32:
+            return LEAF_UINT32
+        elif native == DType.uint64:
+            return LEAF_UINT64
+        elif native == DType.float16:
+            return LEAF_FLOAT16
+        elif native == DType.float32:
+            return LEAF_FLOAT32
+        else:
+            return LEAF_FLOAT64
+    elif conforms_to(T, PrimitiveType):
+        # bool and fixed-size binary: primitives outside the numeric family
+        comptime if downcast[T, PrimitiveType].native == DType.bool:
+            return LEAF_BOOL
+        else:
+            return LEAF_FIXED_SIZE_BINARY
+    else:
+        return LEAF_FIXED_SIZE_BINARY
+
+
+trait LeveledSink(Movable):
+    """The four steps a leveled (list-element) leaf decode needs from its leaf.
+
+    `_drive_leveled` used to take these as four closures. They cannot be
+    closures: two closure arguments to one call may not both capture mutably,
+    and all four work on the same builder. Threading the state through as a
+    parameter is what a trait already is — and unlike a state struct passed to
+    four separate closures, it does not make the callbacks parametric over the
+    leaf's dtype, which is the second limit that shape runs into.
+
+    Monomorphised per conformer, so each call is direct and inlinable exactly as
+    the closures were.
+    """
+
+    def handle_dict(mut self, pg: Page) raises:
+        """Fold a dictionary page into the sink's dictionary."""
+        ...
+
+    def decode_present(mut self, pg: Page) raises:
+        """Decode a data page's present values into the sink."""
+        ...
+
+    def place_present(mut self, vi: Int) raises:
+        """Append present value `vi` to the sink's builder."""
+        ...
+
+    def place_null(mut self) raises:
+        """Append a null to the sink's builder."""
+        ...
+
+
+@fieldwise_init
+struct _PrimitiveSink[T: NumericType, phys: DType](LeveledSink, Movable):
+    var dict: Encoded
+    var present: List[Scalar[Self.T.native]]
+    var builder: PrimitiveBuilder[Self.T]
+
+    def handle_dict(mut self, pg: Page) raises:
+        self.dict = DictionaryValues.read_page[Self.T.native, Self.phys](
+            pg.body, pg.num_values
+        )
+
+    def decode_present(mut self, pg: Page) raises:
+        self.present.clear()
+        pg.encoding.decode_primitive[Self.T.native, Self.phys](
+            pg.values(), pg.num_present, self.dict, self.present
+        )
+
+    def place_present(mut self, vi: Int) raises:
+        self.builder.append(self.present[vi])
+
+    def place_null(mut self) raises:
+        self.builder.append_null()
+
+
+@fieldwise_init
+struct _BytesSink[B: BytesBuilder](LeveledSink, Movable):
+    var dict_body: List[UInt8]
+    var dict_off: List[Int]
+    var dict_len: List[Int]
+    var value_offsets: List[Int32]
+    var value_data: List[UInt8]
+    var indices: List[Int32]
+    """A dictionary-encoded page's indices; the values are read out of the
+    dictionary as they are placed, never materialised per row."""
+    var builder: Self.B
+
+    def handle_dict(mut self, pg: Page) raises:
+        DictionaryValues.decode_page_bytes(
+            pg.body, pg.num_values, self.dict_body, self.dict_off, self.dict_len
+        )
+
+    def decode_present(mut self, pg: Page) raises:
+        self.value_offsets.clear()
+        self.value_offsets.append(0)
+        self.value_data.clear()
+        self.indices.clear()
+        var vspan = pg.values()
+        if pg.encoding.is_dictionary():
+            self.indices = List[Int32]()
+            _read_dictionary_codes(
+                vspan, pg.num_present, len(self.dict_len), self.indices
+            )
+        else:
+            pg.encoding.decode_bytes(
+                vspan,
+                pg.num_present,
+                self.value_offsets,
+                self.value_data,
+            )
+
+    def place_present(mut self, vi: Int) raises:
+        if len(self.indices) > 0:
+            var idx = Int(self.indices[vi])
+            var start = self.dict_off[idx]
+            self.builder.append(
+                StringSlice(
+                    unsafe_from_utf8=Span(self.dict_body)[
+                        start : start + self.dict_len[idx]
+                    ]
+                )
+            )
+        else:
+            self.builder.append(
+                StringSlice(
+                    unsafe_from_utf8=Span(self.value_data)[
+                        Int(self.value_offsets[vi]) : Int(
+                            self.value_offsets[vi + 1]
+                        )
+                    ]
+                )
+            )
+
+    def place_null(mut self) raises:
+        self.builder.append_null()
+
+
+@fieldwise_init
+struct _BoolSink(LeveledSink, Movable):
+    var present: List[Bool]
+    var builder: BoolBuilder
+
+    def handle_dict(mut self, pg: Page) raises:
+        raise NotImplementedError(
+            "parquet: dictionary-encoded bool not supported"
+        )
+
+    def decode_present(mut self, pg: Page) raises:
+        self.present.clear()
+        self.present.extend(
+            pg.encoding.decode_bool(pg.values(), pg.num_present)
+        )
+
+    def place_present(mut self, vi: Int) raises:
+        self.builder.append(self.present[vi])
+
+    def place_null(mut self) raises:
+        self.builder.append_null()
+
+
+@fieldwise_init
+struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
+    var width: Int
+    var dict: List[Scalar[Self.T.native]]
+    var present: List[Scalar[Self.T.native]]
+    var builder: PrimitiveBuilder[Self.T]
+
+    def handle_dict(mut self, pg: Page) raises:
+        _check_fixed_dictionary(pg.body, pg.num_values, self.width)
+        for i in range(pg.num_values):
+            self.dict.append(
+                BigEndian.signed[Self.T.native](
+                    pg.body[i * self.width : i * self.width + self.width]
+                )
+            )
+
+    def decode_present(mut self, pg: Page) raises:
+        self.present.clear()
+        var vspan = pg.values()
+        if pg.is_dictionary():
+            var idx = List[Int32]()
+            _read_dictionary_codes(vspan, pg.num_present, len(self.dict), idx)
+            for i in range(pg.num_present):
+                self.present.append(self.dict[Int(idx[i])])
+        elif pg.is_plain():
+            for i in range(pg.num_present):
+                self.present.append(
+                    BigEndian.signed[Self.T.native](
+                        vspan[i * self.width : i * self.width + self.width]
+                    )
+                )
+        else:
+            var bytes = pg.encoding.decode_flba(
+                vspan, pg.num_present, self.width
+            )
+            for i in range(pg.num_present):
+                self.present.append(
+                    BigEndian.signed[Self.T.native](
+                        Span(bytes)[
+                            i * self.width : i * self.width + self.width
+                        ]
+                    )
+                )
+
+    def place_present(mut self, vi: Int) raises:
+        self.builder.append(self.present[vi])
+
+    def place_null(mut self) raises:
+        self.builder.append_null()
+
+
+@fieldwise_init
+struct _FsbSink(LeveledSink, Movable):
+    var width: Int
+    var dict_body: List[UInt8]
+    var dict_count: Int
+    var present: List[List[UInt8]]
+    var builder: FixedSizeBinaryBuilder
+
+    def handle_dict(mut self, pg: Page) raises:
+        _check_fixed_dictionary(pg.body, pg.num_values, self.width)
+        self.dict_body.clear()
+        self.dict_body.extend(pg.body)
+        self.dict_count = pg.num_values
+
+    def decode_present(mut self, pg: Page) raises:
+        self.present.clear()
+        var vspan = pg.values()
+        if pg.is_dictionary():
+            var idx = List[Int32]()
+            _read_dictionary_codes(vspan, pg.num_present, self.dict_count, idx)
+            for i in range(pg.num_present):
+                var o = Int(idx[i]) * self.width
+                self.present.append(
+                    List[UInt8](Span(self.dict_body)[o : o + self.width])
+                )
+        elif pg.is_plain():
+            for i in range(pg.num_present):
+                var o = i * self.width
+                self.present.append(List[UInt8](vspan[o : o + self.width]))
+        else:
+            var bytes = pg.encoding.decode_flba(
+                vspan, pg.num_present, self.width
+            )
+            for i in range(pg.num_present):
+                var o = i * self.width
+                self.present.append(
+                    List[UInt8](Span(bytes)[o : o + self.width])
+                )
+
+    def place_present(mut self, vi: Int) raises:
+        self.builder.append(Span(self.present[vi]))
+
+    def place_null(mut self) raises:
+        self.builder.append_null()
+
+
+@fieldwise_init
+struct _Int96Sink(LeveledSink, Movable):
+    var dict: List[Int64]
+    var present: List[Int64]
+    var builder: PrimitiveBuilder[dt.Int64Type]
+
+    def handle_dict(mut self, pg: Page) raises:
+        _check_int96(pg.body, pg.num_values)
+        for i in range(pg.num_values):
+            self.dict.append(_int96_nanos(pg.body, i * 12))
+
+    def decode_present(mut self, pg: Page) raises:
+        self.present.clear()
+        var vspan = pg.values()
+        if pg.is_dictionary():
+            var idx = List[Int32]()
+            _read_dictionary_codes(vspan, pg.num_present, len(self.dict), idx)
+            for i in range(pg.num_present):
+                self.present.append(self.dict[Int(idx[i])])
+        elif pg.is_plain():
+            _check_int96(vspan, pg.num_present)
+            for i in range(pg.num_present):
+                self.present.append(_int96_nanos(vspan, i * 12))
+        else:
+            raise NotImplementedError("parquet: unsupported INT96 encoding")
+
+    def place_present(mut self, vi: Int) raises:
+        self.builder.append(self.present[vi])
+
+    def place_null(mut self) raises:
+        self.builder.append_null()
+
+
+# ---------------------------------------------------------------------------
+# ColumnReader — decode one column chunk into a DecodedLeaf
+# ---------------------------------------------------------------------------
+
+
+struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
+    Movable
+):
+    """Decode one column chunk. `decode` picks the path from the leaf's max
+    repetition: a flat leaf (`max_rep == 0`) fills a fixed-size `LeafBuilder`
+    with the PLAIN-bulk_copy / fused-gather fast paths; a repeated (list-element)
+    leaf grows a builder while accumulating the Dremel rep/def levels the
+    assembler folds into list offsets. Both share the per-encoding value
+    decoders on `Encoding`, so every encoding works on either path."""
+
+    var pages: PageReader[Self.o]
+    var num_rows: Int
+    var leveled: Bool
+    var def_out: List[Int32]  # per-row def levels, kept only when carry_def
+    var selection: Optional[RowSelection]  # None = decode every row
+
+    def __init__(
+        out self,
+        var segs: List[Span[UInt8, Self.o]],
+        var meta: ColumnMetaData,
+        var leaf: LeafColumn,
+        num_rows: Int,
+        var selection: Optional[RowSelection] = None,
+        var locs: OffsetIndex = OffsetIndex(),
+        var seg_at: List[Int] = [],
+    ):
+        """`data` is this column chunk's bytes — `meta.byte_range()`, not the
+        whole file.
+
+        `locs` is the column chunk's `OffsetIndex` entries when the caller has
+        them, which lets a skipped page be stepped over instead of parsed. They
+        are only useful alongside a `selection` — with nothing to skip, every
+        page is read anyway — and only on the flat path, where a page's row
+        count and its value count are the same number.
+        """
+        var leveled = leaf.max_rep >= 1
+        if leveled:
+            locs = OffsetIndex()
+        if len(seg_at) != len(segs):
+            seg_at = List[Int]()
+            for _ in range(len(segs)):
+                seg_at.append(0)
+        self.pages = PageReader(segs^, seg_at^, meta^, leaf^, locs^)
+        self.num_rows = num_rows
+        self.leveled = leveled
+        self.def_out = List[Int32]()
+        self.selection = selection^
+
+    def decode(mut self, native: Bool) raises -> DecodedLeaf:
+        if self.leveled:
+            # nested columns decode in full (page skipping is a flat-path
+            # optimisation); a Filter above the scan still applies the predicate.
+            return self._dispatch[True](native)
+        else:
+            return self._dispatch[False](native)
+
+    # -----------------------------------------------------------------------
+    # Flat path — fixed-size LeafBuilder, one bulk_copy/gather per all-present page
+    # -----------------------------------------------------------------------
+
+    def _run[B: LeafBuilder](mut self, mut builder: B, native: Bool) raises:
+        if self.selection:
+            return self._run_selected(builder, native)
+        var carry = self.pages.leaf.carry_def
+        var md = self.pages.leaf.max_def
+        while self.pages.has_next():
+            var pg = self.pages.next(native)
+            if carry and not pg.dictionary:
+                # a page materializes def levels only when it has nulls; an
+                # all-present page implies every slot is at max_def.
+                if len(pg.def_levels) == pg.num_values:
+                    self.def_out.extend(Span(pg.def_levels))
+                else:
+                    for _ in range(pg.num_values):
+                        self.def_out.append(Int32(md))
+            builder.consume(pg^)
+
+    def _run_selected[
+        B: LeafBuilder
+    ](mut self, mut builder: B, native: Bool) raises:
+        """Flat decode honoring a row selection: a data page whose rows are all
+        deselected is skipped without decoding; a fully selected page decodes
+        normally; a partially selected page keeps only its chosen rows. For flat
+        columns `pages.produced` is the row-group-relative index of the next data
+        page's first row, so the page's rows are `[produced, produced + nv)`."""
+        ref sel = self.selection.value()
+        var last = sel.last_selected()
+        while self.pages.has_next():
+            if self.pages.produced > last:
+                # Nothing left to keep, so nothing left to read. Load-bearing
+                # rather than an optimisation: `read` trims the fetch to the
+                # page holding `last`, so walking on would step off the end of
+                # the bytes it was given.
+                break
+            var is_dict, nv = self.pages.peek()
+            if is_dict:
+                builder.consume(self.pages.next(native))  # build the dictionary
+            else:
+                var start = self.pages.produced
+                var kept = sel.covers(start, nv)
+                if kept == Coverage.NONE:
+                    _ = self.pages.skip_next()
+                elif kept == Coverage.ALL:
+                    builder.consume(self.pages.next(native))
+                else:
+                    var m = sel.runs_in(start, nv)
+                    builder.consume_selected(self.pages.next(native), m)
+
+    def _build[
+        B: LeafBuilder
+    ](mut self, var builder: B, native: Bool) raises -> DynArray:
+        self._run(builder, native)
+        return builder^.finish()
+
+    def _flat_leaf(mut self, var arr: DynArray) raises -> DecodedLeaf:
+        """Wrap a flat-path array with the carry-def levels accumulated during
+        the build (empty unless the leaf is under a nullable struct)."""
+        var defs = self.def_out^
+        self.def_out = List[Int32]()
+        return DecodedLeaf(arr^, List[Int32](), defs^)
+
+    # -----------------------------------------------------------------------
+    # Leveled path — grow the element array while accumulating rep/def levels.
+    # A slot holds an element when its def reaches `floor`; the element is
+    # present at `max_def`, else null. Present values come from the shared
+    # `Encoding` decoders, so every encoding works here just as on the flat path.
+    # -----------------------------------------------------------------------
+
+    def _drive_leveled[
+        S: LeveledSink
+    ](
+        mut self,
+        native: Bool,
+        floor: Int,
+        max_def: Int,
+        mut rep_out: List[Int32],
+        mut def_out: List[Int32],
+        mut sink: S,
+    ) raises:
+        """The shared page-loop for every leveled (list-element) leaf. For each
+        page it folds a dictionary page into the builder's dict (`sink.handle_dict`)
+        and skips it, else accumulates the page's rep/def levels, decodes its
+        present values (`sink.decode_present`), and walks `num_values` slots placing a
+        present value (`sink.place_present(vi)`) or a null (`sink.place_null`) per
+        definition level — a slot below `floor` holds no element, a slot at
+        `max_def` is present, else null. Only the value type and how it is
+        appended differ across leaves; those live entirely in the sink."""
+        while self.pages.has_next():
+            var pg = self.pages.next(native)
+            if pg.dictionary:
+                sink.handle_dict(pg)
+                continue
+            rep_out.extend(Span(pg.rep_levels))
+            def_out.extend(Span(pg.def_levels))
+            sink.decode_present(pg)
+            var vi = 0
+            for k in range(pg.num_values):
+                var d = Int(pg.def_levels[k])
+                if d < floor:
+                    continue
+                if d == max_def:
+                    sink.place_present(vi)
+                    vi += 1
+                else:
+                    sink.place_null()
+
+    def _drive_primitive[
+        T: NumericType, phys: DType
+    ](
+        mut self,
+        native: Bool,
+        floor: Int,
+        max_def: Int,
+        var retag_to: Optional[dt.DynType] = None,
+    ) raises -> DecodedLeaf:
+        """Leveled primitive decode. `retag_to`, when set, reinterprets the
+        int32/int64 storage array under a temporal Arrow type (the leaf's dtype).
+        """
+        var sink = _PrimitiveSink[T, phys](
+            Encoded(),
+            List[Scalar[T.native]](),
+            PrimitiveBuilder[T](self.num_rows),
+        )
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
+        var arr: DynArray = sink.builder.finish()
+        if retag_to:
+            arr = arr^.view(retag_to.take())
+        return DecodedLeaf(arr^, rep_out^, def_out^)
+
+    def _drive_bytes[
+        B: BytesBuilder
+    ](
+        mut self,
+        native: Bool,
+        floor: Int,
+        max_def: Int,
+        var builder: B,
+    ) raises -> DecodedLeaf:
+        var sink = _BytesSink[B](
+            List[UInt8](),
+            List[Int](),
+            List[Int](),
+            List[Int32](),
+            List[UInt8](),
+            List[Int32](),
+            builder^,
+        )
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
+        var arr = sink.builder.finish()
+        return DecodedLeaf(arr^, rep_out^, def_out^)
+
+    def _drive_bool(
+        mut self, native: Bool, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        var sink = _BoolSink(List[Bool](), BoolBuilder(self.num_rows))
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
+        var arr = sink.builder.finish()
+        return DecodedLeaf(arr^, rep_out^, def_out^)
+
+    def _drive_decimal[
+        T: PrimitiveType
+    ](
+        mut self,
+        dtype_inst: T,
+        native: Bool,
+        floor: Int,
+        max_def: Int,
+    ) raises -> DecodedLeaf:
+        """Decode leveled FIXED_LEN_BYTE_ARRAY decimals (list/map elements).
+        Big-endian two's-complement values, PLAIN or RLE_DICTIONARY;
+        `dtype_inst` carries the leaf's precision/scale so the builder yields the
+        right decimal type."""
+        var sink = _DecimalSink[T](
+            self.pages.leaf.type_length,
+            List[Scalar[T.native]](),
+            List[Scalar[T.native]](),
+            PrimitiveBuilder[T](dtype_inst.copy(), self.num_rows),
+        )
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
+        var arr = sink.builder.finish()
+        return DecodedLeaf(arr^, rep_out^, def_out^)
+
+    def _drive_fsb(
+        mut self, native: Bool, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        """Leveled FIXED_LEN_BYTE_ARRAY raw bytes (list/map elements) ->
+        FixedSizeBinaryArray, PLAIN or RLE_DICTIONARY."""
+        var width = self.pages.leaf.type_length
+        var sink = _FsbSink(
+            width,
+            List[UInt8](),
+            0,
+            List[List[UInt8]](),
+            FixedSizeBinaryBuilder(width, self.num_rows),
+        )
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
+        var arr = sink.builder.finish()
+        return DecodedLeaf(arr^, rep_out^, def_out^)
+
+    # -----------------------------------------------------------------------
+    # Unified dispatch — one arrow-dtype -> (store, phys) decision table shared by
+    # the flat and leveled paths. `leveled` is a compile-time flag: the emit
+    # helpers pick the flat build (fixed-size `LeafBuilder`) or the leveled drive
+    # (`_drive_*`), and each specialization DCEs the other branch, so the closed
+    # per-dtype dispatch is preserved. Temporal, decimal, and fixed-size-binary
+    # work on both paths — the leveled drive grows a builder and, for temporal
+    # (int32/int64 storage retagged) and decimal (precision/scale-carrying
+    # builder), yields the leaf's Arrow type.
+    # -----------------------------------------------------------------------
+
+    def _emit_numeric[
+        T: NumericType, phys: DType, leveled: Bool
+    ](mut self, native: Bool, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_primitive[T, phys](native, floor, max_def)
+        else:
+            var arr = self._build(
+                PrimitiveLeafBuilder[T.native, phys](
+                    self.num_rows, self.pages.leaf
+                ),
+                native,
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_views[
+        T: dt.BinaryViewLikeType, leveled: Bool
+    ](mut self, native: Bool, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        """A view leaf: flat ones decode without copying a value (see
+        `ByteViewLeafBuilder`); leveled ones go through the copying sink."""
+        comptime if leveled:
+            return self._drive_bytes(
+                native, floor, max_def, BinaryViewLikeBuilder[T](self.num_rows)
+            )
+        else:
+            # The views point into each page, so each page keeps its own
+            # decompressed buffer rather than the reused scratch.
+            self.pages.owns_bodies = True
+            var arr = self._build(
+                ByteViewLeafBuilder[T](self.num_rows, self.pages.leaf), native
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_bytes[
+        B: BytesBuilder, leveled: Bool
+    ](
+        mut self,
+        native: Bool,
+        floor: Int,
+        max_def: Int,
+        var builder: B,
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_bytes(native, floor, max_def, builder^)
+        else:
+            var arr = self._build(
+                ByteArrayLeafBuilder(builder^, self.pages.leaf), native
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_bool[
+        leveled: Bool
+    ](mut self, native: Bool, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_bool(native, floor, max_def)
+        else:
+            var arr = self._build(
+                BoolLeafBuilder(self.num_rows, self.pages.leaf), native
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_temporal[
+        T: NumericType, phys: DType, leveled: Bool
+    ](mut self, native: Bool, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        """Temporal and small-decimal (decimal32/decimal64) columns are
+        physically int32/int64; the flat builder already carries the leaf's Arrow
+        dtype, while the leveled drive produces the int32/int64 storage and is
+        retagged to the leaf's type."""
+        comptime if leveled:
+            return self._drive_primitive[T, phys](
+                native, floor, max_def, self.pages.leaf.dtype.copy()
+            )
+        else:
+            var arr = self._build(
+                PrimitiveLeafBuilder[T.native, phys](
+                    self.num_rows, self.pages.leaf
+                ),
+                native,
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_decimal[
+        T: PrimitiveType, leveled: Bool
+    ](
+        mut self,
+        dtype_inst: T,
+        native: Bool,
+        floor: Int,
+        max_def: Int,
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_decimal[T](dtype_inst, native, floor, max_def)
+        else:
+            var arr = self._build(
+                DecimalLeafBuilder[T.native](self.num_rows, self.pages.leaf),
+                native,
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_fsb[
+        leveled: Bool
+    ](mut self, native: Bool, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_fsb(native, floor, max_def)
+        else:
+            var arr = self._build(
+                FixedSizeBinaryLeafBuilder(self.num_rows, self.pages.leaf),
+                native,
+            )
+            return self._flat_leaf(arr^)
+
+    def _drive_int96(
+        mut self, native: Bool, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        """Leveled INT96 timestamps (list/map elements): 12-byte values decoded to
+        int64 nanoseconds, retagged to the leaf's `timestamp(ns)` type."""
+        var sink = _Int96Sink(
+            List[Int64](),
+            List[Int64](),
+            PrimitiveBuilder[dt.Int64Type](self.num_rows),
+        )
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
+        var arr: DynArray = sink.builder.finish()
+        return DecodedLeaf(
+            arr^.view(self.pages.leaf.dtype.copy()), rep_out^, def_out^
+        )
+
+    def _emit_int96[
+        leveled: Bool
+    ](mut self, native: Bool, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_int96(native, floor, max_def)
+        else:
+            var arr = self._build(
+                Int96LeafBuilder(self.num_rows, self.pages.leaf), native
+            )
+            return self._flat_leaf(arr^)
+
+    def _dispatch[leveled: Bool](mut self, native: Bool) raises -> DecodedLeaf:
+        """Resolve the leaf's runtime dtype to its decode arm.
+
+        Each arm sits behind `comptime if Self.leaves.has(...)`, so a reader
+        compiled for a narrow `LeafSet` never instantiates the builders for the
+        kinds it excludes — that gating is the whole point of the parameter
+        (Q4.6). With the default `LeafSet.all()` every arm compiles and this is
+        the ladder it has always been.
+
+        Written as guarded blocks with early returns rather than one `elif`
+        chain because an `elif` clause cannot be `comptime if`-gated.
+        """
+        ref leaf = self.pages.leaf
+        ref vt = leaf.dtype
+        # leveled: a value slot exists at/above the leaf's repetition floor (the
+        # innermost enclosing list's element level), present at max_def. flat
+        # ignores these (the emit helper's flat branch drops them).
+        var f = leaf.slot_def
+        var md = leaf.max_def
+
+        # INT96 is a 12-byte timestamp whose Arrow dtype is timestamp(ns), so
+        # only the *physical* type distinguishes it from an INT64 timestamp.
+        # This test is unconditional on purpose: gating it would let an INT96
+        # column fall through to the temporal arm and be decoded as INT64.
+        if leaf.physical == PhysicalType.INT96:
+            comptime if Self.leaves.has(LEAF_INT96):
+                return self._emit_int96[leveled](native, f, md)
+            else:
+                raise NotImplementedError(
+                    "parquet: this reader was not compiled to decode INT96 -- "
+                    "add LEAF_INT96 to its LeafSet"
+                )
+
+        comptime if Self.leaves.has(LEAF_INT32):
+            if vt == dt.int32:
+                return self._emit_numeric[dt.Int32Type, DType.int32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_INT64):
+            if vt == dt.int64:
+                return self._emit_numeric[dt.Int64Type, DType.int64, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT32):
+            if vt == dt.uint32:
+                return self._emit_numeric[dt.UInt32Type, DType.uint32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT64):
+            if vt == dt.uint64:
+                return self._emit_numeric[dt.UInt64Type, DType.uint64, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_FLOAT32):
+            if vt == dt.float32:
+                return self._emit_numeric[
+                    dt.Float32Type, DType.float32, leveled
+                ](native, f, md)
+
+        comptime if Self.leaves.has(LEAF_FLOAT64):
+            if vt == dt.float64:
+                return self._emit_numeric[
+                    dt.Float64Type, DType.float64, leveled
+                ](native, f, md)
+
+        comptime if Self.leaves.has(LEAF_FLOAT16):
+            if vt == dt.float16:
+                return self._emit_numeric[
+                    dt.Float16Type, DType.float16, leveled
+                ](native, f, md)
+
+        comptime if Self.leaves.has(LEAF_INT8):
+            if vt == dt.int8:
+                return self._emit_numeric[dt.Int8Type, DType.int32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_INT16):
+            if vt == dt.int16:
+                return self._emit_numeric[dt.Int16Type, DType.int32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT8):
+            if vt == dt.uint8:
+                return self._emit_numeric[dt.UInt8Type, DType.int32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT16):
+            if vt == dt.uint16:
+                return self._emit_numeric[dt.UInt16Type, DType.int32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_BOOL):
+            if vt == dt.bool_:
+                return self._emit_bool[leveled](native, f, md)
+
+        comptime if Self.leaves.has(LEAF_STRING):
+            if vt.is_string():
+                return self._emit_bytes[leveled=leveled](
+                    native, f, md, StringBuilder(self.num_rows)
+                )
+
+        comptime if Self.leaves.has(LEAF_LARGE_STRING):
+            if vt.is_large_string():
+                return self._emit_bytes[leveled=leveled](
+                    native, f, md, LargeStringBuilder(self.num_rows)
+                )
+
+        comptime if Self.leaves.has(LEAF_BINARY):
+            if vt.is_binary():
+                return self._emit_bytes[leveled=leveled](
+                    native, f, md, BinaryBuilder(self.num_rows)
+                )
+
+        comptime if Self.leaves.has(LEAF_LARGE_BINARY):
+            if vt.is_large_binary():
+                return self._emit_bytes[leveled=leveled](
+                    native, f, md, LargeBinaryBuilder(self.num_rows)
+                )
+
+        comptime if Self.leaves.has(LEAF_STRING_VIEW):
+            if vt.is_string_view():
+                return self._emit_views[dt.StringViewType, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_BINARY_VIEW):
+            if vt.is_binary_view():
+                return self._emit_views[dt.BinaryViewType, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_TEMPORAL32):
+            if vt.is_date32() or vt.is_time32():
+                return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_TEMPORAL64):
+            if vt.is_timestamp() or vt.is_time64():
+                return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL32):
+            if vt.is_decimal32():
+                return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL64):
+            if vt.is_decimal64():
+                return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
+                    native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL128):
+            if vt.is_decimal128():
+                return self._emit_decimal[dt.Decimal128Type, leveled](
+                    vt.as_decimal128().copy(), native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL256):
+            if vt.is_decimal256():
+                return self._emit_decimal[dt.Decimal256Type, leveled](
+                    vt.as_decimal256().copy(), native, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_FIXED_SIZE_BINARY):
+            if vt.is_fixed_size_binary():
+                return self._emit_fsb[leveled](native, f, md)
+
+        raise NotImplementedError(
+            t"parquet: this reader was not compiled to decode {vt} -- "
+            t"widen the LeafSet parameter, or use the default LeafSet.all()"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+# Below this many rows a file is decoded on one thread — the thread-dispatch
+# overhead is not worth it for small files.
+comptime _PARALLEL_MIN_ROWS = 4096
+
+
+def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
+    """The file metadata, read from the **tail** rather than the whole file.
+
+    **A source is not always a memory map.** `ByteSource` exists so the
+    bytes can come from anywhere, and for anywhere-but-local a read is a
+    round trip: asking for `read_at(0, size())` to find a footer means
+    downloading the entire object to open it. That is what this used to do,
+    and it made every saving below it — column projection, row-group
+    pruning, page skipping — cost more than it saved.
+
+    One speculative read of the last `FOOTER_READ_SIZE` bytes covers the
+    footer of essentially every real file, so opening one normally costs a
+    single round trip. A footer larger than that is read again at its exact
+    size, which is the only case that pays twice; `read_footer` indexes from
+    the end of whatever it is given, so both spans parse identically.
+    """
+    var size = source.size()
+    if size < 12:
+        raise CorruptError("parquet: file too small")
+
+    var tail = FOOTER_READ_SIZE if FOOTER_READ_SIZE < size else size
+    var head = source.read_at(size - tail, tail)
+    var meta_len = FileMetaData.footer_length(head)
+    if meta_len + 8 <= tail:
+        # Parse what was already fetched. Measuring and then re-reading is one
+        # round trip too many, and on a remote source that is the whole cost.
+        return FileMetaData.read_footer(head)
+
+    var want = meta_len + 8
+    if want > size:
+        raise CorruptError("parquet: corrupt footer length")
+    return FileMetaData.read_footer(source.read_at(size - want, want))
+
+
+struct ChunkRead(Copyable, Movable):
+    """One column chunk's part of a read: which of its rows to decode, where
+    its pages sit, and which of its bytes that takes.
+
+    The constructor makes those decisions -- arrow-rs makes them per row group
+    in `InMemoryRowGroup::fetch_ranges` -- so nothing downstream re-derives
+    them. What it does not know is where its bytes land in the batch a read
+    asks the source for; that belongs to the `ReadPlan` that batches them.
+    """
+
+    var row_group: Int
+    """The row group's index in the file."""
+    var leaf: Int
+    """The column chunk's index within the row group."""
+    var num_rows: Int
+    var selection: Optional[RowSelection]
+    """The row group's selection, shared by all of its leaves; `None` when
+    nothing was pushed down, which decodes every row."""
+    var locs: OffsetIndex
+    """Page locations, when there is a selection and a page index to use."""
+    var start: Int
+    """The chunk's offset in the file."""
+    var ranges: List[Tuple[Int, Int]]
+    """Chunk-relative `(offset, length)` of each byte range to fetch."""
+    var needs_libs: Bool
+    """Whether the chunk's codec is a `dlopen`ed library."""
+
+    def __init__(
+        out self,
+        row_group: Int,
+        leaf: Int,
+        cc: ColumnChunk,
+        num_rows: Int,
+        var selection: Optional[RowSelection],
+        var locs: OffsetIndex,
+        native_codecs: Bool,
+    ) raises:
+        var start, length = cc.meta_data.byte_range()
+        self.row_group = row_group
+        self.leaf = leaf
+        self.num_rows = num_rows
+        self.start = start
+        self.needs_libs = Compression(cc.meta_data.codec).needs_libs(
+            native_codecs
+        )
+        # **Only as far into the chunk as the selection reaches.** The
+        # offset index says where the page holding the last selected row
+        # ends; nothing after it will be decoded, so nothing after it is
+        # worth asking the source for. A `limit`-shaped selection reads the
+        # front of the chunk and stops; a scattered one reads each run and
+        # skips the gaps.
+        self.ranges = List[Tuple[Int, Int]]()
+        if selection and locs.num_pages() > 0:
+            self.ranges = scan_ranges(selection.value(), locs, cc, num_rows)
+        else:
+            self.ranges.append((0, length))
+        self.selection = selection^
+        self.locs = locs^
+
+    def seg_at(self) -> List[Int]:
+        """Where in the chunk each fetched segment begins -- what the page
+        reader needs to find a page's bytes among the segments."""
+        var out = List[Int](capacity=len(self.ranges))
+        for ref r in self.ranges:
+            out.append(r[0])
+        return out^
+
+
+struct ReadPlan(Movable):
+    """One `ParquetFile.read`, settled before any of it runs: the projection,
+    the row groups, one `ChunkRead` per (row group, leaf) -- group-major -- and
+    every byte range they need, batched so the source is asked once.
+
+    The batch is the plan's, so the plan is what knows where each chunk's
+    bytes sit in it: `segments` hands a chunk its slices of what came back,
+    and `assemble` folds the decoded leaves back in the order they were
+    planned.
+    """
+
+    var projection: Projection
+    var row_groups: List[Int]
+    var chunks: List[ChunkRead]
+    var ranges: List[Tuple[Int, Int]]
+    """Every chunk's file-absolute byte ranges, in chunk order."""
+    var needs_libs: Bool
+    """Whether any chunk's codec is a `dlopen`ed library -- which decides
+    whether to open them."""
+    var _first: List[Int]
+    """Chunk `t`'s ranges start at `ranges[_first[t]]`."""
+
+    def __init__(
+        out self, var projection: Projection, var row_groups: List[Int]
+    ):
+        self.projection = projection^
+        self.row_groups = row_groups^
+        self.chunks = List[ChunkRead]()
+        self.ranges = List[Tuple[Int, Int]]()
+        self.needs_libs = False
+        self._first = List[Int]()
+
+    def add(mut self, var chunk: ChunkRead):
+        """Append a chunk, placing its ranges at the end of the batch."""
+        self._first.append(len(self.ranges))
+        for ref r in chunk.ranges:
+            self.ranges.append((chunk.start + r[0], r[1]))
+        self.needs_libs = self.needs_libs or chunk.needs_libs
+        self.chunks.append(chunk^)
+
+    def segments(
+        self, t: Int, ref fetched: Fetched
+    ) raises -> List[Span[UInt8, origin_of(fetched)]]:
+        """Chunk `t`'s bytes, sliced out of the batch `ranges` came back as.
+
+        Borrowed rather than copied: `Fetched.span` is a read, so every worker
+        can slice its own chunk out of the one value nobody is mutating.
+        """
+        var n = len(self.chunks[t].ranges)
+        var out = List[Span[UInt8, origin_of(fetched)]](capacity=n)
+        for i in range(self._first[t], self._first[t] + n):
+            out.append(fetched.span(i))
+        return out^
+
+    def assemble(
+        self, mut decoded: List[Optional[DecodedLeaf]]
+    ) raises -> Table:
+        """Fold each row group's decoded leaves back into the Arrow tree, one
+        batch per group, taking them out of `decoded` as it goes."""
+        var num_leaves = len(self.projection.decode_order)
+        var batches = List[RecordBatch](capacity=len(self.row_groups))
+        for g in range(len(self.row_groups)):
+            var leaves = List[DecodedLeaf](capacity=num_leaves)
+            for c in range(num_leaves):
+                leaves.append(decoded[g * num_leaves + c].take())
+            batches.append(self.projection.assemble(leaves))
+        if len(batches) == 0:
+            batches.append(
+                RecordBatch.empty(Schema(copy=self.projection.schema))
+            )
+        return Table.from_batches(Schema(copy=self.projection.schema), batches)
+
+
+struct ParquetFile[
+    S: ByteSource = BufferSource, leaves: LeafSet = LeafSet.all()
+](Movable):
+    """A Parquet file opened for reading — mirrors PyArrow's `ParquetFile`.
+
+    Owns a `ByteSource` (the file's bytes), the footer metadata, and the
+    Parquet->Arrow schema mapping, all read once at construction. `read()`
+    decodes columns into a `Table`; the source is released when the
+    `ParquetFile` drops. Decoded values are copied into owned Arrow buffers, so
+    a returned `Table` outlives the file.
+
+    The source defaults to a local `BufferSource` — `ParquetFile(path)` opens a
+    memory map — but any `ByteSource` (streaming, remote object store, …) can be
+    passed instead; the whole decode path reads only through `S.read_at`.
+
+    `leaves` narrows which leaf kinds the decoder is compiled for. The default
+    compiles all of them and is what the dynamic lane uses; an AOT query that
+    knows its schema can pass a narrower set and not link the builders for
+    types it will never see (see `LeafSet`).
+
+    LZ4, SNAPPY and ZSTD pages decode in Mojo; `native_codecs=False` decodes
+    them with liblz4, libsnappy and libzstd instead."""
+
+    var _source: Self.S
+    var _meta: FileMetaData
+    var _mapping: SchemaMapping
+    var _native_codecs: Bool
+    """Whether LZ4, SNAPPY and ZSTD pages decode in Mojo, the default, or
+    through liblz4, libsnappy and libzstd."""
+
+    def __init__(
+        out self: ParquetFile[BufferSource, Self.leaves],
+        path: String,
+        *,
+        binary_type: dt.DynType = dt.binary,
+        schema: Optional[Schema] = None,
+        native_codecs: Bool = True,
+    ) raises:
+        """Open a local file as a memory map (S == BufferSource).
+
+        `binary_type` is the Arrow type `BYTE_ARRAY` columns read as --
+        `binary` (the default), `large_binary` or `binary_view`; a `STRING`
+        column reads as the matching string type. `schema`, where it names a
+        column, decides that column's string layouts instead, leaf by leaf.
+        See `SchemaMapping.from_parquet`."""
+        self._source = BufferSource(path)
+        self._meta = _read_footer(self._source)
+        self._mapping = SchemaMapping.from_parquet(
+            self._meta, binary_type, schema
+        )
+        self._native_codecs = native_codecs
+
+    def __init__(
+        out self,
+        var source: Self.S,
+        *,
+        binary_type: dt.DynType = dt.binary,
+        schema: Optional[Schema] = None,
+        native_codecs: Bool = True,
+    ) raises:
+        # Read from any byte source; everything downstream goes through it.
+        self._source = source^
+        self._meta = _read_footer(self._source)
+        self._mapping = SchemaMapping.from_parquet(
+            self._meta, binary_type, schema
+        )
+        self._native_codecs = native_codecs
+
+    def _read_at(
+        ref self, offset: Int, length: Int
+    ) raises -> Span[UInt8, origin_of(self)]:
+        """One region of the file. Every read goes through here, so the source
+        is only ever asked for the bytes actually needed — a column chunk, a
+        page index, a bloom filter — never the whole file.
+
+        `_source` is a field of `self`; widening its origin to the file's is
+        sound and is what every caller relies on."""
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._source.read_at(offset, length)
+        )
+
+    def _metadata_at(
+        ref self, offset: Int, length: Int
+    ) raises -> Span[UInt8, origin_of(self)]:
+        """A metadata region (page index, bloom filter) whose recorded `length`
+        may be absent — writers may omit it. Then the region has to be bounded
+        by the end of the file, and only the Thrift reader knows where it really
+        stops."""
+        return self._read_at(
+            offset, length if length > 0 else self._source.size() - offset
+        )
+
+    def metadata(ref self) -> ref[self._meta] FileMetaData:
+        """The file's footer metadata (row groups, column chunks, statistics),
+        borrowed from the file; `.copy()` it to keep it past the file."""
+        return self._meta
+
+    def schema(self) -> Schema:
+        """The file's Arrow schema."""
+        return self._mapping.schema.copy()
+
+    def num_row_groups(self) -> Int:
+        return len(self._meta.row_groups)
+
+    def num_rows(self) -> Int:
+        return self._meta.num_rows
+
+    def read(
+        self,
+        columns: Optional[List[String]] = None,
+        row_groups: Optional[List[Int]] = None,
+        row_selections: Optional[List[RowSelection]] = None,
+        ctx: ExecContext = ExecContext.auto(),
+    ) raises -> Table:
+        """Decode columns into a Marrow `Table`.
+
+        `columns` projects the read to the named top-level columns (in the given
+        order); `None` reads all. Only the selected columns' chunks are touched.
+
+        `row_groups` restricts the read to the given row-group indices (in that
+        order); `None` reads all. Unselected row groups are never decoded — this
+        is what predicate pushdown uses to skip groups that cannot match a
+        filter.
+
+        Every (row group, selected leaf) pair decodes independently — each reads
+        a disjoint byte range of the shared read-only mmap and writes its own
+        result slot — so the grid is decoded across `ctx`'s workers, and the
+        same budget bounds how many ranges the source fetches at once; the
+        mmap and metadata are read-only.
+
+        `ctx` follows `stripe`'s contract: `serial()` decodes and fetches on
+        the calling thread, `parallel(n)` uses `n` workers whatever the size,
+        and the default `auto()` uses every core once the selected row groups
+        hold `_PARALLEL_MIN_ROWS` rows. A scan operator passes the context its
+        plan runs under."""
+        var plan = self._plan(columns, row_groups, row_selections)
+        var total = len(plan.chunks)
+
+        # rows across selected groups — governs the parallel-dispatch threshold
+        var selected_rows = 0
+        for rg in plan.row_groups:
+            selected_rows += self._meta.row_groups[rg].num_rows
+        var nt = 1
+        if total >= 2 and ctx.wants_parallel(selected_rows, _PARALLEL_MIN_ROWS):
+            nt = min(ctx.resolved_num_threads(), total)
+
+        # One result slot per chunk, pre-sized so workers assign by index
+        # without racing on list growth. (DecodedLeaf is move-only, so slots
+        # are filled by appending, not the copy-based `fill=`.)
+        var decoded = List[Optional[DecodedLeaf]](capacity=total)
+        for _ in range(total):
+            decoded.append(None)
+
+        # Open the compression libraries here, on the calling thread, if any
+        # chunk about to be decoded uses one. `_Global` vends its pointer
+        # without locking and promises nothing about racing *creation*, so the
+        # first touch must not be several workers at once; after this every
+        # worker's use of the handle set is a pure read. Guarded rather than
+        # unconditional so a file of uncompressed, LZ4, LZ4_RAW or ZSTD pages
+        # `dlopen`s nothing.
+        if plan.needs_libs:
+            Codecs.preload()
+
+        # --- plan, then fetch, then decode -------------------------------
+        #
+        # All three used to happen inside the worker, which was wrong twice
+        # over. `ByteSource.read_at` hands back a span borrowed from storage
+        # the *source* owns, so a source that must fetch has to retain it --
+        # `OpenDalSource` did that in an arena behind an `ArcPointer`, and N
+        # workers appending to one unsynchronised `List` is a realloc race with
+        # a use-after-free hanging off it. The arena also never shrank, so the
+        # bytes stayed resident for the life of the *source* -- across every
+        # later `read()` -- rather than for this call. (The peak within one
+        # call is unchanged: `fetched` below holds every selected range at
+        # once too. What changed is when it is released, and by whom.)
+        #
+        # Both go away by asking the source once, here, on the calling thread:
+        # `read_ranges` answers with a `Fetched` **the caller owns and scopes**,
+        # the workers borrow a value nobody is mutating, and the absence of a
+        # race is a property of the types rather than a rule to remember. It is
+        # what `Fetched` was built for.
+        var fetched = self._source.read_ranges(plan.ranges, ctx)
+
+        def decode(w: Int, t: Int) raises {mut decoded, imm}:
+            ref chunk = plan.chunks[t]
+            # ColumnReader.decode picks the flat vs leveled path from the
+            # leaf's max repetition, so one call serves every column shape.
+            # Nothing here touches the source: the segments are slices of the
+            # one batch nobody is mutating.
+            var reader = ColumnReader[origin_of(fetched), Self.leaves](
+                plan.segments(t, fetched),
+                self._meta.row_groups[chunk.row_group]
+                .columns[chunk.leaf]
+                .meta_data.copy(),
+                self._mapping.leaves[chunk.leaf].copy(),
+                chunk.num_rows,
+                chunk.selection.copy(),
+                chunk.locs.copy(),
+                chunk.seg_at(),
+            )
+            decoded[t] = reader.decode(self._native_codecs)
+
+        ctx.fan_out(total, decode, nt)
+        return plan.assemble(decoded)
+
+    def _plan(
+        self,
+        columns: Optional[List[String]],
+        row_groups: Optional[List[Int]],
+        row_selections: Optional[List[RowSelection]],
+    ) raises -> ReadPlan:
+        """What `read` will do, settled before it does any of it.
+
+        On the file rather than on `ReadPlan` because planning reads: a chunk
+        with a selection needs its `OffsetIndex`, and only the file can fetch
+        one. Everything else here is a function of the footer and the request.
+        """
+        var projection = self._mapping.project(
+            columns.value()
+        ) if columns else self._mapping.full()
+
+        var groups = List[Int]()
+        if row_groups:
+            for rg in row_groups.value():
+                if rg < 0 or rg >= len(self._meta.row_groups):
+                    raise IndexError("parquet: row group index out of range")
+                groups.append(rg)
+        else:
+            for rg in range(len(self._meta.row_groups)):
+                groups.append(rg)
+
+        if row_selections and len(row_selections.value()) != len(groups):
+            raise InvalidError(
+                "parquet: row_selections must match the selected row groups"
+            )
+        # **A selection this reader cannot apply is refused, not ignored.**
+        # `ColumnReader.decode` picks the flat or the leveled path from the
+        # leaf's max repetition and only the flat one consults `selection`, so
+        # a repeated column would silently decode *all* its rows while its flat
+        # neighbours decoded a subset -- columns of different lengths, which is
+        # a wrong answer rather than a slow one. Leaving that as an unwritten
+        # rule made it every caller's job to know; a leaf count does not reveal
+        # it either, since `list<int>` is one leaf.
+        if row_selections:
+            for orig in projection.decode_order:
+                if self._mapping.leaves[orig].max_rep >= 1:
+                    raise NotImplementedError(
+                        t"parquet: row_selections cannot be applied to a "
+                        t"repeated column ('"
+                        t"{self._mapping.leaves[orig].name}'); read it without "
+                        t"a selection"
+                    )
+
+        var plan = ReadPlan(projection^, groups^)
+        for slot in range(len(plan.row_groups)):
+            ref rg = self._meta.row_groups[plan.row_groups[slot]]
+            for orig in plan.projection.decode_order:
+                var sel: Optional[RowSelection] = None
+                var locs = OffsetIndex()
+                if row_selections:
+                    sel = row_selections.value()[slot].copy()
+                    # Only worth decoding when there is something to skip: with no
+                    # selection every page is read, and the index would answer
+                    # questions nobody asks. Offsets only -- the `ColumnIndex`'s
+                    # per-page bounds are decode-time dead weight here, and they
+                    # are the bulky half. Not for a leveled leaf: `ColumnReader`
+                    # discards the index there (page skipping is a flat-path
+                    # optimisation), so decoding one is pure waste.
+                    if self._mapping.leaves[orig].max_rep == 0:
+                        locs = self._chunk_offsets(
+                            rg.columns[orig], rg.num_rows
+                        )
+                plan.add(
+                    ChunkRead(
+                        plan.row_groups[slot],
+                        orig,
+                        rg.columns[orig],
+                        rg.num_rows,
+                        sel^,
+                        locs^,
+                        self._native_codecs,
+                    )
+                )
+        return plan^
+
+    def _trusted_leaf(self, ci: Int) -> Optional[LeafColumn]:
+        """The leaf behind column chunk `ci`, when its stored statistics
+        describe something a row-level predicate can use — otherwise None, which
+        every caller turns into an absent statistic (and an absent statistic
+        prunes nothing).
+
+        Two conditions. **The leaf must be a whole top-level column.** A leaf
+        inside a struct, list or map carries only its bare Parquet element name
+        (`x`, `element`, `key`), so a lookup that keys statistics by column
+        position hands `s.x`'s bounds to a top-level `x`; and under a repeated
+        field `null_count` and the min/max count *elements* while
+        `RowGroup.num_rows` counts rows, so they bound nothing a row predicate
+        names. **The footer must declare this leaf's ColumnOrder.** Without
+        `column_orders` (field 7) parquet-format leaves the meaning of
+        `min_value` / `max_value` undefined, and that verdict covers the whole
+        statistic rather than being split per member."""
+        if ci >= len(self._meta.column_orders) or not (
+            self._meta.column_orders[ci]
+        ):
+            return None
+        for ref n in self._mapping.nodes:
+            if n.kind == NODE_LEAF and n.leaf_index == ci:
+                return self._mapping.leaves[ci].copy()
+        return None
+
+    def statistics(self) raises -> List[List[ColumnStatistics]]:
+        """Per-(row group, leaf column) decoded column-chunk statistics, indexed
+        `result[row_group][leaf]`. `min`/`max` are typed scalars matching each
+        column's Arrow type (each `None` when the file stored no bound or the
+        type's bounds are not yet decoded); `null_count` is -1 if absent. A leaf
+        `_trusted_leaf` rejects reports no statistics at all."""
+        var out = List[List[ColumnStatistics]]()
+        for ref rg in self._meta.row_groups:
+            var row = List[ColumnStatistics]()
+            for ci in range(len(rg.columns)):
+                var leaf = self._trusted_leaf(ci)
+                if leaf:
+                    row.append(
+                        ColumnStatistics.from_metadata(
+                            leaf.value(), rg.columns[ci].meta_data
+                        )
+                    )
+                else:
+                    row.append(ColumnStatistics())
+            out.append(row^)
+        return out^
+
+    def _chunk_offsets(
+        ref self, cc: ColumnChunk, num_rows: Int = -1
+    ) raises -> OffsetIndex:
+        """One column chunk's page *locations*, and nothing else.
+
+        `_chunk_page_index` decodes both halves, and the `ColumnIndex` half is
+        the expensive one: per-page min and max as raw byte lists, for every
+        page of the chunk. A decoder wants only the offsets, so decoding the
+        bounds and dropping them costs a large allocation per (row group, leaf)
+        in the middle of the read loop.
+
+        **Given `num_rows`, the locations are checked here and nowhere else.**
+        An index that does not tile its chunk answers *empty*, which is already
+        the sentinel every consumer honours -- `scan_ranges` asks
+        for the whole chunk and `PageReader` walks page headers.
+        """
+        if cc.offset_index_offset < 0:
+            return OffsetIndex()
+        var r = ThriftCompactReader(
+            self._metadata_at(cc.offset_index_offset, cc.offset_index_length),
+            0,
+        )
+        # Copied rather than moved out: a field cannot be taken from a value
+        # that still has to be destroyed, and three ints per page is nothing
+        # beside the `ColumnIndex` this does not decode.
+        var oi = OffsetIndex.read(r)
+        if num_rows < 0:
+            return oi^
+        var start, length = cc.meta_data.byte_range()
+        if not oi.tiles_chunk(start, length, num_rows):
+            return OffsetIndex()
+        return oi^
+
+    def _chunk_page_index(ref self, cc: ColumnChunk) raises -> PageIndex:
+        """One column chunk's page index, each half absent when the writer
+        stored none. The two readers below share this so the offsets are
+        resolved in exactly one place."""
+        var pi = PageIndex()
+        if cc.offset_index_offset >= 0:
+            pi.offset_index = self._chunk_offsets(cc)
+        if cc.column_index_offset >= 0:
+            var r = ThriftCompactReader(
+                self._metadata_at(
+                    cc.column_index_offset, cc.column_index_length
+                ),
+                0,
+            )
+            pi.column_index = ColumnIndex.read(r)
+        return pi^
+
+    def page_index(self) raises -> List[List[PageIndex]]:
+        """The raw page index (OffsetIndex + ColumnIndex) for every (row group,
+        leaf column), indexed `result[row_group][leaf]`. A chunk without a page
+        index yields empty optionals."""
+        var out = List[List[PageIndex]]()
+        for ref rg in self._meta.row_groups:
+            var row = List[PageIndex]()
+            for ci in range(len(rg.columns)):
+                row.append(self._chunk_page_index(rg.columns[ci]))
+            out.append(row^)
+        return out^
+
+    def bloom_filter(
+        self, row_group: Int, column: Int
+    ) raises -> Optional[SplitBlockBloomFilter]:
+        """The split-block bloom filter for one `(row_group, leaf column)`, or
+        `None` when the chunk has none. Use `.might_contain(bytes)` to test a
+        value's XXH64-hashed bytes — a `False` proves absence (no false negatives).
+        """
+        ref cc = self._meta.row_groups[row_group].columns[column]
+        if cc.meta_data.bloom_filter_offset < 0:
+            return None
+        var data = self._metadata_at(
+            cc.meta_data.bloom_filter_offset, cc.meta_data.bloom_filter_length
+        )
+        var r = ThriftCompactReader(data, 0)
+        var hdr = BloomFilterHeader.read(r)
+        return SplitBlockBloomFilter.from_bytes(
+            data[r.pos : r.pos + hdr.num_bytes]
+        )
+
+    def page_bounds(self) raises -> List[List[List[PageBounds]]]:
+        """Per (row group, leaf column, data page) decoded bounds, from the page
+        index — indexed `result[rg][leaf][page]`. A column with no page index
+        yields an empty page list. Predicate pushdown prunes pages with these.
+        """
+        var out = List[List[List[PageBounds]]]()
+        for ref rg in self._meta.row_groups:
+            var per_col = List[List[PageBounds]]()
+            for ci in range(len(rg.columns)):
+                var pi = self._chunk_page_index(rg.columns[ci])
+                var pages = List[PageBounds]()
+                if pi.offset_index and pi.column_index:
+                    ref oi = pi.offset_index.value()
+                    ref cix = pi.column_index.value()
+                    var leaf = self._trusted_leaf(ci)
+                    var np = len(oi.page_locations)
+                    for p in range(np):
+                        var first = oi.page_locations[p].first_row_index
+                        var nxt = (
+                            oi.page_locations[p + 1].first_row_index if p + 1
+                            < np else rg.num_rows
+                        )
+                        var mn: Optional[DynScalar] = None
+                        var mx: Optional[DynScalar] = None
+                        var all_null = (
+                            p < len(cix.null_pages) and cix.null_pages[p]
+                        )
+                        # an all-null page has no bounds to prune with, only
+                        # its null-ness
+                        if leaf and not all_null:
+                            if p < len(cix.min_values):
+                                mn = Statistics.decode(
+                                    leaf.value(), cix.min_values[p]
+                                )
+                            if p < len(cix.max_values):
+                                mx = Statistics.decode(
+                                    leaf.value(), cix.max_values[p]
+                                )
+                            # a half this reader cannot trust taints the other:
+                            # a NaN or unreadable bound means the page carries
+                            # no statistic, not half of one
+                            if not (Bool(mn) and Bool(mx)):
+                                mn = None
+                                mx = None
+                        pages.append(
+                            PageBounds(nxt - first, all_null, mn^, mx^)
+                        )
+                per_col.append(pages^)
+            out.append(per_col^)
+        return out^
+
+
+struct ParquetReader[
+    S: ByteSource = BufferSource, leaves: LeafSet = LeafSet.all()
+](BatchReader):
+    """Reads a Parquet file one row group at a time.
+
+    Each `read_next_batch` decodes at most one row group, so what is resident
+    is bounded by a row group rather than by the file: a group is fetched only
+    when the batches of the one before it are used up.
+
+    `row_groups` and `row_selections` are the read plan a scan builds from a
+    predicate, as `ParquetFile.read` takes them; a selection that keeps every
+    row is dropped here, so its group decodes without a per-page check.
+    """
+
+    var _file: ParquetFile[Self.S, Self.leaves]
+    var _schema: Schema
+    var _columns: List[String]
+    var _plan: List[Int]
+    var _selections: List[Optional[RowSelection]]
+    """One entry per `_plan` entry, or none at all; `None` reads the group
+    whole."""
+    var _ctx: ExecContext
+    var _next: Int
+    var _pending: List[RecordBatch]
+
+    def __init__(
+        out self,
+        var file: ParquetFile[Self.S, Self.leaves],
+        columns: Optional[List[String]] = None,
+        row_groups: Optional[List[Int]] = None,
+        row_selections: Optional[List[RowSelection]] = None,
+        ctx: ExecContext = ExecContext.auto(),
+    ) raises:
+        var full = file.schema()
+        if columns:
+            self._columns = columns.value().copy()
+        else:
+            self._columns = full.names()
+        # An unknown name is left to `read` to reject, with its own message.
+        var fields = List[Field](capacity=len(self._columns))
+        for ref name in self._columns:
+            var i = full.get_field_index(name)
+            if i >= 0:
+                fields.append(full.fields[i].copy())
+        self._schema = Schema(fields=fields^)
+        if row_groups:
+            self._plan = row_groups.value().copy()
+        else:
+            self._plan = List[Int](capacity=file.num_row_groups())
+            for rg in range(file.num_row_groups()):
+                self._plan.append(rg)
+        self._selections = List[Optional[RowSelection]]()
+        if row_selections:
+            for ref sel in row_selections.value():
+                if sel.selects_all():
+                    self._selections.append(None)
+                else:
+                    self._selections.append(Optional(sel.copy()))
+        self._file = file^
+        self._ctx = ctx.copy()
+        self._next = 0
+        self._pending = List[RecordBatch]()
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        while len(self._pending) == 0:
+            if self._next >= len(self._plan):
+                return None
+            var groups: List[Int] = [self._plan[self._next]]
+            var picked = Optional[List[RowSelection]](None)
+            if (
+                self._next < len(self._selections)
+                and self._selections[self._next]
+            ):
+                var one: List[RowSelection] = [
+                    self._selections[self._next].value().copy()
+                ]
+                picked = Optional(one^)
+            self._next += 1
+            var table = self._file.read(
+                columns=Optional(self._columns.copy()),
+                row_groups=Optional(groups^),
+                row_selections=picked^,
+                ctx=self._ctx,
+            )
+            # A row group can decode to several chunks; each is a batch of
+            # its own rather than being concatenated back together.
+            self._pending = table.to_batches()
+        return self._pending.pop(0)
+
+
+struct ParquetFormat(Format):
+    """Parquet, read by `ParquetReader` one row group at a time; only the
+    projected columns' chunks are fetched."""
+
+    comptime Reader = ParquetReader[DynSource, LeafSet.all()]
+
+    @staticmethod
+    def name() -> StaticString:
+        return "Parquet"
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self.Reader:
+        # The schema also decides each string column's layout, leaf by leaf.
+        var file = ParquetFile[DynSource, LeafSet.all()](
+            DynSource.open(path), schema=schema.copy()
+        )
+        return Self.Reader(file^, columns=schema.names())
+
+
+def read_table[
+    leaves: LeafSet = LeafSet.all()
+](
+    uri: String,
+    columns: Optional[List[String]] = None,
+    row_groups: Optional[List[Int]] = None,
+    row_selections: Optional[List[RowSelection]] = None,
+    options: StorageOptions = StorageOptions(),
+    ctx: ExecContext = ExecContext.auto(),
+    binary_type: dt.DynType = dt.binary,
+    native_codecs: Bool = True,
+) raises -> Table:
+    """Read a Parquet file into a Marrow `Table` — a convenience wrapper over
+    `ParquetFile(uri).read(...)` (mirrors `pyarrow.parquet.read_table`).
+    `binary_type` picks the `BYTE_ARRAY` read type, as on `ParquetFile`.
+
+    `uri` is a path or a URL: `data.parquet`, `file:///tmp/data.parquet`,
+    `s3://bucket/key.parquet`, `gs://…`, `az://…`, `https://…`. A bare path
+    takes the local memory map and never opens `libopendal_c`; anything else
+    goes through OpenDAL, and `options` carries service configuration the URI
+    does not (see `StorageOptions` for the precedence rules).
+
+    Erased through `DynSource` rather than branching on scheme, because
+    branching would link one whole copy of the reader per source type. The
+    ladder costs a discriminant compare per read; a second monomorphization of
+    `ParquetFile` costs kilobytes.
+
+    `leaves` narrows which leaf kinds the decoder is compiled for; the default
+    compiles all of them. An AOT program that knows its schema can cut the
+    decode ladder it links — see `LeafSet`.
+
+    LZ4, SNAPPY and ZSTD pages decode in Mojo; `native_codecs=False` decodes
+    them with liblz4, libsnappy and libzstd instead."""
+    var pf = ParquetFile[DynSource, leaves](
+        DynSource.open(uri, options),
+        binary_type=binary_type,
+        native_codecs=native_codecs,
+    )
+    return pf.read(columns, row_groups, row_selections, ctx)
+
+
+# ---------------------------------------------------------------------------
+# Metadata / statistics — read the footer without decoding any column data.
+# Mirrors PyArrow's `read_metadata` / `ColumnChunkMetaData.statistics`.
+# ---------------------------------------------------------------------------
+
+
+struct Coverage(Equatable, ImplicitlyCopyable, Movable):
+    """What a `RowSelection` says about one page: skip it, take it whole, or
+    decode it from the selection's runs. `RowSelection.covers` answers it."""
+
+    var code: Int
+
+    comptime NONE = Self(0)
+    comptime ALL = Self(1)
+    comptime SOME = Self(2)
+
+    def __init__(out self, code: Int):
+        self.code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.code == other.code
+
+
+struct RowSelection(Copyable, Movable):
+    """Which rows of a row group to decode when a pushed-down predicate lets the
+    reader skip pages.
+
+    Row-group-relative: a data page whose rows are all deselected is skipped
+    without decoding; a partially selected page keeps only its chosen rows, so
+    every column yields the same rows and stays aligned. Built from per-page
+    keep flags, combined with `intersect`, and queried by the decoder over each
+    page's row range.
+
+    **Stored as runs, because that is the shape it is produced in.** Per-row
+    flags made every query rediscover that by scanning, and `last_selected`
+    worst of all: its cost was the rows *discarded*, which is why page skipping
+    used to make a read slower than reading everything. As runs it is the last
+    run's end. `selects_any`, `selects_all` and `total_rows` are equally free,
+    `intersect` is a two-pointer merge that allocates nothing row-length, and
+    the range queries binary search. Only `mask` still answers per row, because
+    `consume_selected` places values one at a time.
+
+    The `List[Bool]` constructor stays for callers holding flags, and
+    compresses; `_from_runs` is private because the normal form is load-bearing
+    and nothing in the type enforces it. `backlog.md` has the measurements, and
+    the reason to distrust the next one taken here."""
+
+    var _runs: List[Tuple[Int, Int]]
+    """Ascending, disjoint, never adjacent, half-open `[start, end)` runs.
+
+    Every O(1) query rests on that normal form; `_normalised` states it."""
+
+    var _total: Int
+
+    def __init__(out self, var selected: List[Bool]):
+        """Compress per-row flags into runs."""
+        self._runs = List[Tuple[Int, Int]]()
+        self._total = len(selected)
+        var at = 0
+        while at < self._total:
+            if selected[at]:
+                var start = at
+                while at < self._total and selected[at]:
+                    at += 1
+                self._runs.append((start, at))
+            else:
+                at += 1
+
+    @staticmethod
+    def _from_runs(var runs: List[Tuple[Int, Int]], total: Int) -> Self:
+        """From runs already in normal form.
+
+        Private because every O(1) query rests on that form and nothing in
+        `List[Tuple[Int, Int]]` says so: overlapping or unsorted runs would
+        leave `selects_all` answering False for a full selection and the
+        binary searches looking in the wrong place. The three constructors
+        below are the only ways in, and the assert holds them to it.
+        """
+        debug_assert(
+            Self._normalised(runs, total),
+            "RowSelection: runs not in normal form",
+        )
+        var out = Self(List[Bool]())
+        out._runs = runs^
+        out._total = total
+        return out^
+
+    @staticmethod
+    def _normalised(runs: List[Tuple[Int, Int]], total: Int) -> Bool:
+        """Ascending, disjoint, never adjacent, non-empty, inside `total`."""
+        var prev = -1
+        for ref r in runs:
+            if r[0] >= r[1] or r[0] <= prev or r[1] > total:
+                return False
+            prev = r[1]
+        return True
+
+    @staticmethod
+    def all(n: Int) -> Self:
+        """Select every one of `n` rows."""
+        var runs = List[Tuple[Int, Int]]()
+        if n > 0:
+            runs.append((0, n))
+        return Self._from_runs(runs^, n)
+
+    @staticmethod
+    def from_pages(keep: List[Bool], page_rows: List[Int]) -> Self:
+        """Per-page keep flags as runs. `keep[i]` decides all `page_rows[i]`
+        rows of page `i` (pages begin on row boundaries).
+
+        This is how every selection the reader sees is built -- `page_selections`
+        has nothing finer than a page to say -- so the runs it produces are at
+        most one per page however scattered the pages are.
+        """
+        var runs = List[Tuple[Int, Int]](capacity=len(page_rows))
+        var at = 0
+        for p in range(len(page_rows)):
+            var end = at + page_rows[p]
+            if p < len(keep) and keep[p]:
+                if len(runs) > 0 and runs[len(runs) - 1][1] == at:
+                    runs[len(runs) - 1] = (runs[len(runs) - 1][0], end)
+                else:
+                    runs.append((at, end))
+            at = end
+        return Self._from_runs(runs^, at)
+
+    def total_rows(self) -> Int:
+        return self._total
+
+    def selected(self, row: Int) -> Bool:
+        return self.any_selected_in(row, 1)
+
+    def num_selected(self) -> Int:
+        var n = 0
+        for ref r in self._runs:
+            n += r[1] - r[0]
+        return n
+
+    def selects_any(self) -> Bool:
+        return len(self._runs) > 0
+
+    def last_selected(self) -> Int:
+        """The last selected row, or `-1` when nothing is selected.
+
+        What lets `_run_selected` stop walking: everything past this row is
+        skipped whatever the pages say, so once the cursor is beyond it there
+        is nothing left to decode — and, with a trimmed fetch, nothing left
+        that was even read.
+        """
+        if len(self._runs) == 0:
+            return -1
+        return self._runs[len(self._runs) - 1][1] - 1
+
+    def selects_all(self) -> Bool:
+        if self._total == 0:
+            return True
+        return (
+            len(self._runs) == 1
+            and self._runs[0][0] == 0
+            and self._runs[0][1] == self._total
+        )
+
+    def intersect(self, other: Self) raises -> Self:
+        """AND two selections over the same row group (a row survives only if
+        both keep it).
+
+        A two-pointer merge over the runs, so it costs the runs rather than the
+        rows and allocates nothing row-length. `page_selections` runs it once
+        per predicate column per row group, which is where that matters.
+        """
+        if self._total != other._total:
+            raise InvalidError("parquet: RowSelection size mismatch")
+        var runs = List[Tuple[Int, Int]](
+            capacity=len(self._runs) + len(other._runs)
+        )
+        var i = 0
+        var j = 0
+        while i < len(self._runs) and j < len(other._runs):
+            var lo = max(self._runs[i][0], other._runs[j][0])
+            var hi = min(self._runs[i][1], other._runs[j][1])
+            if lo < hi:
+                runs.append((lo, hi))
+            if self._runs[i][1] < other._runs[j][1]:
+                i += 1
+            elif self._runs[i][1] > other._runs[j][1]:
+                j += 1
+            else:
+                i += 1
+                j += 1
+        return Self._from_runs(runs^, self._total)
+
+    def any_selected_in(self, start: Int, length: Int) -> Bool:
+        """Whether *any* row of `[start, start+length)` is selected.
+
+        `selected_in` counts, and a planner only ever asks whether the count is
+        zero -- over a page of a million-row group that is a million tests to
+        answer a question the first set bit settles.
+        """
+        if length <= 0:
+            return False
+        var i = self._first_run_from(start)
+        return i < len(self._runs) and self._runs[i][0] < start + length
+
+    def _first_run_from(self, row: Int) -> Int:
+        """Index of the first run ending after `row`; `len(_runs)` if none."""
+        var lo = 0
+        var hi = len(self._runs)
+        while lo < hi:
+            var mid = (lo + hi) // 2
+            if self._runs[mid][1] <= row:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    def covers(self, start: Int, length: Int) -> Coverage:
+        """Whether `[start, start+length)` is skipped, whole, or partial.
+
+        What the decoder actually asks of a page: skip it, take it whole, or
+        build a mask. `selected_in` would answer by counting every run that
+        overlaps, and the count is then thrown away -- but the runs are
+        disjoint and never adjacent, so one lookup settles it. A run that does
+        not cover the page cannot be completed by the next one.
+        """
+        if length <= 0:
+            return Coverage.NONE
+        var stop = start + length
+        var i = self._first_run_from(start)
+        if i >= len(self._runs) or self._runs[i][0] >= stop:
+            return Coverage.NONE
+        if self._runs[i][0] <= start and self._runs[i][1] >= stop:
+            return Coverage.ALL
+        return Coverage.SOME
+
+    def selected_in(self, start: Int, length: Int) -> Int:
+        """How many rows in the half-open range `[start, start+length)` are
+        selected — lets the decoder decide skip / keep-all / mask for a page."""
+        var stop = start + length
+        var n = 0
+        var i = self._first_run_from(start)
+        while i < len(self._runs) and self._runs[i][0] < stop:
+            n += min(self._runs[i][1], stop) - max(self._runs[i][0], start)
+            i += 1
+        return n
+
+    def runs_in(self, start: Int, length: Int) -> List[Tuple[Int, Int]]:
+        """This selection over `[start, start+length)`, rebased to the page.
+
+        What a partially selected page needs, and all it needs: `Page.scatter`
+        walks these with a cursor. It used to get a `List[Bool]` built here and
+        copied again by every `consume_selected` -- two page-length allocations
+        per partial page per leaf, to say what a handful of ranges says.
+        """
+        var out = List[Tuple[Int, Int]]()
+        if length <= 0:
+            # Without this an empty range still emits a run when one starts
+            # before `start`: clipping gives `[start, start)`, which breaks the
+            # ascending-and-non-empty form `Page.scatter`'s cursor assumes.
+            return out^
+        var stop = start + length
+        var i = self._first_run_from(start)
+        while i < len(self._runs) and self._runs[i][0] < stop:
+            out.append(
+                (
+                    max(self._runs[i][0], start) - start,
+                    min(self._runs[i][1], stop) - start,
+                )
+            )
+            i += 1
+        return out^
+
+
+def scan_ranges(
+    selection: RowSelection, oi: OffsetIndex, cc: ColumnChunk, num_rows: Int
+) raises -> List[Tuple[Int, Int]]:
+    """The chunk-relative `(offset, length)` ranges this selection needs.
+
+    Where rows meet layout, so it belongs to neither: `selection` knows which
+    rows, `oi` where pages sit, `cc` where the chunk does. It was a method on
+    `RowSelection` (parquet-rs's `RowSelection::scan_ranges` is too), which
+    gave the row algebra a dependency on page offsets, chunk byte ranges and
+    dictionary placement. A free function here keeps `RowSelection` pure and
+    `format.mojo` a leaf -- a method on `OffsetIndex` would have made `format`
+    import the reader.
+
+    The dictionary page comes first when the chunk has one — it is the
+    chunk's first byte and every dictionary-encoded page is unreadable
+    without it — followed by each data page holding a selected row.
+    Adjacent ranges are merged, so a run of selected pages is one read;
+    parquet-rs leaves that to its IO layer, and marrow does it here because
+    `ByteSource` has no batch entry point.
+
+    Everything else is left unread, which is sound only because a page is
+    skipped from the index: `PageReader.skip_next` takes its row count and
+    its size from `oi`, so stepping over a page touches none of its bytes.
+
+    `oi` is assumed to tile the chunk — `OffsetIndex.tiles_chunk` is asked
+    when it is decoded, and an index that fails answers no pages at all —
+    so the only retreats here are the two this method owns: no pages, and a
+    chunk whose dictionary has nowhere to live.
+
+    **The walk stops at `last_selected()`.** Page locations ascend, so
+    once a page starts past the last selected row every page after it is
+    dead. Without the stop a `limit`-shaped selection asks
+    `any_selected_in` about each dead page, and each answers `False` only
+    after reading every one of its flags — on the calling thread, before
+    the decode fans out.
+    """
+    var stop = selection.last_selected()
+    var start, length = cc.meta_data.byte_range()
+    var out = List[Tuple[Int, Int]]()
+    if stop < 0:
+        # Nothing selected: `_run_selected` breaks before its first page,
+        # so every byte asked for here would go unread. The fallback below
+        # would ask for the whole chunk, which is free on a memory map and
+        # a full column chunk over HTTP. Reachable from the pushdown path,
+        # where a group can survive statistics pruning and still lose every
+        # page.
+        return out^
+    if oi.num_pages() == 0:
+        out.append((0, length))
+        return out^
+
+    if cc.meta_data.dictionary_page_offset != -1:
+        var head = oi.page_locations[0].offset - start
+        if head <= 0:
+            out.append((0, length))
+            return out^
+        out.append((0, head))
+
+    for i in range(oi.num_pages()):
+        ref loc = oi.page_locations[i]
+        if loc.first_row_index > stop:
+            break
+        if not selection.any_selected_in(
+            loc.first_row_index, oi.page_rows(i, num_rows)
+        ):
+            continue
+        var at = loc.offset - start
+        var n = loc.compressed_page_size
+        if len(out) > 0 and out[len(out) - 1][0] + out[len(out) - 1][1] == at:
+            out[len(out) - 1] = (
+                out[len(out) - 1][0],
+                out[len(out) - 1][1] + n,
+            )
+        else:
+            out.append((at, n))
+
+    return out^
+
+
+def read_metadata(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> FileMetaData:
+    """Read only the file footer: schema, row groups, and per-column-chunk
+    metadata (offsets, sizes, codec, null_count, and the raw min/max statistic
+    bytes). No column data is decoded. Mirrors `pyarrow.parquet.read_metadata` —
+    a convenience wrapper over `ParquetFile(uri).metadata()`.
+
+    Reads the file's tail, not the file, so pointing this at an object store
+    costs one ranged request rather than a download."""
+    return ParquetFile(DynSource.open(uri, options)).metadata().copy()
+
+
+struct PageIndex(Copyable, Movable):
+    """One column chunk's page index: `offset_index` locates each data page,
+    `column_index` holds its per-page min/max/null stats. Either may be absent
+    (a file without a page index)."""
+
+    var offset_index: Optional[OffsetIndex]
+    var column_index: Optional[ColumnIndex]
+
+    def __init__(out self):
+        self.offset_index = None
+        self.column_index = None
+
+
+def read_page_index(
+    uri: String, options: StorageOptions = StorageOptions()
+) raises -> List[List[PageIndex]]:
+    """Read the page index (OffsetIndex + ColumnIndex) for every (row group,
+    leaf column), indexed `result[row_group][leaf]` — a convenience wrapper over
+    `ParquetFile(uri).page_index()`."""
+    return ParquetFile(DynSource.open(uri, options)).page_index()
+
+
+struct PageBounds(Copyable, Movable):
+    """One data page's decoded bounds: its row count, whether every value in
+    it is null, and the typed `min`/`max` (each `None` when the page is
+    all-null or carried no bound)."""
+
+    var num_rows: Int
+    var all_null: Bool
+    var min: Optional[DynScalar]
+    var max: Optional[DynScalar]
+
+    def __init__(
+        out self,
+        num_rows: Int,
+        all_null: Bool,
+        var min: Optional[DynScalar],
+        var max: Optional[DynScalar],
+    ):
+        self.num_rows = num_rows
+        self.all_null = all_null
+        self.min = min^
+        self.max = max^
+
+
+struct ColumnStatistics(Copyable, Movable):
+    """Decoded per-column-chunk statistics: `null_count` / `distinct_count`
+    (-1 if absent) and the `min`/`max` bounds as typed scalars (each `None`
+    when the file stored no usable bound, so absence is in the type rather than
+    a separate flag)."""
+
+    var null_count: Int
+    var distinct_count: Int
+    """This chunk's distinct non-null value count, `-1` when the writer
+    recorded none, which most writers do. Per chunk, so the chunks' counts do
+    not add up to the column's (`Index.distinct_count` reduces them), and an
+    estimate even for its own chunk: a writer may take it from a dictionary
+    holding values no row uses."""
+    var min: Optional[DynScalar]
+    var max: Optional[DynScalar]
+
+    def __init__(out self):
+        self.null_count = -1
+        self.distinct_count = -1
+        self.min = None
+        self.max = None
+
+    @staticmethod
+    def from_metadata(leaf: LeafColumn, cm: ColumnMetaData) raises -> Self:
+        """Decode a column chunk's `ColumnMetaData` statistics: `null_count`
+        and `distinct_count` plus the min/max bounds as typed scalars (kept
+        only when both decode)."""
+        var cs = Self()
+        cs.null_count = cm.null_count
+        cs.distinct_count = cm.distinct_count
+        if cm.has_min_max:
+            var mn = Statistics.decode(leaf, cm.min_value)
+            var mx = Statistics.decode(leaf, cm.max_value)
+            if Bool(mn) and Bool(mx):
+                cs.min = mn^
+                cs.max = mx^
+        return cs^

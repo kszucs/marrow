@@ -18,7 +18,7 @@ Input layout:
     bytes 4..    the compressed page
 """
 
-from marrow.parquet import Compression
+from marrow.formats.parquet import Compression
 
 
 def fuzz_one(data: Span[UInt8, _]) raises:

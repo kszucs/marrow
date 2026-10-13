@@ -15,7 +15,7 @@ from std.os.path import join
 from ...utils.testing import ScratchDir
 from ...builders import array
 from ...dtypes import DynType, Int64Type, field, float64, int64, string
-from ...parquet.writer import write_table
+from ...formats.parquet.writer import write_table
 from ...scalars import Int64Scalar, StringScalar
 from ...schema import schema
 from ...tabular import Table, record_batch

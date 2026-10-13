@@ -8,7 +8,7 @@ an abort or a crash is a bug.
 """
 
 from marrow.io import BufferSource
-from marrow.ipc import RecordBatchStreamReader
+from marrow.formats.ipc import RecordBatchStreamReader
 
 from common import consume
 

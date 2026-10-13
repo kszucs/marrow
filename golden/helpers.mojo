@@ -17,7 +17,7 @@ from marrow.errors import InvalidError
 from marrow.arrays import DynArray
 from marrow.expr.builders import table as _in_memory_table
 from marrow.expr.logical import DynRelation
-from marrow.ipc import read_ipc_file
+from marrow.formats.ipc import read_ipc_file
 from marrow.kernels.aggregate import AllKernel
 from marrow.kernels.numeric import EqualKernel
 from marrow.tabular import RecordBatch

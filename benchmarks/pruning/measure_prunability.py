@@ -10,7 +10,7 @@ distinguish the two things this script prints side by side:
 - **real** — the file's own row groups. This is what any reader can prune today.
 - **simulated** — fixed-size row windows. These granules do not exist in the
   file; the figures are reachable only after rewriting it with a page index or
-  smaller row groups, so they are statements about `marrow/parquet/writer.mojo`
+  smaller row groups, so they are statements about `marrow/formats/parquet/writer.mojo`
   and not about index architecture.
 
 Reporting a simulated figure as if it were achievable is the mistake this file

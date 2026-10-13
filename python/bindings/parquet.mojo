@@ -3,7 +3,7 @@
 
 """Python bindings for the native Parquet reader/writer.
 
-Thin marshaling over `marrow.parquet.read_table` / `write_table`: the friendly
+Thin marshaling over `marrow.formats.parquet.read_table` / `write_table`: the friendly
 API (default compression, the `marrow.parquet` module surface) lives in pure
 Python; these entry points stay strict.
 """
@@ -12,12 +12,12 @@ from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
 from marrow.errors import InvalidError
-from marrow.parquet import (
+from marrow.formats.parquet import (
     read_table as _read_table,
     write_table as _write_table,
 )
-from marrow.parquet.chunker import ContentDefinedChunking
-from marrow.parquet.compression import Compression
+from marrow.formats.parquet.chunker import ContentDefinedChunking
+from marrow.formats.parquet.compression import Compression
 from marrow.tabular import Table
 from marrow.dtypes import DynType
 

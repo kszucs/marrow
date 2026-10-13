@@ -13,7 +13,7 @@ from std.python.bindings import PythonModuleBuilder
 
 from marrow.io import DynSource
 from marrow.schema import Schema
-from marrow.json import (
+from marrow.formats.json import (
     JsonReader,
     ParseOptions,
     ReadOptions,

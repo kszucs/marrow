@@ -244,21 +244,21 @@ Brotli -- MIT
 --------------------------------------------------------------------------------
 
 Apache Arrow -- Apache-2.0
-    marrow/parquet/chunker.mojo, marrow/parquet/gearhash.mojo and
-    marrow/parquet/tests/test_chunker.mojo: content-defined chunking, ported
+    marrow/formats/parquet/chunker.mojo, marrow/formats/parquet/gearhash.mojo and
+    marrow/formats/parquet/tests/test_chunker.mojo: content-defined chunking, ported
     from Arrow C++ `cpp/src/parquet/chunker_internal.{h,cc}` and
     `chunker_internal_generated.h`, and from Arrow Rust
     `parquet/src/column/chunker/cdc.rs`, with test vectors from
     `chunker_internal_test.cc`.
     marrow/compress/hadoop.mojo: `Hadoop`, ported from Arrow C++
     `cpp/src/arrow/util/compression_lz4.cc` (`Lz4HadoopCodec`).
-    marrow/parquet/tests/test_page_skip.mojo: one case ported from Arrow Rust
+    marrow/formats/parquet/tests/test_page_skip.mojo: one case ported from Arrow Rust
     `parquet/src/arrow/arrow_reader/selection/ranges.rs`.
     python/marrow/tests/test_arrays.py: ported from PyArrow's
     `python/pyarrow/tests/test_convert_builtin.py`.
-    marrow/avro/tests/data/*.avro, all but `manifest-list-v2-1.avro`: copied
+    marrow/formats/avro/tests/data/*.avro, all but `manifest-list-v2-1.avro`: copied
     from the arrow-testing repository's `data/avro/`, with the values
-    marrow/avro/tests/test_file.mojo expects of them taken from Arrow Rust's
+    marrow/formats/avro/tests/test_file.mojo expects of them taken from Arrow Rust's
     `arrow-avro/src/reader/mod.rs`.
     https://github.com/apache/arrow, https://github.com/apache/arrow-rs,
     https://github.com/apache/arrow-testing
@@ -283,7 +283,7 @@ Apache Arrow testing data -- Apache-2.0
 --------------------------------------------------------------------------------
 
 Apache Parquet testing data -- Apache-2.0
-    marrow/parquet/tests/data/{hadoop_lz4_compressed,non_hadoop_lz4_compressed,
+    marrow/formats/parquet/tests/data/{hadoop_lz4_compressed,non_hadoop_lz4_compressed,
     lz4_raw_compressed}.parquet, copied unchanged from its `data/` directory.
     https://github.com/apache/parquet-testing
 
@@ -305,7 +305,7 @@ Apache OpenDAL -- Apache-2.0
 --------------------------------------------------------------------------------
 
 Apache Iceberg Rust -- Apache-2.0
-    marrow/avro/tests/data/manifest-list-v2-1.avro: an Iceberg manifest list,
+    marrow/formats/avro/tests/data/manifest-list-v2-1.avro: an Iceberg manifest list,
     copied from `crates/iceberg/testdata/manifests_lists/`.
     https://github.com/apache/iceberg-rust
 

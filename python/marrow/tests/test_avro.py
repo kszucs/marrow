@@ -20,7 +20,7 @@ import pytest
 
 import marrow.avro as mavro
 
-DATA = Path(__file__).parents[3] / "marrow" / "avro" / "tests" / "data"
+DATA = Path(__file__).parents[3] / "marrow" / "formats" / "avro" / "tests" / "data"
 
 
 CODECS = ["null", "deflate", "snappy", "zstandard"]

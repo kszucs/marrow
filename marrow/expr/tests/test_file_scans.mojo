@@ -13,8 +13,8 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import array
 from ...dtypes import field, int64, string
-from ...avro import write_avro
-from ...ipc import write_ipc_file
+from ...formats.avro import write_avro
+from ...formats.ipc import write_ipc_file
 from ...scalars import StringScalar
 from ...schema import Schema
 from ...tabular import RecordBatch, Table, record_batch

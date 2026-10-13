@@ -58,7 +58,7 @@ from ..kernels.filter import FilterKernel, TakeKernel
 from ..kernels.groupby import Groups
 from ..kernels.dictionary import DictionaryEncoder
 from ..dtypes import DynType
-from ..parquet.reader import (
+from ..formats.parquet.reader import (
     LeafSet,
     ParquetFile,
     ParquetReader,

@@ -43,9 +43,9 @@ from ...dtypes import Field, field, int64
 from ...io import FileSink
 from ...kernels.join import JOIN_INNER
 from ...scalars import Int64Scalar
-from ...parquet.compression import Compression
-from ...parquet.reader import ParquetFile
-from ...parquet.writer import FileWriter
+from ...formats.parquet.compression import Compression
+from ...formats.parquet.reader import ParquetFile
+from ...formats.parquet.writer import FileWriter
 from ...schema import Schema, schema
 from ...tabular import RecordBatch, Table, record_batch
 from ...utils.testing import Benchmark, ScratchDir

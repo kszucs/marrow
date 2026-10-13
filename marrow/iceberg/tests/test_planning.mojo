@@ -20,7 +20,7 @@ from ..metadata import PartitionSpec, TableMetadata, TableSchema
 from ..planning import SnapshotFiles, scan_tasks, snapshot_files
 from ..scan import IcebergFileReader
 from ..scan import POSITION_DELETE_FILE_PATH_ID
-from ...parquet import ParquetFile
+from ...formats.parquet import ParquetFile
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ...io.uri import StorageOptions

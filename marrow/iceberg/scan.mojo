@@ -29,7 +29,7 @@ from ..execution import ExecContext
 from ..io import DynSource
 from ..io.uri import StorageOptions
 from ..kernels.filter import FilterKernel
-from ..parquet.reader import LeafSet, ParquetFile, RowSelection
+from ..formats.parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..schema import Schema
 from ..tabular import RecordBatch
 

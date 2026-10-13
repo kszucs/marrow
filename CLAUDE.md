@@ -430,8 +430,8 @@ Rules:
   `c_data.mojo`, `utils/byteorder.mojo` and the layers that hand raw pointers
   to a `dlopen`ed C library** — `utils/dylib.mojo` (the shared marshalling
   primitives), the `Lib*` compressors in `compress/` (each in its format's
-  module, deflate's in `compress/zlib.mojo`) with `parquet/reader.mojo` and
-  `parquet/compression.mojo` for the page codecs, and `io/opendal.mojo` for the
+  module, deflate's in `compress/zlib.mojo`) with `formats/parquet/reader.mojo`
+  and `formats/parquet/compression.mojo` for the page codecs, and `io/opendal.mojo` for the
   object store — plus `compress/snappy.mojo`, a codec built from unchecked block
   copies and shuffles. `utils/threads.mojo` holds raw pointers too, handing
   pthread objects and coroutine frames to libc, and it is the one module exempt
@@ -554,7 +554,8 @@ share no node types**:
   a `Variant` for inspection, so `isa[R]()` is a discriminant compare and the
   optimizer's rules read a real typed node, plus a trampoline for lowering. The
   nodes are `EmptyRelation`, `InMemoryTable`, the `FileScan`s (`ParquetScan`,
-  `IpcScan`, `JsonScan`; `with_schema` is how `ColumnPruning` narrows any of
+  `IcebergScan`, and `FormatScan[F]` -- `IpcScan`, `JsonScan`, `AvroScan`;
+  `with_schema` is how `ColumnPruning` narrows any of
   them), `Filter`,
   `Project`, `Aggregate`, `Limit`, `Sort`, `Window`, `JoinChain`, `Union`,
   `Intersection` and `Difference`, chained by `.filter()` / `.select()` /
@@ -623,7 +624,7 @@ share no node types**:
   — `FilterOperator`, `ProjectOperator`, `GroupedAggregateOperator`,
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
   `UnionOperator`, `MultisetOperator[M]`, `LimitOperator`,
-  `ParquetScanOperator`, `IpcScanOperator`, `JsonScanOperator`,
+  `ParquetScanOperator`, `FileScanOperator[F]`, `IcebergScanOperator`,
   `BatchSourceOperator` — plus `Pipeline`, `EvalOperator`, and the two a join
   chain lowers through: `SelectOperator` (its output, by position, after a
   filter on its root) and `RenamedPredicate` (a filter between two joins,
@@ -861,21 +862,27 @@ by URI scheme — and both formats read and write through it, so a backend is
 written once and every format gains it. A new `dlopen`ed library must also be
 added to the wheel staging in `python/marrow/compile.py`; nothing links it, so
 `delocate`/`auditwheel` cannot find it and the wheel would silently omit it.
-`marrow/parquet/tests/test_page_io.mojo` pins that with a recording
+`marrow/formats/parquet/tests/test_page_io.mojo` pins that with a recording
 `ByteSource` — the only way to tell "returned the right rows" from "did less
 work".
 
-**JSON** (`marrow/json/`): newline-delimited JSON, matching `pyarrow.json`
+**JSON** (`marrow/formats/json/`): newline-delimited JSON, matching `pyarrow.json`
 down to its error messages — `read_json`, the streaming `JsonReader` /
 `open_json`, and `write_json` / `JsonWriter`. A read is two passes over
 newline-cut `Blocks`, each walked by a `JsonCursor` over EmberJson's pull
 `Parser`: `ColumnShape` settles the schema by Arrow C++'s promotion rules,
-then each block is parsed straight into builders of it. `marrow.json` imports
-nothing from `marrow.expr`; `JsonScan` reads through it.
+then each block is parsed straight into builders of it. `marrow.formats.json`
+imports nothing from `marrow.expr`; `JsonScan` reads through it.
 
 **Tabular** (`marrow/tabular.mojo`): `RecordBatch` (schema + column arrays) and
 `Table` (schema + chunked columns). `marrow/schema.mojo` holds `Schema`, `Field`
-and metadata. `marrow/ipc.mojo` is the Arrow IPC file/stream reader and writer.
+and metadata.
+
+**Formats** (`marrow/formats/`): every file format reads and writes through
+`BatchReader` / `BatchWriter` (`formats/core.mojo`), a batch, row group or
+block at a time, and `Format` names a format's reader for `FormatScan`.
+`ipc/` is the Arrow IPC file and stream format, `parquet/`, `json/` and
+`avro/` the others.
 
 ### Directory structure
 
@@ -890,7 +897,6 @@ marrow/
 ├── schema.mojo           # Schema, Field, metadata
 ├── tabular.mojo          # RecordBatch, Table
 ├── c_data.mojo           # Arrow C Data Interface
-├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── integration.mojo      # archery's integration JSON, read for the
 │                         #   cross-implementation suite (test-only)
 ├── execution.mojo        # ExecContext — threads, device, `stripe`, GPU_ENABLED
@@ -945,10 +951,17 @@ marrow/
 │   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
 │   │   └── tests/
 │   └── tests/
-├── json/                 # NDJSON: types (shared kinds), reader (options,
-│   └── tests/            #   cursor, both passes), writer
-├── parquet/              # reader, writer, schema, format, encodings,
-│   └── tests/            # compression, bloom, statistics
+├── formats/
+│   ├── core.mojo         # BatchReader, BatchWriter, Format
+│   ├── ipc/              # format (wire constants), flatbuf, metadata, body,
+│   │                     #   compression, reader, writer
+│   ├── parquet/          # reader, writer, schema, format, encodings,
+│   │                     #   compression, bloom, statistics
+│   ├── json/             # NDJSON: types (shared kinds), reader (options,
+│   │                     #   cursor, both passes), writer
+│   ├── avro/             # object container files: file, schema, mapping,
+│   │                     #   binary, decoder, encoder
+│   └── tests/            # the protocol, across every format
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # Python package + bindings (python/marrow/libmarrow.so)
 └── marrow/tests/         # Python test_*.py and bench_*.py
@@ -1175,7 +1188,7 @@ In addition:
   (`pixi run devkit license check` lists what lacks it). **Code, tables or
   test vectors ported from another project** also name the upstream project,
   its files and licence in a comment below the header, and get an entry in
-  `NOTICE.txt` — see `marrow/parquet/chunker.mojo`. Consulting a reference
+  `NOTICE.txt` — see `marrow/formats/parquet/chunker.mojo`. Consulting a reference
   implementation is not porting; carrying its code over is.
 - **Conventional commits** (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`,
   `test:`), optional scope in parens: `feat(kernels): add concat`.

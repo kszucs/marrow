@@ -10,7 +10,7 @@ bug.
 
 from marrow.execution import ExecContext
 from marrow.io import BufferSource
-from marrow.parquet import ParquetFile
+from marrow.formats.parquet import ParquetFile
 
 from common import consume
 

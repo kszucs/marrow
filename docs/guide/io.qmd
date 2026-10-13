@@ -164,8 +164,8 @@ Python. `write_table` accepts any Arrow-C-stream object too, so a PyArrow table
 can be written directly.
 
 ::: {.callout-note}
-The Mojo API mirrors the Python one — `from marrow.parquet import read_table,
-write_table` operate on a marrow `Table`, and the `marrow/parquet` package also
+The Mojo API mirrors the Python one — `from marrow.formats.parquet import read_table,
+write_table` operate on a marrow `Table`, and the `marrow/formats/parquet` package also
 exposes lower-level metadata, statistics, page-index and bloom-filter readers.
 :::
 

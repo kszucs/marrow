@@ -100,7 +100,7 @@ from ..kernels.boolean import AndKernel
 from ..iceberg.bounds import decode_bound
 from ..iceberg.manifest import DataFile
 from ..iceberg.metadata import PartitionSpec
-from ..parquet.reader import (
+from ..formats.parquet.reader import (
     LeafSet,
     PageBounds,
     ParquetFile,

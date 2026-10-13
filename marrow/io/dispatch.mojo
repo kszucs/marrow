@@ -40,7 +40,7 @@ was tried.
 
 The closed type set costs nothing here. An instrumenting or test-local source
 is still supplied as the comptime `S` -- which is how
-`marrow/parquet/tests/test_page_io.mojo` does it, and it is unaffected.
+`marrow/formats/parquet/tests/test_page_io.mojo` does it, and it is unaffected.
 """
 
 from std.os import abort

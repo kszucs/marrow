@@ -14,7 +14,7 @@ is how one decoder reads both the v1 and the v2 layout.
 
 from ..arrays import BinaryArray, DynArray, Int32Array, MapArray, StructArray
 from ..dtypes import DynType, field_index, int32
-from ..avro import AvroFile
+from ..formats.avro import AvroFile
 from ..errors import CorruptError
 from ..io import DynSource
 from ..io.uri import StorageOptions

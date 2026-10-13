@@ -471,7 +471,7 @@ under load.
 A `RowSelection` now narrows what is *fetched*, not just what is decoded: the
 `OffsetIndex` plans the byte ranges, adjacent pages merge into one read, and a
 skipped page is stepped over from the index rather than by parsing its header.
-`marrow/parquet/tests/test_page_io.mojo` measures this with a recording
+`marrow/formats/parquet/tests/test_page_io.mojo` measures this with a recording
 `ByteSource` -- the only way to tell "returned the right rows" from "did less
 work". What is left:
 
@@ -486,16 +486,16 @@ work". What is left:
   have; widening the I/O pool raises nt but does not substitute for one.
 
 - **`bench_read_selected_prefix_snappy_1m` reads an uncompressed file.**
-  `_prepare_groups` in `marrow/parquet/tests/bench_parquet.mojo` takes a
+  `_prepare_groups` in `marrow/formats/parquet/tests/bench_parquet.mojo` takes a
   `compression` argument and writes `compression="none"` regardless, so the
   row its docstring calls "where page skipping shows" measures no codec at all.
 
-- **`pytest marrow/tests/test_ipc.mojo` on its own deadlocks the compiler.**
+- **`pytest marrow/formats/ipc/tests/test_ipc.mojo` on its own deadlocks the compiler.**
   `%cpu=0.0`, RSS flat at ~900 MB, CPU time frozen at ~13.7 s while elapsed
   grows, no diagnostic -- the signature CLAUDE.md records for the `__eq__`
   instantiation cycle. It reproduces on `cb296c82` with no local changes, so it
   is not new, and it is invisible day to day because every routine invocation
-  selects that file *alongside* `marrow/parquet/tests`, and that larger unit
+  selects that file *alongside* `marrow/formats/parquet/tests`, and that larger unit
   compiles in ~110 s. One selection is one compilation unit, so the smaller
   selection is a different unit and only it deadlocks. Not yet narrowed to a
   case: the first 18 cases compile in 33 s, and both halves of the remaining 19
@@ -862,9 +862,6 @@ Every format reads and writes through `marrow.formats`' `BatchReader` /
 `BatchWriter`, one batch, row group or block resident at a time, and a scan
 over IPC, JSON or Avro is one `FormatScan[F]`. Still open:
 
-- **The formats still live at the top level.** `marrow/formats/` holds only
-  the traits; moving `ipc`, `parquet`, `json` and `avro` under it touches ~60
-  import sites (bindings, golden, fuzz, CI path filters, `NOTICE.txt`).
 - **The Python bindings expose none of the streaming API**: no
   `ParquetWriter`, `ParquetFile.iter_batches`, IPC stream reader or Avro batch
   reader.
@@ -938,7 +935,7 @@ A user rejects the library outright without these.
 
 #### 1.2 CSV and JSON readers
 
-**What exists.** NDJSON: `marrow/json/` reads (`read_json`, `open_json`) and
+**What exists.** NDJSON: `marrow/formats/json/` reads (`read_json`, `open_json`) and
 writes (`write_json`) like `pyarrow.json`, from Mojo and Python, and scans as
 `scan_json`. No CSV: the only CSV code is `QueryCli`'s output writer
 (`render_csv`, `marrow/expr/cli.mojo`); `QueryCli` has no `--format json`.
@@ -1371,7 +1368,7 @@ differentiator hiding inside a table-stakes item.
 - **No `__dataframe__` protocol**, though
   the PyCapsule/C Stream path marrow already has is the better-supported
   modern route.
-- **Avro, and Iceberg on top of it.** `marrow/avro/` reads and writes object
+- **Avro, and Iceberg on top of it.** `marrow/formats/avro/` reads and writes object
   container files (`read_avro`, `write_avro`, `AvroFile`, `AvroWriter`;
   Python's `marrow.avro`) with the `null`, `deflate`, `snappy` and
   `zstandard` codecs, and carries Iceberg's `field-id` / `element-id` /

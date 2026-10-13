@@ -11,22 +11,22 @@ from std.python import Python
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from ...arrays import DynArray
-from ...avro import AvroFile, AvroFormat, AvroWriter
+from ..avro import AvroFile, AvroFormat, AvroWriter
 from ...builders import array
 from ...dtypes import int64
 from ...execution import ExecContext
 from ...io import BufferSource, ByteSink, ByteSource, Fetched, FileSink
-from ...ipc import (
+from ..ipc import (
     IpcFormat,
     RecordBatchFileReader,
     RecordBatchFileWriter,
     RecordBatchStreamReader,
     RecordBatchStreamWriter,
 )
-from ...json import JsonFormat, JsonReader, JsonWriter
-from ...parquet import ParquetFile, ParquetFormat, ParquetReader, read_table
-from ...parquet.compression import Compression
-from ...parquet.writer import FileWriter
+from ..json import JsonFormat, JsonReader, JsonWriter
+from ..parquet import ParquetFile, ParquetFormat, ParquetReader, read_table
+from ..parquet.compression import Compression
+from ..parquet.writer import FileWriter
 from ...schema import Schema
 from ...tabular import RecordBatch, record_batch
 from ...utils.testing import ScratchDir

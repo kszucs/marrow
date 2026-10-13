@@ -20,10 +20,10 @@ from std.memory import ArcPointer
 from ...utils.testing import ScratchDir
 from ...execution import ExecContext
 from ...io import ByteSource, Fetched, FileSink, BufferSource
-from ...parquet import ParquetFile, read_table, write_table
-from ...parquet.compression import Compression
-from ...parquet.writer import FileWriter
-from ...ipc import (
+from ...formats.parquet import ParquetFile, read_table, write_table
+from ...formats.parquet.compression import Compression
+from ...formats.parquet.writer import FileWriter
+from ...formats.ipc import (
     RecordBatchFileReader,
     RecordBatchFileWriter,
     read_ipc_file,

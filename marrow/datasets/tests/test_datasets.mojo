@@ -11,8 +11,8 @@ from std.testing import assert_equal, assert_false, assert_raises, assert_true
 from ...arrays import DynArray
 from ...builders import array
 from ...dtypes import field, int64, string
-from ...ipc import write_ipc_file
-from ...parquet.writer import write_table
+from ...formats.ipc import write_ipc_file
+from ...formats.parquet.writer import write_table
 from ...schema import Schema
 from ...tabular import RecordBatch, Table, record_batch
 from ...utils.testing import ScratchDir

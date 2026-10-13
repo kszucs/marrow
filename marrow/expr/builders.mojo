@@ -776,7 +776,7 @@ def scan(
 
 
 def scan_json(var path: String, var schema: Schema) raises -> DynRelation:
-    """A newline-delimited JSON file, as a plan; see `marrow.json`.
+    """A newline-delimited JSON file, as a plan; see `marrow.formats.json`.
 
     The schema is required, as it is for `scan`: a plan is a description, and
     building it must not open the file. Keys outside it are skipped.

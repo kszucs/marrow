@@ -359,7 +359,7 @@ datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = [
 # Anything after the task name is passed to pytest, so a selection works the
 # same as it does on the host:
 #
-#   pixi run -e docker test_arm64 marrow/tests/test_ipc.mojo
+#   pixi run -e docker test_arm64 marrow/formats/ipc/tests/test_ipc.mojo
 #
 # `arm64` is native on Apple Silicon and is the loop that found the IPC
 # dictionary deadlock; `x86` is the platform CI runs and needs Rosetta on a Mac.
@@ -464,7 +464,7 @@ mojo-regex = { git = "https://github.com/kszucs/mojo-regex.git", branch = "marro
 # `$CONDA_PREFIX/share/zoneinfo`.
 morrow = { git = "https://github.com/kszucs/morrow.mojo.git", branch = "marrow-1.2.0.dev2026100805" }
 tzdata = "*"
-# The JSON tokenizer behind `marrow/json/`: a fork of bgreni/EmberJson whose
+# The JSON tokenizer behind `marrow/formats/json/`: a fork of bgreni/EmberJson whose
 # `marrow-<mojo version>` branch builds on that nightly. It installs
 # `lib/mojo/emberjson.mojoc` (with its `emberserde`).
 emberjson = { git = "https://github.com/kszucs/EmberJson.git", branch = "marrow-1.2.0.dev2026100805" }
@@ -487,7 +487,7 @@ psutil = ">=5,<8"
 # libopentelemetry-cpp → prometheus-cpp → zlib chain can resolve on linux-64.
 zlib = ">=1.3.1"
 # Native Parquet page compression codecs, opened at runtime via dlopen by
-# marrow/parquet/compression.mojo (no link-time dependency).
+# marrow/formats/parquet/compression.mojo (no link-time dependency).
 zstd = ">=1.5.0"
 snappy = ">=1.1.0"
 lz4-c = ">=1.9.0"
