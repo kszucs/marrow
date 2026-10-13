@@ -684,6 +684,32 @@ def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
     )
 
 
+def _read_dictionary_codes(
+    values: Span[UInt8, _], count: Int, size: Int, mut out: List[Int32]
+) raises:
+    """Append a dictionary-encoded page's first `count` codes, refusing a page
+    whose codes name a value past the chunk's `size`-entry dictionary."""
+    var base = len(out)
+    Rle.read_codes[DType.int32](values, count, out)
+    # As unsigned, a negative code is past any dictionary too.
+    var top = UInt32(0)
+    for i in range(base, len(out)):
+        top = max(top, out[i].cast[DType.uint32]())
+    if len(out) > base and Int(top) >= size:
+        raise CorruptError("parquet: dictionary index out of range")
+
+
+def _check_fixed_dictionary(
+    body: Span[UInt8, _], count: Int, width: Int
+) raises:
+    """Refuse a dictionary page whose `count` values of `width` bytes do not
+    fit in its `body`, before they are read out of it."""
+    if count * width > len(body):
+        raise CorruptError(
+            "parquet: a dictionary page holds fewer values than it says"
+        )
+
+
 def _check_int96(span: Span[UInt8, _], count: Int) raises:
     """Refuse a page or dictionary whose `count` INT96 values do not fit in
     `span`, before `_int96_nanos` reads them."""
@@ -963,13 +989,12 @@ struct ByteArrayLeafBuilder[B: BytesBuilder](LeafBuilder):
         """Dictionary indices, each value copied straight out of the
         dictionary page's bytes -- once, into storage sized up front."""
         var indices = List[Int32]()
-        Rle.read_codes[DType.int32](vspan, page.num_present, indices)
+        _read_dictionary_codes(
+            vspan, page.num_present, len(self.dict_len), indices
+        )
         var total = 0
         for i in range(len(indices)):
-            var idx = Int(indices[i])
-            if idx < 0 or idx >= len(self.dict_len):
-                raise CorruptError("parquet: dictionary index out of range")
-            total += self.dict_len[idx]
+            total += self.dict_len[Int(indices[i])]
         self.builder.reserve(page.num_values)
         self.builder.reserve_bytes(total)
 
@@ -1138,7 +1163,9 @@ struct ByteViewLeafBuilder[T: dt.BinaryViewLikeType](LeafBuilder):
             page.scatter(self.max_def, runs, place_plain)
         elif page.encoding.is_dictionary():
             var indices = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, page.num_present, indices)
+            _read_dictionary_codes(
+                vspan, page.num_present, len(self.dict_len), indices
+            )
 
             def place_dict(
                 present_here: Bool, selected: Bool, vi: Int
@@ -1287,7 +1314,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         var use_decoded = False
         if is_dict:
             idx = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, page.num_present, idx)
+            _read_dictionary_codes(vspan, page.num_present, len(self.dict), idx)
         elif not page.is_plain():
             decoded = page.encoding.decode_flba(
                 vspan, page.num_present, self.width
@@ -1317,6 +1344,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
             var span = page.body
+            _check_fixed_dictionary(span, page.num_values, self.width)
             for i in range(page.num_values):
                 self.dict.append(self._decode_be(span, i * self.width))
         else:
@@ -1356,7 +1384,7 @@ struct Int96LeafBuilder(LeafBuilder):
         var is_dict = page.is_dictionary()
         if is_dict:
             idx = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, page.num_present, idx)
+            _read_dictionary_codes(vspan, page.num_present, len(self.dict), idx)
         elif page.is_plain():
             _check_int96(vspan, page.num_present)
         else:
@@ -1402,12 +1430,14 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
     var max_def: Int
     var width: Int
     var dict_body: List[UInt8]  # concatenated dict values, `width` bytes each
+    var dict_count: Int
 
     def __init__(out self, num_rows: Int, leaf: LeafColumn):
         self.width = leaf.type_length
         self.builder = FixedSizeBinaryBuilder(self.width, num_rows)
         self.max_def = leaf.max_def
         self.dict_body = List[UInt8]()
+        self.dict_count = 0
 
     def _place(
         mut self, page: Page, runs: Optional[List[Tuple[Int, Int]]]
@@ -1421,7 +1451,9 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
         var use_decoded = False
         if is_dict:
             idx = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, page.num_present, idx)
+            _read_dictionary_codes(
+                vspan, page.num_present, self.dict_count, idx
+            )
         elif not page.is_plain():
             decoded = page.encoding.decode_flba(
                 vspan, page.num_present, self.width
@@ -1451,8 +1483,10 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
+            _check_fixed_dictionary(page.body, page.num_values, self.width)
             self.dict_body = List[UInt8]()
             self.dict_body.extend(page.body)
+            self.dict_count = page.num_values
         else:
             self._place(page, None)
 
@@ -1794,7 +1828,9 @@ struct _BytesSink[B: BytesBuilder](LeveledSink, Movable):
         var vspan = pg.values()
         if pg.encoding.is_dictionary():
             self.indices = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, pg.num_present, self.indices)
+            _read_dictionary_codes(
+                vspan, pg.num_present, len(self.dict_len), self.indices
+            )
         else:
             pg.encoding.decode_bytes(
                 vspan,
@@ -1860,6 +1896,7 @@ struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
     var builder: PrimitiveBuilder[Self.T]
 
     def handle_dict(mut self, pg: Page) raises:
+        _check_fixed_dictionary(pg.body, pg.num_values, self.width)
         for i in range(pg.num_values):
             self.dict.append(
                 BigEndian.signed[Self.T.native](
@@ -1872,7 +1909,7 @@ struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
         var vspan = pg.values()
         if pg.is_dictionary():
             var idx = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, pg.num_present, idx)
+            _read_dictionary_codes(vspan, pg.num_present, len(self.dict), idx)
             for i in range(pg.num_present):
                 self.present.append(self.dict[Int(idx[i])])
         elif pg.is_plain():
@@ -1906,19 +1943,22 @@ struct _DecimalSink[T: PrimitiveType](LeveledSink, Movable):
 struct _FsbSink(LeveledSink, Movable):
     var width: Int
     var dict_body: List[UInt8]
+    var dict_count: Int
     var present: List[List[UInt8]]
     var builder: FixedSizeBinaryBuilder
 
     def handle_dict(mut self, pg: Page) raises:
+        _check_fixed_dictionary(pg.body, pg.num_values, self.width)
         self.dict_body.clear()
         self.dict_body.extend(pg.body)
+        self.dict_count = pg.num_values
 
     def decode_present(mut self, pg: Page) raises:
         self.present.clear()
         var vspan = pg.values()
         if pg.is_dictionary():
             var idx = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, pg.num_present, idx)
+            _read_dictionary_codes(vspan, pg.num_present, self.dict_count, idx)
             for i in range(pg.num_present):
                 var o = Int(idx[i]) * self.width
                 self.present.append(
@@ -1961,7 +2001,7 @@ struct _Int96Sink(LeveledSink, Movable):
         var vspan = pg.values()
         if pg.is_dictionary():
             var idx = List[Int32]()
-            Rle.read_codes[DType.int32](vspan, pg.num_present, idx)
+            _read_dictionary_codes(vspan, pg.num_present, len(self.dict), idx)
             for i in range(pg.num_present):
                 self.present.append(self.dict[Int(idx[i])])
         elif pg.is_plain():
@@ -2246,6 +2286,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         var sink = _FsbSink(
             width,
             List[UInt8](),
+            0,
             List[List[UInt8]](),
             FixedSizeBinaryBuilder(width, self.num_rows),
         )

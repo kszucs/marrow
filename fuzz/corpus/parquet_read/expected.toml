@@ -119,3 +119,24 @@ bug = "B-PR12"
 ["int96-page-overcount.parquet"]
 verdict = "reject"
 note = "an INT96 data page whose header counts 1000 values over a body of 100"
+
+["dictionary-index-int96.parquet"]
+verdict = "reject"
+note = "every INT96 dictionary index past a 96-entry dictionary"
+
+["dictionary-index-decimal.parquet"]
+verdict = "reject"
+note = "every decimal dictionary index past a 96-entry dictionary"
+
+["dictionary-index-fixed-binary-list.parquet"]
+verdict = "reject"
+note = "a list of fixed-size binary, every dictionary index past the dictionary"
+
+["dictionary-index-string-list.parquet"]
+verdict = "reject"
+note = "a list of strings, every dictionary index past the dictionary"
+
+["dictionary-overcount-decimal.parquet"]
+verdict = "reject"
+note = "a decimal dictionary page whose header counts 1000 values over a body of 96"
+

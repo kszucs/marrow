@@ -995,6 +995,183 @@ def test_read_int96_refuses_an_overcounted_page() raises:
             _ = read_table(dict)
 
 
+comptime _DICT_SIZE = 96
+"""Distinct values written by `_past_the_dictionary`: 7-bit indices, one
+bit-packed run of twelve groups of eight."""
+
+
+def _one_per_list(values: PythonObject) raises -> PythonObject:
+    """`values` as a list array holding one value per row."""
+    var pa = Python.import_module("pyarrow")
+    var offsets = Python.list()
+    for i in range(_DICT_SIZE + 1):
+        offsets.append(i)
+    return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), values)
+
+
+def _past_the_dictionary(
+    path: String, column: PythonObject, int96: Bool = False
+) raises:
+    """Write `column` -- `_DICT_SIZE` distinct values -- dictionary-encoded to
+    `path`, then set every bit of the data page's index run, so each index
+    reads 127, past the dictionary."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var bi = Python.import_module("builtins")
+    pq.write_table(
+        pa.table(Python.dict(c=column)),
+        path,
+        compression="none",
+        write_statistics=False,
+        use_deprecated_int96_timestamps=int96,
+    )
+    var f = bi.open(path, "rb")
+    var raw = bi.bytearray(f.read())
+    f.close()
+    # The index stream: its bit width, 7, then the run header -- twelve
+    # bit-packed groups, (12 << 1) | 1 -- and their 12 * 7 bytes.
+    var head = bi.bytes(Python.list(0x07, 0x19))
+    assert_equal(Int(py=raw.count(head)), 1)
+    var at = Int(py=raw.find(head)) + 2
+    for i in range(12 * 7):
+        raw[at + i] = 0xFF
+    f = bi.open(path, "wb")
+    _ = f.write(raw)
+    f.close()
+
+
+def _refuses_past_the_dictionary(
+    dir: String,
+    name: String,
+    values: PythonObject,
+    int96: Bool = False,
+    views: Bool = False,
+) raises:
+    """A flat column of `values` and a list of them, each with every index
+    past the dictionary, are refused as corrupt -- with `views`, the flat
+    column read as views too."""
+    var flat = join(dir, name + "_flat.parquet")
+    _past_the_dictionary(flat, values, int96)
+    with assert_raises(contains="dictionary index out of range"):
+        _ = read_table(flat)
+    if views:
+        with assert_raises(contains="dictionary index out of range"):
+            _ = read_table(flat, binary_type=binary_view)
+    var nested = join(dir, name + "_nested.parquet")
+    _past_the_dictionary(nested, _one_per_list(values), int96)
+    with assert_raises(contains="dictionary index out of range"):
+        _ = read_table(nested)
+
+
+def test_read_int96_refuses_a_dictionary_index_past_the_dictionary() raises:
+    var pa = Python.import_module("pyarrow")
+    var ts = Python.list()
+    for i in range(_DICT_SIZE):
+        ts.append(i * 1000000000)
+    with ScratchDir() as dir:
+        _refuses_past_the_dictionary(
+            dir,
+            "marrow_int96_dict_index",
+            pa.array(ts, type=pa.timestamp("ns")),
+            int96=True,
+        )
+
+
+def test_read_decimal_refuses_a_dictionary_index_past_the_dictionary() raises:
+    var pa = Python.import_module("pyarrow")
+    var ints = Python.list()
+    for i in range(_DICT_SIZE):
+        ints.append(i)
+    with ScratchDir() as dir:
+        _refuses_past_the_dictionary(
+            dir,
+            "marrow_decimal_dict_index",
+            pa.array(ints, type=pa.int64()).cast(pa.decimal128(21, 2)),
+        )
+
+
+def test_read_fixed_size_binary_refuses_a_dictionary_index_past_the_dictionary() raises:
+    var pa = Python.import_module("pyarrow")
+    var bi = Python.import_module("builtins")
+    var values = Python.list()
+    for i in range(_DICT_SIZE):
+        values.append(bi.bytes(Python.list(0, 0, 0, i)))
+    with ScratchDir() as dir:
+        _refuses_past_the_dictionary(
+            dir,
+            "marrow_fsb_dict_index",
+            pa.array(values, type=pa.binary(4)),
+        )
+
+
+def test_read_strings_refuse_a_dictionary_index_past_the_dictionary() raises:
+    """Copied into a string array, and pointed at by views."""
+    var pa = Python.import_module("pyarrow")
+    var values = Python.list()
+    for i in range(_DICT_SIZE):
+        values.append("value-" + String(i))
+    with ScratchDir() as dir:
+        _refuses_past_the_dictionary(
+            dir, "marrow_string_dict_index", pa.array(values), views=True
+        )
+
+
+def _overcount_the_dictionary(path: String, column: PythonObject) raises:
+    """Write `column` -- `_DICT_SIZE` distinct values -- dictionary-encoded to
+    `path`, then raise the dictionary page's count from 96 to 1000, leaving
+    its body as it was."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var bi = Python.import_module("builtins")
+    pq.write_table(
+        pa.table(Python.dict(c=column)),
+        path,
+        compression="none",
+        write_statistics=False,
+    )
+    var f = bi.open(path, "rb")
+    var raw = f.read()
+    f.close()
+    # The dictionary page header (field 7), then its num_values as a zigzag
+    # varint -- 96 is 0xC0 0x01, 1000 is 0xD0 0x0F.
+    var count = bi.bytes(Python.list(0x4C, 0x15, 0xC0, 0x01))
+    assert_equal(Int(py=raw.count(count)), 1)
+    raw = raw.replace(count, bi.bytes(Python.list(0x4C, 0x15, 0xD0, 0x0F)))
+    f = bi.open(path, "wb")
+    _ = f.write(raw)
+    f.close()
+
+
+def test_read_fixed_width_refuses_an_overcounted_dictionary() raises:
+    """A decimal or fixed-size binary dictionary page counting more values
+    than its body holds is refused, flat or in a list."""
+    var pa = Python.import_module("pyarrow")
+    var bi = Python.import_module("builtins")
+    var ints = Python.list()
+    var bytes = Python.list()
+    for i in range(_DICT_SIZE):
+        ints.append(i)
+        bytes.append(bi.bytes(Python.list(0, 0, 0, i)))
+    var columns = Python.list(
+        pa.array(ints, type=pa.int64()).cast(pa.decimal128(21, 2)),
+        pa.array(bytes, type=pa.binary(4)),
+    )
+    with ScratchDir() as dir:
+        for i in range(2):
+            var flat = join(
+                dir, "marrow_dict_overcount_" + String(i) + "_flat.parquet"
+            )
+            _overcount_the_dictionary(flat, columns[i])
+            with assert_raises(contains="fewer values than it says"):
+                _ = read_table(flat)
+            var nested = join(
+                dir, "marrow_dict_overcount_" + String(i) + "_nested.parquet"
+            )
+            _overcount_the_dictionary(nested, _one_per_list(columns[i]))
+            with assert_raises(contains="fewer values than it says"):
+                _ = read_table(nested)
+
+
 def test_read_float16() raises:
     # FLOAT16 = FIXED_LEN_BYTE_ARRAY(2) + FLOAT16 logical -> Arrow halffloat.
     var pa = Python.import_module("pyarrow")
