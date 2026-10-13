@@ -55,6 +55,7 @@ from ..dtypes import (
 )
 from ..execution import ExecContext
 from ..errors import InvalidError, NotImplementedError
+from .core import Kernel
 from .filter import FilterKernel, TakeKernel
 from .boolean import NotNullKernel
 from .dictionary import DictionaryEncoder
@@ -883,64 +884,71 @@ struct HashJoin[Hash: Hasher = KeyHash]:
 
 
 # ---------------------------------------------------------------------------
-# hash_join — top-level public API
+# HashJoinKernel — the public entry point
 # ---------------------------------------------------------------------------
 
 
-def hash_join(
-    left: StructArray,
-    right: StructArray,
-    left_on: List[Int],
-    right_on: List[Int],
-    kind: JoinKind = JOIN_INNER,
-    strictness: UInt8 = JOIN_ALL,
-    build_side: JoinBuildSide = BUILD_LEFT,
-    ctx: ExecContext = ExecContext.auto(),
-) raises -> StructArray:
-    """Equijoin two StructArrays on positional key column indices.
+struct HashJoinKernel(Kernel):
+    """Equijoin of two `StructArray`s on positional key columns, through
+    `HashJoin`."""
 
-    ``build_side`` decides which input is materialised and indexed; it decides
-    nothing else. The answer — field names, field order and rows — is the same
-    either way, which is the property that makes "index the smaller side" a
-    cost decision an optimizer may take on its own.
+    comptime name = "hash_join"
 
-    Args:
-        left: The left side as a StructArray (one child per column).
-        right: The right side as a StructArray (one child per column).
-        left_on: Positional column indices in ``left`` to join on.
-        right_on: Positional column indices in ``right`` to join on.
-        kind: Join direction (JOIN_INNER, JOIN_LEFT, JOIN_RIGHT, JOIN_FULL,
-              JOIN_SEMI, JOIN_ANTI, JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI).
-        strictness: JOIN_ALL (default) or JOIN_ANY.
-        build_side: BUILD_LEFT (default) indexes ``left`` and streams
-            ``right``; BUILD_RIGHT does the opposite. Row *order* within the
-            result follows the probe side and so does change; the multiset of
-            rows does not.
-        ctx: How to execute. ``.auto()`` (default) picks
-            ``num_physical_cores()`` workers; ``.serial()`` keeps every step on
-            the calling thread; ``.parallel(n)`` lets each step use ``n``
-            workers when its input is large enough. Any GPU device on the
-            context survives into the join's internal dispatches.
+    @staticmethod
+    def apply(
+        left: StructArray,
+        right: StructArray,
+        left_on: List[Int],
+        right_on: List[Int],
+        kind: JoinKind = JOIN_INNER,
+        strictness: UInt8 = JOIN_ALL,
+        build_side: JoinBuildSide = BUILD_LEFT,
+        ctx: ExecContext = ExecContext.auto(),
+    ) raises -> StructArray:
+        """Equijoin two StructArrays on positional key column indices.
 
-    Returns:
-        Output StructArray:
-        * INNER/LEFT/RIGHT/FULL: left columns + right columns.
-        * SEMI/ANTI: left columns only.
-        * RIGHT_SEMI/RIGHT_ANTI: right columns only.
-    """
-    if len(left_on) != len(right_on):
-        raise InvalidError("hash_join: len(left_on) != len(right_on)")
-    if not kind.is_supported():
-        # CROSS, MARK and SINGLE have constants but no implementation. They used
-        # to fall through to the outer-join arm, and MARK additionally built a
-        # result whose declared schema had more fields than it had columns.
-        raise NotImplementedError(
-            t"hash_join: join kind '{kind}' is not implemented"
-        )
+        ``build_side`` decides which input is materialised and indexed; it decides
+        nothing else. The answer — field names, field order and rows — is the same
+        either way, which is the property that makes "index the smaller side" a
+        cost decision an optimizer may take on its own.
 
-    if build_side == BUILD_LEFT:
-        var join = HashJoin(left, left_on, ctx.copy())
-        return join.probe(right, right_on, kind, strictness, build_side)
-    else:
-        var join = HashJoin(right, right_on, ctx.copy())
-        return join.probe(left, left_on, kind, strictness, build_side)
+        Args:
+            left: The left side as a StructArray (one child per column).
+            right: The right side as a StructArray (one child per column).
+            left_on: Positional column indices in ``left`` to join on.
+            right_on: Positional column indices in ``right`` to join on.
+            kind: Join direction (JOIN_INNER, JOIN_LEFT, JOIN_RIGHT, JOIN_FULL,
+                  JOIN_SEMI, JOIN_ANTI, JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI).
+            strictness: JOIN_ALL (default) or JOIN_ANY.
+            build_side: BUILD_LEFT (default) indexes ``left`` and streams
+                ``right``; BUILD_RIGHT does the opposite. Row *order* within the
+                result follows the probe side and so does change; the multiset of
+                rows does not.
+            ctx: How to execute. ``.auto()`` (default) picks
+                ``num_physical_cores()`` workers; ``.serial()`` keeps every step on
+                the calling thread; ``.parallel(n)`` lets each step use ``n``
+                workers when its input is large enough. Any GPU device on the
+                context survives into the join's internal dispatches.
+
+        Returns:
+            Output StructArray:
+            * INNER/LEFT/RIGHT/FULL: left columns + right columns.
+            * SEMI/ANTI: left columns only.
+            * RIGHT_SEMI/RIGHT_ANTI: right columns only.
+        """
+        if len(left_on) != len(right_on):
+            raise Self.error[InvalidError]("len(left_on) != len(right_on)")
+        if not kind.is_supported():
+            # CROSS, MARK and SINGLE have constants but no implementation. They used
+            # to fall through to the outer-join arm, and MARK additionally built a
+            # result whose declared schema had more fields than it had columns.
+            raise Self.error[NotImplementedError](
+                t"join kind '{kind}' is not implemented"
+            )
+
+        if build_side == BUILD_LEFT:
+            var join = HashJoin(left, left_on, ctx.copy())
+            return join.probe(right, right_on, kind, strictness, build_side)
+        else:
+            var join = HashJoin(right, right_on, ctx.copy())
+            return join.probe(left, left_on, kind, strictness, build_side)

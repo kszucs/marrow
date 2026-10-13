@@ -6,7 +6,7 @@
 Covers three phases across sizes 10k–10M (and a gated 100M tier):
   - build           — build the hash table from the left side
   - probe           — probe + assemble (full join output)
-  - full            — hash_join() end-to-end (build + probe + assemble)
+  - full            — HashJoinKernel.apply() end-to-end (build + probe + assemble)
 
 Plus a build×probe shape matrix (small build / large probe, etc.) that
 reflects realistic analytical workloads where one side is a fact table and
@@ -25,7 +25,7 @@ from ...arrays import PrimitiveArray, DynArray, StructArray
 from ...builders import PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, Int64Type, struct_, Field
 from ...kernels.join import JOIN_INNER, JOIN_ALL
-from ...kernels.join import HashJoin, hash_join
+from ...kernels.join import HashJoin, HashJoinKernel
 from ...kernels.aggregate import Fold, SumFold
 from ...kernels.groupby import Groups
 from ...execution import ExecContext
@@ -112,7 +112,7 @@ def _bench_probe(mut b: Benchmark, build_n: Int, probe_n: Int) raises:
 
 
 def _bench_full(mut b: Benchmark, build_n: Int, probe_n: Int) raises:
-    """Measure hash_join() end-to-end: build + probe + assemble.
+    """Measure HashJoinKernel.apply() end-to-end: build + probe + assemble.
 
     Throughput is reported in total input rows/sec (build + probe).
     """
@@ -124,7 +124,9 @@ def _bench_full(mut b: Benchmark, build_n: Int, probe_n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        var r = hash_join(left, right, keys, keys, JOIN_INNER, JOIN_ALL)
+        var r = HashJoinKernel.apply(
+            left, right, keys, keys, JOIN_INNER, JOIN_ALL
+        )
         keep(len(r))
 
     b.iter(call)

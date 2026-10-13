@@ -44,7 +44,7 @@ from ...utils import Hasher, KeyHash, TruncatedHash64
 from ...kernels.join import (
     JoinHashTable,
     JoinIndex,
-    hash_join,
+    HashJoinKernel,
     HashJoin,
     JOIN_INNER,
     JOIN_LEFT,
@@ -147,7 +147,7 @@ def test_inner_join_basic() raises:
     right_vals.append(400)
     var right = _int32_struct(right_keys, right_vals)
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 2)
     assert_equal(len(result.children), 4)  # k, v, k_right, v_right
 
@@ -170,7 +170,7 @@ def test_inner_join_no_matches() raises:
     right_vals.append(40)
     var right = _int32_struct(right_keys, right_vals)
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 0)
 
 
@@ -196,7 +196,7 @@ def test_inner_join_duplicate_keys_cartesian() raises:
     rv.append(200)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 4)
 
 
@@ -212,7 +212,7 @@ def test_inner_join_empty_left() raises:
     rv.append(10)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 0)
 
 
@@ -228,7 +228,7 @@ def test_inner_join_empty_right() raises:
     var right_vals = List[Int]()
     var right = _int32_struct(right_keys, right_vals)
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 0)
 
 
@@ -258,7 +258,9 @@ def test_left_join_unmatched_left_rows() raises:
     rv.append(200)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_LEFT)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_LEFT
+    )
     assert_equal(len(result), 3)
     # Right side columns have nulls for unmatched rows.
     assert_equal(result.children[2].null_count(), 2)
@@ -291,7 +293,7 @@ def test_right_join_unmatched_right_rows() raises:
     rv.append(300)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(
+    var result = HashJoinKernel.apply(
         left, right, _left_on(), _right_on(), kind=JOIN_RIGHT
     )
     assert_equal(len(result), 3)
@@ -326,7 +328,9 @@ def test_full_outer_join() raises:
     rv.append(300)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_FULL)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_FULL
+    )
     assert_equal(len(result), 3)
     assert_equal(len(result.children), 4)
 
@@ -359,7 +363,9 @@ def test_semi_join_basic() raises:
     rv.append(201)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_SEMI)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_SEMI
+    )
     assert_equal(len(result), 1)
     assert_equal(len(result.children), 2)  # left columns only
     ref k = result.children[0].as_int32()
@@ -392,7 +398,9 @@ def test_anti_join_basic() raises:
     rv.append(200)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_ANTI)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_ANTI
+    )
     assert_equal(len(result), 2)
     assert_equal(len(result.children), 2)  # left columns only
     ref k = result.children[0].as_int32()
@@ -428,7 +436,7 @@ def test_any_strictness_deduplicates() raises:
     rv.append(200)
     var right = _int32_struct(rk, rv)
 
-    var result_all = hash_join(
+    var result_all = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -438,7 +446,7 @@ def test_any_strictness_deduplicates() raises:
     )
     assert_equal(len(result_all), 4)
 
-    var result_any = hash_join(
+    var result_any = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -480,7 +488,7 @@ def test_inner_join_string_keys() raises:
     rcols.append(rv_b.finish().to_dyn())
     var right = record_batch(rcols^, names=["k", "v"]).to_struct_array()
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 2)
 
 
@@ -534,7 +542,7 @@ def test_inner_join_multi_key() raises:
     right_on.append(0)
     right_on.append(1)
 
-    var result = hash_join(left, right, left_on, right_on)
+    var result = HashJoinKernel.apply(left, right, left_on, right_on)
     assert_equal(len(result), 1)
 
 
@@ -558,7 +566,7 @@ def test_output_schema_column_name_collision() raises:
     rv.append(100)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(result.dtype.as_struct().fields[0].name, "k")
     assert_equal(result.dtype.as_struct().fields[1].name, "v")
     assert_equal(result.dtype.as_struct().fields[2].name, "k_right")
@@ -653,7 +661,7 @@ def _dense_struct(n: Int) raises -> StructArray:
 def _run_inner(
     left: StructArray, right: StructArray, num_threads: Int
 ) raises -> StructArray:
-    return hash_join(
+    return HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -704,7 +712,7 @@ def test_partitioned_join_with_duplicate_build_keys() raises:
         "expected the partitioned layout at 150k distinct keys / 4 workers",
     )
     var partitioned = j.probe(right, _right_on(), JOIN_INNER, JOIN_ALL)
-    var single = hash_join(
+    var single = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -778,8 +786,10 @@ def test_join_default_context_matches_explicit_auto() raises:
     """
     var left = _dense_struct(20_000)
     var right = _dense_struct(20_000)
-    var default_result = hash_join(left, right, _left_on(), _right_on())
-    var auto_result = hash_join(
+    var default_result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on()
+    )
+    var auto_result = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -794,14 +804,14 @@ def test_join_serial_and_parallel_contexts_agree() raises:
     return the same number of matched rows for the same input."""
     var left = _dense_struct(20_000)
     var right = _dense_struct(20_000)
-    var serial = hash_join(
+    var serial = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
         _right_on(),
         ctx=ExecContext.serial(),
     )
-    var parallel = hash_join(
+    var parallel = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -851,7 +861,7 @@ def test_join_kind_agrees_on_right_columns() raises:
     kinds.append(JOIN_SEMI)
     kinds.append(JOIN_ANTI)
     for ref k in kinds:
-        var out = hash_join(left, right, _left_on(), _right_on(), k)
+        var out = HashJoinKernel.apply(left, right, _left_on(), _right_on(), k)
         assert_equal(
             len(out.dtype.as_struct().fields),
             len(out.children),
@@ -885,7 +895,7 @@ def test_unimplemented_join_kind_raises_instead_of_corrupting() raises:
     for ref k in unimplemented:
         var raised = False
         try:
-            _ = hash_join(left, right, _left_on(), _right_on(), k)
+            _ = HashJoinKernel.apply(left, right, _left_on(), _right_on(), k)
         except:
             raised = True
         assert_true(raised, String("kind ", k, " should raise"))
@@ -927,7 +937,7 @@ def _bytes_join_side[
 def _assert_bytes_join[T: BinaryLikeType]() raises:
     var left = _bytes_join_side[T](["a", "b", "c"], [1, 2, 3])
     var right = _bytes_join_side[T](["b", "c", "d"], [20, 30, 40])
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 2)
 
 
@@ -944,7 +954,7 @@ def test_inner_join_binary_keys_collision_verified() raises:
     (not just the hash lookup): 2x2 matches on "b" plus 1x1 on "c"."""
     var left = _bytes_join_side[BinaryType](["b", "b", "c", "x"], [1, 2, 3, 4])
     var right = _bytes_join_side[BinaryType](["b", "b", "c"], [10, 20, 30])
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 5)
 
 
@@ -1100,7 +1110,7 @@ def test_inner_join_null_key_left_only() raises:
     var left = _nullable_int32_struct([1, None], [10, 20])
     var right = _nullable_int32_struct([1, 2], [100, 200])
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     # Only (k=1, v=10, k_right=1, v_right=100).
     assert_equal(_join_fingerprint(result), "1|1:0|10:0|1:0|100:0")
 
@@ -1115,7 +1125,7 @@ def test_inner_join_null_key_both_sides() raises:
     var left = _nullable_int32_struct([1, None], [10, 20])
     var right = _nullable_int32_struct([1, None], [100, 200])
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(_join_fingerprint(result), "1|1:0|10:0|1:0|100:0")
 
 
@@ -1124,7 +1134,9 @@ def test_semi_join_null_key_has_no_match() raises:
     var left = _nullable_int32_struct([1, None, 2], [10, 20, 30])
     var right = _nullable_int32_struct([1, None], [100, 200])
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_SEMI)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_SEMI
+    )
     # Left columns only, and only the k=1 row.
     assert_equal(_join_fingerprint(result), "1|1:0|10:0")
 
@@ -1134,7 +1146,9 @@ def test_anti_join_keeps_null_key() raises:
     var left = _nullable_int32_struct([1, None, 2], [10, 20, 30])
     var right = _nullable_int32_struct([1, None], [100, 200])
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_ANTI)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_ANTI
+    )
     # (k=NULL, v=20) and (k=2, v=30): key sum 2 with one null, values 20+30.
     assert_equal(_join_fingerprint(result), "2|2:1|50:0")
 
@@ -1144,7 +1158,9 @@ def test_left_join_null_key_widens_right() raises:
     var left = _nullable_int32_struct([1, None], [10, 20])
     var right = _nullable_int32_struct([1, None], [100, 200])
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_LEFT)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_LEFT
+    )
     # (1,10,1,100) and (NULL,20,NULL,NULL).
     assert_equal(_join_fingerprint(result), "2|1:1|30:0|1:1|100:1")
 
@@ -1155,7 +1171,7 @@ def test_right_join_null_key_widens_left() raises:
     var left = _nullable_int32_struct([1], [10])
     var right = _nullable_int32_struct([1, None], [100, 200])
 
-    var result = hash_join(
+    var result = HashJoinKernel.apply(
         left, right, _left_on(), _right_on(), kind=JOIN_RIGHT
     )
     # (1,10,1,100) and (NULL,NULL,NULL,200).
@@ -1167,7 +1183,9 @@ def test_full_join_null_keys_on_both_sides() raises:
     var left = _nullable_int32_struct([1, None], [10, 20])
     var right = _nullable_int32_struct([1, None], [100, 200])
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_FULL)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_FULL
+    )
     # (1,10,1,100), (NULL,20,NULL,NULL), (NULL,NULL,NULL,200).
     assert_equal(_join_fingerprint(result), "3|1:2|30:1|1:2|300:1")
 
@@ -1177,7 +1195,7 @@ def test_any_strictness_null_key_has_no_match() raises:
     var left = _nullable_int32_struct([1, None], [10, 20])
     var right = _nullable_int32_struct([1, None], [100, 200])
 
-    var result = hash_join(
+    var result = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -1213,7 +1231,7 @@ def test_multi_key_join_null_in_one_column() raises:
     right_on.append(0)
     right_on.append(1)
 
-    var result = hash_join(left, right, left_on, right_on)
+    var result = HashJoinKernel.apply(left, right, left_on, right_on)
     # Only (a=1, b=10) pairs: v 200 on the left, 2000 on the right.
     assert_equal(_join_fingerprint(result), "1|1:0|10:0|200:0|1:0|10:0|2000:0")
 
@@ -1291,7 +1309,7 @@ def test_inner_join_bool_keys() raises:
     var left = _bool_key_struct([True, False, None], [1, 2, 3], ["b", "v"])
     var right = _bool_key_struct([True, None], [9, 8], ["b2", "w"])
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 1)
     assert_true(result.field(0).as_bool()[0].value())
     assert_equal(Int(result.field(1).as_int32()[0].value()), 1)
@@ -1304,7 +1322,7 @@ def test_inner_join_bool_keys_false_matches_false() raises:
     var left = _bool_key_struct([True, False, None], [1, 2, 3], ["b", "v"])
     var right = _bool_key_struct([False, None], [7, 8], ["b2", "w"])
 
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 1)
     assert_false(result.field(0).as_bool()[0].value())
     assert_equal(Int(result.field(1).as_int32()[0].value()), 2)
@@ -1316,7 +1334,9 @@ def test_left_join_bool_key_null_widens_right() raises:
     var left = _bool_key_struct([True, None], [1, 2], ["b", "v"])
     var right = _bool_key_struct([True], [9], ["b2", "w"])
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_LEFT)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_LEFT
+    )
     assert_equal(len(result), 2)
     assert_equal(result.field(2).null_count(), 1)
     assert_equal(result.field(3).null_count(), 1)
@@ -1327,7 +1347,9 @@ def test_semi_join_bool_key_null_has_no_match() raises:
     var left = _bool_key_struct([True, False, None], [1, 2, 3], ["b", "v"])
     var right = _bool_key_struct([True, None], [9, 8], ["b2", "w"])
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_SEMI)
+    var result = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), kind=JOIN_SEMI
+    )
     assert_equal(len(result), 1)
     assert_equal(Int(result.field(1).as_int32()[0].value()), 1)
 
@@ -1389,10 +1411,10 @@ def _canonical(result: StructArray) raises -> StructArray:
 def _assert_build_sides_agree(kind: JoinKind) raises:
     var left = _swap_left()
     var right = _swap_right()
-    var built_left = hash_join(
+    var built_left = HashJoinKernel.apply(
         left, right, _left_on(), _right_on(), kind, JOIN_ALL, BUILD_LEFT
     )
-    var built_right = hash_join(
+    var built_right = HashJoinKernel.apply(
         left, right, _left_on(), _right_on(), kind, JOIN_ALL, BUILD_RIGHT
     )
     assert_true(
@@ -1500,7 +1522,7 @@ def test_build_side_agrees_on_a_multi_column_key() raises:
         JOIN_RIGHT_ANTI,
     ]
     for ref kind in kinds:
-        var built_left = hash_join(
+        var built_left = HashJoinKernel.apply(
             left,
             right,
             _both_keys(),
@@ -1509,7 +1531,7 @@ def test_build_side_agrees_on_a_multi_column_key() raises:
             JOIN_ALL,
             BUILD_LEFT,
         )
-        var built_right = hash_join(
+        var built_right = HashJoinKernel.apply(
             left,
             right,
             _both_keys(),
@@ -1544,7 +1566,7 @@ def test_build_side_agrees_on_a_multi_column_key() raises:
     # never met would agree on nothing and pass the loop above.
     assert_equal(
         len(
-            hash_join(
+            HashJoinKernel.apply(
                 left,
                 right,
                 _both_keys(),
@@ -1593,7 +1615,7 @@ def test_join_multi_member_keys_may_differ_in_nullability() raises:
         names=["k1", "k2", "rv"],
     ).to_struct_array()
 
-    var out = hash_join(left, right, _both_keys(), _both_keys())
+    var out = HashJoinKernel.apply(left, right, _both_keys(), _both_keys())
     assert_equal(len(out), 2)
     # The members survive into the output as declared, for both key columns —
     # the join compares the key columns' dtypes and never rewrites a field.
@@ -1616,7 +1638,7 @@ def test_build_side_suffixes_the_logical_right_side() raises:
     var expected: List[String] = ["k", "lv", "k_right", "rv"]
     var sides: List[JoinBuildSide] = [BUILD_LEFT, BUILD_RIGHT]
     for ref side in sides:
-        var out = hash_join(
+        var out = HashJoinKernel.apply(
             left, right, _left_on(), _right_on(), JOIN_INNER, JOIN_ALL, side
         )
         ref fields = out.dtype.as_struct().fields
@@ -1646,7 +1668,7 @@ def test_build_side_agrees_on_the_partitioned_path() raises:
         ),
     )
 
-    var built_left = hash_join(
+    var built_left = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -1656,7 +1678,7 @@ def test_build_side_agrees_on_the_partitioned_path() raises:
         BUILD_LEFT,
         ctx.copy(),
     )
-    var built_right = hash_join(
+    var built_right = HashJoinKernel.apply(
         left,
         right,
         _left_on(),
@@ -1723,7 +1745,9 @@ def test_right_semi_and_right_anti_emit_the_right_side_only() raises:
     var left = _swap_left()
     var right = _swap_right()
 
-    var semi = hash_join(left, right, _left_on(), _right_on(), JOIN_RIGHT_SEMI)
+    var semi = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), JOIN_RIGHT_SEMI
+    )
     ref semi_fields = semi.dtype.as_struct().fields
     assert_equal(len(semi_fields), 2)
     assert_equal(semi_fields[0].name, "k")
@@ -1731,7 +1755,9 @@ def test_right_semi_and_right_anti_emit_the_right_side_only() raises:
     # Right keys 2, 3, 3 match; 4 and NULL do not.
     assert_equal(len(semi), 3)
 
-    var anti = hash_join(left, right, _left_on(), _right_on(), JOIN_RIGHT_ANTI)
+    var anti = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), JOIN_RIGHT_ANTI
+    )
     assert_equal(len(anti.dtype.as_struct().fields), 2)
     assert_equal(len(anti), 2)
 
@@ -1741,8 +1767,10 @@ def test_right_semi_is_a_mirrored_semi_over_swapped_inputs() raises:
     against itself: `semi(a, b)` and `right_semi(b, a)` are the same rows."""
     var left = _swap_left()
     var right = _swap_right()
-    var semi = hash_join(left, right, _left_on(), _right_on(), JOIN_SEMI)
-    var mirrored = hash_join(
+    var semi = HashJoinKernel.apply(
+        left, right, _left_on(), _right_on(), JOIN_SEMI
+    )
+    var mirrored = HashJoinKernel.apply(
         right, left, _right_on(), _left_on(), JOIN_RIGHT_SEMI
     )
     assert_true(semi.dtype == mirrored.dtype)
@@ -1795,7 +1823,7 @@ def _assert_annotations_survive(side: JoinBuildSide) raises:
     the path that used to rebuild the field from its dtype alone."""
     var left = _annotated_side("k", "v", "cents")
     var right = _annotated_side("k", "v", "grams")
-    var out = hash_join(
+    var out = HashJoinKernel.apply(
         left, right, _left_on(), _right_on(), JOIN_INNER, JOIN_ALL, side
     )
     ref fields = out.dtype.as_struct().fields
@@ -1937,7 +1965,7 @@ def test_inner_join_string_view_keys() raises:
         ["a key longer than twelve", "b", "a key longer than twelve"],
         [20, 30, 40],
     )
-    var result = hash_join(left, right, _left_on(), _right_on())
+    var result = HashJoinKernel.apply(left, right, _left_on(), _right_on())
     assert_equal(len(result), 3)
 
 
@@ -2050,11 +2078,11 @@ def test_join_any_existence_reads_every_build_row() raises:
     var left = _int32_struct([1, 1], [10, 20])
     var right = _int32_struct([1], [100])
     for side in [BUILD_LEFT, BUILD_RIGHT]:
-        var anti = hash_join(
+        var anti = HashJoinKernel.apply(
             left, right, _left_on(), _right_on(), JOIN_ANTI, JOIN_ANY, side
         )
         assert_equal(len(anti), 0)
-        var semi = hash_join(
+        var semi = HashJoinKernel.apply(
             left, right, _left_on(), _right_on(), JOIN_SEMI, JOIN_ANY, side
         )
         assert_equal(len(semi), 2)

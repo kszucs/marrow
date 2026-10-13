@@ -23,7 +23,7 @@ from marrow.arrays import PrimitiveArray, DynArray, StructArray
 from marrow.builders import PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, Int64Type, struct_, Field
 from marrow.kernels.join import JOIN_INNER, JOIN_ALL
-from marrow.kernels.join import hash_join
+from marrow.kernels.join import HashJoinKernel
 
 
 def _make_struct(n: Int) raises -> StructArray:
@@ -72,7 +72,7 @@ def main() raises:
     # Repeatedly run the join so Instruments has enough samples to
     # attribute time. ``num_threads=0`` → auto (num_physical_cores()).
     for _ in range(iters):
-        var out = hash_join(
+        var out = HashJoinKernel.apply(
             left,
             right,
             left_on,

@@ -20,7 +20,7 @@ from .c_data import CArrowArray
 from .schema import Schema
 from .dtypes import struct_, Field
 from .kernels.join import (
-    hash_join,
+    HashJoinKernel,
     JoinKind,
 )
 from .execution import ExecContext
@@ -306,7 +306,7 @@ struct RecordBatch(
 
         var kind = JoinKind.parse(how)
 
-        var joined = hash_join(
+        var joined = HashJoinKernel.apply(
             self.to_struct_array(),
             right.to_struct_array(),
             left_on,
