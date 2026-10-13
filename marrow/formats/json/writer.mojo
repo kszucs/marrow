@@ -183,10 +183,6 @@ struct JsonWriter[S: ByteSink](BatchWriter):
         var text = render_json(batch)
         self._sink.write(text.as_bytes())
 
-    def write(mut self, table: Table) raises:
-        for ref batch in table.to_batches():
-            self.write(batch)
-
     def close(mut self) raises:
         if self._closed:
             return

@@ -404,6 +404,11 @@ struct StorageOptions(Copyable, Movable):
     def __init__(out self, *, copy: Self):
         self._kv = copy._kv.copy()
 
+    def is_empty(self) -> Bool:
+        """Whether nothing was set, so every key comes from the URI or the
+        environment."""
+        return len(self._kv) == 0
+
     def resolve(self, uri: Uri) raises DynError -> Dict[String, String]:
         """The full option map for `uri`: the caller's keys, then the query
         string, then the environment, then whatever the scheme itself implies.

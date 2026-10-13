@@ -4,22 +4,36 @@
 """`FileFormat`: what a data file is stored as, and the scan that reads it."""
 
 from ..errors import InvalidError, NotImplementedError
-from ..expr.builders import scan, scan_ipc, scan_json
+from ..expr.builders import scan, scan_avro, scan_ipc, scan_json
 from ..expr.logical import DynRelation
-from ..io import DynSource
-from ..formats.ipc import RecordBatchFileReader
-from ..formats.json import open_json
-from ..formats.parquet.reader import ParquetFile
+from ..formats import Format
+from ..formats.avro import AvroFormat
+from ..formats.ipc import IpcFormat
+from ..formats.json import JsonFormat
+from ..formats.parquet import ParquetFormat
+from ..io import StorageOptions
+from ..schema import Schema
+
+
+def _names[F: Format](file: String) -> Bool:
+    """Whether `file`, lower-cased, carries one of `F`'s extensions."""
+    for ext in F.extensions():
+        if file.endswith(ext):
+            return True
+    return False
+
+
+def _schema[F: Format](path: String, options: StorageOptions) raises -> Schema:
+    """The schema of the file at `path`, as `F` reads it."""
+    return F.open(path, None, options).schema()
 
 
 struct FileFormat(Equatable, ImplicitlyCopyable, Movable, Writable):
-    """The format of a data file: `parquet`, `json` (newline-delimited) or
-    `arrow` (the IPC file format), the ones marrow reads; `OTHER` for data it
+    """The format of a data file: `parquet`, `json` (newline-delimited),
+    `arrow` (the IPC file format) or `avro`, the ones marrow reads, each
+    recognised by the extensions its `Format` names; `OTHER` for data it
     cannot -- CSV, anything compressed -- and `NONE` for a file holding no
     data, a README say.
-
-    A `.json` file is `OTHER`: it may hold one JSON document rather than a
-    line per row, and only `.jsonl` and `.ndjson` say which.
     """
 
     var name: StaticString
@@ -27,6 +41,7 @@ struct FileFormat(Equatable, ImplicitlyCopyable, Movable, Writable):
     comptime PARQUET = Self("parquet")
     comptime JSON = Self("json")
     comptime ARROW = Self("arrow")
+    comptime AVRO = Self("avro")
     comptime OTHER = Self("other")
     comptime NONE = Self("none")
 
@@ -34,7 +49,7 @@ struct FileFormat(Equatable, ImplicitlyCopyable, Movable, Writable):
     def named(name: StringSlice) -> Optional[Self]:
         """The readable format called `name`, as `datasets` names its
         builders, or `None`."""
-        for format in [Self.PARQUET, Self.JSON, Self.ARROW]:
+        for format in [Self.PARQUET, Self.JSON, Self.ARROW, Self.AVRO]:
             if name == format.name:
                 return format
         return None
@@ -43,19 +58,20 @@ struct FileFormat(Equatable, ImplicitlyCopyable, Movable, Writable):
     def of(path: StringSlice) -> Self:
         """The format `path`'s extension names."""
         var file = String(path).lower()
-        if file.endswith(".parquet"):
+        if _names[ParquetFormat](file):
             return Self.PARQUET
-        if file.endswith(".jsonl") or file.endswith(".ndjson"):
+        if _names[JsonFormat](file):
             return Self.JSON
-        if file.endswith(".arrow"):
+        if _names[IpcFormat](file):
             return Self.ARROW
+        if _names[AvroFormat](file):
+            return Self.AVRO
         var other: List[StaticString] = [
             ".json",
             ".csv",
             ".tsv",
             ".txt",
             ".xml",
-            ".avro",
             ".orc",
             ".gz",
             ".bz2",
@@ -88,30 +104,36 @@ struct FileFormat(Equatable, ImplicitlyCopyable, Movable, Writable):
         """Whether `scan` reads files of this format."""
         return self != Self.OTHER and self != Self.NONE
 
-    def scan(self, var paths: List[String]) raises -> DynRelation:
-        """One scan over `paths`, all in this format, read in order.
+    def scan(
+        self,
+        var paths: List[String],
+        options: StorageOptions = StorageOptions(),
+    ) raises -> DynRelation:
+        """One scan over `paths`, all in this format, read in order, each
+        opened with `options`.
 
-        Its schema is the first file's own -- a Parquet or Arrow footer, or a
-        JSON file's first block -- so this opens that file; every other is
-        opened only when the scan reaches it, and must match.
+        Its schema is the first file's own -- a Parquet or Arrow footer, a
+        JSON file's first block, an Avro header -- so this opens that file;
+        every other is opened only when the scan reaches it, and must match.
         """
         if len(paths) == 0:
             raise InvalidError("datasets: no files to read")
         if not self.is_readable():
             raise NotImplementedError(
                 t"datasets: the files, {paths[0]} first, are not all in one "
-                t"format marrow reads: parquet, json or arrow"
+                t"format marrow reads: parquet, json, arrow or avro"
             )
         if self == Self.PARQUET:
-            var schema = ParquetFile(DynSource.open(paths[0])).schema()
-            return scan(paths^, schema^)
+            var schema = _schema[ParquetFormat](paths[0], options)
+            return scan(paths^, schema^, options.copy())
         if self == Self.JSON:
-            var schema = open_json(paths[0]).schema()
-            return scan_json(paths^, schema^)
-        var schema = RecordBatchFileReader[DynSource](
-            DynSource.open(paths[0])
-        ).schema()
-        return scan_ipc(paths^, schema^)
+            var schema = _schema[JsonFormat](paths[0], options)
+            return scan_json(paths^, schema^, options.copy())
+        if self == Self.AVRO:
+            var schema = _schema[AvroFormat](paths[0], options)
+            return scan_avro(paths^, schema^, options.copy())
+        var schema = _schema[IpcFormat](paths[0], options)
+        return scan_ipc(paths^, schema^, options.copy())
 
     def __eq__(self, other: Self) -> Bool:
         return self.name == other.name

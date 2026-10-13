@@ -36,7 +36,14 @@ from ....dtypes import (
     timestamp,
 )
 from ....execution import ExecContext
-from ....io import ByteSink, ByteSource, BufferSource, Fetched, MemorySink
+from ....io import (
+    ByteSink,
+    ByteSource,
+    BufferSource,
+    Fetched,
+    MemorySink,
+    StorageOptions,
+)
 from ....schema import Schema
 from ....tabular import RecordBatch, Table
 from ....utils.testing import ScratchDir
@@ -665,7 +672,7 @@ def test_avro_reader_projection_and_format() raises:
         var path = join(tmp, "t.avro")
         write_avro(t, path)
         var only_a = Schema(fields=[t.schema.fields[0].copy()])
-        var r = AvroFormat.open(path, only_a)
+        var r = AvroFormat.open(path, only_a, StorageOptions())
         assert_equal(AvroFormat.name(), "Avro")
         assert_equal(len(r.schema().fields), 1)
         var b = r.read_next_batch()

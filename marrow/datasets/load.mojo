@@ -56,7 +56,7 @@ def load_dataset(
 ) raises -> DynRelation:
     """A split of `data_files`, as a scan over every file it names.
 
-    `path` is a format -- `parquet`, `json` or `arrow` -- and the patterns
+    `path` is a format -- `parquet`, `json`, `arrow` or `avro` -- and the patterns
     are paths or URIs (`hf://`, `s3://`, …), globs expanded by listing; or
     `path` is a Hub dataset and the patterns are relative to its root.
 

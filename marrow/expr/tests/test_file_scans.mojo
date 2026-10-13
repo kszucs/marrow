@@ -15,6 +15,7 @@ from ...builders import array
 from ...dtypes import field, int64, string
 from ...formats.avro import write_avro
 from ...formats.ipc import write_ipc_file
+from ...io import StorageOptions
 from ...scalars import StringScalar
 from ...schema import Schema
 from ...tabular import RecordBatch, Table, record_batch
@@ -196,3 +197,15 @@ def test_scan_avro_column_pruning_decodes_only_the_kept_column() raises:
         assert_equal(out.num_columns(), 1)
         assert_equal(out.schema.fields[0].name, "name")
         assert_equal(out.num_rows(), 3)
+
+
+def test_scan_storage_options_reach_the_reader_unprinted() raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "rows.arrow")
+        write_ipc_file(path, [_ipc_batch()])
+        # A local path takes no options, so a made-up credential is carried to
+        # the reader and ignored there -- and must never be printed.
+        var options = StorageOptions({"token": "s3cr3t"})
+        var plan = scan_ipc(path, _schema(), options^)
+        assert_equal(String(plan), String("IpcScan(", path, ")"))
+        assert_equal(plan.execute().num_rows(), 3)

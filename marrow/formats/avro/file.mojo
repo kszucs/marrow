@@ -370,8 +370,18 @@ struct AvroFormat(Format):
         return "Avro"
 
     @staticmethod
-    def open(path: String, schema: Schema) raises -> Self.Reader:
-        return AvroFile[DynSource](DynSource.open(path)).batches(schema.names())
+    def extensions() -> List[StaticString]:
+        return [".avro"]
+
+    @staticmethod
+    def open(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Reader:
+        var columns = Optional[List[String]](None)
+        if schema:
+            columns = schema.value().names()
+        var file = AvroFile[DynSource](DynSource.open(path, options))
+        return file^.batches(columns)
 
 
 def _decode_block(
@@ -488,10 +498,6 @@ struct AvroWriter[S: ByteSink = FileSink](BatchWriter):
             self._rows += 1
             if len(self._block) >= self._sync_interval:
                 self._flush()
-
-    def write(mut self, table: Table) raises:
-        for ref batch in table.to_batches():
-            self.write(batch)
 
     def _flush(mut self) raises:
         if self._rows == 0:

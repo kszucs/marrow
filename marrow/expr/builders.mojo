@@ -744,27 +744,37 @@ def table(var batch: RecordBatch) raises -> DynRelation:
     return InMemoryTable(batch^)
 
 
-def scan(var path: String, var schema: Schema) raises -> DynRelation:
+def scan(
+    var path: String,
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
+) raises -> DynRelation:
     """A Parquet file, as a plan.
 
     The `table` of the file world: a source has to *be* a `DynRelation` before
     any verb applies, so without this a caller names `ParquetScan` and wraps it
     by hand.
     """
-    return DynRelation(ParquetScan(ScanPath(path^), schema^))
+    return DynRelation(ParquetScan(ScanPath(path^, options^), schema^))
 
 
-def scan(var paths: List[String], var schema: Schema) raises -> DynRelation:
+def scan(
+    var paths: List[String],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
+) raises -> DynRelation:
     """Several Parquet files sharing `schema`, read in order as one plan.
 
     Each file is opened only when the scan reaches it, and row-group and page
     pruning apply to every file.
     """
-    return DynRelation(ParquetScan(ScanPath(paths^), schema^))
+    return DynRelation(ParquetScan(ScanPath(paths^, options^), schema^))
 
 
 def scan(
-    var path: StringParam[StringType], var schema: Schema
+    var path: StringParam[StringType],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
 ) raises -> DynRelation:
     """A Parquet file named at run time, as a plan.
 
@@ -772,68 +782,94 @@ def scan(
     other, so a compiled query reads a different file per run, and `QueryCli`
     offers it as `--src`.
     """
-    return DynRelation(ParquetScan(ScanPath(path^), schema^))
+    return DynRelation(ParquetScan(ScanPath(path^, options^), schema^))
 
 
-def scan_json(var path: String, var schema: Schema) raises -> DynRelation:
+def scan_json(
+    var path: String,
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
+) raises -> DynRelation:
     """A newline-delimited JSON file, as a plan; see `marrow.formats.json`.
 
     The schema is required, as it is for `scan`: a plan is a description, and
     building it must not open the file. Keys outside it are skipped.
     """
-    return DynRelation(JsonScan(ScanPath(path^), schema^))
+    return DynRelation(JsonScan(ScanPath(path^, options^), schema^))
 
 
 def scan_json(
-    var paths: List[String], var schema: Schema
+    var paths: List[String],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
 ) raises -> DynRelation:
     """Several newline-delimited JSON files, read in order as one plan."""
-    return DynRelation(JsonScan(ScanPath(paths^), schema^))
+    return DynRelation(JsonScan(ScanPath(paths^, options^), schema^))
 
 
 def scan_json(
-    var path: StringParam[StringType], var schema: Schema
+    var path: StringParam[StringType],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
 ) raises -> DynRelation:
     """A newline-delimited JSON file named at run time, as a plan."""
-    return DynRelation(JsonScan(ScanPath(path^), schema^))
-
-
-def scan_ipc(var path: String, var schema: Schema) raises -> DynRelation:
-    """An Arrow IPC file, as a plan: one record batch at a time, the schema
-    selecting the columns."""
-    return DynRelation(IpcScan(ScanPath(path^), schema^))
-
-
-def scan_ipc(var paths: List[String], var schema: Schema) raises -> DynRelation:
-    """Several Arrow IPC files sharing `schema`, read in order as one plan."""
-    return DynRelation(IpcScan(ScanPath(paths^), schema^))
+    return DynRelation(JsonScan(ScanPath(path^, options^), schema^))
 
 
 def scan_ipc(
-    var path: StringParam[StringType], var schema: Schema
+    var path: String,
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
+) raises -> DynRelation:
+    """An Arrow IPC file, as a plan: one record batch at a time, the schema
+    selecting the columns."""
+    return DynRelation(IpcScan(ScanPath(path^, options^), schema^))
+
+
+def scan_ipc(
+    var paths: List[String],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
+) raises -> DynRelation:
+    """Several Arrow IPC files sharing `schema`, read in order as one plan."""
+    return DynRelation(IpcScan(ScanPath(paths^, options^), schema^))
+
+
+def scan_ipc(
+    var path: StringParam[StringType],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
 ) raises -> DynRelation:
     """An Arrow IPC file named at run time, as a plan."""
-    return DynRelation(IpcScan(ScanPath(path^), schema^))
+    return DynRelation(IpcScan(ScanPath(path^, options^), schema^))
 
 
-def scan_avro(var path: String, var schema: Schema) raises -> DynRelation:
+def scan_avro(
+    var path: String,
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
+) raises -> DynRelation:
     """An Avro object container file, as a plan: a batch at a time, only the
     schema's columns decoded."""
-    return DynRelation(AvroScan(ScanPath(path^), schema^))
+    return DynRelation(AvroScan(ScanPath(path^, options^), schema^))
 
 
 def scan_avro(
-    var paths: List[String], var schema: Schema
+    var paths: List[String],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
 ) raises -> DynRelation:
     """Several Avro files sharing `schema`, read in order as one plan."""
-    return DynRelation(AvroScan(ScanPath(paths^), schema^))
+    return DynRelation(AvroScan(ScanPath(paths^, options^), schema^))
 
 
 def scan_avro(
-    var path: StringParam[StringType], var schema: Schema
+    var path: StringParam[StringType],
+    var schema: Schema,
+    var options: StorageOptions = StorageOptions(),
 ) raises -> DynRelation:
     """An Avro file named at run time, as a plan."""
-    return DynRelation(AvroScan(ScanPath(path^), schema^))
+    return DynRelation(AvroScan(ScanPath(path^, options^), schema^))
 
 
 def scan_iceberg(

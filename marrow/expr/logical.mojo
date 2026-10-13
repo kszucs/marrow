@@ -75,6 +75,7 @@ from ..kernels.window import (
     WindowFrame,
     WindowKernel,
 )
+from ..io import StorageOptions
 from ..schema import Schema, schema
 from ..iceberg.catalog import IcebergTable
 from ..tabular import RecordBatch
@@ -4307,19 +4308,22 @@ comptime Difference = Multiset[Except]
 
 
 struct _ScanPathRest(Movable):
-    """What a `ScanPath` holds beyond one literal path: more paths, or a
-    parameter."""
+    """What a `ScanPath` holds beyond one literal path: more paths, a
+    parameter, or the storage options its files are opened with."""
 
     var more: List[String]
     var param: Optional[StringParam[StringType]]
+    var options: StorageOptions
 
     def __init__(
         out self,
         var more: List[String],
         var param: Optional[StringParam[StringType]],
+        var options: StorageOptions,
     ):
         self.more = more^
         self.param = param^
+        self.options = options^
 
 
 struct ScanPath(Copyable, Movable, Writable):
@@ -4339,22 +4343,45 @@ struct ScanPath(Copyable, Movable, Writable):
     var _literal: String
     var _rest: Optional[ArcPointer[_ScanPathRest]]
 
-    def __init__(out self, var path: String):
+    def __init__(
+        out self,
+        var path: String,
+        var options: StorageOptions = StorageOptions(),
+    ):
         self._literal = path^
         self._rest = None
+        if not options.is_empty():
+            self._rest = ArcPointer(
+                _ScanPathRest(List[String](), None, options^)
+            )
 
-    def __init__(out self, var paths: List[String]):
+    def __init__(
+        out self,
+        var paths: List[String],
+        var options: StorageOptions = StorageOptions(),
+    ):
         self._literal = paths[0].copy() if len(paths) else String()
         self._rest = None
-        if len(paths) > 1:
-            var more = List[String](capacity=len(paths) - 1)
+        if len(paths) > 1 or not options.is_empty():
+            var more = List[String](capacity=max(len(paths) - 1, 0))
             for i in range(1, len(paths)):
                 more.append(paths[i].copy())
-            self._rest = ArcPointer(_ScanPathRest(more^, None))
+            self._rest = ArcPointer(_ScanPathRest(more^, None, options^))
 
-    def __init__(out self, var param: StringParam[StringType]):
+    def __init__(
+        out self,
+        var param: StringParam[StringType],
+        var options: StorageOptions = StorageOptions(),
+    ):
         self._literal = String()
-        self._rest = ArcPointer(_ScanPathRest(List[String](), param^))
+        self._rest = ArcPointer(_ScanPathRest(List[String](), param^, options^))
+
+    def options(self) -> StorageOptions:
+        """The storage options every path is opened with. Never printed: they
+        may hold credentials."""
+        if self._rest:
+            return self._rest.value()[].options.copy()
+        return StorageOptions()
 
     def resolve(self, bindings: Bindings) raises -> List[String]:
         """The paths this execution reads, in order."""
@@ -4500,6 +4527,7 @@ struct ParquetScan(FileScan, Writable):
                 ctx.copy(),
                 self.pruners.copy(),
                 bindings.copy(),
+                self.path.options(),
             )
         )
 
@@ -4563,7 +4591,9 @@ struct FormatScan[Fmt: Format](FileScan, Writable):
     ) raises -> Pipeline:
         return Pipeline(
             FileScanOperator[Self.Fmt](
-                self.path.resolve(bindings), self._schema.copy()
+                self.path.resolve(bindings),
+                self._schema.copy(),
+                self.path.options(),
             )
         )
 

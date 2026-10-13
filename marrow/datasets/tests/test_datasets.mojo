@@ -11,13 +11,14 @@ from std.testing import assert_equal, assert_false, assert_raises, assert_true
 from ...arrays import DynArray
 from ...builders import array
 from ...dtypes import field, int64, string
+from ...formats.avro import write_avro
 from ...formats.ipc import write_ipc_file
 from ...formats.parquet.writer import write_table
 from ...schema import Schema
 from ...tabular import RecordBatch, Table, record_batch
 from ...utils.testing import ScratchDir
 from ...expr.builders import col, lit
-from ...expr.logical import IpcScan, JsonScan, ParquetScan
+from ...expr.logical import AvroScan, IpcScan, JsonScan, ParquetScan
 from ...expr.optimizer import AllRules
 from ...io.uri import Uri
 from ..files import DataFiles
@@ -93,6 +94,7 @@ def test_file_format_reads_the_extension() raises:
     assert_true(FileFormat.of("x.jsonl") == FileFormat.JSON)
     assert_true(FileFormat.of("x.json") == FileFormat.OTHER)
     assert_true(FileFormat.of("x.arrow") == FileFormat.ARROW)
+    assert_true(FileFormat.of("x.AVRO") == FileFormat.AVRO)
     assert_true(FileFormat.of("Iris.csv") == FileFormat.OTHER)
     assert_true(FileFormat.of("x.jsonl.gz") == FileFormat.OTHER)
     assert_true(FileFormat.of("README.md") == FileFormat.NONE)
@@ -349,6 +351,25 @@ def test_load_dataset_arrow_reads_every_file() raises:
         write_ipc_file(join(dir, "b.arrow"), [_batch(2, 2), _batch(4, 1)])
         var rel = load_dataset("arrow", _files(join(dir, "*.arrow")))
         assert_true(rel.isa[IpcScan]())
+        var out = rel.execute()
+        assert_equal(out.num_rows(), 5)
+        assert_true(out.column("id") == array([0, 1, 2, 3, 4], int64).to_dyn())
+
+
+def test_load_dataset_avro_reads_every_file() raises:
+    with ScratchDir() as dir:
+        var first = _batch(0, 2)
+        var second = _batch(2, 3)
+        write_avro(
+            Table.from_batches(first.schema, [first.copy()]),
+            join(dir, "a.avro"),
+        )
+        write_avro(
+            Table.from_batches(second.schema, [second.copy()]),
+            join(dir, "b.avro"),
+        )
+        var rel = load_dataset("avro", _files(join(dir, "*.avro")))
+        assert_true(rel.isa[AvroScan]())
         var out = rel.execute()
         assert_equal(out.num_rows(), 5)
         assert_true(out.column("id") == array([0, 1, 2, 3, 4], int64).to_dyn())

@@ -15,5 +15,5 @@ from common import consume
 
 def fuzz_one(data: Span[UInt8, _]) raises:
     var reader = RecordBatchStreamReader(BufferSource(data))
-    for batch in reader.read_all():
+    for batch in reader.read_all().to_batches():
         consume(batch)

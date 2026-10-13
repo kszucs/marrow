@@ -64,7 +64,7 @@ from ..formats.parquet.reader import (
     ParquetReader,
     RowSelection,
 )
-from ..io import ByteSource, DynSource
+from ..io import ByteSource, DynSource, StorageOptions
 from ..formats import Format
 from ..iceberg.catalog import IcebergTable
 from ..iceberg.manifest import DataFile
@@ -1682,6 +1682,7 @@ struct ParquetScanOperator(Operator):
     discriminant compare per read, against a page decode."""
     var _pushed: List[DynValue]
     var _bindings: Bindings
+    var _options: StorageOptions
     var _ctx: ExecContext
     """The plan's worker budget, handed to every read: it bounds both the
     decode fan-out and how many ranges a remote source fetches at once, so a
@@ -1694,6 +1695,7 @@ struct ParquetScanOperator(Operator):
         var ctx: ExecContext,
         var pushed: List[DynValue] = List[DynValue](),
         var bindings: Bindings = Bindings(),
+        var options: StorageOptions = StorageOptions(),
     ):
         self._paths = paths^
         self._current = 0
@@ -1702,6 +1704,7 @@ struct ParquetScanOperator(Operator):
         self._reader = None
         self._pushed = pushed^
         self._bindings = bindings^
+        self._options = options^
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         # A source consumes nothing; the driver never calls this.
@@ -1725,7 +1728,7 @@ struct ParquetScanOperator(Operator):
         straight into views.
         """
         var file = ParquetFile[DynSource, LeafSet.all()](
-            DynSource.open(self._paths[self._current]),
+            DynSource.open(self._paths[self._current], self._options),
             schema=self._schema.copy(),
         )
         var columns = Optional(self._schema.names())
@@ -1787,13 +1790,20 @@ struct FileScanOperator[Fmt: Format](Operator):
     var _current: Int
     var _schema: Schema
     var _names: List[String]
+    var _options: StorageOptions
     var _reader: Optional[Self.Fmt.Reader]
 
-    def __init__(out self, var paths: List[String], var schema: Schema):
+    def __init__(
+        out self,
+        var paths: List[String],
+        var schema: Schema,
+        var options: StorageOptions = StorageOptions(),
+    ):
         self._paths = paths^
         self._current = 0
         self._names = schema.names()
         self._schema = schema^
+        self._options = options^
         self._reader = None
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -1804,7 +1814,7 @@ struct FileScanOperator[Fmt: Format](Operator):
         while self._current < len(self._paths):
             if not self._reader:
                 self._reader = Self.Fmt.open(
-                    self._paths[self._current], self._schema
+                    self._paths[self._current], self._schema, self._options
                 )
             var batch = self._reader.value().read_next_batch()
             if batch:

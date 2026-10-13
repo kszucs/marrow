@@ -3396,12 +3396,21 @@ struct ParquetFormat(Format):
         return "Parquet"
 
     @staticmethod
-    def open(path: String, schema: Schema) raises -> Self.Reader:
+    def extensions() -> List[StaticString]:
+        return [".parquet"]
+
+    @staticmethod
+    def open(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Reader:
         # The schema also decides each string column's layout, leaf by leaf.
         var file = ParquetFile[DynSource, LeafSet.all()](
-            DynSource.open(path), schema=schema.copy()
+            DynSource.open(path, options), schema=schema.copy()
         )
-        return Self.Reader(file^, columns=schema.names())
+        var columns = Optional[List[String]](None)
+        if schema:
+            columns = schema.value().names()
+        return Self.Reader(file^, columns=columns^)
 
 
 def read_table[

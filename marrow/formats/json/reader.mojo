@@ -955,16 +955,6 @@ struct JsonReader[S: ByteSource](BatchReader):
         var rows = builder.finish()
         return RecordBatch(self._schema, rows.as_struct().children.copy())
 
-    def read_all(mut self) raises -> Table:
-        """Every remaining block, as a table with one chunk per block."""
-        var batches = List[RecordBatch]()
-        while True:
-            var batch = self.read_next_batch()
-            if not batch:
-                break
-            batches.append(batch.take())
-        return Table.from_batches(self._schema, batches)
-
 
 def read_json[
     S: ByteSource
@@ -1021,9 +1011,15 @@ struct JsonFormat(Format):
         return "Json"
 
     @staticmethod
-    def open(path: String, schema: Schema) raises -> Self.Reader:
-        return open_json(
-            path,
-            ReadOptions(),
-            ParseOptions(schema, UnexpectedFieldBehavior.IGNORE),
-        )
+    def extensions() -> List[StaticString]:
+        # A `.json` file may hold one document rather than a row per line.
+        return [".jsonl", ".ndjson"]
+
+    @staticmethod
+    def open(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Reader:
+        var parse = ParseOptions()
+        if schema:
+            parse = ParseOptions(schema.value(), UnexpectedFieldBehavior.IGNORE)
+        return open_json(path, ReadOptions(), parse, options)

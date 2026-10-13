@@ -15,7 +15,14 @@ from ..avro import AvroFile, AvroFormat, AvroWriter
 from ...builders import array
 from ...dtypes import int64
 from ...execution import ExecContext
-from ...io import BufferSource, ByteSink, ByteSource, Fetched, FileSink
+from ...io import (
+    BufferSource,
+    ByteSink,
+    ByteSource,
+    Fetched,
+    FileSink,
+    StorageOptions,
+)
 from ..ipc import (
     IpcFormat,
     RecordBatchFileReader,
@@ -267,7 +274,7 @@ def test_writers_close_once() raises:
 
 
 def _scan[F: Format](path: String, schema: Schema) raises -> List[RecordBatch]:
-    var reader = F.open(path, schema)
+    var reader = F.open(path, schema, StorageOptions())
     return _drain(reader)
 
 
@@ -368,3 +375,48 @@ def test_avro_and_parquet_read_back_what_they_wrote() raises:
         parquet.close()
         var parquet_reader = ParquetReader(ParquetFile(parquet_path))
         _assert_same(_drain(parquet_reader), batches)
+
+
+def _schema_of[F: Format](path: String) raises -> Schema:
+    return F.open(path, None, StorageOptions()).schema()
+
+
+def test_formats_name_their_extensions() raises:
+    assert_true(ParquetFormat.extensions() == [StaticString(".parquet")])
+    assert_true(IpcFormat.extensions() == [StaticString(".arrow")])
+    assert_true(AvroFormat.extensions() == [StaticString(".avro")])
+    var json = JsonFormat.extensions()
+    assert_equal(len(json), 2)
+    assert_equal(json[0], ".jsonl")
+    assert_equal(json[1], ".ndjson")
+
+
+def test_formats_open_every_column_without_a_schema() raises:
+    var batches = _batches()
+    ref schema = batches[0].schema
+    with ScratchDir() as dir:
+        var arrow = join(dir, "t.arrow")
+        var ipc = RecordBatchFileWriter(arrow, schema)
+        _write_all(ipc, batches)
+        ipc.close()
+        assert_true(_schema_of[IpcFormat](arrow) == schema)
+
+        var jsonl = join(dir, "t.jsonl")
+        var json = JsonWriter(FileSink(jsonl))
+        _write_all(json, batches)
+        json.close()
+        assert_true(_schema_of[JsonFormat](jsonl) == schema)
+
+        var avro_path = join(dir, "t.avro")
+        var avro = AvroWriter(avro_path, schema)
+        _write_all(avro, batches)
+        avro.close()
+        assert_equal(len(_schema_of[AvroFormat](avro_path).fields), 2)
+
+        var parquet_path = join(dir, "t.parquet")
+        var parquet = FileWriter(
+            FileSink(parquet_path), schema, Compression.SNAPPY
+        )
+        _write_all(parquet, batches)
+        parquet.close()
+        assert_true(_schema_of[ParquetFormat](parquet_path) == schema)

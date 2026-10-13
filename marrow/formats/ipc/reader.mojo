@@ -254,13 +254,6 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](BatchReader):
             self._native_codecs,
         )
 
-    def read_all(mut self) raises -> List[RecordBatch]:
-        # Footer only lists record-batch blocks, so no header check needed.
-        var batches = List[RecordBatch]()
-        for i in range(len(self._blocks)):
-            batches.append(self.read_batch(i))
-        return batches^
-
 
 struct RecordBatchStreamReader[S: ByteSource = BufferSource](BatchReader):
     """Reader for the Arrow IPC stream format.
@@ -357,15 +350,6 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](BatchReader):
                     self._native_codecs,
                 )
 
-    def read_all(mut self) raises -> List[RecordBatch]:
-        var batches = List[RecordBatch]()
-        while True:
-            var batch = self.read_next_batch()
-            if not batch:
-                break
-            batches.append(batch.take())
-        return batches^
-
 
 struct IpcFormat(Format):
     """The Arrow IPC file format, read by `RecordBatchFileReader`. A batch
@@ -378,8 +362,14 @@ struct IpcFormat(Format):
         return "Ipc"
 
     @staticmethod
-    def open(path: String, schema: Schema) raises -> Self.Reader:
-        return RecordBatchFileReader[DynSource](DynSource.open(path))
+    def extensions() -> List[StaticString]:
+        return [".arrow"]
+
+    @staticmethod
+    def open(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Reader:
+        return RecordBatchFileReader[DynSource](DynSource.open(path, options))
 
 
 def read_ipc_file(
@@ -391,7 +381,7 @@ def read_ipc_file(
     bodies decode in Mojo, or with `native_codecs=False` through liblz4 and
     libzstd."""
     var r = RecordBatchFileReader(DynSource.open(uri, options), native_codecs)
-    return r.read_all()
+    return r.read_all().to_batches()
 
 
 def read_ipc_stream(
@@ -402,7 +392,7 @@ def read_ipc_stream(
     """Read an Arrow IPC stream and return all RecordBatches; compressed
     bodies decode as `read_ipc_file` says."""
     var r = RecordBatchStreamReader(DynSource.open(uri, options), native_codecs)
-    return r.read_all()
+    return r.read_all().to_batches()
 
 
 def read_ipc_file_schema(

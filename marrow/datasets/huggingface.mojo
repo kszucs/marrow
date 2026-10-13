@@ -256,8 +256,8 @@ struct HubDataset(Movable, Writable):
         var parts = repo.split("/")
         if len(parts) != 2 or parts[0] == "" or parts[1] == "":
             raise InvalidError(
-                t"datasets: '{repo}' is neither a format marrow reads "
-                t"(parquet, json, arrow) nor a Hub dataset named owner/name"
+                t"datasets: '{repo}' is neither a format marrow reads (parquet,"
+                t" json, arrow, avro) nor a Hub dataset named owner/name"
             )
         if revision.find("/") >= 0:
             raise InvalidError(

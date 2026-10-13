@@ -417,7 +417,7 @@ def test_stream_writer_reader() raises:
     writer.close()
 
     var reader = RecordBatchStreamReader(path)
-    var all_batches = reader.read_all()
+    var all_batches = reader.read_all().to_batches()
     assert_equal(len(all_batches), 2)
     assert_true(b1 == all_batches[0])
     assert_true(b2 == all_batches[1])
@@ -1236,7 +1236,7 @@ def test_ipc_file_reads_from_a_memory_source() raises:
 
         var r = RecordBatchFileReader(BufferSource(Span(_file_bytes(path))))
         assert_equal(r.num_record_batches(), 2)
-        var got = r.read_all()
+        var got = r.read_all().to_batches()
         assert_equal(len(got), 2)
         assert_true(got[0] == b1)
         assert_true(got[1] == b2)
@@ -1253,7 +1253,7 @@ def test_ipc_stream_reads_from_a_memory_source() raises:
         write_ipc_stream(path, [b.copy()])
 
         var r = RecordBatchStreamReader(BufferSource(Span(_file_bytes(path))))
-        var got = r.read_all()
+        var got = r.read_all().to_batches()
         assert_equal(len(got), 1)
         assert_true(got[0] == b)
 
@@ -1571,7 +1571,7 @@ def _child_field(b: List[UInt8], field: Int, i: Int) raises -> Int:
 def _read_every_value(b: List[UInt8]) raises:
     """Read the stream and format every column, as the fuzz harness does."""
     var reader = RecordBatchStreamReader(BufferSource(Span(b)))
-    for batch in reader.read_all():
+    for batch in reader.read_all().to_batches():
         for i in range(batch.num_columns()):
             _ = String(batch.column(i))
 
@@ -1745,7 +1745,7 @@ def test_ipc_dictionary_without_index_type_reads_int32() raises:
     var encoding = _follow(b, _slot(b, _schema_field(b, 0), 4))
     _put(b, _vtable(b, encoding) + 6, 0, width=2)  # slot 1, indexType: absent
     var reader = RecordBatchStreamReader(BufferSource(Span(b)))
-    var batches = reader.read_all()
+    var batches = reader.read_all().to_batches()
     assert_true(
         batches[0].schema.fields[0].dtype == dictionary(int32, string).to_dyn()
     )

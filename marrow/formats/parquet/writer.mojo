@@ -1130,11 +1130,6 @@ struct FileWriter[S: ByteSink = FileSink](BatchWriter):
                 self.pending.append(rows.slice(self.row_group_size, rest))
             self.pending_rows = rest
 
-    def write(mut self, table: Table) raises:
-        """Append `table`'s rows, batch by batch."""
-        for batch in table.to_batches():
-            self.write(batch)
-
     def close(mut self) raises:
         """Encode the rows still pending, then the bloom filters, the page
         index and the footer, and commit the sink. A file nothing was written
