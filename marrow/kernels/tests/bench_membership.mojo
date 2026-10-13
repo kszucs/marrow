@@ -9,7 +9,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import DynArray
 from ...builders import Int64Builder, StringBuilder
 from ...execution import ExecContext
-from ...kernels.membership import is_in
+from ...kernels.membership import IsInKernel
 from ...utils.testing import Benchmark
 
 comptime _N = 1_000_000
@@ -36,7 +36,7 @@ def _bench_is_in(
 
     @always_inline
     def call() raises {imm}:
-        keep(len(is_in(values, value_set, ExecContext.serial())))
+        keep(len(IsInKernel.dispatch(values, value_set, ExecContext.serial())))
 
     b.iter(call)
     keep(values)

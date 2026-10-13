@@ -181,5 +181,5 @@ from .distinct import (
     approx_count_distinct,
 )
 from .filter import FilterKernel, TakeKernel
-from .membership import IsInKernel, is_in
-from .sort import SortIndices, sort_indices, sort
+from .membership import IsInKernel
+from .sort import SortIndices, SortKernel

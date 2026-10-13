@@ -45,7 +45,7 @@ from ...kernels.join import (
     JOIN_ALL,
     JOIN_ANY,
 )
-from ...kernels.sort import sort
+from ...kernels.sort import SortKernel
 from ..optimizer import (
     AllRules,
     ColumnPruning,
@@ -892,7 +892,7 @@ def _canonical_rows(batch: RecordBatch) raises -> StructArray:
     for i in range(len(sa.children)):
         keys.append(i)
         asc.append(True)
-    return sort(sa, keys, asc)
+    return SortKernel.apply(sa, keys, asc)
 
 
 def _assert_plan_build_sides_agree(kind: JoinKind) raises:

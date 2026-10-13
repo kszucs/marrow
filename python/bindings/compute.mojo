@@ -134,7 +134,7 @@ def _sort_indices(
     ctx: PythonObject,
 ) raises -> PythonObject:
     return (
-        mk.sort_indices(
+        mk.SortIndices.dispatch(
             DynArray(py=array),
             Bool(py=ascending),
             Bool(py=nulls_first),
@@ -154,7 +154,7 @@ def _sort(
     """`sort_indices` then `take` — marrow has no fused sort kernel."""
     var values = DynArray(py=array)
     var context = ExecContext(py=ctx)
-    var indices = mk.sort_indices(
+    var indices = mk.SortIndices.dispatch(
         values, Bool(py=ascending), Bool(py=nulls_first), ctx=context
     )
     # `sort_indices` answers a *typed* `Int32Array`, so it needs `to_dyn`

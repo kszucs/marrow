@@ -778,46 +778,24 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         )
 
 
-# ---------------------------------------------------------------------------
-# Public API — the two `pc.*`-style entry points (``pc.sort_indices`` /
-# ``Table.sort_by``). Three typed `sort_indices` overloads used to sit beside
-# them forwarding to `SortIndices.apply`, which is itself typed — so they saved
-# no copy and only gave the kernel a second place to be taught a new array type.
-# They had already drifted: the `BoolArray` one silently dropped `stable` and
-# `limit` from its signature. Call `SortIndices.apply` for a typed array.
-# ---------------------------------------------------------------------------
+struct SortKernel[stable: Bool = True, nan_largest: Bool = False](Kernel):
+    """Sort a `StructArray` by key columns — `take` under the permutation
+    `SortIndices.multi` computes."""
 
+    comptime name = "sort"
 
-def sort_indices[
-    stable: Bool = True, nan_largest: Bool = False
-](
-    array: DynArray,
-    ascending: Bool = True,
-    nulls_first: Bool = False,
-    limit: Optional[Int] = None,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> Int32Array:
-    """Return the indices that would sort ``array``."""
-    return SortIndices[stable, nan_largest].dispatch(
-        array, ascending, nulls_first, limit, ctx
-    )
-
-
-def sort[
-    stable: Bool = True, nan_largest: Bool = False
-](
-    array: StructArray,
-    key_indices: List[Int],
-    ascending: List[Bool],
-    nulls_first: Bool = False,
-    limit: Optional[Int] = None,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> StructArray:
-    """Sort a StructArray by the specified key columns — ``take`` under the
-    permutation from ``SortIndices.multi``."""
-    return TakeKernel.apply(
-        array,
-        SortIndices[stable, nan_largest].multi(
-            array, key_indices, ascending, nulls_first, limit, ctx
-        ),
-    )
+    @staticmethod
+    def apply(
+        array: StructArray,
+        key_indices: List[Int],
+        ascending: List[Bool],
+        nulls_first: Bool = False,
+        limit: Optional[Int] = None,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> StructArray:
+        return TakeKernel.apply(
+            array,
+            SortIndices[Self.stable, Self.nan_largest].multi(
+                array, key_indices, ascending, nulls_first, limit, ctx
+            ),
+        )

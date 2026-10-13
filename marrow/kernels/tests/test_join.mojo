@@ -64,7 +64,7 @@ from ...kernels.join import (
     BUILD_LEFT,
     BUILD_RIGHT,
 )
-from ...kernels.sort import sort
+from ...kernels.sort import SortKernel
 
 
 # ---------------------------------------------------------------------------
@@ -1383,7 +1383,7 @@ def _canonical(result: StructArray) raises -> StructArray:
     for i in range(len(result.children)):
         keys.append(i)
         asc.append(True)
-    return sort(result, keys, asc)
+    return SortKernel.apply(result, keys, asc)
 
 
 def _assert_build_sides_agree(kind: JoinKind) raises:

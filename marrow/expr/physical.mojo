@@ -98,7 +98,7 @@ from .logical import (
     WindowSpec,
 )
 from .index import Index, page_selections
-from ..kernels.sort import SortIndices, sort_indices
+from ..kernels.sort import SortIndices
 from ..kernels.window import WindowExtents, WindowFrame, WindowKernel
 from ..schema import Schema, schema
 from ..tabular import RecordBatch, Table
@@ -1009,7 +1009,7 @@ struct SortOperator(Operator):
     the standard decomposition — each pass preserves the order the previous one
     established, so the composition orders by key 0, ties broken by key 1, and
     so on. It costs one pass per key and needs no comparator over tuples, which
-    the single-column `sort_indices` kernel could not express anyway.
+    the single-column `SortIndices` kernel could not express anyway.
     """
 
     var _keys: List[DynOperator]
@@ -1068,7 +1068,7 @@ struct SortOperator(Operator):
             # one to permute. Truncating an earlier pass discards rows the
             # later keys still have to order, which loses answers rather than
             # reordering them. `k == 0` is the final, most significant pass.
-            var pass_order = sort_indices[nan_largest=True](
+            var pass_order = SortIndices[nan_largest=True].dispatch(
                 key,
                 ascending=self._ascending[k],
                 nulls_first=self._nulls_first,

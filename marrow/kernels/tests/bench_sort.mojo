@@ -18,7 +18,7 @@ from ...builders import (
     Float64Builder,
 )
 from ...dtypes import int32, int64, float64
-from ...kernels.sort import sort_indices, SortIndices
+from ...kernels.sort import SortIndices
 from ...tabular import record_batch
 
 
@@ -73,7 +73,7 @@ def _bench_sort_int32(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(sort_indices(data.copy()))
+        keep(SortIndices.dispatch(data.copy()))
 
     b.iter(call)
     keep(data)
@@ -85,7 +85,7 @@ def _bench_sort_int64(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(sort_indices(data.copy()))
+        keep(SortIndices.dispatch(data.copy()))
 
     b.iter(call)
     keep(data)
@@ -97,7 +97,7 @@ def _bench_sort_float64(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(sort_indices(data.copy()))
+        keep(SortIndices.dispatch(data.copy()))
 
     b.iter(call)
     keep(data)
@@ -217,7 +217,7 @@ def bench_sort_multi_3col_1m(mut b: Benchmark) raises:
 
 
 # ---------------------------------------------------------------------------
-# Unstable — what `sort_indices[stable=False]` saves against the stable default above.
+# Unstable — what `SortIndices[stable=False]` saves against the stable default above.
 # ---------------------------------------------------------------------------
 
 
@@ -226,7 +226,7 @@ def _bench_unstable(mut b: Benchmark, data: DynArray, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(sort_indices[stable=False](data.copy()))
+        keep(SortIndices[stable=False].dispatch(data.copy()))
 
     b.iter(call)
     keep(data)

@@ -24,7 +24,7 @@ from .kernels.join import (
     JoinKind,
 )
 from .execution import ExecContext
-from .kernels.sort import sort
+from .kernels.sort import SortKernel
 
 
 struct RecordBatch(
@@ -329,7 +329,7 @@ struct RecordBatch(
         `"name"` / `[(name, "descending"), ...]` spellings and flattens them to
         these two lists."""
         var indices = self._key_indices(keys, "sort_by")
-        var sorted_sa = sort(
+        var sorted_sa = SortKernel.apply(
             self.to_struct_array(),
             indices,
             ascending,

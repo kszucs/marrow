@@ -73,43 +73,11 @@ struct IsInKernel(Kernel):
         Self.expect_same_dtype(values.dtype(), value_set.dtype())
         return Self.apply(values, value_set, ctx)
 
-
-# ---------------------------------------------------------------------------
-# Public API — the `pc.*` entry point, in its erased and typed forms. There
-# used to be three typed overloads (`PrimitiveArray[T]`, `BoolArray`,
-# `StringArray`) with byte-identical bodies; one bound on `Array` covers every
-# array type there is, including the ones they omitted. It exists for the call
-# site, not for the kernel: typed arrays are deliberately not
-# `ImplicitlyCopyable`, so without it every caller holding a typed array would
-# have to spell `.copy()` to reach the erased form.
-# ---------------------------------------------------------------------------
-
-
-def is_in(
-    values: DynArray,
-    value_set: DynArray,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> BoolArray:
-    """Membership of each value in ``value_set``.
-
-    ``values`` and ``value_set`` must share the same data type: numeric, bool,
-    string, binary, temporal, decimal, dictionary and the nested types.
-    """
-    return IsInKernel.dispatch(values, value_set, ctx)
-
-
-def is_in[
-    A: Array
-](
-    values: A,
-    value_set: A,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> BoolArray:
-    """Membership of each value in ``value_set``, for two arrays of one type.
-
-    Still validated rather than trusted: a shared Mojo type is not a shared
-    dtype for the types that carry theirs at runtime — two `ListArray`s can
-    disagree about their element type — so this goes through `dispatch` like
-    any other caller.
-    """
-    return IsInKernel.dispatch(values.copy(), value_set.copy(), ctx)
+    @staticmethod
+    def apply[
+        A: Array
+    ](
+        values: A, value_set: A, ctx: ExecContext = ExecContext.serial()
+    ) raises -> BoolArray:
+        """`dispatch` over typed operands of one array type."""
+        return Self.dispatch(values.copy(), value_set.copy(), ctx)

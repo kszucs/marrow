@@ -3,7 +3,7 @@
 
 """Profiling driver for the sort kernel.
 
-Calls the production sort_indices() and take() kernels directly so that the
+Calls the production SortIndices.dispatch() and take() kernels directly so that the
 macOS `sample` profiler (or Instruments Time Profiler) can attribute hot
 samples to the real call tree:
 
@@ -26,7 +26,7 @@ from std.time import perf_counter_ns
 from marrow.arrays import DynArray, Int64Array, Float64Array, PrimitiveArray
 from marrow.builders import Int64Builder, Float64Builder
 from marrow.dtypes import int64, float64, Int64Type, Float64Type, PrimitiveType
-from marrow.kernels.sort import sort_indices
+from marrow.kernels.sort import SortIndices
 from marrow.kernels.filter import TakeKernel
 
 
@@ -101,11 +101,11 @@ def _bench_sort_indices[
     var arr: DynArray = data.copy()
 
     # warmup (not counted)
-    keep(sort_indices(arr))
+    keep(SortIndices.dispatch(arr))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
-        var idx = sort_indices(arr)
+        var idx = SortIndices.dispatch(arr)
         keep(idx)
     var elapsed = perf_counter_ns() - t0
 
@@ -130,12 +130,12 @@ def _bench_sort[T: PrimitiveType](data: PrimitiveArray[T], iters: Int) raises:
     var arr: DynArray = data.copy()
 
     # warmup
-    var wi = sort_indices(arr)
+    var wi = SortIndices.dispatch(arr)
     keep(TakeKernel.dispatch(arr, wi))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
-        var idx = sort_indices(arr)
+        var idx = SortIndices.dispatch(arr)
         var sorted = TakeKernel.dispatch(arr, idx)
         keep(idx)
         keep(sorted)
@@ -162,11 +162,11 @@ def _bench_sort_indices_desc[
     var n = len(data)
     var arr: DynArray = data.copy()
 
-    keep(sort_indices(arr, ascending=False))
+    keep(SortIndices.dispatch(arr, ascending=False))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
-        var idx = sort_indices(arr, ascending=False)
+        var idx = SortIndices.dispatch(arr, ascending=False)
         keep(idx)
     var elapsed = perf_counter_ns() - t0
 
