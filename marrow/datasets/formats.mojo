@@ -106,11 +106,11 @@ struct FileFormat(Equatable, ImplicitlyCopyable, Movable, Writable):
             var schema = ParquetFile(DynSource.open(paths[0])).schema()
             return scan(paths^, schema^)
         if self == Self.JSON:
-            var schema = open_json(paths[0]).schema.copy()
+            var schema = open_json(paths[0]).schema()
             return scan_json(paths^, schema^)
         var schema = RecordBatchFileReader[DynSource](
             DynSource.open(paths[0])
-        ).schema.copy()
+        ).schema()
         return scan_ipc(paths^, schema^)
 
     def __eq__(self, other: Self) -> Bool:

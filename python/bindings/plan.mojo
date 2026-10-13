@@ -502,7 +502,7 @@ def json_scan(path: PythonObject, schema: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var sch: Schema
     if schema.__is__(builtins.None):
-        sch = open_json(p).schema.copy()
+        sch = open_json(p).schema()
     else:
         sch = Schema(py=schema)
     return _wrap(_scan_json(p^, sch^))

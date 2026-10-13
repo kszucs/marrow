@@ -397,7 +397,7 @@ def test_json_reader_infers_from_the_first_block_then_is_strict() raises:
     var reader = JsonReader[BufferSource](
         BufferSource(text.as_bytes()), ReadOptions(block_size=18)
     )
-    assert_equal(len(reader.schema.fields), 1)
+    assert_equal(len(reader.schema().fields), 1)
     var first = reader.read_next_batch()
     assert_true(Bool(first))
     assert_equal(first.value().num_rows(), 2)

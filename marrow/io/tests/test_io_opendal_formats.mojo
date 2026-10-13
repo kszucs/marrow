@@ -252,7 +252,7 @@ def test_opendal_ipc_round_trip() raises:
         var t = _sample()
         var batch = t.combine_chunks()
         var w = RecordBatchFileWriter(_fs(dir).writer(name), batch.schema)
-        w.write_batch(batch)
+        w.write(batch)
         w.close()
         assert_true(exists(path), "the sink did not commit")
 

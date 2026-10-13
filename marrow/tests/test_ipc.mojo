@@ -344,8 +344,8 @@ def test_file_writer_class() raises:
     var b2 = _mk_batch()
 
     var writer = RecordBatchFileWriter(path, b1.schema)
-    writer.write_batch(b1)
-    writer.write_batch(b2)
+    writer.write(b1)
+    writer.write(b2)
     writer.close()
 
     var batches_out = read_ipc_file(path)
@@ -412,8 +412,8 @@ def test_stream_writer_reader() raises:
     var b2 = _mk_batch()
 
     var writer = RecordBatchStreamWriter(path, b1.schema)
-    writer.write_batch(b1)
-    writer.write_batch(b2)
+    writer.write(b1)
+    writer.write(b2)
     writer.close()
 
     var reader = RecordBatchStreamReader(path)

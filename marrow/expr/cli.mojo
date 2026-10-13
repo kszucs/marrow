@@ -459,5 +459,5 @@ def _write_parquet(path: String, batch: RecordBatch) raises:
 
 def _write_ipc(path: String, batch: RecordBatch) raises:
     var writer = RecordBatchFileWriter(path, batch.schema)
-    writer.write_batch(batch)
+    writer.write(batch)
     writer.close()

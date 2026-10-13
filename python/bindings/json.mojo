@@ -83,7 +83,7 @@ def json_open(
 def _stream_schema(py_self: PythonObject) raises -> PythonObject:
     return (
         py_self.downcast_value_ptr[JsonStreamReader]()[]
-        .reader.schema.copy()
+        .reader.schema()
         .to_python_object()
     )
 

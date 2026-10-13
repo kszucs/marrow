@@ -20,7 +20,8 @@ from emberjson.teju import write_float
 from emberjson.utils import write_escaped_string
 
 from ..arrays import DynArray
-from ..errors import NotImplementedError
+from ..errors import InvalidError, NotImplementedError
+from ..formats import BatchWriter
 from ..io import ByteSink, DynSink, StorageOptions
 from ..tabular import RecordBatch, Table
 from ..utils.datetime import CivilDate, Epoch, Iso8601, floor_div
@@ -165,16 +166,20 @@ def render_json(batch: RecordBatch) raises -> String:
     return out^
 
 
-struct JsonWriter[S: ByteSink](Movable):
+struct JsonWriter[S: ByteSink](BatchWriter):
     """Writes batches to a sink as newline-delimited JSON. Nothing is
     published until `close`, which is the sink's contract."""
 
     var _sink: Self.S
+    var _closed: Bool
 
     def __init__(out self, var sink: Self.S):
         self._sink = sink^
+        self._closed = False
 
     def write(mut self, batch: RecordBatch) raises:
+        if self._closed:
+            raise InvalidError("JsonWriter: writer is closed")
         var text = render_json(batch)
         self._sink.write(text.as_bytes())
 
@@ -183,6 +188,9 @@ struct JsonWriter[S: ByteSink](Movable):
             self.write(batch)
 
     def close(mut self) raises:
+        if self._closed:
+            return
+        self._closed = True
         self._sink.close()
 
 

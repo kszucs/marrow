@@ -9,6 +9,7 @@ Explicit re-exports, never `import *`.
 """
 
 from .reader import (
+    JsonFormat,
     JsonReader,
     ParseOptions,
     ReadOptions,

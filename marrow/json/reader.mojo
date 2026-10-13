@@ -52,6 +52,7 @@ from ..dtypes import (
 )
 from ..errors import DynError, InvalidError, NotImplementedError
 from ..execution import ExecContext
+from ..formats import BatchReader, Format
 from ..io import ByteSource, DynSource, Fetched, StorageOptions
 from ..schema import Schema
 from ..tabular import RecordBatch, Table
@@ -886,7 +887,7 @@ struct _Slot(Movable):
             b.as_float64().append(cur.number[DType.float64](self.dtype))
 
 
-struct JsonReader[S: ByteSource](Movable):
+struct JsonReader[S: ByteSource](BatchReader):
     """Newline-delimited JSON, one `RecordBatch` per block.
 
     Mirrors Arrow C++'s streaming reader: the schema is the explicit one when
@@ -896,7 +897,7 @@ struct JsonReader[S: ByteSource](Movable):
     batches already committed to.
     """
 
-    var schema: Schema
+    var _schema: Schema
     var _blocks: Blocks[Self.S]
     var _ignore_unexpected: Bool
     var _row: Int
@@ -919,7 +920,7 @@ struct JsonReader[S: ByteSource](Movable):
     ):
         """A reader of `schema` over `blocks`, as `ColumnShape.infer` left
         them."""
-        self.schema = schema.copy()
+        self._schema = schema.copy()
         self._blocks = blocks^
         # After pass 1 has run with `INFER` there is no key left to meet, so
         # meeting one is an error; only an explicit `IGNORE` skips.
@@ -928,11 +929,14 @@ struct JsonReader[S: ByteSource](Movable):
         )
         self._row = 0
 
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
     def read_next_batch(mut self) raises -> Optional[RecordBatch]:
         """The next block's rows, or `None` at the end of the input."""
         if not self._blocks.next():
             return None
-        var dtype: DynType = struct_(self.schema.fields.copy())
+        var dtype: DynType = struct_(self._schema.fields.copy())
         var builder = DynBuilder(dtype)
         var root = _Slot(dtype, False, "", builder)
         var cur = JsonCursor(
@@ -949,7 +953,7 @@ struct JsonReader[S: ByteSource](Movable):
             raise cur.located(e)
         self._row = cur.row
         var rows = builder.finish()
-        return RecordBatch(self.schema, rows.as_struct().children.copy())
+        return RecordBatch(self._schema, rows.as_struct().children.copy())
 
     def read_all(mut self) raises -> Table:
         """Every remaining block, as a table with one chunk per block."""
@@ -959,7 +963,7 @@ struct JsonReader[S: ByteSource](Movable):
             if not batch:
                 break
             batches.append(batch.take())
-        return Table.from_batches(self.schema, batches)
+        return Table.from_batches(self._schema, batches)
 
 
 def read_json[
@@ -1004,3 +1008,22 @@ def open_json(
     return JsonReader[DynSource](
         DynSource.open(uri, options), read_options, parse_options
     )
+
+
+struct JsonFormat(Format):
+    """Newline-delimited JSON, read by `JsonReader` into the projected schema:
+    keys outside it are skipped rather than parsed."""
+
+    comptime Reader = JsonReader[DynSource]
+
+    @staticmethod
+    def name() -> StaticString:
+        return "Json"
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self.Reader:
+        return open_json(
+            path,
+            ReadOptions(),
+            ParseOptions(schema, UnexpectedFieldBehavior.IGNORE),
+        )

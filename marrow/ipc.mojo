@@ -60,6 +60,7 @@ from .io import (
     StorageOptions,
 )
 from .schema import Schema
+from .formats import BatchReader, BatchWriter, Format
 from .tabular import RecordBatch
 from .builders import DynBuilder
 from .kernels.hashing import KeyCompare
@@ -2253,10 +2254,10 @@ struct _BatchDecoder(Movable):
 # ---------------------------------------------------------------------------
 
 
-struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
+struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
     """Incremental writer for the Arrow IPC file format.
 
-    Write batches with `write_batch`, then call `close()` to append the footer
+    Write batches with `write`, then call `close()` to append the footer
     and commit. Nothing is published until `close()` succeeds.
 
     Batches are handed to the sink as they are written, so peak residency is
@@ -2311,7 +2312,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
         )
         self._out.write(Span(schema_msg))
 
-    def write_batch(mut self, batch: RecordBatch) raises:
+    def write(mut self, batch: RecordBatch) raises:
         if self._closed:
             raise InvalidError("RecordBatchFileWriter: writer is closed")
         # Collect all (dict_id, values) pairs in DFS inner-first order; ids
@@ -2366,10 +2367,10 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](Movable):
         self._closed = True
 
 
-struct RecordBatchStreamWriter[S: ByteSink = FileSink](Movable):
+struct RecordBatchStreamWriter[S: ByteSink = FileSink](BatchWriter):
     """Incremental writer for the Arrow IPC stream format.
 
-    Write batches with `write_batch`, then call `close()` to write the EOS
+    Write batches with `write`, then call `close()` to write the EOS
     marker and commit. A stream records no offsets at all, so each message goes
     to the sink as soon as it is encoded.
     """
@@ -2410,7 +2411,7 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](Movable):
         )
         self._out.write(Span(schema_msg))
 
-    def write_batch(mut self, batch: RecordBatch) raises:
+    def write(mut self, batch: RecordBatch) raises:
         if self._closed:
             raise InvalidError("RecordBatchStreamWriter: writer is closed")
         # Stream format sends all dicts before each record batch.
@@ -2442,7 +2443,7 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](Movable):
 # ---------------------------------------------------------------------------
 
 
-struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
+struct RecordBatchFileReader[S: ByteSource = BufferSource](BatchReader):
     """Reader for the Arrow IPC file format with random-access batch reads.
 
     Opens a file by reading its **tail**, not its whole extent: the footer sits
@@ -2450,9 +2451,10 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
     read is repeated only when the footer overruns that window.
     """
 
-    var schema: Schema
+    var _schema: Schema
     var _ipc_infos: List[_FieldIpcInfo]
     var _blocks: List[_Block]
+    var _next: Int
     var _src: Self.S
     var _dict_values: List[DynArray]
     var _native_codecs: Bool
@@ -2511,9 +2513,10 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
         var dict_blocks = List[_Block]()
         var blocks = List[_Block]()
         var ipc_infos = List[_FieldIpcInfo]()
-        self.schema = dec.read_footer(dict_blocks, blocks, ipc_infos)
+        self._schema = dec.read_footer(dict_blocks, blocks, ipc_infos)
         self._ipc_infos = ipc_infos^
         self._blocks = blocks^
+        self._next = 0
         self._src = source^
         self._dict_values = List[DynArray]()
 
@@ -2528,7 +2531,7 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
                 break
             var dict_id = _IpcDecoder(meta.copy()).peek_dict_id()
             var lkup = _FieldIpcInfo.find_in_schema(
-                self.schema.fields, self._ipc_infos, dict_id
+                self._schema.fields, self._ipc_infos, dict_id
             )
             if lkup:
                 var dec = _IpcDecoder(meta^)
@@ -2543,8 +2546,19 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
                     self._dict_values.append(NullArray(0))
                 self._dict_values[dict_id] = values^
 
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
     def num_record_batches(self) -> Int:
         return len(self._blocks)
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        """The batch after the last one this returned, in file order, or
+        `None` after the last; `read_batch` is the random-access path."""
+        if self._next >= len(self._blocks):
+            return None
+        self._next += 1
+        return self.read_batch(self._next - 1)
 
     def read_batch(ref self, i: Int) raises -> RecordBatch:
         """One batch, by index. `ref self` rather than `mut self`: this format is
@@ -2558,7 +2572,7 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
         var _ok = _read_message(self._src, pos, meta, body)
         var dec = _IpcDecoder(meta^)
         return dec.decode_record_batch(
-            self.schema,
+            self._schema,
             self._ipc_infos,
             body^,
             self._dict_values,
@@ -2573,7 +2587,7 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](Movable):
         return batches^
 
 
-struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
+struct RecordBatchStreamReader[S: ByteSource = BufferSource](BatchReader):
     """Reader for the Arrow IPC stream format.
 
     Framing stays strictly sequential, because a stream carries no index. That
@@ -2582,10 +2596,12 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
     this reader does not add one.
     """
 
-    var schema: Schema
+    var _schema: Schema
     var _ipc_infos: List[_FieldIpcInfo]
     var _src: Self.S
     var _pos: Int
+    var _dict_values: List[DynArray]
+    """Every dictionary read so far, by id, deltas applied."""
     var _native_codecs: Bool
     """Whether compressed bodies decode in Mojo, the default, or through
     liblz4 and libzstd."""
@@ -2607,6 +2623,7 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
         self._native_codecs = native_codecs
         self._src = source^
         self._pos = 0
+        self._dict_values = List[DynArray]()
         var meta = List[UInt8]()
         var body = List[UInt8]()
         if not _read_message(self._src, self._pos, meta, body):
@@ -2615,25 +2632,26 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
             )
         var ipc_infos = List[_FieldIpcInfo]()
         var dec = _IpcDecoder(meta^)
-        self.schema = dec.decode_schema(ipc_infos)
+        self._schema = dec.decode_schema(ipc_infos)
         self._ipc_infos = ipc_infos^
 
-    def read_all(mut self) raises -> List[RecordBatch]:
-        var dict_values = List[DynArray]()
-        var batches = List[RecordBatch]()
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        """The next record batch, applying the dictionary messages before it,
+        or `None` at the end of the stream."""
         while True:
             var meta = List[UInt8]()
             var body = List[UInt8]()
             if not _read_message(self._src, self._pos, meta, body):
-                break
-            var header_type: UInt8
-            var peek = _IpcDecoder(meta.copy())
-            header_type = peek.peek_header()
+                return None
+            var header_type = _IpcDecoder(meta.copy()).peek_header()
             if Int(header_type) == Int(_HEADER_DICTIONARY_BATCH):
                 var dict_id = _IpcDecoder(meta.copy()).peek_dict_id()
                 var is_delta = _IpcDecoder(meta.copy()).peek_is_delta()
                 var lkup = _FieldIpcInfo.find_in_schema(
-                    self.schema.fields, self._ipc_infos, dict_id
+                    self._schema.fields, self._ipc_infos, dict_id
                 )
                 if lkup:
                     var dec = _IpcDecoder(meta^)
@@ -2641,31 +2659,52 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](Movable):
                         lkup.value().value_type,
                         lkup.value().value_ipc_info,
                         body^,
-                        dict_values,
+                        self._dict_values,
                         self._native_codecs,
                     )
-                    while len(dict_values) <= dict_id:
-                        dict_values.append(NullArray(0))
-                    if is_delta and len(dict_values[dict_id]) > 0:
+                    while len(self._dict_values) <= dict_id:
+                        self._dict_values.append(NullArray(0))
+                    if is_delta and len(self._dict_values[dict_id]) > 0:
                         # a delta carries only the newly-appended values
                         var merged = List[DynArray]()
-                        merged.append(dict_values[dict_id].copy())
+                        merged.append(self._dict_values[dict_id].copy())
                         merged.append(values^)
-                        dict_values[dict_id] = DynBuilder.concat(merged)
+                        self._dict_values[dict_id] = DynBuilder.concat(merged)
                     else:
-                        dict_values[dict_id] = values^
+                        self._dict_values[dict_id] = values^
             elif Int(header_type) == Int(_HEADER_RECORD_BATCH):
                 var dec = _IpcDecoder(meta^)
-                batches.append(
-                    dec.decode_record_batch(
-                        self.schema,
-                        self._ipc_infos,
-                        body^,
-                        dict_values,
-                        self._native_codecs,
-                    )
+                return dec.decode_record_batch(
+                    self._schema,
+                    self._ipc_infos,
+                    body^,
+                    self._dict_values,
+                    self._native_codecs,
                 )
+
+    def read_all(mut self) raises -> List[RecordBatch]:
+        var batches = List[RecordBatch]()
+        while True:
+            var batch = self.read_next_batch()
+            if not batch:
+                break
+            batches.append(batch.take())
         return batches^
+
+
+struct IpcFormat(Format):
+    """The Arrow IPC file format, read by `RecordBatchFileReader`. A batch
+    holds whole columns, so the projection reads nothing less."""
+
+    comptime Reader = RecordBatchFileReader[DynSource]
+
+    @staticmethod
+    def name() -> StaticString:
+        return "Ipc"
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self.Reader:
+        return RecordBatchFileReader[DynSource](DynSource.open(path))
 
 
 # ---------------------------------------------------------------------------
@@ -2688,7 +2727,7 @@ def write_ipc_file(
         DynSink.open(uri, options), schema, compression, native_codecs
     )
     for batch in batches:
-        w.write_batch(batch)
+        w.write(batch)
     w.close()
 
 
@@ -2724,7 +2763,7 @@ def write_ipc_stream(
         DynSink.open(uri, options), schema, compression, native_codecs
     )
     for batch in batches:
-        w.write_batch(batch)
+        w.write(batch)
     w.close()
 
 
@@ -2774,7 +2813,7 @@ def read_ipc_file_schema(
 ) raises -> RecordBatch:
     """Read the schema from an Arrow IPC file; return a 0-row RecordBatch."""
     var r = RecordBatchFileReader(DynSource.open(uri, options))
-    return RecordBatch.empty(r.schema)
+    return RecordBatch.empty(r.schema())
 
 
 def read_ipc_stream_schema(
@@ -2782,4 +2821,4 @@ def read_ipc_stream_schema(
 ) raises -> RecordBatch:
     """Read the schema from an Arrow IPC stream; return a 0-row RecordBatch."""
     var r = RecordBatchStreamReader(DynSource.open(uri, options))
-    return RecordBatch.empty(r.schema)
+    return RecordBatch.empty(r.schema())
