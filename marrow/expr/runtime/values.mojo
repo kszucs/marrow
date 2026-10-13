@@ -826,9 +826,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # values and are null where the input is -- the same split the
         # comptime lane draws between `NullPredicate` and `ValuePredicate`.
         if self._tag == "is_null":
-            return IsNullKernel.apply(a).to_dyn()
+            return IsNullKernel.dispatch(a).to_dyn()
         if self._tag == "is_valid":
-            return NotNullKernel.apply(a).to_dyn()
+            return NotNullKernel.dispatch(a).to_dyn()
         if self._tag == "is_nan":
             return IsNanKernel.dispatch(a)
         if self._tag == "is_inf":
@@ -908,13 +908,13 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "ilike":
             return ILikeKernel.dispatch(a, self._payload[String])
         if self._tag == "date_trunc":
-            return DateTruncKernel.apply(
+            return DateTruncKernel.dispatch(
                 a, CalendarUnit.parse(self._payload[String])
             )
         if self._tag == "assume_timezone":
-            return AssumeTimezoneKernel.apply(a, self._payload[String])
+            return AssumeTimezoneKernel.dispatch(a, self._payload[String])
         if self._tag == "convert_timezone":
-            return ConvertTimezoneKernel.apply(a, self._payload[String])
+            return ConvertTimezoneKernel.dispatch(a, self._payload[String])
         if self._tag == "isin":
             var pair = Self._unified([a^, self._payload[DynArray].copy()])
             return IsInKernel.dispatch(pair[0], pair[1]).to_dyn()

@@ -193,13 +193,9 @@ struct DateTrunc[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        return (
-            DateTruncKernel.apply(
-                self.a.evaluate(batch, bindings).to_array(len(batch)),
-                self._unit,
-            )
-            .as_primitive[Self.Type]()
-            .copy()
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return DateTruncKernel.apply(
+            t.as_type[PrimitiveArray[Self.Type]](), self._unit
         )
 
     @always_inline
@@ -392,12 +388,11 @@ struct ZonedTimestamp[A: TemporalValue, convert: Bool](
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var t = self.a.evaluate(batch, bindings).to_array(len(batch))
-        var out: DynArray
+        ref typed = t.as_type[PrimitiveArray[Self.Type]]()
         comptime if Self.convert:
-            out = ConvertTimezoneKernel.apply(t, self._zone)
+            return ConvertTimezoneKernel.apply(typed, self._zone)
         else:
-            out = AssumeTimezoneKernel.apply(t, self._zone)
-        return out.as_primitive[Self.Type]().copy()
+            return AssumeTimezoneKernel.apply(typed, self._zone)
 
     @always_inline
     def lane[

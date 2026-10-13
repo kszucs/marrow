@@ -647,7 +647,7 @@ def _same_keys(
     var n = len(li)
     var same = Bitmap.alloc_zeroed(n)
     same.set_range(0, n, True)
-    KeyCompare.apply(left, _idx(li), right, _idx(ri), same, ctx)
+    KeyCompare.dispatch(left, _idx(li), right, _idx(ri), same, ctx)
     var out = List[Bool]()
     for i in range(n):
         out.append(same.test(i))
@@ -864,7 +864,7 @@ def test_key_compare_skips_rows_already_distinct() raises:
     """A cleared bit stays cleared: columns AND into one bitmap."""
     var a = _i64([1, 1])
     var same = Bitmap.alloc_zeroed(1)
-    KeyCompare.apply(a, _idx([0]), a, _idx([1]), same)
+    KeyCompare.dispatch(a, _idx([0]), a, _idx([1]), same)
     assert_false(same.test(0))
 
 

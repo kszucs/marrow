@@ -19,7 +19,7 @@ Three tiers per kernel (same scheme as ``numeric.mojo``):
 
 from std.math import isnan, isinf
 
-from ..arrays import BoolArray, DynArray, PrimitiveArray
+from ..arrays import Array, ArrayData, BoolArray, DynArray, PrimitiveArray
 from ..buffers import Bitmap
 from ..dtypes import (
     FloatingType,
@@ -254,8 +254,9 @@ struct XorKernel(BoolBinaryKernel):
 
 trait NullPredicateKernel(Kernel):
     """`is_null` / `not_null` — reads only the validity bitmap. `negate` picks the
-    polarity (`is_null` inverts validity, `not_null` copies it); the shared
-    `apply` runs the mask through the offset-aware byte-level bitmap `apply`."""
+    polarity (`is_null` inverts validity, `not_null` copies it). It reads the
+    layout alone, so `apply(ArrayData)` is the operation and the typed `apply`
+    and `dispatch` hand it their array's data."""
 
     comptime negate: Bool
 
@@ -268,11 +269,25 @@ trait NullPredicateKernel(Kernel):
             return v
 
     @staticmethod
-    def apply(
+    def apply[
+        A: Array
+    ](array: A, ctx: ExecContext = ExecContext.serial()) raises -> BoolArray:
+        return Self.apply(array.to_data(), ctx)
+
+    @staticmethod
+    def dispatch(
         arr: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
-        var n = len(arr)
-        var validity = arr.to_data().validity()
+        return Self.apply(arr.to_data(), ctx)
+
+    @staticmethod
+    def apply(
+        data: ArrayData, ctx: ExecContext = ExecContext.serial()
+    ) raises -> BoolArray:
+        """The mask over any layout: only its validity is read."""
+        var n = data.length
+        var null_count = data.nulls
+        var validity = data.validity()
         var buf: Bitmap[mut=False]
         if validity:
             var out = Bitmap.alloc_uninit(n)
@@ -283,17 +298,11 @@ trait NullPredicateKernel(Kernel):
             # for the `null` dtype, which carries no bitmap and was reported
             # as never null.
             var zeroed = Bitmap.alloc_zeroed(n)
-            if (arr.null_count() == n) == Self.negate:
+            if (null_count == n) == Self.negate:
                 buf = (~zeroed.view()).to_immutable()
             else:
                 buf = zeroed.to_immutable()
         return BoolArray(length=n, nulls=0, offset=0, bitmap=None, buffer=buf)
-
-    @staticmethod
-    def dispatch(
-        arr: DynArray, ctx: ExecContext = ExecContext.serial()
-    ) raises -> DynArray:
-        return Self.apply(arr, ctx).to_dyn()
 
 
 trait ValuePredicateKernel(Kernel):

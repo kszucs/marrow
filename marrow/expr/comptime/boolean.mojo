@@ -220,9 +220,9 @@ struct NullPredicate[K: NullPredicateKernel, A: ComptimeValue](
 
     The operand is bound on `ComptimeValue`, not on a family, for the same
     reason `BoolBinary`'s are: this asks its operand for a column and never for
-    a lane, so any family will do. That is also why it is a breaker —
-    `NullPredicateKernel.apply` takes a `DynArray`, because reading a bitmap
-    is one operation whatever the dtype underneath it is.
+    a lane, so any family will do. That is also why it is a breaker, calling
+    `NullPredicateKernel.apply` on the column's layout: reading a bitmap is
+    one operation whatever the dtype underneath it is.
 
     **The result is never null**, which is the whole content of a validity
     predicate: `is_null(NULL)` is `TRUE`, a perfectly good value. The kernel
@@ -259,7 +259,7 @@ struct NullPredicate[K: NullPredicateKernel, A: ComptimeValue](
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return Self.K.apply(
-            self.a.evaluate(batch, bindings).to_array(len(batch))
+            self.a.evaluate(batch, bindings).to_array(len(batch)).to_data()
         )
 
     @always_inline

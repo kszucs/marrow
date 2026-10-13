@@ -224,7 +224,7 @@ struct WindowExtents(Copyable, Movable, Sized):
             var same = Bitmap.alloc_zeroed(n - 1)
             same.set_range(0, n - 1, True)
             var rows = arange[Int32Type](0, n - 1)
-            KeyCompare.apply(
+            KeyCompare.dispatch(
                 key.slice(1, n - 1), rows, key.slice(0, n - 1), rows, same, ctx
             )
             for j in range(1, n):

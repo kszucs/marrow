@@ -541,52 +541,45 @@ struct DateTruncKernel(Kernel):
     comptime name = "date_trunc"
 
     @staticmethod
-    def apply(array: DynArray, unit: CalendarUnit) raises -> DynArray:
-        var dt = array.dtype()
+    def apply[
+        T: TemporalType
+    ](array: PrimitiveArray[T], unit: CalendarUnit) raises -> PrimitiveArray[T]:
+        var dt = array.type()
         if dt.is_date32() and not unit.is_calendar():
             # date32 is already day-granular, so any *fixed-length* unit up to a
             # day is a no-op. Month, quarter and year are not -- returning the
             # input for those silently ignored the request, which is what this
             # guard used to do for every unit.
             return array.copy()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"unsupported type {dt}")
 
         var data = array.to_data()
         var n = data.length
-        var width = dt.byte_width()
         var clock = _clock(dt)
-        var tps = 1 if dt.is_date32() else ticks_per_second(dt)
-
+        var out: DynArray
         if unit.is_calendar():
             # date32 counts days directly; everything else counts sub-day ticks.
-            var ticks_per_day = 1 if dt.is_date32() else tps * 86400
-            if width == 4:
-                return _trunc_calendar[DType.int32](
-                    data, dt, ticks_per_day, unit, n, clock
-                )
-            elif width == 8:
-                return _trunc_calendar[DType.int64](
-                    data, dt, ticks_per_day, unit, n, clock
-                )
-            else:
-                raise Self.error[InternalError](
-                    t"{dt} is {width} bytes wide; expected 4 or 8",
-                )
-
-        var ticks_per_unit = ticks_per_second(dt) * unit.seconds()
-        if width == 4:  # time32
-            return _trunc[DType.int32](data, dt, ticks_per_unit, n, clock)
-        elif width == 8:  # date64 / timestamp / time64
-            return _trunc[DType.int64](data, dt, ticks_per_unit, n, clock)
-        else:
-            # Every temporal type Arrow defines is int32- or int64-backed, so
-            # this is unreachable today. It is spelled out rather than folded
-            # into the int64 branch because a wider temporal type would
-            # otherwise be read through the wrong lane width, silently.
-            raise Self.error[InternalError](
-                t"{dt} is {width} bytes wide; expected 4 or 8",
+            var ticks_per_day = (
+                1 if dt.is_date32() else ticks_per_second(dt) * 86400
             )
+            out = _trunc_calendar[T.native](
+                data, dt, ticks_per_day, unit, n, clock
+            )
+        else:
+            var ticks_per_unit = ticks_per_second(dt) * unit.seconds()
+            out = _trunc[T.native](data, dt, ticks_per_unit, n, clock)
+        return out.as_primitive[T]().copy()
+
+    @staticmethod
+    def dispatch(array: DynArray, unit: CalendarUnit) raises -> DynArray:
+        """The typed `apply` for `array`'s temporal dtype."""
+        var dt = array.dtype()
+        if not dt.is_temporal():
+            raise Self.error[TypeError](t"unsupported type {dt}")
+
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T](), unit).to_dyn()
+
+        return dt.dispatch_temporal(leaf)
 
 
 # ---------------------------------------------------------------------------
@@ -967,8 +960,10 @@ struct AssumeTimezoneKernel(Kernel):
     comptime name = "assume_timezone"
 
     @staticmethod
-    def apply(array: DynArray, zone: String) raises -> DynArray:
-        var dt = array.dtype()
+    def apply[
+        T: TemporalType
+    ](array: PrimitiveArray[T], zone: String) raises -> PrimitiveArray[T]:
+        var dt = array.type()
         if not dt.is_timestamp():
             raise Self.error[TypeError](t"expected a timestamp array, got {dt}")
         ref ts = dt.as_timestamp()
@@ -980,7 +975,27 @@ struct AssumeTimezoneKernel(Kernel):
             # A naive timestamp is already read as UTC: nothing moves.
             return ConvertTimezoneKernel.apply(array, zone)
         var clock = WallClock(WallClock.load_zone(zone), _unit_tps(ts.unit))
-        return _shift[True](clock, array, DynType(TimestampType(ts.unit, zone)))
+        return (
+            _shift[True](
+                clock,
+                array.copy().to_dyn(),
+                DynType(TimestampType(ts.unit, zone)),
+            )
+            .as_primitive[T]()
+            .copy()
+        )
+
+    @staticmethod
+    def dispatch(array: DynArray, zone: String) raises -> DynArray:
+        """The typed `apply` for `array`'s temporal dtype."""
+        var dt = array.dtype()
+        if not dt.is_temporal():
+            raise Self.error[TypeError](t"expected a timestamp array, got {dt}")
+
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T](), zone).to_dyn()
+
+        return dt.dispatch_temporal(leaf)
 
 
 struct ConvertTimezoneKernel(Kernel):
@@ -992,11 +1007,25 @@ struct ConvertTimezoneKernel(Kernel):
     comptime name = "convert_timezone"
 
     @staticmethod
-    def apply(array: DynArray, zone: String) raises -> DynArray:
-        var dt = array.dtype()
+    def apply[
+        T: TemporalType
+    ](array: PrimitiveArray[T], zone: String) raises -> PrimitiveArray[T]:
+        var dt = array.type()
         if not dt.is_timestamp():
             raise Self.error[TypeError](t"expected a timestamp array, got {dt}")
         _ = WallClock.load_zone(zone)
         var data = array.to_data()
         data.dtype = DynType(TimestampType(dt.as_timestamp().unit, zone))
-        return DynArray.from_data(data^)
+        return PrimitiveArray[T](data^)
+
+    @staticmethod
+    def dispatch(array: DynArray, zone: String) raises -> DynArray:
+        """The typed `apply` for `array`'s temporal dtype."""
+        var dt = array.dtype()
+        if not dt.is_temporal():
+            raise Self.error[TypeError](t"expected a timestamp array, got {dt}")
+
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T](), zone).to_dyn()
+
+        return dt.dispatch_temporal(leaf)

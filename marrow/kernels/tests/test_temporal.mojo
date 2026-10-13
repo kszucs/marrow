@@ -226,7 +226,7 @@ def test_pre_epoch_timestamp() raises:
 def test_date_trunc_minute() raises:
     # 2019-06-15 12:30:45 -> 2019-06-15 12:30:00 = 1560601800
     var a = _ts([1_560_601_845], timestamp(second))
-    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
+    var r = DateTruncKernel.dispatch(a.copy().to_dyn(), unit_minute)
     assert_true(r.dtype() == timestamp(second).to_dyn())
     assert_equal(r.as_timestamp()[0].value(), 1_560_601_800)
 
@@ -234,25 +234,25 @@ def test_date_trunc_minute() raises:
 def test_date_trunc_units() raises:
     var a = _ts([1_560_601_845], timestamp(second))  # 2019-06-15 12:30:45
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_dyn(), unit_second)
+        DateTruncKernel.dispatch(a.copy().to_dyn(), unit_second)
         .as_timestamp()[0]
         .value(),
         1_560_601_845,
     )
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
+        DateTruncKernel.dispatch(a.copy().to_dyn(), unit_minute)
         .as_timestamp()[0]
         .value(),
         1_560_601_800,
     )
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_dyn(), unit_hour)
+        DateTruncKernel.dispatch(a.copy().to_dyn(), unit_hour)
         .as_timestamp()[0]
         .value(),
         1_560_600_000,  # 2019-06-15 12:00:00
     )
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_dyn(), unit_day)
+        DateTruncKernel.dispatch(a.copy().to_dyn(), unit_day)
         .as_timestamp()[0]
         .value(),
         1_560_556_800,  # 2019-06-15 00:00:00
@@ -262,12 +262,12 @@ def test_date_trunc_units() raises:
 def test_date_trunc_millisecond_unit() raises:
     # 2019-06-15 12:30:45.123 ms -> minute -> 2019-06-15 12:30:00.000
     var a = _ts([1_560_601_845_123], timestamp(millisecond))
-    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
+    var r = DateTruncKernel.dispatch(a.copy().to_dyn(), unit_minute)
     assert_equal(r.as_timestamp()[0].value(), 1_560_601_800_000)
 
 
 def test_date_trunc_preserves_nulls() raises:
-    var r = DateTruncKernel.apply(_ts_with_null().to_dyn(), unit_hour)
+    var r = DateTruncKernel.dispatch(_ts_with_null().to_dyn(), unit_hour)
     assert_equal(r.null_count(), 1)
     assert_false(r.is_valid(1))
     assert_equal(r.as_timestamp()[0].value(), 1_560_600_000)
@@ -344,7 +344,7 @@ def test_cross_check_date_trunc_pyarrow() raises:
     var pa_arr = pa.array(pylist, type=pa.timestamp("s"))
 
     for unit in ["second", "minute", "hour", "day"]:
-        var r = DateTruncKernel.apply(
+        var r = DateTruncKernel.dispatch(
             a.copy().to_dyn(), CalendarUnit.parse(unit)
         )
         var pa_r = pc.floor_temporal(pa_arr, unit=unit)
@@ -367,7 +367,7 @@ def test_date_trunc_duration() raises:
     b.append(Int64(59))
     var d = b.finish()
 
-    var r = DateTruncKernel.apply(d.copy().to_dyn(), unit_hour)
+    var r = DateTruncKernel.dispatch(d.copy().to_dyn(), unit_hour)
     assert_equal(Int(r.as_primitive[DurationType]()[0].value()), 3600)
     assert_equal(Int(r.as_primitive[DurationType]()[1].value()), 0)
 
@@ -394,7 +394,7 @@ def test_extract_rejects_duration_with_a_useful_message() raises:
 def test_date_trunc_month() raises:
     # 2019-06-15 12:30:45 -> 2019-06-01 00:00:00 = 1559347200
     var a = _ts([1_560_601_845], timestamp(second))
-    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_month)
+    var r = DateTruncKernel.dispatch(a.copy().to_dyn(), unit_month)
     assert_true(r.dtype() == timestamp(second).to_dyn())
     assert_equal(r.as_timestamp()[0].value(), 1_559_347_200)
 
@@ -402,14 +402,14 @@ def test_date_trunc_month() raises:
 def test_date_trunc_quarter() raises:
     # 2019-06-15 is Q2, which starts 2019-04-01 00:00:00 = 1554076800
     var a = _ts([1_560_601_845], timestamp(second))
-    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_quarter)
+    var r = DateTruncKernel.dispatch(a.copy().to_dyn(), unit_quarter)
     assert_equal(r.as_timestamp()[0].value(), 1_554_076_800)
 
 
 def test_date_trunc_year() raises:
     # 2019-01-01 00:00:00 = 1546300800
     var a = _ts([1_560_601_845], timestamp(second))
-    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_year)
+    var r = DateTruncKernel.dispatch(a.copy().to_dyn(), unit_year)
     assert_equal(r.as_timestamp()[0].value(), 1_546_300_800)
 
 
@@ -420,7 +420,7 @@ def test_date_trunc_quarter_boundaries() raises:
         [1_547_078_400, 1_557_446_400, 1_565_395_200, 1_573_344_000],
         timestamp(second),
     )
-    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_quarter)
+    var r = DateTruncKernel.dispatch(a.copy().to_dyn(), unit_quarter)
     ref t = r.as_timestamp()
     assert_equal(t[0].value(), 1_546_300_800)  # Q1 -> 2019-01-01
     assert_equal(t[1].value(), 1_554_076_800)  # Q2 -> 2019-04-01
@@ -434,14 +434,14 @@ def test_date_trunc_calendar_units_apply_to_date32() raises:
     var db = PrimitiveBuilder[Date32Type](date32(), capacity=1)
     db.append(Int32(18_062))  # 2019-06-15
     var d = db.finish()
-    var m = DateTruncKernel.apply(d.copy().to_dyn(), unit_month)
+    var m = DateTruncKernel.dispatch(d.copy().to_dyn(), unit_month)
     assert_true(m.dtype() == date32().to_dyn())
     assert_equal(m.as_date32()[0].value(), 18_048)  # 2019-06-01
-    var y = DateTruncKernel.apply(d.copy().to_dyn(), unit_year)
+    var y = DateTruncKernel.dispatch(d.copy().to_dyn(), unit_year)
     assert_equal(y.as_date32()[0].value(), 17_897)  # 2019-01-01
     # sub-day still a no-op
     assert_equal(
-        DateTruncKernel.apply(d.copy().to_dyn(), unit_hour)
+        DateTruncKernel.dispatch(d.copy().to_dyn(), unit_hour)
         .as_date32()[0]
         .value(),
         18_062,
@@ -480,7 +480,7 @@ def _naive_budapest_edges() raises -> DynArray:
 
 
 def test_assume_timezone_reads_wall_clock_time() raises:
-    var got = AssumeTimezoneKernel.apply(
+    var got = AssumeTimezoneKernel.dispatch(
         _naive_budapest_edges(), "Europe/Budapest"
     )
     assert_true(got.dtype() == timestamp(second, "Europe/Budapest").to_dyn())
@@ -494,17 +494,17 @@ def test_assume_timezone_reads_wall_clock_time() raises:
 
 def test_assume_timezone_refuses_a_zoned_timestamp() raises:
     with assert_raises(contains="already has a time zone"):
-        _ = AssumeTimezoneKernel.apply(
+        _ = AssumeTimezoneKernel.dispatch(
             _tsd([0], timestamp(second, "UTC")), "Europe/Budapest"
         )
     with assert_raises(contains="unknown time zone"):
-        _ = AssumeTimezoneKernel.apply(
+        _ = AssumeTimezoneKernel.dispatch(
             _tsd([0], timestamp(second)), "Mars/Base"
         )
 
 
 def test_extraction_reads_the_zone() raises:
-    var zoned = AssumeTimezoneKernel.apply(
+    var zoned = AssumeTimezoneKernel.dispatch(
         _naive_budapest_edges(), "Europe/Budapest"
     )
     var hours = HourKernel.dispatch(zoned).as_int32().copy()
@@ -514,38 +514,40 @@ def test_extraction_reads_the_zone() raises:
     assert_equal(Int(hours[3].value()), 2)
     assert_true(hours.is_null(4))
     # The same instants read in UTC.
-    var utc = ConvertTimezoneKernel.apply(zoned, "UTC")
+    var utc = ConvertTimezoneKernel.dispatch(zoned, "UTC")
     assert_equal(Int(HourKernel.dispatch(utc).as_int32()[0].value()), 23)
     assert_equal(Int(DayKernel.dispatch(utc).as_int32()[0].value()), 31)
 
 
 def test_convert_timezone_validates_the_zone() raises:
     with assert_raises(contains="unknown time zone"):
-        _ = ConvertTimezoneKernel.apply(
+        _ = ConvertTimezoneKernel.dispatch(
             _tsd([0], timestamp(second, "UTC")), "Mars/Base"
         )
 
 
 def test_convert_timezone_keeps_the_instants() raises:
     var a = _tsd([1_623_760_245], timestamp(second, "UTC"))
-    var got = ConvertTimezoneKernel.apply(a, "Asia/Kolkata")
+    var got = ConvertTimezoneKernel.dispatch(a, "Asia/Kolkata")
     assert_true(got.dtype() == timestamp(second, "Asia/Kolkata").to_dyn())
     assert_equal(Int(got.as_timestamp()[0].value()), 1_623_760_245)
 
 
 def test_date_trunc_floors_wall_clock_time() raises:
     var kolkata = _tsd([0, 1_623_760_245], timestamp(second, "Asia/Kolkata"))
-    var hour = DateTruncKernel.apply(kolkata, unit_hour).as_timestamp().copy()
+    var hour = (
+        DateTruncKernel.dispatch(kolkata, unit_hour).as_timestamp().copy()
+    )
     assert_equal(Int(hour[0].value()), -1800)
     assert_equal(Int(hour[1].value()), 1_623_760_200)
     var bud = _tsd(
         [1_623_760_245, 1_609_459_200 - 1800],
         timestamp(second, "Europe/Budapest"),
     )
-    var day = DateTruncKernel.apply(bud, unit_day).as_timestamp().copy()
+    var day = DateTruncKernel.dispatch(bud, unit_day).as_timestamp().copy()
     assert_equal(Int(day[0].value()), 1_623_708_000)
     assert_equal(Int(day[1].value()), 1_609_455_600)
-    var month = DateTruncKernel.apply(bud, unit_month).as_timestamp().copy()
+    var month = DateTruncKernel.dispatch(bud, unit_month).as_timestamp().copy()
     assert_equal(Int(month[0].value()), 1_622_498_400)
 
 
@@ -577,12 +579,12 @@ def test_timestamp_to_string() raises:
         _render(zoned)
         == array(["2021-01-01 00:00:00+00", "2021-06-15 12:30:45+00"])
     )
-    var bud = ConvertTimezoneKernel.apply(zoned, "Europe/Budapest")
+    var bud = ConvertTimezoneKernel.dispatch(zoned, "Europe/Budapest")
     assert_true(
         _render(bud)
         == array(["2021-01-01 01:00:00+01", "2021-06-15 14:30:45+02"])
     )
-    var kolkata = ConvertTimezoneKernel.apply(zoned, "Asia/Kolkata")
+    var kolkata = ConvertTimezoneKernel.dispatch(zoned, "Asia/Kolkata")
     assert_equal(
         _render(kolkata)[0].value(),
         "2021-01-01 05:30:00+05:30",
@@ -599,15 +601,15 @@ def test_zones_cover_fixed_offsets_and_the_footer_rule() raises:
     transition a TZif file lists (2100) still follows its daylight rule."""
     var zoned = _tsd([1_609_459_200, 4_118_083_200], timestamp(second, "UTC"))
     assert_true(
-        _render(ConvertTimezoneKernel.apply(zoned, "+05:30"))
+        _render(ConvertTimezoneKernel.dispatch(zoned, "+05:30"))
         == array(["2021-01-01 05:30:00+05:30", "2100-07-01 05:30:00+05:30"])
     )
     assert_equal(
-        _render(ConvertTimezoneKernel.apply(zoned, "-0800"))[0].value(),
+        _render(ConvertTimezoneKernel.dispatch(zoned, "-0800"))[0].value(),
         "2020-12-31 16:00:00-08",
     )
     assert_equal(
-        _render(ConvertTimezoneKernel.apply(zoned, "Europe/Budapest"))[
+        _render(ConvertTimezoneKernel.dispatch(zoned, "Europe/Budapest"))[
             1
         ].value(),
         "2100-07-01 02:00:00+02",

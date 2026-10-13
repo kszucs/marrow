@@ -554,7 +554,7 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
         """``codes`` with ``-1`` wherever ``key`` is NULL — ``=`` matches no
         NULL, not even another, where the encoder's identity does."""
         var n = len(codes)
-        var valid = NotNullKernel.apply(key)
+        var valid = NotNullKernel.dispatch(key)
         var bits = valid.values()
         var src = codes.values()
         var buf = Buffer.alloc_uninit[int32.native](max(n, 1))

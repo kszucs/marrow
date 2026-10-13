@@ -620,11 +620,11 @@ struct KeyCompare(Kernel):
         var equal = Bitmap.alloc_zeroed(n)
         equal.set_range(0, n, True)
         var rows = arange[Int32Type](0, n)
-        Self.apply(left, rows, right, rows, equal)
+        Self.dispatch(left, rows, right, rows, equal)
         return equal.view().all_set()
 
     @staticmethod
-    def apply(
+    def dispatch(
         left: DynArray,
         left_rows: Int32Array,
         right: DynArray,
@@ -708,7 +708,7 @@ struct KeyCompare(Kernel):
         elif dt.is_dictionary():
             # By decoded value: two arrays of one column may carry different
             # dictionaries, and the hash is taken over decoded values too.
-            Self.apply(
+            Self.dispatch(
                 decode_dictionary(left.as_dictionary(), ctx),
                 left_rows,
                 decode_dictionary(right.as_dictionary(), ctx),
@@ -971,7 +971,7 @@ struct KeyCompare(Kernel):
         hold, so only rows valid on both sides reach the fields."""
         if left.null_count() == 0 and right.null_count() == 0:
             for k in range(len(left.children)):
-                Self.apply(
+                Self.dispatch(
                     left.field(k),
                     left_rows,
                     right.field(k),
@@ -991,7 +991,7 @@ struct KeyCompare(Kernel):
                     fields_equal.set(i)
         # A struct's offset is not propagated to its children by the layout.
         for k in range(len(left.children)):
-            Self.apply(
+            Self.dispatch(
                 left.children[k].slice(left.offset, len(left)),
                 left_rows,
                 right.children[k].slice(right.offset, len(right)),
@@ -1102,7 +1102,7 @@ struct KeyCompare(Kernel):
             return
         var elems_equal = Bitmap.alloc_zeroed(m)
         elems_equal.set_range(0, m, True)
-        Self.apply(left, left_rows, right, right_rows, elems_equal, ctx)
+        Self.dispatch(left, left_rows, right, right_rows, elems_equal, ctx)
         for e in range(m):
             if not elems_equal.test(e):
                 equal.clear(owner[e])

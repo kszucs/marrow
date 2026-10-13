@@ -146,11 +146,11 @@ def test_length_mismatch_raises() raises:
 def test_is_null_over_the_null_dtype_is_true_everywhere() raises:
     """A `null` array carries no bitmap, which the kernel read as all valid."""
     var n = nulls(3, null.to_dyn())
-    assert_true(IsNullKernel.apply(n) == array([True, True, True]))
-    assert_true(NotNullKernel.apply(n) == array([False, False, False]))
+    assert_true(IsNullKernel.dispatch(n) == array([True, True, True]))
+    assert_true(NotNullKernel.dispatch(n) == array([False, False, False]))
 
 
 def test_is_null_without_a_bitmap_is_false_everywhere() raises:
-    var v = array([1, 2], int64).to_dyn()
+    var v = array([1, 2], int64)
     assert_true(IsNullKernel.apply(v) == array([False, False]))
     assert_true(NotNullKernel.apply(v) == array([True, True]))

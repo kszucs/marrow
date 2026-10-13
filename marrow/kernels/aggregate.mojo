@@ -651,12 +651,6 @@ struct AnyKernel(BoolReduceKernel):
                 return True
         return False
 
-    @staticmethod
-    def reduce(
-        array: DynArray, ctx: ExecContext = ExecContext.serial()
-    ) raises -> Bool:
-        return Self.reduce(array.as_bool(), ctx)
-
 
 struct AllKernel(BoolReduceKernel):
     """True if all valid elements are True. `reduce` answers True for an empty
@@ -686,12 +680,6 @@ struct AllKernel(BoolReduceKernel):
             if (data_bv.load_bits[DType.uint64](i) & v) != v:
                 return False
         return True
-
-    @staticmethod
-    def reduce(
-        array: DynArray, ctx: ExecContext = ExecContext.serial()
-    ) raises -> Bool:
-        return Self.reduce(array.as_bool(), ctx)
 
 
 # ---------------------------------------------------------------------------

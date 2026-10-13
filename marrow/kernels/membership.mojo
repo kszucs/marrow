@@ -36,13 +36,17 @@ struct IsInKernel(Kernel):
     comptime name = "is_in"
 
     @staticmethod
-    def apply(
-        values: DynArray, value_set: DynArray, ctx: ExecContext
+    def dispatch(
+        values: DynArray,
+        value_set: DynArray,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
-        """Encode ``value_set`` once, then look every value up in it.
+        """Encode ``value_set`` once, then look every value up in it; both
+        operands must share one dtype.
 
         Returns an all-valid ``BoolArray`` of ``len(values)`` — ``true`` where
         the value has a code."""
+        Self.expect_same_dtype(values.dtype(), value_set.dtype())
         var types = List[DynType]()
         types.append(value_set.dtype())
         var encoder = DictionaryEncoder(types^, ctx.copy())
@@ -62,16 +66,6 @@ struct IsInKernel(Kernel):
             bitmap=None,
             buffer=found^.to_immutable(),
         )
-
-    @staticmethod
-    def dispatch(
-        values: DynArray,
-        value_set: DynArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> BoolArray:
-        """Validate that both operands carry the same type, then probe."""
-        Self.expect_same_dtype(values.dtype(), value_set.dtype())
-        return Self.apply(values, value_set, ctx)
 
     @staticmethod
     def apply[
