@@ -140,3 +140,6 @@ note = "a list of strings, every dictionary index past the dictionary"
 verdict = "reject"
 note = "a decimal dictionary page whose header counts 1000 values over a body of 96"
 
+["v2-required-nulls.parquet"]
+verdict = "reject"
+note = "a v2 page of a required column claiming 5 nulls"

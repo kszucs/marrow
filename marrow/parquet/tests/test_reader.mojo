@@ -1172,6 +1172,72 @@ def test_read_fixed_width_refuses_an_overcounted_dictionary() raises:
                 _ = read_table(nested)
 
 
+def _v2_null_count(path: String, nullable: Bool, zigzag: Int) raises:
+    """Write 20 int64 values, none null, as one v2 data page to `path`, then
+    set the page header's `num_nulls` to the zigzag varint byte `zigzag`."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var bi = Python.import_module("builtins")
+    var ints = Python.list()
+    for i in range(20):
+        ints.append(i)
+    var field = pa.field("i", pa.int64(), nullable=nullable)
+    pq.write_table(
+        pa.table(
+            Python.list(pa.array(ints, type=pa.int64())),
+            schema=pa.schema(Python.list(field)),
+        ),
+        path,
+        compression="none",
+        use_dictionary=False,
+        write_statistics=False,
+        data_page_version="2.0",
+    )
+    var f = bi.open(path, "rb")
+    var raw = f.read()
+    f.close()
+    # The thrift compact header: the v2 page header struct (field 8), its
+    # num_values (20, zigzag 0x28), then its num_nulls (0).
+    var header = bi.bytes(Python.list(0x5C, 0x15, 0x28, 0x15, 0x00))
+    assert_equal(Int(py=raw.count(header)), 1)
+    raw = raw.replace(
+        header, bi.bytes(Python.list(0x5C, 0x15, 0x28, 0x15, zigzag))
+    )
+    f = bi.open(path, "wb")
+    _ = f.write(raw)
+    f.close()
+
+
+def test_read_v2_refuses_nulls_in_a_required_column() raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_v2_required_nulls.parquet")
+        _v2_null_count(path, nullable=False, zigzag=0x0A)  # 5
+        with assert_raises(contains="no definition levels"):
+            _ = read_table(path)
+
+
+def test_read_v2_refuses_a_negative_null_count() raises:
+    """Refused where the page header is read."""
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_v2_negative_nulls.parquet")
+        _v2_null_count(path, nullable=False, zigzag=0x01)  # -1
+        with assert_raises(contains="nulls in 20 values"):
+            _ = read_table(path)
+
+
+def test_read_v2_refuses_more_nulls_than_values() raises:
+    """Refused where the page header is read, with levels or without."""
+    with ScratchDir() as dir:
+        var required = join(dir, "marrow_v2_required_overcount.parquet")
+        _v2_null_count(required, nullable=False, zigzag=0x3C)  # 30
+        with assert_raises(contains="nulls in 20 values"):
+            _ = read_table(required)
+        var nullable = join(dir, "marrow_v2_nullable_overcount.parquet")
+        _v2_null_count(nullable, nullable=True, zigzag=0x3C)
+        with assert_raises(contains="nulls in 20 values"):
+            _ = read_table(nullable)
+
+
 def test_read_float16() raises:
     # FLOAT16 = FIXED_LEN_BYTE_ARRAY(2) + FLOAT16 logical -> Arrow halffloat.
     var pa = Python.import_module("pyarrow")

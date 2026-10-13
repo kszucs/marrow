@@ -542,7 +542,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
                     dph2.num_values,
                     defs,
                 )
-            if self.leaf.max_def >= 1 and len(defs) == 0 and dph2.num_nulls > 0:
+            # A required column has no levels to place a null with, and
+            # `PageHeader` already refused a count outside the page.
+            if len(defs) == 0 and dph2.num_nulls > 0:
                 raise CorruptError(
                     t"parquet: a v2 page of {dph2.num_nulls} nulls and no"
                     t" definition levels"
@@ -550,7 +552,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
             # Present values are the levels at max_def. The header's
             # `num_nulls` is no substitute under a list: writers disagree on
             # whether an empty or null list counts as a null.
-            var num_present = dph2.num_values - dph2.num_nulls
+            var num_present = dph2.num_values
             if len(defs) > 0:
                 num_present = 0
                 for d in defs:
