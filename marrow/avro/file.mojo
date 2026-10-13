@@ -480,6 +480,8 @@ struct AvroWriter[S: ByteSink = FileSink](BatchWriter):
         self.out.write(header.written())
 
     def write(mut self, batch: RecordBatch) raises:
+        if self._closed:
+            raise InvalidError("AvroWriter: writer is closed")
         self._encoder.bind(batch)
         for row in range(batch.num_rows()):
             self._encoder.encode(row, self._block)

@@ -1,8 +1,8 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""`scan_json` and `scan_ipc` — JSON and Arrow IPC files as plan sources,
-a `JsonScan` and an `IpcScan`.
+"""`scan_json`, `scan_ipc` and `scan_avro` — JSON, Arrow IPC and Avro files
+as plan sources, a `JsonScan`, an `IpcScan` and an `AvroScan`.
 
 Each runs in a plan like any other: a filter above it, `ColumnPruning`
 narrowing it, a path bound per execution by a parameter.
@@ -13,13 +13,14 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import array
 from ...dtypes import field, int64, string
+from ...avro import write_avro
 from ...ipc import write_ipc_file
 from ...scalars import StringScalar
 from ...schema import Schema
-from ...tabular import RecordBatch, record_batch
+from ...tabular import RecordBatch, Table, record_batch
 from ...utils.testing import ScratchDir
-from ..builders import col, lit, param, scan_ipc, scan_json
-from ..logical import IpcScan, JsonScan
+from ..builders import col, lit, param, scan_avro, scan_ipc, scan_json
+from ..logical import AvroScan, IpcScan, JsonScan
 from ..optimizer import ColumnPruning
 
 
@@ -155,4 +156,43 @@ def test_scan_ipc_path_is_a_parameter() raises:
         var plan = scan_ipc(param("src", string), _schema())
         assert_equal(len(plan.params()), 1)
         var out = plan.execute(bindings={"src": StringScalar(path).to_dyn()})
+        assert_equal(out.num_rows(), 3)
+
+
+# ---------------------------------------------------------------------------
+# Avro
+# ---------------------------------------------------------------------------
+
+
+def _write_avro_rows(path: String) raises:
+    var batch = _ipc_batch()
+    write_avro(Table.from_batches(batch.schema, [batch.copy()]), path)
+
+
+def test_scan_avro_executes_through_a_filter() raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "rows.avro")
+        _write_avro_rows(path)
+        var out = (
+            scan_avro(path, _schema()).filter(col("id", int64) > lit(1, int64))
+        ).execute()
+        assert_equal(out.num_rows(), 2)
+        assert_true(out.column("id") == array([2, 3], int64).to_dyn())
+
+
+def test_scan_avro_prints_as_an_avro_scan() raises:
+    var plan = scan_avro("rows.avro", _schema())
+    assert_true(plan.isa[AvroScan]())
+    assert_equal(String(plan), "AvroScan(rows.avro)")
+
+
+def test_scan_avro_column_pruning_decodes_only_the_kept_column() raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "rows.avro")
+        _write_avro_rows(path)
+        var pruned = ColumnPruning.apply(scan_avro(path, _schema()), ["name"])
+        assert_true(pruned.isa[AvroScan]())
+        var out = pruned.execute()
+        assert_equal(out.num_columns(), 1)
+        assert_equal(out.schema.fields[0].name, "name")
         assert_equal(out.num_rows(), 3)

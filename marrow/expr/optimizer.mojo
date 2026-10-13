@@ -112,6 +112,7 @@ from .logical import (
     JoinFilter,
     JoinRef,
     DynRelation,
+    AvroScan,
     DynValue,
     EmptyRelation,
     FileScan,
@@ -1631,6 +1632,8 @@ struct ColumnPruning(Copyable, Movable):
             return Self._narrow_scan[IpcScan](node, needed)
         if node.isa[JsonScan]():
             return Self._narrow_scan[JsonScan](node, needed)
+        if node.isa[AvroScan]():
+            return Self._narrow_scan[AvroScan](node, needed)
         if node.isa[IcebergScan]():
             return Self._narrow_scan[IcebergScan](node, needed)
 

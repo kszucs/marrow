@@ -74,6 +74,7 @@ from .logical import (
     IcebergScan,
     DynRelation,
     InMemoryTable,
+    AvroScan,
     IpcScan,
     JsonScan,
     Nothing,
@@ -813,6 +814,26 @@ def scan_ipc(
 ) raises -> DynRelation:
     """An Arrow IPC file named at run time, as a plan."""
     return DynRelation(IpcScan(ScanPath(path^), schema^))
+
+
+def scan_avro(var path: String, var schema: Schema) raises -> DynRelation:
+    """An Avro object container file, as a plan: a batch at a time, only the
+    schema's columns decoded."""
+    return DynRelation(AvroScan(ScanPath(path^), schema^))
+
+
+def scan_avro(
+    var paths: List[String], var schema: Schema
+) raises -> DynRelation:
+    """Several Avro files sharing `schema`, read in order as one plan."""
+    return DynRelation(AvroScan(ScanPath(paths^), schema^))
+
+
+def scan_avro(
+    var path: StringParam[StringType], var schema: Schema
+) raises -> DynRelation:
+    """An Avro file named at run time, as a plan."""
+    return DynRelation(AvroScan(ScanPath(path^), schema^))
 
 
 def scan_iceberg(

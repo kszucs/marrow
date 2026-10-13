@@ -33,9 +33,12 @@ from std.sys import argv, exit, stderr
 
 from ..errors import DynError, InvalidError, NotImplementedError
 from ..execution import ExecContext
+from ..formats import BatchWriter
+from ..io import DynSink
 from ..ipc import RecordBatchFileWriter
-from ..parquet.writer import write_table
-from ..tabular import RecordBatch, Table
+from ..parquet.compression import Compression
+from ..parquet.writer import FileWriter
+from ..tabular import RecordBatch
 from ..utils.argparse import ArgumentParser, ParsedArgs
 from .logical import Bindings, ParamSpec
 from .logical import DynRelation
@@ -367,7 +370,13 @@ struct QueryCli(Movable):
                 print(rendered, end="")
         elif fmt == "parquet":
             comptime if parquet:
-                _write_parquet(_require_path(path, fmt), batch)
+                var out = _require_path(path, fmt)
+                _write(
+                    FileWriter(
+                        DynSink.open(out), batch.schema, Compression.SNAPPY
+                    ),
+                    batch,
+                )
             else:
                 raise NotImplementedError(
                     "--format parquet: this binary was built without the "
@@ -376,7 +385,8 @@ struct QueryCli(Movable):
                 )
         else:
             comptime if ipc:
-                _write_ipc(_require_path(path, fmt), batch)
+                var out = _require_path(path, fmt)
+                _write(RecordBatchFileWriter(out, batch.schema), batch)
             else:
                 raise NotImplementedError(
                     "--format ipc: this binary was built without the Arrow IPC "
@@ -450,14 +460,9 @@ def _write_text(path: String, var text: String) raises:
         f.write(text^)
 
 
-def _write_parquet(path: String, batch: RecordBatch) raises:
-    """Kept out of `run` so the only call to it sits inside a `comptime if`
-    branch: when that branch is deleted this function becomes unreferenced and
-    the Parquet writer goes with it."""
-    write_table(Table.from_batches(batch.schema, [batch.copy()]), path)
-
-
-def _write_ipc(path: String, batch: RecordBatch) raises:
-    var writer = RecordBatchFileWriter(path, batch.schema)
+def _write[W: BatchWriter](var writer: W, batch: RecordBatch) raises:
+    """Write `batch` as the one batch of a file. Each format's call sits inside
+    a `comptime if` branch in `run`, so a binary built without a format never
+    instantiates this for its writer, and the writer goes with it."""
     writer.write(batch)
     writer.close()

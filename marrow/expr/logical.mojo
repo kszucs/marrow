@@ -110,9 +110,8 @@ from .physical import (
     FilterOperator,
     JoinOperator,
     JoinOrder,
-    IpcScanOperator,
+    FileScanOperator,
     IcebergScanOperator,
-    JsonScanOperator,
     ParquetScanOperator,
     ProjectOperator,
     MultisetOperator,
@@ -122,6 +121,10 @@ from .physical import (
     UnionOperator,
     WindowOperator,
 )
+from ..avro import AvroFormat
+from ..formats import Format
+from ..ipc import IpcFormat
+from ..json import JsonFormat
 
 
 # ---------------------------------------------------------------------------
@@ -1312,6 +1315,7 @@ struct DynRelation(Copyable, Movable, Writable):
         ParquetScan,
         IpcScan,
         JsonScan,
+        AvroScan,
         IcebergScan,
     ]
 
@@ -4507,7 +4511,7 @@ struct ParquetScan(FileScan, Writable):
 
 trait FileScan(Relation):
     """A relation reading files of one format, in order: `ParquetScan`,
-    `IpcScan` or `JsonScan`.
+    `IcebergScan`, or a `FormatScan` -- `IpcScan`, `JsonScan`, `AvroScan`.
 
     Each is a plan node of its own, run by an operator of its own, so the
     optimizer tells formats apart with `isa`. What they share is that the
@@ -4521,10 +4525,12 @@ trait FileScan(Relation):
         ...
 
 
-struct IpcScan(FileScan, Writable):
-    """An Arrow IPC file, one record batch at a time, the schema selecting
-    columns by name. IPC stores whole columns per batch, so a narrowed scan
-    still reads the others; it has no statistics and prunes nothing."""
+struct FormatScan[Fmt: Format](FileScan, Writable):
+    """Files of the format `Fmt`, one batch at a time, the schema selecting
+    columns by name: `IpcScan`, `JsonScan`, `AvroScan`. How much the schema
+    saves is the format's -- JSON skips the keys outside it, IPC stores whole
+    columns per batch and reads them anyway. None has statistics, so none
+    prunes."""
 
     var path: ScanPath
     var _schema: Schema
@@ -4556,60 +4562,21 @@ struct IpcScan(FileScan, Writable):
         bindings: Bindings = Bindings(),
     ) raises -> Pipeline:
         return Pipeline(
-            IpcScanOperator(self.path.resolve(bindings), self._schema.copy())
+            FileScanOperator[Self.Fmt](
+                self.path.resolve(bindings), self._schema.copy()
+            )
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("IpcScan(", self.path, ")")
+        writer.write(Self.Fmt.name(), "Scan(", self.path, ")")
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
 
-struct JsonScan(FileScan, Writable):
-    """A newline-delimited JSON file, one batch per block; see `marrow.json`.
-    Keys outside the schema are skipped, so a narrowed scan reads only the
-    columns the plan needs out of rows that carry more. It has no statistics
-    and prunes nothing."""
-
-    var path: ScanPath
-    var _schema: Schema
-
-    def __init__(out self, var path: ScanPath, var schema: Schema):
-        self.path = path^
-        self._schema = schema^
-
-    def references(self, mut into: References):
-        self.path.references(into)
-
-    def schema(self) -> Schema:
-        return self._schema.copy()
-
-    def with_schema(self, var schema: Schema) -> Self:
-        return Self(self.path.copy(), schema^)
-
-    def estimate(self) raises -> Estimate:
-        """Unknown, and column-shaped for the reason `ParquetScan`'s is."""
-        return Estimate.unknown(self._schema)
-
-    def cost(self) raises -> Cost:
-        var estimate = self.estimate()
-        return Cost.source(estimate.size())
-
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        return Pipeline(
-            JsonScanOperator(self.path.resolve(bindings), self._schema.copy())
-        )
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("JsonScan(", self.path, ")")
-
-    def write_repr_to[W: Writer](self, mut writer: W):
-        self.write_to(writer)
+comptime IpcScan = FormatScan[IpcFormat]
+comptime JsonScan = FormatScan[JsonFormat]
+comptime AvroScan = FormatScan[AvroFormat]
 
 
 @fieldwise_init

@@ -11,6 +11,7 @@ from std.python import Python
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from ...arrays import DynArray
+from ...avro import AvroFile, AvroFormat, AvroWriter
 from ...builders import array
 from ...dtypes import int64
 from ...execution import ExecContext
@@ -24,6 +25,8 @@ from ...ipc import (
 )
 from ...json import JsonFormat, JsonReader, JsonWriter
 from ...parquet import ParquetFile, ParquetFormat, ParquetReader, read_table
+from ...parquet.compression import Compression
+from ...parquet.writer import FileWriter
 from ...schema import Schema
 from ...tabular import RecordBatch, record_batch
 from ...utils.testing import ScratchDir
@@ -255,6 +258,12 @@ def test_writers_close_once() raises:
         _close_twice_then_write(ipc_stream, batch)
         var json = JsonWriter(FileSink(join(dir, "a.jsonl")))
         _close_twice_then_write(json, batch)
+        var avro = AvroWriter(join(dir, "a.avro"), batch.schema)
+        _close_twice_then_write(avro, batch)
+        var parquet = FileWriter(
+            FileSink(join(dir, "a.parquet")), batch.schema, Compression.SNAPPY
+        )
+        _close_twice_then_write(parquet, batch)
 
 
 def _scan[F: Format](path: String, schema: Schema) raises -> List[RecordBatch]:
@@ -328,3 +337,34 @@ def test_parquet_format_opens_a_projection() raises:
         var got = _scan[ParquetFormat](path, n_only)
         assert_equal(len(got), 3)
         assert_true(got[0].schema == n_only)
+
+
+def test_avro_and_parquet_read_back_what_they_wrote() raises:
+    var batches = _batches()
+    with ScratchDir() as dir:
+        var avro_path = join(dir, "t.avro")
+        var avro = AvroWriter(avro_path, batches[0].schema)
+        _write_all(avro, batches)
+        avro.close()
+        var avro_reader = AvroFile(avro_path).batches(batch_size=4)
+        var from_avro = _drain(avro_reader)
+        var rows = 0
+        for ref b in from_avro:
+            rows += b.num_rows()
+        assert_equal(rows, 9)
+        assert_equal(AvroFormat.name(), "Avro")
+        assert_equal(
+            _scan[AvroFormat](avro_path, batches[0].schema)[0].num_rows(), 9
+        )
+
+        var parquet_path = join(dir, "t.parquet")
+        var parquet = FileWriter(
+            FileSink(parquet_path),
+            batches[0].schema,
+            Compression.SNAPPY,
+            row_group_size=3,
+        )
+        _write_all(parquet, batches)
+        parquet.close()
+        var parquet_reader = ParquetReader(ParquetFile(parquet_path))
+        _assert_same(_drain(parquet_reader), batches)

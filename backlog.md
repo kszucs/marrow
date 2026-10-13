@@ -509,16 +509,6 @@ work". What is left:
   too. Both compile inside the whole `marrow/iceberg/tests` selection, so run
   that directory, not one file of it.
 
-- **A Parquet file is still staged whole before it is written.** `ColumnWriter`
-  records `data_page_offset`, `dictionary_page_offset` and every
-  `PageLocation.offset` as `len(out)`, an absolute file offset, so
-  `FileWriter`'s `BufferedSink` cannot flush between row groups: the staging
-  buffer would restart at zero while the footer went on claiming file
-  positions. Teaching `ColumnWriter` its base offset is what unlocks streaming,
-  and would drop peak residency from the file to one row group. The IPC writers
-  already stream, because their only absolute offsets are the `_Block`
-  positions the writer itself computes.
-
 - **The page index is fetched more than once.** `expr.page_selections` decodes
   the whole file's page index to choose pages, and then `read` fetches and
   decodes each chunk's `OffsetIndex` again (`_chunk_offsets`) to locate them --
@@ -865,6 +855,28 @@ hold, so every format that builds one checks it. Still written per format:
   `physical_type` and `flba_width` already compute them.
 - **The Parquet writer stores decimal128/256 as full 16/32-byte FLBA**; PyArrow
   writes `fixed_decimal_size(precision)` bytes. The reader accepts both.
+
+### 1.16b The file-format protocol — what is left
+
+Every format reads and writes through `marrow.formats`' `BatchReader` /
+`BatchWriter`, one batch, row group or block resident at a time, and a scan
+over IPC, JSON or Avro is one `FormatScan[F]`. Still open:
+
+- **The formats still live at the top level.** `marrow/formats/` holds only
+  the traits; moving `ipc`, `parquet`, `json` and `avro` under it touches ~60
+  import sites (bindings, golden, fuzz, CI path filters, `NOTICE.txt`).
+- **The Python bindings expose none of the streaming API**: no
+  `ParquetWriter`, `ParquetFile.iter_batches`, IPC stream reader or Avro batch
+  reader.
+- **`datasets.FileFormat` does not know Avro**: `.avro` is `OTHER`, though
+  `scan_avro` exists.
+- **A Parquet writer still holds per-row-group metadata until `close`** —
+  bloom filter bytes and page index entries — because both are written after
+  the last row group, as Arrow C++ and parquet-rs do.
+- **`read_json` reads its input twice** to infer one schema over every block;
+  `open_json` infers from the first block and reads once.
+- **An IPC message costs three round trips** (prefix, metadata, body), which
+  an object store pays per batch.
 
 ### 1.17 The kernel layer, simplified one step at a time
 

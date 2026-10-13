@@ -65,19 +65,12 @@ from ..parquet.reader import (
     RowSelection,
 )
 from ..io import ByteSource, DynSource
-from ..ipc import RecordBatchFileReader
+from ..formats import Format
 from ..iceberg.catalog import IcebergTable
 from ..iceberg.manifest import DataFile
 from ..iceberg.planning import scan_tasks, snapshot_files
 from ..iceberg.projection import NameMapping
 from ..iceberg.scan import FileScanTask, IcebergFileReader
-from ..json import (
-    JsonReader,
-    ParseOptions,
-    ReadOptions,
-    UnexpectedFieldBehavior,
-    open_json,
-)
 from ..kernels.join import (
     BUILD_LEFT,
     HashJoin,
@@ -1784,62 +1777,22 @@ struct ParquetScanOperator(Operator):
         return None
 
 
-struct IpcScanOperator(Operator):
-    """Runs an `IpcScan`: one record batch per `drain`, its files read in
-    order and its columns selected by the scan's schema. Each file is opened
-    when the scan reaches it, not here: a `Relation` must not touch the
-    filesystem to exist."""
-
-    var _paths: List[String]
-    var _current: Int
-    var _names: List[String]
-    var _reader: Optional[RecordBatchFileReader[DynSource]]
-    var _next: Int
-
-    def __init__(out self, var paths: List[String], schema: Schema):
-        self._paths = paths^
-        self._current = 0
-        self._names = schema.names()
-        self._reader = None
-        self._next = 0
-
-    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        # A source consumes nothing; the driver never calls this.
-        return None
-
-    def drain(mut self) raises -> Optional[Datum]:
-        while self._current < len(self._paths):
-            if not self._reader:
-                self._reader = RecordBatchFileReader[DynSource](
-                    DynSource.open(self._paths[self._current])
-                )
-                self._next = 0
-            ref reader = self._reader.value()
-            if self._next < reader.num_record_batches():
-                var batch = reader.read_batch(self._next)
-                self._next += 1
-                return Datum(
-                    batch.select(self._names).to_struct_array().to_dyn()
-                )
-            self._reader = None
-            self._current += 1
-        return None
-
-
-struct JsonScanOperator(Operator):
-    """Runs a `JsonScan`: one block per `drain`, its files read in order and
-    parsed into the scan's schema with keys outside it skipped. Each file is
-    opened when the scan reaches it, not here: a `Relation` must not touch the
-    filesystem to exist."""
+struct FileScanOperator[Fmt: Format](Operator):
+    """Runs a `FormatScan[Fmt]`: one batch per `drain`, its files read in
+    order by `Fmt`'s reader and its columns selected by the scan's schema. Each file
+    is opened when the scan reaches it, not here: a `Relation` must not touch
+    the filesystem to exist."""
 
     var _paths: List[String]
     var _current: Int
     var _schema: Schema
-    var _reader: Optional[JsonReader[DynSource]]
+    var _names: List[String]
+    var _reader: Optional[Self.Fmt.Reader]
 
     def __init__(out self, var paths: List[String], var schema: Schema):
         self._paths = paths^
         self._current = 0
+        self._names = schema.names()
         self._schema = schema^
         self._reader = None
 
@@ -1850,14 +1803,14 @@ struct JsonScanOperator(Operator):
     def drain(mut self) raises -> Optional[Datum]:
         while self._current < len(self._paths):
             if not self._reader:
-                self._reader = open_json(
-                    self._paths[self._current],
-                    ReadOptions(),
-                    ParseOptions(self._schema, UnexpectedFieldBehavior.IGNORE),
+                self._reader = Self.Fmt.open(
+                    self._paths[self._current], self._schema
                 )
             var batch = self._reader.value().read_next_batch()
             if batch:
-                return Datum(batch.value().to_struct_array().to_dyn())
+                return Datum(
+                    batch.value().select(self._names).to_struct_array().to_dyn()
+                )
             self._reader = None
             self._current += 1
         return None

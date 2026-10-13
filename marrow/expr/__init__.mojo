@@ -41,6 +41,7 @@ from .builders import (
     rank,
     row_number,
     scan,
+    scan_avro,
     scan_iceberg,
     scan_ipc,
     scan_json,
@@ -48,6 +49,7 @@ from .builders import (
 )
 from .logical import (
     Aggregate,
+    AvroScan,
     Bindings,
     DynRelation,
     Difference,
