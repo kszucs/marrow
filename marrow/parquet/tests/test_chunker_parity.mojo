@@ -62,7 +62,7 @@ from ...dtypes import Field, Int64Type, DynType, decimal128, decimal256
 from ...schema import Schema
 from ...tabular import RecordBatch, Table, record_batch
 from ...c_data import CArrowArrayStream
-from ...kernels.cast import cast
+from ...kernels.cast import CastKernel
 from ...parquet import ParquetFile
 from ...parquet.writer import FileWriter
 from ...io import FileSink
@@ -275,7 +275,7 @@ def _flat_nullable_decimal_batch(n: Int, to: DynType) raises -> RecordBatch:
             b.unsafe_append_null()
         else:
             b.unsafe_append(Int64(i))
-    var dec = cast(b.finish(), to)
+    var dec = CastKernel.dispatch(b.finish(), to)
     return record_batch([dec^], names=["x"])
 
 

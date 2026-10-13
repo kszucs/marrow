@@ -41,7 +41,7 @@ from ..dtypes import (
     struct_,
 )
 from ..errors import InvalidError, KeyError, TypeError
-from ..kernels.cast import cast
+from ..kernels.cast import CastKernel
 from ..kernels.filter import TakeKernel
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -281,7 +281,7 @@ struct SchemaProjection(Copyable, Movable):
         if id in self._constants:
             var value = _broadcast(self._constants[id], length)
             if value.dtype() != target.dtype:
-                return cast(value, target.dtype)
+                return CastKernel.dispatch(value, target.dtype)
             return value^
         return nulls(length, target.dtype)
 
@@ -297,7 +297,7 @@ struct SchemaProjection(Copyable, Movable):
             dst, src
         ):
             # A promotion; construction checked that it is one.
-            return cast(array, dst)
+            return CastKernel.dispatch(array, dst)
         var data = array.to_data()
         var children = List[ArrayData]()
         if dst.is_struct():

@@ -29,7 +29,7 @@ from ...kernels.aggregate import (
     Fold,
     MaxFold,
 )
-from ...kernels.cast import cast
+from ...kernels.cast import CastKernel
 from ...kernels.decimal import (
     DecimalAddKernel,
     DecimalDivKernel,
@@ -42,12 +42,12 @@ from ...kernels.groupby import Groups
 
 def _dec(values: List[Optional[String]], dt: DynType) raises -> DynArray:
     """A decimal column spelled as text, through the string -> decimal cast."""
-    return cast(array(values), dt)
+    return CastKernel.dispatch(array(values), dt)
 
 
 def _text(values: DynArray) raises -> List[Optional[String]]:
     """`values` rendered through the decimal -> string cast."""
-    var s = cast(values, string).as_string().copy()
+    var s = CastKernel.dispatch(values, string).as_string().copy()
     var out = List[Optional[String]]()
     for i in range(len(s)):
         if s.is_valid(i):
@@ -213,7 +213,9 @@ def test_string_to_decimal_rejects() raises:
 
 
 def test_string_to_decimal_unsafe_nulls() raises:
-    var r = cast(array(["1.555", "2.5", "x"]), decimal128(10, 2), safe=False)
+    var r = CastKernel.dispatch(
+        array(["1.555", "2.5", "x"]), decimal128(10, 2), safe=False
+    )
     _assert_text(r, [None, "2.50", None])
 
 

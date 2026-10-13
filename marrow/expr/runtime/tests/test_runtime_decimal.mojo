@@ -17,12 +17,12 @@ from ...logical import DynRelation, DynValue
 from ....arrays import DynArray
 from ....builders import array
 from ....dtypes import DynType, decimal128, decimal256, float64, int64, string
-from ....kernels.cast import cast
+from ....kernels.cast import CastKernel
 from ....tabular import record_batch
 
 
 def _dec(values: List[Optional[String]], dt: DynType) raises -> DynArray:
-    return cast(array(values), dt)
+    return CastKernel.dispatch(array(values), dt)
 
 
 def _prices() raises -> DynRelation:
@@ -41,7 +41,7 @@ def _prices() raises -> DynRelation:
 
 
 def _assert_text(column: DynArray, expected: List[Optional[String]]) raises:
-    var s = cast(column, string).as_string().copy()
+    var s = CastKernel.dispatch(column, string).as_string().copy()
     assert_equal(len(s), len(expected))
     for i in range(len(s)):
         if expected[i]:

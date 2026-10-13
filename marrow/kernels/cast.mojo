@@ -26,7 +26,7 @@ directly by the AOT expression layer):
   and its int32 indices, through the typed leaves alone, for the kernels that
   read dictionary columns (hashing, sorting) without linking ``cast``.
 
-Every kernel conforms to ``CastKernel`` and so exposes the **same**
+Every kernel conforms to ``CastArm`` and so exposes the **same**
 ``dispatch(array, to, safe, ctx)``, resolving the runtime dtypes of its family
 (the arithmetic-kernel pattern). The free ``cast`` function at the bottom picks
 the target family and delegates to the matching kernel's ``dispatch``; ``safe``
@@ -36,7 +36,7 @@ grabs ``NumericCastKernel.core`` directly.
 
 The uniform signature is the point of the trait, not code reuse: the ladder used
 to call six different shapes and silently dropped whichever argument the target
-arm did not accept. ``CastKernel``'s docstring has the detail.
+arm did not accept. ``CastArm``'s docstring has the detail.
 """
 
 from std.collections.string import atol, atof, StringSlice
@@ -107,12 +107,12 @@ from .filter import TakeKernel
 # ---------------------------------------------------------------------------
 
 
-trait CastKernel(Kernel):
+trait CastArm(Kernel):
     """A cast kernel: one erased entry point, identical across the family.
 
     Declared abstract rather than defaulted, because no two cast kernels share
     a resolution strategy — the point of the trait is not code reuse, it is
-    that every arm takes the *same four arguments*, so `cast()`'s ladder cannot
+    that every arm takes the *same four arguments*, so `CastKernel`'s ladder cannot
     hand one arm fewer than it hands another.
 
     It could, and did. Six of the fifteen kernels had no `ctx` parameter and
@@ -129,7 +129,7 @@ trait CastKernel(Kernel):
     redundant beats fifteen signatures nobody can check against the call site.
 
     Note this trait buys signature uniformity and **not** a shared dispatcher.
-    `cast()` stays a hand-written ladder calling each struct by name: a closure
+    `CastKernel.dispatch` stays a hand-written ladder calling each struct by name: a closure
     generic over its own trait bound needs a narrowing adapter that inlines
     into every arm, measured at +662,740 bytes on one gate (§0).
     """
@@ -149,7 +149,7 @@ trait CastKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct NumericCastKernel(CastKernel):
+struct NumericCastKernel(CastArm):
     """Numeric ↔ numeric cast: one ``pop.cast`` per SIMD lane."""
 
     comptime name = "numeric_cast"
@@ -461,7 +461,7 @@ def _rescale_down[
     return _map_decimal[FromN, ToN](data, to, down)
 
 
-struct DecimalRescaleKernel(CastKernel):
+struct DecimalRescaleKernel(CastArm):
     """Decimal → decimal: an integer rescale by 10^(to_scale − from_scale).
 
     The only member of the family whose direction is genuinely unknown until
@@ -494,7 +494,7 @@ struct DecimalRescaleKernel(CastKernel):
         return array.dtype().dispatch_decimal(on_from)
 
 
-struct IntToDecimalKernel(CastKernel):
+struct IntToDecimalKernel(CastArm):
     """Integer → decimal. An integer is scale 0, so this only ever scales *up*
     — the `delta < 0` arm the fat kernel carried here was unreachable."""
 
@@ -520,7 +520,7 @@ struct IntToDecimalKernel(CastKernel):
         return array.dtype().dispatch_integer(on_from)
 
 
-struct DecimalToIntKernel(CastKernel):
+struct DecimalToIntKernel(CastArm):
     """Decimal → integer. An integer target is scale 0, so this only ever
     scales *down*, and the remainder check is the whole of `safe` here."""
 
@@ -549,7 +549,7 @@ struct DecimalToIntKernel(CastKernel):
         return array.dtype().dispatch_decimal(on_from)
 
 
-struct FloatToDecimalKernel(CastKernel):
+struct FloatToDecimalKernel(CastArm):
     """Float → decimal: the decimal nearest ``x * 10^scale``, ties to even.
 
     The product is formed exactly from the float's bits, so an integral double
@@ -614,7 +614,7 @@ struct FloatToDecimalKernel(CastKernel):
         return array.dtype().dispatch_floating(on_from)
 
 
-struct DecimalToFloatKernel(CastKernel):
+struct DecimalToFloatKernel(CastArm):
     """Decimal → float: divide by 10^scale in float64.
 
     Unchecked on purpose. Decimal → float is inexact by construction and Arrow
@@ -648,10 +648,10 @@ struct DecimalToFloatKernel(CastKernel):
         return array.dtype().dispatch_decimal(on_from)
 
 
-struct DecimalCastKernel(CastKernel):
+struct DecimalCastKernel(CastArm):
     """Router for the decimal family: pick the kernel for this pair.
 
-    Kept so `cast()`'s ladder has one decimal arm rather than five, and so the
+    Kept so `CastKernel`'s ladder has one decimal arm rather than five, and so the
     "which conversion is this?" question is answered in exactly one place. It
     holds no conversion logic of its own."""
 
@@ -686,7 +686,7 @@ struct DecimalCastKernel(CastKernel):
 # ---------------------------------------------------------------------------
 
 
-struct NumToBoolKernel(CastKernel):
+struct NumToBoolKernel(CastArm):
     """Numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
 
     comptime name = "num_to_bool"
@@ -709,7 +709,7 @@ struct NumToBoolKernel(CastKernel):
     ) raises -> DynArray:
         """Runtime numeric → bool over the numeric source dtypes.
 
-        `to` is checked rather than assumed: `cast()` only routes here when it
+        `to` is checked rather than assumed: `CastKernel` only routes here when it
         is bool, but that was a positional invariant no reader of this kernel
         could verify. `safe` is inert — `x != 0` is total.
         """
@@ -736,7 +736,7 @@ struct NumToBoolKernel(CastKernel):
         )
 
 
-struct BoolToNumKernel(CastKernel):
+struct BoolToNumKernel(CastArm):
     """Bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
 
     comptime name = "bool_to_num"
@@ -786,7 +786,7 @@ struct BoolToNumKernel(CastKernel):
 # ---------------------------------------------------------------------------
 
 
-struct TemporalCastKernel(CastKernel):
+struct TemporalCastKernel(CastArm):
     """Cast temporal ↔ integer / temporal ↔ temporal. Same physical width and
     resolution → a zero-copy relabel (``_reinterpret``); a differing unit → scale
     the underlying integers by the unit ratio (``_scale``)."""
@@ -1087,7 +1087,7 @@ struct TemporalCastKernel(CastKernel):
 # ---------------------------------------------------------------------------
 
 
-struct StringToNumKernel(CastKernel):
+struct StringToNumKernel(CastArm):
     """Parse strings to a numeric type. ``safe`` is comptime: safe=True raises on
     an unparseable value, safe=False nulls it — the dead branch is elided."""
 
@@ -1161,7 +1161,7 @@ struct StringToNumKernel(CastKernel):
         return b.finish()
 
 
-struct StringToBoolKernel(CastKernel):
+struct StringToBoolKernel(CastArm):
     """Parse ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive) to bool.
     ``safe`` comptime: raise vs null on an unrecognized value."""
 
@@ -1211,7 +1211,7 @@ struct StringToBoolKernel(CastKernel):
         return b.finish()
 
 
-struct NumToStringKernel(CastKernel):
+struct NumToStringKernel(CastArm):
     """Format a numeric array to strings (per-element ``String(value)``)."""
 
     comptime name = "num_to_string"
@@ -1252,7 +1252,7 @@ struct NumToStringKernel(CastKernel):
         return b.finish()
 
 
-struct TimestampToStringKernel(CastKernel):
+struct TimestampToStringKernel(CastArm):
     """Format a timestamp array as text, as `TimestampFormat` spells it."""
 
     comptime name = "timestamp_to_string"
@@ -1297,7 +1297,7 @@ struct TimestampToStringKernel(CastKernel):
         return b.finish()
 
 
-struct BoolToStringKernel(CastKernel):
+struct BoolToStringKernel(CastArm):
     """Format a bool array to ``"true"``/``"false"`` strings."""
 
     comptime name = "bool_to_string"
@@ -1333,7 +1333,7 @@ struct BoolToStringKernel(CastKernel):
         return b.finish()
 
 
-struct DecimalToStringKernel(CastKernel):
+struct DecimalToStringKernel(CastArm):
     """Format a decimal array to text, every declared fractional digit kept —
     see `format`."""
 
@@ -1405,7 +1405,7 @@ struct DecimalToStringKernel(CastKernel):
         return b.finish()
 
 
-struct StringToDecimalKernel(CastKernel):
+struct StringToDecimalKernel(CastArm):
     """Parse text to a decimal — see `parse`. ``safe`` as
     `StringToNumKernel`: raise on a value that does not parse or fit, or null
     it."""
@@ -1662,7 +1662,7 @@ def _validate_utf8_window(window: BufferView[DType.uint8, _]) -> Bool:
 # ---------------------------------------------------------------------------
 
 
-struct BinaryLikeCastKernel(CastKernel):
+struct BinaryLikeCastKernel(CastArm):
     """Cast between the binary-like containers (binary, large_binary, utf8,
     large_utf8). Equal physical offset width → a zero-copy relabel that shares
     the offset and value buffers; differing width (32↔64-bit offsets) → a rebuild
@@ -1804,7 +1804,7 @@ struct BinaryLikeCastKernel(CastKernel):
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryCastKernel(CastKernel):
+struct FixedSizeBinaryCastKernel(CastArm):
     """Cast fixed-size-binary ↔ variable-length binary. ``to_binary`` derives the
     offset buffer from the fixed width and shares the data bytes; ``from_binary``
     packs each element into a fixed cell, raising when a length ≠ the width."""
@@ -1889,7 +1889,7 @@ struct FixedSizeBinaryCastKernel(CastKernel):
 # ---------------------------------------------------------------------------
 
 
-struct NullCastKernel(CastKernel):
+struct NullCastKernel(CastArm):
     """Cast a null array to any target type: an all-null array of that type."""
 
     comptime name = "null_cast"
@@ -1918,7 +1918,7 @@ struct NullCastKernel(CastKernel):
 # ---------------------------------------------------------------------------
 
 
-struct ListCastKernel(CastKernel):
+struct ListCastKernel(CastArm):
     """Cast a list-like array (list / large_list / map) to another of the same
     kind by recursively casting its child values to the target's value type; the
     offset buffer and validity are shared unchanged.
@@ -1947,7 +1947,7 @@ struct ListCastKernel(CastKernel):
             target = to.as_large_list().value_type().copy()
         else:
             target = to.as_list().value_type().copy()
-        var new_child = cast(child, target, safe, ctx)
+        var new_child = CastKernel.dispatch(child, target, safe, ctx)
         return DynArray.from_data(
             ArrayData(
                 dtype=to.copy(),
@@ -1961,7 +1961,7 @@ struct ListCastKernel(CastKernel):
         )
 
 
-struct StructCastKernel(CastKernel):
+struct StructCastKernel(CastArm):
     """Cast struct → struct by recursively casting each field to the target
     field's type (matched by position); the field counts must match."""
 
@@ -1983,7 +1983,9 @@ struct StructCastKernel(CastKernel):
         var children = List[ArrayData]()
         for i in range(len(data.children)):
             var field_arr = DynArray.from_data(data.children[i].copy())
-            var casted = cast(field_arr, fields[i].dtype, safe, ctx)
+            var casted = CastKernel.dispatch(
+                field_arr, fields[i].dtype, safe, ctx
+            )
             children.append(casted.to_data())
         return DynArray.from_data(
             ArrayData(
@@ -2041,7 +2043,7 @@ def decode_dictionary(
     )
 
 
-struct DictionaryCastKernel(CastKernel):
+struct DictionaryCastKernel(CastArm):
     """Decode a dictionary array (``decode_dictionary``), then cast the decoded
     values to the target type when it differs."""
 
@@ -2057,7 +2059,7 @@ struct DictionaryCastKernel(CastKernel):
         var decoded = decode_dictionary(array.as_dictionary(), ctx)
         if decoded.dtype() == to:
             return decoded^
-        return cast(decoded, to, safe, ctx)
+        return CastKernel.dispatch(decoded, to, safe, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -2065,7 +2067,7 @@ struct DictionaryCastKernel(CastKernel):
 # ---------------------------------------------------------------------------
 
 
-struct ViewCastKernel(CastKernel):
+struct ViewCastKernel(CastArm):
     """Cast between the view layout (binary_view, string_view) and the offsets
     layout (binary, large_binary, string, large_string), or within the view
     layout.
@@ -2235,82 +2237,111 @@ struct ViewCastKernel(CastKernel):
 
 
 # ---------------------------------------------------------------------------
-# Public entry points
+# CastKernel — the public entry point
 # ---------------------------------------------------------------------------
 
 
-def cast(
-    array: DynArray,
-    to: DynType,
-    safe: Bool = True,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> DynArray:
+struct CastKernel(Kernel):
     """Cast ``array`` to dtype ``to``: pick the target family and delegate to the
     matching kernel's ``dispatch``. ``safe`` is a runtime flag each kernel resolves
     at its leaf ``apply`` call (raise vs. null/truncate)."""
-    var src = array.dtype()
-    if src == to:
-        return array.copy()  # identity → zero-copy
-    elif src.is_null():
-        return NullCastKernel.dispatch(array, to, safe, ctx)  # null → any
-    elif src.is_dictionary():
-        return DictionaryCastKernel.dispatch(
-            array, to, safe, ctx
-        )  # decode first
-    elif src.is_binary_like() and to.is_binary_like():
-        return BinaryLikeCastKernel.dispatch(
-            array, to, safe, ctx
-        )  # bytes ↔ bytes
-    elif (
-        src.is_binary_like() or src.is_string_view() or src.is_binary_view()
-    ) and (to.is_binary_like() or to.is_string_view() or to.is_binary_view()):
-        return ViewCastKernel.dispatch(array, to, safe, ctx)  # views ↔ bytes
-    elif src.is_string_view() or src.is_binary_view():
-        # Anything else from a view goes through its offsets counterpart,
-        # which every other cast kernel reads.
-        var via = string.to_dyn() if src.is_string_view() else binary.to_dyn()
-        return cast(cast(array, via, safe, ctx), to, safe, ctx)
-    elif to.is_string_view() or to.is_binary_view():
-        var via = string.to_dyn() if to.is_string_view() else binary.to_dyn()
-        return cast(cast(array, via, safe, ctx), to, safe, ctx)
-    elif (src.is_fixed_size_binary() and to.is_binary_like()) or (
-        src.is_binary_like() and to.is_fixed_size_binary()
-    ):
-        return FixedSizeBinaryCastKernel.dispatch(array, to, safe, ctx)
-    elif src.is_string() or src.is_large_string():  # string-like → numeric/bool
-        if to.is_bool():
-            return StringToBoolKernel.dispatch(array, to, safe, ctx)
-        elif to.is_decimal():
-            return StringToDecimalKernel.dispatch(array, to, safe, ctx)
-        elif to.is_numeric():
-            return StringToNumKernel.dispatch(array, to, safe, ctx)
-        raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")
-    elif to.is_string() or to.is_large_string():  # numeric/bool → string-like
-        if src.is_bool():
-            return BoolToStringKernel.dispatch(array, to, safe, ctx)
-        elif src.is_decimal():
-            return DecimalToStringKernel.dispatch(array, to, safe, ctx)
-        elif src.is_numeric():
-            return NumToStringKernel.dispatch(array, to, safe, ctx)
-        elif src.is_timestamp():
-            return TimestampToStringKernel.dispatch(array, to, safe, ctx)
-        raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")
-    elif src.is_decimal() or to.is_decimal():
-        return DecimalCastKernel.dispatch(array, to, safe, ctx)
-    elif src.is_numeric() and to.is_numeric():
-        return NumericCastKernel.dispatch(array, to, safe, ctx)
-    elif to.is_bool():
-        return NumToBoolKernel.dispatch(array, to, safe, ctx)  # numeric → bool
-    elif src.is_bool():
-        return BoolToNumKernel.dispatch(array, to, safe, ctx)  # bool → numeric
-    elif src.is_temporal() or to.is_temporal():
-        return TemporalCastKernel.dispatch(array, to, safe, ctx)
-    elif (
-        (src.is_list() and to.is_list())
-        or (src.is_large_list() and to.is_large_list())
-        or (src.is_map() and to.is_map())
-    ):
-        return ListCastKernel.dispatch(array, to, safe, ctx)
-    elif src.is_struct() and to.is_struct():
-        return StructCastKernel.dispatch(array, to, safe, ctx)
-    raise NotImplementedError(t"cast: unsupported cast {src} -> {to}")
+
+    comptime name = "cast"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        var src = array.dtype()
+        if src == to:
+            return array.copy()  # identity → zero-copy
+        elif src.is_null():
+            return NullCastKernel.dispatch(array, to, safe, ctx)  # null → any
+        elif src.is_dictionary():
+            return DictionaryCastKernel.dispatch(
+                array, to, safe, ctx
+            )  # decode first
+        elif src.is_binary_like() and to.is_binary_like():
+            return BinaryLikeCastKernel.dispatch(
+                array, to, safe, ctx
+            )  # bytes ↔ bytes
+        elif (
+            src.is_binary_like() or src.is_string_view() or src.is_binary_view()
+        ) and (
+            to.is_binary_like() or to.is_string_view() or to.is_binary_view()
+        ):
+            return ViewCastKernel.dispatch(
+                array, to, safe, ctx
+            )  # views ↔ bytes
+        elif src.is_string_view() or src.is_binary_view():
+            # Anything else from a view goes through its offsets counterpart,
+            # which every other cast kernel reads.
+            var via = (
+                string.to_dyn() if src.is_string_view() else binary.to_dyn()
+            )
+            return Self.dispatch(
+                Self.dispatch(array, via, safe, ctx), to, safe, ctx
+            )
+        elif to.is_string_view() or to.is_binary_view():
+            var via = (
+                string.to_dyn() if to.is_string_view() else binary.to_dyn()
+            )
+            return Self.dispatch(
+                Self.dispatch(array, via, safe, ctx), to, safe, ctx
+            )
+        elif (src.is_fixed_size_binary() and to.is_binary_like()) or (
+            src.is_binary_like() and to.is_fixed_size_binary()
+        ):
+            return FixedSizeBinaryCastKernel.dispatch(array, to, safe, ctx)
+        elif (
+            src.is_string() or src.is_large_string()
+        ):  # string-like → numeric/bool
+            if to.is_bool():
+                return StringToBoolKernel.dispatch(array, to, safe, ctx)
+            elif to.is_decimal():
+                return StringToDecimalKernel.dispatch(array, to, safe, ctx)
+            elif to.is_numeric():
+                return StringToNumKernel.dispatch(array, to, safe, ctx)
+            raise Self.error[NotImplementedError](
+                t"unsupported cast {src} -> {to}"
+            )
+        elif (
+            to.is_string() or to.is_large_string()
+        ):  # numeric/bool → string-like
+            if src.is_bool():
+                return BoolToStringKernel.dispatch(array, to, safe, ctx)
+            elif src.is_decimal():
+                return DecimalToStringKernel.dispatch(array, to, safe, ctx)
+            elif src.is_numeric():
+                return NumToStringKernel.dispatch(array, to, safe, ctx)
+            elif src.is_timestamp():
+                return TimestampToStringKernel.dispatch(array, to, safe, ctx)
+            raise Self.error[NotImplementedError](
+                t"unsupported cast {src} -> {to}"
+            )
+        elif src.is_decimal() or to.is_decimal():
+            return DecimalCastKernel.dispatch(array, to, safe, ctx)
+        elif src.is_numeric() and to.is_numeric():
+            return NumericCastKernel.dispatch(array, to, safe, ctx)
+        elif to.is_bool():
+            return NumToBoolKernel.dispatch(
+                array, to, safe, ctx
+            )  # numeric → bool
+        elif src.is_bool():
+            return BoolToNumKernel.dispatch(
+                array, to, safe, ctx
+            )  # bool → numeric
+        elif src.is_temporal() or to.is_temporal():
+            return TemporalCastKernel.dispatch(array, to, safe, ctx)
+        elif (
+            (src.is_list() and to.is_list())
+            or (src.is_large_list() and to.is_large_list())
+            or (src.is_map() and to.is_map())
+        ):
+            return ListCastKernel.dispatch(array, to, safe, ctx)
+        elif src.is_struct() and to.is_struct():
+            return StructCastKernel.dispatch(array, to, safe, ctx)
+        raise Self.error[NotImplementedError](t"unsupported cast {src} -> {to}")

@@ -16,7 +16,7 @@ from ..chunker import ContentDefinedChunking, ContentDefinedChunker, Chunk
 from ...arrays import DynArray, StructArray
 from ... import builders as ar
 from ... import dtypes as dt
-from ...kernels.cast import cast
+from ...kernels.cast import CastKernel
 
 
 def test_gearhash_table_intact() raises:
@@ -386,7 +386,7 @@ def _as(vals: List[Int64], to: dt.DynType) raises -> DynArray:
     """Cast an int64 column to `to` -- the idiom `kernels/tests/test_cast.mojo`
     uses to build temporal and decimal columns, not a reinterpret of the
     int64 bytes."""
-    return cast(_int64_array(vals), to)
+    return CastKernel.dispatch(_int64_array(vals), to)
 
 
 def _bools(vals: List[Bool]) raises -> DynArray:

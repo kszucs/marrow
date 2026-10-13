@@ -172,7 +172,7 @@ def _take(
     # rather than raise. Cast instead: PyArrow's `take` accepts any integer
     # index type, and an abort is not a diagnosis.
     if not idx.dtype().is_int32():
-        idx = mk.cast(idx, DynType(int32), True, context)
+        idx = mk.CastKernel.dispatch(idx, DynType(int32), True, context)
     var values = DynArray(py=array)
     mk.TakeKernel.check_bounds(len(values), idx.as_int32(), context)
     return mk.TakeKernel.dispatch(
@@ -186,7 +186,7 @@ def _cast(
     safe: PythonObject,
     ctx: PythonObject,
 ) raises -> PythonObject:
-    return mk.cast(
+    return mk.CastKernel.dispatch(
         DynArray(py=array),
         DynType(py=target),
         Bool(py=safe),
@@ -232,7 +232,7 @@ def _divide(
     """
     var out = mk.DivKernel.dispatch(left, right, ctx)
     if right.dtype().is_integer():
-        var nonzero = mk.cast(right, DynType(bool_), True, ctx)
+        var nonzero = mk.CastKernel.dispatch(right, DynType(bool_), True, ctx)
         var ok = mk.OrKernel.dispatch(
             nonzero, IsNullKernel.dispatch(left, ctx), ctx
         )

@@ -20,7 +20,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import DynArray, Int32Array, StringArray, StringViewArray
 from ...builders import Int32Builder, BoolBuilder
 from ...dtypes import string, string_view
-from ...kernels.cast import cast
+from ...kernels.cast import CastKernel
 from ...kernels.filter import FilterKernel, TakeKernel
 from ...kernels.hashing import RapidHashKernel
 from ...kernels.sort import SortIndices
@@ -34,7 +34,7 @@ comptime N = 1_000_000
 def _layout(var data: StringArray, view: Bool) raises -> DynArray:
     """`data` in the layout under test."""
     if view:
-        return cast(data^.to_dyn(), string_view.to_dyn())
+        return CastKernel.dispatch(data^.to_dyn(), string_view.to_dyn())
     return data^.to_dyn()
 
 
@@ -225,7 +225,7 @@ def bench_cast_string_to_view(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(cast(arr, string_view.to_dyn()).length())
+        keep(CastKernel.dispatch(arr, string_view.to_dyn()).length())
 
     b.iter(call)
     keep(arr)
@@ -238,7 +238,7 @@ def bench_cast_view_to_string(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(cast(arr, string.to_dyn()).length())
+        keep(CastKernel.dispatch(arr, string.to_dyn()).length())
 
     b.iter(call)
     keep(arr)

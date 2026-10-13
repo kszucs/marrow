@@ -28,7 +28,7 @@ from ...dtypes import (
     second,
     millisecond,
 )
-from ...kernels.cast import cast, BinaryLikeCastKernel, NumericCastKernel
+from ...kernels.cast import CastKernel, BinaryLikeCastKernel, NumericCastKernel
 from ...utils.testing import Benchmark
 
 
@@ -105,7 +105,7 @@ def _bench_dispatch_int64_to_float64(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(cast(src, float64, safe=True)))
+        keep(len(CastKernel.dispatch(src, float64, safe=True)))
 
     b.iter(call)
     keep(src)
@@ -125,12 +125,14 @@ def bench_dispatch_int64_to_float64_1m(mut b: Benchmark) raises:
 
 
 def _bench_timestamp_upscale(mut b: Benchmark, n: Int) raises:
-    var src = cast(DynArray(arange[Int64Type](0, n)), timestamp(second))
+    var src = CastKernel.dispatch(
+        DynArray(arange[Int64Type](0, n)), timestamp(second)
+    )
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
     def call() raises {imm}:
-        keep(len(cast(src, timestamp(millisecond))))
+        keep(len(CastKernel.dispatch(src, timestamp(millisecond))))
 
     b.iter(call)
     keep(src)
@@ -290,7 +292,7 @@ def _bench_dispatch_binary_to_string(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(cast(src, string, safe=True)))
+        keep(len(CastKernel.dispatch(src, string, safe=True)))
 
     b.iter(call)
     keep(src)

@@ -173,7 +173,7 @@ from .conditional import (
     fill_null,
 )
 from .nested import ArrayLengthKernel, ArrayContainsKernel
-from .cast import CastKernel, cast
+from .cast import CastArm, CastKernel
 from .core import Kernel
 from .groupby import Groups
 from .distinct import ApproxCountDistinctKernel, CountDistinctKernel

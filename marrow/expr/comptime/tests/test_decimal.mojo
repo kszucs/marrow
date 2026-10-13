@@ -24,12 +24,12 @@ from ....dtypes import (
     int64,
     string,
 )
-from ....kernels.cast import cast
+from ....kernels.cast import CastKernel
 from ....tabular import record_batch
 
 
 def _dec(values: List[Optional[String]], dt: DynType) raises -> DynArray:
-    return cast(array(values), dt)
+    return CastKernel.dispatch(array(values), dt)
 
 
 def _sales() raises -> DynRelation:

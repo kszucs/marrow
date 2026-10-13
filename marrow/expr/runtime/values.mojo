@@ -72,7 +72,7 @@ from ...kernels.boolean import (
     OrKernel,
     XorKernel,
 )
-from ...kernels.cast import cast as cast_array
+from ...kernels.cast import CastKernel
 from ...kernels.decimal import (
     DecimalAddKernel,
     DecimalBinaryKernel,
@@ -671,7 +671,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             and r_dt.is_primitive()
             and not (l_number and r_number)
         ):
-            return K.dispatch(l, cast_array(r^, l_dt))
+            return K.dispatch(l, CastKernel.dispatch(r^, l_dt))
         else:
             var pair = Self._unified([l^, r^])
             if pair[0].dtype().is_primitive():
@@ -747,7 +747,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
             # (`DecimalBinaryKernel`), and `//` / `%` have none.
             var to = Self._common_type(l.dtype(), r.dtype())
             if to.is_numeric():
-                return K.dispatch(cast_array(l^, to), cast_array(r^, to))
+                return K.dispatch(
+                    CastKernel.dispatch(l^, to), CastKernel.dispatch(r^, to)
+                )
         raise TypeError(
             t"arithmetic is not defined for {l.dtype()} and {r.dtype()}"
         )
@@ -764,12 +766,14 @@ struct RuntimeValue(Evaluable, Movable, Value):
         here.
         """
         var to = DynType(float64)
-        return K.dispatch(cast_array(l^, to), cast_array(r^, to))
+        return K.dispatch(
+            CastKernel.dispatch(l^, to), CastKernel.dispatch(r^, to)
+        )
 
     @staticmethod
     def _float_unary[K: UnaryKernel](var a: DynArray) raises -> DynArray:
         """`sqrt` / `exp` / `ln` — the runtime half of `FloatUnary`."""
-        return K.dispatch(cast_array(a^, DynType(float64)))
+        return K.dispatch(CastKernel.dispatch(a^, DynType(float64)))
 
     def _unary(self, var a: DynArray) raises -> Optional[DynArray]:
         """The one-operand tags, or `None` when this node is not one of them.
@@ -915,7 +919,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             var pair = Self._unified([a^, self._payload[DynArray].copy()])
             return IsInKernel.dispatch(pair[0], pair[1]).to_dyn()
         if self._tag == "cast" or self._tag == "cast_unsafe":
-            return cast_array(
+            return CastKernel.dispatch(
                 a^, self._payload[DynType].copy(), self._tag == "cast"
             )
         return None
@@ -1065,12 +1069,12 @@ struct RuntimeValue(Evaluable, Movable, Value):
     def _as_text(a: DynArray) raises -> StringArray:
         """An argument operand as `utf8`. Identity for a `utf8` column —
         `cast` returns the input when the dtypes already agree."""
-        return cast_array(a, DynType(string)).as_string().copy()
+        return CastKernel.dispatch(a, DynType(string)).as_string().copy()
 
     @staticmethod
     def _as_int64(a: DynArray) raises -> Int64Array:
         """An argument operand as `int64`, the width `lit(2)` already infers."""
-        return cast_array(a, DynType(int64)).as_int64().copy()
+        return CastKernel.dispatch(a, DynType(int64)).as_int64().copy()
 
     @staticmethod
     def _common_type(l: DynType, r: DynType) raises -> DynType:
@@ -1151,7 +1155,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             to = Self._common_type(to, a.dtype())
         var out = List[DynArray](capacity=len(arrays))
         for ref a in arrays:
-            out.append(cast_array(a.copy(), to))
+            out.append(CastKernel.dispatch(a.copy(), to))
         return out^
 
     # -- Writable -----------------------------------------------------------

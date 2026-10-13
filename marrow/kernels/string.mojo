@@ -51,7 +51,7 @@ from ..dtypes import (
     StringViewLikeType,
     string,
 )
-from .cast import cast
+from .cast import CastKernel
 from .core import Kernel
 from ..views import apply
 from ..execution import ExecContext
@@ -740,8 +740,8 @@ def dispatch_text[
     about to write."""
     var dt = array.dtype()
     if dt.is_string_view():
-        var flat = cast(array, string.to_dyn())
-        return cast(func(flat.as_string()), dt)
+        var flat = CastKernel.dispatch(array, string.to_dyn())
+        return CastKernel.dispatch(func(flat.as_string()), dt)
     if not dt.is_string_like():
         raise K.error[TypeError](t"expected a string array, got {dt}")
 

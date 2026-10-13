@@ -56,7 +56,7 @@ from ...dtypes import (
     StringType,
 )
 from ...builders import Date32Builder, Decimal128Builder
-from ...kernels.cast import cast
+from ...kernels.cast import CastKernel
 
 from ...kernels.string import (
     StringEqKernel,
@@ -473,8 +473,12 @@ def test_string_dispatch_anyarray() raises:
 
 
 def test_large_string_ordering() raises:
-    var a = cast(array(["apple", "banana", "cherry"]), large_string)
-    var b = cast(array(["apricot", "banana", "berry"]), large_string)
+    var a = CastKernel.dispatch(
+        array(["apple", "banana", "cherry"]), large_string
+    )
+    var b = CastKernel.dispatch(
+        array(["apricot", "banana", "berry"]), large_string
+    )
     var r = StringLtKernel.dispatch(a, b)
     ref rb = r.as_bool()
     assert_true(rb[0].value())  # apple < apricot
@@ -851,8 +855,8 @@ def test_key_compare_equals_needs_one_dtype() raises:
     `large_string` and `string_view`, or the same ints as int32 and int64,
     are not equal, and that is an answer rather than an error."""
     var s: DynArray = array(["cat", "dog"])
-    assert_false(KeyCompare.equals(s, cast(s, large_string)))
-    assert_false(KeyCompare.equals(s, cast(s, string_view)))
+    assert_false(KeyCompare.equals(s, CastKernel.dispatch(s, large_string)))
+    assert_false(KeyCompare.equals(s, CastKernel.dispatch(s, string_view)))
     assert_false(KeyCompare.equals(_i32([1, 2]), _i64([1, 2])))
 
 

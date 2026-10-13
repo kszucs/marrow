@@ -22,7 +22,7 @@ from ...dtypes import (
     string,
     struct_,
 )
-from ...kernels.cast import cast
+from ...kernels.cast import CastKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
 
@@ -129,13 +129,15 @@ def test_iceberg_projection_float_to_double() raises:
 def test_iceberg_projection_decimal_widening() raises:
     var file = _schema([_f("d", decimal128(9, 2), 1)])
     var table = _schema([_f("d", decimal128(12, 2), 1)])
-    var src = cast(array([1, None, -3], int64), decimal128(9, 2))
+    var src = CastKernel.dispatch(array([1, None, -3], int64), decimal128(9, 2))
     var result = SchemaProjection(table, file).project(
         RecordBatch(file, [src.copy()])
     )
     ref d = result.column(0)
     assert_true(d.dtype() == decimal128(12, 2).to_dyn())
-    assert_true(cast(d, int64).as_int64() == array([1, None, -3], int64))
+    assert_true(
+        CastKernel.dispatch(d, int64).as_int64() == array([1, None, -3], int64)
+    )
 
 
 def test_iceberg_projection_decimal_scale_change_raises() raises:

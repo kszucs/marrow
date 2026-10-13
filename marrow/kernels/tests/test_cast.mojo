@@ -76,7 +76,7 @@ from ...dtypes import (
     StringType,
 )
 from ...kernels.cast import (
-    cast,
+    CastKernel,
     BinaryLikeCastKernel,
     FixedSizeBinaryCastKernel,
     NumericCastKernel,
@@ -410,25 +410,25 @@ def test_unsafe_overflow_ok() raises:
 
 def test_anyarray_dispatch() raises:
     var a: DynArray = array([1, 2, 3], int32)
-    var r = cast(a, float64)
+    var r = CastKernel.dispatch(a, float64)
     assert_true(r.dtype() == float64)
     assert_true(r.as_float64() == array([1.0, 2.0, 3.0], float64))
 
 
 def test_identity_zero_copy() raises:
     var a: DynArray = array([1, 2, 3], int32)
-    var r = cast(a, int32)
+    var r = CastKernel.dispatch(a, int32)
     assert_true(r.dtype() == int32)
     assert_true(r.as_int32() == array([1, 2, 3], int32))
 
 
 def test_anyarray_every_target() raises:
     var src: DynArray = array([1, 2, 3], int32)
-    assert_true(cast(src, int8).dtype() == int8)
-    assert_true(cast(src, uint16).dtype() == uint16)
-    assert_true(cast(src, float32).dtype() == float32)
-    assert_true(cast(src, uint64).dtype() == uint64)
-    assert_true(cast(src, float16).dtype() == float16)
+    assert_true(CastKernel.dispatch(src, int8).dtype() == int8)
+    assert_true(CastKernel.dispatch(src, uint16).dtype() == uint16)
+    assert_true(CastKernel.dispatch(src, float32).dtype() == float32)
+    assert_true(CastKernel.dispatch(src, uint64).dtype() == uint64)
+    assert_true(CastKernel.dispatch(src, float16).dtype() == float16)
 
 
 # ---------------------------------------------------------------------------
@@ -438,27 +438,27 @@ def test_anyarray_every_target() raises:
 
 def test_numeric_to_bool() raises:
     var a: DynArray = array([0, 5, 0, -3], int32)
-    var r = cast(a, bool_)
+    var r = CastKernel.dispatch(a, bool_)
     assert_true(r.dtype() == bool_)
     assert_true(r.as_bool() == array([False, True, False, True]))
 
 
 def test_bool_to_numeric() raises:
     var a: DynArray = array([True, False, True])
-    var r = cast(a, int8)
+    var r = CastKernel.dispatch(a, int8)
     assert_true(r.dtype() == int8)
     assert_true(r.as_int8() == array([1, 0, 1], int8))
 
 
 def test_bool_to_float() raises:
     var a: DynArray = array([True, False, True])
-    var r = cast(a, float64)
+    var r = CastKernel.dispatch(a, float64)
     assert_true(r.as_float64() == array([1.0, 0.0, 1.0], float64))
 
 
 def test_bool_cast_nulls_preserved() raises:
     var a: DynArray = array([1, None, 0], int32)
-    var r = cast(a, bool_)
+    var r = CastKernel.dispatch(a, bool_)
     ref rb = r.as_bool()
     assert_equal(rb.nulls, 1)
     assert_true(not rb.is_valid(1))
@@ -466,7 +466,7 @@ def test_bool_cast_nulls_preserved() raises:
 
 def test_bool_identity() raises:
     var a: DynArray = array([True, False, True])
-    var r = cast(a, bool_)
+    var r = CastKernel.dispatch(a, bool_)
     assert_true(r.dtype() == bool_)
 
 
@@ -477,19 +477,20 @@ def test_bool_identity() raises:
 
 def test_temporal_int_reinterpret() raises:
     var i: DynArray = array([10, 20, 30], int64)
-    var ts = cast(i, timestamp(microsecond))
+    var ts = CastKernel.dispatch(i, timestamp(microsecond))
     assert_true(ts.dtype() == timestamp(microsecond).to_dyn())
-    var back = cast(ts, int64)
+    var back = CastKernel.dispatch(ts, int64)
     assert_true(back.as_int64() == array([10, 20, 30], int64))
 
 
 def test_timestamp_unit_upscale() raises:
     var i: DynArray = array([1, 2, 3], int64)
-    var ts_s = cast(i, timestamp(second))
-    var ts_ms = cast(ts_s, timestamp(millisecond))  # * 1000
+    var ts_s = CastKernel.dispatch(i, timestamp(second))
+    var ts_ms = CastKernel.dispatch(ts_s, timestamp(millisecond))  # * 1000
     assert_true(ts_ms.dtype() == timestamp(millisecond).to_dyn())
     assert_true(
-        cast(ts_ms, int64).as_int64() == array([1000, 2000, 3000], int64)
+        CastKernel.dispatch(ts_ms, int64).as_int64()
+        == array([1000, 2000, 3000], int64)
     )
 
 
@@ -499,40 +500,55 @@ def test_timestamp_unit_downscale() raises:
     # This case asserted the truncation under the default until S4 threaded
     # `safe` through to `TemporalCastKernel` — the suite encoded the defect.
     var i: DynArray = array([1500, 2500], int64)
-    var ts_ms = cast(i, timestamp(millisecond))
-    var ts_s = cast(ts_ms, timestamp(second), safe=False)  # // 1000 truncates
-    assert_true(cast(ts_s, int64).as_int64() == array([1, 2], int64))
+    var ts_ms = CastKernel.dispatch(i, timestamp(millisecond))
+    var ts_s = CastKernel.dispatch(
+        ts_ms, timestamp(second), safe=False
+    )  # // 1000 truncates
+    assert_true(
+        CastKernel.dispatch(ts_s, int64).as_int64() == array([1, 2], int64)
+    )
 
 
 def test_timestamp_unit_downscale_truncates_toward_zero() raises:
-    var ts = cast(array([-1, -1500, 1500], int64), timestamp(millisecond))
-    var r = cast(ts, timestamp(second), safe=False)
-    assert_true(cast(r, int64).as_int64() == array([0, -1, 1], int64))
+    var ts = CastKernel.dispatch(
+        array([-1, -1500, 1500], int64), timestamp(millisecond)
+    )
+    var r = CastKernel.dispatch(ts, timestamp(second), safe=False)
+    assert_true(
+        CastKernel.dispatch(r, int64).as_int64() == array([0, -1, 1], int64)
+    )
 
 
 def test_timestamp_to_date_floors_to_the_day() raises:
     """The day an instant falls in, floored: -1 s is the day before."""
-    var ts = cast(array([1, -1, 86_400], int64), timestamp(second))
-    var d64 = cast(ts, date64(), safe=True)
+    var ts = CastKernel.dispatch(
+        array([1, -1, 86_400], int64), timestamp(second)
+    )
+    var d64 = CastKernel.dispatch(ts, date64(), safe=True)
     assert_true(
-        cast(d64, int64).as_int64()
+        CastKernel.dispatch(d64, int64).as_int64()
         == array([0, -86_400_000, 86_400_000], int64)
     )
-    var d32 = cast(ts, date32(), safe=True)
-    assert_true(cast(d32, int32).as_int32() == array([0, -1, 1], int32))
+    var d32 = CastKernel.dispatch(ts, date32(), safe=True)
+    assert_true(
+        CastKernel.dispatch(d32, int32).as_int32() == array([0, -1, 1], int32)
+    )
 
 
 def test_timestamp_to_time_takes_the_time_of_day() raises:
-    var ts = cast(array([-1, 2_091_084], int64), timestamp(second))
-    var t = cast(ts, time32(millisecond))
-    assert_true(
-        cast(t, int32).as_int32() == array([86_399_000, 17_484_000], int32)
+    var ts = CastKernel.dispatch(
+        array([-1, 2_091_084], int64), timestamp(second)
     )
-    var ms = cast(array([1500], int64), timestamp(millisecond))
+    var t = CastKernel.dispatch(ts, time32(millisecond))
+    assert_true(
+        CastKernel.dispatch(t, int32).as_int32()
+        == array([86_399_000, 17_484_000], int32)
+    )
+    var ms = CastKernel.dispatch(array([1500], int64), timestamp(millisecond))
     with assert_raises():
-        _ = cast(ms, time32(second), safe=True)
-    var lax = cast(ms, time32(second), safe=False)
-    assert_true(cast(lax, int32).as_int32() == array([1], int32))
+        _ = CastKernel.dispatch(ms, time32(second), safe=True)
+    var lax = CastKernel.dispatch(ms, time32(second), safe=False)
+    assert_true(CastKernel.dispatch(lax, int32).as_int32() == array([1], int32))
 
 
 def test_timestamp_to_date_and_time_every_unit() raises:
@@ -541,32 +557,42 @@ def test_timestamp_to_date_and_time_every_unit() raises:
     var units = [second, millisecond, microsecond, nanosecond]
     var per_day = 86_400
     for unit in units:
-        var ts = cast(
+        var ts = CastKernel.dispatch(
             array([-1, -per_day, -per_day - 1, per_day - 1, None], int64),
             timestamp(unit),
         )
-        var days = cast(cast(ts, date32()), int32)
+        var days = CastKernel.dispatch(CastKernel.dispatch(ts, date32()), int32)
         assert_true(days.as_int32() == array([-1, -1, -2, 0, None], int32))
         var last = (per_day - 1) * (86_400_000_000_000 // per_day)
-        var tod = cast(cast(ts, time64(nanosecond)), int64)
+        var tod = CastKernel.dispatch(
+            CastKernel.dispatch(ts, time64(nanosecond)), int64
+        )
         assert_true(tod.as_int64() == array([last, 0, last, last, None], int64))
         per_day *= 1000
-    var neg = cast(array([-1000], int64), timestamp(millisecond))
-    var t = cast(neg, time32(second), safe=True)
-    assert_true(cast(t, int32).as_int32() == array([86_399], int32))
-    var lossy = cast(array([-1500], int64), timestamp(millisecond))
+    var neg = CastKernel.dispatch(array([-1000], int64), timestamp(millisecond))
+    var t = CastKernel.dispatch(neg, time32(second), safe=True)
+    assert_true(
+        CastKernel.dispatch(t, int32).as_int32() == array([86_399], int32)
+    )
+    var lossy = CastKernel.dispatch(
+        array([-1500], int64), timestamp(millisecond)
+    )
     with assert_raises():
-        _ = cast(lossy, time32(second), safe=True)
+        _ = CastKernel.dispatch(lossy, time32(second), safe=True)
 
 
 def test_timestamp_to_date_and_time_reads_the_zone() raises:
     """A zoned timestamp is split in its own wall-clock time: the epoch is
     19:00 the day before in New York."""
-    var naive = cast(array([0, -1, 18_000], int64), timestamp(second))
-    var ny = cast(naive, timestamp(second, "America/New_York"))
-    var days = cast(cast(ny, date32()), int32)
+    var naive = CastKernel.dispatch(
+        array([0, -1, 18_000], int64), timestamp(second)
+    )
+    var ny = CastKernel.dispatch(naive, timestamp(second, "America/New_York"))
+    var days = CastKernel.dispatch(CastKernel.dispatch(ny, date32()), int32)
     assert_true(days.as_int32() == array([-1, -1, 0], int32))
-    var tod = cast(cast(ny, time64(microsecond)), int64)
+    var tod = CastKernel.dispatch(
+        CastKernel.dispatch(ny, time64(microsecond)), int64
+    )
     assert_true(
         tod.as_int64() == array([68_400_000_000, 68_399_000_000, 0], int64)
     )
@@ -574,26 +600,31 @@ def test_timestamp_to_date_and_time_reads_the_zone() raises:
 
 def test_date32_to_date64() raises:
     var i: DynArray = array([1, 2], int32)
-    var d32 = cast(i, date32())  # days, int32
-    var d64 = cast(d32, date64())  # * 86_400_000, widen to int64
+    var d32 = CastKernel.dispatch(i, date32())  # days, int32
+    var d64 = CastKernel.dispatch(d32, date64())  # * 86_400_000, widen to int64
     assert_true(d64.dtype() == date64().to_dyn())
     assert_true(
-        cast(d64, int64).as_int64() == array([86_400_000, 172_800_000], int64)
+        CastKernel.dispatch(d64, int64).as_int64()
+        == array([86_400_000, 172_800_000], int64)
     )
 
 
 def test_timestamp_tz_relabel() raises:
     var i: DynArray = array([5], int64)
-    var naive = cast(i, timestamp(second))
-    var aware = cast(naive, timestamp(second, "UTC"))  # metadata only
+    var naive = CastKernel.dispatch(i, timestamp(second))
+    var aware = CastKernel.dispatch(
+        naive, timestamp(second, "UTC")
+    )  # metadata only
     assert_true(aware.dtype() == timestamp(second, "UTC").to_dyn())
-    assert_true(cast(aware, int64).as_int64() == array([5], int64))
+    assert_true(
+        CastKernel.dispatch(aware, int64).as_int64() == array([5], int64)
+    )
 
 
 def test_temporal_nulls_preserved() raises:
     var i: DynArray = array([1, None, 3], int64)
-    var ts = cast(i, timestamp(second))
-    var ms = cast(ts, timestamp(millisecond))
+    var ts = CastKernel.dispatch(i, timestamp(second))
+    var ms = CastKernel.dispatch(ts, timestamp(millisecond))
     assert_equal(ms.null_count(), 1)
     assert_true(not ms.is_valid(1))
 
@@ -605,7 +636,7 @@ def test_temporal_nulls_preserved() raises:
 
 def test_numeric_to_string() raises:
     var a: DynArray = array([1, 2, 3], int32)
-    var r = cast(a, string)
+    var r = CastKernel.dispatch(a, string)
     assert_true(r.dtype() == string)
     assert_equal(String(r.as_string()[0]), "1")
     assert_equal(String(r.as_string()[2]), "3")
@@ -613,14 +644,14 @@ def test_numeric_to_string() raises:
 
 def test_string_to_int() raises:
     var a: DynArray = array(["1", "22", "-3"])
-    var r = cast(a, int32)
+    var r = CastKernel.dispatch(a, int32)
     assert_true(r.dtype() == int32)
     assert_true(r.as_int32() == array([1, 22, -3], int32))
 
 
 def test_string_to_float() raises:
     var a: DynArray = array(["1.5", "-2.25", "3.0"])
-    var r = cast(a, float64)
+    var r = CastKernel.dispatch(a, float64)
     assert_true(r.as_float64() == array([1.5, -2.25, 3.0], float64))
 
 
@@ -632,7 +663,7 @@ def test_a_nan_is_not_zero_so_it_casts_to_true() raises:
     while its own docstring called the test total. Negating `eq` is total.
     """
     var a: DynArray = array([nan[float64.native](), 0.0, 2.0], float64)
-    var r = cast(a, bool_)
+    var r = CastKernel.dispatch(a, bool_)
     assert_true(r.as_bool() == array([True, False, True]))
 
 
@@ -650,8 +681,8 @@ def test_a_nan_does_not_round_trip_so_a_safe_cast_to_int_raises() raises:
     """
     var a: DynArray = array([nan[float64.native](), 1.0], float64)
     with assert_raises():
-        _ = cast(a, int64, safe=True)
-    var lax = cast(a, int64, safe=False)
+        _ = CastKernel.dispatch(a, int64, safe=True)
+    var lax = CastKernel.dispatch(a, int64, safe=False)
     assert_equal(lax.null_count(), 0)
     assert_equal(len(lax), 2)
 
@@ -659,42 +690,44 @@ def test_a_nan_does_not_round_trip_so_a_safe_cast_to_int_raises() raises:
 def test_string_to_int_parse_error_safe_raises() raises:
     var a: DynArray = array(["1", "oops", "3"])
     with assert_raises():
-        _ = cast(a, int32, safe=True)
+        _ = CastKernel.dispatch(a, int32, safe=True)
 
 
 def test_string_to_int_out_of_range_raises() raises:
     with assert_raises():
-        _ = cast(array(["128"]), int8, safe=True)
+        _ = CastKernel.dispatch(array(["128"]), int8, safe=True)
     with assert_raises():
-        _ = cast(array(["-1"]), uint8, safe=True)
+        _ = CastKernel.dispatch(array(["-1"]), uint8, safe=True)
     with assert_raises():
-        _ = cast(array(["300"]), uint8, safe=True)
+        _ = CastKernel.dispatch(array(["300"]), uint8, safe=True)
 
 
 def test_string_to_int_range_edges() raises:
     """Each target's own bounds parse; one past them raises under safe."""
-    var r = cast(array(["-128", "127", "-0", "007", None]), int8)
+    var r = CastKernel.dispatch(array(["-128", "127", "-0", "007", None]), int8)
     assert_true(r.as_int8() == array([-128, 127, 0, 7, None], int8))
-    var limits = cast(
+    var limits = CastKernel.dispatch(
         array(["-9223372036854775808", "9223372036854775807"]), int64
     )
     assert_true(limits.as_int64().unsafe_get(0) == Int64.MIN)
     assert_true(limits.as_int64().unsafe_get(1) == Int64.MAX)
-    var u = cast(array(["0", "255"]), uint8)
+    var u = CastKernel.dispatch(array(["0", "255"]), uint8)
     assert_true(u.as_uint8() == array([0, 255], uint8))
     var bad8: List[String] = ["128", "-129", "12a"]
     for text in bad8:
         with assert_raises():
-            _ = cast(array([text]), int8, safe=True)
+            _ = CastKernel.dispatch(array([text]), int8, safe=True)
     with assert_raises():
-        _ = cast(array(["99999999999999999999999"]), int64, safe=True)
+        _ = CastKernel.dispatch(
+            array(["99999999999999999999999"]), int64, safe=True
+        )
     with assert_raises():
-        _ = cast(array(["-1"]), uint64, safe=True)
+        _ = CastKernel.dispatch(array(["-1"]), uint64, safe=True)
 
 
 def test_string_to_int_parse_error_unsafe_nulls() raises:
     var a: DynArray = array(["1", "oops", "3"])
-    var r = cast(a, int32, safe=False)
+    var r = CastKernel.dispatch(a, int32, safe=False)
     assert_equal(r.null_count(), 1)
     assert_true(not r.is_valid(1))
     assert_true(r.is_valid(0))
@@ -702,22 +735,22 @@ def test_string_to_int_parse_error_unsafe_nulls() raises:
 
 def test_string_roundtrip_nulls() raises:
     var a: DynArray = array([1, None, 3], int32)
-    var s = cast(a, string)
+    var s = CastKernel.dispatch(a, string)
     assert_equal(s.null_count(), 1)
-    var back = cast(s, int32)
+    var back = CastKernel.dispatch(s, int32)
     assert_true(back.as_int32() == array([1, None, 3], int32))
 
 
 def test_bool_to_string() raises:
     var a: DynArray = array([True, False, True])
-    var r = cast(a, string)
+    var r = CastKernel.dispatch(a, string)
     assert_equal(String(r.as_string()[0]), "true")
     assert_equal(String(r.as_string()[1]), "false")
 
 
 def test_string_to_bool() raises:
     var a: DynArray = array(["true", "False", "1", "0"])
-    var r = cast(a, bool_)
+    var r = CastKernel.dispatch(a, bool_)
     assert_true(r.as_bool() == array([True, False, True, False]))
 
 
@@ -728,7 +761,7 @@ def test_string_to_bool() raises:
 
 def test_null_to_numeric() raises:
     var a: DynArray = NullArray(length=3)
-    var r = cast(a, int64)
+    var r = CastKernel.dispatch(a, int64)
     assert_true(r.dtype() == int64)
     assert_equal(len(r), 3)
     assert_equal(r.null_count(), 3)
@@ -736,7 +769,7 @@ def test_null_to_numeric() raises:
 
 def test_null_to_string() raises:
     var a: DynArray = NullArray(length=2)
-    var r = cast(a, string)
+    var r = CastKernel.dispatch(a, string)
     assert_true(r.dtype() == string)
     assert_equal(r.null_count(), 2)
 
@@ -748,62 +781,70 @@ def test_null_to_string() raises:
 
 def test_string_to_binary_roundtrip() raises:
     var s: DynArray = array(["ab", "cd", "e"])
-    var b = cast(s, binary)  # relabel, same 32-bit offsets
+    var b = CastKernel.dispatch(s, binary)  # relabel, same 32-bit offsets
     assert_true(b.dtype() == binary)
-    var back = cast(b, string)  # validates UTF-8, relabel
+    var back = CastKernel.dispatch(b, string)  # validates UTF-8, relabel
     assert_true(back.as_string() == array(["ab", "cd", "e"]))
 
 
 def test_string_to_large_string_widen_narrow() raises:
     var s: DynArray = array(["ab", "cd", "e"])
-    var ls = cast(s, large_string)  # 32 → 64-bit offsets
+    var ls = CastKernel.dispatch(s, large_string)  # 32 → 64-bit offsets
     assert_true(ls.dtype() == large_string)
-    var back = cast(ls, string)  # 64 → 32-bit offsets
+    var back = CastKernel.dispatch(ls, string)  # 64 → 32-bit offsets
     assert_true(back.as_string() == array(["ab", "cd", "e"]))
 
 
 def test_binary_to_large_binary() raises:
-    var b = cast(array(["xy", "z"]), binary)
-    var lb = cast(b, large_binary)
+    var b = CastKernel.dispatch(array(["xy", "z"]), binary)
+    var lb = CastKernel.dispatch(b, large_binary)
     assert_true(lb.dtype() == large_binary)
-    assert_true(cast(lb, string).as_string() == array(["xy", "z"]))
+    assert_true(
+        CastKernel.dispatch(lb, string).as_string() == array(["xy", "z"])
+    )
 
 
 def test_large_string_to_numeric() raises:
-    var ls = cast(array(["1", "22", "-3"]), large_string)
-    var r = cast(ls, int32)
+    var ls = CastKernel.dispatch(array(["1", "22", "-3"]), large_string)
+    var r = CastKernel.dispatch(ls, int32)
     assert_true(r.as_int32() == array([1, 22, -3], int32))
 
 
 def test_large_string_to_bool() raises:
-    var ls = cast(array(["true", "0", "False"]), large_string)
-    assert_true(cast(ls, bool_).as_bool() == array([True, False, False]))
+    var ls = CastKernel.dispatch(array(["true", "0", "False"]), large_string)
+    assert_true(
+        CastKernel.dispatch(ls, bool_).as_bool() == array([True, False, False])
+    )
 
 
 def test_numeric_to_large_string() raises:
-    var ls = cast(array([1, 2, 3], int32), large_string)
+    var ls = CastKernel.dispatch(array([1, 2, 3], int32), large_string)
     assert_true(ls.dtype() == large_string)
-    assert_true(cast(ls, int32).as_int32() == array([1, 2, 3], int32))
+    assert_true(
+        CastKernel.dispatch(ls, int32).as_int32() == array([1, 2, 3], int32)
+    )
 
 
 def test_bool_to_large_string() raises:
-    var ls = cast(array([True, False]), large_string)
+    var ls = CastKernel.dispatch(array([True, False]), large_string)
     assert_equal(String(ls.as_large_string()[0]), "true")
     assert_equal(String(ls.as_large_string()[1]), "false")
 
 
 def test_fixed_size_binary_roundtrip() raises:
     var s: DynArray = array(["ab", "cd", "ef"])
-    var fsb = cast(s, fixed_size_binary_(2))
+    var fsb = CastKernel.dispatch(s, fixed_size_binary_(2))
     assert_true(fsb.dtype() == fixed_size_binary_(2).to_dyn())
-    var back = cast(fsb, string)
+    var back = CastKernel.dispatch(fsb, string)
     assert_true(back.as_string() == array(["ab", "cd", "ef"]))
 
 
 def test_binary_to_fixed_size_binary_width_mismatch_raises() raises:
-    var b = cast(array(["ab", "c"]), binary)  # "c" is 1 byte, target width 2
+    var b = CastKernel.dispatch(
+        array(["ab", "c"]), binary
+    )  # "c" is 1 byte, target width 2
     with assert_raises():
-        _ = cast(b, fixed_size_binary_(2))
+        _ = CastKernel.dispatch(b, fixed_size_binary_(2))
 
 
 def test_binary_to_string_invalid_utf8_raises() raises:
@@ -812,9 +853,9 @@ def test_binary_to_string_invalid_utf8_raises() raises:
     raw.append(0xFF)
     var fb = FixedSizeBinaryBuilder(1)
     fb.append(Span(raw))
-    var bad: DynArray = cast(fb.finish(), binary)
+    var bad: DynArray = CastKernel.dispatch(fb.finish(), binary)
     with assert_raises():
-        _ = cast(bad, string, safe=True)
+        _ = CastKernel.dispatch(bad, string, safe=True)
 
 
 # ---------------------------------------------------------------------------
@@ -823,86 +864,130 @@ def test_binary_to_string_invalid_utf8_raises() raises:
 
 
 def test_int_to_decimal_roundtrip() raises:
-    var d = cast(array([1, 2, 3], int64), decimal128(10, 2))  # × 100
+    var d = CastKernel.dispatch(
+        array([1, 2, 3], int64), decimal128(10, 2)
+    )  # × 100
     assert_true(d.dtype() == decimal128(10, 2).to_dyn())
-    assert_true(cast(d, int64).as_int64() == array([1, 2, 3], int64))
+    assert_true(
+        CastKernel.dispatch(d, int64).as_int64() == array([1, 2, 3], int64)
+    )
 
 
 def test_decimal_to_float() raises:
-    var d = cast(array([3], int64), decimal128(10, 2))  # 3 → 300 at scale 2
-    assert_true(cast(d, float64).as_float64() == array([3.0], float64))
+    var d = CastKernel.dispatch(
+        array([3], int64), decimal128(10, 2)
+    )  # 3 → 300 at scale 2
+    assert_true(
+        CastKernel.dispatch(d, float64).as_float64() == array([3.0], float64)
+    )
 
 
 def test_float_to_decimal_roundtrip() raises:
     var f: DynArray = array([1.5, 2.25, -0.5], float64)
-    var d = cast(f, decimal128(10, 2))  # round(×100): 150, 225, -50
+    var d = CastKernel.dispatch(
+        f, decimal128(10, 2)
+    )  # round(×100): 150, 225, -50
     assert_true(
-        cast(d, float64).as_float64() == array([1.5, 2.25, -0.5], float64)
+        CastKernel.dispatch(d, float64).as_float64()
+        == array([1.5, 2.25, -0.5], float64)
     )
 
 
 def test_float_to_decimal_is_exact() raises:
     """An integral double past 2^53 / 10^scale stays integral, and a tie
     rounds to even."""
-    var d = cast(
+    var d = CastKernel.dispatch(
         array([14411518807587.0, 0.125, -0.375], float64), decimal128(20, 4)
     )
     assert_true(
-        cast(d, string).as_string()
+        CastKernel.dispatch(d, string).as_string()
         == array(["14411518807587.0000", "0.1250", "-0.3750"])
     )
-    var tie = cast(array([0.125, 0.375], float64), decimal128(10, 2))
-    assert_true(cast(tie, string).as_string() == array(["0.12", "0.38"]))
+    var tie = CastKernel.dispatch(
+        array([0.125, 0.375], float64), decimal128(10, 2)
+    )
+    assert_true(
+        CastKernel.dispatch(tie, string).as_string() == array(["0.12", "0.38"])
+    )
     with assert_raises():
-        _ = cast(array([1000.0], float64), decimal128(5, 2), safe=True)
+        _ = CastKernel.dispatch(
+            array([1000.0], float64), decimal128(5, 2), safe=True
+        )
 
 
 def test_float_to_decimal_edges() raises:
     """Ties to even on both signs, every digit of a double at a large scale,
     the precision limit, subnormals, and non-finite values."""
-    var ties = cast(array([0.5, 1.5, 2.5, -0.5, -2.5], float64), decimal128(10))
-    assert_true(
-        cast(ties, string).as_string() == array(["0", "2", "2", "0", "-2"])
+    var ties = CastKernel.dispatch(
+        array([0.5, 1.5, 2.5, -0.5, -2.5], float64), decimal128(10)
     )
-    var wide = cast(array([0.1], float64), decimal256(76, 50))
     assert_true(
-        cast(wide, string).as_string()
+        CastKernel.dispatch(ties, string).as_string()
+        == array(["0", "2", "2", "0", "-2"])
+    )
+    var wide = CastKernel.dispatch(array([0.1], float64), decimal256(76, 50))
+    assert_true(
+        CastKernel.dispatch(wide, string).as_string()
         == array(["0.10000000000000000555111512312578270211815834045410"])
     )
-    var big = cast(array([1e38], float64), decimal128(38, 0))
+    var big = CastKernel.dispatch(array([1e38], float64), decimal128(38, 0))
     assert_true(
-        cast(big, string).as_string()
+        CastKernel.dispatch(big, string).as_string()
         == array(["99999999999999997748809823456034029568"])
     )
-    var tiny = cast(array([5e-324, -0.0], float64), decimal128(10, 4))
-    assert_true(cast(tiny, string).as_string() == array(["0.0000", "0.0000"]))
-    var edge = cast(array([99999.995, 0.001], float64), decimal128(7, 2))
-    assert_true(cast(edge, string).as_string() == array(["99999.99", "0.00"]))
-    var below_one = cast(array([0.001], float64), decimal128(5, 7))
-    assert_true(cast(below_one, string).as_string() == array(["0.0010000"]))
+    var tiny = CastKernel.dispatch(
+        array([5e-324, -0.0], float64), decimal128(10, 4)
+    )
+    assert_true(
+        CastKernel.dispatch(tiny, string).as_string()
+        == array(["0.0000", "0.0000"])
+    )
+    var edge = CastKernel.dispatch(
+        array([99999.995, 0.001], float64), decimal128(7, 2)
+    )
+    assert_true(
+        CastKernel.dispatch(edge, string).as_string()
+        == array(["99999.99", "0.00"])
+    )
+    var below_one = CastKernel.dispatch(
+        array([0.001], float64), decimal128(5, 7)
+    )
+    assert_true(
+        CastKernel.dispatch(below_one, string).as_string()
+        == array(["0.0010000"])
+    )
     with assert_raises():
-        _ = cast(array([0.05], float64), decimal128(5, 7), safe=True)
+        _ = CastKernel.dispatch(
+            array([0.05], float64), decimal128(5, 7), safe=True
+        )
     var odd: List[Float64] = [nan[DType.float64](), inf[DType.float64]()]
     for x in odd:
         with assert_raises():
-            _ = cast(array([x], float64), decimal128(10, 2), safe=True)
-    var lax = cast(
+            _ = CastKernel.dispatch(
+                array([x], float64), decimal128(10, 2), safe=True
+            )
+    var lax = CastKernel.dispatch(
         array([odd[0], odd[1], 1.0], float64), decimal128(10, 2), safe=False
     )
     assert_true(
-        cast(lax, string).as_string() == array(["0.00", "0.00", "1.00"])
+        CastKernel.dispatch(lax, string).as_string()
+        == array(["0.00", "0.00", "1.00"])
     )
 
 
 def test_decimal_rescale_widen() raises:
-    var d = cast(array([1, 2], int64), decimal64(10, 1))  # scale 1: 10, 20
-    var d2 = cast(d, decimal128(20, 3))  # scale 1 → 3: × 100
+    var d = CastKernel.dispatch(
+        array([1, 2], int64), decimal64(10, 1)
+    )  # scale 1: 10, 20
+    var d2 = CastKernel.dispatch(d, decimal128(20, 3))  # scale 1 → 3: × 100
     assert_true(d2.dtype() == decimal128(20, 3).to_dyn())
-    assert_true(cast(d2, int64).as_int64() == array([1, 2], int64))
+    assert_true(
+        CastKernel.dispatch(d2, int64).as_int64() == array([1, 2], int64)
+    )
 
 
 def test_decimal_nulls_preserved() raises:
-    var d = cast(array([1, None, 3], int64), decimal128(10, 2))
+    var d = CastKernel.dispatch(array([1, None, 3], int64), decimal128(10, 2))
     assert_equal(d.null_count(), 1)
     assert_true(not d.is_valid(1))
 
@@ -920,7 +1005,9 @@ def test_list_to_list_cast() raises:
     var lb = ListBuilder(ib^)
     lb.append_valid()  # one list [1, 2, 3]
     var lst: DynArray = lb.finish()
-    var casted = cast(lst, list_(int64))  # list<int32> → list<int64>
+    var casted = CastKernel.dispatch(
+        lst, list_(int64)
+    )  # list<int32> → list<int64>
     assert_true(casted.dtype() == list_(int64).to_dyn())
     ref child = casted.as_list().values()
     assert_true(child.as_int64() == array([1, 2, 3], int64))
@@ -935,7 +1022,9 @@ def test_struct_to_struct_cast() raises:
     sb.append_valid()
     sb.append_valid()
     var st: DynArray = sb.finish()
-    var casted = cast(st, struct_([field("a", int64), field("b", float64)]))
+    var casted = CastKernel.dispatch(
+        st, struct_([field("a", int64), field("b", float64)])
+    )
     assert_true(casted.dtype().is_struct())
     assert_true(casted.as_struct().field(0).as_int64() == array([1, 2], int64))
     assert_true(
@@ -954,7 +1043,10 @@ def test_dictionary_decode() raises:
         indices=indices^,
         values=values^,
     )
-    assert_true(cast(d, string).as_string() == array(["a", "c", "b", "a"]))
+    assert_true(
+        CastKernel.dispatch(d, string).as_string()
+        == array(["a", "c", "b", "a"])
+    )
 
 
 def test_dictionary_decode_then_cast() raises:
@@ -968,7 +1060,10 @@ def test_dictionary_decode_then_cast() raises:
         indices=indices^,
         values=values^,
     )
-    assert_true(cast(d, int64).as_int64() == array([10, 20, 30, 20], int64))
+    assert_true(
+        CastKernel.dispatch(d, int64).as_int64()
+        == array([10, 20, 30, 20], int64)
+    )
 
 
 def test_cast_map_casts_the_entry_values() raises:
@@ -994,7 +1089,7 @@ def test_cast_map_casts_the_entry_values() raises:
     var m = b.finish()
 
     var target = map_(DynType(string), DynType(int32)).to_dyn()
-    var out = cast(m^.to_dyn(), target)
+    var out = CastKernel.dispatch(m^.to_dyn(), target)
 
     assert_true(out.dtype() == target)
     assert_equal(len(out), 1)
@@ -1021,7 +1116,7 @@ def test_cast_float_to_decimal_overflow_raises_under_safe() raises:
     var f: DynArray = array([1.0e38], float64)
     var dec = decimal128(38, 2)
     with assert_raises():
-        _ = cast(f, dec, safe=True)
+        _ = CastKernel.dispatch(f, dec, safe=True)
 
 
 def test_cast_decimal_upscale_overflow_raises_under_safe() raises:
@@ -1029,16 +1124,16 @@ def test_cast_decimal_upscale_overflow_raises_under_safe() raises:
     var i: DynArray = array([12345], int64)
     var dec = decimal32(9, 6)
     with assert_raises():
-        _ = cast(i, dec, safe=True)
+        _ = CastKernel.dispatch(i, dec, safe=True)
 
 
 def test_cast_decimal_downscale_truncation_raises_under_safe() raises:
     """1.234 at scale 3 cannot be held at scale 1 — the `34` is discarded."""
     var f: DynArray = array([1.234], float64)
-    var d3 = cast(f, decimal64(18, 3), safe=False)
+    var d3 = CastKernel.dispatch(f, decimal64(18, 3), safe=False)
     var d1 = decimal64(18, 1)
     with assert_raises():
-        _ = cast(d3, d1, safe=True)
+        _ = CastKernel.dispatch(d3, d1, safe=True)
 
 
 def test_cast_decimal_downscale_exact_passes_under_safe() raises:
@@ -1048,45 +1143,49 @@ def test_cast_decimal_downscale_exact_passes_under_safe() raises:
     integer rescales it to scale 0, so `12 @ scale 1` would read as `1`.
     """
     var f: DynArray = array([1.2], float64)
-    var d3 = cast(f, decimal64(18, 3), safe=False)
-    var d1 = cast(d3, decimal64(18, 1), safe=True)
+    var d3 = CastKernel.dispatch(f, decimal64(18, 3), safe=False)
+    var d1 = CastKernel.dispatch(d3, decimal64(18, 1), safe=True)
     assert_true(
-        cast(d1, float64, safe=False).as_float64() == array([1.2], float64)
+        CastKernel.dispatch(d1, float64, safe=False).as_float64()
+        == array([1.2], float64)
     )
 
 
 def test_cast_timestamp_downscale_raises_under_safe() raises:
     """1500 ms is not a whole number of seconds."""
     var i: DynArray = array([1500], int64)
-    var ts_ms = cast(i, timestamp(millisecond))
+    var ts_ms = CastKernel.dispatch(i, timestamp(millisecond))
     with assert_raises():
-        _ = cast(ts_ms, timestamp(second), safe=True)
+        _ = CastKernel.dispatch(ts_ms, timestamp(second), safe=True)
 
 
 def test_cast_timestamp_upscale_overflow_raises_under_safe() raises:
     """1e10 seconds is 1e19 nanoseconds, past int64's 9.22e18."""
     var i: DynArray = array([10_000_000_000], int64)
-    var ts_s = cast(i, timestamp(second))
+    var ts_s = CastKernel.dispatch(i, timestamp(second))
     with assert_raises():
-        _ = cast(ts_s, timestamp(nanosecond), safe=True)
+        _ = CastKernel.dispatch(ts_s, timestamp(nanosecond), safe=True)
 
 
 def test_cast_timestamp_downscale_truncates_under_unsafe() raises:
     """`safe=False` keeps the old truncating behaviour."""
     var i: DynArray = array([1500, 2500], int64)
-    var ts_ms = cast(i, timestamp(millisecond))
-    var ts_s = cast(ts_ms, timestamp(second), safe=False)
+    var ts_ms = CastKernel.dispatch(i, timestamp(millisecond))
+    var ts_s = CastKernel.dispatch(ts_ms, timestamp(second), safe=False)
     assert_true(
-        cast(ts_s, int64, safe=False).as_int64() == array([1, 2], int64)
+        CastKernel.dispatch(ts_s, int64, safe=False).as_int64()
+        == array([1, 2], int64)
     )
 
 
 def test_cast_timestamp_downscale_exact_passes_under_safe() raises:
     """The truncation check must not fire on a whole number of seconds."""
     var i: DynArray = array([1000, 2000], int64)
-    var ts_ms = cast(i, timestamp(millisecond))
-    var ts_s = cast(ts_ms, timestamp(second), safe=True)
-    assert_true(cast(ts_s, int64).as_int64() == array([1, 2], int64))
+    var ts_ms = CastKernel.dispatch(i, timestamp(millisecond))
+    var ts_s = CastKernel.dispatch(ts_ms, timestamp(second), safe=True)
+    assert_true(
+        CastKernel.dispatch(ts_s, int64).as_int64() == array([1, 2], int64)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1111,7 +1210,7 @@ def _binary_of_width(
     var fb = FixedSizeBinaryBuilder(width)
     for cell in cells:
         fb.append(Span(cell))
-    return cast(fb.finish(), binary)
+    return CastKernel.dispatch(fb.finish(), binary)
 
 
 def test_binary_to_string_invalid_utf8_raises_past_fast_path() raises:
@@ -1129,7 +1228,7 @@ def test_binary_to_string_invalid_utf8_raises_past_fast_path() raises:
 
     var arr = _binary_of_width(cells^, 1)
     with assert_raises():
-        _ = cast(arr, string)  # safe=True is the default
+        _ = CastKernel.dispatch(arr, string)  # safe=True is the default
 
 
 def test_binary_to_string_split_character_raises() raises:
@@ -1149,15 +1248,15 @@ def test_binary_to_string_split_character_raises() raises:
 
     var arr = _binary_of_width(cells^, 1)
     with assert_raises():
-        _ = cast(arr, string)
+        _ = CastKernel.dispatch(arr, string)
 
 
 def test_binary_to_string_valid_multibyte_passes() raises:
     """Non-ASCII input misses the all-ASCII path and must still be accepted."""
-    var src = cast(
+    var src = CastKernel.dispatch(
         array(["Здравствуйте", "ünïcødé", "日本語", "ascii", ""]), binary
     )
-    var out = cast(src, string)
+    var out = CastKernel.dispatch(src, string)
     assert_true(out.dtype() == string)
     assert_equal(len(out), 5)
     assert_equal(String(out.as_string()[0]), "Здравствуйте")
@@ -1165,8 +1264,8 @@ def test_binary_to_string_valid_multibyte_passes() raises:
 
 
 def test_binary_to_string_ascii_fast_path_matches_loop() raises:
-    var src = cast(array(["a", "bc", "", "def"]), binary)
-    var out = cast(src, string)
+    var src = CastKernel.dispatch(array(["a", "bc", "", "def"]), binary)
+    var out = CastKernel.dispatch(src, string)
     assert_equal(len(out), 4)
     assert_equal(String(out.as_string()[3]), "def")
 
@@ -1225,9 +1324,9 @@ def test_binary_to_string_slice_validates_only_its_window() raises:
 
     var src = _binary_of_width(cells^, 1)
 
-    assert_true(cast(src.slice(0, 2), string).dtype() == string)
+    assert_true(CastKernel.dispatch(src.slice(0, 2), string).dtype() == string)
     with assert_raises():
-        _ = cast(src.slice(1, 2), string)
+        _ = CastKernel.dispatch(src.slice(1, 2), string)
 
 
 # ---------------------------------------------------------------------------
@@ -1237,7 +1336,7 @@ def test_binary_to_string_slice_validates_only_its_window() raises:
 
 def test_numeric_cast_of_a_slice_keeps_nulls_in_place() raises:
     var sl = array([1, None, 3, 4], int64).slice(1, 3)
-    var out = cast(sl.copy(), int32)
+    var out = CastKernel.dispatch(sl.copy(), int32)
     assert_equal(out.null_count(), 1)
     assert_true(not out.is_valid(0))
     assert_true(out.is_valid(1) and out.is_valid(2))
@@ -1245,15 +1344,17 @@ def test_numeric_cast_of_a_slice_keeps_nulls_in_place() raises:
 
 def test_decimal_cast_of_a_slice_keeps_nulls_in_place() raises:
     var sl = array([1, None, 3, 4], int64).slice(1, 3)
-    var d = cast(sl.copy(), decimal128(20, 0))
+    var d = CastKernel.dispatch(sl.copy(), decimal128(20, 0))
     assert_equal(d.null_count(), 1)
     assert_true(not d.is_valid(0))
     assert_true(d.is_valid(1) and d.is_valid(2))
 
 
 def test_temporal_cast_of_a_slice_keeps_nulls_in_place() raises:
-    var ts = cast(array([1, None, 3, 4], int64), timestamp(second))
-    var out = cast(ts.slice(1, 3), timestamp(millisecond))
+    var ts = CastKernel.dispatch(
+        array([1, None, 3, 4], int64), timestamp(second)
+    )
+    var out = CastKernel.dispatch(ts.slice(1, 3), timestamp(millisecond))
     assert_equal(out.null_count(), 1)
     assert_true(not out.is_valid(0))
     assert_true(out.is_valid(1) and out.is_valid(2))
@@ -1261,15 +1362,15 @@ def test_temporal_cast_of_a_slice_keeps_nulls_in_place() raises:
 
 def test_num_to_bool_cast_of_a_slice_keeps_nulls_in_place() raises:
     var sl = array([1, None, 3, 4], int64).slice(1, 3)
-    var out = cast(sl.copy(), bool_)
+    var out = CastKernel.dispatch(sl.copy(), bool_)
     assert_equal(out.null_count(), 1)
     assert_true(not out.is_valid(0))
     assert_true(out.is_valid(1) and out.is_valid(2))
 
 
 def test_bool_to_num_cast_of_a_slice_keeps_nulls_in_place() raises:
-    var b = cast(array([1, None, 3, 4], int64), bool_)
-    var out = cast(b.slice(1, 3), int32)
+    var b = CastKernel.dispatch(array([1, None, 3, 4], int64), bool_)
+    var out = CastKernel.dispatch(b.slice(1, 3), int32)
     assert_equal(out.null_count(), 1)
     assert_true(not out.is_valid(0))
     assert_true(out.is_valid(1) and out.is_valid(2))
@@ -1284,65 +1385,77 @@ def test_decimal_upscale_negative_boundary_raises() raises:
     # Int32.MIN // 1000 floors to -2147484, whose product is below Int32.MIN.
     # A floored lower bound lets it through and wraps.
     with assert_raises():
-        _ = cast(array([-2147484], int64), decimal32(9, 3), True)
+        _ = CastKernel.dispatch(array([-2147484], int64), decimal32(9, 3), True)
 
 
 def test_decimal_upscale_positive_boundary_raises() raises:
     with assert_raises():
-        _ = cast(array([2147484], int64), decimal32(9, 3), True)
+        _ = CastKernel.dispatch(array([2147484], int64), decimal32(9, 3), True)
 
 
 def test_decimal_to_int_truncates_toward_zero() raises:
     # unscaled -15 at scale 1 (= -1.5); Arrow truncates, so -1 not -2.
-    var d = cast(array([-1.5], float64), decimal128(10, 1))
-    assert_true(cast(d, int64, False).as_int64() == array([-1], int64))
+    var d = CastKernel.dispatch(array([-1.5], float64), decimal128(10, 1))
+    assert_true(
+        CastKernel.dispatch(d, int64, False).as_int64() == array([-1], int64)
+    )
 
 
 def test_decimal_to_int_positive_is_unaffected() raises:
-    var d = cast(array([1.5], float64), decimal128(10, 1))
-    assert_true(cast(d, int64, False).as_int64() == array([1], int64))
+    var d = CastKernel.dispatch(array([1.5], float64), decimal128(10, 1))
+    assert_true(
+        CastKernel.dispatch(d, int64, False).as_int64() == array([1], int64)
+    )
 
 
 def test_decimal_downscale_truncates_toward_zero() raises:
     # -1.234 at scale 3 narrowed to scale 1 is -1.2, not -1.3.
-    var d = cast(array([-1.234], float64), decimal64(18, 3))
-    var narrowed = cast(d, decimal64(18, 1), False)
+    var d = CastKernel.dispatch(array([-1.234], float64), decimal64(18, 3))
+    var narrowed = CastKernel.dispatch(d, decimal64(18, 1), False)
     assert_true(
-        cast(narrowed, float64, False).as_float64() == array([-1.2], float64)
+        CastKernel.dispatch(narrowed, float64, False).as_float64()
+        == array([-1.2], float64)
     )
 
 
 def test_decimal_downscale_positive_is_unaffected() raises:
-    var d = cast(array([1.234], float64), decimal64(18, 3))
-    var narrowed = cast(d, decimal64(18, 1), False)
+    var d = CastKernel.dispatch(array([1.234], float64), decimal64(18, 3))
+    var narrowed = CastKernel.dispatch(d, decimal64(18, 1), False)
     assert_true(
-        cast(narrowed, float64, False).as_float64() == array([1.2], float64)
+        CastKernel.dispatch(narrowed, float64, False).as_float64()
+        == array([1.2], float64)
     )
 
 
 def test_decimal_cast_past_target_precision_raises() raises:
     # 7 digits into a declared precision of 5. delta == 0, so every
     # storage-width check passes and only the digit bound can catch it.
-    var wide = cast(array([1_000_000], int64), decimal128(38, 0))
+    var wide = CastKernel.dispatch(array([1_000_000], int64), decimal128(38, 0))
     var narrow = decimal128(5, 0)
     with assert_raises():
-        _ = cast(wide, narrow, True)
+        _ = CastKernel.dispatch(wide, narrow, True)
 
 
 def test_decimal_cast_within_target_precision_passes() raises:
-    var wide = cast(array([12_345], int64), decimal128(38, 0))
-    assert_true(cast(wide, decimal128(5, 0), True).null_count() == 0)
+    var wide = CastKernel.dispatch(array([12_345], int64), decimal128(38, 0))
+    assert_true(
+        CastKernel.dispatch(wide, decimal128(5, 0), True).null_count() == 0
+    )
 
 
 def test_scale_zero_decimal_to_int_roundtrips() raises:
-    var d = cast(array([7, -7, 0], int64), decimal128(10, 0))
-    assert_true(cast(d, int64).as_int64() == array([7, -7, 0], int64))
+    var d = CastKernel.dispatch(array([7, -7, 0], int64), decimal128(10, 0))
+    assert_true(
+        CastKernel.dispatch(d, int64).as_int64() == array([7, -7, 0], int64)
+    )
 
 
 def test_scale_zero_decimal_to_int_overflow_raises() raises:
-    var d = cast(array([10_000_000_000], int64), decimal128(20, 0))
+    var d = CastKernel.dispatch(
+        array([10_000_000_000], int64), decimal128(20, 0)
+    )
     with assert_raises():
-        _ = cast(d, int32, True)
+        _ = CastKernel.dispatch(d, int32, True)
 
 
 from ...arrays import BinaryViewArray, StringArray, StringViewArray
@@ -1368,7 +1481,7 @@ def test_cast_string_to_string_view_zero_copy() raises:
     b.append_null()
     b.append("a value longer than twelve")
     var src = b.finish().slice(1)
-    var out = cast(src.copy().to_dyn(), string_view)
+    var out = CastKernel.dispatch(src.copy().to_dyn(), string_view)
     ref v = out.as_string_view()
     assert_equal(len(v), 3)
     assert_equal(v.null_count(), 1)
@@ -1385,7 +1498,7 @@ def test_cast_short_strings_to_string_view_hold_no_buffer() raises:
     """Every value fits in its view, so the source's values buffer is not
     taken: the result keeps nothing of it alive."""
     var src: StringArray = ["a", "twelve bytes", ""]
-    var out = cast(src^.to_dyn(), string_view)
+    var out = CastKernel.dispatch(src^.to_dyn(), string_view)
     ref v = out.as_string_view()
     assert_equal(len(v.buffers), 0)
     assert_equal(v[1].value(), "twelve bytes")
@@ -1394,7 +1507,7 @@ def test_cast_short_strings_to_string_view_hold_no_buffer() raises:
 
 def test_cast_string_view_to_string() raises:
     var src: StringViewArray = ["a", "a value longer than twelve", ""]
-    var out = cast(src^.to_dyn(), string)
+    var out = CastKernel.dispatch(src^.to_dyn(), string)
     ref s = out.as_string()
     assert_equal(len(s), 3)
     assert_equal(s[1].value(), "a value longer than twelve")
@@ -1403,24 +1516,26 @@ def test_cast_string_view_to_string() raises:
 
 def test_cast_string_view_roundtrip_large_string() raises:
     var src: StringViewArray = ["x", "a value longer than twelve"]
-    var back = cast(cast(src.copy().to_dyn(), large_string), string_view)
+    var back = CastKernel.dispatch(
+        CastKernel.dispatch(src.copy().to_dyn(), large_string), string_view
+    )
     assert_true(back.as_string_view() == src)
 
 
 def test_cast_binary_view_to_string_view_validates_utf8() raises:
     var b = BinaryViewBuilder()
     b.append("valid bytes")
-    var ok = cast(b.finish().to_dyn(), string_view)
+    var ok = CastKernel.dispatch(b.finish().to_dyn(), string_view)
     assert_equal(ok.as_string_view()[0].value(), "valid bytes")
     var bad = BinaryBuilder(1)
     bad.append(StringSlice(unsafe_from_utf8=Span[Byte]([0xFF, 0xFE])))
     with assert_raises(contains="UTF-8"):
-        _ = cast(bad.finish().to_dyn(), string_view)
+        _ = CastKernel.dispatch(bad.finish().to_dyn(), string_view)
 
 
 def test_cast_string_view_numeric() raises:
     var src: StringViewArray = ["1", "22", "333"]
-    var ints = cast(src^.to_dyn(), int64)
+    var ints = CastKernel.dispatch(src^.to_dyn(), int64)
     assert_equal(ints.as_int64()[2].value(), 333)
-    var back = cast(ints, string_view)
+    var back = CastKernel.dispatch(ints, string_view)
     assert_equal(back.as_string_view()[1].value(), "22")

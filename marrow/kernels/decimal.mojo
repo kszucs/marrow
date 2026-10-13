@@ -57,7 +57,7 @@ from ..dtypes import (
 from ..views import apply
 from .core import Kernel
 from ..errors import InvalidError, TypeError
-from .cast import cast
+from .cast import CastKernel
 from .numeric import FloordivKernel
 from ..execution import ExecContext
 
@@ -275,8 +275,8 @@ trait DecimalBinaryKernel(Kernel):
     ) raises -> DynArray:
         """Erased entry: decimal or integer operands, in either position."""
         var promo = Self.promotion(left.dtype(), right.dtype())
-        var l = cast(left, promo.left, True, ctx)
-        var r = cast(right, promo.right, True, ctx)
+        var l = CastKernel.dispatch(left, promo.left, True, ctx)
+        var r = CastKernel.dispatch(right, promo.right, True, ctx)
 
         # Two arms, not `dispatch_decimal`'s four: `DecimalPromotion` only
         # ever answers decimal128 or decimal256.
