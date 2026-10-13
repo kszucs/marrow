@@ -19,7 +19,7 @@ from marrow.expr.builders import table as _in_memory_table
 from marrow.expr.logical import DynRelation
 from marrow.ipc import read_ipc_file
 from marrow.kernels.aggregate import AllKernel
-from marrow.kernels.numeric import equal
+from marrow.kernels.numeric import EqualKernel
 from marrow.tabular import RecordBatch
 
 
@@ -62,7 +62,7 @@ def values_equal(a: DynArray, b: DynArray) raises -> Bool:
     for i in range(len(a)):
         if a.is_null(i) != b.is_null(i):
             return False
-    return AllKernel.reduce(equal(a, b))
+    return AllKernel.reduce(EqualKernel.dispatch(a, b))
 
 
 def check(var name: String, plan: DynRelation) raises:

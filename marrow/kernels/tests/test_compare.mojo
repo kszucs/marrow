@@ -67,7 +67,7 @@ from ...kernels.string import (
     StringGeKernel,
 )
 from ...kernels.numeric import (
-    equal,
+    EqualKernel,
     EqKernel,
     NeKernel,
     LtKernel,
@@ -555,7 +555,7 @@ def _bytes_pair[
 
 def _assert_equal_bytes[T: BinaryLikeType]() raises:
     var pair = _bytes_pair[T](["a", "bb", "c"], ["a", "xx", "c"])
-    var r = equal(pair[0], pair[1])
+    var r = EqualKernel.dispatch(pair[0], pair[1])
     assert_true(r[0].value())
     assert_false(r[1].value())
     assert_true(r[2].value())
@@ -583,7 +583,7 @@ def test_equal_binary_nulls_propagate() raises:
     rb.append("a")
     rb.append("b")
     rb.append_null()
-    var r = equal(lb.finish(), rb.finish())
+    var r = EqualKernel.dispatch(lb.finish(), rb.finish())
     assert_equal(r.null_count(), 2)
     assert_true(r.is_valid(0))
     assert_true(r[0].value())
@@ -600,12 +600,14 @@ def test_equal_mismatched_dtypes_raise() raises:
     var bb = BinaryLikeBuilder[BinaryType](1)
     bb.append("a")
     with assert_raises():
-        _ = equal(sb.finish(), bb.finish())
+        _ = EqualKernel.dispatch(sb.finish(), bb.finish())
 
 
 def test_equal_numeric_still_dispatches() raises:
     """The non-binarylike arm is unchanged."""
-    var r = equal(array([1, 2, 3], int64), array([1, 9, 3], int64))
+    var r = EqualKernel.dispatch(
+        array([1, 2, 3], int64), array([1, 9, 3], int64)
+    )
     assert_true(r[0].value())
     assert_false(r[1].value())
     assert_true(r[2].value())

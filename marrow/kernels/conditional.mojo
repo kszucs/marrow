@@ -36,7 +36,7 @@ from .core import Kernel
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 from .filter import TakeKernel
-from .numeric import equal
+from .numeric import EqualKernel
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +326,7 @@ struct NullifKernel(BinaryConditionalKernel):
 
         # `nullif` is defined for any dtype with an equality, so it needs the
         # family-picking primitive rather than either comparison kernel directly.
-        var eq = equal(a, b, ctx)
+        var eq = EqualKernel.dispatch(a, b, ctx)
         var candidates = List[DynArray](capacity=1)
         candidates.append(a.copy())
         var sel = Selection(Self.name, candidates^)

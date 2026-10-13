@@ -639,11 +639,7 @@ trait NumericCompareKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-def equal(
-    left: DynArray,
-    right: DynArray,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> BoolArray:
+struct EqualKernel(Kernel):
     """The user's `=` over any comparable dtype, picking the kernel family: a
     NULL on either side gives NULL, and a NaN equals nothing. Key identity,
     where both are equal to themselves, is `KeyCompare` (`hashing.mojo`).
@@ -657,47 +653,54 @@ def equal(
     The split is `primitive` vs everything else: what decides the kernel is
     whether the payload is fixed-width, and every byte string -- `binary` as
     much as `string`, in either layout -- is not.
-
-    Not to be confused with the erased arm in `NumericCompare`, which answers a different
-    question — which kernel the *user's* `==` meant — and lives in the
-    expression layer for that reason.
     """
-    # Checked before every arm, and before the downcast below: `leaf` resolves
-    # `T` from the *left* dtype and then reads `right` at that same `T`, so a
-    # mismatch here would be one more wrong `as_type` — the exact failure this
-    # function's binarylike arm was added to fix. `expect_same_dtype` rather
-    # than a hand-rolled raise, so one condition has one message whichever
-    # entry point reached it.
-    EqKernel.expect_same_dtype(left.dtype(), right.dtype())
 
-    if left.dtype() == bool_dt:
-        # Booleans are bit-packed, so `BoolArray` is not a `PrimitiveArray` and
-        # `dispatch_primitive` raised "dtype is not primitive" on them — a
-        # `bool` join key was impossible for the same reason a `binary` one was.
-        # Equality over packed bits is XNOR, which the boolean kernels already
-        # spell: `Xor` gives "the two differ" with Arrow's validity (valid only
-        # where both operands are), and `Not` flips the data while propagating
-        # those nulls. Both work a word at a time on the bitmaps, so this is not
-        # a slower path than the SIMD one it could not use.
-        return NotKernel.apply(
-            XorKernel.apply(left.as_bool().copy(), right.as_bool().copy(), ctx),
-            ctx,
-        )
-    elif left.dtype().is_primitive():
-        return EqKernel.dispatch(left, right, ctx).as_bool().copy()
-    else:
-        # Every byte-string dtype, not just the text ones. `binary` and
-        # `large_binary` are perfectly ordinary hash-join key columns, but an
-        # earlier `is_string() or is_large_string()` test dropped them into the
-        # numeric arm and `dispatch_primitive` raised "dtype is not primitive"
-        # -- joining on a `binary` key was impossible while the same join on
-        # `string` worked. Anything else (a nested key) raises in the dispatch.
-        # `apply` through a local leaf, not `StringEqKernel.dispatch`, which
-        # round-trips the result through an erased array.
-        def leaf[A: BytesArray](arr: A) raises {imm} -> BoolArray:
-            return StringEqKernel.apply(arr, right.as_type[A]())
+    comptime name = "equal"
 
-        return left.dispatch_bytes(leaf)
+    @staticmethod
+    def dispatch(
+        left: DynArray,
+        right: DynArray,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> BoolArray:
+        # Checked before every arm, and before the downcast below: `leaf` resolves
+        # `T` from the *left* dtype and then reads `right` at that same `T`, so a
+        # mismatch here would be one more wrong `as_type` — the exact failure this
+        # function's binarylike arm was added to fix. `expect_same_dtype` rather
+        # than a hand-rolled raise, so one condition has one message whichever
+        # entry point reached it.
+        Self.expect_same_dtype(left.dtype(), right.dtype())
+
+        if left.dtype() == bool_dt:
+            # Booleans are bit-packed, so `BoolArray` is not a `PrimitiveArray` and
+            # `dispatch_primitive` raised "dtype is not primitive" on them — a
+            # `bool` join key was impossible for the same reason a `binary` one was.
+            # Equality over packed bits is XNOR, which the boolean kernels already
+            # spell: `Xor` gives "the two differ" with Arrow's validity (valid only
+            # where both operands are), and `Not` flips the data while propagating
+            # those nulls. Both work a word at a time on the bitmaps, so this is not
+            # a slower path than the SIMD one it could not use.
+            return NotKernel.apply(
+                XorKernel.apply(
+                    left.as_bool().copy(), right.as_bool().copy(), ctx
+                ),
+                ctx,
+            )
+        elif left.dtype().is_primitive():
+            return EqKernel.dispatch(left, right, ctx).as_bool().copy()
+        else:
+            # Every byte-string dtype, not just the text ones. `binary` and
+            # `large_binary` are perfectly ordinary hash-join key columns, but an
+            # earlier `is_string() or is_large_string()` test dropped them into the
+            # numeric arm and `dispatch_primitive` raised "dtype is not primitive"
+            # -- joining on a `binary` key was impossible while the same join on
+            # `string` worked. Anything else (a nested key) raises in the dispatch.
+            # `apply` through a local leaf, not `StringEqKernel.dispatch`, which
+            # round-trips the result through an erased array.
+            def leaf[A: BytesArray](arr: A) raises {imm} -> BoolArray:
+                return StringEqKernel.apply(arr, right.as_type[A]())
+
+            return left.dispatch_bytes(leaf)
 
 
 struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):

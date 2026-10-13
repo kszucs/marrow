@@ -35,7 +35,7 @@ from std.time import perf_counter_ns
 
 from ..arrays import DynArray
 from ..kernels.aggregate import AllKernel
-from ..kernels.numeric import equal
+from ..kernels.numeric import EqualKernel
 
 
 struct CLIFlags:
@@ -661,7 +661,7 @@ def assert_values_equal(
             raise Error(
                 "assert_values_equal: values differ, ", a, " != ", b, " " + msg
             )
-    elif not AllKernel.reduce(equal(a, b)):
+    elif not AllKernel.reduce(EqualKernel.dispatch(a, b)):
         raise Error(
             "assert_values_equal: values differ, ", a, " != ", b, " " + msg
         )

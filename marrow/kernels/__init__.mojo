@@ -113,7 +113,7 @@ from .numeric import (
     LeKernel,
     GtKernel,
     GeKernel,
-    equal,
+    EqualKernel,
 )
 from .boolean import (
     AndKernel,
