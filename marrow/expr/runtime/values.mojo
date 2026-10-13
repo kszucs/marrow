@@ -115,7 +115,7 @@ from ...kernels.numeric import (
     SqrtKernel,
     SubKernel,
     TruncKernel,
-    UnaryFloatKernel,
+    UnaryKernel,
     EqKernel,
     GeKernel,
     GtKernel,
@@ -767,7 +767,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         return K.dispatch(cast_array(l^, to), cast_array(r^, to))
 
     @staticmethod
-    def _float_unary[K: UnaryFloatKernel](var a: DynArray) raises -> DynArray:
+    def _float_unary[K: UnaryKernel](var a: DynArray) raises -> DynArray:
         """`sqrt` / `exp` / `ln` — the runtime half of `FloatUnary`."""
         return K.dispatch(cast_array(a^, DynType(float64)))
 
@@ -826,9 +826,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "is_valid":
             return NotNullKernel.apply(a).to_dyn()
         if self._tag == "is_nan":
-            return IsNanKernel.apply(a).to_dyn()
+            return IsNanKernel.dispatch(a)
         if self._tag == "is_inf":
-            return IsInfKernel.apply(a).to_dyn()
+            return IsInfKernel.dispatch(a)
 
         if self._tag == "upper":
             return UpperKernel.dispatch(a^)

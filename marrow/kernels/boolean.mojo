@@ -19,11 +19,12 @@ Three tiers per kernel (same scheme as ``numeric.mojo``):
 
 from std.math import isnan, isinf
 
-from ..arrays import BoolArray, DynArray
+from ..arrays import BoolArray, DynArray, PrimitiveArray
 from ..buffers import Bitmap
 from ..dtypes import (
     FloatingType,
     bool_ as bool_dt,
+    PrimitiveType,
 )
 from ..views import apply
 from .core import Kernel
@@ -68,60 +69,6 @@ trait BoolBinaryKernel(Kernel):
         return Self.apply(
             left.as_bool().copy(), right.as_bool().copy(), ctx
         ).to_dyn()
-
-
-trait BoolUnaryKernel(Kernel):
-    """Element-wise unary boolean kernel (BoolArray → BoolArray).
-
-    Concrete structs define ``core`` and ``apply``; ``dispatch`` has a default
-    implementation that type-checks the input and delegates to ``apply``.
-    """
-
-    @staticmethod
-    def core[W: Int](a: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
-        ...
-
-    @staticmethod
-    def apply(
-        arr: BoolArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> BoolArray:
-        ...
-
-    @staticmethod
-    def dispatch(
-        arr: DynArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> DynArray:
-        if arr.dtype() != bool_dt:
-            raise Self.error[TypeError]("input must be a bool array")
-        return Self.apply(arr.as_bool().copy(), ctx).to_dyn()
-
-
-trait UnaryPredicateKernel(Kernel):
-    """Element-wise `array -> bool` predicate over a runtime-typed `DynArray`.
-
-    Unlike `BoolUnaryKernel` (bool -> bool) these take *any* array and produce a
-    `BoolArray`. Validity predicates (`is_null`/`not_null`) read only the bitmap;
-    value predicates (`is_nan`/`is_inf`) scan the values. Concrete kernels define
-    `apply` (which owns type resolution — over any dtype for the validity ones,
-    over floating dtypes for the value ones); `dispatch` defaults to
-    `apply(...).to_dyn()`, mirroring the other kernel traits.
-    """
-
-    @staticmethod
-    def apply(
-        arr: DynArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> BoolArray:
-        ...
-
-    @staticmethod
-    def dispatch(
-        arr: DynArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> DynArray:
-        return Self.apply(arr, ctx).to_dyn()
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +184,9 @@ struct OrKernel(BoolBinaryKernel):
         return _kleene[is_and=False](left, right, "or_")
 
 
-struct NotKernel(BoolUnaryKernel):
+struct NotKernel(Kernel):
+    """Logical NOT; nulls propagate unchanged (NOT NULL = NULL)."""
+
     comptime name = "not"
 
     @always_inline
@@ -252,6 +201,15 @@ struct NotKernel(BoolUnaryKernel):
     ) raises -> BoolArray:
         # NOT flips the data; nulls propagate unchanged (NOT NULL = NULL).
         return BoolArray(like=arr, buffer=(~arr.values()).to_immutable())
+
+    @staticmethod
+    def dispatch(
+        arr: DynArray,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        if arr.dtype() != bool_dt:
+            raise Self.error[TypeError]("input must be a bool array")
+        return Self.apply(arr.as_bool().copy(), ctx).to_dyn()
 
 
 struct XorKernel(BoolBinaryKernel):
@@ -294,7 +252,7 @@ struct XorKernel(BoolBinaryKernel):
 # ---------------------------------------------------------------------------
 
 
-trait NullPredicateKernel(UnaryPredicateKernel):
+trait NullPredicateKernel(Kernel):
     """`is_null` / `not_null` — reads only the validity bitmap. `negate` picks the
     polarity (`is_null` inverts validity, `not_null` copies it); the shared
     `apply` runs the mask through the offset-aware byte-level bitmap `apply`."""
@@ -331,31 +289,41 @@ trait NullPredicateKernel(UnaryPredicateKernel):
                 buf = zeroed.to_immutable()
         return BoolArray(length=n, nulls=0, offset=0, bitmap=None, buffer=buf)
 
+    @staticmethod
+    def dispatch(
+        arr: DynArray, ctx: ExecContext = ExecContext.serial()
+    ) raises -> DynArray:
+        return Self.apply(arr, ctx).to_dyn()
 
-trait ValuePredicateKernel(UnaryPredicateKernel):
-    """`is_nan` / `is_inf` — scans floating values with the SIMD `core` predicate,
-    bit-packing via the shared `apply` (CPU serial/parallel + GPU dispatch by
-    `ctx`) and propagating input nulls (result is null where the input is)."""
+
+trait ValuePredicateKernel(Kernel):
+    """`is_nan` / `is_inf` — scans values with the SIMD `core` predicate,
+    bit-packing through the shared `apply` and keeping the input's nulls."""
 
     @staticmethod
     def core[T: DType, W: Int](x: SIMD[T, W]) -> SIMD[DType.bool, W]:
         ...
 
     @staticmethod
-    def apply(
-        arr: DynArray, ctx: ExecContext = ExecContext.serial()
+    def apply[
+        T: PrimitiveType
+    ](
+        array: PrimitiveArray[T], ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
-        def leaf[T: FloatingType](d: T) raises {imm} -> BoolArray:
-            ref prim = arr.as_primitive[T]()
-            var n = len(prim)
-            var result = ctx.alloc_bitmap(n)
-            apply[T.native, Self.core[T.native, _]](
-                prim.values(), result.view(), ctx
-            )
-            return BoolArray(
-                like=prim,
-                buffer=result.to_immutable(),
-            )
+        var result = ctx.alloc_bitmap(len(array))
+        apply[T.native, Self.core[T.native, _]](
+            array.values(), result.view(), ctx
+        )
+        return BoolArray(like=array, buffer=result.to_immutable())
+
+    @staticmethod
+    def dispatch(
+        arr: DynArray, ctx: ExecContext = ExecContext.serial()
+    ) raises -> DynArray:
+        """The typed `apply` for `arr`'s floating-point dtype."""
+
+        def leaf[T: FloatingType](d: T) raises {imm} -> DynArray:
+            return Self.apply(arr.as_primitive[T](), ctx).to_dyn()
 
         return arr.dtype().dispatch_floating(leaf)
 

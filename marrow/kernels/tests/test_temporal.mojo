@@ -373,14 +373,13 @@ def test_date_trunc_duration() raises:
 
 
 def test_extract_rejects_duration_with_a_useful_message() raises:
-    """A duration reaches the extraction kernels now, and is refused by
-    `_extract` naming the real reason rather than by the dispatcher claiming it
-    is not temporal."""
+    """A duration is temporal but names no calendar day, so `year` refuses
+    it by name."""
     var b = PrimitiveBuilder[DurationType](duration(second), capacity=1)
     b.append(Int64(3661))
     var d = b.finish()
 
-    with assert_raises(contains="requires a date or timestamp array"):
+    with assert_raises(contains="year: unsupported dtype duration"):
         _ = YearKernel.dispatch(d.copy().to_dyn())
 
 

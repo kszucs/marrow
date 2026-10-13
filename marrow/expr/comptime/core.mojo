@@ -1294,8 +1294,8 @@ trait NumericValue(PrimitiveValue):
     #
     # The kernels for all of these have been in `kernels/numeric.mojo` since
     # long before this lane existed and were entirely unreferenced from it.
-    # These methods and the two nodes they name (`NumericUnary`, `FloatUnary`)
-    # are the wiring, not new compute.
+    # These methods and the node they name (`NumericUnary`) are the wiring,
+    # not new compute.
 
     def __neg__(self) -> Neg[Self]:
         """`-self`, keeping the operand's dtype."""

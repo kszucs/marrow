@@ -50,6 +50,7 @@ extraction loop is scalar per element (TODO: vectorise the pure-arithmetic clock
 fields — hour/minute/second — via ``views.apply``).
 """
 
+
 from ..arrays import (
     DynArray,
     ArrayData,
@@ -63,14 +64,17 @@ from ..buffers import Buffer, Bitmap
 from ..builders import StringBuilder
 from ..dtypes import (
     Date32Type,
+    Date64Type,
     DynType,
     DType,
     TemporalType,
+    Time32Type,
+    Time64Type,
     TimestampType,
     TimeUnit,
 )
 from ..errors import InternalError, InvalidError, TypeError
-from .core import Kernel
+from .core import Kernel, one_of
 
 from ..utils import CivilDate, WallClock, floor_div
 
@@ -168,6 +172,13 @@ def localise(array: DynArray) raises -> DynArray:
     )
 
 
+comptime DATES = one_of[Date32Type, Date64Type, TimestampType]
+"""The dtypes with a date part, which the calendar fields read."""
+
+comptime TIMES = one_of[Time32Type, Time64Type, TimestampType]
+"""The dtypes with a time of day, which the clock fields read."""
+
+
 # ---------------------------------------------------------------------------
 # Extraction engine + kernel trait
 # ---------------------------------------------------------------------------
@@ -176,7 +187,7 @@ def localise(array: DynArray) raises -> DynArray:
 def _extract[
     T: TemporalType,
     component: def(days: Int, tod: Int) thin -> Scalar[DType.int32],
-](array: PrimitiveArray[T], calendar: Bool, name: String) raises -> Int32Array:
+](array: PrimitiveArray[T]) raises -> Int32Array:
     """Normalise each element to (days-since-epoch, seconds-of-day), run
     ``component``, and write an ``Int32Array`` with the input's validity."""
     var dt = array.type()
@@ -187,13 +198,6 @@ def _extract[
             " localise first"
         ),
     )
-    var is_date = dt.is_date32() or dt.is_date64()
-    var is_ts = dt.is_timestamp()
-    var is_time = dt.is_time32() or dt.is_time64()
-    if calendar and not (is_date or is_ts):
-        raise TypeError(t"{name}: requires a date or timestamp array, got {dt}")
-    if not calendar and not (is_ts or is_time):
-        raise TypeError(t"{name}: requires a timestamp or time array, got {dt}")
 
     # Normalisation: total seconds = raw * mul / div.
     var mul = 86400 if dt.is_date32() else 1
@@ -218,13 +222,12 @@ def _extract[
 
 
 trait TemporalExtractKernel(Kernel):
-    """A temporal-field extraction kernel. Concrete kernels define ``component``
-    (and ``calendar``); ``apply`` (typed, per temporal type) and ``dispatch``
-    (type-erased) are defaulted."""
+    """A temporal-field extraction kernel. Concrete kernels define ``name``,
+    ``accepts`` and ``component``; ``apply`` (typed, per temporal type) and
+    ``dispatch`` (type-erased) are defaulted."""
 
-    comptime calendar: Bool
-    """Whether the field is a calendar field (date/timestamp) or a clock field
-    (timestamp/time)."""
+    comptime accepts[T: AnyType]: Bool
+    """Whether the field exists for dtype `T`: `DATES` or `TIMES`."""
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -233,38 +236,20 @@ trait TemporalExtractKernel(Kernel):
 
     @staticmethod
     def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> Int32Array:
-        """The field of every element. A zoned timestamp must go through
-        `localise` first, as `dispatch` does; the typed loop never
-        reads a zone, and asserts as much under `ASSERT=all`."""
-        return _extract[T, Self.component](array, Self.calendar, Self.name)
+        comptime if Self.accepts[T]:
+            return _extract[T, Self.component](array)
+        else:
+            raise Self.error[TypeError](t"unsupported dtype {array.type()}")
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        """Resolve the runtime temporal dtype and run the typed `apply`.
-
-        The guard runs first so the diagnostic names this kernel and the family
-        it wanted; `dispatch_temporal` alone would fall through to
-        `_dispatch`'s generic "no arm matched", which says neither.
-
-        This used to be a five-arm ladder over date32/date64/timestamp/time32/
-        time64 -- and it had already drifted: `DurationType` is a `TemporalType`
-        that `ticks_per_second` handles and the ladder had forgotten, so a
-        duration column reported "expected a temporal array" while being one.
-        Walking the family closes that by construction: a temporal type is
-        registered once, and every kernel here picks it up. (Duration still
-        raises for calendar fields, but now from `_extract` naming the actual
-        reason.)
-        """
-        var dt = array.dtype()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
-
-        var local = localise(array)
+        """The typed `apply` for `array`'s dtype, which must be one `accepts`
+        admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(local.as_primitive[T]()).to_dyn()
+            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
 
-        return dt.dispatch_temporal(leaf)
+        return array.dtype().dispatch_temporal(leaf)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +259,7 @@ trait TemporalExtractKernel(Kernel):
 
 struct YearKernel(TemporalExtractKernel):
     comptime name = "year"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -283,7 +268,7 @@ struct YearKernel(TemporalExtractKernel):
 
 struct MonthKernel(TemporalExtractKernel):
     comptime name = "month"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -292,7 +277,7 @@ struct MonthKernel(TemporalExtractKernel):
 
 struct DayKernel(TemporalExtractKernel):
     comptime name = "day"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -301,7 +286,7 @@ struct DayKernel(TemporalExtractKernel):
 
 struct QuarterKernel(TemporalExtractKernel):
     comptime name = "quarter"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -310,7 +295,7 @@ struct QuarterKernel(TemporalExtractKernel):
 
 struct DayOfYearKernel(TemporalExtractKernel):
     comptime name = "day_of_year"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -319,7 +304,7 @@ struct DayOfYearKernel(TemporalExtractKernel):
 
 struct DayOfWeekKernel(TemporalExtractKernel):
     comptime name = "day_of_week"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -333,7 +318,7 @@ struct DayOfWeekKernel(TemporalExtractKernel):
 
 struct HourKernel(TemporalExtractKernel):
     comptime name = "hour"
-    comptime calendar = False
+    comptime accepts = TIMES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -342,7 +327,7 @@ struct HourKernel(TemporalExtractKernel):
 
 struct MinuteKernel(TemporalExtractKernel):
     comptime name = "minute"
-    comptime calendar = False
+    comptime accepts = TIMES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -351,7 +336,7 @@ struct MinuteKernel(TemporalExtractKernel):
 
 struct SecondKernel(TemporalExtractKernel):
     comptime name = "second"
-    comptime calendar = False
+    comptime accepts = TIMES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
@@ -624,7 +609,7 @@ struct DateTruncKernel(Kernel):
 def _extract64[
     T: TemporalType,
     component: def(days: Int, tod: Int) thin -> Scalar[DType.int64],
-](array: PrimitiveArray[T], calendar: Bool, name: String) raises -> Int64Array:
+](array: PrimitiveArray[T]) raises -> Int64Array:
     """`_extract`, writing `int64`. See that function for the normalisation."""
     var dt = array.type()
     debug_assert(
@@ -634,13 +619,6 @@ def _extract64[
             " localise first"
         ),
     )
-    var is_date = dt.is_date32() or dt.is_date64()
-    var is_ts = dt.is_timestamp()
-    var is_time = dt.is_time32() or dt.is_time64()
-    if calendar and not (is_date or is_ts):
-        raise TypeError(t"{name}: requires a date or timestamp array, got {dt}")
-    if not calendar and not (is_ts or is_time):
-        raise TypeError(t"{name}: requires a timestamp or time array, got {dt}")
 
     var mul = 86400 if dt.is_date32() else 1
     var div = 1 if dt.is_date32() else ticks_per_second(dt)
@@ -664,10 +642,11 @@ def _extract64[
 
 trait TemporalExtract64Kernel(Kernel):
     """A temporal-field extraction kernel answering `int64`. The `int32`
-    family's shape exactly — concrete kernels define `component` and
-    `calendar`; `apply` and `dispatch` are defaulted."""
+    family's shape exactly — concrete kernels define `accepts` and
+    `component`; `apply` and `dispatch` are defaulted."""
 
-    comptime calendar: Bool
+    comptime accepts[T: AnyType]: Bool
+    """Whether the field exists for dtype `T`: `DATES` or `TIMES`."""
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int64]:
@@ -675,20 +654,20 @@ trait TemporalExtract64Kernel(Kernel):
 
     @staticmethod
     def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> Int64Array:
-        return _extract64[T, Self.component](array, Self.calendar, Self.name)
+        comptime if Self.accepts[T]:
+            return _extract64[T, Self.component](array)
+        else:
+            raise Self.error[TypeError](t"unsupported dtype {array.type()}")
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        var dt = array.dtype()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
-
-        var local = localise(array)
+        """The typed `apply` for `array`'s dtype, which must be one `accepts`
+        admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(local.as_primitive[T]()).to_dyn()
+            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
 
-        return dt.dispatch_temporal(leaf)
+        return array.dtype().dispatch_temporal(leaf)
 
 
 # -- ISO-8601 week numbering ------------------------------------------------
@@ -724,7 +703,7 @@ struct IsoYearKernel(TemporalExtract64Kernel):
     not always the calendar year of the date itself."""
 
     comptime name = "iso_year"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int64]:
@@ -735,7 +714,7 @@ struct WeekKernel(TemporalExtract64Kernel):
     """SQL `week` — the ISO-8601 week number, 1 to 53."""
 
     comptime name = "week"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int64]:
@@ -757,7 +736,7 @@ struct EpochKernel(TemporalExtract64Kernel):
     """
 
     comptime name = "epoch"
-    comptime calendar = True
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int64]:
@@ -799,30 +778,32 @@ struct LastDayKernel(Kernel):
 
     comptime name = "last_day"
 
+    comptime accepts = DATES
+
     @staticmethod
     def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> Date32Array:
-        var d = _extract[T, _last_day_component](array, True, Self.name)
-        return Date32Array(
-            Date32Type(),
-            length=len(d),
-            nulls=d.nulls,
-            offset=d.offset,
-            bitmap=d.bitmap,
-            buffer=d.buffer,
-        )
+        comptime if Self.accepts[T]:
+            var d = _extract[T, _last_day_component](array)
+            return Date32Array(
+                Date32Type(),
+                length=len(d),
+                nulls=d.nulls,
+                offset=d.offset,
+                bitmap=d.bitmap,
+                buffer=d.buffer,
+            )
+        else:
+            raise Self.error[TypeError](t"unsupported dtype {array.type()}")
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        var dt = array.dtype()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
-
-        var local = localise(array)
+        """The typed `apply` for `array`'s dtype, which must be one `accepts`
+        admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(local.as_primitive[T]()).to_dyn()
+            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
 
-        return dt.dispatch_temporal(leaf)
+        return array.dtype().dispatch_temporal(leaf)
 
 
 # ---------------------------------------------------------------------------
@@ -890,7 +871,7 @@ def _month_name_of(days: Int) -> String:
 def _extract_name[
     T: TemporalType,
     component: def(days: Int) thin -> String,
-](array: PrimitiveArray[T], name: String) raises -> StringArray:
+](array: PrimitiveArray[T]) raises -> StringArray:
     """`_extract`'s shape with a variable-width destination, so a
     `StringBuilder` replaces the preallocated buffer and a null input appends a
     null rather than writing a placeholder."""
@@ -902,8 +883,6 @@ def _extract_name[
             " localise first"
         ),
     )
-    if not (dt.is_date32() or dt.is_date64() or dt.is_timestamp()):
-        raise TypeError(t"{name}: requires a date or timestamp array, got {dt}")
 
     var mul = 86400 if dt.is_date32() else 1
     var div = 1 if dt.is_date32() else ticks_per_second(dt)
@@ -923,32 +902,36 @@ def _extract_name[
 trait TemporalNameKernel(Kernel):
     """A temporal-field kernel answering a *name* rather than a number."""
 
+    comptime accepts[T: AnyType]: Bool
+    """Whether the field exists for dtype `T`: `DATES` or `TIMES`."""
+
     @staticmethod
     def component(days: Int) -> String:
         ...
 
     @staticmethod
     def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> StringArray:
-        return _extract_name[T, Self.component](array, Self.name)
+        comptime if Self.accepts[T]:
+            return _extract_name[T, Self.component](array)
+        else:
+            raise Self.error[TypeError](t"unsupported dtype {array.type()}")
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        var dt = array.dtype()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"expected a temporal array, got {dt}")
-
-        var local = localise(array)
+        """The typed `apply` for `array`'s dtype, which must be one `accepts`
+        admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(local.as_primitive[T]()).to_dyn()
+            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
 
-        return dt.dispatch_temporal(leaf)
+        return array.dtype().dispatch_temporal(leaf)
 
 
 struct DayNameKernel(TemporalNameKernel):
     """SQL `dayname` — `Monday` … `Sunday`."""
 
     comptime name = "day_name"
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int) -> String:
@@ -959,6 +942,7 @@ struct MonthNameKernel(TemporalNameKernel):
     """SQL `monthname` — `January` … `December`."""
 
     comptime name = "month_name"
+    comptime accepts = DATES
 
     @staticmethod
     def component(days: Int) -> String:

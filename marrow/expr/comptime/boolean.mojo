@@ -23,7 +23,7 @@ the base, and only the part of it that matters (`Type`).
 """
 
 from ...errors import TypeError
-from ...arrays import StructArray, BoolArray, DynArray
+from ...arrays import StructArray, BoolArray, DynArray, PrimitiveArray
 from ...dtypes import BoolType, DynType
 from ...kernels.boolean import (
     AndKernel,
@@ -34,7 +34,7 @@ from ...kernels.boolean import (
     IsNanKernel,
     NotNullKernel,
     OrKernel,
-    UnaryPredicateKernel,
+    NullPredicateKernel,
     ValuePredicateKernel,
     XorKernel,
 )
@@ -178,11 +178,9 @@ struct Not[A: ComptimeValue](ComptimeValue, Unnamed):
     only because it shares the operand bound that lets the families mix; a
     fused version would be a legitimate, separate optimisation.
 
-    **Not parameterised on its kernel**, unlike `BoolBinary`. `NotKernel` is
-    the only `BoolUnaryKernel` in the tree, so a `K` parameter would be generic
-    over something that cannot vary — it would read as a choice where there is
-    none. `BoolBinary` earns its `K` with three (`and`, `or`, `xor`). If a
-    second unary boolean kernel ever lands, generalising is mechanical.
+    **Not parameterised on its kernel**, unlike `BoolBinary`: `NotKernel` is
+    the only unary boolean kernel, so a `K` parameter would read as a choice
+    where there is none.
     """
 
     comptime Type = BoolType
@@ -214,7 +212,7 @@ struct Not[A: ComptimeValue](ComptimeValue, Unnamed):
 # ---------------------------------------------------------------------------
 # NullPredicate — is_null / not_null
 # ---------------------------------------------------------------------------
-struct NullPredicate[K: UnaryPredicateKernel, A: ComptimeValue](
+struct NullPredicate[K: NullPredicateKernel, A: ComptimeValue](
     BoolValue, ColumnBound, Unnamed
 ):
     """`is_null` / `not_null` — the only nodes that read an operand's *validity*
@@ -223,7 +221,7 @@ struct NullPredicate[K: UnaryPredicateKernel, A: ComptimeValue](
     The operand is bound on `ComptimeValue`, not on a family, for the same
     reason `BoolBinary`'s are: this asks its operand for a column and never for
     a lane, so any family will do. That is also why it is a breaker —
-    `UnaryPredicateKernel.apply` takes a `DynArray`, because reading a bitmap
+    `NullPredicateKernel.apply` takes a `DynArray`, because reading a bitmap
     is one operation whatever the dtype underneath it is.
 
     **The result is never null**, which is the whole content of a validity
@@ -231,10 +229,9 @@ struct NullPredicate[K: UnaryPredicateKernel, A: ComptimeValue](
     produces an all-valid `BoolArray` and `ColumnBound` reports it, so nothing
     here has to state the rule twice.
 
-    Only the two validity predicates are aliased below. `is_nan` / `is_inf` are
-    `UnaryPredicateKernel`s too, but they read *values* and are meaningful only
-    over floating operands, so they need a narrower operand bound than
-    `ComptimeValue` and therefore their own node.
+    Only the two validity predicates are aliased below. `is_nan` / `is_inf`
+    read *values* and are meaningful only over floating operands, so they need
+    a narrower operand bound than `ComptimeValue` and their own node.
     """
 
     comptime NativeType = DType.int32
@@ -299,9 +296,8 @@ struct ValuePredicate[K: ValuePredicateKernel, A: NumericValue](
     result, and `ColumnBound` reads that back, so the rule is stated once — in
     the kernel — rather than restated here.
 
-    A breaker for the same reason `NullPredicate` is: the kernel takes a
-    `DynArray` and produces a whole `BoolArray`, and `lane` reads bits back out
-    of it.
+    A breaker, as `NullPredicate` is: the kernel produces a whole `BoolArray`,
+    and `lane` reads bits back out of it.
     """
 
     comptime NativeType = DType.int32
@@ -327,9 +323,10 @@ struct ValuePredicate[K: ValuePredicateKernel, A: NumericValue](
     # -- BoolValue ----------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        return Self.K.apply(
-            self.a.evaluate(batch, bindings).to_array(len(batch))
-        )
+        # The typed `apply`: `A.Type` is a comptime parameter here, so nothing
+        # has to resolve a runtime dtype first.
+        var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return Self.K.apply(arr.as_type[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:

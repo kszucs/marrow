@@ -13,8 +13,26 @@ a caller sees is the same sentence whichever kernel raised it, and a new family
 inherits it by conforming rather than by copying the message.
 """
 
+from std.builtin.variadics import TypeList
+
 from ..dtypes import DynType
 from ..errors import ArrowError, InvalidError, TypeError
+
+
+comptime conforms[F: type_of(AnyType), T: AnyType]: Bool = conforms_to(T, F)
+"""Whether dtype `T` belongs to family `F`."""
+
+comptime family[F: type_of(AnyType)] = conforms[F, ...]
+"""A kernel's `accepts`: every dtype of family `F` —
+`comptime accepts = family[FloatingType]`."""
+
+comptime _member[L: TypeList[Trait=AnyType, ...], T: AnyType]: Bool = (
+    L.contains[T]()
+)
+
+comptime one_of[*Ts: AnyType] = _member[TypeList.of[Trait=AnyType, *Ts](), ...]
+"""A kernel's `accepts`: exactly the dtypes `Ts` —
+`comptime accepts = one_of[Date32Type, Date64Type, TimestampType]`."""
 
 
 trait Kernel:

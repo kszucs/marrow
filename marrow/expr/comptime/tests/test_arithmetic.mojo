@@ -13,10 +13,10 @@ follows.
 
 The three rules are the whole design, and the file is organised around them:
 
-- **`NumericUnary` keeps the operand's dtype** — `abs(int32)` is `int32`.
-- **`FloatUnary` / `FloatBinary` answer `float64` whatever went in** — `sqrt`
-  and `/` are not closed over the integers, so preserving the dtype would
-  truncate rather than widen.
+- **`NumericUnary` keeps the operand's dtype for a kernel closed over the
+  integers** — `abs(int32)` is `int32` — **and answers `float64` for a
+  floating-point one**, as `FloatBinary` does — `sqrt` and `/` are not closed
+  over the integers, so preserving the dtype would truncate rather than widen.
 - **`ValuePredicate` answers `bool` and propagates nulls** — `is_nan(NULL)` is
   NULL, which is the entire difference from `is_null`.
 """
@@ -146,7 +146,7 @@ def test_unary_arithmetic_forwards_validity() raises:
 
 
 # ---------------------------------------------------------------------------
-# FloatUnary / FloatBinary — float64 whatever went in
+# Floating-point unaries and FloatBinary — float64 whatever went in
 # ---------------------------------------------------------------------------
 
 
@@ -257,8 +257,8 @@ def test_pow_and_the_float_unaries_answer_float64() raises:
 def test_float_returning_ops_widen_an_integer_operand() raises:
     """`sqrt` over `int64` is `float64`, not a truncated `int64`.
 
-    That is what separates `FloatUnary` from `NumericUnary`: `abs` is closed
-    over the integers and keeps its dtype, `sqrt` is not and cannot.
+    `NumericUnary` reads that off the kernel's `Domain`: `abs` is closed over
+    the integers and keeps its dtype, `sqrt` is not and cannot.
     """
     var b = _ints()
     var got = _as_f64(col("n", int64).abs().sqrt(), b)
@@ -330,7 +330,7 @@ def test_arithmetic_nodes_still_fuse_into_one_pass() raises:
 
 
 def test_the_rest_of_the_float_unary_family_is_reachable() raises:
-    """Six `UnaryFloatKernel`s that `NumericValue` named none of.
+    """Six floating-point `UnaryKernel`s that `NumericValue` named none of.
 
     Exactness is chosen the way the `sqrt`/`exp`/`ln` case above chooses it.
     `y` is [2, 4, 1, 2], so `exp2` and `log2` land on powers of two and are
@@ -343,7 +343,7 @@ def test_the_rest_of_the_float_unary_family_is_reachable() raises:
     var logs: List[Optional[Float64]] = [1.0, 2.0, 0.0, 1.0]
     assert_true(_as_f64(col("y", float64).log2(), b) == array(logs, float64))
     # At `y[1] == 4.0`, not at `y[2] == 1.0`: every logarithm is 0 at 1, so a
-    # `Log10 = FloatUnary[Log2Kernel]` mis-wiring survives an assertion there.
+    # `Log10 = NumericUnary[Log2Kernel]` mis-wiring survives an assertion there.
     assert_almost_equal(
         _as_f64(col("y", float64).log10(), b)[1].value(),
         Float64(0.6020599913279624),
@@ -355,7 +355,7 @@ def test_the_rest_of_the_float_unary_family_is_reachable() raises:
 
 
 def test_the_new_float_unaries_propagate_a_null() raises:
-    """`FloatUnary` forwards its operand's validity, so a null stays a null
+    """`NumericUnary` forwards its operand's validity, so a null stays a null
     rather than turning into a NaN — the rule `sqrt` already followed."""
     var b = _floats()
     assert_true(_as_f64(col("x", float64).sin(), b).is_null(3))
@@ -388,7 +388,7 @@ def test_minimum_and_maximum_are_null_in_null_out_not_sql_least() raises:
     `n` is null on row 3 and `d` is 3 there. SQL's `LEAST(NULL, 3)` is **3**
     — it skips nulls — and so does `pc.min_element_wise` at its
     `skip_nulls=True` default. `MinKernel` intersects validity like every
-    other `BinaryNumericKernel`, so this answers NULL. That is a legitimate
+    other numeric `BinaryKernel`, so this answers NULL. That is a legitimate
     operation under PyArrow's `skip_nulls=False`, and a wrong answer under
     SQL's name, which is why the SQL name is withheld until a kernel skips.
     """

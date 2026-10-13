@@ -56,10 +56,11 @@ from ..dtypes import (
     BinaryLikeType,
     bool_ as bool_dt,
 )
-from .core import Kernel
+from .core import Kernel, family
 from .boolean import NotKernel, XorKernel
 from .string import StringEqKernel
 from ..execution import ExecContext
+from ..errors import TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +69,16 @@ from ..execution import ExecContext
 
 
 trait BinaryKernel(Kernel):
-    """Base for element-wise binary kernels: ``core`` (abstract) + ``apply`` (default).
+    """Element-wise binary kernels: a register ``core`` over the dtypes
+    ``accepts`` admits, with the typed ``apply`` and erased ``dispatch``
+    defaulted.
 
-    Concrete structs define ``comptime name`` and ``core``; subtraits add ``dispatch``.
+    Concrete structs define ``name`` and ``core``, and ``accepts`` when they
+    admit less than every numeric dtype.
     """
+
+    comptime accepts[T: AnyType]: Bool = family[NumericType][T]
+    """Whether ``dispatch`` admits dtype ``T``; numeric unless overridden."""
 
     @always_inline
     @staticmethod
@@ -84,13 +91,19 @@ trait BinaryKernel(Kernel):
         right: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        """Erased entry point. Declared here rather than only on the sub-traits
-        so a node generic over `BinaryKernel` can reach it — `FloatBinary` takes
-        `DivKernel` (a `BinaryNumericKernel`) and `PowKernel` (a
-        `BinaryFloatKernel`), which have no common sub-trait. Both sub-traits
-        already default it, and no struct conforms to `BinaryKernel` directly.
-        """
-        ...
+        """The typed `apply` for the operands' dtype, which must be one
+        `accepts` admits and the same on both sides."""
+        Self.expect_same_dtype(left.dtype(), right.dtype())
+
+        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
+            comptime if Self.accepts[T]:
+                return Self.apply(
+                    left.as_primitive[T](), right.as_primitive[T](), ctx
+                ).to_dyn()
+            else:
+                raise Self.error[TypeError](t"unsupported dtype {d}")
+
+        return left.dtype().dispatch_numeric(leaf)
 
     @staticmethod
     def apply[
@@ -118,49 +131,17 @@ trait BinaryKernel(Kernel):
         )
 
 
-trait BinaryNumericKernel(BinaryKernel):
-    """Binary kernel dispatching over all numeric dtypes."""
-
-    @staticmethod
-    def dispatch(
-        left: DynArray,
-        right: DynArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> DynArray:
-        Self.expect_same_dtype(left.dtype(), right.dtype())
-
-        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
-            return Self.apply(
-                left.as_primitive[T](), right.as_primitive[T](), ctx
-            ).to_dyn()
-
-        return left.dtype().dispatch_numeric(leaf)
-
-
-trait BinaryFloatKernel(BinaryKernel):
-    """Binary kernel dispatching over floating-point dtypes only."""
-
-    @staticmethod
-    def dispatch(
-        left: DynArray,
-        right: DynArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> DynArray:
-        Self.expect_same_dtype(left.dtype(), right.dtype())
-
-        def leaf[T: FloatingType](d: T) raises {imm} -> DynArray:
-            return Self.apply(
-                left.as_primitive[T](), right.as_primitive[T](), ctx
-            ).to_dyn()
-
-        return left.dtype().dispatch_floating(leaf)
-
-
 trait UnaryKernel(Kernel):
-    """Base for element-wise unary kernels: ``core`` (abstract) + ``apply`` (default).
+    """Element-wise unary kernels: a register ``core`` over the dtypes
+    ``accepts`` admits, with the typed ``apply`` and erased ``dispatch``
+    defaulted.
 
-    Concrete structs define ``comptime name`` and ``core``; subtraits add ``dispatch``.
+    Concrete structs define ``name`` and ``core``, and ``accepts`` when they
+    admit less than every numeric dtype.
     """
+
+    comptime accepts[T: AnyType]: Bool = family[NumericType][T]
+    """Whether ``dispatch`` admits dtype ``T``; numeric unless overridden."""
 
     @always_inline
     @staticmethod
@@ -186,33 +167,21 @@ trait UnaryKernel(Kernel):
             buffer=buf.to_immutable(),
         )
 
-
-trait UnaryNumericKernel(UnaryKernel):
-    """Unary kernel dispatching over all numeric dtypes."""
-
     @staticmethod
     def dispatch(
         array: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
+        """The typed `apply` for `array`'s dtype, which must be one
+        `accepts` admits."""
+
         def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
-            return Self.apply(array.as_primitive[T](), ctx).to_dyn()
+            comptime if Self.accepts[T]:
+                return Self.apply(array.as_primitive[T](), ctx).to_dyn()
+            else:
+                raise Self.error[TypeError](t"unsupported dtype {d}")
 
         return array.dtype().dispatch_numeric(leaf)
-
-
-trait UnaryFloatKernel(UnaryKernel):
-    """Unary kernel dispatching over floating-point dtypes only."""
-
-    @staticmethod
-    def dispatch(
-        array: DynArray,
-        ctx: ExecContext = ExecContext.serial(),
-    ) raises -> DynArray:
-        def leaf[T: FloatingType](d: T) raises {imm} -> DynArray:
-            return Self.apply(array.as_primitive[T](), ctx).to_dyn()
-
-        return array.dtype().dispatch_floating(leaf)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +189,7 @@ trait UnaryFloatKernel(UnaryKernel):
 # ---------------------------------------------------------------------------
 
 
-struct AddKernel(BinaryNumericKernel):
+struct AddKernel(BinaryKernel):
     comptime name = "add"
 
     @always_inline
@@ -229,7 +198,7 @@ struct AddKernel(BinaryNumericKernel):
         return a + b
 
 
-struct SubKernel(BinaryNumericKernel):
+struct SubKernel(BinaryKernel):
     comptime name = "subtract"
 
     @always_inline
@@ -238,7 +207,7 @@ struct SubKernel(BinaryNumericKernel):
         return a - b
 
 
-struct MulKernel(BinaryNumericKernel):
+struct MulKernel(BinaryKernel):
     comptime name = "multiply"
 
     @always_inline
@@ -247,7 +216,7 @@ struct MulKernel(BinaryNumericKernel):
         return a * b
 
 
-struct DivKernel(BinaryNumericKernel):
+struct DivKernel(BinaryKernel):
     comptime name = "divide"
 
     @always_inline
@@ -311,7 +280,7 @@ struct DivKernel(BinaryNumericKernel):
             return a / b
 
 
-struct FloordivKernel(BinaryNumericKernel):
+struct FloordivKernel(BinaryKernel):
     comptime name = "floordiv"
 
     @always_inline
@@ -347,7 +316,7 @@ struct FloordivKernel(BinaryNumericKernel):
             return q
 
 
-struct ModKernel(BinaryNumericKernel):
+struct ModKernel(BinaryKernel):
     comptime name = "modulo"
 
     @always_inline
@@ -370,7 +339,7 @@ struct ModKernel(BinaryNumericKernel):
             return r
 
 
-struct MinKernel(BinaryNumericKernel):
+struct MinKernel(BinaryKernel):
     comptime name = "minimum"
 
     @always_inline
@@ -379,7 +348,7 @@ struct MinKernel(BinaryNumericKernel):
         return math.min(a, b)
 
 
-struct MaxKernel(BinaryNumericKernel):
+struct MaxKernel(BinaryKernel):
     comptime name = "maximum"
 
     @always_inline
@@ -393,7 +362,7 @@ struct MaxKernel(BinaryNumericKernel):
 # ---------------------------------------------------------------------------
 
 
-struct NegKernel(UnaryNumericKernel):
+struct NegKernel(UnaryKernel):
     comptime name = "negate"
 
     @always_inline
@@ -402,7 +371,7 @@ struct NegKernel(UnaryNumericKernel):
         return a.__neg__()
 
 
-struct AbsKernel(UnaryNumericKernel):
+struct AbsKernel(UnaryKernel):
     comptime name = "abs"
 
     @always_inline
@@ -411,7 +380,7 @@ struct AbsKernel(UnaryNumericKernel):
         return a.__abs__()
 
 
-struct SignKernel(UnaryNumericKernel):
+struct SignKernel(UnaryKernel):
     comptime name = "sign"
 
     @always_inline
@@ -420,7 +389,7 @@ struct SignKernel(UnaryNumericKernel):
         return a.gt(SIMD[T, W](0)).cast[T]() - a.lt(SIMD[T, W](0)).cast[T]()
 
 
-struct FloorKernel(UnaryNumericKernel):
+struct FloorKernel(UnaryKernel):
     comptime name = "floor"
 
     @always_inline
@@ -429,7 +398,7 @@ struct FloorKernel(UnaryNumericKernel):
         return a.__floor__()
 
 
-struct CeilKernel(UnaryNumericKernel):
+struct CeilKernel(UnaryKernel):
     comptime name = "ceil"
 
     @always_inline
@@ -438,7 +407,7 @@ struct CeilKernel(UnaryNumericKernel):
         return a.__ceil__()
 
 
-struct TruncKernel(UnaryNumericKernel):
+struct TruncKernel(UnaryKernel):
     comptime name = "trunc"
 
     @always_inline
@@ -447,7 +416,7 @@ struct TruncKernel(UnaryNumericKernel):
         return a.__trunc__()
 
 
-struct RoundKernel(UnaryNumericKernel):
+struct RoundKernel(UnaryKernel):
     comptime name = "round"
 
     @always_inline
@@ -457,12 +426,13 @@ struct RoundKernel(UnaryNumericKernel):
 
 
 # ---------------------------------------------------------------------------
-# Kernel structs — BinaryFloatKernel
+# Kernel structs — floating-point only
 # ---------------------------------------------------------------------------
 
 
-struct PowKernel(BinaryFloatKernel):
+struct PowKernel(BinaryKernel):
     comptime name = "power"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -472,12 +442,13 @@ struct PowKernel(BinaryFloatKernel):
 
 
 # ---------------------------------------------------------------------------
-# Kernel structs — UnaryFloatKernel
+# Kernel structs — floating-point unary
 # ---------------------------------------------------------------------------
 
 
-struct SqrtKernel(UnaryFloatKernel):
+struct SqrtKernel(UnaryKernel):
     comptime name = "sqrt"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -485,8 +456,9 @@ struct SqrtKernel(UnaryFloatKernel):
         return math.sqrt(a)
 
 
-struct ExpKernel(UnaryFloatKernel):
+struct ExpKernel(UnaryKernel):
     comptime name = "exp"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -495,8 +467,9 @@ struct ExpKernel(UnaryFloatKernel):
         return math.exp(a)
 
 
-struct Exp2Kernel(UnaryFloatKernel):
+struct Exp2Kernel(UnaryKernel):
     comptime name = "exp2"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -505,8 +478,9 @@ struct Exp2Kernel(UnaryFloatKernel):
         return math.exp2(a)
 
 
-struct LogKernel(UnaryFloatKernel):
+struct LogKernel(UnaryKernel):
     comptime name = "ln"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -515,8 +489,9 @@ struct LogKernel(UnaryFloatKernel):
         return math.log(a)
 
 
-struct Log2Kernel(UnaryFloatKernel):
+struct Log2Kernel(UnaryKernel):
     comptime name = "log2"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -525,8 +500,9 @@ struct Log2Kernel(UnaryFloatKernel):
         return math.log2(a)
 
 
-struct Log10Kernel(UnaryFloatKernel):
+struct Log10Kernel(UnaryKernel):
     comptime name = "log10"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -535,8 +511,9 @@ struct Log10Kernel(UnaryFloatKernel):
         return math.log10(a)
 
 
-struct Log1pKernel(UnaryFloatKernel):
+struct Log1pKernel(UnaryKernel):
     comptime name = "log1p"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -546,8 +523,9 @@ struct Log1pKernel(UnaryFloatKernel):
         return math.log(a + 1)
 
 
-struct SinKernel(UnaryFloatKernel):
+struct SinKernel(UnaryKernel):
     comptime name = "sin"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -556,8 +534,9 @@ struct SinKernel(UnaryFloatKernel):
         return math.sin(a)
 
 
-struct CosKernel(UnaryFloatKernel):
+struct CosKernel(UnaryKernel):
     comptime name = "cos"
+    comptime accepts = family[FloatingType]
 
     @always_inline
     @staticmethod
@@ -605,8 +584,10 @@ def _binary_cmp[
 trait NumericCompareKernel(Kernel):
     """Element-wise comparison over fixed-width lanes, producing a BoolArray.
 
-    Concrete structs define ``comptime name`` and ``core`` (the SIMD predicate);
-    ``apply`` and ``dispatch`` are defaulted.
+    Concrete structs define ``name`` and ``core`` (the SIMD
+    predicate); ``apply`` and ``dispatch`` are defaulted. Every comparison
+    accepts every primitive dtype: temporal, interval and decimal columns
+    compare like numbers.
 
     **Numeric only.** Comparing strings is a different kernel family —
     `StringPredicateKernel` in `string.mojo`, whose core is elementwise over
@@ -641,17 +622,10 @@ trait NumericCompareKernel(Kernel):
         right: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
+        """The typed `apply` for the operands' dtype, which must be the
+        same on both sides."""
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
-        # `apply` is bound on `PrimitiveType`, so dispatch on that family, not
-        # the narrower `NumericType`: temporal, interval and decimal columns all
-        # reach the same leaf. Narrowing here made runtime comparison raise on
-        # those dtypes, took `equal` -- and with it hash-join key
-        # verification and `nullif` -- down too, and left the runtime lane
-        # unable to prune a row group on a date or decimal predicate, which is
-        # still the only lane that can. CLAUDE.md's
-        # "dispatch on the widest family the typed leaf accepts" rule is for
-        # exactly this; `filter`/`take` and `sort` were already fixed.
         def leaf[T: PrimitiveType](d: T) raises {imm} -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx

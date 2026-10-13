@@ -14,7 +14,7 @@ kernel in every binary that builds any expression.
 """
 
 from ...errors import NotImplementedError
-from ...dtypes import DataType, DynType, Float64Type, NumericType
+from ...dtypes import DataType, DynType, Float64Type, Int64Type, NumericType
 from ...kernels.boolean import AndKernel
 from ...kernels.numeric import (
     AbsKernel,
@@ -35,7 +35,6 @@ from ...kernels.numeric import (
     NeKernel,
     NegKernel,
     NumericCompareKernel,
-    BinaryNumericKernel,
     CosKernel,
     Exp2Kernel,
     Log2Kernel,
@@ -52,7 +51,6 @@ from ...kernels.numeric import (
     SubKernel,
     TruncKernel,
     UnaryKernel,
-    UnaryNumericKernel,
 )
 from ...arrays import StructArray, BoolArray, DynArray, PrimitiveArray
 from ...kernels.conditional import (
@@ -81,7 +79,7 @@ from .core import (
 )
 
 
-struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
+struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     NumericValue, Unnamed
 ):
     """A binary arithmetic node over two fused operands."""
@@ -144,7 +142,7 @@ element-wise, `np.min(a)` reduces — and `min` is taken here by the aggregate
 
 Not `least`/`greatest`, because SQL's skip nulls (`LEAST(NULL, 3)` is 3) and
 so does PyArrow's `pc.min_element_wise`. These propagate, like every other
-`BinaryNumericKernel`, so the SQL names stay free for the skipping verbs that
+numeric `BinaryKernel`, so the SQL names stay free for the skipping verbs that
 `golden/cases/math_greatest_and_least.mojo` pins.
 """
 
@@ -152,7 +150,7 @@ so does PyArrow's `pc.min_element_wise`. These propagate, like every other
 # ---------------------------------------------------------------------------
 # DivisionBinary — `//` and `%`, whose divisor decides a null
 # ---------------------------------------------------------------------------
-struct DivisionBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
+struct DivisionBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     NumericValue, Unnamed
 ):
     """`//` and `%`: `NumericBinary` plus SQL's NULL on a zero divisor.
@@ -263,24 +261,23 @@ supplies the validity a SIMD lane cannot.
 # ---------------------------------------------------------------------------
 # NumericUnary — one operand, the operand's type
 # ---------------------------------------------------------------------------
-struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](
-    NumericValue, Unnamed
-):
-    """A unary arithmetic node that keeps its operand's dtype — `neg`, `abs`,
-    `sign`, `floor`, `ceil`, `round`, `trunc`.
+struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
+    """A unary arithmetic node: `neg`, `abs`, `sign`, `floor`, `ceil`,
+    `round`, `trunc`, and `sqrt`, `exp`, `ln` and the rest of the
+    floating-point functions.
 
-    The dtype is preserved rather than promoted because every one of these is
-    closed over its input: `abs(int32)` is an `int32` and `floor(float64)` is a
-    `float64` — Arrow C++'s rule for the same functions, and PyArrow's. The
-    two exceptions are `sqrt`/`exp`/`ln`, which are not closed over the
-    integers and therefore live on `FloatUnary` below.
+    The result type follows what the kernel accepts. A kernel accepting the
+    integers keeps its operand's dtype — `abs(int32)` is an `int32`, Arrow
+    C++'s rule and PyArrow's — and a floating-point one answers `float64`,
+    its operand cast up first: `sqrt` of an integer is not an integer, and
+    keeping the dtype would truncate the answer rather than widen it.
 
     `validity` forwards rather than intersecting: with one operand there is
     nothing to intersect, and none of these kernels manufactures or removes a
-    null.
+    null. `sqrt(-1)` is NaN, not null — a domain error is a value in IEEE 754.
     """
 
-    comptime Type = Self.A.Type
+    comptime Type = Self.A.Type if Self.K.accepts[Int64Type] else Float64Type
     comptime shape = Self.A.shape
     comptime Bound = Self.A.Bound
 
@@ -324,7 +321,7 @@ comptime Trunc = NumericUnary[TruncKernel, _]
 
 
 # ---------------------------------------------------------------------------
-# FloatBinary / FloatUnary — the nodes whose output is float64 whatever went in
+# FloatBinary — the node whose output is float64 whatever went in
 # ---------------------------------------------------------------------------
 struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     NumericValue, Unnamed
@@ -336,11 +333,6 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     operands at all. Both operands are cast up to `float64` *before* the
     kernel, which is what makes integer true division exact rather than an
     integer division silently widened afterwards.
-
-    `K` is bound on `BinaryKernel`, not on `BinaryNumericKernel` or
-    `BinaryFloatKernel`: `DivKernel` is the former and `PowKernel` the latter,
-    and the two have no common sub-trait. That is also why `BinaryKernel`
-    declares `dispatch` — see its docstring.
 
     **PyArrow diverges here and marrow does not follow it.** `pc.divide` on two
     integer arrays returns an integer, so `-1 / 3` is 0; marrow answers -0.333.
@@ -389,59 +381,16 @@ comptime Div = FloatBinary[DivKernel, _, _]
 comptime Pow = FloatBinary[PowKernel, _, _]
 
 
-struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
-    """`sqrt`, `exp`, `ln` — unary operators whose result is always `float64`.
-
-    The operand is cast up before the kernel for the same reason
-    `FloatBinary`'s are: `sqrt` of an integer is not an integer, so preserving
-    the operand's dtype the way `NumericUnary` does would truncate the answer
-    rather than widen it.
-
-    `K` is bound on `UnaryKernel` rather than `UnaryFloatKernel` so the same
-    node can carry a kernel from either family, matching `FloatBinary`.
-    """
-
-    comptime Type = Float64Type
-    comptime shape = Self.A.shape
-    comptime Bound = Self.A.Bound
-
-    var a: Self.A
-
-    def __init__(out self, var a: Self.A):
-        self.a = a^
-
-    # -- ComptimeValue ------------------------------------------------------
-
-    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        return self.a.bind(batch, bindings)
-
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        """Forwarded. `sqrt(-1)` is NaN, not null — a domain error is a value
-        in IEEE 754, and `is_nan` is how a caller asks about it."""
-        return self.a.validity(bound)
-
-    @always_inline
-    def lane[
-        W: Int
-    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
-        return Self.K.core[Self.Type.native, W](
-            self.a.lane[W](bound, idx).cast[Self.Type.native]()
-        )
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(Self.K.name, "(", self.a, ")")
-
-
-comptime Sqrt = FloatUnary[SqrtKernel, _]
-comptime Exp = FloatUnary[ExpKernel, _]
-comptime Ln = FloatUnary[LogKernel, _]
-comptime Exp2 = FloatUnary[Exp2Kernel, _]
-comptime Log2 = FloatUnary[Log2Kernel, _]
-comptime Log10 = FloatUnary[Log10Kernel, _]
-comptime Log1p = FloatUnary[Log1pKernel, _]
-comptime Sin = FloatUnary[SinKernel, _]
-comptime Cos = FloatUnary[CosKernel, _]
-"""The rest of `UnaryFloatKernel`, which the lane named three of.
+comptime Sqrt = NumericUnary[SqrtKernel, _]
+comptime Exp = NumericUnary[ExpKernel, _]
+comptime Ln = NumericUnary[LogKernel, _]
+comptime Exp2 = NumericUnary[Exp2Kernel, _]
+comptime Log2 = NumericUnary[Log2Kernel, _]
+comptime Log10 = NumericUnary[Log10Kernel, _]
+comptime Log1p = NumericUnary[Log1pKernel, _]
+comptime Sin = NumericUnary[SinKernel, _]
+comptime Cos = NumericUnary[CosKernel, _]
+"""The rest of the floating-point `UnaryKernel`s, which the lane named three of.
 
 Nothing here is new machinery: each is the same partial specialisation as
 `Sqrt`, over a kernel that has been in `kernels/numeric.mojo` and tested since

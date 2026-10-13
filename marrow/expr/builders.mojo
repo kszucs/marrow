@@ -513,7 +513,7 @@ def is_in(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
 # not.** `LEAST`/`GREATEST` skip, Ibis spells them the same way, and
 # `pc.min_element_wise` skips too — `ElementWiseAggregateOptions` defaults
 # `skip_nulls=True`. `MinKernel` intersects validity like every other
-# `BinaryNumericKernel`, so this is the propagating form and only that, which
+# numeric `BinaryKernel`, so this is the propagating form and only that, which
 # is what NumPy's name means as well: `minimum` propagates NaN where `fmin`
 # skips it. `least`/`greatest` stay free for the skipping verbs — see
 # `Minimum`.
