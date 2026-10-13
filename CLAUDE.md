@@ -510,15 +510,30 @@ the local ladder; do not reintroduce the shared helper.
 ### Kernels
 
 Kernels (`marrow/kernels/`) are **typed first**, with a type-erased `DynArray`
-layer on top:
+layer on top, and both live on the kernel struct:
 
-1. **Typed overloads** — one per concrete array type (`PrimitiveArray[T]`,
-   `StringArray`, `ListArray`, …). All the logic lives here.
-2. **Type-erased overload** — takes `DynArray` (or `List[DynArray]`), converts to
-   the typed form, and delegates. This is what makes a kernel usable from
-   runtime-typed code.
+1. **`apply`** — the typed overloads, one per concrete array type
+   (`PrimitiveArray[T]`, `StringArray`, `ListArray`, …). All the logic lives
+   here.
+2. **`dispatch`** — takes `DynArray` (or `List[DynArray]`), resolves the typed
+   form, and delegates to `apply`. **Only `dispatch` takes a `DynArray`.** This
+   is what makes a kernel usable from runtime-typed code.
 
 See `marrow/kernels/concat.mojo` and `marrow/kernels/filter.mojo`.
+
+**A kernel is a struct; avoid free-standing functions in `marrow/kernels/`.**
+Callers write `FilterKernel.dispatch(...)`, `CastKernel.dispatch(...)`,
+`SortKernel.apply(...)` — not a convenience `filter()` / `cast()` / `sort()`
+beside the struct. A free function is a second entry point to keep in sync
+with the struct's; logic that has no struct yet gets one. Private helpers
+shared by several kernels are the exception.
+
+**The comptime expression lane calls the typed `apply`, never `dispatch`.** A
+comptime node knows its operand dtype as a type parameter (`Self.A.Type`), so it
+narrows the evaluated column once (`.as_type[PrimitiveArray[Self.A.Type]]()`)
+and calls `K.apply`; going through `dispatch` puts a runtime dtype ladder, and
+every arm of it, into a lane whose point is that nothing is resolved at run
+time. A kernel the comptime lane needs gains a typed `apply` first.
 
 **Dispatch on the widest family the typed leaf accepts.** A leaf bound on
 `PrimitiveType` already takes temporal, interval and decimal columns, so it needs
