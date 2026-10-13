@@ -27,7 +27,9 @@ from ..io import (
     FileSink,
     StorageOptions,
 )
-from ..io.core import FOOTER_READ_SIZE
+from ..io.core import FOOTER_READ_SIZE, Fetched
+from ..execution import ExecContext
+from ..formats import BatchReader, BatchWriter, Format
 from ..schema import Schema
 from ..tabular import RecordBatch, Table
 from ..compress import Method
@@ -159,29 +161,38 @@ struct _Header(Movable):
         self.size = cur.pos
 
 
+def _fetch[
+    S: ByteSource
+](ref source: S, offset: Int, length: Int) raises -> Fetched:
+    """One range, owned by the caller: `read_at` would keep every block a
+    fetching source returns alive for as long as the source."""
+    return source.read_ranges([(offset, length)], ExecContext.serial())
+
+
 def _read_header[S: ByteSource](ref source: S) raises -> _Header:
     """The header is at the front and its length is not known before it is
     parsed: read 64 KiB, and widen the read while the metadata runs past it."""
     var size = source.size()
     var window = min(size, FOOTER_READ_SIZE)
-    var head = source.read_at(0, window)
+    var head = _fetch(source, 0, window)
     if (
-        len(head) < MAGIC.byte_length()
-        or head[: MAGIC.byte_length()] != MAGIC.as_bytes()
+        len(head.span(0)) < MAGIC.byte_length()
+        or head.span(0)[: MAGIC.byte_length()] != MAGIC.as_bytes()
     ):
         raise CorruptError("avro: not an object container file")
     while window < size:
         try:
-            return _Header(head)
+            return _Header(head.span(0))
         except:
             window = min(size, 4 * window)
-        head = source.read_at(0, window)
-    return _Header(head)
+        head = _fetch(source, 0, window)
+    return _Header(head.span(0))
 
 
 struct AvroFile[S: ByteSource = BufferSource](Movable):
     """An Avro object container file, opened: its header is read, the blocks
-    are not. `read` decodes them into a `Table`.
+    are not. `read` decodes them into a `Table`, `batches` one batch at a
+    time.
 
     Reads the writer's schema and nothing else -- there is no reader schema to
     resolve against. Columns are selected by name with `read(columns=...)`.
@@ -194,6 +205,7 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
     var _native_codecs: Bool
     """Whether compressed blocks decode in Mojo, the default, or through
     libsnappy and libzstd."""
+    var _schema: Schema
 
     def __init__(
         out self: AvroFile[BufferSource],
@@ -221,6 +233,8 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
         self._native_codecs = native_codecs
         self._header = header^
         self._source = source^
+        self._schema = to_arrow(self._avro)
+        self._schema.metadata = self._user_metadata()
 
     def avro_schema(self) -> AvroSchema:
         """The writer's schema, as written."""
@@ -233,11 +247,9 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
         """Every header entry, `avro.schema` and `avro.codec` included."""
         return self._header.metadata.copy()
 
-    def schema(self) raises -> Schema:
+    def schema(self) -> Schema:
         """The Arrow schema `read` produces."""
-        var schema = to_arrow(self._avro)
-        schema.metadata = self._user_metadata()
-        return schema^
+        return self._schema.copy()
 
     def _user_metadata(self) -> Dict[String, String]:
         """The header's entries outside the `avro.` namespace whose values are
@@ -262,63 +274,104 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
         one."""
         var decoder = RecordDecoder(self._avro, columns)
         var batches = List[RecordBatch]()
-        var start = self._header.size
-        var blocks = _Blocks(
-            self._source.read_at(start, self._source.size() - start),
-            self._header.sync,
-            start,
-        )
-        while blocks.next():
-            var records = self._codec.decompress(
-                blocks.data, self._native_codecs
-            )
-            _decode_block(decoder, records, blocks.count)
-            if decoder.rows() >= batch_size:
+        var pos = self._header.size
+        while pos < self._source.size():
+            self._fill(decoder, pos, batch_size)
+            if decoder.rows() > 0:
                 batches.append(decoder.finish())
-        if decoder.rows() > 0 or len(batches) == 0:
+        if len(batches) == 0:
             batches.append(decoder.finish())
         var schema = decoder.schema()
-        schema.metadata = self._user_metadata()
+        schema.metadata = self._schema.metadata.copy()
         return Table.from_batches(schema, batches)
 
+    def batches(
+        var self,
+        columns: Optional[List[String]] = None,
+        batch_size: Int = 65_536,
+    ) raises -> AvroReader[Self.S]:
+        """The file as a stream of batches of about `batch_size` rows, holding
+        one block's bytes at a time."""
+        return AvroReader(self^, columns, batch_size)
 
-struct _Blocks[origin: ImmOrigin, sync_origin: ImmOrigin](Movable):
-    """The blocks after a header, in order: each a record count, a byte size,
-    that many bytes of records and the file's sync marker, which is
-    checked."""
+    def _fill(
+        self, mut decoder: RecordDecoder, mut pos: Int, batch_size: Int
+    ) raises:
+        """Decode the blocks from `pos` on until `decoder` holds `batch_size`
+        rows or the file ends, leaving `pos` after the last one.
 
-    var _cur: AvroCursor[Self.origin]
-    var _sync: Span[UInt8, Self.sync_origin]
-    var _start: Int
-    """Where the blocks start in the file, for error messages."""
-    var count: Int
-    var data: Span[UInt8, Self.origin]
-    """The current block's records, still compressed."""
+        A block is a record count, a byte size, that many bytes of records and
+        the file's sync marker, which is checked. Each is fetched on its own --
+        its two varints first, then its bytes and marker -- so only one block is
+        held at a time."""
+        var size = self._source.size()
+        while pos < size and decoder.rows() < batch_size:
+            # Two varints take at most ten bytes each.
+            var head = _fetch(self._source, pos, min(20, size - pos))
+            var cur = AvroCursor(head.span(0))
+            var count = cur.length()
+            var length = cur.length()
+            var start = pos + cur.pos
+            var block = _fetch(self._source, start, length + SYNC_SIZE)
+            var data = block.span(0)
+            if data[length:] != Span(self._header.sync):
+                raise CorruptError(
+                    t"avro: sync marker mismatch at offset {start + length}"
+                )
+            var records = self._codec.decompress(
+                data[:length], self._native_codecs
+            )
+            _decode_block(decoder, records, count)
+            pos = start + length + SYNC_SIZE
+
+
+struct AvroReader[S: ByteSource = BufferSource](BatchReader):
+    """An Avro file read one batch at a time: each batch gathers blocks until
+    it holds `batch_size` rows, and only the block being decoded is in
+    memory."""
+
+    var _file: AvroFile[Self.S]
+    var _decoder: RecordDecoder
+    var _schema: Schema
+    var _pos: Int
+    var _batch_size: Int
 
     def __init__(
         out self,
-        body: Span[UInt8, Self.origin],
-        sync: Span[UInt8, Self.sync_origin],
-        start: Int,
-    ):
-        self._cur = AvroCursor(body)
-        self._sync = sync
-        self._start = start
-        self.count = 0
-        self.data = body[:0]
+        var file: AvroFile[Self.S],
+        columns: Optional[List[String]] = None,
+        batch_size: Int = 65_536,
+    ) raises:
+        self._decoder = RecordDecoder(file._avro, columns)
+        self._schema = self._decoder.schema()
+        self._schema.metadata = file._schema.metadata.copy()
+        self._pos = file._header.size
+        self._batch_size = batch_size
+        self._file = file^
 
-    def next(mut self) raises -> Bool:
-        """Move to the next block; False at the end of the file."""
-        if self._cur.remaining() == 0:
-            return False
-        self.count = self._cur.length()
-        self.data = self._cur.fixed(self._cur.length())
-        if self._cur.fixed(SYNC_SIZE) != self._sync:
-            raise CorruptError(
-                t"avro: sync marker mismatch at offset"
-                t" {self._start + self._cur.pos - SYNC_SIZE}"
-            )
-        return True
+    def schema(self) -> Schema:
+        """The projected columns, with the file's metadata."""
+        return self._schema.copy()
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        self._file._fill(self._decoder, self._pos, self._batch_size)
+        if self._decoder.rows() == 0:
+            return None
+        return self._decoder.finish()
+
+
+struct AvroFormat(Format):
+    """Avro object container files, as a scan opens them."""
+
+    comptime Reader = AvroReader[DynSource]
+
+    @staticmethod
+    def name() -> StaticString:
+        return "Avro"
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self.Reader:
+        return AvroFile[DynSource](DynSource.open(path)).batches(schema.names())
 
 
 def _decode_block(
@@ -333,7 +386,7 @@ def _decode_block(
         )
 
 
-struct AvroWriter[S: ByteSink = FileSink](Movable):
+struct AvroWriter[S: ByteSink = FileSink](BatchWriter):
     """Writes an Avro object container file, batch by batch; `close` finishes
     it.
 
@@ -451,6 +504,8 @@ struct AvroWriter[S: ByteSink = FileSink](Movable):
         self.out.write(head.written())
         self.out.write(body)
         self.out.write(self._sync)
+        # Avro records no offsets, so a block can leave memory once written.
+        self.out.flush()
         self._block.clear()
         self._rows = 0
 

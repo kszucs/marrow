@@ -7,6 +7,7 @@ Iceberg manifest list, and writing tables back under every codec.
 The expected values for the arrow-testing files are the ones Arrow Rust's
 `arrow-avro/src/reader/mod.rs` asserts."""
 
+from std.memory import ArcPointer
 from std.os.path import join
 from std.python import Python, PythonObject
 from std.testing import assert_equal, assert_raises, assert_true
@@ -15,6 +16,7 @@ from ...arrays import DynArray
 from ...avro import (
     AvroCodec,
     AvroFile,
+    AvroFormat,
     AvroSchema,
     AvroWriter,
     from_arrow,
@@ -33,7 +35,8 @@ from ...dtypes import (
     string,
     timestamp,
 )
-from ...io import BufferSource, MemorySink
+from ...execution import ExecContext
+from ...io import ByteSink, ByteSource, BufferSource, Fetched, MemorySink
 from ...schema import Schema
 from ...tabular import RecordBatch, Table
 from ...utils.testing import ScratchDir
@@ -524,3 +527,197 @@ def test_avro_write_refusals() raises:
     )
     with assert_raises(contains="non-nullable"):
         w.write(one)
+
+
+# ---------------------------------------------------------------------------
+# Streaming: one block in memory at a time, in both directions
+# ---------------------------------------------------------------------------
+
+
+comptime Log = ArcPointer[List[Int]]
+
+
+struct _SinkRecorder(ByteSink):
+    """Keeps what is written, and the size of every write and the number of
+    closes, where a test can see them while the writer still owns the sink."""
+
+    var _bytes: ArcPointer[List[UInt8]]
+    var _writes: Log
+    var _closes: Log
+
+    def __init__(
+        out self,
+        var bytes: ArcPointer[List[UInt8]],
+        var writes: Log,
+        var closes: Log,
+    ):
+        self._bytes = bytes^
+        self._writes = writes^
+        self._closes = closes^
+
+    def write[o: Origin[mut=False]](mut self, data: Span[UInt8, o]) raises:
+        self._bytes[].extend(data)
+        self._writes[].append(len(data))
+
+    def close(mut self) raises:
+        self._closes[].append(1)
+
+
+struct _SourceRecorder(ByteSource):
+    """A `BufferSource` that logs every `read_at` and every range of every
+    `read_ranges` it serves."""
+
+    var _inner: BufferSource
+    var _read_at: Log
+    var _ranges: Log
+    """The length of every range fetched through `read_ranges`."""
+
+    def __init__(
+        out self, data: Span[UInt8, _], var read_at: Log, var ranges: Log
+    ):
+        self._inner = BufferSource(data)
+        self._read_at = read_at^
+        self._ranges = ranges^
+
+    def size(self) -> Int:
+        return self._inner.size()
+
+    def read_at(
+        ref self, offset: Int, length: Int
+    ) raises -> Span[UInt8, origin_of(self)]:
+        self._read_at[].append(length)
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._inner.read_at(offset, length)
+        )
+
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
+        for ref r in ranges:
+            self._ranges[].append(r[1])
+        return self._inner.read_ranges(ranges, ctx)
+
+
+def _thousand_rows() raises -> Table:
+    var scope = Python.dict()
+    _ = Python.import_module("builtins").exec(
+        (
+            "import pyarrow as pa\n"
+            "table = pa.table({'a': pa.array(range(1000), pa.int64()),"
+            " 's': [str(i) for i in range(1000)]})"
+        ),
+        scope,
+    )
+    return _to_marrow(scope["table"])
+
+
+def _many_blocks(t: Table) raises -> List[UInt8]:
+    """`t` in blocks of about 500 bytes -- a dozen or so."""
+    var w = AvroWriter(
+        MemorySink(), from_arrow(t.schema), AvroCodec.DEFLATE, sync_interval=500
+    )
+    w.write(t)
+    w.close()
+    return List[UInt8](w.out.sink().bytes())
+
+
+def test_avro_reader_streams_batches() raises:
+    var t = _thousand_rows()
+    var written = _many_blocks(t)
+    var whole = AvroFile(BufferSource(Span(written))).read()
+    var reader = AvroFile(BufferSource(Span(written))).batches(batch_size=100)
+    var batches = List[RecordBatch]()
+    while True:
+        var batch = reader.read_next_batch()
+        if not batch:
+            break
+        batches.append(batch.take())
+    assert_true(len(batches) > 1)
+    for i in range(len(batches) - 1):
+        assert_true(batches[i].num_rows() >= 100)
+    # Exhausted, it stays exhausted.
+    assert_true(not reader.read_next_batch())
+    var streamed = Table.from_batches(reader.schema(), batches)
+    assert_true(streamed.combine_chunks() == whole.combine_chunks())
+    assert_true(
+        whole.combine_chunks().column("a") == t.combine_chunks().column("a")
+    )
+
+
+def test_avro_reader_projection_and_format() raises:
+    var t = _thousand_rows()
+    var written = _many_blocks(t)
+    var reader = AvroFile(BufferSource(Span(written))).batches(
+        List[String](["s"]), batch_size=300
+    )
+    assert_equal(len(reader.schema().fields), 1)
+    assert_equal(reader.schema().fields[0].name, "s")
+    var rows = 0
+    while True:
+        var batch = reader.read_next_batch()
+        if not batch:
+            break
+        assert_equal(len(batch.value().columns), 1)
+        rows += batch.value().num_rows()
+    assert_equal(rows, 1000)
+    # `AvroFormat` opens a path and projects the schema it is given.
+    with ScratchDir() as tmp:
+        var path = join(tmp, "t.avro")
+        write_avro(t, path)
+        var only_a = Schema(fields=[t.schema.fields[0].copy()])
+        var r = AvroFormat.open(path, only_a)
+        assert_equal(AvroFormat.name(), "Avro")
+        assert_equal(len(r.schema().fields), 1)
+        var b = r.read_next_batch()
+        assert_true(Bool(b))
+        assert_equal(b.value().num_rows(), 1000)
+        assert_equal(b.value().schema.fields[0].name, "a")
+
+
+def test_avro_writer_flushes_each_block() raises:
+    var t = _thousand_rows()
+    var bytes = ArcPointer(List[UInt8]())
+    var writes = Log(List[Int]())
+    var closes = Log(List[Int]())
+    var w = AvroWriter(
+        _SinkRecorder(bytes, writes, closes),
+        from_arrow(t.schema),
+        AvroCodec.NULL,
+        sync_interval=500,
+    )
+    w.write(t)
+    # Every finished block has reached the sink before `close`.
+    assert_true(len(writes[]) >= 3)
+    for n in writes[]:
+        assert_true(n < len(bytes[]))
+    assert_equal(len(closes[]), 0)
+    w.close()
+    w.close()
+    assert_equal(len(closes[]), 1)
+    var back = AvroFile(BufferSource(Span(bytes[]))).read()
+    assert_true(
+        back.combine_chunks().column("s") == t.combine_chunks().column("s")
+    )
+
+
+def test_avro_reader_fetches_block_by_block() raises:
+    var t = _thousand_rows()
+    var written = _many_blocks(t)
+    var read_at = Log(List[Int]())
+    var ranges = Log(List[Int]())
+    var f = AvroFile(_SourceRecorder(Span(written), read_at, ranges))
+    # Opening fetched the header, and for a file this small that is all of it.
+    var opened = len(ranges[])
+    var reader = f^.batches(batch_size=100)
+    var rows = 0
+    while True:
+        var batch = reader.read_next_batch()
+        if not batch:
+            break
+        rows += batch.value().num_rows()
+    assert_equal(rows, 1000)
+    assert_equal(len(read_at[]), 0)
+    # Two fetches per block, and none of them the whole body.
+    assert_true(len(ranges[]) - opened >= 6)
+    for i in range(opened, len(ranges[])):
+        assert_true(ranges[][i] < len(written) // 4)
