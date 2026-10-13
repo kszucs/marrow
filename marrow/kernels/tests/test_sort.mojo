@@ -59,7 +59,7 @@ from ...dtypes import (
 )
 from ...tabular import record_batch
 from ...kernels.sort import sort_indices, sort, SortIndices
-from ...kernels.filter import take as _take
+from ...kernels.filter import TakeKernel
 from ...execution import ExecContext
 from std.utils.numerics import nan, inf, neg_inf
 
@@ -199,7 +199,7 @@ def _assert_sorted(
     var ve = n if nulls_first else n - null_count
     if ve - vs <= 1:
         return
-    var s = _take(a, idx, ExecContext.serial())
+    var s = TakeKernel.dispatch(a, idx, ExecContext.serial())
     var dt = a.dtype()
     if dt == int8:
         _check_order(s.as_int8(), vs, ve, ascending)
@@ -1053,7 +1053,7 @@ def test_sort_indices_limit() raises:
     assert_equal(_idx(idx, 1), 4)  # 2
     assert_equal(_idx(idx, 2), 1)  # 3
     # Verify the 3 selected values are in sorted order (indices refer into full a).
-    var taken = _take(a, idx, ExecContext.serial())
+    var taken = TakeKernel.dispatch(a, idx, ExecContext.serial())
     _assert_values_sorted(taken)
 
 

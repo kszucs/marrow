@@ -42,7 +42,7 @@ from ..dtypes import (
 )
 from ..errors import InvalidError, KeyError, TypeError
 from ..kernels.cast import cast
-from ..kernels.filter import take
+from ..kernels.filter import TakeKernel
 from ..schema import Schema
 from ..tabular import RecordBatch
 
@@ -349,7 +349,7 @@ def _broadcast(row: DynArray, length: Int) raises -> DynArray:
     var indices = Int32Builder(length)
     for _ in range(length):
         indices.unsafe_append(0)
-    return take(row, indices.finish())
+    return TakeKernel.dispatch(row, indices.finish())
 
 
 def _check_fields(

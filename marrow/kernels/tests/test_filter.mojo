@@ -43,7 +43,7 @@ from ...dtypes import (
     Float32Type,
 )
 from ...buffers import Bitmap
-from ...kernels.filter import FilterKernel, TakeKernel, filter, take, drop_null
+from ...kernels.filter import FilterKernel, TakeKernel
 from ...execution import ExecContext
 from ...arrays import BinaryLikeArray
 from ...builders import BinaryLikeBuilder
@@ -359,13 +359,13 @@ def test_filterstrings_length_mismatch_raises() raises:
 
 def test_filterarray_dispatch_int32() raises:
     var a: DynArray = array([10, 20, 30], int32)
-    var result = filter(a, (array([False, True, True])))
+    var result = FilterKernel.dispatch(a, (array([False, True, True])))
     assert_equal(result.length(), 2)
 
 
 def test_filterarray_dispatch_float32() raises:
     var a: DynArray = array([1, 2, 3], float32)
-    var result = filter(a, (array([True, False, True])))
+    var result = FilterKernel.dispatch(a, (array([True, False, True])))
     assert_equal(result.length(), 2)
 
 
@@ -374,14 +374,14 @@ def test_filterarray_dispatch_string() raises:
     s.append("hello")
     s.append("world")
     var a: DynArray = s.finish()
-    var result = filter(a, (array([True, False])))
+    var result = FilterKernel.dispatch(a, (array([True, False])))
     assert_equal(result.length(), 1)
 
 
 def test_filterarray_dispatch_length_mismatch_raises() raises:
     var a: DynArray = array([1, 2, 3], int32)
     with assert_raises():
-        _ = filter(a, (array([True, False])))
+        _ = FilterKernel.dispatch(a, (array([True, False])))
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +421,7 @@ def test_drop_null_empty() raises:
 
 
 def test_drop_null_untyped() raises:
-    var result = drop_null(
+    var result = FilterKernel.drop_null(
         array([None, 1, None, 3, None, 5, None, 7, None, 9], uint8).to_dyn()
     )
     assert_equal(result.length(), 5)
@@ -568,7 +568,7 @@ def _duration(var vals: List[Int]) raises -> DynArray:
 def test_filter_date32() raises:
     """Filter a date32 column — dtype preserved, values selected."""
     var a = _date32([19000, 18500, 19100, 18800])
-    var result = filter(a, (array([True, False, True, True])))
+    var result = FilterKernel.dispatch(a, (array([True, False, True, True])))
     assert_true(result.dtype() == date32().to_dyn())  # dtype preserved
     assert_equal(len(result), 3)
     ref r = result.as_date32()
@@ -580,7 +580,9 @@ def test_filter_date32() raises:
 def test_filter_timestamp_preserves_unit_tz() raises:
     """Filter a timestamp column — unit/tz preserved through the reinterpret."""
     var a = _timestamp([1000, 2000, 3000, 4000, 5000])
-    var result = filter(a, (array([False, True, False, True, True])))
+    var result = FilterKernel.dispatch(
+        a, (array([False, True, False, True, True]))
+    )
     assert_true(result.dtype() == timestamp(second, "UTC").to_dyn())
     assert_equal(len(result), 3)
     ref r = result.as_timestamp()
@@ -598,7 +600,7 @@ def test_filter_temporal_with_nulls() raises:
     b.append(Scalar[int64.native](3000))
     b.append_null()
     var a: DynArray = b.finish()
-    var result = filter(a, (array([True, True, False, True])))
+    var result = FilterKernel.dispatch(a, (array([True, True, False, True])))
     assert_equal(len(result), 3)
     assert_equal(result.null_count(), 2)
     assert_true(result.is_valid(0))
@@ -610,7 +612,7 @@ def test_filter_temporal_with_nulls() raises:
 def test_take_date32() raises:
     """Gather rows from a date32 column at arbitrary indices."""
     var a = _date32([19000, 18500, 19100, 18800])
-    var result = take(a, array([2, 0, 3, 1], int32))
+    var result = TakeKernel.dispatch(a, array([2, 0, 3, 1], int32))
     assert_true(result.dtype() == date32().to_dyn())
     assert_equal(len(result), 4)
     ref r = result.as_date32()
@@ -627,7 +629,7 @@ def test_take_duration_null_index() raises:
     idx.append(Scalar[int32.native](2))
     idx.append_null()
     idx.append(Scalar[int32.native](0))
-    var result = take(a, idx.finish())
+    var result = TakeKernel.dispatch(a, idx.finish())
     assert_true(result.dtype() == duration(second).to_dyn())
     assert_equal(result.null_count(), 1)
     assert_true(result.is_valid(0))
@@ -655,7 +657,7 @@ def test_filter_bool_array_after_primitive_narrowing() raises:
     mb.append(False)
     var mask = mb.finish()
 
-    var out = filter(arr^.to_dyn(), mask^).as_bool().copy()
+    var out = FilterKernel.dispatch(arr^.to_dyn(), mask^).as_bool().copy()
     assert_equal(len(out), 3)
     assert_true(out[0].value())
     assert_true(not out[1].value())
@@ -672,7 +674,7 @@ def test_take_bool_array_after_primitive_narrowing() raises:
     idx.append_null()
     idx.append(Scalar[int32.native](0))
     idx.append(Scalar[int32.native](3))
-    var result = take(a^, idx.finish())
+    var result = TakeKernel.dispatch(a^, idx.finish())
     assert_equal(len(result), 4)
     ref r = result.as_bool()
     assert_true(r[0].value())
@@ -727,7 +729,7 @@ def test_cross_check_temporal_pyarrow() raises:
     var pa_mask = Python.list()
     for m in mask:
         pa_mask.append(m.value())
-    var got_f = filter(a, (array(mask^)))
+    var got_f = FilterKernel.dispatch(a, (array(mask^)))
     # `pc.filter` / `pc.take` are PyArrow's own API — this is the reference side
     # of the cross-check, so it must NOT be renamed to marrow's `FilterKernel.apply`.
     # The result is cast to int64 so `as_py()` yields the epoch value that
@@ -743,7 +745,7 @@ def test_cross_check_temporal_pyarrow() raises:
     var pa_idx = Python.list()
     for k in idx:
         pa_idx.append(k.value())
-    var got_t = take(a, array(idx^, int32))
+    var got_t = TakeKernel.dispatch(a, array(idx^, int32))
     var pa_t = pc.take(pa_arr, pa.array(pa_idx)).cast(pa.int64())
     ref rt = got_t.as_timestamp()
     for i in range(len(got_t)):
@@ -754,7 +756,7 @@ def test_cross_check_temporal_pyarrow() raises:
 # Moved here from `test_join.mojo` (B23).
 #
 # These are `take` tests and belong beside the other `take` tests, but the move
-# was forced rather than tidy: calling the *erased* `take(DynArray, Int32Array)`
+# was forced rather than tidy: calling the erased `TakeKernel.dispatch`
 # from `test_join.mojo` deadlocked the Mojo compiler whenever that file was
 # selected on its own — 7 hours of wall clock against 10 s of CPU, with every
 # worker thread parked. The identical call compiles fine here. See B23 for the
@@ -765,7 +767,7 @@ def test_cross_check_temporal_pyarrow() raises:
 def test_take_primitive_basic_int32() raises:
     """Gather elements from a primitive array at given indices."""
     var a: DynArray = array([10, 20, 30, 40], int32)
-    var result = take(a.copy(), array([2, 0, 3], int32))
+    var result = TakeKernel.dispatch(a.copy(), array([2, 0, 3], int32))
     ref r = result.as_int32()
     assert_equal(r[0].value(), Scalar[int32.native](30))
     assert_equal(r[1].value(), Scalar[int32.native](10))
@@ -778,7 +780,7 @@ def test_take_null_index_produces_null_int32() raises:
     var idx = Int32Builder(capacity=2)
     idx.append_null()
     idx.append(Scalar[int32.native](1))
-    var result = take(a.copy(), idx.finish())
+    var result = TakeKernel.dispatch(a.copy(), idx.finish())
     assert_equal(result.null_count(), 1)
     assert_false(result.is_valid(0))
     assert_true(result.is_valid(1))
@@ -791,11 +793,13 @@ def test_take_out_of_bounds_raises() raises:
     var a: DynArray = array([10, 20, 30], int32)
     for bad in [3, -1, 1 << 30]:
         with assert_raises(contains="IndexError"):
-            _ = take(a.copy(), array([0, bad], int32))
+            TakeKernel.check_bounds(len(a), array([0, bad], int32))
     var idx = Int32Builder(capacity=2)
     idx.append_null()
     idx.append(Scalar[int32.native](2))
-    assert_equal(take(a.copy(), idx.finish()).null_count(), 1)
+    var indices = idx.finish()
+    TakeKernel.check_bounds(len(a), indices)
+    assert_equal(TakeKernel.dispatch(a.copy(), indices).null_count(), 1)
 
 
 def test_take_bounds_check_reads_every_valid_index() raises:
@@ -813,10 +817,10 @@ def test_take_bounds_check_reads_every_valid_index() raises:
                 for i in range(N):
                     b.append(Int32(bad) if i == pos else Int32(i))
                 if bad == N - 1:
-                    _ = take(a, b.finish(), ctx)
+                    TakeKernel.check_bounds(len(a), b.finish(), ctx)
                 else:
                     with assert_raises(contains="IndexError"):
-                        _ = take(a, b.finish(), ctx)
+                        TakeKernel.check_bounds(len(a), b.finish(), ctx)
 
         # Every seventh index is null over a payload of -1; three more rows
         # in front hold `N`, valid, and a slice past them must not see them.
@@ -841,8 +845,8 @@ def test_take_bounds_check_reads_every_valid_index() raises:
             buffer=payload.finish().buffer,
         )
         with assert_raises(contains="IndexError"):
-            _ = take(a, idx.copy(), ctx)
-        _ = take(a, idx.slice(3, N), ctx)
+            TakeKernel.check_bounds(len(a), idx.copy(), ctx)
+        TakeKernel.check_bounds(len(a), idx.slice(3, N), ctx)
 
 
 def test_take_bounds_check_past_two_billion_rows() raises:
@@ -978,7 +982,7 @@ def test_filter_null_mask_entry_is_not_selected() raises:
     # filter's dispatch ladder parks the compiler at 0% CPU with no
     # diagnostic — and the count already distinguishes the two behaviours.
     var erased: DynArray = values.copy()
-    var kept = filter(erased, mask.copy())
+    var kept = FilterKernel.dispatch(erased, mask.copy())
     assert_equal(kept.length(), 3)  # 1, 6, 2 — never the null lane
 
 
@@ -1005,7 +1009,7 @@ def _views_with_null() raises -> StringViewArray:
 def test_filter_string_view() raises:
     var src = _views_with_null()
     var mask: DynArray = array([True, True, False, True, True])
-    var out = filter(src.copy().to_dyn(), mask)
+    var out = FilterKernel.dispatch(src.copy().to_dyn(), mask.as_bool())
     assert_true(out.dtype() == string_view)
     ref v = out.as_string_view()
     assert_equal(len(v), 4)
@@ -1021,7 +1025,7 @@ def test_filter_string_view() raises:
 def test_filter_string_view_sliced() raises:
     var src = _views_with_null().slice(2, 3)
     var mask: DynArray = array([False, True, True])
-    var out = filter(src^.to_dyn(), mask)
+    var out = FilterKernel.dispatch(src^.to_dyn(), mask.as_bool())
     ref v = out.as_string_view()
     assert_equal(len(v), 2)
     assert_equal(v.null_count(), 0)
@@ -1036,7 +1040,7 @@ def test_take_string_view() raises:
     ib.append_null()
     ib.append(Int32(1))
     ib.append(Int32(2))
-    var out = take(src^.to_dyn(), ib.finish())
+    var out = TakeKernel.dispatch(src^.to_dyn(), ib.finish())
     ref v = out.as_string_view()
     assert_equal(len(v), 4)
     assert_equal(v.null_count(), 2)

@@ -77,7 +77,7 @@ from ...dtypes import (
     string,
     struct_,
 )
-from ...kernels.filter import take
+from ...kernels.filter import TakeKernel
 from ...kernels.cast import decode_dictionary
 from ...kernels.hashing import HashKernel, NULL_HASH_SENTINEL
 from ...kernels.hashtable import insert_hashes
@@ -861,7 +861,7 @@ def _assert_same_grouping(var exact: _Placed, var other: _Placed) raises:
     for c in range(len(exact.keys)):
         assert_equal(
             String(_decoded(other.keys[c])),
-            String(take(_decoded(exact.keys[c]), idx.copy())),
+            String(TakeKernel.dispatch(_decoded(exact.keys[c]), idx.copy())),
         )
 
 

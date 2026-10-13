@@ -55,7 +55,7 @@ from ..dtypes import (
 )
 from ..execution import ExecContext
 from ..errors import InvalidError, NotImplementedError
-from .filter import TakeKernel, filter
+from .filter import FilterKernel, TakeKernel
 from .boolean import NotNullKernel
 from .dictionary import DictionaryEncoder
 from ..utils import Hasher, KeyHash

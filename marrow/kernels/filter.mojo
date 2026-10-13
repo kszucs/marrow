@@ -68,6 +68,30 @@ struct FilterKernel(Kernel):
     @staticmethod
     def dispatch(
         array: DynArray,
+        mask: BoolArray,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """Filter `array`, keeping elements where `mask` is true.
+
+        **A null mask entry does not select.** That is Arrow's rule — pyarrow's
+        default `null_selection_behavior="drop"` — and SQL's: `WHERE v < 4`
+        omits the row where `v` is NULL. The comparison kernels write a data
+        bit for a null lane too, so selecting on the values alone would keep
+        rows the validity says are meaningless.
+
+        `intersect_views` rather than `intersect`: views index logically from
+        zero and owning bitmaps do not, so a sliced mask would otherwise have
+        its nulls applied `offset` positions from where they belong."""
+        if mask.null_count() == 0:
+            return Self.dispatch(array, mask.values(), ctx)
+        var selected = Bitmap.intersect_views(
+            Optional(mask.values()), mask.validity()
+        ).value()
+        return Self.dispatch(array, selected.view(), ctx)
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
         mask: BitmapView[_],
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
@@ -656,8 +680,8 @@ struct TakeKernel(Kernel):
     ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and gather it at `indices`.
 
-        Trusts its indices, as the typed `apply` leaves do: for indices the
-        caller produced. `take` checks them first.
+        Trusts its indices, as the typed `apply` leaves do: a caller holding
+        indices it did not produce runs `check_bounds` first.
         """
         var dt = array.dtype()
         if dt == bool_:
@@ -1284,61 +1308,3 @@ struct TakeKernel(Kernel):
             bitmap=bm,
             children=children^,
         )
-
-
-# ---------------------------------------------------------------------------
-# Public API — the three `pc.*` entry points. Everything typed is a method on
-# the `Filter` / `Take` kernels; adding an array type means teaching those, not
-# writing another delegator here.
-# ---------------------------------------------------------------------------
-
-
-def filter(
-    array: DynArray,
-    mask: DynArray,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> DynArray:
-    """Filter `array`, keeping elements where boolean `mask` is True.
-
-    **A null mask entry does not select.** That is Arrow's rule — pyarrow's
-    default `null_selection_behavior="drop"` — and SQL's: `WHERE v < 4` omits
-    the row where `v` is NULL.
-
-    It has to be applied here because the comparison kernels evaluate every
-    SIMD lane whatever the validity says. A null input still compares its raw
-    payload and writes a data bit; the validity bitmap is what records that
-    the bit is meaningless. Selecting on `values()` alone therefore read that
-    stray bit, which is why `v > 3` looked correct (`0 > 3` is False, so the
-    bit was clear) while `v < 4` silently returned an extra row.
-
-    `intersect_views` rather than `intersect`: views index logically from
-    zero and owning bitmaps do not, so a sliced mask would otherwise have its
-    nulls applied `offset` positions from where they belong."""
-    # Borrowed, not copied: `intersect_views` wants immutable-origin views,
-    # and an owned local would hand it a mutable one.
-    ref m = mask.as_bool()
-    if m.null_count() == 0:
-        return FilterKernel.dispatch(array, m.values(), ctx)
-    var selected = Bitmap.intersect_views(
-        Optional(m.values()), m.validity()
-    ).value()
-    return FilterKernel.dispatch(array, selected.view(), ctx)
-
-
-def take(
-    array: DynArray,
-    indices: Int32Array,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> DynArray:
-    """Gather elements of `array` at `indices` (null index -> null element).
-
-    Raises `IndexError` for a valid index outside `array`."""
-    TakeKernel.check_bounds(len(array), indices, ctx)
-    return TakeKernel.dispatch(array, indices, ctx)
-
-
-def drop_null(
-    array: DynArray, ctx: ExecContext = ExecContext.serial()
-) raises -> DynArray:
-    """Remove null elements using the validity bitmap as the selection."""
-    return FilterKernel.drop_null(array, ctx)

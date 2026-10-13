@@ -28,7 +28,7 @@ from ..errors import InvalidError, NotImplementedError
 from ..execution import ExecContext
 from ..io import DynSource
 from ..io.uri import StorageOptions
-from ..kernels.filter import filter
+from ..kernels.filter import FilterKernel
 from ..parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -276,10 +276,12 @@ struct IcebergFileReader(Movable):
                 ctx=self._ctx,
             ).combine_chunks()
             if mask:
-                var keep: DynArray = mask.value().copy()
+                ref keep = mask.value()
                 var columns = List[DynArray](capacity=batch.num_columns())
                 for i in range(batch.num_columns()):
-                    columns.append(filter(batch.column(i), keep, self._ctx))
+                    columns.append(
+                        FilterKernel.dispatch(batch.column(i), keep, self._ctx)
+                    )
                 batch = RecordBatch(batch.schema, columns^)
             return self._projection.project(batch)
         return None

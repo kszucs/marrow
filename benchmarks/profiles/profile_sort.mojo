@@ -27,7 +27,7 @@ from marrow.arrays import DynArray, Int64Array, Float64Array, PrimitiveArray
 from marrow.builders import Int64Builder, Float64Builder
 from marrow.dtypes import int64, float64, Int64Type, Float64Type, PrimitiveType
 from marrow.kernels.sort import sort_indices
-from marrow.kernels.filter import take
+from marrow.kernels.filter import TakeKernel
 
 
 # ---------------------------------------------------------------------------
@@ -131,12 +131,12 @@ def _bench_sort[T: PrimitiveType](data: PrimitiveArray[T], iters: Int) raises:
 
     # warmup
     var wi = sort_indices(arr)
-    keep(take(arr, wi))
+    keep(TakeKernel.dispatch(arr, wi))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
         var idx = sort_indices(arr)
-        var sorted = take(arr, idx)
+        var sorted = TakeKernel.dispatch(arr, idx)
         keep(idx)
         keep(sorted)
     var elapsed = perf_counter_ns() - t0

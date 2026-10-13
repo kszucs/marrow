@@ -21,7 +21,7 @@ from ...arrays import DynArray, Int32Array, StringArray, StringViewArray
 from ...builders import Int32Builder, BoolBuilder
 from ...dtypes import string, string_view
 from ...kernels.cast import cast
-from ...kernels.filter import filter, take
+from ...kernels.filter import FilterKernel, TakeKernel
 from ...kernels.hashing import RapidHashKernel
 from ...kernels.sort import SortIndices
 from ...kernels.string import LikeKernel, StringEqKernel
@@ -67,7 +67,7 @@ def _bench_filter(mut b: Benchmark, var data: StringArray, view: Bool) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(filter(arr, mask).length())
+        keep(FilterKernel.dispatch(arr, mask.as_bool()).length())
 
     b.iter(call)
     keep(arr)
@@ -98,7 +98,7 @@ def _bench_take(mut b: Benchmark, view: Bool) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(take(arr, idx).length())
+        keep(TakeKernel.dispatch(arr, idx).length())
 
     b.iter(call)
     keep(arr)

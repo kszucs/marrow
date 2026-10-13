@@ -22,9 +22,6 @@ from marrow.errors import InvalidError
 from marrow.dtypes import DynType, bool_, int32
 import marrow.kernels as mk
 
-# ``mk.filter`` collides with the like-named submodule, so the package alias
-# resolves to the submodule rather than the function. Import it directly.
-from marrow.kernels.filter import filter as _filter_kernel
 from marrow.kernels.boolean import IsNullKernel, NotNullKernel
 from marrow.execution import ExecContext
 from marrow.utils.threads import ThreadPool
@@ -162,7 +159,7 @@ def _sort(
     )
     # `sort_indices` answers a *typed* `Int32Array`, so it needs `to_dyn`
     # above; `take` over an erased input already answers a `DynArray`.
-    return mk.take(values, indices, context).to_python_object()
+    return mk.TakeKernel.dispatch(values, indices, context).to_python_object()
 
 
 def _take(
@@ -176,8 +173,10 @@ def _take(
     # index type, and an abort is not a diagnosis.
     if not idx.dtype().is_int32():
         idx = mk.cast(idx, DynType(int32), True, context)
-    return mk.take(
-        DynArray(py=array), idx.as_int32().copy(), context
+    var values = DynArray(py=array)
+    mk.TakeKernel.check_bounds(len(values), idx.as_int32(), context)
+    return mk.TakeKernel.dispatch(
+        values, idx.as_int32().copy(), context
     ).to_python_object()
 
 
@@ -193,6 +192,12 @@ def _cast(
         Bool(py=safe),
         ExecContext(py=ctx),
     ).to_python_object()
+
+
+def _filter(
+    array: DynArray, mask: DynArray, ctx: ExecContext
+) raises -> DynArray:
+    return mk.FilterKernel.dispatch(array, mask.as_bool(), ctx)
 
 
 def _divide(
@@ -263,8 +268,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_reduce[mk.AllKernel.aggregate]()]("all")
     mb.def_function[_unary[IsNullKernel.dispatch]()]("is_null")
     mb.def_function[_unary[NotNullKernel.dispatch]()]("is_valid")
-    mb.def_function[_unary[mk.drop_null]()]("drop_null")
-    mb.def_function[_binary[_filter_kernel]()]("filter")
+    mb.def_function[_unary[mk.FilterKernel.drop_null]()]("drop_null")
+    mb.def_function[_binary[_filter]()]("filter")
     mb.def_function[_binary[mk.EqKernel[nan_safe=False].dispatch]()]("equal")
     mb.def_function[_binary[mk.NeKernel[nan_safe=False].dispatch]()](
         "not_equal"

@@ -26,7 +26,6 @@ from ..builders import (
 from ..dtypes import *
 from ..buffers import Buffer
 from ..buffers import Bitmap
-from ..kernels.filter import drop_null
 
 from std.reflection import call_location
 

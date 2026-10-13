@@ -24,7 +24,7 @@ from ...builders import array
 from ...dtypes import DynType, Field, FIELD_ID_KEY, float64, int32, int64
 from ...dtypes import date32, string
 from ...io import FileSink
-from ...kernels.filter import take
+from ...kernels.filter import TakeKernel
 from ...parquet import ParquetFile, RowSelection, write_table
 from ...parquet.compression import Compression
 from ...parquet.writer import FileWriter
@@ -137,7 +137,7 @@ def _assert_rows(
     for i in range(got.num_columns()):
         _assert_same(
             got.column(i),
-            take(expected.column(i), picked),
+            TakeKernel.dispatch(expected.column(i), picked),
             got.column_names()[i],
         )
 

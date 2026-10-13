@@ -180,6 +180,6 @@ from .distinct import (
     count_distinct,
     approx_count_distinct,
 )
-from .filter import FilterKernel, TakeKernel, filter, drop_null, take
+from .filter import FilterKernel, TakeKernel
 from .membership import IsInKernel, is_in
 from .sort import SortIndices, sort_indices, sort

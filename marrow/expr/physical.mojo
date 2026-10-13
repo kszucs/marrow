@@ -54,7 +54,7 @@ from ..dtypes import Field, field, null, struct_
 from ..kernels.aggregate import AggKernel, Windowable
 from ..kernels.conditional import case_when
 from ..execution import ExecContext
-from ..kernels.filter import TakeKernel, filter
+from ..kernels.filter import FilterKernel, TakeKernel
 from ..kernels.groupby import Groups
 from ..kernels.dictionary import DictionaryEncoder
 from ..dtypes import DynType
@@ -638,7 +638,9 @@ struct FilterOperator(Operator):
             return None
         var mask = produced.value().to_array(len(batch))
         var out = (
-            filter(batch.copy().to_dyn(), mask.copy(), self._ctx)
+            FilterKernel.dispatch(
+                batch.copy().to_dyn(), mask.as_bool(), self._ctx
+            )
             .as_struct()
             .copy()
         )
@@ -2051,13 +2053,15 @@ def compact_to_admitted(
         offset=0,
         bitmap=None,
         buffer=admitted_bits(predicate.push(morsel).value().to_array(rows)),
-    ).to_dyn()
+    )
     if not groups.is_single():
         var ids = (
-            filter(groups.ids.copy().to_dyn(), keep.copy()).as_int32().copy()
+            FilterKernel.dispatch(groups.ids.copy().to_dyn(), keep)
+            .as_int32()
+            .copy()
         )
         groups = Groups(ids^, groups.num_groups)
-    column = filter(column, keep^)
+    column = FilterKernel.dispatch(column, keep)
 
 
 trait FrameEvaluator(Deinitable, Movable):
