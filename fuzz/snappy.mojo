@@ -38,13 +38,16 @@ def _decoded[
 
 
 def fuzz_one(data: Span[UInt8, _]) raises:
-    var declared = -1
+    # A length the preamble cannot spell, or one its bytes cannot hold, is
+    # refused before anything is allocated: a reject, not a finding.
+    var length: Optional[Int] = None
     try:
-        declared = Snappy.uncompressed_length(data)
+        length = Snappy.content_length(data)
     except:
         pass
-    if declared < 0 or declared > Snappy.max_decompressed_length(len(data)):
+    if not length:
         return
+    var declared = length.value()
     var native = _decoded[True](data, declared)
 
     if declared <= MAX_DIFFERENTIAL:

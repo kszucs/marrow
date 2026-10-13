@@ -150,11 +150,12 @@ fields can trip it; holding them behind an `ArcPointer` is the known fix.
 dispatch helper** (`_dispatch`, `_dispatch_mut`, `dispatch_*`) since nightly
 `dev2026092905`. `precompile` passes; the instantiation fails with *"struct
 '…::f::__storage' does not have witness table for trait '__mojo_closure__'"*.
-Spelling `-> None` does not help; returning a value does, so the 21 affected
+Spelling `-> None` does not help; returning a value does, so the affected
 closures (the boxes' `write_to`/`write_repr_to`, `DynBuilder`'s mutators,
-`KeyCompare`'s family arms, the Parquet writer's encoders, `SchemaNode`'s
-list slot and `DynCodec`'s `inverse`/`encode`/`decode`) return a dummy `Bool`
-that their call sites discard. Revert once upstream fixes it. Reproducer:
+`KeyCompare`'s family arms, the Parquet writer's encoders and `SchemaNode`'s
+list slot) return a dummy `Bool` that their call sites discard. The codecs
+are `Codec` conformers composed by `Cascade` and dispatch through no such
+closure. Revert once upstream fixes it. Reproducer:
 
 ```mojo
 from std.utils import Variant
@@ -1376,6 +1377,10 @@ differentiator hiding inside a table-stakes item.
     wrong for a multi-gigabyte file on an object store.
   - **No `AvroScan`** in `marrow.expr`, and `AvroFile` does not implement
     `BatchReader`, so a plan cannot scan Avro.
+  - **A zstd block allocates its declared size up front**, bounded only by
+    `Zstd.max_decompressed_length` (32,768 times the block), as Parquet and
+    IPC do. That is an allocation amplification a hostile file can use; a
+    cap with a streaming fallback past it would close it.
   - **The Iceberg layer itself** -- the manifest-list / manifest model,
     field-id projection and evolution over the decoded tables, and
     `Index.from_iceberg_manifest` beside `Index.from_parquet`

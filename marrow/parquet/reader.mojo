@@ -684,6 +684,15 @@ def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
     )
 
 
+def _check_int96(span: Span[UInt8, _], count: Int) raises:
+    """Refuse a page or dictionary whose `count` INT96 values do not fit in
+    `span`, before `_int96_nanos` reads them."""
+    if count * 12 > len(span):
+        raise CorruptError(
+            "parquet: an INT96 page holds fewer values than it says"
+        )
+
+
 trait LeafBuilder(Deinitable, Movable):
     """Accumulates the values of a column chunk, page by page, into an array."""
 
@@ -1348,7 +1357,9 @@ struct Int96LeafBuilder(LeafBuilder):
         if is_dict:
             idx = List[Int32]()
             Rle.read_codes[DType.int32](vspan, page.num_present, idx)
-        elif not page.is_plain():
+        elif page.is_plain():
+            _check_int96(vspan, page.num_present)
+        else:
             raise NotImplementedError("parquet: unsupported INT96 encoding")
 
         def place(
@@ -1368,6 +1379,7 @@ struct Int96LeafBuilder(LeafBuilder):
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
             var span = page.body
+            _check_int96(span, page.num_values)
             for i in range(page.num_values):
                 self.dict.append(_int96_nanos(span, i * 12))
         else:
@@ -1940,6 +1952,7 @@ struct _Int96Sink(LeveledSink, Movable):
     var builder: PrimitiveBuilder[dt.Int64Type]
 
     def handle_dict(mut self, pg: Page) raises:
+        _check_int96(pg.body, pg.num_values)
         for i in range(pg.num_values):
             self.dict.append(_int96_nanos(pg.body, i * 12))
 
@@ -1952,6 +1965,7 @@ struct _Int96Sink(LeveledSink, Movable):
             for i in range(pg.num_present):
                 self.present.append(self.dict[Int(idx[i])])
         elif pg.is_plain():
+            _check_int96(vspan, pg.num_present)
             for i in range(pg.num_present):
                 self.present.append(_int96_nanos(vspan, i * 12))
         else:

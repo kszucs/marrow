@@ -191,11 +191,20 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
     var _header: _Header
     var _avro: AvroSchema
     var _codec: AvroCodec
+    var _native_codecs: Bool
+    """Whether compressed blocks decode in Mojo, the default, or through
+    libsnappy and libzstd."""
 
-    def __init__(out self: AvroFile[BufferSource], path: String) raises:
-        self = AvroFile[BufferSource](BufferSource(path))
+    def __init__(
+        out self: AvroFile[BufferSource],
+        path: String,
+        native_codecs: Bool = True,
+    ) raises:
+        self = AvroFile[BufferSource](BufferSource(path), native_codecs)
 
-    def __init__(out self, var source: Self.S) raises:
+    def __init__(
+        out self, var source: Self.S, native_codecs: Bool = True
+    ) raises:
         var header = _read_header(source)
         var schema = header.metadata.get(SCHEMA_KEY)
         if not schema:
@@ -209,6 +218,7 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
             self._codec = AvroCodec.parse(
                 StringSlice(from_utf8=Span(codec.value()))
             )
+        self._native_codecs = native_codecs
         self._header = header^
         self._source = source^
 
@@ -259,7 +269,9 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
             start,
         )
         while blocks.next():
-            var records = self._codec.decompress(blocks.data)
+            var records = self._codec.decompress(
+                blocks.data, self._native_codecs
+            )
             _decode_block(decoder, records, blocks.count)
             if decoder.rows() >= batch_size:
                 batches.append(decoder.finish())
@@ -333,6 +345,9 @@ struct AvroWriter[S: ByteSink = FileSink](Movable):
     """Where the file goes; a `MemorySink`'s bytes are `out.sink().bytes()`."""
     var _encoder: RecordEncoder
     var _codec: AvroCodec
+    var _native_codecs: Bool
+    """Whether blocks compress in Mojo, the default, or through libsnappy and
+    libzstd."""
     var _sync: List[UInt8]
     var _block: AvroBytes
     var _rows: Int
@@ -344,19 +359,29 @@ struct AvroWriter[S: ByteSink = FileSink](Movable):
         path: String,
         schema: Schema,
         codec: AvroCodec = AvroCodec.DEFLATE,
+        native_codecs: Bool = True,
     ) raises:
         """A file at `path` with the Avro form of `schema`."""
-        self = AvroWriter[FileSink](FileSink(path), schema, codec)
+        self = AvroWriter[FileSink](
+            FileSink(path), schema, codec, native_codecs
+        )
 
     def __init__(
         out self,
         var sink: Self.S,
         schema: Schema,
         codec: AvroCodec = AvroCodec.DEFLATE,
+        native_codecs: Bool = True,
     ) raises:
         """A file in `sink` with the Avro form of `schema`, whose metadata is
         written into the header."""
-        self = Self(sink^, from_arrow(schema), codec, schema.metadata)
+        self = Self(
+            sink^,
+            from_arrow(schema),
+            codec,
+            schema.metadata,
+            native_codecs=native_codecs,
+        )
 
     def __init__(
         out self,
@@ -365,6 +390,7 @@ struct AvroWriter[S: ByteSink = FileSink](Movable):
         codec: AvroCodec = AvroCodec.DEFLATE,
         metadata: Dict[String, String] = {},
         sync_interval: Int = DEFAULT_SYNC_INTERVAL,
+        native_codecs: Bool = True,
     ) raises:
         """A file in `sink` of `avro` records, with `metadata` in its header
         beside `avro.schema` and `avro.codec`."""
@@ -373,6 +399,7 @@ struct AvroWriter[S: ByteSink = FileSink](Movable):
         self.out = BufferedSink(sink^)
         self._encoder = RecordEncoder(avro)
         self._codec = codec
+        self._native_codecs = native_codecs
         self._sync = List[UInt8](capacity=SYNC_SIZE)
         for _ in range(SYNC_SIZE // 8):
             LittleEndian.append[DType.uint64](
@@ -415,7 +442,9 @@ struct AvroWriter[S: ByteSink = FileSink](Movable):
         if self._rows == 0:
             return
         # A block: its record count, its byte size, the bytes, the sync marker.
-        var body = self._codec.compress(self._block.written())
+        var body = self._codec.compress(
+            self._block.written(), self._native_codecs
+        )
         var head = AvroBytes()
         head.long(Int64(self._rows))
         head.long(Int64(len(body)))
@@ -438,10 +467,12 @@ def read_avro(
     uri: String,
     columns: Optional[List[String]] = None,
     options: StorageOptions = StorageOptions(),
+    native_codecs: Bool = True,
 ) raises -> Table:
     """Read an Avro object container file at `uri` -- a local path or any URI
-    `DynSource` opens -- into a `Table`, optionally just `columns`."""
-    var f = AvroFile[DynSource](DynSource.open(uri, options))
+    `DynSource` opens -- into a `Table`, optionally just `columns`. Without
+    `native_codecs`, libsnappy and libzstd decompress the blocks."""
+    var f = AvroFile[DynSource](DynSource.open(uri, options), native_codecs)
     return f.read(columns)
 
 
@@ -450,9 +481,13 @@ def write_avro(
     uri: String,
     codec: AvroCodec = AvroCodec.DEFLATE,
     options: StorageOptions = StorageOptions(),
+    native_codecs: Bool = True,
 ) raises:
     """Write `table` to `uri` as an Avro object container file. The table's
-    schema metadata goes into the file header."""
-    var w = AvroWriter[DynSink](DynSink.open(uri, options), table.schema, codec)
+    schema metadata goes into the file header. Without `native_codecs`,
+    libsnappy and libzstd compress the blocks."""
+    var w = AvroWriter[DynSink](
+        DynSink.open(uri, options), table.schema, codec, native_codecs
+    )
     w.write(table)
     w.close()

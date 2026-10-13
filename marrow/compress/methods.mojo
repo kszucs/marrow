@@ -75,8 +75,10 @@ struct Method(Equatable, ImplicitlyCopyable, Movable, Writable):
             writer.write("lz4_frame")
         elif c == 7:
             writer.write("lz4_hadoop")
-        else:
+        elif c == 8:
             writer.write("zstd")
+        else:
+            writer.write("unknown(", c, ")")
 
     def _unsupported(self) -> NotImplementedError:
         return NotImplementedError(t"{self} compression is not supported here")

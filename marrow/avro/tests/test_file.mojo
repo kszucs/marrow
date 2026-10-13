@@ -406,6 +406,21 @@ def test_avro_write_roundtrip_under_each_codec() raises:
             )
 
 
+def test_avro_write_and_read_through_the_libraries() raises:
+    """`native_codecs=False` writes and reads zstd and snappy blocks through
+    libzstd and libsnappy, and marrow's own codecs read what they wrote."""
+    var py = _roundtrip_table()
+    for codec in [AvroCodec.SNAPPY, AvroCodec.ZSTANDARD]:
+        with ScratchDir() as tmp:
+            var path = join(tmp, "t.avro")
+            write_avro(_to_marrow(py), path, codec, native_codecs=False)
+            for native in [False, True]:
+                var back = _to_pyarrow(read_avro(path, native_codecs=native))
+                assert_true(Bool(back.equals(py)), String(codec, ": ", native))
+            var file = AvroFile(path, native_codecs=False)
+            assert_true(Bool(_to_pyarrow(file.read()).equals(py)))
+
+
 def test_avro_codec_native_and_library() raises:
     """Each codec's blocks decode whichever of marrow's codec or the system
     library wrote them."""

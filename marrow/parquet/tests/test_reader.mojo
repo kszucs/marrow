@@ -943,6 +943,58 @@ def test_read_int96_timestamp() raises:
         assert_equal(col[2].value(), 2000000000 + 500)
 
 
+def _int96_overcounted(path: String, use_dictionary: Bool) raises:
+    """Write 100 required INT96 timestamps to `path`, then raise the count in
+    the page header holding their bytes (the dictionary page, or the data page
+    without one) from 100 to 1000, leaving the body as it was."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var bi = Python.import_module("builtins")
+    var ts = Python.list()
+    for i in range(100):
+        ts.append(i * 1000000000)
+    var field = pa.field("t", pa.timestamp("ns"), nullable=False)
+    var tbl = pa.table(
+        Python.list(pa.array(ts, type=pa.timestamp("ns"))),
+        schema=pa.schema(Python.list(field)),
+    )
+    pq.write_table(
+        tbl,
+        path,
+        compression="none",
+        use_dictionary=use_dictionary,
+        write_statistics=False,
+        use_deprecated_int96_timestamps=True,
+    )
+    var f = bi.open(path, "rb")
+    var raw = f.read()
+    f.close()
+    # The thrift compact header: the nested page header struct (field 5 for a
+    # data page, field 7 for a dictionary page), then its i32 field 1,
+    # num_values, as a zigzag varint -- 100 is 0xC8 0x01, 1000 is 0xD0 0x0F.
+    var tag = 0x4C if use_dictionary else 0x2C
+    var count = bi.bytes(Python.list(tag, 0x15, 0xC8, 0x01))
+    assert_equal(Int(py=raw.count(count)), 1)
+    raw = raw.replace(count, bi.bytes(Python.list(tag, 0x15, 0xD0, 0x0F)))
+    f = bi.open(path, "wb")
+    _ = f.write(raw)
+    f.close()
+
+
+def test_read_int96_refuses_an_overcounted_page() raises:
+    """An INT96 data page or dictionary page whose header counts more values
+    than its body holds is refused as corrupt rather than read past."""
+    with ScratchDir() as dir:
+        var plain = join(dir, "marrow_int96_plain_overcount.parquet")
+        _int96_overcounted(plain, use_dictionary=False)
+        with assert_raises(contains="CorruptError"):
+            _ = read_table(plain)
+        var dict = join(dir, "marrow_int96_dict_overcount.parquet")
+        _int96_overcounted(dict, use_dictionary=True)
+        with assert_raises(contains="CorruptError"):
+            _ = read_table(dict)
+
+
 def test_read_float16() raises:
     # FLOAT16 = FIXED_LEN_BYTE_ARRAY(2) + FLOAT16 logical -> Arrow halffloat.
     var pa = Python.import_module("pyarrow")

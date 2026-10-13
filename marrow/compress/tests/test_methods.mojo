@@ -95,6 +95,12 @@ def test_utils_method_decompress_unsized() raises:
     assert_true(refused)
 
 
+def test_utils_method_names() raises:
+    assert_true(String(Method.ZSTD) == "zstd")
+    assert_true(String(Method.LZ4_HADOOP) == "lz4_hadoop")
+    assert_true(String(Method(9)) == "unknown(9)")
+
+
 def test_utils_method_outside_the_list_is_refused() raises:
     var data = words(1000)
     var packed = _compress_all(Method.SNAPPY, True, data)
