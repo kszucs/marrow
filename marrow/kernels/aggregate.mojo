@@ -1142,6 +1142,48 @@ trait Foldable(AggKernel):
         `count` rows — the ungrouped path's once-per-morsel hand-off."""
         ...
 
+    def fold_frames(
+        mut self,
+        leaves: List[FoldPartial[Self.Lane, Self.Acc]],
+        extents: WindowExtents,
+        frame: WindowFrame,
+    ) raises:
+        """Fold each row `j`'s frame, `extents.frame(j, frame)`, of `leaves`
+        into slot `j`.
+
+        Each frame comes from the previous one where it can and from a
+        `SegmentTree` where it cannot; no row is ever subtracted. A frame
+        sharing the previous start extends the running fold by the rows it
+        adds, and one starting at or past the previous stop restarts it: frames
+        are monotone, so both total O(n) and cover cumulative frames, peer
+        groups and whole partitions without a tree. Only a frame overlapping
+        the previous one from a later start is a range query, O(log n). Answers
+        go through `reserve` and `combine_at`, so `finish` applies `finalize`
+        and `empty_is_null` exactly as in a `GROUP BY`.
+        """
+        comptime P = FoldPartial[Self.Lane, Self.Acc]
+        self.reserve(len(extents))
+        var tree: Optional[SegmentTree[P]] = None
+        var run = P.identity()
+        var prev_lo = 0
+        var prev_hi = 0
+        for j in range(len(extents)):
+            var lo, hi = extents.frame(j, frame)
+            if j > 0 and lo == prev_lo and hi >= prev_hi:
+                for i in range(prev_hi, hi):
+                    run = P.combine(run, leaves[i])
+            elif j == 0 or lo >= prev_hi:
+                run = P.identity()
+                for i in range(lo, hi):
+                    run = P.combine(run, leaves[i])
+            else:
+                if not tree:
+                    tree = SegmentTree(leaves)
+                run = tree.value().query(lo, hi)
+            self.combine_at(j, run.acc, run.count)
+            prev_lo = lo
+            prev_hi = hi
+
 
 # ---------------------------------------------------------------------------
 # Windowable — an aggregate over many overlapping row ranges at once.
@@ -1189,51 +1231,6 @@ struct FoldPartial[K: FoldKernel, A: DType](Monoid):
     @staticmethod
     def combine(a: Self, b: Self) -> Self:
         return Self(Self.K.combine[Self.A, 1](a.acc, b.acc), a.count + b.count)
-
-
-def fold_frames[
-    F: Foldable
-](
-    mut agg: F,
-    leaves: List[FoldPartial[F.Lane, F.Acc]],
-    extents: WindowExtents,
-    frame: WindowFrame,
-) raises:
-    """Fold each row `j`'s frame, `extents.frame(j, frame)`, of `leaves` into
-    slot `j` of `agg`.
-
-    Each frame comes from the previous one where it can and from a
-    `SegmentTree` where it cannot; no row is ever subtracted. A frame sharing
-    the previous start extends the running fold by the rows it adds, and one
-    starting at or past the previous stop restarts it: frames are monotone, so
-    both total O(n) and cover cumulative frames, peer groups and whole
-    partitions without a tree. Only a frame overlapping the previous one from a
-    later start is a range query, O(log n). Answers go through `reserve` and
-    `combine_at`, so `finish` applies `finalize` and `empty_is_null` exactly as
-    in a `GROUP BY`.
-    """
-    comptime P = FoldPartial[F.Lane, F.Acc]
-    agg.reserve(len(extents))
-    var tree: Optional[SegmentTree[P]] = None
-    var run = P.identity()
-    var prev_lo = 0
-    var prev_hi = 0
-    for j in range(len(extents)):
-        var lo, hi = extents.frame(j, frame)
-        if j > 0 and lo == prev_lo and hi >= prev_hi:
-            for i in range(prev_hi, hi):
-                run = P.combine(run, leaves[i])
-        elif j == 0 or lo >= prev_hi:
-            run = P.identity()
-            for i in range(lo, hi):
-                run = P.combine(run, leaves[i])
-        else:
-            if not tree:
-                tree = SegmentTree(leaves)
-            run = tree.value().query(lo, hi)
-        agg.combine_at(j, run.acc, run.count)
-        prev_lo = lo
-        prev_hi = hi
 
 
 struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
@@ -1372,7 +1369,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     def over(
         input: Self.InArray, extents: WindowExtents, frame: WindowFrame
     ) raises -> Self.OutArray:
-        """`fold_frames` over the column's rows, a null folding as the
+        """`Foldable.fold_frames` over the column's rows, a null folding as the
         identity."""
         comptime P = FoldPartial[Self.Lane, Self.Acc]
         var values = input.values()
@@ -1385,7 +1382,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
                 if not valid[i]:
                     leaves[i] = P.identity()
         var agg = Self(input.type())
-        fold_frames(agg, leaves, extents, frame)
+        agg.fold_frames(leaves, extents, frame)
         return agg.finish()
 
 

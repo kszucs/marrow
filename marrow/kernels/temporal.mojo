@@ -129,47 +129,62 @@ def _clock(dt: DynType) raises -> Optional[WallClock]:
 
 
 def _shift[
-    to_utc: Bool
-](clock: WallClock, array: DynArray, var to: DynType) raises -> DynArray:
+    T: TemporalType, to_utc: Bool
+](
+    clock: WallClock, array: PrimitiveArray[T], to: DynType
+) raises -> PrimitiveArray[T]:
     """Every tick of a timestamp array moved onto `clock`, or off it with
     `to_utc`, typed `to`."""
-    var data = array.to_data()
-    var n = data.length
-    var out = Buffer.alloc_uninit[DType.int64](n)
-    var dst = out.view[DType.int64](0, n)
-    var src = data.buffers[0].view[DType.int64](data.offset, n)
+    var n = len(array)
+    var out = Buffer.alloc_uninit[T.native](n)
+    var dst = out.view[T.native](0, n)
+    var src = array.values()
     for i in range(n):
         var raw = Int(src.unsafe_get(i))
         comptime if to_utc:
             raw = clock.to_utc(raw)
         else:
             raw = clock.to_local(raw)
-        dst.unsafe_set(i, Int64(raw))
-    return DynArray.from_data(
-        ArrayData(
-            like=data,
-            dtype=to^,
-            buffers=[out.to_immutable()],
-        )
+        dst.unsafe_set(i, Scalar[T.native](raw))
+    return PrimitiveArray[T](
+        like=array, dtype=to.as_type[T]().copy(), buffer=out^.to_immutable()
     )
 
 
-@no_inline
-def localise(array: DynArray) raises -> DynArray:
+struct LocalTimestampKernel(Kernel):
     """A zoned timestamp's wall-clock times, as a naive timestamp of the same
-    unit — what every field extractor reads. Any other array comes back as
-    itself, an O(1) copy.
+    unit — what every field extractor reads.
+    Any other temporal array comes back as itself, an O(1) copy.
 
-    The extractors' `dispatch` and the expression nodes call this on the erased
-    array; the typed `apply[T]` overloads read the values as they are, UTC for
-    a zoned timestamp."""
-    var dt = array.dtype()
-    var clock = _clock(dt)
-    if not clock:
+    The extractors' `dispatch` and the expression nodes call this before the
+    typed field loop, which reads the values as they are, UTC for a zoned
+    timestamp."""
+
+    comptime name = "local_timestamp"
+
+    @staticmethod
+    def apply[
+        T: TemporalType
+    ](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+        comptime if one_of[TimestampType][T]:
+            var dt = array.type()
+            var clock = _clock(dt)
+            if clock:
+                return _shift[T, False](
+                    clock.value(),
+                    array,
+                    DynType(TimestampType(dt.as_timestamp().unit)),
+                )
         return array.copy()
-    return _shift[False](
-        clock.value(), array, DynType(TimestampType(dt.as_timestamp().unit))
-    )
+
+    @staticmethod
+    def dispatch(array: DynArray) raises -> DynArray:
+        """The typed `apply` for `array`'s temporal dtype."""
+
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T]()).to_dyn()
+
+        return array.dtype().dispatch_temporal(leaf)
 
 
 comptime DATES = one_of[Date32Type, Date64Type, TimestampType]
@@ -195,7 +210,7 @@ def _extract[
         not _is_zoned(dt),
         (
             "_extract: a zoned timestamp reaches the typed loop; call"
-            " localise first"
+            " LocalTimestampKernel first"
         ),
     )
 
@@ -247,7 +262,9 @@ trait TemporalExtractKernel(Kernel):
         admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
+            return Self.apply(
+                LocalTimestampKernel.apply(array.as_primitive[T]())
+            ).to_dyn()
 
         return array.dtype().dispatch_temporal(leaf)
 
@@ -609,7 +626,7 @@ def _extract64[
         not _is_zoned(dt),
         (
             "_extract64: a zoned timestamp reaches the typed loop; call"
-            " localise first"
+            " LocalTimestampKernel first"
         ),
     )
 
@@ -658,7 +675,9 @@ trait TemporalExtract64Kernel(Kernel):
         admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
+            return Self.apply(
+                LocalTimestampKernel.apply(array.as_primitive[T]())
+            ).to_dyn()
 
         return array.dtype().dispatch_temporal(leaf)
 
@@ -794,7 +813,9 @@ struct LastDayKernel(Kernel):
         admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
+            return Self.apply(
+                LocalTimestampKernel.apply(array.as_primitive[T]())
+            ).to_dyn()
 
         return array.dtype().dispatch_temporal(leaf)
 
@@ -873,7 +894,7 @@ def _extract_name[
         not _is_zoned(dt),
         (
             "_extract_name: a zoned timestamp reaches the typed loop; call"
-            " localise first"
+            " LocalTimestampKernel first"
         ),
     )
 
@@ -915,7 +936,9 @@ trait TemporalNameKernel(Kernel):
         admits; a zoned timestamp is read on its wall clock."""
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
-            return Self.apply(localise(array).as_primitive[T]()).to_dyn()
+            return Self.apply(
+                LocalTimestampKernel.apply(array.as_primitive[T]())
+            ).to_dyn()
 
         return array.dtype().dispatch_temporal(leaf)
 
@@ -975,14 +998,8 @@ struct AssumeTimezoneKernel(Kernel):
             # A naive timestamp is already read as UTC: nothing moves.
             return ConvertTimezoneKernel.apply(array, zone)
         var clock = WallClock(WallClock.load_zone(zone), _unit_tps(ts.unit))
-        return (
-            _shift[True](
-                clock,
-                array.copy().to_dyn(),
-                DynType(TimestampType(ts.unit, zone)),
-            )
-            .as_primitive[T]()
-            .copy()
+        return _shift[T, True](
+            clock, array, DynType(TimestampType(ts.unit, zone))
         )
 
     @staticmethod

@@ -20,6 +20,7 @@ from ..arrays import Int32Array, UInt64Array
 from ..buffers import Buffer
 from ..dtypes import int32, uint64
 from ..execution import ExecContext
+from ..views import BufferView
 
 
 comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
@@ -27,58 +28,116 @@ comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
 dispatch + per-thread histogram overhead would dominate."""
 
 
-def radix_histogram[
-    BucketOf: def(Int) -> Int
-](
-    n: Int,
-    num_buckets: Int,
-    bucket_of: BucketOf,
-    ctx: ExecContext,
-    min_parallel_size: Int = _MIN_PARALLEL_PARTITION_ROWS,
-) -> Tuple[List[Int], List[Int]]:
-    """One counting/radix pass' histogram + partition-major prefix sum.
+struct RadixHistogram[mut: Bool, //, origin: Origin[mut=mut]](Movable):
+    """One counting pass of a radix scatter over 64-bit keys: how many keys
+    hold each value of one bit field, prefix-summed into a write cursor per
+    (stripe, digit) — the shared front half of the radix *sort* and the radix
+    *partitioner*. Column-oriented, no atomics.
 
-    Buckets ``n`` items (``bucket_of(i)`` gives item ``i``'s bucket in
-    ``[0, num_buckets)``) with per-thread histograms, then prefix-sums them into
-    per-thread write cursors — the shared front half of the radix *sort* and the
-    radix *partitioner* (only the scatter payload differs, so that stays with
-    each caller). Column-oriented, no atomics.
+    A key's digit is its ``bits`` bits starting at bit ``shift``; there are
+    ``2**bits`` digits. ``scatter`` then hands every key its destination,
+    digit by digit and, within a digit, in key order.
 
-    Returns ``(write_offsets, bucket_start)``:
-    - ``write_offsets[t * num_buckets + b]`` — where thread ``t`` starts writing
-      bucket ``b``. Each ``(t, b)`` owns a disjoint slot, so the caller's scatter
-      mutates this in place as a cursor without synchronization.
-    - ``bucket_start[b]`` — global start of bucket ``b`` (``bucket_start[0]==0``,
-      ``bucket_start[num_buckets]==n``); ``bucket_start[b+1]-bucket_start[b]`` is
-      bucket ``b``'s size.
-
-    The returned ``write_offsets`` is indexed by stripe, so the caller's scatter
-    **must** stripe the same way: call ``ctx.stripe_workers(n, min_parallel_size)``
-    with this same ``min_parallel_size``. Disagree and the scatter reads a cursor
-    belonging to another stripe, which duplicates and drops rows rather than
-    failing — see the coverage assertions in ``test_partition.mojo``.
+    The cursors are indexed by stripe, so the count and the scatter must
+    stripe the keys identically or the scatter duplicates and drops keys
+    rather than failing. The histogram therefore keeps the ``ctx`` and
+    ``min_parallel_size`` it counted with and drives the scatter through the
+    same ``ctx.stripe``.
     """
-    var num_threads = ctx.stripe_workers(n, min_parallel_size)
-    var hist = List[Int](length=num_threads * num_buckets, fill=0)
 
-    @always_inline
-    def hist_worker(t: Int, start: Int, end: Int) {mut hist, imm}:
-        var base = t * num_buckets
-        for i in range(start, end):
-            hist[base + bucket_of(i)] += 1
+    var _keys: BufferView[DType.uint64, Self.origin]
+    var _shift: UInt64
+    var _mask: UInt64
+    var _cursors: List[Int]
+    """Where stripe ``t`` starts writing digit ``d``, at
+    ``t * num_digits + d``; each slot is disjoint."""
+    var _starts: List[Int]
+    """Where digit ``d`` starts, ``num_digits + 1`` entries ending at the key
+    count."""
+    var _ctx: ExecContext
+    var _min_parallel_size: Int
 
-    ctx.stripe(n, hist_worker, min_parallel_size)
+    def __init__(
+        out self,
+        keys: BufferView[DType.uint64, Self.origin],
+        shift: Int,
+        bits: Int,
+        ctx: ExecContext,
+        min_parallel_size: Int = _MIN_PARALLEL_PARTITION_ROWS,
+    ):
+        self._keys = keys
+        self._shift = UInt64(shift)
+        self._mask = UInt64((1 << bits) - 1)
+        self._ctx = ctx.copy()
+        self._min_parallel_size = min_parallel_size
 
-    var write_offsets = List[Int](length=num_threads * num_buckets, fill=0)
-    var bucket_start = List[Int](length=num_buckets + 1, fill=0)
-    var running = 0
-    for b in range(num_buckets):
-        bucket_start[b] = running
-        for t in range(num_threads):
-            write_offsets[t * num_buckets + b] = running
-            running += hist[t * num_buckets + b]
-    bucket_start[num_buckets] = running
-    return (write_offsets^, bucket_start^)
+        var n = len(keys)
+        var num_digits = 1 << bits
+        var num_threads = ctx.stripe_workers(n, min_parallel_size)
+        var hist = List[Int](length=num_threads * num_digits, fill=0)
+        var key_shift = self._shift
+        var key_mask = self._mask
+
+        @always_inline
+        def hist_worker(t: Int, start: Int, end: Int) {mut hist, imm}:
+            var base = t * num_digits
+            for i in range(start, end):
+                hist[
+                    base + Int((keys.unsafe_get(i) >> key_shift) & key_mask)
+                ] += 1
+
+        ctx.stripe(n, hist_worker, min_parallel_size)
+
+        self._cursors = List[Int](length=num_threads * num_digits, fill=0)
+        self._starts = List[Int](length=num_digits + 1, fill=0)
+        var running = 0
+        for d in range(num_digits):
+            self._starts[d] = running
+            for t in range(num_threads):
+                self._cursors[t * num_digits + d] = running
+                running += hist[t * num_digits + d]
+        self._starts[num_digits] = running
+
+    def num_digits(self) -> Int:
+        """How many digit values there are: ``2**bits``."""
+        return len(self._starts) - 1
+
+    def digit_start(self, d: Int) -> Int:
+        """Where the keys with digit ``d`` start in the scattered order."""
+        return self._starts[d]
+
+    def digit_count(self, d: Int) -> Int:
+        """How many keys have digit ``d``."""
+        return self._starts[d + 1] - self._starts[d]
+
+    def distinct_digits(self) -> Int:
+        """How many digit values occur among the keys."""
+        var count = 0
+        for d in range(self.num_digits()):
+            if self.digit_count(d) > 0:
+                count += 1
+        return count
+
+    def scatter[Place: def(Int, UInt64, Int) -> None](self, place: Place):
+        """Call ``place(i, key, pos)`` once per key: ``key`` is key ``i`` and
+        ``pos`` its destination."""
+        var cursors = self._cursors.copy()
+        var num_digits = self.num_digits()
+        var keys = self._keys
+        var key_shift = self._shift
+        var key_mask = self._mask
+
+        @always_inline
+        def scatter_worker(t: Int, start: Int, end: Int) {mut cursors, imm}:
+            var base = t * num_digits
+            for i in range(start, end):
+                var key = keys.unsafe_get(i)
+                var slot = base + Int((key >> key_shift) & key_mask)
+                var pos = cursors[slot]
+                place(i, key, pos)
+                cursors[slot] = pos + 1
+
+        self._ctx.stripe(len(keys), scatter_worker, self._min_parallel_size)
 
 
 # ---------------------------------------------------------------------------
@@ -180,23 +239,10 @@ struct RadixPartitioner(Movable):
         var bits = self.num_bits
         var src = hashes.values()
 
-        # The histogram and the scatter both index `write_offsets` by stripe, so
-        # they must stripe identically. What guarantees that is passing the same
-        # `(ctx, _MIN_PARALLEL_PARTITION_ROWS)` pair to both — `stripe_workers`
-        # and `stripe` agree by construction given equal arguments, and
-        # `test_partition.mojo` asserts the row coverage that would break first
-        # if they ever drifted.
-
-        # 1-2. Histogram rows by top-bit partition id + prefix-sum into per-thread
-        # write cursors (shared with the radix sort, cf. ``radix_histogram``).
-        def bucket_of(i: Int) {imm} -> Int:
-            return Self.partition_of(UInt64(src.load[1](i)), bits)
-
-        var offsets = radix_histogram(
-            n, p, bucket_of, self.ctx, _MIN_PARALLEL_PARTITION_ROWS
+        # 1-2. Histogram rows by their top `bits` hash bits.
+        var histogram = RadixHistogram(
+            src, 64 - bits, bits, self.ctx, _MIN_PARALLEL_PARTITION_ROWS
         )
-        var write_offsets = offsets[0].copy()
-        var partition_offsets = offsets[1].copy()  # bucket_start
 
         # 3. Allocate the two flat buffers (N rows total each).
         var row_buf = Buffer.alloc_uninit[int32.native](n)
@@ -204,27 +250,13 @@ struct RadixPartitioner(Movable):
         var row_view = row_buf.view[int32.native](0, n)
         var hash_view = hash_buf.view[uint64.native](0, n)
 
-        # 4. Parallel scatter — each thread scans its chunk and writes
-        # into its precomputed per-partition slots.  No cross-thread
-        # contention: every thread ``t`` owns indices ``t * p .. (t+1) * p``
-        # of ``write_offsets`` exclusively, so we mutate that array in
-        # place as the cursor — avoiding a per-worker ``List[Int]``
-        # allocation (each alloc contends on tcmalloc's page heap
-        # spinlock, which showed up as ~11% of worker time in profiling).
+        # 4. Parallel scatter of every row and its hash into its partition.
         @always_inline
-        def scatter_worker(
-            t: Int, start: Int, end: Int
-        ) {mut write_offsets, imm}:
-            var base = t * p
-            for i in range(start, end):
-                var h = UInt64(src.load[1](i))
-                var pid = Self.partition_of(h, bits)
-                var pos = write_offsets[base + pid]
-                row_view.store[1](pos, Int32(i))
-                hash_view.store[1](pos, h)
-                write_offsets[base + pid] = pos + 1
+        def place(i: Int, h: UInt64, pos: Int) {imm}:
+            row_view.store[1](pos, Int32(i))
+            hash_view.store[1](pos, h)
 
-        self.ctx.stripe(n, scatter_worker, _MIN_PARALLEL_PARTITION_ROWS)
+        histogram.scatter(place)
 
         # 5. Freeze buffers once, then expose per-partition slices via
         # ref-counted shares (ArcPointer bumps — O(1)).
@@ -233,8 +265,8 @@ struct RadixPartitioner(Movable):
 
         var result = List[Partition](capacity=p)
         for pid in range(p):
-            var off = partition_offsets[pid]
-            var sz = partition_offsets[pid + 1] - off
+            var off = histogram.digit_start(pid)
+            var sz = histogram.digit_count(pid)
             var row_arr = Int32Array(
                 length=sz,
                 nulls=0,

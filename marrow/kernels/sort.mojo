@@ -71,7 +71,7 @@ from ..utils.integers import ordered
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 from .filter import TakeKernel
-from .partition import radix_histogram
+from .partition import RadixHistogram
 
 
 comptime _RADIX_THRESHOLD: Int = 32_768
@@ -181,61 +181,34 @@ struct KeySort[bits: Int]:
         `_PARALLEL_THRESHOLD` rows the histogram and the scatter run per thread,
         into disjoint slots.
         """
-        comptime bucket_count = 1 << _BITS_PER_PASS
         var keys_b = Buffer.alloc_uninit[DType.uint64](n)
         var rows_b = Buffer.alloc_uninit[DType.int32](n)
 
-        # The histogram and the scatter below index `write_offsets` by stripe, so
-        # both must stripe identically — same `ctx`, same `_PARALLEL_THRESHOLD`.
         for pass_ in range(Self.passes):
-            var shift = UInt64(pass_ * _BITS_PER_PASS)
             # The last pass may cover fewer than _BITS_PER_PASS bits.
-            var bits_this_pass = min(
-                Self.bits - pass_ * _BITS_PER_PASS, _BITS_PER_PASS
+            var histogram = RadixHistogram(
+                keys.view[DType.uint64](0, n),
+                pass_ * _BITS_PER_PASS,
+                min(Self.bits - pass_ * _BITS_PER_PASS, _BITS_PER_PASS),
+                ctx,
+                _PARALLEL_THRESHOLD,
             )
-            var mask = UInt64((1 << bits_this_pass) - 1)
 
-            var kh = keys.view[DType.uint64](0, n)
-
-            def bucket_of(i: Int) {imm} -> Int:
-                return Int((kh.unsafe_get(i) >> shift) & mask)
-
-            var offsets = radix_histogram(
-                n, bucket_count, bucket_of, ctx, _PARALLEL_THRESHOLD
-            )
-            var write_offsets = offsets[0].copy()
-            ref bucket_start = offsets[1]
-
-            # One non-empty bucket: every key shares these bits, so the pass
-            # would not move anything.
-            var non_zero = 0
-            for b in range(bucket_count):
-                if bucket_start[b + 1] > bucket_start[b]:
-                    non_zero += 1
-                    if non_zero > 1:
-                        break
-            if non_zero <= 1:
+            # One digit value: every key shares these bits, so the pass would
+            # not move anything.
+            if histogram.distinct_digits() <= 1:
                 continue
 
-            var ka = keys.view[DType.uint64](0, n)
             var ra = rows.view[DType.int32](0, n)
             var kb = keys_b.view[DType.uint64](0, n)
             var rb = rows_b.view[DType.int32](0, n)
 
             @always_inline
-            def scatter_worker(
-                t: Int, start: Int, end: Int
-            ) {mut write_offsets, imm}:
-                var base = t * bucket_count
-                for i in range(start, end):
-                    var key = ka.unsafe_get(i)
-                    var b = Int((key >> shift) & mask)
-                    var pos = write_offsets[base + b]
-                    kb.unsafe_set(pos, key)
-                    rb.unsafe_set(pos, ra.unsafe_get(i))
-                    write_offsets[base + b] = pos + 1
+            def place(i: Int, key: UInt64, pos: Int) {imm}:
+                kb.unsafe_set(pos, key)
+                rb.unsafe_set(pos, ra.unsafe_get(i))
 
-            ctx.stripe(n, scatter_worker, _PARALLEL_THRESHOLD)
+            histogram.scatter(place)
 
             var tmp_keys = keys^
             keys = keys_b^

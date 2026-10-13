@@ -87,7 +87,7 @@ from ..dtypes import (
     binary,
 )
 from .core import Kernel
-from .temporal import localise, ticks_per_second
+from .temporal import LocalTimestampKernel, ticks_per_second
 from ..utils import (
     CivilDate,
     Epoch,
@@ -945,7 +945,7 @@ struct TemporalCastKernel(CastArm):
         dropping the time of day for a date is the conversion itself and never
         raises."""
         var src = array.dtype()
-        var local = localise(array)
+        var local = LocalTimestampKernel.dispatch(array)
         var data = local.to_data()
         var ns_from = Self.ns_per_tick(src)
         var per_day = Int64(Epoch.NANOS_PER_DAY) // ns_from

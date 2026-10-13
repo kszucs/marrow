@@ -47,13 +47,13 @@ from ...kernels.temporal import (
     AssumeTimezoneKernel,
     CalendarUnit,
     ConvertTimezoneKernel,
-    localise,
     DateTruncKernel,
     DayKernel,
     DayNameKernel,
     EpochKernel,
     IsoYearKernel,
     LastDayKernel,
+    LocalTimestampKernel,
     MonthNameKernel,
     TemporalExtract64Kernel,
     TemporalNameKernel,
@@ -129,8 +129,10 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
         # bound *is* the column: `Self.A.Bound` is opaque at this point —
         # declared `Copyable & Deinitable` — so it cannot be handed to a kernel
         # that wants a `PrimitiveArray`. Only the family's `Type` projects.
-        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
-        return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return Self.K.apply(
+            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        )
 
     @always_inline
     def lane[
@@ -235,8 +237,10 @@ struct TemporalExtract64[K: TemporalExtract64Kernel, A: TemporalValue](
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
-        return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return Self.K.apply(
+            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        )
 
     @always_inline
     def lane[
@@ -283,8 +287,10 @@ struct LastDay[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
-        return LastDayKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return LastDayKernel.apply(
+            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        )
 
     @always_inline
     def lane[
@@ -322,8 +328,10 @@ struct TemporalName[K: TemporalNameKernel, A: TemporalValue](
     # -- StringValue --------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var t = localise(self.a.evaluate(batch, bindings).to_array(len(batch)))
-        return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return Self.K.apply(
+            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+        )
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         # `_extract_name` appends a null for a null input, so the bound column

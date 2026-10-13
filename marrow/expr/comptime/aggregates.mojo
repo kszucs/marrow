@@ -50,7 +50,6 @@ from ...kernels.aggregate import (
     Foldable,
     FoldPartial,
     Windowable,
-    fold_frames,
     CountFold,
     DecimalMeanFold,
     DecimalSumFold,
@@ -700,7 +699,7 @@ struct FoldEvaluator[Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing](
     """A fused fold over every window frame of one batch: the frame leaves
     come straight from the operand's lanes — `bind` once, `lane[1]` per row,
     `FILTER` as a validity mask — with no intermediate column, and
-    `fold_frames` answers each frame.
+    `Foldable.fold_frames` answers each frame.
 
     The window counterpart of `RegisterAggregateOperator`.
     """
@@ -751,7 +750,7 @@ struct FoldEvaluator[Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing](
                 if not bits[i]:
                     leaves[i] = Leaf.identity()
         var agg = Self.Agg(self._in_dtype)
-        fold_frames(agg, leaves, extents, self._frame)
+        agg.fold_frames(leaves, extents, self._frame)
         return agg.finish().to_dyn()
 
 
