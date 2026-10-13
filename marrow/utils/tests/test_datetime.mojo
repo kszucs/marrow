@@ -16,13 +16,25 @@ against the proleptic Gregorian calendar Arrow C++ and arrow-rs assume.
 
 from std.testing import assert_equal, assert_false, assert_true
 
+from std.testing import assert_raises
+
 from ..datetime import (
+    CalendarUnit,
     CivilDate,
     Epoch,
     floor_div,
     Iso8601,
+    iso_week_thursday,
     split_days,
     truncate_div,
+    unit_day,
+    unit_minute,
+    unit_month,
+    unit_quarter,
+    unit_second,
+    unit_year,
+    weekday,
+    weekday_name,
 )
 
 
@@ -102,6 +114,74 @@ def test_civil_date_start_of_quarter_for_every_month() raises:
         got += String(CivilDate(2021, m, 28).start_of_quarter().month)
         got += ","
     assert_equal(got, "1,1,1,4,4,4,7,7,7,10,10,10,")
+
+
+def test_civil_date_end_of_month() raises:
+    """February comes from the calendar, not a table of month lengths."""
+    assert_true(CivilDate(2020, 2, 3).end_of_month() == CivilDate(2020, 2, 29))
+    assert_true(CivilDate(2100, 2, 3).end_of_month() == CivilDate(2100, 2, 28))
+    assert_true(
+        CivilDate(2021, 12, 9).end_of_month() == CivilDate(2021, 12, 31)
+    )
+
+
+def test_civil_date_month_name() raises:
+    assert_equal(String(CivilDate(2021, 1, 5).month_name()), "January")
+    assert_equal(String(CivilDate(2021, 12, 5).month_name()), "December")
+
+
+def test_weekday_is_monday_zero() raises:
+    """1970-01-01 was a Thursday; the days before it keep counting back."""
+    assert_equal(weekday(0), 3)
+    assert_equal(weekday(-3), 0)
+    assert_equal(weekday(-4), 6)
+    assert_equal(weekday(CivilDate(2021, 1, 4).to_days()), 0)
+    assert_equal(String(weekday_name(weekday(0))), "Thursday")
+    assert_equal(String(weekday_name(6)), "Sunday")
+
+
+def test_iso_week_thursday_names_the_iso_year() raises:
+    """2021-01-01 is a Friday in ISO week 53 of 2020, and 2019-12-30 a Monday
+    in week 1 of 2020."""
+    var fri = CivilDate(2021, 1, 1).to_days()
+    assert_true(
+        CivilDate.from_days(iso_week_thursday(fri)) == CivilDate(2020, 12, 31)
+    )
+    var mon = CivilDate(2019, 12, 30).to_days()
+    assert_true(
+        CivilDate.from_days(iso_week_thursday(mon)) == CivilDate(2020, 1, 2)
+    )
+
+
+def test_calendar_unit_floor_fixed_units() raises:
+    """Seconds ticks, 86,400 a day; a pre-epoch tick floors into the unit
+    that holds it."""
+    assert_equal(unit_minute.floor(125, 86_400), 120)
+    assert_equal(unit_minute.floor(-1, 86_400), -60)
+    assert_equal(unit_day.floor(86_401, 86_400), 86_400)
+    # Milliseconds: one second is 1,000 ticks.
+    assert_equal(unit_second.floor(1_500, 86_400_000), 1_000)
+    # A day count cannot be floored finer than a day.
+    assert_equal(unit_second.floor(17, 1), 17)
+
+
+def test_calendar_unit_floor_calendar_units() raises:
+    var d = CivilDate(2021, 8, 17).to_days()
+    assert_equal(unit_month.floor(d, 1), CivilDate(2021, 8, 1).to_days())
+    assert_equal(unit_quarter.floor(d, 1), CivilDate(2021, 7, 1).to_days())
+    assert_equal(unit_year.floor(d, 1), CivilDate(2021, 1, 1).to_days())
+    # The middle of the day in seconds lands on the first of the month.
+    var noon = d * 86_400 + 43_200
+    assert_equal(
+        unit_month.floor(noon, 86_400), CivilDate(2021, 8, 1).to_days() * 86_400
+    )
+
+
+def test_calendar_unit_parse() raises:
+    assert_true(CalendarUnit.parse("quarter") == unit_quarter)
+    assert_equal(String(unit_month), "month")
+    with assert_raises(contains="unsupported unit"):
+        _ = CalendarUnit.parse("fortnight")
 
 
 def test_civil_date_writes_iso_8601() raises:

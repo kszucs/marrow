@@ -40,10 +40,9 @@ arm did not accept. ``CastArm``'s docstring has the detail.
 """
 
 from std.collections.string import atol, atof, StringSlice
-from std.collections.string._utf8 import _is_valid_utf8
 from std.math import trunc
 from std.memory import bitcast
-from std.sys import bit_width_of, simd_width_of
+from std.sys import bit_width_of
 
 from ..arrays import (
     DynArray,
@@ -91,11 +90,15 @@ from .temporal import LocalTimestampKernel, ticks_per_second
 from ..utils import (
     CivilDate,
     Epoch,
+    decimal_bound,
     float_to_decimal,
+    format_decimal,
     floor_div,
+    parse_decimal,
     split_days,
     truncate_div,
     TimestampFormat,
+    Utf8,
 )
 from ..execution import ExecContext
 from ..errors import InternalError, InvalidError, NotImplementedError, TypeError
@@ -326,20 +329,6 @@ struct NumericCastKernel(CastArm):
 # runtime on every path.
 
 
-def _digit_bound[T: DType](precision: Int) -> Scalar[T]:
-    """`10^precision` — the first unscaled magnitude a decimal of `precision`
-    digits cannot represent — or 0 for `precision` 0, which is how a
-    non-decimal target spells "no digit bound".
-
-    The storage-width checks either side of this one bound the *backing
-    integer*; a decimal also bounds the *digits*, and the two are different
-    limits. Without it `cast(x, decimal128(5, 0), safe=True)` returns a
-    21-digit value labelled as five digits, where Arrow C++ raises through
-    `Decimal128::FitsInPrecision`.
-    """
-    return pow(Scalar[T](10), precision) if precision > 0 else Scalar[T](0)
-
-
 def _map_decimal[
     FromN: DType,
     ToN: DType,
@@ -402,7 +391,7 @@ def _rescale_up[
     var lo = Scalar[ToN].MIN // f
     if Scalar[ToN].MIN % f != 0:
         lo += 1
-    var digits = _digit_bound[ToN](precision)
+    var digits = decimal_bound[ToN](precision)
 
     def up(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
         var v = x.cast[ToN]()
@@ -433,7 +422,7 @@ def _rescale_down[
     """Integer-divide by 10^-delta, narrowing the scale. Shared by
     `DecimalRescaleKernel` and `DecimalToIntKernel`."""
     var f = pow(Scalar[FromN](10), -delta)
-    var digits = _digit_bound[ToN](precision)
+    var digits = decimal_bound[ToN](precision)
 
     def down(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
         var r = x % f
@@ -1335,41 +1324,9 @@ struct BoolToStringKernel(CastArm):
 
 struct DecimalToStringKernel(CastArm):
     """Format a decimal array to text, every declared fractional digit kept —
-    see `format`."""
+    see `format_decimal`."""
 
     comptime name = "decimal_to_string"
-
-    @staticmethod
-    def format[N: DType](value: Scalar[N], scale: Int) -> String:
-        """`value` read at `scale`, as Arrow C++'s `ToString` renders it.
-
-        Every fractional digit the scale declares is written, trailing zeros
-        included — `150` at scale 2 is `1.50`, never `1.5` — because the scale is
-        part of the value's type and a reader of the text should be able to see
-        it. A magnitude below one keeps its leading `0`, so `-5` at scale 2 is
-        `-0.05`.
-
-        Built from the integer's own text rather than by dividing by `10^scale`,
-        which is what keeps the most negative value right: its magnitude does not
-        fit the signed type, but its digits do.
-        """
-        var text = String(value)
-        var negative = value < 0
-        var digits = text[byte= 1 if negative else 0:]
-        var out = String("-") if negative else String()
-        var n = digits.byte_length()
-        if scale <= 0:
-            out += digits
-        elif n <= scale:
-            out += "0."
-            for _ in range(scale - n):
-                out += "0"
-            out += digits
-        else:
-            out += digits[byte = 0 : n - scale]
-            out += "."
-            out += digits[byte = n - scale :]
-        return out^
 
     @staticmethod
     def dispatch(
@@ -1392,132 +1349,27 @@ struct DecimalToStringKernel(CastArm):
     def apply[
         From: DecimalType, To: StringLikeType
     ](array: PrimitiveArray[From]) raises -> BinaryLikeArray[To]:
-        """Formats in `WideDecimalType`'s integer, so `format` is
+        """Formats in `WideDecimalType`'s integer, so `format_decimal` is
         instantiated for two widths rather than four."""
         comptime Wide = WideDecimalType[From.native].native
         var scale = array.dtype.scale()
         var b = BinaryLikeBuilder[To](len(array))
         for i in range(len(array)):
             if array.is_valid(i):
-                b.append(Self.format(array.unsafe_get(i).cast[Wide](), scale))
+                b.append(
+                    format_decimal(array.unsafe_get(i).cast[Wide](), scale)
+                )
             else:
                 b.append_null()
         return b.finish()
 
 
 struct StringToDecimalKernel(CastArm):
-    """Parse text to a decimal — see `parse`. ``safe`` as
+    """Parse text to a decimal — see `parse_decimal`. ``safe`` as
     `StringToNumKernel`: raise on a value that does not parse or fit, or null
     it."""
 
     comptime name = "string_to_decimal"
-
-    @staticmethod
-    def parse[
-        N: DType
-    ](
-        text: StringSlice, digits: Int, bound: Scalar[N], scale: Int
-    ) raises InvalidError -> Scalar[N]:
-        """Parse `text` as a decimal of `scale`, unscaled, in `N`.
-
-        Arrow C++'s grammar: an optional sign, digits with at most one `.`, and an
-        optional exponent — `+1.5`, `.5`, `5.`, `1.5e-1` are all accepted, and
-        whitespace is not. The parsed value is rescaled to `scale` exactly: a
-        digit the scale cannot hold raises rather than rounding (`1.555` is not a
-        `decimal(10, 2)`), and so does a magnitude of `bound` (`10^precision`) or
-        more.
-
-        Overflow cannot happen silently. Leading zeros are not counted, and a
-        value with more than `digits` significant digits raises before the next
-        one is accumulated; `N` holds `digits` of them with a digit to spare, so
-        `10 * acc + d` always fits.
-        """
-        var b = text.as_bytes()
-        var n = len(b)
-        var negative, i = Self._sign(b, 0)
-        var acc = Scalar[N](0)
-        var significant = 0
-        var fraction = 0
-        var seen_dot = False
-        var seen_digit = False
-        while i < n:
-            var c = Int(b[i])
-            if c >= ord("0") and c <= ord("9"):
-                seen_digit = True
-                if acc != 0 or c != ord("0"):
-                    significant += 1
-                    if significant > digits:
-                        raise InvalidError(
-                            t"decimal: '{text}' has too many digits"
-                        )
-                acc = acc * 10 + Scalar[N](c - ord("0"))
-                if seen_dot:
-                    fraction += 1
-            elif c == ord(".") and not seen_dot:
-                seen_dot = True
-            elif c == ord("e") or c == ord("E"):
-                break
-            else:
-                raise InvalidError(t"decimal: '{text}' is not a decimal number")
-            i += 1
-        if not seen_digit:
-            raise InvalidError(t"decimal: '{text}' is not a decimal number")
-
-        var delta = scale - fraction
-        if i < n:
-            delta += Self._exponent(text, i + 1, digits)
-        if acc == 0:
-            return acc
-        elif delta >= 0:
-            if significant + delta > digits:
-                raise InvalidError(t"decimal: '{text}' is out of range")
-            acc *= pow(Scalar[N](10), delta)
-        elif -delta > digits:
-            raise InvalidError(
-                t"decimal: rescaling '{text}' would cause data loss"
-            )
-        else:
-            var f = pow(Scalar[N](10), -delta)
-            if acc % f != 0:
-                raise InvalidError(
-                    t"decimal: rescaling '{text}' would cause data loss"
-                )
-            acc //= f
-        if acc >= bound:
-            raise InvalidError(t"decimal: '{text}' does not fit its precision")
-        return -acc if negative else acc
-
-    @staticmethod
-    def _sign(b: Span[Byte, _], i: Int) -> Tuple[Bool, Int]:
-        """An optional `+` or `-` at `b[i]`: whether it negates, and the index
-        after it."""
-        if i < len(b) and Int(b[i]) == ord("-"):
-            return (True, i + 1)
-        elif i < len(b) and Int(b[i]) == ord("+"):
-            return (False, i + 1)
-        return (False, i)
-
-    @staticmethod
-    def _exponent(
-        text: StringSlice, start: Int, digits: Int
-    ) raises InvalidError -> Int:
-        """The signed exponent after an `e`, which begins at `start`. Bounded by
-        `2 * digits` so a runaway exponent is an error, not an overflowing `Int`.
-        """
-        var b = text.as_bytes()
-        var negative, i = Self._sign(b, start)
-        if i >= len(b):
-            raise InvalidError(t"decimal: '{text}' is not a decimal number")
-        var exponent = 0
-        while i < len(b):
-            var c = Int(b[i])
-            if c < ord("0") or c > ord("9"):
-                raise InvalidError(t"decimal: '{text}' is not a decimal number")
-            exponent = exponent * 10 + (c - ord("0"))
-            if exponent > 2 * digits:
-                raise InvalidError(t"decimal: '{text}' is out of range")
-            i += 1
-        return -exponent if negative else exponent
 
     @staticmethod
     def dispatch(
@@ -1543,10 +1395,10 @@ struct StringToDecimalKernel(CastArm):
         array: BinaryLikeArray[From], to: To, safe: Bool
     ) raises -> PrimitiveArray[To]:
         """Parses in `WideDecimalType`'s integer and narrows, so
-        `parse` is instantiated for two widths rather than four; the
+        `parse_decimal` is instantiated for two widths rather than four; the
         precision bound keeps every accepted value inside `To`."""
         comptime Wide = WideDecimalType[To.native].native
-        var bound = _digit_bound[Wide](to.precision())
+        var bound = decimal_bound[Wide](to.precision())
         var scale = to.scale()
         var b = PrimitiveBuilder[To](to, len(array))
         for i in range(len(array)):
@@ -1555,7 +1407,7 @@ struct StringToDecimalKernel(CastArm):
                 continue
             var v: Scalar[Wide]
             try:
-                v = Self.parse[Wide](
+                v = parse_decimal[Wide](
                     array.unsafe_get(UInt(i)), To.max_precision, bound, scale
                 )
             except e:
@@ -1565,96 +1417,6 @@ struct StringToDecimalKernel(CastArm):
                 continue
             b.append(v.cast[To.native]())
         return b.finish()
-
-
-def _all_ascii(window: BufferView[DType.uint8, _]) -> Bool:
-    """True when every byte in `window` is < 0x80.
-
-    ASCII is a subset of UTF-8 that is closed under slicing, so an all-ASCII
-    buffer makes every element of *any* offset layout over it valid UTF-8 —
-    which is what lets `BinaryLikeCastKernel._check_utf8` skip both its offset scan
-    and its per-element loop.
-
-    Four accumulators, reduced once per 4 KiB chunk. The accumulators are for
-    throughput — the loop is a pure load-and-OR chain, latency-bound on one
-    accumulator and bandwidth-bound on enough of them to cover the load-to-use
-    distance. The chunking is for the *failure* case: a caller that gets False
-    goes on to do more work over the same bytes, so bailing within 4 KiB of the
-    first non-ASCII byte is what keeps this probe from costing a wasted pass
-    over the whole buffer.
-    """
-    comptime W = simd_width_of[DType.uint8]()
-    comptime CHUNK = 4096  # a whole multiple of 4 * W on every target here
-    var n = len(window)
-    var base = 0
-
-    while base < n:
-        var stop = min(base + CHUNK, n)
-        var acc0 = SIMD[DType.uint8, W](0)
-        var acc1 = SIMD[DType.uint8, W](0)
-        var acc2 = SIMD[DType.uint8, W](0)
-        var acc3 = SIMD[DType.uint8, W](0)
-
-        var i = base
-        while i + 4 * W <= stop:
-            acc0 |= window.load[W](i)
-            acc1 |= window.load[W](i + W)
-            acc2 |= window.load[W](i + 2 * W)
-            acc3 |= window.load[W](i + 3 * W)
-            i += 4 * W
-        while i + W <= stop:
-            acc0 |= window.load[W](i)
-            i += W
-
-        var tail = UInt8(0)
-        while i < stop:
-            tail |= window.unsafe_get(i)
-            i += 1
-
-        if ((((acc0 | acc1) | (acc2 | acc3)).reduce_or() | tail) & 0x80) != 0:
-            return False
-        base = stop
-
-    return True
-
-
-def _validate_utf8_window(window: BufferView[DType.uint8, _]) -> Bool:
-    """Validate `window` as UTF-8, skipping runs of pure-ASCII blocks.
-
-    The reason this exists rather than one `_is_valid_utf8` call over the whole
-    window: on the columns that motivated this code the bytes are *mostly*
-    ASCII but not entirely. ClickBench's `URL` is 4.5% non-ASCII by byte, and
-    those bytes are clustered — 92.7% of 16-byte blocks are pure ASCII. A
-    single call pays the slow validator's per-byte throughput on all of it; this
-    pays it only on the blocks that actually contain a multi-byte sequence.
-
-    The block skipping is safe because of where the region boundaries land. A
-    pure-ASCII block cannot contain any part of a multi-byte sequence, so no
-    sequence can straddle one: the byte after a skipped block is a character
-    start, and so is the byte at the window start. Every region handed to
-    `_is_valid_utf8` therefore begins and ends on a character boundary and can
-    be validated independently of its neighbours.
-    """
-    comptime W = simd_width_of[DType.uint8]()
-    var n = len(window)
-    var i = 0
-
-    while i < n:
-        if i + W <= n and (window.load[W](i) & 0x80).reduce_or() == 0:
-            i += W
-        else:
-            var start = i
-            while i < n:
-                if i + W <= n and (window.load[W](i) & 0x80).reduce_or() == 0:
-                    break
-                if i + W <= n:
-                    i += W
-                else:
-                    i = n
-            if not _is_valid_utf8(window[start:i].as_span()):
-                return False
-
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1764,15 +1526,15 @@ struct BinaryLikeCastKernel(CastArm):
         )
         var window = array.values.view[DType.uint8](start, end - start)
 
-        if _all_ascii(window):
+        if Utf8.is_ascii(window):
             return
-        if _validate_utf8_window(window) and Self._starts_on_boundaries(
+        if Utf8.is_valid(window) and Self._starts_on_boundaries(
             array, start, end
         ):
             return
 
         for i in range(len(array)):
-            if array.is_valid(i) and not _is_valid_utf8(
+            if array.is_valid(i) and not Utf8.is_valid(
                 array.unsafe_get(UInt(i)).as_bytes()
             ):
                 raise InvalidError(
@@ -2147,7 +1909,7 @@ struct ViewCastKernel(CastArm):
     def _check_utf8[A: BytesArray](array: A) raises:
         """Reject an array holding invalid UTF-8 in any non-null element."""
         for i in range(len(array)):
-            if array.is_valid(i) and not _is_valid_utf8(
+            if array.is_valid(i) and not Utf8.is_valid(
                 array.unsafe_get(UInt(i)).as_bytes()
             ):
                 raise InvalidError(

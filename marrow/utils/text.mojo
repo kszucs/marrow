@@ -13,7 +13,12 @@ overall match, and capture groups come from the NFA's
 group above 0 and a `\\N` replacement reach the second path.
 """
 
+from std.collections.string._utf8 import _is_valid_utf8
+from std.sys import simd_width_of
+
 from regex.matcher import CompiledRegex, Match
+
+from ..views import BufferView
 
 
 # Token sentinels for a compiled LIKE pattern. Non-negative tokens are literal
@@ -126,6 +131,106 @@ struct Utf8:
                 return i
             i += 1
         return -1
+
+    @staticmethod
+    def is_ascii(window: BufferView[DType.uint8, _]) -> Bool:
+        """True when every byte in `window` is < 0x80.
+
+        ASCII is a subset of UTF-8 that is closed under slicing, so an all-ASCII
+        buffer makes every element of *any* offset layout over it valid UTF-8 —
+        which is what lets a caller validating an offsets layout skip both its offset scan
+        and its per-element loop.
+
+        Four accumulators, reduced once per 4 KiB chunk. The accumulators are for
+        throughput — the loop is a pure load-and-OR chain, latency-bound on one
+        accumulator and bandwidth-bound on enough of them to cover the load-to-use
+        distance. The chunking is for the *failure* case: a caller that gets False
+        goes on to do more work over the same bytes, so bailing within 4 KiB of the
+        first non-ASCII byte is what keeps this probe from costing a wasted pass
+        over the whole buffer.
+        """
+        comptime W = simd_width_of[DType.uint8]()
+        comptime CHUNK = 4096  # a whole multiple of 4 * W on every target here
+        var n = len(window)
+        var base = 0
+
+        while base < n:
+            var stop = min(base + CHUNK, n)
+            var acc0 = SIMD[DType.uint8, W](0)
+            var acc1 = SIMD[DType.uint8, W](0)
+            var acc2 = SIMD[DType.uint8, W](0)
+            var acc3 = SIMD[DType.uint8, W](0)
+
+            var i = base
+            while i + 4 * W <= stop:
+                acc0 |= window.load[W](i)
+                acc1 |= window.load[W](i + W)
+                acc2 |= window.load[W](i + 2 * W)
+                acc3 |= window.load[W](i + 3 * W)
+                i += 4 * W
+            while i + W <= stop:
+                acc0 |= window.load[W](i)
+                i += W
+
+            var tail = UInt8(0)
+            while i < stop:
+                tail |= window.unsafe_get(i)
+                i += 1
+
+            if (
+                (((acc0 | acc1) | (acc2 | acc3)).reduce_or() | tail) & 0x80
+            ) != 0:
+                return False
+            base = stop
+
+        return True
+
+    @staticmethod
+    def is_valid(window: BufferView[DType.uint8, _]) -> Bool:
+        """Validate `window` as UTF-8, skipping runs of pure-ASCII blocks.
+
+        The reason this exists rather than one `is_valid` over a span call over the whole
+        window: on the columns that motivated this code the bytes are *mostly*
+        ASCII but not entirely. ClickBench's `URL` is 4.5% non-ASCII by byte, and
+        those bytes are clustered — 92.7% of 16-byte blocks are pure ASCII. A
+        single call pays the slow validator's per-byte throughput on all of it; this
+        pays it only on the blocks that actually contain a multi-byte sequence.
+
+        The block skipping is safe because of where the region boundaries land. A
+        pure-ASCII block cannot contain any part of a multi-byte sequence, so no
+        sequence can straddle one: the byte after a skipped block is a character
+        start, and so is the byte at the window start. Every region handed to
+        `is_valid` over a span therefore begins and ends on a character boundary and can
+        be validated independently of its neighbours.
+        """
+        comptime W = simd_width_of[DType.uint8]()
+        var n = len(window)
+        var i = 0
+
+        while i < n:
+            if i + W <= n and (window.load[W](i) & 0x80).reduce_or() == 0:
+                i += W
+            else:
+                var start = i
+                while i < n:
+                    if (
+                        i + W <= n
+                        and (window.load[W](i) & 0x80).reduce_or() == 0
+                    ):
+                        break
+                    if i + W <= n:
+                        i += W
+                    else:
+                        i = n
+                if not Self.is_valid(window[start:i].as_span()):
+                    return False
+
+        return True
+
+    @staticmethod
+    def is_valid(bytes: Span[Byte, _]) -> Bool:
+        """Whether `bytes` is well-formed UTF-8."""
+        return _is_valid_utf8(bytes)
 
     @staticmethod
     def charset_has(chars: StringSlice, s: StringSlice, a: Int, b: Int) -> Bool:

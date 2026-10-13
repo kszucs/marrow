@@ -30,7 +30,7 @@ from ...kernels.string import (
     LikeKernel,
     ILikeKernel,
 )
-from ...utils import LikePattern
+from ...utils import LikePattern, Utf8
 
 
 def _broadcast(pat: String, n: Int) raises -> StringArray:
@@ -565,3 +565,31 @@ def test_like_pattern_with_a_truncated_sequence() raises:
     var escaped: List[UInt8] = [0x5C, 0xE2]
     var esc = LikePattern[False](StringSlice(unsafe_from_utf8=Span(escaped)))
     assert_false(esc.matches("b"))
+
+
+def _bytes_of(text: String) raises -> StringArray:
+    """One-row array holding `text`, whose `values` buffer is its bytes."""
+    var b = StringBuilder()
+    b.append(text)
+    return b.finish()
+
+
+def test_utf8_window_scans() raises:
+    """`is_ascii` and the windowed `is_valid` over buffers wider than one
+    SIMD vector, with the non-ASCII byte past the first vector."""
+    var ascii = String("a") * 100
+    var plain = _bytes_of(ascii)
+    var mixed = _bytes_of(ascii + "é" + ascii)
+    assert_true(Utf8.is_ascii(plain.values.view[DType.uint8](0, 100)))
+    assert_true(Utf8.is_valid(plain.values.view[DType.uint8](0, 100)))
+    assert_false(Utf8.is_ascii(mixed.values.view[DType.uint8](0, 202)))
+    assert_true(Utf8.is_valid(mixed.values.view[DType.uint8](0, 202)))
+    # The window cut inside "é" leaves a truncated sequence.
+    assert_false(Utf8.is_valid(mixed.values.view[DType.uint8](0, 101)))
+
+
+def test_utf8_is_valid_span() raises:
+    assert_true(Utf8.is_valid(String("héllo").as_bytes()))
+    var lone = List[Byte]()
+    lone.append(0xC3)
+    assert_false(Utf8.is_valid(Span(lone)))

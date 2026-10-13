@@ -158,7 +158,6 @@ from .temporal import (
     HourKernel,
     MinuteKernel,
     SecondKernel,
-    CalendarUnit,
     DateTruncKernel,
 )
 from .conditional import (

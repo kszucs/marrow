@@ -54,19 +54,20 @@ from ...kernels.temporal import (
     DayOfYearKernel,
     DayOfWeekKernel,
     DateTruncKernel,
-    CalendarUnit,
-    unit_month,
-    unit_quarter,
-    unit_year,
-    CalendarUnit,
-    unit_second,
-    unit_minute,
-    unit_hour,
-    unit_day,
     AssumeTimezoneKernel,
     ConvertTimezoneKernel,
 )
 from ...kernels.cast import TimestampToStringKernel
+from ...utils import (
+    CalendarUnit,
+    unit_day,
+    unit_hour,
+    unit_minute,
+    unit_month,
+    unit_quarter,
+    unit_second,
+    unit_year,
+)
 
 
 # --- helpers ---------------------------------------------------------------

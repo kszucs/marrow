@@ -4,14 +4,14 @@
 """Format-agnostic primitives shared across marrow.
 
 Each submodule is a self-contained block that depends on nothing in marrow
-but its errors -- no arrays, no dtypes, no
-execution context -- so it can be read, tested and lifted out on its own:
+but its errors, buffers and views -- no arrays, no dtypes, no execution
+context -- so it can be read, tested and lifted out on its own:
 
 | module | what |
 |---|---|
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
-| `decimal` | `float_to_decimal` — the exact unscaled decimal of a double |
-| `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div` — proleptic-Gregorian arithmetic; `WallClock`, `TimestampFormat` — time zones |
+| `decimal` | `float_to_decimal` — the exact unscaled decimal of a double; `parse_decimal`, `format_decimal` — decimal text; `decimal_bound` — the digit limit of a precision |
+| `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div`, `weekday`, `iso_week_thursday`, `weekday_name` — proleptic-Gregorian arithmetic; `CalendarUnit` — the boundaries a date is floored to; `WallClock`, `TimestampFormat` — time zones |
 | `byteorder` | `LittleEndian`, `BigEndian`, `Leb128` — values as bytes and as varints |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
 | `hex` | `hex_digit` — one hexadecimal digit's value |
@@ -42,15 +42,31 @@ whether there is a device.
 from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
 from .byteorder import BigEndian, Leb128, LittleEndian
 from .checksum import Crc32, Crc32c
-from .decimal import float_to_decimal
+from .decimal import (
+    decimal_bound,
+    float_to_decimal,
+    format_decimal,
+    parse_decimal,
+)
 from .datetime import (
+    CalendarUnit,
     CivilDate,
     Epoch,
     TimestampFormat,
     WallClock,
     floor_div,
+    iso_week_thursday,
     split_days,
     truncate_div,
+    unit_day,
+    unit_hour,
+    unit_minute,
+    unit_month,
+    unit_quarter,
+    unit_second,
+    unit_year,
+    weekday,
+    weekday_name,
 )
 from .dylib import Dylib, LibSpec
 from .segment_tree import Monoid, SegmentTree

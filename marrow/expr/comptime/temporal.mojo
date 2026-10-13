@@ -43,9 +43,9 @@ from ...dtypes import (
     TemporalType,
     TimestampType,
 )
+from ...utils import CalendarUnit
 from ...kernels.temporal import (
     AssumeTimezoneKernel,
-    CalendarUnit,
     ConvertTimezoneKernel,
     DateTruncKernel,
     DayKernel,

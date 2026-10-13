@@ -29,7 +29,7 @@ non-inlined call or a heap allocation here would show up as a per-row cost.
 
 from morrow import TimeZone
 
-from ..errors import IOError, KeyError
+from ..errors import InvalidError, IOError, KeyError
 
 
 @always_inline
@@ -199,6 +199,38 @@ struct CivilDate(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
     def start_of_month(self) -> Self:
         return Self(self.year, self.month, 1)
 
+    @always_inline
+    def end_of_month(self) -> Self:
+        return Self(self.year, self.month, self.days_in_month())
+
+    def month_name(self) -> StaticString:
+        """The full English name of this date's month."""
+        var m = self.month
+        if m == 1:
+            return "January"
+        elif m == 2:
+            return "February"
+        elif m == 3:
+            return "March"
+        elif m == 4:
+            return "April"
+        elif m == 5:
+            return "May"
+        elif m == 6:
+            return "June"
+        elif m == 7:
+            return "July"
+        elif m == 8:
+            return "August"
+        elif m == 9:
+            return "September"
+        elif m == 10:
+            return "October"
+        elif m == 11:
+            return "November"
+        else:
+            return "December"
+
     def __eq__(self, other: Self) -> Bool:
         return (
             self.year == other.year
@@ -220,6 +252,159 @@ struct CivilDate(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
         _write_padded(writer, self.month, 2)
         writer.write("-")
         _write_padded(writer, self.day, 2)
+
+
+@always_inline
+def weekday(days: Int) -> Int:
+    """The weekday of a days-since-epoch value, Monday = 0 ... Sunday = 6."""
+    # 1970-01-01 was a Thursday.
+    return days + 3 - floor_div(days + 3, 7) * 7
+
+
+@always_inline
+def iso_week_thursday(days: Int) -> Int:
+    """Days-since-epoch of the Thursday of the ISO week holding `days` — the
+    day whose calendar year is that week's ISO year."""
+    return days - weekday(days) + 3
+
+
+def weekday_name(weekday: Int) -> StaticString:
+    """The full English name of `weekday`, Monday = 0."""
+    if weekday == 0:
+        return "Monday"
+    elif weekday == 1:
+        return "Tuesday"
+    elif weekday == 2:
+        return "Wednesday"
+    elif weekday == 3:
+        return "Thursday"
+    elif weekday == 4:
+        return "Friday"
+    elif weekday == 5:
+        return "Saturday"
+    else:
+        return "Sunday"
+
+
+struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
+    """The boundary `date_trunc` floors to — `second`, `minute`, `hour`, `day`.
+
+    A *calendar* unit, not a storage resolution: distinct from `dtypes.TimeUnit`
+    (`s`/`ms`/`us`/`ns`), which says how finely a timestamp is stored. Named
+    after Arrow C++'s `CalendarUnit`, which plays the same role in
+    `RoundTemporalOptions`.
+
+    This is a type rather than a `String` so an unsupported unit cannot reach
+    the kernel at all. String-driven callers (Python, SQL) convert once at their
+    boundary with `parse`, which is the only place the spelling is known — the
+    expression frontends do it at *construction*, so a bad unit fails when the
+    plan is built rather than on the row that first evaluates it.
+    """
+
+    var value: Int
+
+    def __init__(out self, value: Int):
+        self.value = value
+
+    @staticmethod
+    def parse(unit: String) raises -> Self:
+        """The unit named by `unit`; raises if it names none."""
+        if unit == "second":
+            return Self(0)
+        elif unit == "minute":
+            return Self(1)
+        elif unit == "hour":
+            return Self(2)
+        elif unit == "day":
+            return Self(3)
+        elif unit == "month":
+            return Self(4)
+        elif unit == "quarter":
+            return Self(5)
+        elif unit == "year":
+            return Self(6)
+        raise InvalidError(
+            t"date_trunc: unsupported unit '{unit}' (expected "
+            t"second/minute/hour/day/month/quarter/year)"
+        )
+
+    def is_calendar(self) -> Bool:
+        """Whether this unit has no fixed length in seconds.
+
+        A month is 28-31 days and a year 365 or 366, so `seconds()` cannot
+        answer for these and flooring cannot be a division on the tick count --
+        they go through the civil calendar instead. Everything up to `day` is
+        fixed-length.
+        """
+        return self.value >= 4
+
+    def seconds(self) -> Int:
+        """How many seconds one of these spans."""
+        if self.value == 0:
+            return 1
+        elif self.value == 1:
+            return 60
+        elif self.value == 2:
+            return 3600
+        else:
+            return 86400
+
+    def floor(self, ticks: Int, ticks_per_day: Int) -> Int:
+        """`ticks` floored to the start of the unit it falls in, at a
+        resolution of `ticks_per_day` ticks a day — 1 for a day count.
+
+        Floors rather than truncates, so a pre-epoch tick lands in the unit
+        that contains it rather than the one after. A unit finer than the
+        resolution leaves `ticks` as it is."""
+        if self.is_calendar():
+            var c = CivilDate.from_days(floor_div(ticks, ticks_per_day))
+            var start: CivilDate
+            if self.value == 6:
+                start = c.start_of_year()
+            elif self.value == 5:
+                start = c.start_of_quarter()
+            else:
+                start = c.start_of_month()
+            return start.to_days() * ticks_per_day
+        var per_unit = max(ticks_per_day // 86400 * self.seconds(), 1)
+        return floor_div(ticks, per_unit) * per_unit
+
+    def to_string(self) -> StaticString:
+        """The unit's spelling. `StaticString`, not `String`: these are four
+        literals, and returning an owned `String` would drag its construction
+        into every binary that only ever renders a plan."""
+        if self.value == 0:
+            return "second"
+        elif self.value == 1:
+            return "minute"
+        elif self.value == 2:
+            return "hour"
+        elif self.value == 3:
+            return "day"
+        elif self.value == 4:
+            return "month"
+        elif self.value == 5:
+            return "quarter"
+        else:
+            return "year"
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.value == other.value
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.value != other.value
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.to_string())
+
+
+comptime unit_second = CalendarUnit(0)
+comptime unit_minute = CalendarUnit(1)
+comptime unit_hour = CalendarUnit(2)
+comptime unit_day = CalendarUnit(3)
+comptime unit_month = CalendarUnit(4)
+comptime unit_quarter = CalendarUnit(5)
+comptime unit_year = CalendarUnit(6)
 
 
 struct _Iso8601Text[origin: ImmOrigin]:

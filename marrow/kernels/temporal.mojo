@@ -53,7 +53,6 @@ fields — hour/minute/second — via ``views.apply``).
 
 from ..arrays import (
     DynArray,
-    ArrayData,
     Date32Array,
     Int32Array,
     Int64Array,
@@ -76,7 +75,15 @@ from ..dtypes import (
 from ..errors import InternalError, InvalidError, TypeError
 from .core import Kernel, one_of
 
-from ..utils import CivilDate, WallClock, floor_div
+from ..utils import (
+    CalendarUnit,
+    CivilDate,
+    WallClock,
+    floor_div,
+    iso_week_thursday,
+    weekday,
+    weekday_name,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +332,7 @@ struct DayOfWeekKernel(TemporalExtractKernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
-        # ISO weekday, Monday = 0 (PyArrow default). 1970-01-01 is a Thursday.
-        var dow = days - floor_div(days, 7) * 7  # [0, 6]
-        var w = dow + 3
-        if w >= 7:
-            w -= 7
-        return Int32(w)
+        return Int32(weekday(days))
 
 
 struct HourKernel(TemporalExtractKernel):
@@ -365,193 +367,6 @@ struct SecondKernel(TemporalExtractKernel):
 # ---------------------------------------------------------------------------
 
 
-struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
-    """The boundary `date_trunc` floors to — `second`, `minute`, `hour`, `day`.
-
-    A *calendar* unit, not a storage resolution: distinct from `dtypes.TimeUnit`
-    (`s`/`ms`/`us`/`ns`), which says how finely a timestamp is stored. Named
-    after Arrow C++'s `CalendarUnit`, which plays the same role in
-    `RoundTemporalOptions`.
-
-    This is a type rather than a `String` so an unsupported unit cannot reach
-    the kernel at all. String-driven callers (Python, SQL) convert once at their
-    boundary with `parse`, which is the only place the spelling is known — the
-    expression frontends do it at *construction*, so a bad unit fails when the
-    plan is built rather than on the row that first evaluates it.
-    """
-
-    var value: Int
-
-    def __init__(out self, value: Int):
-        self.value = value
-
-    @staticmethod
-    def parse(unit: String) raises -> Self:
-        """The unit named by `unit`; raises if it names none."""
-        if unit == "second":
-            return Self(0)
-        elif unit == "minute":
-            return Self(1)
-        elif unit == "hour":
-            return Self(2)
-        elif unit == "day":
-            return Self(3)
-        elif unit == "month":
-            return Self(4)
-        elif unit == "quarter":
-            return Self(5)
-        elif unit == "year":
-            return Self(6)
-        raise InvalidError(
-            t"date_trunc: unsupported unit '{unit}' (expected "
-            t"second/minute/hour/day/month/quarter/year)"
-        )
-
-    def is_calendar(self) -> Bool:
-        """Whether this unit has no fixed length in seconds.
-
-        A month is 28-31 days and a year 365 or 366, so `seconds()` cannot
-        answer for these and flooring cannot be a division on the tick count --
-        they go through the civil calendar instead. Everything up to `day` is
-        fixed-length.
-        """
-        return self.value >= 4
-
-    def seconds(self) -> Int:
-        """How many seconds one of these spans."""
-        if self.value == 0:
-            return 1
-        elif self.value == 1:
-            return 60
-        elif self.value == 2:
-            return 3600
-        else:
-            return 86400
-
-    def to_string(self) -> StaticString:
-        """The unit's spelling. `StaticString`, not `String`: these are four
-        literals, and returning an owned `String` would drag its construction
-        into every binary that only ever renders a plan."""
-        if self.value == 0:
-            return "second"
-        elif self.value == 1:
-            return "minute"
-        elif self.value == 2:
-            return "hour"
-        elif self.value == 3:
-            return "day"
-        elif self.value == 4:
-            return "month"
-        elif self.value == 5:
-            return "quarter"
-        else:
-            return "year"
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.value == other.value
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.value != other.value
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.to_string())
-
-
-comptime unit_second = CalendarUnit(0)
-comptime unit_minute = CalendarUnit(1)
-comptime unit_hour = CalendarUnit(2)
-comptime unit_day = CalendarUnit(3)
-comptime unit_month = CalendarUnit(4)
-comptime unit_quarter = CalendarUnit(5)
-comptime unit_year = CalendarUnit(6)
-
-
-def _trunc[
-    N: DType
-](
-    data: ArrayData,
-    dt: DynType,
-    ticks_per_unit: Int,
-    n: Int,
-    clock: Optional[WallClock],
-) raises -> DynArray:
-    """Floor each ``N``-typed tick count to a multiple of ``ticks_per_unit``,
-    keeping the same tick resolution and dtype. With a `clock` the floor is
-    taken on wall-clock time, so an hour boundary in Asia/Kolkata falls on
-    the half hour in UTC."""
-    var out = Buffer.alloc_uninit[N](n)
-    var dst = out.view[N](0, n)
-    var src = data.buffers[0].view[N](data.offset, n)
-    for i in range(n):
-        var raw = Int(src.unsafe_get(i))
-        if clock:
-            raw = clock.value().to_local(raw)
-        raw = floor_div(raw, ticks_per_unit) * ticks_per_unit
-        if clock:
-            raw = clock.value().to_utc(raw)
-        dst.unsafe_set(i, Scalar[N](raw))
-
-    return DynArray.from_data(
-        ArrayData(
-            like=data,
-            dtype=dt.copy(),
-            buffers=[out.to_immutable()],
-        )
-    )
-
-
-def _floor_civil(days: Int, unit: CalendarUnit) -> Int:
-    """Floor a day count to the start of its month, quarter or year.
-
-    Goes through the civil calendar because these units have no fixed length:
-    decompose to (y, m, d), zero the finer fields, recompose. `CivilDate`
-    (`utils/datetime.mojo`) is Hinnant's algorithm, already used by the
-    extraction kernels, so this adds no new date arithmetic.
-    """
-    var c = CivilDate.from_days(days)
-    if unit == unit_year:
-        return c.start_of_year().to_days()
-    if unit == unit_quarter:
-        return c.start_of_quarter().to_days()
-    return c.start_of_month().to_days()
-
-
-def _trunc_calendar[
-    N: DType
-](
-    data: ArrayData,
-    dt: DynType,
-    ticks_per_day: Int,
-    unit: CalendarUnit,
-    n: Int,
-    clock: Optional[WallClock],
-) raises -> DynArray:
-    """Floor each tick count to a month/quarter/year boundary — in wall-clock
-    time when there is a `clock`, as `_trunc` does."""
-    var out = Buffer.alloc_uninit[N](n)
-    var dst = out.view[N](0, n)
-    var src = data.buffers[0].view[N](data.offset, n)
-    for i in range(n):
-        var raw = Int(src.unsafe_get(i))
-        if clock:
-            raw = clock.value().to_local(raw)
-        # Floor-divide, so pre-epoch instants land on the day containing them
-        # rather than the day after -- the same reason `_trunc` uses `floor_div`.
-        var days = floor_div(raw, ticks_per_day)
-        var floored = _floor_civil(days, unit) * ticks_per_day
-        if clock:
-            floored = clock.value().to_utc(floored)
-        dst.unsafe_set(i, Scalar[N](floored))
-
-    return DynArray.from_data(
-        ArrayData(
-            like=data,
-            dtype=dt.copy(),
-            buffers=[out.to_immutable()],
-        )
-    )
-
-
 struct DateTruncKernel(Kernel):
     """Floor a temporal array to a `CalendarUnit` boundary, keeping its type."""
 
@@ -569,22 +384,28 @@ struct DateTruncKernel(Kernel):
             # guard used to do for every unit.
             return array.copy()
 
-        var data = array.to_data()
-        var n = data.length
+        # date32 counts days directly; everything else counts sub-day ticks.
+        var ticks_per_day = (
+            1 if dt.is_date32() else ticks_per_second(dt) * 86400
+        )
         var clock = _clock(dt)
-        var out: DynArray
-        if unit.is_calendar():
-            # date32 counts days directly; everything else counts sub-day ticks.
-            var ticks_per_day = (
-                1 if dt.is_date32() else ticks_per_second(dt) * 86400
-            )
-            out = _trunc_calendar[T.native](
-                data, dt, ticks_per_day, unit, n, clock
-            )
-        else:
-            var ticks_per_unit = ticks_per_second(dt) * unit.seconds()
-            out = _trunc[T.native](data, dt, ticks_per_unit, n, clock)
-        return out.as_primitive[T]().copy()
+        var n = len(array)
+        var out = Buffer.alloc_uninit[T.native](n)
+        var dst = out.view[T.native](0, n)
+        var src = array.values()
+        for i in range(n):
+            # With a clock the floor is taken on wall-clock time, so an hour
+            # boundary in Asia/Kolkata falls on the half hour in UTC.
+            var raw = Int(src.unsafe_get(i))
+            if clock:
+                raw = clock.value().to_local(raw)
+            raw = unit.floor(raw, ticks_per_day)
+            if clock:
+                raw = clock.value().to_utc(raw)
+            dst.unsafe_set(i, Scalar[T.native](raw))
+        return PrimitiveArray[T](
+            like=array, dtype=array.dtype.copy(), buffer=out^.to_immutable()
+        )
 
     @staticmethod
     def dispatch(array: DynArray, unit: CalendarUnit) raises -> DynArray:
@@ -696,20 +517,6 @@ trait TemporalExtract64Kernel(Kernel):
 # 1899-01-01 -> 1898-W52, 2019-12-30 -> 2020-W1, 2010-01-01 -> 2009-W53.
 
 
-@always_inline
-def _iso_weekday(days: Int) -> Int:
-    """ISO weekday of a days-since-epoch value: Monday = 1 ... Sunday = 7."""
-    # 1970-01-01 was a Thursday, so `days % 7 == 0` is a Thursday.
-    var dow = days - floor_div(days, 7) * 7  # [0, 6], 0 == Thursday
-    return dow + 4 if dow <= 3 else dow - 3
-
-
-@always_inline
-def _iso_thursday(days: Int) -> Int:
-    """Days-since-epoch of the Thursday in the same ISO week as `days`."""
-    return days - (_iso_weekday(days) - 4)
-
-
 struct IsoYearKernel(TemporalExtract64Kernel):
     """SQL `isoyear` — the calendar year of this ISO week's Thursday, which is
     not always the calendar year of the date itself."""
@@ -719,7 +526,7 @@ struct IsoYearKernel(TemporalExtract64Kernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int64]:
-        return Int64(CivilDate.from_days(_iso_thursday(days)).year)
+        return Int64(CivilDate.from_days(iso_week_thursday(days)).year)
 
 
 struct WeekKernel(TemporalExtract64Kernel):
@@ -730,7 +537,7 @@ struct WeekKernel(TemporalExtract64Kernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int64]:
-        var thu = _iso_thursday(days)
+        var thu = iso_week_thursday(days)
         # January 1st of the ISO year is always inside ISO week 1, and the
         # Thursday of week 1 is within three days of it, so counting whole
         # weeks from January 1st to this week's Thursday gives the week index.
@@ -764,16 +571,8 @@ struct EpochKernel(TemporalExtract64Kernel):
 
 @always_inline
 def _last_day_component(days: Int, tod: Int) -> Scalar[DType.int32]:
-    """Days-since-epoch of the last day of this date's month.
-
-    The first of the *next* month minus one day, which gets February right from
-    the calendar algorithm rather than from a table of month lengths: 2020-02
-    answers the 29th and 2100-02 the 28th without either being written down.
-    """
-    var c = CivilDate.from_days(days)
-    var y = c.year + 1 if c.month == 12 else c.year
-    var m = 1 if c.month == 12 else c.month + 1
-    return Int32(CivilDate.days_from(y, m, 1) - 1)
+    """Days-since-epoch of the last day of this date's month."""
+    return Int32(CivilDate.from_days(days).end_of_month().to_days())
 
 
 struct LastDayKernel(Kernel):
@@ -824,62 +623,8 @@ struct LastDayKernel(Kernel):
 # day_name / month_name — temporal -> string
 # ---------------------------------------------------------------------------
 #
-# The English tables are written out here rather than taken from a locale.
-# Arrow has no `day_name`/`month_name` kernel at all; its only route to a name
-# is `strftime`'s `%A`/`%B`, whose answer depends on a `std::locale` and so is
-# not a specification. DuckDB's `dayname`/`monthname` are the full, capitalized
-# English names, and that is what these return.
-
-
-def _day_name_of(days: Int) -> String:
-    """Full English weekday name of a days-since-epoch value."""
-    var dow = days - floor_div(days, 7) * 7  # [0, 6], 0 == Thursday
-    var mon0 = dow + 3  # 0 == Monday, matching `DayOfWeekKernel`
-    if mon0 >= 7:
-        mon0 -= 7
-    if mon0 == 0:
-        return "Monday"
-    elif mon0 == 1:
-        return "Tuesday"
-    elif mon0 == 2:
-        return "Wednesday"
-    elif mon0 == 3:
-        return "Thursday"
-    elif mon0 == 4:
-        return "Friday"
-    elif mon0 == 5:
-        return "Saturday"
-    else:
-        return "Sunday"
-
-
-def _month_name_of(days: Int) -> String:
-    """Full English month name of a days-since-epoch value."""
-    var m = CivilDate.from_days(days).month
-    if m == 1:
-        return "January"
-    elif m == 2:
-        return "February"
-    elif m == 3:
-        return "March"
-    elif m == 4:
-        return "April"
-    elif m == 5:
-        return "May"
-    elif m == 6:
-        return "June"
-    elif m == 7:
-        return "July"
-    elif m == 8:
-        return "August"
-    elif m == 9:
-        return "September"
-    elif m == 10:
-        return "October"
-    elif m == 11:
-        return "November"
-    else:
-        return "December"
+# The names are `weekday_name` and `CivilDate.month_name`: full English names,
+# never a locale's.
 
 
 def _extract_name[
@@ -951,7 +696,7 @@ struct DayNameKernel(TemporalNameKernel):
 
     @staticmethod
     def component(days: Int) -> String:
-        return _day_name_of(days)
+        return String(weekday_name(weekday(days)))
 
 
 struct MonthNameKernel(TemporalNameKernel):
@@ -962,7 +707,7 @@ struct MonthNameKernel(TemporalNameKernel):
 
     @staticmethod
     def component(days: Int) -> String:
-        return _month_name_of(days)
+        return String(CivilDate.from_days(days).month_name())
 
 
 # ---------------------------------------------------------------------------

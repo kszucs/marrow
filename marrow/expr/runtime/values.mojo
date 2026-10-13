@@ -165,10 +165,9 @@ from ...kernels.string import (
     StringLtKernel,
     StringNeKernel,
 )
-from ...utils import WallClock
+from ...utils import CalendarUnit, WallClock
 from ...kernels.temporal import (
     AssumeTimezoneKernel,
-    CalendarUnit,
     ConvertTimezoneKernel,
     DateTruncKernel,
     DayKernel,

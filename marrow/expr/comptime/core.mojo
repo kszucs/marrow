@@ -220,8 +220,7 @@ from .temporal import (
     Second,
     Year,
 )
-from ...kernels.temporal import CalendarUnit
-from ...utils import WallClock
+from ...utils import CalendarUnit, WallClock
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
