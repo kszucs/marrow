@@ -7,7 +7,7 @@
 |---|---|
 | `core` | `Codec`, `Cascade`, `Encoded`: the trait, the chain -- itself a codec -- and the stored form; and what codecs share |
 | `lanes` | the codecs a cascade passes values through |
-| `stores` | the codecs that end a cascade and hold the bytes, `Compressed[C]` -- a `marrow.compress` compressor -- among them |
+| `stores` | the codecs that end a cascade and hold the bytes |
 | `strings` | the codecs that take byte strings first |
 
 Every codec of a `Cascade` but the last turns each value into one value;
@@ -20,13 +20,9 @@ is stored as an `Encoded` tree, which a container frames as it likes.
     cascade.decode(encoded, out)
 
 A codec configured at run time is given as a value, its slots as values
-or type parameters:
+or type parameters -- Parquet's DELTA_BINARY_PACKED after its first value:
 
     Cascade((Delta(first), Ordered(), FrameOfReference(128), BitPack(32)))
-    Cascade[Alp[], Ordered, FrameOfReference[], BitPack[]]()
-
-the first Parquet's DELTA_BINARY_PACKED after its first value, the second
-DuckDB's ALP.
 """
 
 from .core import (
@@ -34,28 +30,23 @@ from .core import (
     Cascade,
     Codec,
     Encoded,
+    Unpacked,
 )
 from .lanes import (
-    Alp,
     ByteSwap,
     Cast,
     Delta,
     Dictionary,
     FrameOfReference,
-    Gcd,
     Ordered,
-    Patch,
-    Xor,
     Zigzag,
 )
 from .stores import (
     BitPack,
-    Buckets,
     ByteStreamSplit,
-    Compressed,
-    Frequency,
-    Gorilla,
     Plain,
+    Rle,
+    RleRuns,
     Runs,
 )
 from .strings import Lengths, Prefixes

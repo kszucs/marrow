@@ -4,25 +4,23 @@
 """Parquet's page encodings, as cascades of `marrow.codecs`.
 
 Each encoding is a cascade; what is here is Parquet's byte layout around it
--- the run headers, the block headers, the zigzag varints -- and how a page's
-present values come out of an Arrow array and go back into one:
+-- the block headers, the zigzag varints, the length prefixes -- and how a
+page's present values come out of an Arrow array and go back into one. Its
+levels, dictionary codes and booleans are `marrow.codecs.Rle`'s runs.
 
-- `RleEncoding` -- RLE / bit-packed runs over `Runs`: levels, dictionary
-  codes, booleans.
 - `DeltaBinaryPackedEncoding` -- the first value, then `Delta(first)`,
   `Ordered`, `FrameOfReference(128)`, `BitPack(32)`.
 - `DeltaLengthEncoding` -- `Lengths`, the lengths as DELTA_BINARY_PACKED.
 - `DeltaByteArrayEncoding` -- `Prefixes`, its prefixes and its suffixes'
   lengths as DELTA_BINARY_PACKED.
 - `PlainValues` · `DictionaryValues` · `ByteStreamSplitValues` -- a page's
-  present values to and from an array, through `Plain`, `Dictionary` and
-  `ByteStreamSplit`.
+  present values to and from an array, through `Plain`, `Dictionary` over
+  `Rle`, and `ByteStreamSplit`.
 - `Encoding` -- the enum that dispatches a data page's present values to the
   right one, so the flat and nested reader paths share one decoder.
 """
 
-from std.memory import bitcast
-from std.sys import bit_width_of, size_of
+from std.sys import size_of
 
 from ..arrays import (
     BoolArray,
@@ -38,7 +36,6 @@ from ..codecs import (
     ByteSwap,
     Cascade,
     Cast,
-    Codec,
     Delta,
     Dictionary,
     Encoded,
@@ -47,310 +44,13 @@ from ..codecs import (
     Ordered,
     Plain,
     Prefixes,
-    Runs,
+    Rle,
 )
 from ..utils.byteorder import Leb128, LittleEndian
 from ..utils.integers import Unsigned, ordered, unordered, unzigzag, zigzag
-from ..codecs.core import Unpacked
 from .. import dtypes as dt
 from ..errors import CorruptError, NotImplementedError
-from ..views import BitmapView, BufferView, PackedGroup
-
-
-# ---------------------------------------------------------------------------
-# RLE / bit-packed runs
-# ---------------------------------------------------------------------------
-
-
-struct RleRuns(Copyable, Movable):
-    """Where reading Parquet's RLE runs is: the next header, and the run
-    being read -- one value repeated, or bit-packed groups of eight. Read a
-    stretch of values at a time, each picking up where the last left off."""
-
-    var pos: Int
-    """The byte after the run being read."""
-    var left: Int
-    """Its values not yet read."""
-    var packed: Bool
-    var value: UInt64
-    """A repeated run's value."""
-    var at: Int
-    """The byte a packed run's groups start at."""
-    var read: Int
-    """A packed run's values read."""
-
-    def __init__(out self):
-        self.pos = 0
-        self.left = 0
-        self.packed = False
-        self.value = 0
-        self.at = 0
-        self.read = 0
-
-    def fill[
-        T: DType
-    ](
-        mut self,
-        data: BufferView[DType.uint8, _],
-        group: PackedGroup,
-        dst: BufferView[mut=True, T, _],
-    ) -> Bool:
-        """Read `len(dst)` values into `dst`; False when the runs end, or a
-        run runs past `data`, first."""
-        comptime G = RleEncoding.GROUP
-        var width = group.width
-        var produced = 0
-        while produced < len(dst):
-            if self.left == 0:
-                var header, end = Leb128.scan(data.as_span(), self.pos)
-                if end < 0:
-                    return False
-                self.pos = end
-                self.packed = (header & 1) == 1
-                var n = header >> 1
-                if self.packed:
-                    if n > UInt64((len(data) - self.pos) // max(width, 1)):
-                        return False
-                    self.at = self.pos
-                    self.read = 0
-                    self.left = Int(n) * G
-                    self.pos += Int(n) * width
-                else:
-                    var bytes = (width + 7) // 8
-                    if self.pos + bytes > len(data) or n > UInt64(Int.MAX):
-                        return False
-                    self.value = LittleEndian.partial[DType.uint64](
-                        data.as_span()[self.pos : self.pos + bytes], 0
-                    )
-                    self.pos += bytes
-                    self.left = Int(n)
-                continue
-            var take = min(self.left, len(dst) - produced)
-            if not self.packed:
-                dst.as_span()[produced : produced + take].fill(
-                    self.value.cast[T]()
-                )
-            else:
-                var end = self.read + take
-                var to = produced
-                while self.read < end:
-                    var lane = self.read % G
-                    var values = group.unpack(
-                        data, self.at + (self.read // G) * width
-                    ).cast[T]()
-                    if lane == 0 and self.read + G <= end:
-                        dst.store[G](to, values)
-                        to += G
-                        self.read += G
-                    else:
-                        var stop = min(G, lane + end - self.read)
-                        for k in range(lane, stop):
-                            dst.unsafe_set(to, values[k])
-                            to += 1
-                        self.read += stop - lane
-            self.left -= take
-            produced += take
-        return True
-
-
-struct RleEncoding(Codec):
-    """Parquet's RLE encoding: runs of one value -- a header, then the value
-    in its whole bytes -- or bit-packed groups of eight, `width` bits each.
-    A run is written as one only where a stretch of packed groups may end:
-    at its start or after a whole group. Encoding takes the runs `Runs`
-    finds and lays them out so; decoding reads them a block at a time, so
-    as a cascade's store -- `Cascade[Dictionary[], RleEncoding]` -- it feeds
-    the codecs before it. It takes unsigned integers of `width` bits."""
-
-    comptime GROUP = 8
-
-    var width: Int
-    var values: Buffer[mut=True]
-    """The values being encoded."""
-    var taken: Int
-    var node: Encoded
-    """The runs being decoded."""
-    var runs: RleRuns
-    var group: PackedGroup
-    var unpacked: Unpacked
-    var bad: Bool
-    """Whether the runs ended before the values."""
-
-    def __init__(out self):
-        self = Self(0)
-
-    def __init__(out self, width: Int):
-        self.width = width
-        self.values = Buffer.alloc_uninit(0)
-        self.taken = 0
-        self.node = Encoded()
-        self.runs = RleRuns()
-        self.group = PackedGroup(width)
-        self.unpacked = Unpacked()
-        self.bad = False
-
-    def start[T: DType](mut self, count: Int) raises:
-        self.values = Buffer.alloc_uninit[T](count)
-        self.taken = 0
-
-    def store[T: DType](mut self, src: BufferView[T, _]) raises:
-        self.values.extend(src, self.taken, len(src))
-        self.taken += len(src)
-
-    def finish[T: DType](mut self) raises -> Encoded:
-        var values = self.values^.to_immutable()
-        self.values = Buffer.alloc_uninit(0)
-        var out = List[UInt8]()
-        Self.write_runs(
-            values.view[T](0, self.taken).as_span(), self.width, out
-        )
-        return Encoded(bytes=Span(out))
-
-    def start[T: DType](mut self, ref node: Encoded, count: Int) raises:
-        if self.width > bit_width_of[T]():
-            raise CorruptError(
-                t"parquet: {count} RLE values of {self.width} bits"
-            )
-        self.node = node.copy()
-        self.runs = RleRuns()
-        self.unpacked.start(count)
-        self.bad = False
-
-    def _unpack[T: DType](mut self):
-        var out = self.unpacked.next[T]()
-        var n = self.unpacked.size()
-        if self.width == 0:
-            out.as_span()[:n].fill(0)
-        elif not self.runs.fill[T](
-            BufferView(self.node.bytes()), self.group, out[:n]
-        ):
-            self.bad = True
-
-    @always_inline
-    def load[T: DType, W: Int](mut self, i: Int) -> SIMD[T, W]:
-        if self.unpacked.due(i):
-            self._unpack[T]()
-        return self.unpacked.load[T, W](i)
-
-    def check(self) raises:
-        if self.bad:
-            raise CorruptError("parquet: truncated RLE runs")
-
-    @staticmethod
-    def write_runs[
-        T: DType
-    ](values: Span[Scalar[T], _], width: Int, mut out: List[UInt8]) raises:
-        """Append `values` at `width` bits; a `width` of 0 writes nothing."""
-        comptime G = Self.GROUP
-        comptime U = Unsigned[T]
-        if width == 0:
-            return
-        var codec = Runs[]()
-        var runs = codec.encode_view(BufferView(values))
-        var run_values = runs[Runs[].VALUES].values[T]()
-        var run_lengths = runs[Runs[].LENGTHS].values[DType.uint64]()
-        var byte_width = (width + 7) // 8
-        var literals = List[UInt64]()
-        for r in range(len(run_values)):
-            var v = bitcast[U](run_values[r]).cast[DType.uint64]()
-            var n = Int(run_lengths[r])
-            # A run's first values finish the open group of literals.
-            var fill = min((G - len(literals) % G) % G, n)
-            for _ in range(fill):
-                literals.append(v)
-            n -= fill
-            if n >= G:
-                Self._literals(literals, width, out)
-                Leb128.write(out, UInt64(n) << 1)
-                LittleEndian.append(out, v, byte_width)
-            else:
-                for _ in range(n):
-                    literals.append(v)
-        Self._literals(literals, width, out)
-
-    @staticmethod
-    def _literals(
-        mut literals: List[UInt64], width: Int, mut out: List[UInt8]
-    ) raises:
-        """Write `literals` as a bit-packed run, the last group padded with
-        zeros, and clear them."""
-        comptime G = Self.GROUP
-        if len(literals) == 0:
-            return
-        var groups = (len(literals) + G - 1) // G
-        Leb128.write(out, (UInt64(groups) << 1) | 1)
-        var start = len(out)
-        out.resize(start + groups * width, 0)
-        var bits = BitmapView(Span(out)[start:])
-        var values = BufferView(Span(literals))
-        for g in range(groups):
-            var lo = g * G
-            PackedGroup.pack(
-                bits, lo * width, values, lo, min(lo + G, len(literals)), width
-            )
-        literals.clear()
-
-    @staticmethod
-    def read_runs[
-        T: DType
-    ](
-        data: Span[UInt8, _], width: Int, count: Int, mut out: List[Scalar[T]]
-    ) raises -> Int:
-        """Append the first `count` values of the runs in `data`, `width`
-        bits each; return where the runs read end. A run past `count` is
-        read whole, as a packed run's padding is."""
-        if width > bit_width_of[T]():
-            raise CorruptError(t"parquet: {count} RLE values of {width} bits")
-        var base = len(out)
-        out.resize(unsafe_uninit_length=base + count)
-        var dst = BufferView(Span(out))[base:]
-        if width == 0:
-            dst.as_span().fill(0)
-            return 0
-        var runs = RleRuns()
-        if not runs.fill[T](BufferView(data), PackedGroup(width), dst):
-            raise CorruptError("parquet: truncated RLE runs")
-        return runs.pos
-
-    @staticmethod
-    def read_codes[
-        T: DType
-    ](data: Span[UInt8, _], count: Int, mut out: List[Scalar[T]]) raises:
-        """Append a data page's first `count` dictionary codes: their width
-        in a byte, then their runs."""
-        if len(data) == 0:
-            if count > 0:
-                raise CorruptError("parquet: a dictionary page with no codes")
-            return
-        _ = Self.read_runs[T](data[1:], Int(data[0]), count, out)
-
-    @staticmethod
-    def count(
-        data: Span[UInt8, _], width: Int, count: Int, target: UInt64
-    ) raises -> Int:
-        """How many of the first `count` values are `target` -- without
-        decoding them when the runs are one run, as a column with no nulls'
-        levels are."""
-        if count == 0:
-            return 0
-        if width == 0:
-            return count if target == 0 else 0
-        var header, pos = Leb128.read(data, 0)
-        var byte_width = (width + 7) // 8
-        if (header & 1) == 0 and header >> 1 >= UInt64(count):
-            if pos + byte_width > len(data):
-                raise CorruptError("parquet: truncated RLE run")
-            var v = LittleEndian.partial[DType.uint64](
-                data[pos : pos + byte_width], 0
-            )
-            return count if v == target else 0
-        var values = List[UInt32](capacity=count)
-        _ = Self.read_runs[DType.uint32](data, width, count, values)
-        var matches = 0
-        for v in values:
-            if UInt64(v) == target:
-                matches += 1
-        return matches
+from ..views import BitmapView, BufferView
 
 
 # ---------------------------------------------------------------------------
@@ -391,8 +91,8 @@ struct DeltaBinaryPackedEncoding:
         var encoded = cascade.encode_view(
             BufferView(values[1:] if n > 0 else values)
         )
-        var low = encoded[2][FrameOfReference[].LOWS].values[U]()
-        var w = encoded[3][BitPack[].WIDTHS].values[DType.uint8]()
+        var low = FrameOfReference.lows[U](encoded[2])
+        var w = BitPack.widths(encoded[3])
         var packed = encoded[3].bytes()
         var deltas = max(n - 1, 0)
         var at = 0
@@ -476,15 +176,13 @@ struct DeltaBinaryPackedEncoding:
                 # A miniblock is stored whole, its padding included.
                 pos += min(per * width // 8, len(data) - pos)
             done += left
-        var bits = Encoded(bytes=Span(packed))
-        bits.children.append(Encoded(Span(widths)))
         var tree = Encoded(
             deltas,
             [
-                Encoded(),
-                Encoded(),
-                Encoded(0, [Encoded(Span(lows))]),
-                bits^,
+                Delta.node(),
+                Ordered.node(),
+                FrameOfReference.node(Plain.node(Span(lows))),
+                BitPack.node(Span(packed), Plain.node(Span(widths))),
             ],
         )
         var cascade = Cascade(
@@ -512,7 +210,7 @@ struct DeltaLengthEncoding:
         DeltaBinaryPackedEncoding.encode(
             encoded[1].values[DType.int32]().as_span(), out
         )
-        out.extend(encoded[0][Lengths[].BYTES].bytes())
+        out.extend(Lengths.bytes(encoded[0]))
 
     @staticmethod
     def decode(
@@ -550,10 +248,7 @@ struct DeltaLengthEncoding:
         as."""
         return Encoded(
             len(lengths),
-            [
-                Encoded(0, [Encoded(bytes)]),
-                Encoded(Span(lengths)),
-            ],
+            [Lengths.node(Plain.node(bytes)), Plain.node(Span(lengths))],
         )
 
 
@@ -569,14 +264,14 @@ struct DeltaByteArrayEncoding:
     ) raises:
         var cascade = Cascade[Prefixes[], Plain]()
         var encoded = cascade.encode(offsets, data)
-        ref suffixes = encoded[0][Prefixes[].SUFFIXES]
+        ref suffixes = Prefixes.suffixes(encoded[0])
         DeltaBinaryPackedEncoding.encode(
             encoded[1].values[DType.int32]().as_span(), out
         )
         DeltaBinaryPackedEncoding.encode(
             suffixes[1].values[DType.int32]().as_span(), out
         )
-        out.extend(suffixes[0][Lengths[].BYTES].bytes())
+        out.extend(Lengths.bytes(suffixes[0]))
 
     @staticmethod
     def decode(
@@ -598,7 +293,7 @@ struct DeltaByteArrayEncoding:
         var total = DeltaLengthEncoding.total(lengths, len(src) - pos)
         var suffixes = DeltaLengthEncoding.tree(lengths, src[pos : pos + total])
         var tree = Encoded(
-            count, [Encoded(0, [suffixes^]), Encoded(Span(prefixes))]
+            count, [Prefixes.node(suffixes^), Plain.node(Span(prefixes))]
         )
         var cascade = Cascade[Prefixes[], Plain]()
         cascade.decode(tree, offsets, data)
@@ -714,7 +409,9 @@ struct PlainValues:
         comptime PW = size_of[Scalar[phys]]()
         if len(values) < np * PW:
             raise CorruptError(t"parquet: {len(values)} bytes for {np} values")
-        var tree = Encoded(np, [Encoded(), Encoded(bytes=values[: np * PW])])
+        var tree = Encoded(
+            np, [Cast[phys].node(), Plain.node(bytes=values[: np * PW])]
+        )
         var base = len(out)
         out.resize(unsafe_uninit_length=base + np)
         var cascade = Cascade[Cast[phys], Plain]()
@@ -793,12 +490,10 @@ struct DictionaryValues:
             if count > 0:
                 raise CorruptError("parquet: a dictionary page with no codes")
             return
-        # A `Dictionary` node, its distinct values `Plain`'s slot, then
-        # the store's.
         var tree = Encoded(
-            count, [Encoded(0, [dict.copy()]), Encoded(bytes=values[1:])]
+            count, [Dictionary.node(dict.copy()), Rle.node(values[1:])]
         )
-        var cascade = Cascade((Dictionary(), RleEncoding(Int(values[0]))))
+        var cascade = Cascade((Dictionary(), Rle(Int(values[0]))))
         cascade.decode_into[T](tree, dst)
 
     @staticmethod
@@ -815,7 +510,7 @@ struct DictionaryValues:
         var present = PlainValues.present(arr)
         var cascade = Cascade[Dictionary[], Plain]()
         var encoded = cascade.encode_view(BufferView(Span(present)))
-        var distinct = encoded[0][Dictionary[].DISTINCT].values[store.native]()
+        var distinct = Dictionary.distinct(encoded[0]).values[store.native]()
         var codes = encoded[1].values[DType.uint32]()
         indices.reserve(len(indices) + len(codes))
         for i in range(len(codes)):
@@ -844,9 +539,9 @@ struct DictionaryValues:
         var encoded = cascade.encode(Span(offsets), Span(data))
         # The distinct strings, stored as `Lengths`, then `Plain`, make the
         # dictionary page: each as PLAIN writes it.
-        ref strings = encoded[0][Dictionary[].DISTINCT]
+        ref strings = Dictionary.distinct(encoded[0])
         var lengths = strings[1].values[DType.int32]()
-        var bytes = strings[0][Lengths[].BYTES].bytes()
+        var bytes = Lengths.bytes(strings[0])
         var at = 0
         for i in range(len(lengths)):
             var length = Int(lengths[i])
@@ -940,7 +635,7 @@ struct DictionaryValues:
         data page of it."""
         var values = List[Scalar[store]](capacity=num_values)
         PlainValues.decode_primitive[store, phys](body, num_values, values)
-        return Encoded(Span(values))
+        return Plain.node(Span(values))
 
     @staticmethod
     def decode_page_bytes(
@@ -1000,7 +695,9 @@ struct ByteStreamSplitValues:
         comptime B = size_of[Scalar[phys]]()
         if len(values) < np * B:
             raise CorruptError(t"parquet: {len(values)} bytes for {np} values")
-        var tree = Encoded(np, [Encoded(), Encoded(bytes=values[: np * B])])
+        var tree = Encoded(
+            np, [Cast[phys].node(), ByteStreamSplit.node(values[: np * B])]
+        )
         var base = len(out)
         out.resize(unsafe_uninit_length=base + np)
         var cascade = Cascade[Cast[phys], ByteStreamSplit[]]()
@@ -1162,7 +859,7 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
                     t" {len(values) - 4}"
                 )
             var decoded = List[Int32](capacity=num_present)
-            _ = RleEncoding.read_runs[DType.int32](
+            _ = Rle.read_runs[DType.int32](
                 values[4 : 4 + length], 1, num_present, decoded
             )
             var out = List[Bool](capacity=num_present)

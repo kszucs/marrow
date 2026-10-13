@@ -11,29 +11,20 @@ Run with:
 from std.benchmark import BenchMetric, keep
 
 from ...codecs import (
-    Alp,
     BitPack,
-    Buckets,
     ByteStreamSplit,
     Cascade,
     Codec,
-    Compressed,
     Delta,
     Dictionary,
-    Frequency,
-    Gcd,
-    Gorilla,
     Lengths,
     Ordered,
-    Patch,
     Plain,
     Prefixes,
     FrameOfReference,
     Runs,
-    Xor,
     Zigzag,
 )
-from ...compress import Huffman, Lz4, Snappy, Zstd
 from ...utils.testing import Benchmark
 from ...views import BufferView
 
@@ -51,24 +42,14 @@ def _data[T: DType, shape: StaticString]() -> List[Scalar[T]]:
             out.append(Scalar[T]((i * 7919) % 100))
         elif shape == "runs":
             out.append(Scalar[T]((i // 50) % 7))
-        elif shape == "frequent":
-            out.append(Scalar[T](3 if i % 97 != 0 else i % 11))
         elif shape == "cardinality":
             out.append(Scalar[T]((i * 7919) % 1000) * 1_003)
         elif shape == "constant":
             out.append(Scalar[T](42))
-        elif shape == "bytes":
-            out.append(Scalar[T]((i // 3) % 17))
         elif shape == "interval":
             # Timestamps every second, a jitter of a few milliseconds.
             t += Int64(1_000 + (i * 7919) % 7 - 3)
             out.append(Scalar[T](t))
-        elif shape == "seconds":
-            # Milliseconds, in whole seconds.
-            t += Int64(1_000 * (1 + i % 3))
-            out.append(Scalar[T](t))
-        elif shape == "outliers":
-            out.append(Scalar[T]((i * 7919) % 100 if i % 100 != 0 else 1 << 20))
         elif shape == "signed":
             out.append(Scalar[T]((i * 7919) % 201 - 100))
         elif shape == "sparse":
@@ -418,165 +399,3 @@ def bench_cascade_strings_dictionary_encode(mut b: Benchmark) raises:
 
 def bench_cascade_strings_dictionary_decode(mut b: Benchmark) raises:
     _bench_bytes[True](b, Cascade[Dictionary[], Runs[BitPack[], BitPack[]]]())
-
-
-def bench_xor_encode(mut b: Benchmark) raises:
-    _bench[DType.float64, "floats", False](b, Cascade[Xor, Plain]())
-
-
-def bench_xor_decode(mut b: Benchmark) raises:
-    _bench[DType.float64, "floats", True](b, Cascade[Xor, Plain]())
-
-
-def bench_gcd_encode(mut b: Benchmark) raises:
-    _bench[DType.uint64, "seconds", False](b, Cascade[Gcd[], Plain]())
-
-
-def bench_gcd_decode(mut b: Benchmark) raises:
-    _bench[DType.uint64, "seconds", True](b, Cascade[Gcd[], Plain]())
-
-
-def bench_patch_encode(mut b: Benchmark) raises:
-    _bench[DType.uint32, "outliers", False](b, Cascade[Patch[], Plain]())
-
-
-def bench_patch_decode(mut b: Benchmark) raises:
-    _bench[DType.uint32, "outliers", True](b, Cascade[Patch[], Plain]())
-
-
-def bench_alp_encode(mut b: Benchmark) raises:
-    _bench[DType.float64, "floats", False](b, Cascade[Alp[], Plain]())
-
-
-def bench_alp_decode(mut b: Benchmark) raises:
-    _bench[DType.float64, "floats", True](b, Cascade[Alp[], Plain]())
-
-
-def bench_buckets_encode(mut b: Benchmark) raises:
-    _bench[DType.uint64, "small", False](b, Cascade[Buckets]())
-
-
-def bench_buckets_decode(mut b: Benchmark) raises:
-    _bench[DType.uint64, "small", True](b, Cascade[Buckets]())
-
-
-def bench_gorilla_encode(mut b: Benchmark) raises:
-    _bench[DType.uint64, "small", False](b, Cascade[Gorilla]())
-
-
-def bench_gorilla_decode(mut b: Benchmark) raises:
-    _bench[DType.uint64, "small", True](b, Cascade[Gorilla]())
-
-
-def bench_cascade_pfor_encode(mut b: Benchmark) raises:
-    _bench[DType.int64, "outliers", False](
-        b, Cascade[Ordered, FrameOfReference[], Patch[], BitPack[]]()
-    )
-
-
-def bench_cascade_pfor_decode(mut b: Benchmark) raises:
-    _bench[DType.int64, "outliers", True](
-        b, Cascade[Ordered, FrameOfReference[], Patch[], BitPack[]]()
-    )
-
-
-def bench_cascade_alp_encode(mut b: Benchmark) raises:
-    _bench[DType.float64, "floats", False](
-        b, Cascade[Alp[], Ordered, FrameOfReference[], BitPack[]]()
-    )
-
-
-def bench_cascade_alp_decode(mut b: Benchmark) raises:
-    _bench[DType.float64, "floats", True](
-        b, Cascade[Alp[], Ordered, FrameOfReference[], BitPack[]]()
-    )
-
-
-def bench_cascade_gcd_encode(mut b: Benchmark) raises:
-    _bench[DType.int64, "seconds", False](
-        b, Cascade[Ordered, FrameOfReference[], Gcd[], BitPack[]]()
-    )
-
-
-def bench_cascade_gcd_decode(mut b: Benchmark) raises:
-    _bench[DType.int64, "seconds", True](
-        b, Cascade[Ordered, FrameOfReference[], Gcd[], BitPack[]]()
-    )
-
-
-def bench_cascade_double_delta_buckets_encode(mut b: Benchmark) raises:
-    _bench[DType.int64, "interval", False](
-        b, Cascade[Delta, Delta, Zigzag, Buckets]()
-    )
-
-
-def bench_cascade_double_delta_buckets_decode(mut b: Benchmark) raises:
-    _bench[DType.int64, "interval", True](
-        b, Cascade[Delta, Delta, Zigzag, Buckets]()
-    )
-
-
-def bench_cascade_gorilla_bits_encode(mut b: Benchmark) raises:
-    _bench[DType.float64, "gauge", False](b, Cascade[Xor, Gorilla]())
-
-
-def bench_cascade_gorilla_bits_decode(mut b: Benchmark) raises:
-    _bench[DType.float64, "gauge", True](b, Cascade[Xor, Gorilla]())
-
-
-def bench_huffman_encode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", False](b, Cascade[Compressed[Huffman]]())
-
-
-def bench_huffman_decode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", True](b, Cascade[Compressed[Huffman]]())
-
-
-def bench_cascade_lengths_huffman_encode(mut b: Benchmark) raises:
-    _bench_bytes[False](
-        b,
-        Cascade[
-            Lengths[Cascade[Compressed[Huffman]]], Delta, Zigzag, BitPack[]
-        ](),
-    )
-
-
-def bench_cascade_lengths_huffman_decode(mut b: Benchmark) raises:
-    _bench_bytes[True](
-        b,
-        Cascade[
-            Lengths[Cascade[Compressed[Huffman]]], Delta, Zigzag, BitPack[]
-        ](),
-    )
-
-
-def bench_frequency_encode(mut b: Benchmark) raises:
-    _bench[DType.int64, "frequent", False](b, Cascade[Frequency[]]())
-
-
-def bench_frequency_decode(mut b: Benchmark) raises:
-    _bench[DType.int64, "frequent", True](b, Cascade[Frequency[]]())
-
-
-def bench_compressed_zstd_encode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", False](b, Cascade[Compressed[Zstd]]())
-
-
-def bench_compressed_zstd_decode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", True](b, Cascade[Compressed[Zstd]]())
-
-
-def bench_compressed_lz4_encode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", False](b, Cascade[Compressed[Lz4]]())
-
-
-def bench_compressed_lz4_decode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", True](b, Cascade[Compressed[Lz4]]())
-
-
-def bench_compressed_snappy_encode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", False](b, Cascade[Compressed[Snappy]]())
-
-
-def bench_compressed_snappy_decode(mut b: Benchmark) raises:
-    _bench[DType.uint8, "bytes", True](b, Cascade[Compressed[Snappy]]())

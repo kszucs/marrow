@@ -19,8 +19,7 @@ type parameter: `BitPack[Widths=Plain]`. A column is stored as an
 child per codec; a codec's node holds its bytes and a child per slot.
 
 What codecs share is here too: `Frames` and `FrameValues`, a parameter a
-frame; `Exceptions`, values set apart; and `Unpacked`, the block a store
-decodes at a time.
+frame; and `Unpacked`, the block a store decodes at a time.
 """
 
 from std.bit import count_trailing_zeros
@@ -30,7 +29,6 @@ from ..arrays import PrimitiveArray
 from ..buffers import Buffer
 from ..dtypes import PrimitiveType, _FloatingType, _IntegerType
 from ..errors import CorruptError, InvalidError
-from ..utils.integers import Unsigned
 from ..views import BufferView
 
 
@@ -97,15 +95,6 @@ struct Encoded(Copyable, Movable):
         var buffer = Buffer.alloc_uninit(len(bytes))
         buffer.extend(BufferView(bytes), 0, len(bytes))
         self = Self(buffer^.to_immutable(), len(bytes))
-
-    def __init__[A: PrimitiveType](out self, array: PrimitiveArray[A]):
-        """`Plain`'s node of `array`'s values, sharing its buffer."""
-        comptime S = size_of[Scalar[A.native]]()
-        self.count = len(array)
-        self.buffer = array.buffer
-        self.start = array.offset * S
-        self.size = len(array) * S
-        self.children = List[Encoded]()
 
     def __init__[T: DType](out self, values: Span[Scalar[T], _]):
         """`Plain`'s node of `values`, a copy."""
@@ -265,119 +254,6 @@ struct FrameValues[S: Codec](Movable, Sized):
         return self.get[T](self.frames.of(i))
 
 
-struct Exceptions[Positions: Codec, Values: Codec](Movable):
-    """Values set apart and where they were, two slots of the codec that
-    sets them apart: each one's position in the column, ascending, and its
-    value."""
-
-    var positions: Self.Positions
-    var values: Self.Values
-    var found: List[UInt64]
-    """Each exception's position."""
-    var kept: Buffer[mut=True]
-    """Each exception's value, while encoding."""
-    var decoded: Encoded
-    """Each exception's value, decoded."""
-    var before: Int
-    """Values encoded before the block being encoded."""
-    var next: Int
-    """The exception to put back next."""
-    var ahead: Int
-    """Its position; `Int.MAX` past the last."""
-
-    def __init__(
-        out self, var positions: Self.Positions, var values: Self.Values
-    ):
-        self.positions = positions^
-        self.values = values^
-        self.found = List[UInt64]()
-        self.kept = Buffer.alloc_uninit(0)
-        self.decoded = Encoded()
-        self.before = 0
-        self.next = 0
-        self.ahead = Int.MAX
-
-    # --- encoding ---
-
-    def start[T: DType](mut self, count: Int):
-        self.found = List[UInt64]()
-        self.kept = Buffer.alloc_uninit[T](count)
-        self.before = 0
-
-    @always_inline
-    def keep[T: DType](mut self, i: Int, value: Scalar[T]):
-        """Set value `i` of the block being encoded apart."""
-        self.kept.view[T]().unsafe_set(len(self.found), value)
-        self.found.append(UInt64(self.before + i))
-
-    def count(self) -> Int:
-        """The values set apart so far."""
-        return len(self.found)
-
-    def fill[
-        T: DType
-    ](self, since: Int, dst: BufferView[mut=True, T, _], value: Scalar[T]):
-        """Write `value` where each value set apart after the first `since`
-        was, in `dst`, the block being encoded."""
-        for k in range(since, len(self.found)):
-            dst.unsafe_set(Int(self.found[k]) - self.before, value)
-
-    def passed(mut self, n: Int):
-        """The block being encoded, of `n` values, is done."""
-        self.before += n
-
-    def finish[T: DType](mut self, mut slots: List[Encoded]) raises:
-        """Append the two slots' nodes to `slots`."""
-        var kept = self.kept^.to_immutable()
-        self.kept = Buffer.alloc_uninit(0)
-        var n = len(self.found)
-        slots.append(self.positions.encode_view(BufferView(Span(self.found))))
-        slots.append(
-            self.values.encode_view(BufferView(kept.view[T](0, n).as_span()))
-        )
-
-    # --- decoding ---
-
-    def start[
-        T: DType
-    ](mut self, ref positions: Encoded, ref values: Encoded, count: Int) raises:
-        var n = positions.count
-        var stored = values.count
-        if stored != n:
-            raise CorruptError(t"codecs: {stored} exceptions at {n} positions")
-        self.found = List[UInt64](length=n, fill=0)
-        self.positions.decode_into[DType.uint64](
-            positions, BufferView(Span(self.found))
-        )
-        var last = -1
-        for p in self.found:
-            if Int(p) <= last or Int(p) >= count:
-                raise CorruptError(
-                    t"codecs: an exception at {p}, after {last} of {count}"
-                )
-            last = Int(p)
-        self.decoded = self.values.held[T](values)
-        self.next = 0
-        self.ahead = Int(self.found[0]) if n > 0 else Int.MAX
-
-    @always_inline
-    def put[T: DType, W: Int](mut self, at: Int, v: SIMD[T, W]) -> SIMD[T, W]:
-        """`v`, the values from position `at`, with the exceptions among
-        them put back."""
-        if self.ahead >= at + W:
-            return v
-        var out = v
-        var kept = self.decoded.values[T]()
-        while self.ahead < at + W:
-            out[self.ahead - at] = kept.unsafe_get(self.next)
-            self.next += 1
-            self.ahead = (
-                Int(self.found[self.next]) if self.next
-                < len(self.found) else Int.MAX
-            )
-        return out
-
-
 struct Unpacked(Movable):
     """The block of values a store decodes a block at a time -- runs, or
     values of as many bits as each needs -- for the registers to load: the
@@ -524,39 +400,12 @@ trait Codec(Defaultable, Deinitable, Movable):
     # --- a column, by a store ---
 
     @always_inline
-    def encode[
-        A: PrimitiveType
-    ](mut self, array: PrimitiveArray[A]) raises -> Encoded:
-        """`array`'s values, read where they lie; an array with nulls is
-        refused -- a container sets them apart, or `Nullable` does."""
-        if array.nulls != 0:
-            raise InvalidError(
-                t"codecs: {array.nulls} nulls; encode the values present"
-            )
-        return self.encode_view[A.native](array.values())
-
-    @always_inline
     def decode[
         A: PrimitiveType
     ](mut self, ref node: Encoded, dtype: A) raises -> PrimitiveArray[A]:
         """The values `node` holds, as an array of `dtype`: over the node's
         own buffer when the store keeps them as they are."""
-        comptime T = A.native
-        comptime if Self.STORES_VALUES:
-            self.start[T](node, node.count)
-            return node.array(dtype)
-        else:
-            var n = node.count
-            var buffer = Buffer.alloc_uninit[T](n)
-            self.decode_into[T](node, buffer.view[T](0, n))
-            return PrimitiveArray[A](
-                dtype,
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=buffer^.to_immutable(),
-            )
+        return self.held[A.native](node).array(dtype)
 
     def encode_view[
         T: DType

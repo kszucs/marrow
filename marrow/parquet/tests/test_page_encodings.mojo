@@ -11,7 +11,6 @@ from ..encodings import (
     DeltaBinaryPackedEncoding,
     DeltaLengthEncoding,
     Encoding,
-    RleEncoding,
 )
 
 
@@ -29,41 +28,6 @@ def _dbp_header(block: Int, miniblocks: Int, total: Int) -> List[UInt8]:
     Leb128.write(out, UInt64(total))
     Leb128.write(out, 0)
     return out^
-
-
-def test_rle_width_wider_than_the_type() raises:
-    var data = _bytes(0x02, 0x01)
-    var out = List[UInt32]()
-    with assert_raises(contains="of 33 bits"):
-        _ = RleEncoding.read_runs[DType.uint32](Span(data), 33, 1, out)
-
-
-def test_rle_packed_run_past_the_page() raises:
-    var data = _bytes(0x05, 0xFF)
-    var out = List[UInt32]()
-    with assert_raises(contains="truncated"):
-        _ = RleEncoding.read_runs[DType.uint32](Span(data), 3, 16, out)
-
-
-def test_rle_header_past_the_page() raises:
-    var data = _bytes(0x80)
-    var out = List[UInt32]()
-    with assert_raises(contains="truncated"):
-        _ = RleEncoding.read_runs[DType.uint32](Span(data), 1, 1, out)
-
-
-def test_dictionary_codes_on_an_empty_page() raises:
-    var data = List[UInt8]()
-    var codes = List[Int32]()
-    with assert_raises(contains="no codes"):
-        RleEncoding.read_codes[DType.int32](Span(data), 3, codes)
-
-
-def test_dictionary_codes_none_on_an_empty_page() raises:
-    var data = List[UInt8]()
-    var codes = List[Int32]()
-    RleEncoding.read_codes[DType.int32](Span(data), 0, codes)
-    assert_true(len(codes) == 0)
 
 
 def test_dbp_miniblocks_must_divide_the_block() raises:

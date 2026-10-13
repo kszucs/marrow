@@ -1,7 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot profiling driver for `marrow.codecs.snappy`.
+"""Single-shot profiling driver for `marrow.compress.snappy`.
 
 Runs one operation over one of `bench_snappy.mojo`'s 1 MiB corpora in a loop,
 so a sampling profiler sees nothing but that operation. Build it at `-O3`,

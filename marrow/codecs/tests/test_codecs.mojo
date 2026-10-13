@@ -9,33 +9,25 @@ from std.memory import bitcast
 from std.testing import assert_equal, assert_raises, assert_true
 
 from ...codecs import (
-    Alp,
     BitPack,
-    Buckets,
     ByteStreamSplit,
     ByteSwap,
     Cascade,
     Cast,
     Codec,
-    Compressed,
     Delta,
-    Gcd,
-    Gorilla,
     Dictionary,
     Encoded,
     FrameOfReference,
-    Frequency,
     Lengths,
     Ordered,
-    Patch,
     Plain,
     Prefixes,
+    Rle,
     Runs,
-    Xor,
     Zigzag,
 )
 from ...builders import array
-from ...compress import Huffman, Lz4, Snappy, Zstd
 from ...dtypes import Int64Type, int64
 from ...utils.integers import Unsigned
 from ...utils.testing import Rng
@@ -264,50 +256,6 @@ def test_codecs_delta() raises:
     check[DType.uint16](Cascade((Delta(UInt16(7)), Plain())))
 
 
-def test_codecs_xor() raises:
-    check[DType.float64](Cascade[Xor, Plain]())
-    check[DType.int16](Cascade[Xor, Plain]())
-
-
-def test_codecs_gcd() raises:
-    check[DType.uint32](Cascade[Gcd[], Plain]())
-    check[DType.uint64](Cascade((Gcd(64), BitPack())))
-
-
-def test_codecs_patch() raises:
-    check[DType.uint32](Cascade[Patch[], Plain]())
-    check[DType.uint64](Cascade((Patch(64), BitPack())))
-
-
-def test_codecs_alp() raises:
-    check[DType.float64](Cascade[Alp[], Plain]())
-    check[DType.float32](Cascade[Alp[], Plain]())
-
-
-def test_codecs_buckets() raises:
-    check[DType.uint64](Cascade[Buckets]())
-    check[DType.uint16](Cascade[Buckets]())
-
-
-def test_codecs_gorilla() raises:
-    check[DType.uint64](Cascade[Gorilla]())
-    check[DType.uint32](Cascade[Gorilla]())
-
-
-def test_codecs_compressed() raises:
-    check[DType.uint8](Cascade[Compressed[Huffman]]())
-    check[DType.uint8](Cascade[Compressed[Zstd]]())
-    check[DType.uint8](Cascade[Compressed[Lz4]]())
-    check[DType.uint8](Cascade[Compressed[Snappy]]())
-    check_bytes(Cascade[Lengths[Cascade[Compressed[Zstd]]], Plain]())
-    check_bytes(Cascade[Lengths[Cascade[Compressed[Huffman]]], Plain]())
-
-
-def test_codecs_frequency() raises:
-    check[DType.int64](Cascade[Frequency[]]())
-    check[DType.float32](Cascade((Frequency(64),)))
-
-
 def test_codecs_zigzag() raises:
     check[DType.int32](Cascade[Zigzag, Plain]())
     check[DType.int64](Cascade[Zigzag, Plain]())
@@ -448,53 +396,6 @@ def test_cascade_strings() raises:
     check_bytes(Cascade[Prefixes[], Delta, Zigzag, BitPack[]]())
 
 
-def test_cascade_gorilla() raises:
-    """Gauges as Gorilla begins them: each float's bits xor the one
-    before, which leaves the bits that changed, packed."""
-    check[DType.float64](Cascade[Xor, BitPack[]]())
-    check[DType.float32](Cascade[Xor, BitPack[]]())
-
-
-def test_cascade_gcd() raises:
-    """CODEC(GCD): timestamps in whole seconds, as milliseconds."""
-    check[DType.int64](Cascade[Ordered, FrameOfReference[], Gcd[], BitPack[]]())
-
-
-def test_cascade_pfor() raises:
-    """PFOR: frame of reference, the widest values set apart, the rest
-    packed narrow."""
-    check[DType.int64](
-        Cascade[Ordered, FrameOfReference[], Patch[], BitPack[]]()
-    )
-
-
-def test_cascade_alp() raises:
-    """ALP: decimals as integers, framed and packed."""
-    check[DType.float64](
-        Cascade[Alp[], Ordered, FrameOfReference[], BitPack[]]()
-    )
-    var prices = List[Float64]()
-    for i in range(3000):
-        prices.append(Float64((i * 7919) % 100000) / 100)
-    var alp = Cascade[Alp[], Ordered, FrameOfReference[], BitPack[]]()
-    var encoded = alp.encode_view(BufferView(Span(prices)))
-    assert_equal(len(encoded[0][Alp[].POSITIONS].bytes()), 0)
-    assert_true(_same(_decode[DType.float64](alp, encoded), prices))
-
-
-def test_cascade_double_delta_buckets() raises:
-    """CODEC(DoubleDelta): the delta of the delta in a few widths."""
-    check[DType.int64](Cascade[Delta, Delta, Zigzag, Buckets]())
-    check[DType.int32](Cascade[Delta, Delta, Zigzag, Buckets]())
-
-
-def test_cascade_gorilla_bits() raises:
-    """CODEC(Gorilla): floats' bits xor the one before, in the window of
-    their meaningful bits."""
-    check[DType.float64](Cascade[Xor, Gorilla]())
-    check[DType.float32](Cascade[Xor, Gorilla]())
-
-
 def test_cascade_slots() raises:
     """Slots stored by cascades of their own: the smallest values of each
     frame delta-packed, the widths run-encoded."""
@@ -547,7 +448,8 @@ def _encode[
 def test_codecs_docstring_examples() raises:
     var bitpack = _encode(BitPack[](), [UInt8(0), 1, 3])
     assert_true(_bytes(bitpack) == [UInt8(0x34), 0])
-    assert_true(_bytes(bitpack[BitPack[].WIDTHS]) == [UInt8(2)])
+    var widths = BitPack.widths(bitpack)
+    assert_true(len(widths) == 1 and widths[0] == 2)
 
     var zigzag = _encode(Cascade[Zigzag, Plain](), [Int8(0), -1, 1, -2])
     assert_true(_bytes(zigzag[1]) == [UInt8(0), 1, 2, 3])
@@ -559,7 +461,8 @@ def test_codecs_docstring_examples() raises:
         Cascade[FrameOfReference[], Plain](), [UInt8(100), 101, 103]
     )
     assert_true(_bytes(reference[1]) == [UInt8(0), 1, 3])
-    assert_true(_bytes(reference[0][FrameOfReference[].LOWS]) == [UInt8(100)])
+    var lows = FrameOfReference.lows[DType.uint8](reference[0])
+    assert_true(len(lows) == 1 and lows[0] == 100)
 
     var bss = _encode(ByteStreamSplit(), [UInt16(0x0102), 0x0304])
     assert_true(_bytes(bss) == [UInt8(2), 4, 1, 3])
@@ -567,20 +470,13 @@ def test_codecs_docstring_examples() raises:
     var dictionary = _encode(
         Cascade[Dictionary[], Plain](), [UInt8(5), 5, 9, 5]
     )
-    assert_true(_bytes(dictionary[0][Dictionary[].DISTINCT]) == [UInt8(5), 9])
+    assert_true(_bytes(Dictionary.distinct(dictionary[0])) == [UInt8(5), 9])
     assert_true(dictionary[1].values[DType.uint32]()[2] == 1)
 
     var runs = _encode(Runs[](), [UInt8(5), 5, 5, 1, 2, 2])
     assert_true(_bytes(runs[Runs[].VALUES]) == [UInt8(5), 1, 2])
     var lengths = runs[Runs[].LENGTHS].values[DType.uint64]()
     assert_true(lengths[0] == 3 and lengths[1] == 1 and lengths[2] == 2)
-
-
-def test_codecs_alp_example() raises:
-    var alp = _encode(Cascade[Alp[], Plain](), [Float64(1.5), 2.25, 0.5])
-    var ints = alp[1].values[DType.int64]()
-    assert_true(ints[0] == 150 and ints[1] == 225 and ints[2] == 50)
-    assert_true(alp[0][Alp[].SCALES].values[DType.uint16]()[0] == 2 << 8)
 
 
 def test_codecs_parquet_delta_binary_packed() raises:
@@ -593,10 +489,9 @@ def test_codecs_parquet_delta_binary_packed() raises:
     var deltas: List[Int32] = [2, 3, 4, 5]
     var e = dbp.encode_view(BufferView(Span(deltas)))
     # The smallest delta's key, and one width of 0 -- so no bytes.
-    assert_true(
-        e[2][FrameOfReference[].LOWS].values[DType.uint32]()[0] == 0x80000001
-    )
-    assert_true(_bytes(e[3][BitPack[].WIDTHS]) == [UInt8(0)])
+    assert_true(FrameOfReference.lows[DType.uint32](e[2])[0] == 0x80000001)
+    var widths = BitPack.widths(e[3])
+    assert_true(len(widths) == 1 and widths[0] == 0)
     assert_equal(len(e[3].bytes()), 0)
     var back = _decode[DType.int32](dbp, e)
     assert_true(back == [Int32(2), 3, 4, 5])
@@ -613,7 +508,7 @@ def test_codecs_arrays() raises:
         values.append(Int64(i * 7 - (i % 13) * 1000))
     var arr = array[Int64Type](values.copy(), int64)
     var cascade = Cascade[Delta, Zigzag, BitPack[]]()
-    var node = cascade.encode(arr)
+    var node = cascade.encode_view(arr.values())
     var back = cascade.decode(node, int64)
     assert_equal(len(back), len(values))
     for i in range(len(values)):
@@ -622,29 +517,64 @@ def test_codecs_arrays() raises:
     cascade.decode_into[DType.int64](node, BufferView(Span(wide))[5:])
     assert_true(wide[0] == 0 and wide[5 + 42] == values[42])
     # A sliced array is encoded where it lies.
-    var tail = cascade.encode(arr.slice(1000, 500))
+    var tail = cascade.encode_view(arr.slice(1000, 500).values())
     var sliced = cascade.decode(tail, int64)
     assert_true(sliced.values()[0] == values[1000])
 
 
 def test_codecs_arrays_plain_shares() raises:
-    """`Plain` keeps the values as they are: its node shares the array's
-    buffer, and decoding gives an array over the node's."""
+    """`Plain` keeps the values as they are: decoding gives an array over
+    the node's buffer, at the node's offset."""
     var four: List[Int64] = [5, 6, 7, 8]
-    var arr = array[Int64Type](four^, int64).slice(1, 3)
-    var node = Encoded(arr)
+    var arr = array[Int64Type](four^, int64)
+    var node = Encoded(arr.buffer, 3 * 8)
+    node.start = 8
+    node.count = 3
     var plain = Plain()
     var back = plain.decode(node, int64)
     assert_equal(back.offset, 1)
     assert_true(back.values()[0] == 6 and back.values()[2] == 8)
 
 
-def test_codecs_arrays_refuse_nulls() raises:
-    var xs = List[Optional[Int]]()
-    xs.append(1)
-    xs.append(None)
-    xs.append(3)
-    var arr = array[Int64Type](xs^, int64)
-    var cascade = Cascade[Delta, Zigzag, BitPack[]]()
-    with assert_raises(contains="nulls"):
-        _ = cascade.encode(arr)
+# --- Rle, Parquet's RLE / bit-packed hybrid -----------------------------------
+
+
+def test_codecs_rle() raises:
+    check[DType.uint8](Rle(8))
+    check[DType.uint32](Rle(32))
+    check[DType.uint64](Cascade((Rle(64),)))
+
+
+def test_codecs_rle_width_wider_than_the_type() raises:
+    var data: List[UInt8] = [UInt8(0x02), 0x01]
+    var out = List[UInt32]()
+    with assert_raises(contains="of 33 bits"):
+        _ = Rle.read_runs[DType.uint32](Span(data), 33, 1, out)
+
+
+def test_codecs_rle_packed_run_past_the_data() raises:
+    var data: List[UInt8] = [UInt8(0x05), 0xFF]
+    var out = List[UInt32]()
+    with assert_raises(contains="truncated"):
+        _ = Rle.read_runs[DType.uint32](Span(data), 3, 16, out)
+
+
+def test_codecs_rle_header_past_the_data() raises:
+    var data: List[UInt8] = [UInt8(0x80)]
+    var out = List[UInt32]()
+    with assert_raises(contains="truncated"):
+        _ = Rle.read_runs[DType.uint32](Span(data), 1, 1, out)
+
+
+def test_codecs_rle_codes_with_no_width() raises:
+    var data = List[UInt8]()
+    var codes = List[Int32]()
+    with assert_raises(contains="no codes"):
+        Rle.read_codes[DType.int32](Span(data), 3, codes)
+
+
+def test_codecs_rle_no_codes_with_no_width() raises:
+    var data = List[UInt8]()
+    var codes = List[Int32]()
+    Rle.read_codes[DType.int32](Span(data), 0, codes)
+    assert_true(len(codes) == 0)

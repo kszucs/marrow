@@ -49,8 +49,8 @@ from .encodings import (
     DictionaryValues,
     Encoding,
     PlainValues,
-    RleEncoding,
 )
+from ..codecs import Rle
 from ..utils import Crc32
 from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import (
@@ -706,12 +706,12 @@ struct ColumnWriter(Movable):
             var def_bytes = List[UInt8]()
             if max_rep >= 1:
                 var page_reps = Self._sub(reps, i0, i)
-                RleEncoding.write_runs(
+                Rle.write_runs(
                     Span(page_reps), Int(bit_width(UInt64(max_rep))), rep_bytes
                 )
             if max_def >= 1:
                 var page_defs = Self._sub(defs, i0, i)
-                RleEncoding.write_runs(
+                Rle.write_runs(
                     Span(page_defs), Int(bit_width(UInt64(max_def))), def_bytes
                 )
 
@@ -720,9 +720,7 @@ struct ColumnWriter(Movable):
             if encoding == Encoding.RLE_DICTIONARY:
                 value_bytes.append(UInt8(dict_width))
                 var page_indices = Self._sub(indices, p0, p)
-                RleEncoding.write_runs(
-                    Span(page_indices), dict_width, value_bytes
-                )
+                Rle.write_runs(Span(page_indices), dict_width, value_bytes)
             else:
                 var page_vals = values.slice(e0, e - e0)
                 if (

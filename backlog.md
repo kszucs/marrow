@@ -455,12 +455,10 @@ under load.
 - **The compressor's 5-10% gap on tag-heavy data** (`ints`, `strings`) is not
   algorithmic. Its disassembly has the same CRC hash, 16-position probe and
   `rbit`/`clz` match finder as libsnappy. That gap was not chased.
-- **`CompressionLibs` returns a fresh list per page, for every codec.** The
-  writer then copies it again into the file buffer, and the decompress
-  methods take a raw `Pointer` destination. Taking `mut out: List[UInt8]` to
-  append to, and a `Span` destination, as `Snappy.compress` and
-  `Snappy.decompress` do, would drop a copy and an allocation per page
-  and take raw pointers out of every caller.
+- **Parquet's `Compression.compress` returns a fresh list per page, for
+  every codec** (`parquet/compression.mojo`). The writer then copies it
+  again into the file buffer. Taking `mut out: List[UInt8]` to append to, as
+  `Snappy.compress` does, would drop a copy and an allocation per page.
 - **`bulk_copy` (`buffers.mojo`) is measured on one caller only.** The
   stdlib's `unsafe_memcpy` is a 32-byte loop above 16 bytes and never calls
   libc; handing copies of 256 bytes or more to libc `memcpy` took Snappy
@@ -803,11 +801,11 @@ touches a kernel or the expression layer on `pixi run bench-size-check`.
 | Pass `type_length` in `_emit_field` | `parquet/schema.mojo:1471` | FLBA pages fall back to `MAX_ROWS_PER_PAGE`: ~80 MB pages for `fixed_size_binary(4096)` |
 | Correct `floor_div`'s docstring or reduce it to `//` | `utils/datetime.mojo:28` | it says `//` truncates; `truncate_div` relies on it flooring |
 | Delete the small dead items: `JoinOrder.cost` (a copy of `JoinChain.cost`), `DynValue._shape`, `_IpcEncoder.encode_schema`, `create_vector_u8`, `CArrowDeviceArray.to_array`, `simd_width(s)`, `PrimitiveBuilder.set_length`, `Table.get_schema`, `SchemaNode.contains_repeated`, `PARQUET_MAGIC`, `OpenDalWriter.__enter__` | grepped across the repo | no caller |
-| Delete the codecs chain framework (`cascade.mojo`, `dyn_cascade.mojo`, `core.mojo`'s stream layer, the `constant`/`rle`/`varint`/`xor`/`frequency`/`delta`/`plain` codecs) and the test-only Iceberg transform apply path (`Transform.apply`, `murmur3_x86_32`, `encode_bound`, `snapshot_as_of`) | `marrow/codecs/`, `marrow/iceberg/` | ~1,750 lines with no caller outside their tests; if a cascade is kept, keep one -- the two writers and readers are byte-identical loops |
+| Delete the test-only Iceberg transform apply path (`Transform.apply`, `murmur3_x86_32`, `encode_bound`, `snapshot_as_of`) | `marrow/iceberg/` | no caller outside their tests |
 | One "owned, rebased validity" helper for the five spellings and seven self-unions | `kernels/cast.mojo:338`, `string.mojo:114, 1051`, `boolean.mojo:132, 380`, `nested.mojo:76`, `temporal.mojo:289, 574, 634, 757` | its absence let the unary bitmap bug in |
 | `Buffer.alloc_for[T](ctx, n)` for the GPU-or-CPU allocation ladder | `kernels/numeric.mojo:108, 187, 607`, `cast.mojo:257, 760, 814`, `boolean.mojo:367`, `hashing.mojo:311, 379, 477` | ten copies |
 | Move `JoinOrder`/`PlannedJoin` beside `JoinRules`; `valid_min_max` into `kernels/aggregate`; `assert_values_equal` out of `utils/testing.mojo` | `expr/physical.mojo:2368`, `expr/estimates.mojo:37`, `utils/testing.mojo:36` | plan data in the physical layer, the cost model on the Parquet layer, utils on kernels |
-| One compression dispatch for Parquet, IPC and Avro; drop `CompressionLibs._sz` | `parquet/codecs.mojo`, `ipc.mojo:197`, `avro/file.mojo:51` | snappy is native in Avro and `dlopen`ed in Parquet; Avro decompresses zstd through libzstd and compresses natively |
+| One compression dispatch for Parquet, IPC and Avro | `parquet/compression.mojo`, `ipc.mojo:197`, `avro/file.mojo:51` | snappy is native in Avro and `dlopen`ed in Parquet; Avro decompresses zstd through libzstd and compresses natively |
 | Merge Parquet's flat `LeafBuilder` and leveled `LeveledSink` families into one per-type decode step | `parquet/reader.mojo:669-1965` | two copies of every encoding per physical type, with different bounds checks |
 | Move `RecordBatch.join`/`sort_by` out of the core layer, or say `tabular` sits above the kernels | `tabular.mojo` | `tabular` imports `kernels.join` and `sort`; `execution.mojo:7` still claims the edge is gone. `arrays.mojo` no longer reaches the kernels: concatenation is `DynBuilder.concat` |
 
@@ -1385,20 +1383,23 @@ differentiator hiding inside a table-stakes item.
     `Index.from_iceberg_manifest` beside `Index.from_parquet`
     (`marrow/expr/index.mojo`) -- is unwritten. So are field ids on the
     *Parquet* reader, which Iceberg's data files need the same way.
-- **Codecs, beyond the first fifteen.** `marrow/codecs/` encodes a block of
+- **Codecs, beyond what Parquet uses.** `marrow/codecs/` encodes a block of
   values (a `BufferView`, or byte strings as offsets and data) to an
   `Encoded` node -- byte streams and child nodes, nothing framed -- and back.
-  Maps (`Delta`, `Zigzag`, `Xor`, `Ordered`) fuse inside a `Cascade`;
-  structures (`Rle`, `Frequency`, `Dictionary`, `DeltaLengthByteArray`,
-  `DeltaByteArray`) take a codec per sub-stream; `DynCodec` / `DynCascade`
-  compose the same at run time. What is missing:
+  Lanes (`Delta`, `Zigzag`, `Ordered`, `Cast`, `ByteSwap`,
+  `FrameOfReference`, `Dictionary`) fuse inside a `Cascade`, which a store
+  (`Plain`, `ByteStreamSplit`, `BitPack`, `Runs`) ends; `Lengths` and
+  `Prefixes` take byte strings first. The codecs only tests used -- `Alp`,
+  `Patch`, `Gcd`, `Xor`, `Gorilla`, `Buckets`, `Frequency`, `Compressed[C]`
+  -- were deleted and are recoverable from the parent of the commit
+  `refactor(codecs): drop codecs nothing but their tests used`. What is
+  missing:
   - **Serialization.** Nothing writes a node to bytes but Parquet's own
     layouts; a marrow-native column or spill format needs one, and the chain
     stored beside it.
   - **More codecs**: patched FOR and floating-point codecs (ALP, Chimp,
     pseudodecimal), and the compressors (`Lz4`, `Zstd`, `Snappy`) as codecs
-    over a stream. Each is a `ValueCodec` or a `Map` and an arm of
-    `DynCodec`.
+    over a stream -- each a `Codec`, a lane or a store.
   - **One dictionary builder.** `codecs.Dictionary` assigns fixed-width codes
     through `SwissHashTable`; its byte strings, Parquet's byte-array pages and
     `kernels.DictionaryEncoder` still each map values to codes their own way.

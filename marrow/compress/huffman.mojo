@@ -34,9 +34,8 @@ from std.bit import bit_width, log2_floor
 from std.builtin.globals import global_constant
 from std.memory import bitcast
 
-from ..errors import CorruptError, DynError
+from ..errors import CorruptError
 from ..views import BufferView
-from .core import Compressor
 from ..utils.bits import BitReader, BitWriter
 from .fse import (
     MAX_WEIGHT,
@@ -1335,50 +1334,3 @@ struct LiteralsEncoder(Movable):
         )
         header.write_at(out, at)
         return Int(sent)
-
-
-struct Huffman(Compressor):
-    """Bytes Huffman-coded as Zstandard codes a block's literals, in
-    sections of up to 128 KiB, each with a tree of its own -- or stored, or
-    one byte repeated, where that is smaller."""
-
-    @staticmethod
-    def max_decompressed_length(n: Int) -> Int:
-        """2^18 times as many: the densest section, one byte repeated behind
-        a 3-byte header, makes up to 2^20 bytes of 4."""
-        return n << 18
-
-    @staticmethod
-    def compress(
-        src: Span[mut=False, UInt8, _], mut dst: List[UInt8]
-    ) raises DynError:
-        """Append `src` to `dst` as sections of up to `BLOCK_MAX` bytes."""
-        var lo = 0
-        while lo < len(src):
-            var n = min(BLOCK_MAX, len(src) - lo)
-            var coder = LiteralsEncoder()
-            _ = coder.encode(src[lo : lo + n], False, dst)
-            lo += n
-
-    @staticmethod
-    def decompress[
-        o: Origin[mut=True]
-    ](src: Span[UInt8, _], dst: Span[UInt8, o]) raises DynError:
-        """Decode the sections of `src` into exactly `dst`."""
-        var into = BufferView(dst)
-        var table = HuffmanTable()
-        var pos = 0
-        var done = 0
-        while done < len(dst):
-            var section = LiteralsHeader.read(src[pos:])
-            if section.n == 0:
-                raise CorruptError("zstd: an empty Huffman section")
-            table.decode_section(
-                section, src[pos:], into[done:], len(dst) - done
-            )
-            done += section.n
-            pos += section.end()
-        if pos != len(src):
-            raise CorruptError(
-                t"zstd: {len(src)} Huffman bytes, {pos} of them read"
-            )

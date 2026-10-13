@@ -1,8 +1,8 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Streams of bit fields: `BitCursor`, forward, low bits first -- what
-`Buckets` and `Gorilla` write and an FSE table description is -- and
+"""Streams of bit fields: `BitCursor`, forward, low bits first -- what an
+FSE table description is -- and
 `BitReader` and `BitWriter`, backward, the streams of Zstandard's entropy
 coders.
 

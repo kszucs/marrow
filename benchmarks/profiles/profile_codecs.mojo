@@ -1,7 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot profiling driver for `marrow.codecs.zstd` and `.lz4`.
+"""Single-shot profiling driver for `marrow.compress.zstd` and `.lz4`.
 
 Runs one codec operation over one of the codec benchmarks' corpora in a
 loop, so a sampling profiler sees nothing but that:
