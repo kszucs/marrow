@@ -32,7 +32,7 @@ from std.testing import assert_true
 
 from ...errors import CorruptError, NotImplementedError
 from ...views import BufferView
-from ..core import Codecs, decompress_unsized_with
+from ..core import Codecs
 from ...utils.testing import Rng, ScratchDir
 from ..zstd import LibZstd, Zstd
 from ..huffman import HuffmanTable
@@ -699,8 +699,8 @@ def _without_size(frame: List[UInt8]) -> List[UInt8]:
 
 
 def test_utils_zstd_content_length_declared() raises:
-    """A frame's declared size, summed over frames and past skippable ones,
-    the same through `LibZstd`; no frames hold nothing."""
+    """A frame's declared size, summed over frames and past skippable ones;
+    no frames hold nothing."""
     var a = words(200)
     var b = words(100_000, seed=5)
     var stream = _compress(a)
@@ -710,7 +710,6 @@ def test_utils_zstd_content_length_declared() raises:
     stream.extend(_compress(b))
     var want = len(a) + len(b)
     assert_true(Zstd.content_length(Span(stream)).value() == want)
-    assert_true(LibZstd.content_length(Span(stream)).value() == want)
     assert_true(Zstd.content_length(Span(List[UInt8]())).value() == 0)
 
 
@@ -720,7 +719,6 @@ def test_utils_zstd_content_length_unknown() raises:
     var data = words(200)
     var frame = _without_size(_compress(data))
     assert_true(not Zstd.content_length(Span(frame)))
-    assert_true(not LibZstd.content_length(Span(frame)))
     _expect(frame, data, "without a size")
 
 
@@ -762,26 +760,3 @@ def test_utils_zstd_content_length_corrupt() raises:
             assert_true(False, String(t"case {i} accepted"))
         except e:
             assert_true(e.isa[CorruptError](), String(e))
-
-
-def test_utils_zstd_decompress_unsized_with() raises:
-    """Natively into the declared size, and through libzstd's streaming
-    decoder when the frame declares none or `native` is off."""
-    var data = words(200)
-    var frame = _compress(data)
-    var unsized = _without_size(frame)
-    assert_bytes(
-        decompress_unsized_with[Zstd, LibZstd](True, Span(frame)),
-        data,
-        "native, sized",
-    )
-    assert_bytes(
-        decompress_unsized_with[Zstd, LibZstd](True, Span(unsized)),
-        data,
-        "native, unsized",
-    )
-    assert_bytes(
-        decompress_unsized_with[Zstd, LibZstd](False, Span(frame)),
-        data,
-        "library",
-    )

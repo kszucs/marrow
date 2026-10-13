@@ -271,8 +271,7 @@ def _roundtrip(codec: Compression) raises:
 
 def test_codecs_library_implementations() raises:
     """LZ4, LZ4_RAW, SNAPPY and ZSTD in Mojo and through their libraries:
-    each decodes what the other wrote. BROTLI decodes both ways too, and is
-    written by libbrotli either way."""
+    each decodes what the other wrote. BROTLI decodes both ways too."""
     var data = _sample()
     for codec in [
         Compression.ZSTD,
@@ -312,6 +311,7 @@ def test_codecs_needs_libs() raises:
         assert_false(codec.needs_libs(True))
         assert_true(codec.needs_libs(False))
     assert_true(Compression.GZIP.needs_libs(True))
+    assert_true(Compression(3).needs_libs(True))  # LZO: no method
 
 
 def test_decompress_refuses_sizes_the_page_cannot_hold() raises:

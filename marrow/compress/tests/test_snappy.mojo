@@ -540,9 +540,7 @@ def test_utils_snappy_pair_rejects_either_corrupt_stream() raises:
 
 
 def test_utils_snappy_content_length() raises:
-    """A stream always declares its length, read the same through
-    `LibSnappy`."""
+    """A stream always declares its length."""
     var data = words(1000)
     var comp = _compress(data)
     assert_equal(Snappy.content_length(Span(comp)).value(), len(data))
-    assert_equal(LibSnappy.content_length(Span(comp)).value(), len(data))

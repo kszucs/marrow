@@ -647,16 +647,14 @@ def _with_size(frame: List[UInt8], n: Int) -> List[UInt8]:
 
 def test_utils_lz4_frame_content_length() raises:
     """A frame declares its size only when its descriptor says so --
-    `compress` and liblz4 leave it out -- and a declared size is read the
-    same through `LibLz4Frame` and decodes."""
+    `compress` and liblz4 leave it out -- and a declared size is read and
+    decodes."""
     var data = words(100_000)
     var frame = List[UInt8]()
     Lz4Frame.compress(Span(data), frame)
     assert_true(not Lz4Frame.content_length(Span(frame)))
-    assert_true(not LibLz4Frame.content_length(Span(frame)))
     var sized = _with_size(frame, len(data))
     assert_equal(Lz4Frame.content_length(Span(sized)).value(), len(data))
-    assert_equal(LibLz4Frame.content_length(Span(sized)).value(), len(data))
     _expect[_FRAME](sized, data, "sized")
 
 

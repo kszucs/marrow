@@ -522,18 +522,17 @@ def test_codecs_arrays() raises:
     assert_true(sliced.values()[0] == values[1000])
 
 
-def test_codecs_arrays_plain_shares() raises:
-    """`Plain` keeps the values as they are: decoding gives an array over
-    the node's buffer, at the node's offset."""
+def test_codecs_arrays_plain_decodes_a_prefix() raises:
+    """`Plain` keeps the values as they are: decoding a node holding three
+    of a buffer's four values gives those three."""
     var four: List[Int64] = [5, 6, 7, 8]
     var arr = array[Int64Type](four^, int64)
     var node = Encoded(arr.buffer, 3 * 8)
-    node.start = 8
     node.count = 3
     var plain = Plain()
     var back = plain.decode(node, int64)
-    assert_equal(back.offset, 1)
-    assert_true(back.values()[0] == 6 and back.values()[2] == 8)
+    assert_equal(len(back), 3)
+    assert_true(back.values()[0] == 5 and back.values()[2] == 7)
 
 
 # --- Rle, Parquet's RLE / bit-packed hybrid -----------------------------------

@@ -7,6 +7,7 @@ kept; `FrameOfReference` with a parameter a frame; and `Dictionary` with the
 distinct values. Each is also usable alone, a register at a time --
 `Zigzag().forward[DType.int64, 1](v)`."""
 
+from std.algorithm import vectorize
 from std.bit import byte_swap
 from std.memory import bitcast
 from std.sys import size_of
@@ -38,11 +39,6 @@ struct Delta(Codec):
     """The bits of the value before the first."""
     var last: UInt64
     """The bits of the value before the next one."""
-
-    @staticmethod
-    def node() -> Encoded:
-        """`Delta`'s node in a cascade's tree: it stores nothing."""
-        return Encoded()
 
     def __init__(out self):
         self.first = 0
@@ -88,11 +84,6 @@ struct Zigzag(Codec):
 
     comptime Out[T: DType]: DType = Unsigned[T]
 
-    @staticmethod
-    def node() -> Encoded:
-        """`Zigzag`'s node in a cascade's tree: it stores nothing."""
-        return Encoded()
-
     @always_inline
     def forward[T: DType, W: Int](self, v: SIMD[T, W]) -> SIMD[Self.Out[T], W]:
         return zigzag(v)
@@ -113,11 +104,6 @@ struct Ordered(Codec):
     """
 
     comptime Out[T: DType]: DType = Unsigned[T]
-
-    @staticmethod
-    def node() -> Encoded:
-        """`Ordered`'s node in a cascade's tree: it stores nothing."""
-        return Encoded()
 
     @always_inline
     def forward[T: DType, W: Int](self, v: SIMD[T, W]) -> SIMD[Self.Out[T], W]:
@@ -142,11 +128,6 @@ struct Cast[To: DType](Codec):
 
     comptime Out[T: DType]: DType = Self.To
 
-    @staticmethod
-    def node() -> Encoded:
-        """`Cast`'s node in a cascade's tree: it stores nothing."""
-        return Encoded()
-
     @always_inline
     def forward[T: DType, W: Int](self, v: SIMD[T, W]) -> SIMD[Self.Out[T], W]:
         return v.cast[Self.To]()
@@ -165,11 +146,6 @@ struct ByteSwap(Codec):
 
         [0x0102] as uint16  ->  [0x0201]
     """
-
-    @staticmethod
-    def node() -> Encoded:
-        """`ByteSwap`'s node in a cascade's tree: it stores nothing."""
-        return Encoded()
 
     @always_inline
     def forward[T: DType, W: Int](self, v: SIMD[T, W]) -> SIMD[T, W]:
@@ -190,29 +166,18 @@ struct FrameOfReference[Lows: Codec = Plain](Codec):
     """
 
     comptime SLOTS = 1
-    comptime LOWS = 0
-    """The slot of the smallest values."""
-
     var _lows: FrameValues[Self.Lows]
-
-    @staticmethod
-    def node(var lows: Encoded) -> Encoded:
-        """`FrameOfReference`'s node in a cascade's tree: `lows`, the node
-        of its `Lows` slot."""
-        return Encoded(0, [lows^])
 
     @staticmethod
     def lows[
         U: DType
-    ](node: Encoded) -> BufferView[
-        U, origin_of(node.children[Self.LOWS].buffer)
-    ]:
+    ](node: Encoded) -> BufferView[U, origin_of(node.children[0].buffer)]:
         """The smallest value of each frame `node` holds, as `U`s, read where
         they lie: the `Lows` slot keeps them as they are."""
         comptime assert (
             Self.Lows.STORES_VALUES
         ), "the Lows slot does not keep its values as they are"
-        return node[Self.LOWS].values[U]()
+        return node[0].values[U]()
 
     def __init__(out self):
         self = Self(0)
@@ -232,38 +197,34 @@ struct FrameOfReference[Lows: Codec = Plain](Codec):
     def forward[
         T: DType
     ](mut self, src: BufferView[T, _], dst: BufferView[mut=True, T, _]) raises:
-        comptime W = 64 // size_of[Scalar[T]]()
         var f = self._lows.frames.size
         var lo = 0
         while lo < len(src):
             var hi = min(lo + f, len(src))
-            var lows = SIMD[T, W](Scalar[T].MAX)
-            var i = lo
-            while i + W <= hi:
-                lows = min(lows, src.load[W](i))
-                i += W
-            var low = lows.reduce_min()
-            while i < hi:
-                low = min(low, src[i])
-                i += 1
+            var low = Scalar[T].MAX
+
+            @always_inline
+            def least[W: Int](i: Int) {mut low, imm}:
+                low = min(low, src.load[W](lo + i).reduce_min())
+
+            vectorize[64 // size_of[Scalar[T]]()](hi - lo, least)
             self._lows.put(low)
-            i = lo
-            while i + W <= hi:
-                dst.store[W](i, src.load[W](i) - low)
-                i += W
-            while i < hi:
-                dst.store[1](i, src.load[1](i) - low)
-                i += 1
+
+            @always_inline
+            def lower[W: Int](i: Int) {imm}:
+                dst.store[W](lo + i, src.load[W](lo + i) - low)
+
+            vectorize[64 // size_of[Scalar[T]]()](hi - lo, lower)
             lo = hi
 
     def finish[T: DType](mut self) raises -> Encoded:
-        return Self.node(self._lows.finish[T]())
+        return Encoded(0, [self._lows.finish[T]()])
 
     def start[T: DType](mut self, ref node: Encoded, count: Int) raises:
         comptime assert (
             T.is_unsigned()
         ), "FrameOfReference takes unsigned integers"
-        self._lows.start[T](node[Self.LOWS], count)
+        self._lows.start[T](node[0], count)
 
     @always_inline
     def backward[
@@ -287,8 +248,6 @@ struct Dictionary[
     comptime Out[T: DType]: DType = DType.uint32
     comptime BytesOut: DType = DType.uint32
     comptime SLOTS = 1
-    comptime DISTINCT = 0
-    """The slot of the distinct values or byte strings."""
 
     var values: Self.Values
     var strings: Self.Strings
@@ -307,21 +266,14 @@ struct Dictionary[
     var seen: Int
     """One past the largest code decoded."""
     var hashes: List[UInt64]
-    var ids: List[Int32]
     var firsts: List[Int32]
-    """A block's hashes, codes and first positions of new values, reused
-    from block to block."""
+    """A block's hashes and first positions of new values, reused from
+    block to block."""
 
     @staticmethod
-    def node(var distinct: Encoded) -> Encoded:
-        """`Dictionary`'s node in a cascade's tree: `distinct`, the node of
-        its `Values` slot -- or, for byte strings, its `Strings` slot."""
-        return Encoded(0, [distinct^])
-
-    @staticmethod
-    def distinct(node: Encoded) -> ref[node.children[Self.DISTINCT]] Encoded:
+    def distinct(node: Encoded) -> ref[node.children[0]] Encoded:
         """The node of the distinct values or byte strings `node` holds."""
-        return node[Self.DISTINCT]
+        return node[0]
 
     def __init__(out self):
         self = Self(Self.Values(), Self.Strings())
@@ -337,7 +289,6 @@ struct Dictionary[
         self.known = 0
         self.seen = 0
         self.hashes = List[UInt64]()
-        self.ids = List[Int32]()
         self.firsts = List[Int32]()
 
     def check(self) raises:
@@ -352,7 +303,6 @@ struct Dictionary[
         self.table = SwissHashTable()
         self._distinct = Buffer.alloc_uninit[T](count)
         self.hashes.resize(BLOCK, 0)
-        self.ids.resize(BLOCK, 0)
         self.firsts.resize(BLOCK, 0)
 
     def forward[
@@ -365,57 +315,48 @@ struct Dictionary[
         """A value's hash is `Fmix64` of its bits, a bijection, so equal
         hashes are equal values and none is compared."""
         comptime U = Unsigned[T]
-        comptime W = 64 // size_of[Scalar[T]]()
         var n = len(src)
         var hv = BufferView(Span(self.hashes))[:n]
-        var i = 0
-        while i + W <= n:
+
+        @always_inline
+        def hash[W: Int](i: Int) {imm}:
             hv.store[W](
                 i,
                 Fmix64.mix[W](
                     bitcast[U, W](src.load[W](i)).cast[DType.uint64]()
                 ),
             )
-            i += W
-        while i < n:
-            hv.store[1](
-                i,
-                Fmix64.mix[1](
-                    bitcast[U, 1](src.load[1](i)).cast[DType.uint64]()
-                ),
-            )
-            i += 1
-        var iv = BufferView(Span(self.ids))[:n]
+
+        vectorize[64 // size_of[Scalar[T]]()](n, hash)
         var fv = BufferView(Span(self.firsts))[:n]
         var before = len(self.table)
-        var k = self.table.insert_all(hv, iv, fv)
+        # A code is never negative, so its bits as an `int32` are a
+        # `uint32`'s: the table writes the codes straight into `dst`.
+        var k = self.table.insert_all(
+            hv, BufferView[DType.int32].from_bytes(dst.as_bytes().as_span()), fv
+        )
         var distinct = self._distinct.view[T]()
         for j in range(k):
             distinct.unsafe_set(before + j, src[Int(fv[j])])
-        # A code is never negative: its bits are a `uint32`'s.
-        i = 0
-        while i + W <= n:
-            dst.store[W](i, bitcast[DType.uint32, W](iv.load[W](i)))
-            i += W
-        while i < n:
-            dst.store[1](i, bitcast[DType.uint32, 1](iv.load[1](i)))
-            i += 1
 
     def finish[T: DType](mut self) raises -> Encoded:
         var distinct = self._distinct^.to_immutable()
         self._distinct = Buffer.alloc_uninit(0)
         var k = len(self.table)
-        return Self.node(
-            self.values.encode_view(
-                BufferView(distinct.view[T](0, k).as_span())
-            )
+        return Encoded(
+            0,
+            [
+                self.values.encode_view(
+                    BufferView(distinct.view[T](0, k).as_span())
+                )
+            ],
         )
 
     def start[T: DType](mut self, ref node: Encoded, count: Int) raises:
-        var k = node[Self.DISTINCT].count
+        var k = node[0].count
         if count > 0 and k == 0:
             raise CorruptError(t"codecs: {count} codes into no values")
-        self.decoded = self.values.held[T](node[Self.DISTINCT])
+        self.decoded = self.values.held[T](node[0])
         self.known = k
         self.seen = 0
 
@@ -457,8 +398,8 @@ struct Dictionary[
     def finish(
         mut self, offsets: Span[Int32, _], data: Span[UInt8, _]
     ) raises -> Encoded:
-        var node = Self.node(
-            self.strings.encode(Span(self.ends), Span(self.bytes))
+        var node = Encoded(
+            0, [self.strings.encode(Span(self.ends), Span(self.bytes))]
         )
         self.table = SwissHashTable()
         self.ends = [Int32(0)]
@@ -468,7 +409,7 @@ struct Dictionary[
     def start(mut self, ref node: Encoded, mut data: List[UInt8]) raises:
         self.ends = [Int32(0)]
         self.bytes = List[UInt8]()
-        self.strings.decode(node[Self.DISTINCT], self.ends, self.bytes)
+        self.strings.decode(node[0], self.ends, self.bytes)
         self.known = len(self.ends) - 1
         self.seen = 0
 

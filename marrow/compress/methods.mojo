@@ -19,7 +19,7 @@ A method outside that list raises `NotImplementedError`.
 from ..errors import CorruptError, DynError, NotImplementedError
 from ..views import BufferView
 from .brotli import Brotli, LibBrotli
-from .core import compress_with, decompress_unsized_with, decompress_with
+from .core import Compressor, compress_with, decompress_with
 from .hadoop import Hadoop
 from .lz4 import LibLz4, LibLz4Frame, Lz4, Lz4Frame
 from .snappy import LibSnappy, Snappy
@@ -43,7 +43,8 @@ struct Method(Equatable, ImplicitlyCopyable, Movable, Writable):
     comptime DEFLATE = Self(3)
     """Raw RFC 1951 deflate, through zlib."""
     comptime BROTLI = Self(4)
-    """A Brotli stream; always compressed by libbrotli."""
+    """A Brotli stream; compressed at quality 1 by marrow's encoder, at
+    quality 11 by libbrotli."""
     comptime LZ4 = Self(5)
     """A raw LZ4 block."""
     comptime LZ4_FRAME = Self(6)
@@ -53,32 +54,39 @@ struct Method(Equatable, ImplicitlyCopyable, Movable, Writable):
     comptime ZSTD = Self(8)
     """A Zstandard frame."""
 
+    comptime _NAMES: Array[StaticString, 9] = [
+        "none",
+        "snappy",
+        "gzip",
+        "deflate",
+        "brotli",
+        "lz4",
+        "lz4_frame",
+        "lz4_hadoop",
+        "zstd",
+    ]
+
     @always_inline
     def __eq__(self, other: Self) -> Bool:
         return self.code == other.code
 
     def write_to[W: Writer](self, mut writer: W):
-        var c = self.code
-        if c == 0:
-            writer.write("none")
-        elif c == 1:
-            writer.write("snappy")
-        elif c == 2:
-            writer.write("gzip")
-        elif c == 3:
-            writer.write("deflate")
-        elif c == 4:
-            writer.write("brotli")
-        elif c == 5:
-            writer.write("lz4")
-        elif c == 6:
-            writer.write("lz4_frame")
-        elif c == 7:
-            writer.write("lz4_hadoop")
-        elif c == 8:
-            writer.write("zstd")
+        var names = materialize[Self._NAMES]()
+        if 0 <= self.code < len(names):
+            writer.write(names[self.code])
         else:
-            writer.write("unknown(", c, ")")
+            writer.write("unknown(", self.code, ")")
+
+    def needs_libs(self, native: Bool) -> Bool:
+        """Whether decompressing by this method may call into a `dlopen`ed
+        library: GZIP and DEFLATE always, NONE never, and the rest unless
+        `native`."""
+        if self == Self.NONE:
+            return False
+        elif self == Self.GZIP or self == Self.DEFLATE:
+            return True
+        else:
+            return not native
 
     def _unsupported(self) -> NotImplementedError:
         return NotImplementedError(t"{self} compression is not supported here")
@@ -117,7 +125,7 @@ struct Method(Equatable, ImplicitlyCopyable, Movable, Writable):
                 elif m == Method.DEFLATE:
                     LibDeflate.compress(src, dst)
                 elif m == Method.BROTLI:
-                    LibBrotli.compress(src, dst)
+                    compress_with[Brotli, LibBrotli](native, src, dst)
                 elif m == Method.LZ4:
                     compress_with[Lz4, LibLz4](native, src, dst)
                 elif m == Method.LZ4_FRAME:
@@ -169,27 +177,43 @@ struct Method(Equatable, ImplicitlyCopyable, Movable, Writable):
         *allowed: Method
     ](self, native: Bool, src: Span[UInt8, _]) raises DynError -> List[UInt8]:
         """`src` decompressed, for a format that does not record how long
-        that is: NONE, SNAPPY and ZSTD by the length the stream declares,
-        GZIP and DEFLATE by inflating until the stream ends. The other
-        methods need the length; they raise `NotImplementedError`."""
+        that is: SNAPPY by the length the stream declares, ZSTD so too when
+        `native` and it declares one -- else by libzstd's streaming decoder
+        -- and GZIP and DEFLATE by inflating until the stream ends. The
+        other methods need the length; they raise `NotImplementedError`."""
         comptime for m in allowed:
             if self == m:
                 comptime if m == Method.NONE:
                     return List[UInt8](src)
                 elif m == Method.SNAPPY:
-                    var out = List[UInt8](
-                        unsafe_uninit_length=Snappy.content_length(src).value()
+                    return _declared[Snappy, LibSnappy](
+                        native, Snappy.content_length(src).value(), src
                     )
-                    decompress_with[Snappy, LibSnappy](native, src, Span(out))
-                    return out^
                 elif m == Method.GZIP:
                     return LibGzip.decompress_unsized(src)
                 elif m == Method.DEFLATE:
                     return LibDeflate.decompress_unsized(src)
                 elif m == Method.ZSTD:
-                    return decompress_unsized_with[Zstd, LibZstd](native, src)
+                    if native:
+                        var n = Zstd.content_length(src)
+                        if n:
+                            return _declared[Zstd, LibZstd](
+                                True, n.value(), src
+                            )
+                    return LibZstd.decompress_unsized(src)
                 else:
                     raise NotImplementedError(
                         t"{self} decompression needs the decompressed length"
                     )
         raise self._unsupported()
+
+
+def _declared[
+    Native: Compressor, Library: Compressor
+](native: Bool, n: Int, src: Span[UInt8, _]) raises DynError -> List[UInt8]:
+    """`src` decompressed into the `n` bytes it declares, as
+    `decompress_with` chooses. `n` comes from the native codec's
+    `content_length`, which refuses a length `src` cannot hold."""
+    var out = List[UInt8](unsafe_uninit_length=n)
+    decompress_with[Native, Library](native, src, Span(out))
+    return out^

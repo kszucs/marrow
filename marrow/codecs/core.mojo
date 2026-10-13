@@ -22,12 +22,13 @@ What codecs share is here too: `Frames` and `FrameValues`, a parameter a
 frame; and `Unpacked`, the block a store decodes at a time.
 """
 
+from std.algorithm import vectorize
 from std.bit import count_trailing_zeros
 from std.sys import size_of
 
 from ..arrays import PrimitiveArray
 from ..buffers import Buffer
-from ..dtypes import PrimitiveType, _FloatingType, _IntegerType
+from ..dtypes import PrimitiveType
 from ..errors import CorruptError, InvalidError
 from ..views import BufferView
 
@@ -35,12 +36,6 @@ from ..views import BufferView
 comptime BLOCK = 1024
 """The values a cascade carries through its codecs at once: a block, in
 each codec's type, stays in the L1 cache from codec to codec."""
-
-
-comptime ArrowOf[D: DType] = _IntegerType[D] if D.is_integral() else (
-    _FloatingType[D]
-)
-"""The Arrow type whose values are `D`s: what a slot of `D`s is typed as."""
 
 
 struct Encoded(Copyable, Movable):
@@ -52,8 +47,6 @@ struct Encoded(Copyable, Movable):
 
     var count: Int
     var buffer: Buffer[mut=False]
-    var start: Int
-    """The byte of `buffer` the node's bytes start at."""
     var size: Int
     """How many bytes are the node's."""
     var children: List[Encoded]
@@ -67,28 +60,16 @@ struct Encoded(Copyable, Movable):
         """A node with no bytes: `count` values, and `children`."""
         self.count = count
         self.buffer = Buffer.alloc_uninit(0).to_immutable()
-        self.start = 0
         self.size = 0
         self.children = children^
 
-    def __init__(
-        out self,
-        var buffer: Buffer[mut=False],
-        size: Int,
-        var children: List[Encoded],
-    ):
-        """A codec's node: the first `size` bytes of `buffer`, and a child
-        per slot."""
+    def __init__(out self, var buffer: Buffer[mut=False], size: Int):
+        """A codec's node: the first `size` bytes of `buffer`, its slots'
+        nodes appended after."""
         self.count = 0
         self.buffer = buffer^
-        self.start = 0
         self.size = size
-        self.children = children^
-
-    def __init__(out self, var buffer: Buffer[mut=False], size: Int):
-        """A codec's node with no slots: the first `size` bytes of
-        `buffer`."""
-        self = Self(buffer^, size, List[Encoded]())
+        self.children = List[Encoded]()
 
     def __init__(out self, *, bytes: Span[UInt8, _]):
         """A codec's node holding a copy of `bytes`."""
@@ -113,39 +94,26 @@ struct Encoded(Copyable, Movable):
 
     @always_inline
     def bytes(self) -> Span[UInt8, origin_of(self.buffer)]:
-        return self.buffer.view[DType.uint8](self.start, self.size).as_span()
+        return self.buffer.view[DType.uint8](0, self.size).as_span()
 
     @always_inline
     def values[T: DType](self) -> BufferView[T, origin_of(self.buffer)]:
-        """The bytes as `T`s, read unaligned: `start` may be any byte."""
+        """The bytes as `T`s."""
         return BufferView[T, origin_of(self.buffer)].from_bytes(self.bytes())
 
     def array[A: PrimitiveType](self, dtype: A) raises -> PrimitiveArray[A]:
-        """`Plain`'s node as an array of `dtype`: over the buffer itself when
-        `start` falls on a whole value, a copy otherwise."""
+        """`Plain`'s node as an array of `dtype`, over the buffer itself."""
         comptime T = A.native
-        comptime S = size_of[Scalar[T]]()
         var n = self.count
-        if self.size != n * S:
+        if self.size != n * size_of[Scalar[T]]():
             raise CorruptError(t"codecs: {self.size} bytes for {n} {T} values")
-        if self.start % S == 0:
-            return PrimitiveArray[A](
-                dtype,
-                length=n,
-                nulls=0,
-                offset=self.start // S,
-                bitmap=None,
-                buffer=self.buffer,
-            )
-        var copy = Buffer.alloc_uninit[T](n)
-        copy.extend(BufferView(self.bytes()), 0, self.size)
         return PrimitiveArray[A](
             dtype,
             length=n,
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=copy^.to_immutable(),
+            buffer=self.buffer,
         )
 
 
@@ -195,9 +163,8 @@ struct FrameValues[S: Codec](Movable, Sized):
     var slot: Self.S
     var values: Buffer[mut=True]
     """The values put while encoding."""
-    var table: Buffer[mut=False]
-    """The values decoded, from `first` on."""
-    var first: Int
+    var table: Encoded
+    """The values decoded, as `Plain`'s node."""
     var length: Int
     """How many have been put, or decoded."""
 
@@ -205,8 +172,7 @@ struct FrameValues[S: Codec](Movable, Sized):
         self.frames = Frames(size, step)
         self.slot = slot^
         self.values = Buffer.alloc_uninit(0)
-        self.table = Buffer.alloc_uninit(0).to_immutable()
-        self.first = 0
+        self.table = Encoded()
         self.length = 0
 
     def start[T: DType](mut self, count: Int) raises:
@@ -235,10 +201,8 @@ struct FrameValues[S: Codec](Movable, Sized):
             raise CorruptError(
                 t"codecs: {node.count} values for {frames} frames"
             )
-        var table = self.slot.decode(node, ArrowOf[T]())
-        self.table = table.buffer
-        self.first = table.offset
-        self.length = len(table)
+        self.table = self.slot.held[T](node)
+        self.length = frames
 
     def __len__(self) -> Int:
         """The frames decoded."""
@@ -246,7 +210,7 @@ struct FrameValues[S: Codec](Movable, Sized):
 
     @always_inline
     def get[T: DType](self, frame: Int) -> Scalar[T]:
-        return self.table.unsafe_get[T](self.first + frame)
+        return self.table.values[T]().unsafe_get(frame)
 
     @always_inline
     def at[T: DType](self, i: Int) -> Scalar[T]:
@@ -346,15 +310,12 @@ trait Codec(Defaultable, Deinitable, Movable):
         dst: BufferView[mut=True, Self.Out[T], _],
     ) raises:
         """A lane's block: `src` into `dst`, a register at a time."""
-        comptime W = 64 // size_of[Scalar[T]]()
-        var n = len(src)
-        var i = 0
-        while i + W <= n:
+
+        @always_inline
+        def lane[W: Int](i: Int) {mut self, imm}:
             dst.store[W](i, self.forward[T, W](src.load[W](i)))
-            i += W
-        while i < n:
-            dst.store[1](i, self.forward[T, 1](src.load[1](i)))
-            i += 1
+
+        vectorize[64 // size_of[Scalar[T]]()](len(src), lane)
 
     @always_inline
     def forward[
@@ -529,7 +490,6 @@ struct Cascade[*Ts: Codec](Codec):
     of them.
     """
 
-    comptime n = len(Self.Ts)
     comptime SLOTS = len(Self.Ts)
 
     var codecs: Tuple[*Self.Ts]
@@ -553,19 +513,19 @@ struct Cascade[*Ts: Codec](Codec):
         """The bytes of the widest value codecs `j` on take, codec `j`
         taking `T`: what a block of scratch holds."""
         var widest = 0
-        comptime for k in range(j, Self.n):
+        comptime for k in range(j, Self.SLOTS):
             widest = max(widest, size_of[Scalar[Self._in[j, k, T]()]]())
         return widest
 
     # --- values, as a store ---
 
     def start[T: DType](mut self, count: Int) raises:
-        comptime for k in range(Self.n):
+        comptime for k in range(Self.SLOTS):
             comptime I = Self._in[0, k, T]()
             self.codecs[k].start[I](count)
 
     def store[T: DType](mut self, src: BufferView[T, _]) raises:
-        comptime if Self.n == 1:
+        comptime if Self.SLOTS == 1:
             self.codecs[0].store[T](src)
         else:
             # A block between two codecs stays in two scratch blocks on the
@@ -591,7 +551,7 @@ struct Cascade[*Ts: Codec](Codec):
         return self._up[0, T, W](i)
 
     def check(self) raises:
-        comptime for k in range(Self.n):
+        comptime for k in range(Self.SLOTS):
             self.codecs[k].check()
 
     # --- byte strings ---
@@ -599,10 +559,12 @@ struct Cascade[*Ts: Codec](Codec):
     def encode(
         mut self, offsets: Span[Int32, _], data: Span[UInt8, _]
     ) raises -> Encoded:
-        comptime assert Self.n > 1, "byte strings need a codec after the first"
+        comptime assert (
+            Self.SLOTS > 1
+        ), "byte strings need a codec after the first"
         comptime B = Self.Ts[0].BytesOut
         var n = max(len(offsets) - 1, 0)
-        comptime for k in range(1, Self.n):
+        comptime for k in range(1, Self.SLOTS):
             comptime I = Self._in[1, k, B]()
             self.codecs[k].start[I](n)
         comptime S = BLOCK * Self._widest[1, B]()
@@ -618,7 +580,7 @@ struct Cascade[*Ts: Codec](Codec):
             )
             self._encode[1, B](m, Span(a), Span(b))
             lo += m
-        var children = List[Encoded](capacity=Self.n)
+        var children = List[Encoded](capacity=Self.SLOTS)
         children.append(self.codecs[0].finish(offsets, data))
         children.extend(self._finish[1, B]())
         return Encoded(n, children^)
@@ -629,9 +591,15 @@ struct Cascade[*Ts: Codec](Codec):
         mut offsets: List[Int32],
         mut data: List[UInt8],
     ) raises:
-        comptime assert Self.n > 1, "byte strings need a codec after the first"
+        comptime assert (
+            Self.SLOTS > 1
+        ), "byte strings need a codec after the first"
         comptime B = Self.Ts[0].BytesOut
         var n = node.count
+        if len(node.children) != Self.SLOTS:
+            raise CorruptError(
+                t"codecs: {len(node.children)} nodes for {Self.SLOTS} codecs"
+            )
         self._start[1, B](node, n)
         Self._slots[0](node[0])
         self.codecs[0].start(node[0], data)
@@ -658,7 +626,7 @@ struct Cascade[*Ts: Codec](Codec):
     ) raises:
         """A block of `m` values of `T`, in `a`, through codecs `k` on: a
         lane writes `b`, which the codec after it reads."""
-        comptime if k == Self.n - 1:
+        comptime if k == Self.SLOTS - 1:
             self.codecs[k].store[T](BufferView[T].from_bytes(a)[:m])
         else:
             comptime O = Self.Ts[k].Out[T]
@@ -670,8 +638,8 @@ struct Cascade[*Ts: Codec](Codec):
 
     def _finish[j: Int, T: DType](mut self) raises -> List[Encoded]:
         """The nodes of codecs `j` on, codec `j` having taken `T`."""
-        var out = List[Encoded](capacity=Self.n - j)
-        comptime for k in range(j, Self.n):
+        var out = List[Encoded](capacity=Self.SLOTS - j)
+        comptime for k in range(j, Self.SLOTS):
             comptime I = Self._in[j, k, T]()
             out.append(self.codecs[k].finish[I]())
         return out^
@@ -680,12 +648,8 @@ struct Cascade[*Ts: Codec](Codec):
         j: Int, T: DType
     ](mut self, ref node: Encoded, count: Int) raises:
         """Codecs `j` on, codec `j` taking `T`, started on their nodes for
-        `count` values."""
-        if len(node.children) != Self.n:
-            raise CorruptError(
-                t"codecs: {len(node.children)} nodes for {Self.n} codecs"
-            )
-        comptime for k in range(j, Self.n):
+        `count` values -- a node of one per codec, as the caller checked."""
+        comptime for k in range(j, Self.SLOTS):
             comptime I = Self._in[j, k, T]()
             Self._slots[k](node[k])
             self.codecs[k].start[I](node[k], count)
@@ -718,7 +682,7 @@ struct Cascade[*Ts: Codec](Codec):
     def _up[k: Int, T: DType, W: Int](mut self, i: Int) -> SIMD[T, W]:
         """The `W` values from value `i`, through codecs `k` on, codec `k`
         taking `T`."""
-        comptime if k == Self.n - 1:
+        comptime if k == Self.SLOTS - 1:
             return self.codecs[k].load[T, W](i)
         else:
             return self.codecs[k].backward[T, W](

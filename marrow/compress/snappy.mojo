@@ -854,11 +854,6 @@ struct LibSnappy(Compressor):
     """Snappy through libsnappy: `snappy_compress` and `snappy_uncompress`."""
 
     @staticmethod
-    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
-        """What `Snappy.content_length` reads: the same format."""
-        return Snappy.content_length(src)
-
-    @staticmethod
     def compress(
         src: Span[mut=False, UInt8, _], mut dst: List[UInt8]
     ) raises DynError:

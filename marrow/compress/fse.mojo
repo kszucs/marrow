@@ -381,7 +381,7 @@ struct Distribution(Movable):
         var after_zero = False
 
         # Room for the most the fields can take: a count is at most
-        # `log + 1` bits and a zero costs under one bit.
+        # `log + 1` bits, and a lone zero's repeat flag 2 more.
         var first = len(out)
         out.resize(first + (n * (log + 3) + 7) // 8 + 8, 0)
         var fields = BitCursor(Span(out), 8 * first)

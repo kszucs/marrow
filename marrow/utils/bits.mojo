@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Streams of bit fields: `BitCursor`, forward, low bits first -- what an
-FSE table description is -- and
-`BitReader` and `BitWriter`, backward, the streams of Zstandard's entropy
-coders.
+FSE table description is -- and `BitReader` and `BitWriter`, backward, the
+streams of Zstandard's entropy coders.
 
 Every Huffman and FSE stream in a zstd block is written forwards and read
 backwards: the writer puts each field above the last, low bits first, then a

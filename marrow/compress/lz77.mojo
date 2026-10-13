@@ -14,9 +14,9 @@ bytes, a shuffle-built pattern for an overlapping copy, and an exact byte
 loop for the end of the output. The fast ones write up to 63 bytes past the
 copy -- a caller keeps `LzCopy.SLOP` free -- and read a source that may
 overlap the destination, which neither `unsafe_memcpy` nor `memmove` allows.
-`hash_bytes` is the multiplicative hash of the 5 to 7 bytes the Zstandard and
-LZ4 match finders index, and `match_length` their match extension. Each codec's match
-finder is its own library's, in its own module.
+`hash_bytes` is the multiplicative hash of the 5 to 7 bytes the Zstandard
+and LZ4 match finders index, and `match_length` their match extension. Each
+codec's match finder is its own library's, in its own module.
 
 The names here are public so the codecs can call them, but `marrow.compress`
 does not re-export them: they are the codecs' shared implementation, not an

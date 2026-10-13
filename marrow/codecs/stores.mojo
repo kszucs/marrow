@@ -6,6 +6,7 @@
 each frame needs, `Runs` each run once, and `Rle` Parquet's RLE / bit-packed
 hybrid of runs and packed groups."""
 
+from std.algorithm import vectorize
 from std.bit import bit_width
 from std.memory import bitcast
 from std.sys import bit_width_of, size_of
@@ -33,24 +34,14 @@ struct Plain(Codec):
 
     var bytes: Buffer[mut=True]
     """The bytes being encoded."""
-    var _node: Encoded
+    var node: Encoded
     """The node being decoded."""
     var at: Int
     """Values encoded."""
 
-    @staticmethod
-    def node[T: DType](values: Span[Scalar[T], _]) -> Encoded:
-        """`Plain`'s node of `values`, a copy."""
-        return Encoded(values)
-
-    @staticmethod
-    def node(*, bytes: Span[UInt8, _]) -> Encoded:
-        """`Plain`'s node of values laid out in `bytes`, a copy."""
-        return Encoded(bytes=bytes)
-
     def __init__(out self):
         self.bytes = Buffer.alloc_uninit(0)
-        self._node = Encoded()
+        self.node = Encoded()
         self.at = 0
 
     def start[T: DType](mut self, count: Int) raises:
@@ -74,11 +65,11 @@ struct Plain(Codec):
             raise CorruptError(
                 t"codecs: {node.size} plain bytes for {count} {T} values"
             )
-        self._node = node.copy()
+        self.node = node.copy()
 
     @always_inline
     def load[T: DType, W: Int](mut self, i: Int) -> SIMD[T, W]:
-        return self._node.values[T]().load_unaligned[W](i)
+        return self.node.values[T]().load_unaligned[W](i)
 
 
 struct ByteStreamSplit(Codec):
@@ -90,20 +81,15 @@ struct ByteStreamSplit(Codec):
 
     var bytes: Buffer[mut=True]
     """The planes being encoded."""
-    var _node: Encoded
+    var node: Encoded
     """The planes being decoded."""
     var count: Int
     var at: Int
     """Values encoded."""
 
-    @staticmethod
-    def node(planes: Span[UInt8, _]) -> Encoded:
-        """`ByteStreamSplit`'s node of `planes`, a copy."""
-        return Encoded(bytes=planes)
-
     def __init__(out self):
         self.bytes = Buffer.alloc_uninit(0)
-        self._node = Encoded()
+        self.node = Encoded()
         self.count = 0
         self.at = 0
 
@@ -115,27 +101,19 @@ struct ByteStreamSplit(Codec):
     def store[T: DType](mut self, src: BufferView[T, _]) raises:
         comptime U = Unsigned[T]
         comptime B = size_of[Scalar[T]]()
-        comptime W = 16
         var planes = self.bytes.view[DType.uint8](0, self.count * B)
-        var n = len(src)
-        var i = 0
-        while i + W <= n:
+
+        @always_inline
+        def split[W: Int](i: Int) {imm}:
             var bits = bitcast[U, W](src.load[W](i))
             comptime for k in range(B):
                 planes.store[W](
                     k * self.count + self.at + i,
                     (bits >> Scalar[U](8 * k)).cast[DType.uint8](),
                 )
-            i += W
-        while i < n:
-            var bits = bitcast[U, 1](src.load[1](i))
-            comptime for k in range(B):
-                planes.store[1](
-                    k * self.count + self.at + i,
-                    (bits >> Scalar[U](8 * k)).cast[DType.uint8](),
-                )
-            i += 1
-        self.at += n
+
+        vectorize[16](len(src), split)
+        self.at += len(src)
 
     def finish[T: DType](mut self) raises -> Encoded:
         var frozen = self.bytes^.to_immutable()
@@ -150,13 +128,13 @@ struct ByteStreamSplit(Codec):
             raise CorruptError(
                 t"codecs: {node.size} plane bytes for {count} {T} values"
             )
-        self._node = node.copy()
+        self.node = node.copy()
         self.count = count
 
     @always_inline
     def load[T: DType, W: Int](mut self, i: Int) -> SIMD[T, W]:
         comptime U = Unsigned[T]
-        var planes = self._node.values[DType.uint8]()
+        var planes = self.node.values[DType.uint8]()
         var bits = SIMD[U, W](0)
         comptime for k in range(size_of[Scalar[T]]()):
             bits |= planes.load[W](k * self.count + i).cast[U]() << Scalar[U](
@@ -175,13 +153,11 @@ struct BitPack[Widths: Codec = Plain](Codec):
 
     comptime GROUP = 8
     comptime SLOTS = 1
-    comptime WIDTHS = 0
-    """The slot of the widths."""
 
     var _widths: FrameValues[Self.Widths]
     var bytes: Buffer[mut=True]
     """The bytes being encoded."""
-    var _node: Encoded
+    var node: Encoded
     """The bytes being decoded."""
     var at: Int
     """The bit the next group is packed at."""
@@ -192,23 +168,15 @@ struct BitPack[Widths: Codec = Plain](Codec):
     """By frame decoded, how a group of it holds its values."""
 
     @staticmethod
-    def node(packed: Span[UInt8, _], var widths: Encoded) -> Encoded:
-        """`BitPack`'s node: a copy of `packed`, the frames' groups, and
-        `widths`, the node of its `Widths` slot."""
-        var node = Encoded(bytes=packed)
-        node.children.append(widths^)
-        return node^
-
-    @staticmethod
     def widths(
         node: Encoded,
-    ) -> BufferView[DType.uint8, origin_of(node.children[Self.WIDTHS].buffer)]:
+    ) -> BufferView[DType.uint8, origin_of(node.children[0].buffer)]:
         """The width of each frame `node` holds, read where they lie: the
         `Widths` slot keeps them as they are."""
         comptime assert (
             Self.Widths.STORES_VALUES
         ), "the Widths slot does not keep its values as they are"
-        return node[Self.WIDTHS].values[DType.uint8]()
+        return node[0].values[DType.uint8]()
 
     def __init__(out self):
         self = Self(0)
@@ -219,7 +187,7 @@ struct BitPack[Widths: Codec = Plain](Codec):
     def __init__(out self, size: Int, var widths: Self.Widths):
         self._widths = FrameValues(size, Self.GROUP, widths^)
         self.bytes = Buffer.alloc_uninit(0)
-        self._node = Encoded()
+        self.node = Encoded()
         self.at = 0
         self.starts = List[Int]()
         self.groups = List[PackedGroup]()
@@ -235,24 +203,21 @@ struct BitPack[Widths: Codec = Plain](Codec):
 
     def store[T: DType](mut self, src: BufferView[T, _]) raises:
         comptime G = Self.GROUP
-        comptime W = 64 // size_of[Scalar[T]]()
         var bits = BitmapView(self.bytes.view[DType.uint8]().as_span())
         var f = self._widths.frames.size
         var lo = 0
         while lo < len(src):
             var hi = min(lo + f, len(src))
-            var any = SIMD[T, W](0)
-            var i = lo
-            while i + W <= hi:
-                any |= src.load[W](i)
-                i += W
-            var top = any.reduce_or()
-            while i < hi:
-                top |= src[i]
-                i += 1
+            var top = Scalar[T](0)
+
+            @always_inline
+            def union[W: Int](i: Int) {mut top, imm}:
+                top |= src.load[W](lo + i).reduce_or()
+
+            vectorize[64 // size_of[Scalar[T]]()](hi - lo, union)
             var width = Int(bit_width(top))
             self._widths.put(UInt8(width))
-            i = lo
+            var i = lo
             while i < hi:
                 PackedGroup.pack(bits, self.at, src, i, min(i + G, hi), width)
                 self.at += G * width
@@ -260,18 +225,16 @@ struct BitPack[Widths: Codec = Plain](Codec):
             lo = hi
 
     def finish[T: DType](mut self) raises -> Encoded:
-        var frozen = self.bytes^.to_immutable()
+        # The node takes the packed buffer over, without a copy.
+        var node = Encoded(self.bytes^.to_immutable(), self.at // 8)
         self.bytes = Buffer.alloc_uninit(0)
-        return Encoded(
-            frozen^,
-            self.at // 8,
-            [self._widths.finish[DType.uint8]()],
-        )
+        node.children.append(self._widths.finish[DType.uint8]())
+        return node^
 
     def start[T: DType](mut self, ref node: Encoded, count: Int) raises:
         comptime assert T.is_unsigned(), "BitPack takes unsigned integers"
         comptime G = Self.GROUP
-        self._widths.start[DType.uint8](node[Self.WIDTHS], count)
+        self._widths.start[DType.uint8](node[0], count)
         var f = self._widths.frames.size
         var frames = len(self._widths)
         self.starts = List[Int](capacity=frames)
@@ -287,7 +250,7 @@ struct BitPack[Widths: Codec = Plain](Codec):
             size += (min(f, count - b * f) + G - 1) // G * width
         if node.size != size:
             raise CorruptError(t"codecs: {node.size} BitPack bytes, not {size}")
-        self._node = node.copy()
+        self.node = node.copy()
 
     @always_inline
     def load[T: DType, W: Int](mut self, i: Int) -> SIMD[T, W]:
@@ -296,13 +259,13 @@ struct BitPack[Widths: Codec = Plain](Codec):
             var b = self._widths.frames.of(i)
             var width = self.groups.unsafe_get(b).width
             return (
-                BitmapView(self._node.bytes())
+                BitmapView(self.node.bytes())
                 .load_packed[W](self.starts.unsafe_get(b) + i * width, width)
                 .cast[T]()
             )
         else:
             # A register may span frames; a group of `G` never does.
-            var bytes = BufferView(self._node.bytes())
+            var bytes = BufferView(self.node.bytes())
             var out = SIMD[T, W]()
             comptime for g in range(W // G):
                 var v = i + g * G
@@ -571,18 +534,13 @@ struct Rle(Codec):
     var values: Buffer[mut=True]
     """The values being encoded."""
     var taken: Int
-    var _node: Encoded
+    var node: Encoded
     """The runs being decoded."""
     var runs: RleRuns
     var group: PackedGroup
     var unpacked: Unpacked
     var bad: Bool
     """Whether the runs ended before the values."""
-
-    @staticmethod
-    def node(runs: Span[UInt8, _]) -> Encoded:
-        """`Rle`'s node of `runs`, a copy."""
-        return Encoded(bytes=runs)
 
     def __init__(out self):
         self = Self(0)
@@ -591,7 +549,7 @@ struct Rle(Codec):
         self.width = width
         self.values = Buffer.alloc_uninit(0)
         self.taken = 0
-        self._node = Encoded()
+        self.node = Encoded()
         self.runs = RleRuns()
         self.group = PackedGroup(width)
         self.unpacked = Unpacked()
@@ -612,12 +570,12 @@ struct Rle(Codec):
         Self.write_runs(
             values.view[T](0, self.taken).as_span(), self.width, out
         )
-        return Self.node(Span(out))
+        return Encoded(bytes=Span(out))
 
     def start[T: DType](mut self, ref node: Encoded, count: Int) raises:
         if self.width > bit_width_of[T]():
             raise CorruptError(t"rle: {count} values of {self.width} bits")
-        self._node = node.copy()
+        self.node = node.copy()
         self.runs = RleRuns()
         self.unpacked.start(count)
         self.bad = False
@@ -628,7 +586,7 @@ struct Rle(Codec):
         if self.width == 0:
             out.as_span()[:n].fill(0)
         elif not self.runs.fill[T](
-            BufferView(self._node.bytes()), self.group, out[:n]
+            BufferView(self.node.bytes()), self.group, out[:n]
         ):
             self.bad = True
 

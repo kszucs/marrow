@@ -176,13 +176,15 @@ struct DeltaBinaryPackedEncoding:
                 # A miniblock is stored whole, its padding included.
                 pos += min(per * width // 8, len(data) - pos)
             done += left
+        var bits = Encoded(bytes=Span(packed))
+        bits.children.append(Encoded(Span(widths)))
         var tree = Encoded(
             deltas,
             [
-                Delta.node(),
-                Ordered.node(),
-                FrameOfReference.node(Plain.node(Span(lows))),
-                BitPack.node(Span(packed), Plain.node(Span(widths))),
+                Encoded(),
+                Encoded(),
+                Encoded(0, [Encoded(Span(lows))]),
+                bits^,
             ],
         )
         var cascade = Cascade(
@@ -248,7 +250,10 @@ struct DeltaLengthEncoding:
         as."""
         return Encoded(
             len(lengths),
-            [Lengths.node(Plain.node(bytes)), Plain.node(Span(lengths))],
+            [
+                Encoded(0, [Encoded(bytes)]),
+                Encoded(Span(lengths)),
+            ],
         )
 
 
@@ -293,7 +298,7 @@ struct DeltaByteArrayEncoding:
         var total = DeltaLengthEncoding.total(lengths, len(src) - pos)
         var suffixes = DeltaLengthEncoding.tree(lengths, src[pos : pos + total])
         var tree = Encoded(
-            count, [Prefixes.node(suffixes^), Plain.node(Span(prefixes))]
+            count, [Encoded(0, [suffixes^]), Encoded(Span(prefixes))]
         )
         var cascade = Cascade[Prefixes[], Plain]()
         cascade.decode(tree, offsets, data)
@@ -409,9 +414,7 @@ struct PlainValues:
         comptime PW = size_of[Scalar[phys]]()
         if len(values) < np * PW:
             raise CorruptError(t"parquet: {len(values)} bytes for {np} values")
-        var tree = Encoded(
-            np, [Cast[phys].node(), Plain.node(bytes=values[: np * PW])]
-        )
+        var tree = Encoded(np, [Encoded(), Encoded(bytes=values[: np * PW])])
         var base = len(out)
         out.resize(unsafe_uninit_length=base + np)
         var cascade = Cascade[Cast[phys], Plain]()
@@ -490,8 +493,10 @@ struct DictionaryValues:
             if count > 0:
                 raise CorruptError("parquet: a dictionary page with no codes")
             return
+        # The `Dictionary` node holds the distinct values as its one slot;
+        # the `Rle` node holds the codes.
         var tree = Encoded(
-            count, [Dictionary.node(dict.copy()), Rle.node(values[1:])]
+            count, [Encoded(0, [dict.copy()]), Encoded(bytes=values[1:])]
         )
         var cascade = Cascade((Dictionary(), Rle(Int(values[0]))))
         cascade.decode_into[T](tree, dst)
@@ -635,7 +640,7 @@ struct DictionaryValues:
         data page of it."""
         var values = List[Scalar[store]](capacity=num_values)
         PlainValues.decode_primitive[store, phys](body, num_values, values)
-        return Plain.node(Span(values))
+        return Encoded(Span(values))
 
     @staticmethod
     def decode_page_bytes(
@@ -695,9 +700,7 @@ struct ByteStreamSplitValues:
         comptime B = size_of[Scalar[phys]]()
         if len(values) < np * B:
             raise CorruptError(t"parquet: {len(values)} bytes for {np} values")
-        var tree = Encoded(
-            np, [Cast[phys].node(), ByteStreamSplit.node(values[: np * B])]
-        )
+        var tree = Encoded(np, [Encoded(), Encoded(bytes=values[: np * B])])
         var base = len(out)
         out.resize(unsafe_uninit_length=base + np)
         var cascade = Cascade[Cast[phys], ByteStreamSplit[]]()

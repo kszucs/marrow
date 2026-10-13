@@ -14,7 +14,7 @@ from std.memory import unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
 
 from ..errors import CorruptError, DynError, InternalError
-from .core import UnsizedDecompressor, append_uninit, library
+from .core import Compressor, append_uninit, library
 
 
 struct _ZStream(Movable):
@@ -77,7 +77,7 @@ comptime _RAW_WINDOW = -15
 """windowBits -15: raw RFC 1951 deflate, no header or checksum."""
 
 
-struct LibZlib[window: Int](UnsizedDecompressor):
+struct LibZlib[window: Int](Compressor):
     """Deflate through zlib, at level 6, framed by `window`: `LibGzip`, Parquet's
     GZIP, or `LibDeflate`, raw RFC 1951 -- Avro's `deflate`."""
 

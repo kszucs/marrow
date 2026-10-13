@@ -16,8 +16,8 @@ values, a dictionary -- is a slot, stored by a cascade of its own. A column
 is stored as an `Encoded` tree, which a container frames as it likes.
 
     var cascade = Cascade[Delta, Zigzag, BitPack[]]()
-    var encoded = cascade.encode(values)
-    cascade.decode(encoded, out)
+    var encoded = cascade.encode_view(BufferView(values))
+    var back = cascade.decode(encoded, int64)  # or `decode_into` a view
 
 A codec configured at run time is given as a value, its slots as values
 or type parameters -- Parquet's DELTA_BINARY_PACKED after its first value:
@@ -25,13 +25,7 @@ or type parameters -- Parquet's DELTA_BINARY_PACKED after its first value:
     Cascade((Delta(first), Ordered(), FrameOfReference(128), BitPack(32)))
 """
 
-from .core import (
-    BLOCK,
-    Cascade,
-    Codec,
-    Encoded,
-    Unpacked,
-)
+from .core import Cascade, Codec, Encoded
 from .lanes import (
     ByteSwap,
     Cast,
@@ -46,7 +40,6 @@ from .stores import (
     ByteStreamSplit,
     Plain,
     Rle,
-    RleRuns,
     Runs,
 )
 from .strings import Lengths, Prefixes

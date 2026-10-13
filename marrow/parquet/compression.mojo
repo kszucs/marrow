@@ -13,7 +13,7 @@ from ..errors import CorruptError, NotImplementedError
 struct Compression(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `CompressionCodec` value. Each codec runs in Mojo or, with
     `native` off, through its system library; GZIP always runs through
-    zlib, and BROTLI is always written by libbrotli.
+    zlib. BROTLI is written at quality 1 natively, quality 11 by libbrotli.
 
     Enum values:
         0 UNCOMPRESSED  1 SNAPPY  2 GZIP  4 BROTLI  5 LZ4  6 ZSTD  7 LZ4_RAW
@@ -31,21 +31,11 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
 
     def needs_libs(self, native: Bool) -> Bool:
         """Whether decompressing this codec may call into a `dlopen`ed
-        library: all but UNCOMPRESSED and -- when `native` -- the codecs in
-        Mojo, BROTLI, LZ4, LZ4_RAW, SNAPPY and ZSTD. A codec not named here
-        answers True, so one wired up later opens the libraries first rather
-        than racing to."""
-        if self == Self.UNCOMPRESSED:
-            return False
-        elif (
-            self == Self.LZ4
-            or self == Self.LZ4_RAW
-            or self == Self.SNAPPY
-            or self == Self.ZSTD
-            or self == Self.BROTLI
-        ):
-            return not native
-        else:
+        library, as its method answers (`Method.needs_libs`). A codec with
+        no method answers True."""
+        try:
+            return self.method().needs_libs(native)
+        except:
             return True
 
     def method(self) raises NotImplementedError -> Method:

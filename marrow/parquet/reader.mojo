@@ -51,7 +51,7 @@ from ..dtypes import (
     TemporalType,
 )
 
-from ..codecs import Encoded, Plain, Rle
+from ..codecs import Encoded, Rle
 from ..compress import Codecs
 from .compression import Compression
 from .encodings import DictionaryValues, Encoding, PlainValues
@@ -827,7 +827,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                 var stored = BufferView[Self.store_dt].from_bytes(page.body)
                 if page.num_values > len(stored):
                     _short_page()
-                self.dict = Plain.node(stored.as_span()[: page.num_values])
+                self.dict = Encoded(stored.as_span()[: page.num_values])
             else:
                 self.dict = DictionaryValues.read_page[
                     Self.store_dt, Self.phys_dt

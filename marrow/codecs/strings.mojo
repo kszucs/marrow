@@ -3,6 +3,8 @@
 
 """Codecs that take byte strings apart: `Lengths` and `Prefixes`."""
 
+from std.algorithm import vectorize
+
 from ..errors import CorruptError
 from ..views import BufferView
 from .core import Cascade, Codec, Encoded
@@ -20,8 +22,6 @@ struct Lengths[Bytes: Codec = Plain](Codec):
 
     comptime BytesOut: DType = DType.int32
     comptime SLOTS = 1
-    comptime BYTES = 0
-    """The slot of the bytes."""
 
     var _bytes: Self.Bytes
     var end: Int
@@ -32,21 +32,15 @@ struct Lengths[Bytes: Codec = Plain](Codec):
     """Whether a length was negative or ran past them."""
 
     @staticmethod
-    def node(var bytes: Encoded) -> Encoded:
-        """`Lengths`' node in a cascade's tree: `bytes`, the node of its
-        `Bytes` slot."""
-        return Encoded(0, [bytes^])
-
-    @staticmethod
     def bytes(
         node: Encoded,
-    ) -> Span[UInt8, origin_of(node.children[Self.BYTES].buffer)]:
+    ) -> Span[UInt8, origin_of(node.children[0].buffer)]:
         """The byte strings' bytes `node` holds, end to end, read where they
         lie: the `Bytes` slot keeps them as they are."""
         comptime assert (
             Self.Bytes.STORES_VALUES
         ), "the Bytes slot does not keep its values as they are"
-        return node[Self.BYTES].bytes()
+        return node[0].bytes()
 
     def __init__(out self):
         self = Self(Self.Bytes())
@@ -63,15 +57,13 @@ struct Lengths[Bytes: Codec = Plain](Codec):
         data: Span[UInt8, _],
         dst: BufferView[mut=True, DType.int32, _],
     ) raises:
-        comptime W = 16
         var ends = BufferView(offsets)
-        var i = 0
-        while i + W <= len(dst):
+
+        @always_inline
+        def length[W: Int](i: Int) {imm}:
             dst.store[W](i, ends.load[W](i + 1) - ends.load[W](i))
-            i += W
-        while i < len(dst):
-            dst.store[1](i, ends.load[1](i + 1) - ends.load[1](i))
-            i += 1
+
+        vectorize[16](len(dst), length)
 
     def finish(
         mut self, offsets: Span[Int32, _], data: Span[UInt8, _]
@@ -79,15 +71,15 @@ struct Lengths[Bytes: Codec = Plain](Codec):
         var n = len(offsets) - 1
         var lo = Int(offsets[0]) if n > 0 else 0
         var hi = Int(offsets[n]) if n > 0 else 0
-        return Self.node(self._bytes.encode_view(BufferView(data[lo:hi])))
+        return Encoded(0, [self._bytes.encode_view(BufferView(data[lo:hi]))])
 
     def start(mut self, ref node: Encoded, mut data: List[UInt8]) raises:
         # The bytes go where they belong at once; each block then only
         # says where its strings end.
         self.end = len(data)
-        data.resize(unsafe_uninit_length=self.end + node[Self.BYTES].count)
+        data.resize(unsafe_uninit_length=self.end + node[0].count)
         self._bytes.decode_into[DType.uint8](
-            node[Self.BYTES], BufferView(Span(data)[self.end :])
+            node[0], BufferView(Span(data)[self.end :])
         )
         self.last = len(data)
         self.bad = False
@@ -128,8 +120,6 @@ struct Prefixes[Suffixes: Codec = Cascade[Lengths[], Plain]](Codec):
 
     comptime BytesOut: DType = DType.int32
     comptime SLOTS = 1
-    comptime SUFFIXES = 0
-    """The slot of the suffixes."""
 
     var _suffixes: Self.Suffixes
     var ends: List[Int32]
@@ -147,15 +137,9 @@ struct Prefixes[Suffixes: Codec = Cascade[Lengths[], Plain]](Codec):
     no suffix."""
 
     @staticmethod
-    def node(var suffixes: Encoded) -> Encoded:
-        """`Prefixes`' node in a cascade's tree: `suffixes`, the node of its
-        `Suffixes` slot."""
-        return Encoded(0, [suffixes^])
-
-    @staticmethod
-    def suffixes(node: Encoded) -> ref[node.children[Self.SUFFIXES]] Encoded:
+    def suffixes(node: Encoded) -> ref[node.children[0]] Encoded:
         """The node of the suffixes `node` holds."""
-        return node[Self.SUFFIXES]
+        return node[0]
 
     def __init__(out self):
         self = Self(Self.Suffixes())
@@ -199,8 +183,8 @@ struct Prefixes[Suffixes: Codec = Cascade[Lengths[], Plain]](Codec):
         self.bytes.resize(
             unsafe_uninit_length=Int(self.ends[len(self.ends) - 1])
         )
-        var node = Self.node(
-            self._suffixes.encode(Span(self.ends), Span(self.bytes))
+        var node = Encoded(
+            0, [self._suffixes.encode(Span(self.ends), Span(self.bytes))]
         )
         self.ends = [Int32(0)]
         self.bytes = List[UInt8]()
@@ -211,7 +195,7 @@ struct Prefixes[Suffixes: Codec = Cascade[Lengths[], Plain]](Codec):
     def start(mut self, ref node: Encoded, mut data: List[UInt8]) raises:
         self.ends = [Int32(0)]
         self.bytes = List[UInt8]()
-        self._suffixes.decode(node[Self.SUFFIXES], self.ends, self.bytes)
+        self._suffixes.decode(node[0], self.ends, self.bytes)
         self.lo = len(data)
         self.hi = self.lo
         self.taken = 0

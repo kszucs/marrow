@@ -234,14 +234,16 @@ In Mojo, `write_table` takes
 `content_defined_chunking=ContentDefinedChunking(min_chunk_size=..., max_chunk_size=..., norm_level=...)`,
 both from `marrow.parquet`.
 
-### LZ4 and ZSTD in Mojo
+### Codecs in Mojo
 
-LZ4 and ZSTD are implemented in Mojo, for Parquet pages and IPC bodies alike,
-on the way in and on the way out. `native_codecs=False` hands them to liblz4
-and libzstd instead; the compressed bytes are the same, against liblz4 1.10.0
-and libzstd 1.5.7. Every Parquet and IPC read and write function takes the
-switch. Snappy, gzip and brotli always go through their C libraries, which
-marrow loads when a file first needs them.
+Snappy, LZ4 and ZSTD are implemented in Mojo, for Parquet pages and IPC bodies
+alike, on the way in and on the way out. `native_codecs=False` hands them to
+libsnappy, liblz4 and libzstd instead; the compressed bytes are the same,
+against liblz4 1.10.0 and libzstd 1.5.7. Every Parquet and IPC read and write
+function takes the switch. Brotli runs in Mojo too, in both directions, and
+`native_codecs=False` hands it to libbrotli. Gzip and deflate always go
+through zlib. Brotli is written at quality 1 natively and at quality 11 by
+libbrotli. marrow loads a C library when a file first needs it.
 
 ::: {.callout-tip}
 To read many files — a directory, a glob, an Iceberg table, or a Hugging Face

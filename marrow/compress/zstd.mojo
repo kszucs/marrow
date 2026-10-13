@@ -44,7 +44,6 @@ from ..utils.bits import BitReader, BitWriter
 from ..utils.byteorder import LittleEndian
 from .core import (
     Compressor,
-    UnsizedDecompressor,
     append_uninit,
     library,
     reserve_more,
@@ -1412,14 +1411,9 @@ struct Zstd(Compressor):
 comptime _Opaque = OpaquePointer[MutUntrackedOrigin]
 
 
-struct LibZstd(UnsizedDecompressor):
+struct LibZstd(Compressor):
     """Zstandard through libzstd: `ZSTD_compress` at level 1 and
     `ZSTD_decompress`."""
-
-    @staticmethod
-    def content_length(src: Span[UInt8, _]) raises DynError -> Optional[Int]:
-        """What `Zstd.content_length` reads: the same format."""
-        return Zstd.content_length(src)
 
     @staticmethod
     def compress(
