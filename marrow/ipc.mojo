@@ -2261,10 +2261,9 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
     and commit. Nothing is published until `close()` succeeds.
 
     Batches are handed to the sink as they are written, so peak residency is
-    one message rather than the whole file. That is safe here and is not in the
-    Parquet writer: the only absolute offsets this format records are the
-    `_Block` positions below, which come from `tell()`, while an encoded
-    message is self-contained.
+    one message rather than the whole file. That is safe because the only
+    absolute offsets this format records are the `_Block` positions below,
+    which come from `tell()`, while an encoded message is self-contained.
     """
 
     var _out: BufferedSink[Self.S]

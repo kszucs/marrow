@@ -211,8 +211,14 @@ def test_opendal_parquet_write_then_read_back() raises:
         var path = join(dir, name)
 
         var t = _sample()
-        var w = FileWriter(_fs(dir).writer(name), Compression.SNAPPY)
-        w.write(t, row_group_size=3)
+        var w = FileWriter(
+            _fs(dir).writer(name),
+            t.schema,
+            Compression.SNAPPY,
+            row_group_size=3,
+        )
+        w.write(t)
+        w.close()
         assert_true(exists(path), "the sink did not commit")
 
         # Byte-identical to the same table written through a local sink. That is
@@ -220,8 +226,11 @@ def test_opendal_parquet_write_then_read_back() raises:
         # comparing decoded tables would also pass if the writer had quietly
         # reshaped something.
         var local = join(dir, "marrow_opendal_pq_local.parquet")
-        var lw = FileWriter(FileSink(local), Compression.SNAPPY)
-        lw.write(t, row_group_size=3)
+        var lw = FileWriter(
+            FileSink(local), t.schema, Compression.SNAPPY, row_group_size=3
+        )
+        lw.write(t)
+        lw.close()
 
         var a = BufferSource(path)
         var b = BufferSource(local)
@@ -352,8 +361,11 @@ def test_opendal_parquet_parallel_decode_is_sound() raises:
             ).__arrow_c_stream__(Python.none())
         ).to_table()
 
-        var w = FileWriter(FileSink(path), Compression.SNAPPY)
-        w.write(wide, row_group_size=5000)
+        var w = FileWriter(
+            FileSink(path), wide.schema, Compression.SNAPPY, row_group_size=5000
+        )
+        w.write(wide)
+        w.close()
 
         # 3 row groups x 4 leaves = 12 slots, 15,000 rows -> genuinely parallel.
         var pf = ParquetFile(OpenDalSource(_fs(dir), name))

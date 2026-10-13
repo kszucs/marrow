@@ -84,9 +84,14 @@ comptime C_FILE = "marrow_bench_reassoc_c.parquet"
 def _write(batch: RecordBatch, path: String, row_group: Int) raises:
     """One table through marrow's writer, dictionary-encoded by default — which
     is the only reason a `distinct_count` exists to read back."""
-    var s = Schema(copy=batch.schema)
-    var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
-    w.write(Table.from_batches(s^, [batch.copy()]), row_group_size=row_group)
+    var w = FileWriter(
+        FileSink(path),
+        batch.schema,
+        Compression.UNCOMPRESSED,
+        row_group_size=row_group,
+    )
+    w.write(batch)
+    w.close()
 
 
 def _fixture(dir: String) raises:

@@ -3,12 +3,12 @@
 
 """Native Arrow → Parquet writer.
 
-`FileWriter` orchestrates the file: header magic, one `RowGroup` per slice of the
-table (bounded by `row_group_size`), then the footer. `ColumnWriter` owns one
-leaf column chunk — splitting it into data pages (RLE rep/def levels + encoded
-values) of at most ~1 MiB / `MAX_ROWS_PER_PAGE` rows on record boundaries,
-compressing each, and producing the `ColumnMetaData` plus the per-page
-OffsetIndex / ColumnIndex. A shared dictionary page (when dictionary-encoded)
+`FileWriter` orchestrates the file: header magic, one `RowGroup` per
+`row_group_size` rows written -- each flushed to the sink once encoded -- then
+the footer. `ColumnWriter` owns one leaf column chunk — splitting it into data
+pages (RLE rep/def levels + encoded values) of at most ~1 MiB /
+`MAX_ROWS_PER_PAGE` rows on record boundaries, compressing each, and producing
+the `ColumnMetaData` plus the per-page OffsetIndex / ColumnIndex. A shared dictionary page (when dictionary-encoded)
 precedes the data pages. `version` selects the page format: v1 (levels + values
 compressed together) or v2 (levels stored uncompressed ahead of the compressed
 values). Value encoding is dispatched by Arrow type to typed methods, so the
@@ -19,7 +19,8 @@ writer mirrors the reader's structure.
 from std.bit import bit_width
 from std.sys.info import Endian
 
-from ..errors import InternalError, NotImplementedError
+from ..errors import InternalError, InvalidError, NotImplementedError
+from ..formats import BatchWriter
 from ..kernels.cast import TemporalCastKernel
 from ..arrays import (
     DynArray,
@@ -35,6 +36,7 @@ from ..io import (
 )
 from ..dtypes import PrimitiveType, NumericType
 from .. import dtypes as dt
+from ..schema import Schema
 from ..tabular import Table, RecordBatch
 from .chunker import ContentDefinedChunking, ContentDefinedChunker, Chunk
 from .gearhash import gearhash_table
@@ -487,7 +489,8 @@ struct ColumnWriter(Movable):
         native: Bool,
     ) raises -> Tuple[Int, Int, Int]:
         """Write the shared dictionary page (PLAIN distinct values, compressed);
-        return `(offset, uncompressed_incl_header, compressed_incl_header)`."""
+        return `(offset, uncompressed_incl_header, compressed_incl_header)`,
+        `offset` being the page's index in `out`."""
         var offset = len(out)
         var raw_len = len(dict_body)
         self._pack(dict_body^, native)
@@ -513,9 +516,10 @@ struct ColumnWriter(Movable):
     ) raises -> Tuple[Int, Int, Int]:
         """Serialize one v1/v2 data page into `out` from the already-encoded value
         + rep/def level bytes; return `(page_offset, uncompressed_incl_header,
-        compressed_incl_header)`. v1 length-prefixes each level stream ahead of
-        the values (all compressed together); v2 keeps the levels uncompressed
-        ahead of the (optionally compressed) values."""
+        compressed_incl_header)`, `page_offset` being the page's index in `out`.
+        v1 length-prefixes each level stream ahead of the values (all compressed
+        together); v2 keeps the levels uncompressed ahead of the (optionally
+        compressed) values."""
         var page_offset = len(out)
         var uncompressed_size: Int
         var compressed_size: Int
@@ -580,6 +584,7 @@ struct ColumnWriter(Movable):
         rep_levels: List[Int32],
         path: List[String],
         mut out: List[UInt8],
+        base: Int,
         native: Bool,
         page_plan: List[Int],
     ) raises -> ColumnChunk:
@@ -598,7 +603,13 @@ struct ColumnWriter(Movable):
         sizing. `MAX_ROWS_PER_PAGE` still bounds every physical page inside a
         chunk -- a default-sized CDC chunk of int64 alone holds 32K-131K
         values, well past the 20 000-row cap, so it fires on essentially every
-        chunk and one chunk commonly becomes several pages."""
+        chunk and one chunk commonly becomes several pages.
+
+        `base` is the file position of `out[0]`. The pages are appended to
+        `out`, and every offset the chunk records -- `dictionary_page_offset`,
+        `data_page_offset`, `file_offset`, each `PageLocation.offset` -- is
+        `base` plus the page's index in `out`, so `out` may be a staging
+        buffer whose earlier bytes have already left for the sink."""
         var max_def = self.leaf.max_def
         var max_rep = self.leaf.max_rep
         var slot_def = self.leaf.slot_def
@@ -645,7 +656,7 @@ struct ColumnWriter(Movable):
                 if num_dict > 0:  # one bit even for a one-entry dictionary
                     dict_width = max(1, Int(bit_width(UInt64(num_dict - 1))))
                 var d = self._write_dict_page(dict_body^, num_dict, out, native)
-                dict_page_offset = d[0]
+                dict_page_offset = base + d[0]
                 total_uncompressed += d[1]
                 total_compressed += d[2]
 
@@ -760,12 +771,12 @@ struct ColumnWriter(Movable):
             total_uncompressed += sp[1]
             total_compressed += sp[2]
             if first_data_offset < 0:
-                first_data_offset = sp[0]
+                first_data_offset = base + sp[0]
 
             # OffsetIndex: this page's location and its first (row-group-relative)
             # row.
             var loc = PageLocation()
-            loc.offset = sp[0]
+            loc.offset = base + sp[0]
             loc.compressed_page_size = len(out) - sp[0]
             loc.first_row_index = rows_before
             page_locs.append(loc^)
@@ -866,21 +877,19 @@ def _flat_def_levels(values: DynArray, max_def: Int) raises -> List[Int32]:
     return defs^
 
 
-struct FileWriter[S: ByteSink = FileSink](Movable):
-    """Writes a `Table` as a Parquet file to any `ByteSink`.
+struct FileWriter[S: ByteSink = FileSink](BatchWriter):
+    """Writes a Parquet file to any `ByteSink`, one row group at a time.
 
-    **The output is staged whole and committed at `close`, not streamed.**
-    `ColumnWriter` records `data_page_offset`, `dictionary_page_offset` and
-    every `PageLocation.offset` as `len(out)` — absolute file offsets — so
-    flushing between row groups would leave the staging buffer restarting at
-    zero while the footer went on claiming file positions, and every page offset
-    in the file would be wrong. Streaming needs `ColumnWriter` to be told the
-    base offset first; that is a separate change, and until it lands `out` is
-    never flushed early, which keeps `tell()` and `len(buffer())` in agreement
-    by construction.
+    Batches are buffered until `row_group_size` rows are pending; that many
+    are then encoded as one row group and flushed to the sink, so memory is
+    bounded by a row group (plus the batch that filled it), not by the file.
+    `close` encodes what is left, then the bloom filters, the page index and
+    the footer, and commits the sink. A writer dropped without `close`
+    commits nothing.
 
-    So what the sink buys today is *destination independence*, not a lower peak
-    residency: the same writer emits to a local file or an object store.
+    Row groups start every `row_group_size` rows of the concatenated input,
+    however it was split into batches, so feeding the same rows in any
+    batching writes the same bytes.
     """
 
     var out: BufferedSink[Self.S]
@@ -892,6 +901,11 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
     var column_encodings: Dict[String, Encoding]  # per-column overrides by name
     var write_bloom_filter: Bool  # build bloom filters for eligible columns
     var write_page_checksum: Bool  # attach a CRC-32 to every page
+    var schema: Schema
+    """The Arrow schema every written batch must have."""
+    var row_group_size: Int
+    """Rows per row group; only the last one may be shorter."""
+    var nodes: List[SchemaNode]
     var leaves: List[LeafColumn]
     var content_defined_chunking: Optional[ContentDefinedChunking]
     """How to derive data page boundaries from a rolling hash instead of a row
@@ -899,10 +913,18 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
     var gearhash: List[UInt64]
     """The 16 KiB gear hash table, materialized once per file and lent to
     every chunker call -- never copied per chunker or per value."""
+    var fmeta: FileMetaData
+    """The footer, gathering one `RowGroup` per encoded row group."""
+    var pending: List[RecordBatch]
+    """Batches not yet encoded, fewer than `row_group_size` rows in all
+    between calls."""
+    var pending_rows: Int
+    var closed: Bool
 
     def __init__(
         out self,
         var sink: Self.S,
+        schema: Schema,
         compression: Compression,
         version: Int = 1,
         use_dictionary: Bool = True,
@@ -912,7 +934,14 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
         write_page_checksum: Bool = False,
         var content_defined_chunking: Optional[ContentDefinedChunking] = None,
         native_codecs: Bool = True,
-    ):
+        row_group_size: Int = DEFAULT_ROW_GROUP_SIZE,
+    ) raises:
+        if row_group_size < 1:
+            raise InvalidError(
+                t"FileWriter: row_group_size must be positive, got"
+                t" {row_group_size}"
+            )
+        var ps = SchemaMapping.from_arrow(schema)
         self.out = BufferedSink(sink^)
         FileMetaData.write_magic(self.out.buffer())  # file header magic
         self.native_codecs = native_codecs
@@ -923,9 +952,35 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
         self.column_encodings = column_encodings^
         self.write_bloom_filter = write_bloom_filter
         self.write_page_checksum = write_page_checksum
-        self.leaves = List[LeafColumn]()
+        self.schema = schema.copy()
+        self.row_group_size = row_group_size
+        self.nodes = ps.nodes.copy()
+        self.leaves = ps.leaves.copy()
         self.content_defined_chunking = content_defined_chunking^
+        # Content-defined chunking: the 16 KiB gearhash table is materialized
+        # once per file and lent (never copied) to every `chunks()` call. The
+        # chunkers themselves are per row group -- see `_write_row_group`.
         self.gearhash = List[UInt64]()
+        if self.content_defined_chunking:
+            self.gearhash = gearhash_table()
+
+        self.fmeta = FileMetaData()
+        self.fmeta.version = version
+        self.fmeta.schema = ps.elements.copy()
+        self.fmeta.num_rows = 0
+        self.fmeta.created_by = "marrow"
+        # Preserve the schema's key/value metadata. PyArrow's `ARROW:schema` is
+        # dropped: it pins the exact Arrow types, but marrow writes (and readers
+        # infer) types from the Parquet schema, so re-emitting a foreign
+        # ARROW:schema would make the file self-inconsistent.
+        for entry in schema.metadata.items():
+            if entry.key != "ARROW:schema":
+                self.fmeta.key_value_metadata.append(
+                    KeyValue(entry.key, entry.value)
+                )
+        self.pending = List[RecordBatch]()
+        self.pending_rows = 0
+        self.closed = False
 
     def _encoding_for(self, leaf: LeafColumn) raises -> Encoding:
         """The value encoding for a leaf, most specific first: a per-column
@@ -944,9 +999,7 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
             return Encoding.RLE_DICTIONARY
         return Encoding.PLAIN
 
-    def _write_row_group(
-        mut self, batch: RecordBatch, nodes: List[SchemaNode]
-    ) raises -> RowGroup:
+    def _write_row_group(mut self, batch: RecordBatch) raises -> RowGroup:
         # Content-defined chunking: one chunker per leaf, **built fresh for this
         # row group**. The rolling-hash state carries across the pages and the
         # `chunks()` calls within a row group and is deliberately dropped at its
@@ -968,13 +1021,16 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
                     )
                 )
 
+        # `out` is the staging buffer, which holds only what was written since
+        # the last flush; `base` is the file position of its first byte.
+        var base = self.out.tell() - len(self.out.buffer())
         var columns = List[ColumnChunk]()
         var total = 0
-        for ci in range(len(nodes)):
+        for ci in range(len(self.nodes)):
             var col_leaves = List[Int]()
-            nodes[ci].collect_leaf_indices(col_leaves)
+            self.nodes[ci].collect_leaf_indices(col_leaves)
             var leaf_values = List[DynArray]()
-            nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_values)
+            self.nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_values)
 
             # Per-leaf rep/def levels: empty for a flat column (each leaf's
             # levels are synthesized below from its own validity), Dremel-
@@ -985,8 +1041,8 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
             for _ in range(len(self.leaves)):
                 defs.append(List[Int32]())
                 reps.append(List[Int32]())
-            if nodes[ci].needs_levels():
-                nodes[ci].shred_levels(
+            if self.nodes[ci].needs_levels():
+                self.nodes[ci].shred_levels(
                     batch.columns[ci], self.leaves, defs, reps
                 )
 
@@ -1039,6 +1095,7 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
                     reps[gi],
                     [self.leaves[gi].name],
                     self.out.buffer(),
+                    base,
                     self.native_codecs,
                     page_plan,
                 )
@@ -1051,66 +1108,77 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
         rg.columns = columns^
         return rg^
 
-    def write(
-        mut self,
-        table: Table,
-        row_group_size: Int = DEFAULT_ROW_GROUP_SIZE,
-    ) raises:
-        """Encode `table` and commit it to the sink. The destination was fixed
-        when the writer was constructed."""
-        var batch = table.combine_chunks()
-        var n = batch.num_rows()
+    def write(mut self, batch: RecordBatch) raises:
+        """Append `batch`'s rows. Every full `row_group_size` rows pending are
+        encoded as a row group and flushed to the sink."""
+        if self.closed:
+            raise InvalidError("write: the Parquet writer is closed")
+        if batch.schema != self.schema:
+            raise InvalidError(
+                t"write: batch has schema {batch.schema}, expected"
+                t" {self.schema}"
+            )
+        if batch.num_rows() == 0:
+            return
+        self.pending.append(batch.copy())
+        self.pending_rows += batch.num_rows()
+        while self.pending_rows >= self.row_group_size:
+            var rows = self._take_pending()
+            var rest = rows.num_rows() - self.row_group_size
+            self._write_and_flush(rows.slice(0, self.row_group_size))
+            if rest > 0:
+                self.pending.append(rows.slice(self.row_group_size, rest))
+            self.pending_rows = rest
 
-        var ps = SchemaMapping.from_arrow(table.schema)
-        self.leaves = ps.leaves.copy()
+    def write(mut self, table: Table) raises:
+        """Append `table`'s rows, batch by batch."""
+        for batch in table.to_batches():
+            self.write(batch)
 
-        # Content-defined chunking: the 16 KiB gearhash table is materialized
-        # once per file and lent (never copied) to every `chunks()` call. The
-        # chunkers themselves are per row group -- see `_write_row_group`.
-        if self.content_defined_chunking:
-            self.gearhash = gearhash_table()
-
-        var fmeta = FileMetaData()
-        fmeta.version = self.version
-        fmeta.schema = ps.elements.copy()
-        fmeta.num_rows = n
-        fmeta.created_by = "marrow"
-        # Preserve the schema's key/value metadata. PyArrow's `ARROW:schema` is
-        # dropped: it pins the exact Arrow types, but marrow writes (and readers
-        # infer) types from the Parquet schema, so re-emitting a foreign
-        # ARROW:schema would make the file self-inconsistent.
-        for entry in table.schema.metadata.items():
-            if entry.key != "ARROW:schema":
-                fmeta.key_value_metadata.append(
-                    KeyValue(entry.key, entry.value)
-                )
-
-        var start = 0
-        while start < n or (n == 0 and start == 0):
-            var length = min(row_group_size, n - start)
-            var slice = batch.slice(start, length)
-            fmeta.row_groups.append(self._write_row_group(slice, ps.nodes))
-            start += length
-            if length == 0:
-                break
+    def close(mut self) raises:
+        """Encode the rows still pending, then the bloom filters, the page
+        index and the footer, and commit the sink. A file nothing was written
+        to holds one empty row group. Closing twice is a no-op."""
+        if self.closed:
+            return
+        self.closed = True
+        if self.pending_rows > 0 or len(self.fmeta.row_groups) == 0:
+            self._write_and_flush(self._take_pending())
 
         # bloom filters, then the page index — both written after the page data,
         # before the footer; the footer's ColumnChunks point back at them.
-        self._write_bloom_filters(fmeta)
-        self._write_page_index(fmeta)
-
-        fmeta.write_footer(self.out.buffer())
-        # Nothing has reached the sink until now: this is the single
-        # write, and the commit.
+        self._write_bloom_filters()
+        self._write_page_index()
+        self.fmeta.write_footer(self.out.buffer())
         self.out.close()
 
-    def _write_bloom_filters(mut self, mut fmeta: FileMetaData) raises:
+    def _take_pending(mut self) raises -> RecordBatch:
+        """The pending batches as one, leaving none pending."""
+        var rows: RecordBatch
+        if len(self.pending) == 1:
+            rows = self.pending[0].copy()
+        else:
+            rows = RecordBatch.concat(self.pending, self.schema)
+        self.pending.clear()
+        self.pending_rows = 0
+        return rows^
+
+    def _write_and_flush(mut self, batch: RecordBatch) raises:
+        """Encode `batch` as one row group and hand its bytes to the sink."""
+        var rg = self._write_row_group(batch)
+        self.fmeta.num_rows += batch.num_rows()
+        self.fmeta.row_groups.append(rg^)
+        self.out.flush()
+
+    def _write_bloom_filters(mut self) raises:
         """Emit each chunk's bloom filter (BloomFilterHeader + bitset) and record
         its offset/length on the ColumnMetaData. Chunks with no bloom bytes (a
         non-eligible type, or bloom filters disabled) are skipped."""
-        for rg in range(len(fmeta.row_groups)):
-            for ci in range(len(fmeta.row_groups[rg].columns)):
-                var nbytes = len(fmeta.row_groups[rg].columns[ci].bloom_bytes)
+        for rg in range(len(self.fmeta.row_groups)):
+            for ci in range(len(self.fmeta.row_groups[rg].columns)):
+                var nbytes = len(
+                    self.fmeta.row_groups[rg].columns[ci].bloom_bytes
+                )
                 if nbytes == 0:
                     continue
                 var offset = self.out.tell()
@@ -1118,38 +1186,50 @@ struct FileWriter[S: ByteSink = FileSink](Movable):
                 hdr.num_bytes = nbytes
                 var hlen = hdr.append_to(self.out.buffer())
                 self.out.buffer().extend(
-                    Span(fmeta.row_groups[rg].columns[ci].bloom_bytes)
+                    Span(self.fmeta.row_groups[rg].columns[ci].bloom_bytes)
                 )
-                fmeta.row_groups[rg].columns[
+                self.fmeta.row_groups[rg].columns[
                     ci
                 ].meta_data.bloom_filter_offset = offset
-                fmeta.row_groups[rg].columns[
+                self.fmeta.row_groups[rg].columns[
                     ci
                 ].meta_data.bloom_filter_length = (hlen + nbytes)
 
-    def _write_page_index(mut self, mut fmeta: FileMetaData) raises:
+    def _write_page_index(mut self) raises:
         """Serialize the per-page OffsetIndex (always) and ColumnIndex (when the
         chunk's pages all carry bounds or are null pages) that `ColumnWriter.write`
         produced, then record their file offsets on the chunk."""
-        for rg in range(len(fmeta.row_groups)):
-            for ci in range(len(fmeta.row_groups[rg].columns)):
-                if fmeta.row_groups[rg].columns[ci].write_column_index:
+        for rg in range(len(self.fmeta.row_groups)):
+            for ci in range(len(self.fmeta.row_groups[rg].columns)):
+                if self.fmeta.row_groups[rg].columns[ci].write_column_index:
                     var cix = (
-                        fmeta.row_groups[rg].columns[ci].column_index_out.copy()
+                        self.fmeta.row_groups[rg]
+                        .columns[ci]
+                        .column_index_out.copy()
                     )
                     var coff = self.out.tell()
                     var clen = cix.append_to(self.out.buffer())
-                    fmeta.row_groups[rg].columns[ci].column_index_offset = coff
-                    fmeta.row_groups[rg].columns[ci].column_index_length = clen
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].column_index_offset = coff
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].column_index_length = clen
 
                 var oix = (
-                    fmeta.row_groups[rg].columns[ci].offset_index_out.copy()
+                    self.fmeta.row_groups[rg]
+                    .columns[ci]
+                    .offset_index_out.copy()
                 )
                 if len(oix.page_locations) > 0:
                     var ooff = self.out.tell()
                     var olen = oix.append_to(self.out.buffer())
-                    fmeta.row_groups[rg].columns[ci].offset_index_offset = ooff
-                    fmeta.row_groups[rg].columns[ci].offset_index_length = olen
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].offset_index_offset = ooff
+                    self.fmeta.row_groups[rg].columns[
+                        ci
+                    ].offset_index_length = olen
 
 
 def write_table(
@@ -1211,6 +1291,7 @@ def write_table(
     """
     var writer = FileWriter(
         DynSink.open(uri, options),
+        table.schema,
         compression,
         version,
         use_dictionary,
@@ -1222,3 +1303,4 @@ def write_table(
         native_codecs,
     )
     writer.write(table)
+    writer.close()

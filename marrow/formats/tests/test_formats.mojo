@@ -7,12 +7,14 @@ as each batch is written rather than at `close`."""
 
 from std.memory import ArcPointer
 from std.os.path import join
+from std.python import Python
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from ...arrays import DynArray
 from ...builders import array
 from ...dtypes import int64
-from ...io import BufferSource, ByteSink, FileSink
+from ...execution import ExecContext
+from ...io import BufferSource, ByteSink, ByteSource, Fetched, FileSink
 from ...ipc import (
     IpcFormat,
     RecordBatchFileReader,
@@ -21,6 +23,7 @@ from ...ipc import (
     RecordBatchStreamWriter,
 )
 from ...json import JsonFormat, JsonReader, JsonWriter
+from ...parquet import ParquetFile, ParquetFormat, ParquetReader, read_table
 from ...schema import Schema
 from ...tabular import RecordBatch, record_batch
 from ...utils.testing import ScratchDir
@@ -48,6 +51,60 @@ struct _Tap(ByteSink):
     def close(mut self) raises:
         self._writes[].append(-1)
         self._inner.close()
+
+
+comptime Reads = ArcPointer[List[Tuple[Int, Int]]]
+"""Every `(offset, length)` a source was asked for, in order."""
+
+
+struct _Recorder(ByteSource):
+    """A `BufferSource` that remembers what was read through it."""
+
+    var _inner: BufferSource
+    var _reads: Reads
+
+    def __init__(out self, path: String, var reads: Reads) raises:
+        self._inner = BufferSource(path)
+        self._reads = reads^
+
+    def size(self) -> Int:
+        return self._inner.size()
+
+    def read_at(
+        ref self, offset: Int, length: Int
+    ) raises -> Span[UInt8, origin_of(self)]:
+        self._reads[].append((offset, length))
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._inner.read_at(offset, length)
+        )
+
+    def read_ranges(
+        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
+        for ref r in ranges:
+            self._reads[].append((r[0], r[1]))
+        return self._inner.read_ranges(ranges, ctx)
+
+
+def _largest_read(reads: Reads) -> Int:
+    var largest = 0
+    for ref r in reads[]:
+        largest = max(largest, r[1])
+    return largest
+
+
+def _write_parquet(path: String, row_group_size: Int) raises:
+    """Nine rows of `n: int64, s: string` through pyarrow, in row groups of
+    `row_group_size`."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var table = pa.table(
+        Python.dict(
+            n=Python.list(0, 1, 2, 3, 4, 5, 6, 7, 8),
+            s=Python.list("a", "b", "c", "d", "e", "f", "g", "h", "i"),
+        )
+    )
+    pq.write_table(table, path, row_group_size=row_group_size)
 
 
 def _batches() raises -> List[RecordBatch]:
@@ -224,3 +281,50 @@ def test_formats_open_a_file_for_a_scan() raises:
         var got = _scan[JsonFormat](jsonl, n_only)
         assert_equal(len(got[0].schema.fields), 1)
         assert_equal(got[0].num_rows(), 9)
+
+
+def test_parquet_reads_back_one_row_group_per_batch() raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "t.parquet")
+        _write_parquet(path, row_group_size=3)
+        var expected = read_table(path).to_batches()
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var file = ParquetFile(_Recorder(path, reads))
+        # Opening reads the footer's speculative tail, all of a file this
+        # small; what follows is row group by row group.
+        reads[].clear()
+        var reader = ParquetReader(file^)
+        assert_true(reader.schema() == expected[0].schema)
+        var got = _drain(reader)
+        assert_equal(len(got), 3)
+        _assert_same(got, expected)
+        assert_true(len(reads[]) > 0)
+        assert_true(_largest_read(reads) < BufferSource(path).size() // 3)
+
+
+def test_parquet_reader_follows_a_read_plan() raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "t.parquet")
+        _write_parquet(path, row_group_size=3)
+        var reader = ParquetReader(
+            ParquetFile(path),
+            columns=Optional[List[String]](["s"]),
+            row_groups=Optional[List[Int]]([2, 0]),
+        )
+        assert_equal(len(reader.schema().fields), 1)
+        var got = _drain(reader)
+        assert_equal(len(got), 2)
+        assert_equal(got[0].num_rows(), 3)
+        assert_equal(got[0].schema.fields[0].name, "s")
+
+
+def test_parquet_format_opens_a_projection() raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "t.parquet")
+        _write_parquet(path, row_group_size=4)
+        var full = read_table(path)
+        var n_only = Schema(fields=[full.schema.fields[0].copy()])
+        assert_equal(ParquetFormat.name(), "Parquet")
+        var got = _scan[ParquetFormat](path, n_only)
+        assert_equal(len(got), 3)
+        assert_true(got[0].schema == n_only)

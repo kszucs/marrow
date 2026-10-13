@@ -105,11 +105,14 @@ def _to_table(var batch: RecordBatch) raises -> Table:
 def _write_marrow_cdc(t: Table, path: String, row_group_size: Int) raises:
     var w = FileWriter(
         FileSink(path),
+        t.schema,
         Compression.UNCOMPRESSED,
         use_dictionary=False,
         content_defined_chunking=ContentDefinedChunking(),
+        row_group_size=row_group_size,
     )
-    w.write(t, row_group_size=row_group_size)
+    w.write(t)
+    w.close()
 
 
 def _write_pyarrow_cdc(

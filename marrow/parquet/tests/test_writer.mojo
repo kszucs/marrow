@@ -1,7 +1,8 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-from std.testing import assert_equal, assert_true, assert_false
+from std.memory import ArcPointer
+from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.math import isnan, isinf
 from std.python import Python, PythonObject
 from std.os.path import join
@@ -13,7 +14,7 @@ from ...parquet import (
     read_page_index,
 )
 from ...buffers import Buffer
-from ...io import FileSink, MemorySink
+from ...io import ByteSink, FileSink, MemorySink
 from ...parquet.writer import FileWriter, MAX_ROWS_PER_PAGE
 from ...parquet.chunker import ContentDefinedChunking
 from ...parquet.compression import Compression
@@ -79,8 +80,9 @@ def _v2_roundtrip(codec: Compression) raises:
     )
     with ScratchDir() as dir:
         var path = join(dir, "marrow_v2.parquet")
-        var w = FileWriter(FileSink(path), codec, version=2)
+        var w = FileWriter(FileSink(path), t.schema, codec, version=2)
         w.write(t)
+        w.close()
 
         # the file declares format version 2
         var pf = pq.ParquetFile(path)
@@ -115,8 +117,11 @@ def test_multiple_row_groups() raises:
     var t = _one_col(pa.array(_ints(2500), type=pa.int64()))
     with ScratchDir() as dir:
         var path = join(dir, "marrow_rg.parquet")
-        var w = FileWriter(FileSink(path), Compression.SNAPPY)
-        w.write(t, row_group_size=1000)
+        var w = FileWriter(
+            FileSink(path), t.schema, Compression.SNAPPY, row_group_size=1000
+        )
+        w.write(t)
+        w.close()
 
         # pyarrow sees 3 row groups
         var pq = Python.import_module("pyarrow.parquet")
@@ -504,8 +509,11 @@ def test_write_list_v2() raises:
     var t = _to_marrow(want)
     with ScratchDir() as dir:
         var path = join(dir, "marrow_nested_write_v2.parquet")
-        var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED, version=2)
+        var w = FileWriter(
+            FileSink(path), t.schema, Compression.UNCOMPRESSED, version=2
+        )
         w.write(t)
+        w.close()
         var back = pq.read_table(path)
         assert_true(
             Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
@@ -1209,11 +1217,13 @@ def test_page_checksum() raises:
             var path = join(dir, "marrow_crc.parquet")
             var w = FileWriter(
                 FileSink(path),
+                t.schema,
                 Compression.SNAPPY,
                 version=ver,
                 write_page_checksum=True,
             )
             w.write(t)
+            w.close()
             # PyArrow verifies the checksum -> marrow's CRC matches the spec
             var back = pq.read_table(path, page_checksum_verification=True)
             assert_equal(Int(py=back.num_rows), 200)
@@ -1247,14 +1257,24 @@ def test_parquet_sink_memory_bytes_match_file() raises:
     with ScratchDir() as dir:
         var path = join(dir, "marrow_parquet_sink_equivalence.parquet")
         var fw = FileWriter(
-            FileSink(path), Compression.SNAPPY, write_bloom_filter=True
+            FileSink(path),
+            t.schema,
+            Compression.SNAPPY,
+            write_bloom_filter=True,
+            row_group_size=3,
         )
-        fw.write(t, row_group_size=3)
+        fw.write(t)
+        fw.close()
 
         var mw = FileWriter(
-            MemorySink(), Compression.SNAPPY, write_bloom_filter=True
+            MemorySink(),
+            t.schema,
+            Compression.SNAPPY,
+            write_bloom_filter=True,
+            row_group_size=3,
         )
-        mw.write(t, row_group_size=3)
+        mw.write(t)
+        mw.close()
 
         ref from_memory = mw.out.sink().bytes()
         var mapped = Buffer.mmap_file(path)
@@ -1298,18 +1318,24 @@ def test_cdc_changes_page_layout_and_reads_back_identically() raises:
     with ScratchDir() as dir:
         var path_off = join(dir, "marrow_cdc_off.parquet")
         var w_off = FileWriter(
-            FileSink(path_off), Compression.UNCOMPRESSED, use_dictionary=False
+            FileSink(path_off),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
         )
         w_off.write(t)
+        w_off.close()
 
         var path_on = join(dir, "marrow_cdc_on.parquet")
         var w_on = FileWriter(
             FileSink(path_on),
+            t.schema,
             Compression.UNCOMPRESSED,
             use_dictionary=False,
             content_defined_chunking=ContentDefinedChunking(512, 4096, 0),
         )
         w_on.write(t)
+        w_on.close()
 
         var rows_off = _page_row_counts(path_off, 0, 0)
         var rows_on = _page_row_counts(path_on, 0, 0)
@@ -1336,11 +1362,13 @@ def test_cdc_page_split_respects_max_rows_per_page() raises:
         var path = join(dir, "marrow_cdc_maxrows.parquet")
         var w = FileWriter(
             FileSink(path),
+            t.schema,
             Compression.UNCOMPRESSED,
             use_dictionary=False,
             content_defined_chunking=ContentDefinedChunking(),
         )
         w.write(t)
+        w.close()
 
         var rows = _page_row_counts(path, 0, 0)
         assert_true(len(rows) > 1)
@@ -1361,10 +1389,12 @@ def test_cdc_empty_table_emits_one_page() raises:
         var path = join(dir, "marrow_cdc_empty.parquet")
         var w = FileWriter(
             FileSink(path),
+            t.schema,
             Compression.UNCOMPRESSED,
             content_defined_chunking=ContentDefinedChunking(),
         )
         w.write(t)
+        w.close()
 
         var rows = _page_row_counts(path, 0, 0)
         assert_equal(len(rows), 1)
@@ -1392,11 +1422,13 @@ def test_cdc_no_zero_length_first_page() raises:
         var path = join(dir, "marrow_cdc_zero_first_page.parquet")
         var w = FileWriter(
             FileSink(path),
+            t.schema,
             Compression.UNCOMPRESSED,
             use_dictionary=False,
             content_defined_chunking=ContentDefinedChunking(0, 8, -1),
         )
         w.write(t)
+        w.close()
 
         var rows = _page_row_counts(path, 0, 0)
         assert_true(
@@ -1437,11 +1469,13 @@ def test_cdc_string_and_nullable_roundtrip() raises:
         var path = join(dir, "marrow_cdc_mixed.parquet")
         var w = FileWriter(
             FileSink(path),
+            t.schema,
             Compression.UNCOMPRESSED,
             use_dictionary=False,
             content_defined_chunking=ContentDefinedChunking(512, 4096, 0),
         )
         w.write(t)
+        w.close()
 
         assert_true(Bool(pq.read_table(path).equals(want)))
         var back = read_table(path)
@@ -1498,10 +1532,16 @@ def test_nested_row_group_leaf_slicing() raises:
     )
     with ScratchDir() as dir:
         var path = join(dir, "marrow_nested_row_groups.parquet")
+        var t = _to_marrow(want)
         var w = FileWriter(
-            FileSink(path), Compression.UNCOMPRESSED, use_dictionary=False
+            FileSink(path),
+            t.schema,
+            Compression.UNCOMPRESSED,
+            use_dictionary=False,
+            row_group_size=100,
         )
-        w.write(_to_marrow(want), row_group_size=100)
+        w.write(t)
+        w.close()
 
         assert_equal(ParquetFile(path).num_row_groups(), 3)
         assert_true(Bool(pq.read_table(path).equals(want)))
@@ -1875,8 +1915,14 @@ def _assert_roundtrips(t: Table) raises:
     for row_group_size in [t.num_rows(), 2]:
         with ScratchDir() as dir:
             var path = join(dir, "case.parquet")
-            var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
-            w.write(t, row_group_size=row_group_size)
+            var w = FileWriter(
+                FileSink(path),
+                t.schema,
+                Compression.UNCOMPRESSED,
+                row_group_size=row_group_size,
+            )
+            w.write(t)
+            w.close()
             var got = _pylist(read_table(path))
             assert_true(Bool(got == want), String(got, " != ", want))
 
@@ -2081,3 +2127,188 @@ def test_write_null_map_spanning_entries() raises:
         mask=array([False, True, False]),
     )
     _assert_roundtrips(_table(map_col^))
+
+
+# ---------------------------------------------------------------------------
+# Streaming: row groups reach the sink as they are encoded.
+# ---------------------------------------------------------------------------
+
+
+struct _RecordingSink(ByteSink):
+    """A `MemorySink` that remembers the length of every `write` and whether
+    it was committed, shared with the test through `ArcPointer`s."""
+
+    var _bytes: ArcPointer[List[UInt8]]
+    var _writes: ArcPointer[List[Int]]
+    var _closed: ArcPointer[Bool]
+
+    def __init__(
+        out self,
+        var bytes: ArcPointer[List[UInt8]],
+        var writes: ArcPointer[List[Int]],
+        var closed: ArcPointer[Bool],
+    ):
+        self._bytes = bytes^
+        self._writes = writes^
+        self._closed = closed^
+
+    def write[o: Origin[mut=False]](mut self, data: Span[UInt8, o]) raises:
+        self._writes[].append(len(data))
+        self._bytes[].extend(data)
+
+    def close(mut self) raises:
+        self._closed[] = True
+
+
+def _streaming_table() raises -> Table:
+    """1,000 rows of nullable ints, strings and lists of ints."""
+    var pa = Python.import_module("pyarrow")
+    var ints = Python.list()
+    var strs = Python.list()
+    var lists = Python.list()
+    for i in range(1_000):
+        ints.append(Python.none() if i % 7 == 3 else PythonObject(i % 97))
+        strs.append(
+            Python.none() if i % 5 == 1 else PythonObject("s" + String(i % 13))
+        )
+        var l = Python.list()
+        for j in range(i % 4):
+            l.append(i + j)
+        lists.append(Python.none() if i % 6 == 0 else l)
+    return _to_marrow(
+        pa.table(
+            {
+                "i": pa.array(ints, type=pa.int64()),
+                "s": pa.array(strs),
+                "l": pa.array(lists, type=pa.list_(pa.int64())),
+            }
+        )
+    )
+
+
+def _in_batches(t: Table, size: Int) raises -> List[RecordBatch]:
+    """`t`'s rows as consecutive batches of `size` (the last one shorter)."""
+    var all = t.combine_chunks()
+    var out = List[RecordBatch]()
+    var start = 0
+    while start < all.num_rows():
+        var n = min(size, all.num_rows() - start)
+        out.append(all.slice(start, n))
+        start += n
+    return out^
+
+
+def test_parquet_writer_flushes_each_row_group() raises:
+    """Each full row group reaches the sink during `write`, before `close`."""
+    var bytes = ArcPointer(List[UInt8]())
+    var writes = ArcPointer(List[Int]())
+    var closed = ArcPointer(False)
+    var t = _streaming_table()
+    var w = FileWriter(
+        _RecordingSink(bytes, writes, closed),
+        t.schema,
+        Compression.SNAPPY,
+        write_bloom_filter=True,
+        row_group_size=300,
+    )
+    for b in _in_batches(t, 100):
+        w.write(b)
+
+    # 1,000 rows in groups of 300: three are flushed, 100 rows still pending.
+    assert_equal(len(writes[]), 3)
+    assert_false(closed[])
+    # The first flush starts with the header magic.
+    var magic: List[UInt8] = [0x50, 0x41, 0x52, 0x31]
+    assert_true(bytes[][:4] == magic)
+
+    w.close()
+    # The last row group, then the bloom filters, page index and footer.
+    assert_equal(len(writes[]), 5)
+    assert_true(closed[])
+    var total = 0
+    for n in writes[]:
+        total += n
+    assert_equal(total, len(bytes[]))
+
+
+def test_parquet_writer_batches_match_write_table() raises:
+    """However the rows are split into batches, the bytes are the same."""
+    var t = _streaming_table()
+    with ScratchDir() as dir:
+        # One row group: `write_table` against 37-row batches.
+        var path = join(dir, "marrow_streaming_write_table.parquet")
+        write_table(t, path)
+        var batched = FileWriter(MemorySink(), t.schema, Compression.SNAPPY)
+        for b in _in_batches(t, 37):
+            batched.write(b)
+        batched.close()
+        var mapped = Buffer.mmap_file(path)
+        var n = mapped.mapped_size()
+        ref got = batched.out.sink().bytes()
+        assert_equal(len(got), n)
+        var want = mapped.view[DType.uint8](0, n).as_span()
+        for i in range(n):
+            assert_equal(got[i], want[i])
+
+    # Four row groups, with bloom filters: the whole table against 37-row
+    # batches, whose boundaries straddle every row group's.
+    var whole = FileWriter(
+        MemorySink(),
+        t.schema,
+        Compression.SNAPPY,
+        write_bloom_filter=True,
+        row_group_size=300,
+    )
+    whole.write(t)
+    whole.close()
+    var pieces = FileWriter(
+        MemorySink(),
+        t.schema,
+        Compression.SNAPPY,
+        write_bloom_filter=True,
+        row_group_size=300,
+    )
+    for b in _in_batches(t, 37):
+        pieces.write(b)
+    pieces.close()
+    assert_true(whole.out.sink().bytes() == pieces.out.sink().bytes())
+
+
+def test_parquet_writer_streamed_reads_back() raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _streaming_table()
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_streaming_read_back.parquet")
+        var w = FileWriter(
+            FileSink(path), t.schema, Compression.ZSTD, row_group_size=300
+        )
+        for b in _in_batches(t, 64):
+            w.write(b)
+        w.close()
+
+        var f = ParquetFile(path)
+        assert_equal(f.num_row_groups(), 4)
+        assert_true(f.read().combine_chunks() == t.combine_chunks())
+        var back = pq.read_table(path)
+        assert_equal(Int(py=back.num_rows), 1_000)
+
+
+def test_parquet_writer_close_is_final() raises:
+    """Closing twice is a no-op, a write after `close` raises, and a writer
+    nothing was written to still makes a valid, empty file."""
+    var t = _streaming_table()
+    var w = FileWriter(MemorySink(), t.schema, Compression.SNAPPY)
+    w.close()
+    var size = len(w.out.sink().bytes())
+    w.close()
+    assert_equal(len(w.out.sink().bytes()), size)
+    with assert_raises(contains="closed"):
+        w.write(t)
+
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_streaming_empty.parquet")
+        var e = FileWriter(FileSink(path), t.schema, Compression.SNAPPY)
+        e.close()
+        var f = ParquetFile(path)
+        assert_equal(f.num_row_groups(), 1)
+        assert_equal(f.read().num_rows(), 0)

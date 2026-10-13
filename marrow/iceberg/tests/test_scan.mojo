@@ -271,8 +271,14 @@ def _write_data(path: String, n: Int, row_group_size: Int) raises:
     )
     var columns: List[DynArray] = [array(ids, int64), array(values, float64)]
     var batch = RecordBatch(schema, columns^)
-    var w = FileWriter(FileSink(path), Compression.SNAPPY)
-    w.write(Table.from_batches(schema, [batch^]), row_group_size=row_group_size)
+    var w = FileWriter(
+        FileSink(path),
+        schema,
+        Compression.SNAPPY,
+        row_group_size=row_group_size,
+    )
+    w.write(batch)
+    w.close()
 
 
 def _write_deletes(

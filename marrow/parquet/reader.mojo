@@ -37,6 +37,7 @@ from ..builders import (
 )
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
+from ..formats import BatchReader, Format
 from ..scalars import DynScalar
 from .. import dtypes as dt
 from ..dtypes import (
@@ -45,6 +46,7 @@ from ..dtypes import (
     StringViewLikeType,
     DataType,
     DecimalType,
+    Field,
     NumericType,
     PrimitiveType,
     StringLikeType,
@@ -3283,6 +3285,118 @@ struct ParquetFile[
                 per_col.append(pages^)
             out.append(per_col^)
         return out^
+
+
+struct ParquetReader[
+    S: ByteSource = BufferSource, leaves: LeafSet = LeafSet.all()
+](BatchReader):
+    """Reads a Parquet file one row group at a time.
+
+    Each `read_next_batch` decodes at most one row group, so what is resident
+    is bounded by a row group rather than by the file: a group is fetched only
+    when the batches of the one before it are used up.
+
+    `row_groups` and `row_selections` are the read plan a scan builds from a
+    predicate, as `ParquetFile.read` takes them; a selection that keeps every
+    row is dropped here, so its group decodes without a per-page check.
+    """
+
+    var _file: ParquetFile[Self.S, Self.leaves]
+    var _schema: Schema
+    var _columns: List[String]
+    var _plan: List[Int]
+    var _selections: List[Optional[RowSelection]]
+    """One entry per `_plan` entry, or none at all; `None` reads the group
+    whole."""
+    var _ctx: ExecContext
+    var _next: Int
+    var _pending: List[RecordBatch]
+
+    def __init__(
+        out self,
+        var file: ParquetFile[Self.S, Self.leaves],
+        columns: Optional[List[String]] = None,
+        row_groups: Optional[List[Int]] = None,
+        row_selections: Optional[List[RowSelection]] = None,
+        ctx: ExecContext = ExecContext.auto(),
+    ) raises:
+        var full = file.schema()
+        if columns:
+            self._columns = columns.value().copy()
+        else:
+            self._columns = full.names()
+        # An unknown name is left to `read` to reject, with its own message.
+        var fields = List[Field](capacity=len(self._columns))
+        for ref name in self._columns:
+            var i = full.get_field_index(name)
+            if i >= 0:
+                fields.append(full.fields[i].copy())
+        self._schema = Schema(fields=fields^)
+        if row_groups:
+            self._plan = row_groups.value().copy()
+        else:
+            self._plan = List[Int](capacity=file.num_row_groups())
+            for rg in range(file.num_row_groups()):
+                self._plan.append(rg)
+        self._selections = List[Optional[RowSelection]]()
+        if row_selections:
+            for ref sel in row_selections.value():
+                if sel.selects_all():
+                    self._selections.append(None)
+                else:
+                    self._selections.append(Optional(sel.copy()))
+        self._file = file^
+        self._ctx = ctx.copy()
+        self._next = 0
+        self._pending = List[RecordBatch]()
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def read_next_batch(mut self) raises -> Optional[RecordBatch]:
+        while len(self._pending) == 0:
+            if self._next >= len(self._plan):
+                return None
+            var groups: List[Int] = [self._plan[self._next]]
+            var picked = Optional[List[RowSelection]](None)
+            if (
+                self._next < len(self._selections)
+                and self._selections[self._next]
+            ):
+                var one: List[RowSelection] = [
+                    self._selections[self._next].value().copy()
+                ]
+                picked = Optional(one^)
+            self._next += 1
+            var table = self._file.read(
+                columns=Optional(self._columns.copy()),
+                row_groups=Optional(groups^),
+                row_selections=picked^,
+                ctx=self._ctx,
+            )
+            # A row group can decode to several chunks; each is a batch of
+            # its own rather than being concatenated back together.
+            self._pending = table.to_batches()
+        return self._pending.pop(0)
+
+
+struct ParquetFormat(Format):
+    """Parquet, read by `ParquetReader` one row group at a time; only the
+    projected columns' chunks are fetched."""
+
+    comptime Reader = ParquetReader[DynSource, LeafSet.all()]
+
+    @staticmethod
+    def name() -> StaticString:
+        return "Parquet"
+
+    @staticmethod
+    def open(path: String, schema: Schema) raises -> Self.Reader:
+        # The schema also decides each string column's layout, leaf by leaf.
+        var file = ParquetFile[DynSource, LeafSet.all()](
+            DynSource.open(path), schema=schema.copy()
+        )
+        return Self.Reader(file^, columns=schema.names())
 
 
 def read_table[

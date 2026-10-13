@@ -967,9 +967,13 @@ def _strings_fixture(path: String, dictionary: Bool) raises:
         values.append(String("v") + String(1_000 + i % 25))
     var batch = record_batch([array(values^).copy()], names=["s"])
     var w = FileWriter(
-        FileSink(path), Compression.UNCOMPRESSED, use_dictionary=dictionary
+        FileSink(path),
+        batch.schema,
+        Compression.UNCOMPRESSED,
+        use_dictionary=dictionary,
     )
-    w.write(Table.from_batches(Schema(copy=batch.schema), [batch.copy()]))
+    w.write(batch)
+    w.close()
 
 
 def _footer_estimate(path: String, s: Schema) raises -> Estimate:
@@ -1202,8 +1206,14 @@ def test_estimate_reads_a_distinct_count_from_marrows_own_footer() raises:
             names=["k", "b"],
         )
         var s = Schema(copy=b.schema)
-        var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
-        w.write(Table.from_batches(s.copy(), [b^]), row_group_size=100)
+        var w = FileWriter(
+            FileSink(path),
+            b.schema,
+            Compression.UNCOMPRESSED,
+            row_group_size=100,
+        )
+        w.write(b)
+        w.close()
 
         var f = ParquetFile(path)
         var index = Index.from_parquet(f)
@@ -1251,8 +1261,11 @@ def test_estimate_reduces_across_mixed_dictionary_and_plain_chunks() raises:
             vals.append(i % 7)
         var b = record_batch([array(vals^, int64).to_dyn()], names=["v"])
         var s = Schema(copy=b.schema)
-        var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
-        w.write(Table.from_batches(s.copy(), [b^]), row_group_size=n)
+        var w = FileWriter(
+            FileSink(path), b.schema, Compression.UNCOMPRESSED, row_group_size=n
+        )
+        w.write(b)
+        w.close()
 
         var index = Index.from_parquet(ParquetFile(path))
         assert_equal(index.chunks(), 2)
@@ -1368,9 +1381,14 @@ comptime _C_FILE = "marrow_reassoc_c.parquet"
 def _reassoc_write(batch: RecordBatch, path: String, row_group: Int) raises:
     """One table through marrow's own writer — the only writer that emits a
     `Statistics.distinct_count` at all."""
-    var s = Schema(copy=batch.schema)
-    var w = FileWriter(FileSink(path), Compression.UNCOMPRESSED)
-    w.write(Table.from_batches(s^, [batch.copy()]), row_group_size=row_group)
+    var w = FileWriter(
+        FileSink(path),
+        batch.schema,
+        Compression.UNCOMPRESSED,
+        row_group_size=row_group,
+    )
+    w.write(batch)
+    w.close()
 
 
 def _reassoc_fixture(dir: String) raises:

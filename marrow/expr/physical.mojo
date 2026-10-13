@@ -58,7 +58,12 @@ from ..kernels.filter import FilterKernel, TakeKernel
 from ..kernels.groupby import Groups
 from ..kernels.dictionary import DictionaryEncoder
 from ..dtypes import DynType
-from ..parquet.reader import LeafSet, ParquetFile, RowSelection
+from ..parquet.reader import (
+    LeafSet,
+    ParquetFile,
+    ParquetReader,
+    RowSelection,
+)
 from ..io import ByteSource, DynSource
 from ..ipc import RecordBatchFileReader
 from ..iceberg.catalog import IcebergTable
@@ -1674,40 +1679,18 @@ struct ParquetScanOperator(Operator):
 
     var _paths: List[String]
     var _current: Int
-    """Index into `_paths` of the file `_file` holds; each file is opened only
-    once the one before it is exhausted, and gets its own read plan."""
+    """Index into `_paths` of the file `_reader` reads; each file is opened
+    only once the one before it is exhausted, and gets its own read plan."""
     var _schema: Schema
-    var _file: Optional[ParquetFile[DynSource, LeafSet.all()]]
+    var _reader: Optional[ParquetReader[DynSource, LeafSet.all()]]
     """Erased rather than pinned to the local backend, so a plan can scan
     `s3://…` as readily as a path -- the scheme is a *runtime* property of the
     URI and a comptime `S` cannot answer it. `DynSource`'s ladder is a
     discriminant compare per read, against a page decode."""
     var _pushed: List[DynValue]
     var _bindings: Bindings
-    var _plan: List[Int]
-    """Row groups this scan will read, computed on the first `drain`.
-
-    Empty until the file is opened, because a `Relation` is a description and
-    must not touch the filesystem to exist — so the plan cannot be built where
-    the operator is."""
-
-    var _selections: List[Optional[RowSelection]]
-    """Which rows of each planned group to decode, one entry per `_plan` entry.
-
-    Empty when nothing was pushed and when the file carries no page index; an
-    entry is `None` when that group's pages all survived. Both mean "read the
-    group whole", and both are decided **here, once**, so `drain` asks a
-    question rather than re-deriving one per morsel: a selection that removes
-    nothing still costs the decoder a per-page check to answer what no
-    selection answers.
-
-    The second granularity of the same decision: `_plan` skips groups, this
-    skips pages inside the ones that survive."""
-
-    var _next: Int
-    var _pending: List[StructArray]
     var _ctx: ExecContext
-    """The plan's worker budget, handed to every `read`: it bounds both the
+    """The plan's worker budget, handed to every read: it bounds both the
     decode fan-out and how many ranges a remote source fetches at once, so a
     plan run under `ExecContext.serial()` scans on one thread."""
 
@@ -1723,13 +1706,9 @@ struct ParquetScanOperator(Operator):
         self._current = 0
         self._schema = schema^
         self._ctx = ctx^
-        self._file = None
+        self._reader = None
         self._pushed = pushed^
         self._bindings = bindings^
-        self._plan = List[Int]()
-        self._selections = List[Optional[RowSelection]]()
-        self._next = 0
-        self._pending = List[StructArray]()
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         # A source consumes nothing; the driver never calls this.
@@ -1743,94 +1722,66 @@ struct ParquetScanOperator(Operator):
             err.kind, t"{self._paths[self._current]}: {err.message}"
         )
 
+    def _open(self) raises -> ParquetReader[DynSource, LeafSet.all()]:
+        """The current file, opened with its read plan.
+
+        Opened on first use, not at plan time: a `Relation` is a description
+        and must not touch the filesystem to exist. The scan's schema decides
+        each string column's layout, leaf by leaf: a column declared
+        `string_view` -- or holding one, as `list<string_view>` -- decodes
+        straight into views.
+        """
+        var file = ParquetFile[DynSource, LeafSet.all()](
+            DynSource.open(self._paths[self._current]),
+            schema=self._schema.copy(),
+        )
+        var columns = Optional(self._schema.names())
+        if len(self._pushed) == 0:
+            # Nothing to prove, so nothing to decode. Statistics are per
+            # `(row group x leaf)`, so building an index nobody queries is the
+            # most expensive way to read every group.
+            return ParquetReader(file^, columns=columns^, ctx=self._ctx)
+        var index = Index.from_parquet(file)
+        var plan = index.read_plan(self._pushed, self._bindings)
+        # Then again, one level down: a surviving group still decodes every
+        # row unless its page index says otherwise. The index is handed over
+        # rather than rebuilt -- it knows the per-group row counts a selection
+        # has to match.
+        var selections = page_selections(
+            file, index, plan, self._pushed, self._bindings
+        )
+        var picked = Optional[List[RowSelection]](None)
+        if len(selections) > 0:
+            picked = Optional(selections^)
+        return ParquetReader(
+            file^,
+            columns=columns^,
+            row_groups=Optional(plan^),
+            row_selections=picked^,
+            ctx=self._ctx,
+        )
+
     def drain(mut self) raises -> Optional[Datum]:
-        while len(self._pending) == 0:
-            if self._file and self._next >= len(self._plan):
-                # This file is exhausted: the next one starts over with a
-                # fresh read plan of its own.
-                self._file = None
-                self._plan = List[Int]()
-                self._selections = List[Optional[RowSelection]]()
-                self._next = 0
-                self._current += 1
-            if self._current >= len(self._paths):
-                return None
-            if not self._file:
-                # Opened on first use, not at plan time: a `Relation` is a
-                # description and must not touch the filesystem to exist.
-                # The scan's schema decides each string column's layout, leaf
-                # by leaf: a column declared `string_view` -- or holding one,
-                # as `list<string_view>` -- decodes straight into views.
-                # A scan over many files must say which of them is missing
-                # or does not match the schema, hence the `try`s.
+        # A scan over many files must say which of them is missing or does
+        # not match the schema, hence the `try`s.
+        while self._current < len(self._paths):
+            if not self._reader:
                 try:
-                    self._file = ParquetFile[DynSource, LeafSet.all()](
-                        DynSource.open(self._paths[self._current]),
-                        schema=self._schema.copy(),
-                    )
+                    self._reader = self._open()
                 except e:
                     raise self._in_current_file(e)
-                if len(self._pushed) == 0:
-                    # Nothing to prove, so nothing to decode. Statistics are
-                    # per `(row group x leaf)`, so building an index nobody
-                    # queries is the most expensive way to read every group.
-                    self._plan = List[Int](
-                        capacity=self._file.value().num_row_groups()
-                    )
-                    for rg in range(self._file.value().num_row_groups()):
-                        self._plan.append(rg)
-                else:
-                    var index = Index.from_parquet(self._file.value())
-                    self._plan = index.read_plan(self._pushed, self._bindings)
-                    # Then again, one level down: a surviving group still
-                    # decodes every row unless its page index says otherwise.
-                    # The index is handed over rather than rebuilt -- it knows
-                    # the per-group row counts a selection has to match.
-                    var found = page_selections(
-                        self._file.value(),
-                        index,
-                        self._plan,
-                        self._pushed,
-                        self._bindings,
-                    )
-                    for ref sel in found:
-                        if sel.selects_all():
-                            self._selections.append(None)
-                        else:
-                            self._selections.append(Optional(sel.copy()))
-            if self._next >= len(self._plan):
-                continue
-
-            var names = List[String](capacity=len(self._schema.fields))
-            for ref f in self._schema.fields:
-                names.append(f.name.copy())
-            var groups = List[Int](capacity=1)
-            groups.append(self._plan[self._next])
-            var picked = Optional[List[RowSelection]](None)
-            if (
-                self._next < len(self._selections)
-                and self._selections[self._next]
-            ):
-                var one = List[RowSelection](capacity=1)
-                one.append(self._selections[self._next].value().copy())
-                picked = Optional(one^)
-            self._next += 1
-
-            var table: Table
+            var batch: Optional[RecordBatch]
             try:
-                table = self._file.value().read(
-                    columns=Optional(names^),
-                    row_groups=Optional(groups^),
-                    row_selections=picked^,
-                    ctx=self._ctx,
-                )
+                batch = self._reader.value().read_next_batch()
             except e:
                 raise self._in_current_file(e)
-            # A row group can decode to several chunks; each becomes a morsel
-            # rather than being concatenated back together.
-            for ref b in table.to_batches():
-                self._pending.append(b.to_struct_array())
-        return Datum(self._pending.pop(0).to_dyn())
+            if batch:
+                return Datum(batch.value().to_struct_array().to_dyn())
+            # This file is exhausted: the next one starts over with a fresh
+            # read plan of its own.
+            self._reader = None
+            self._current += 1
+        return None
 
 
 struct IpcScanOperator(Operator):

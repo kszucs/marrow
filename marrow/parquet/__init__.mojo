@@ -39,6 +39,8 @@ from .reader import (
     LEAF_FIXED_SIZE_BINARY,
     LEAF_INT96,
     ParquetFile,
+    ParquetFormat,
+    ParquetReader,
     read_table,
     read_metadata,
     ColumnStatistics,
