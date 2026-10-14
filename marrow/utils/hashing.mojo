@@ -94,9 +94,7 @@ def mul_wide[
     - **CPU** widens to `uint128` and lets the backend emit one widening
       multiply.
     - **GPU** reconstructs the product from four 32-bit sub-products, because
-      Metal has no 128-bit integer type at all. The reconstruction is exact —
-      `tests/test_hashing.mojo` asserts the two agree lane for lane, which is
-      what stops the GPU and CPU paths from ever disagreeing about a hash.
+      Metal has no 128-bit integer type at all. The reconstruction is exact.
     """
     comptime if is_gpu():
         comptime MASK = SIMD[DType.uint64, W](0xFFFFFFFF)
@@ -118,32 +116,6 @@ def mul_wide[
             r.cast[DType.uint64](),
             (r >> 64).cast[DType.uint64](),
         )
-
-
-@always_inline
-def mul_wide_portable[
-    W: Int
-](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> Tuple[
-    SIMD[DType.uint64, W], SIMD[DType.uint64, W]
-]:
-    """`mul_wide`'s 32-bit sub-product path, unconditionally.
-
-    Exposed only so the tests can assert it against the `uint128` path on a CPU;
-    on a GPU `mul_wide` *is* this.
-    """
-    comptime MASK = SIMD[DType.uint64, W](0xFFFFFFFF)
-    var a_lo = a & MASK
-    var a_hi = a >> 32
-    var b_lo = b & MASK
-    var b_hi = b >> 32
-    var t0 = a_lo * b_lo
-    var t1 = a_lo * b_hi
-    var t2 = a_hi * b_lo
-    var t3 = a_hi * b_hi
-    var mid = (t0 >> 32) + (t1 & MASK) + (t2 & MASK)
-    var lo = (t0 & MASK) | (mid << 32)
-    var hi = t3 + (t1 >> 32) + (t2 >> 32) + (mid >> 32)
-    return (lo, hi)
 
 
 @always_inline

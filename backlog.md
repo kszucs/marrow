@@ -811,13 +811,12 @@ bare column" (`DynValue.read_column`, `Project._output_schema`,
 `Project.estimate`, `PushFilterBelowAggregate`); `ParquetScan` lacks the
 `with_pruners` `IcebergScan` has; `AnyKernel.reduce` beside
 `BoolReduceKernel.dispatch`; `ArrayLengthKernel` beside `LengthKernel`;
-`hex_digit` beside `utils/hex.mojo`; `mul_wide`'s GPU branch beside
-`mul_wide_portable`; the leaves' `ParamSpec` block fifteen times and column
+`hex_digit` beside `utils/hex.mojo`; the leaves' `ParamSpec` block fifteen times and column
 `bind` thirteen times (`expr/comptime/leaves.mojo`); ~25 comptime breaker nodes
 re-copy their kernel output through the family's fused `evaluate` default; the
 validity-extend block seven times in `builders.mojo` and the slice null
 recount eight times in `arrays.mojo`. Test-only surface to keep or drop:
-`RapidSecret`/`AHash64`, `LeafSet` narrowing (every caller passes `all()`),
+`LeafSet` narrowing (every caller passes `all()`),
 the typed `case_when`/`coalesce`/`nullif`/`fill_null[T]` shims,
 `ThreadPool.scope`, `argparse`'s `get_float`/`get_bool`.
 
