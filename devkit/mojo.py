@@ -117,6 +117,32 @@ def machine(toolchain):
     }
 
 
+#: The 1-minute load average above which a timing is not one to cite.  This
+#: machine is shared, and under load a run reads several times slower.
+QUIET_LOAD = 2.0
+
+
+def conditions():
+    """How busy the machine was when a measurement ran -- what `machine` does
+    not say and a timing depends on as much."""
+    load = os.getloadavg()[0]
+    return {
+        "load_1m": round(load, 2),
+        "cpus": os.cpu_count(),
+        "quiet": load < QUIET_LOAD,
+    }
+
+
+def unquiet_warning(conds):
+    """The line to print about *conds*, or None when the machine was quiet."""
+    if conds["quiet"]:
+        return None
+    return (
+        f"measured at load {conds['load_1m']} on {conds['cpus']} CPUs, above "
+        f"{QUIET_LOAD}: not a number to cite"
+    )
+
+
 class Repo:
     """A marrow checkout: every path and name the tooling needs.
 

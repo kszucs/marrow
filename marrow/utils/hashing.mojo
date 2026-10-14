@@ -75,6 +75,7 @@ from std.sys.info import is_gpu
 from ..buffers import Buffer
 from ..views import BufferView
 from .byteorder import LittleEndian
+from .stats import count
 
 
 @always_inline
@@ -1188,6 +1189,8 @@ struct SwissHashTable(Copyable, Movable, Sized):
         var needed = Int(next_power_of_two(max(n * 2, _GROUP_WIDTH)))
         if needed <= self._capacity:
             return
+        count["hash.resizes"]()
+        count["hash.rehashed"](self._len)
         var old_capacity = self._capacity
         var old_ctrl = self._ctrl^
         var old_slots = self._slots^

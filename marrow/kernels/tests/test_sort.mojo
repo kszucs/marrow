@@ -1068,6 +1068,67 @@ def test_sort_indices_limit_exceeds_length() raises:
     _assert_sorted(a, idx)
 
 
+def _floats_with_ties(n: Int) raises -> Tuple[DynArray, Int]:
+    """`n` floats of 50 distinct values, with nulls and NaNs among them, and
+    how many NaNs."""
+    var b = Float64Builder(n)
+    var nans = 0
+    for i in range(n):
+        if i % 13 == 0:
+            b.append_null()
+        elif i % 17 == 0:
+            b.append(nan[DType.float64]())
+            nans += 1
+        else:
+            b.append(Float64((i * 7_919) % 50))
+    return (b.finish().to_dyn(), nans)
+
+
+def _ints_with_ties(n: Int) raises -> DynArray:
+    """`n` integers of 50 distinct values, with nulls among them."""
+    var b = Int64Builder(n)
+    for i in range(n):
+        if i % 13 == 0:
+            b.append_null()
+        else:
+            b.append(Int64((i * 7_919) % 50))
+    return b.finish()
+
+
+def _assert_limit_is_prefix[
+    nan_largest: Bool
+](arr: DynArray, nans: Int = 0) raises:
+    """A limited sort answers the first rows of the full stable sort, for
+    every limit up to past the end, both directions and null placements —
+    and for limits just past the nulls and NaNs a sort may place first, so
+    that a few values are selected after them. `nans` is how many NaNs the
+    array holds."""
+    var n = len(arr)
+    var limits: List[Int] = [0, 1, 5, 13, 64, n, n + 3]
+    var before = arr.null_count() + (0 if nan_largest else nans)
+    for extra in [1, 5, 13]:
+        limits.append(before + extra)
+    for asc in [True, False]:
+        for nf in [True, False]:
+            var full = SortIndices[nan_largest=nan_largest].dispatch(arr, asc, nf)
+            for k in limits:
+                var top = SortIndices[nan_largest=nan_largest].dispatch(
+                    arr, asc, nf, limit=k
+                )
+                assert_true(
+                    top == full.slice(0, min(k, n)),
+                    String("limit ", k, " of ", n, " asc=", asc, " nf=", nf),
+                )
+
+
+def test_sort_indices_limit_is_the_stable_prefix() raises:
+    for n in [0, 1, 7, 1000, 70_000]:
+        var floats = _floats_with_ties(n)
+        _assert_limit_is_prefix[True](floats[0], floats[1])
+        _assert_limit_is_prefix[False](floats[0], floats[1])
+        _assert_limit_is_prefix[False](_ints_with_ties(n))
+
+
 # ---------------------------------------------------------------------------
 # Large arrays — PDQsort path (N < 32768) and radix path (N >= 32768)
 # ---------------------------------------------------------------------------

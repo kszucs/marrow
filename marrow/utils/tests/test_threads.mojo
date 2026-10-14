@@ -1657,6 +1657,58 @@ def test_threads_exec_context_run_stays_within_num_threads() raises:
     assert_equal(ids[0], Thread.current_id())
 
 
+def test_threads_serial_run_runs_in_order_on_the_caller() raises:
+    var order = List[Int]()
+    var ids = List[Int]()
+
+    def body(i: Int) {mut order, mut ids}:
+        order.append(i)
+        ids.append(Thread.current_id())
+
+    ExecContext.serial().run(5, body)
+    assert_true(order == [0, 1, 2, 3, 4])
+    assert_equal(_distinct(ids), 1)
+    assert_equal(ids[0], Thread.current_id())
+
+
+def test_threads_fan_out_inline_stops_at_the_first_failure() raises:
+    var seen = List[Int]()
+
+    def visit(wid: Int, i: Int) raises {mut seen}:
+        assert_equal(wid, 0)
+        seen.append(i)
+        if i == 3:
+            raise Error("item 3")
+
+    try:
+        ThreadPool.fan_out_inline(10, visit)
+        assert_true(False, "fan_out_inline did not raise")
+    except e:
+        assert_equal(String(e), "item 3")
+    assert_true(seen == [0, 1, 2, 3])
+
+
+def test_threads_fan_out_inline_stops_when_asked() raises:
+    var seen = List[Int]()
+
+    def visit(wid: Int, i: Int) raises {mut seen} -> Bool:
+        seen.append(i)
+        return i < 2
+
+    ThreadPool.fan_out_inline(10, visit)
+    assert_true(seen == [0, 1, 2])
+
+
+def test_threads_for_batch_keeps_the_pool() raises:
+    """A batch too small to share out runs on the calling thread, under a
+    context derived from the given one: same pool, no device."""
+    var own = ArcPointer(ThreadPool(3))
+    var ctx = ExecContext.parallel(4).with_pool(own.copy()).for_batch(10)
+    assert_equal(ctx.resolved_num_threads(), 1)
+    assert_false(ctx.is_gpu())
+    assert_true(ctx.thread_pool()[].thread_ids() == own[].thread_ids())
+
+
 def test_threads_exec_context_keeps_its_pool_alive() raises:
     # The context's copy of the `ArcPointer` is enough: the caller's handle
     # can go before the context does.

@@ -354,7 +354,7 @@ expose the same surface as `Array`, `ArrowScalar`, `Builder`, `DataType` and
 generic code, and nothing in the tree asks them to be: every `[T: Array]`-style
 bound lives inside a box's own `_dispatch`. Dropping the conformances changed no
 behaviour and no binary size. **A box may *hold* trait-bound values; it should
-not *be* one.** The exception is `DynSource`/`DynSink` in `marrow/io/`, which
+not *be* one.** The exception is `DynByteSource`/`DynByteSink` in `marrow/io/`, which
 do conform, because `ParquetFile[S: ByteSource]` and friends are real generic
 consumers that predate them — see `io/dispatch.mojo`.
 
@@ -550,7 +550,7 @@ wider than a register.
 share no node types**:
 
 - **`logical.mojo`** — the plan IR. `Relation` nodes are pure, immutable
-  descriptions (`schema` / `to_operator` / `write`), erased by `DynRelation`:
+  descriptions (`schema` / `lower` / `write`), erased by `DynRelation`:
   a `Variant` for inspection, so `isa[R]()` is a discriminant compare and the
   optimizer's rules read a real typed node, plus a trampoline for lowering. The
   nodes are `EmptyRelation`, `InMemoryTable`, the `FileScan`s (`ParquetScan`,
@@ -610,11 +610,43 @@ share no node types**:
   optimizer builds a `JoinFilter`. The chain's schema sits behind an `ArcPointer`: inline, it made the
   chain the variant's largest member, and every `DynRelation` move 40 bytes
   wider cost `query_streaming` 17.7 KB.
-- **`physical.mojo`** — the executing counterpart. `Relation.to_operator(ctx)`
-  builds an `Operator` owning all mutable state (grouper table, accumulator
-  slots, child operators), erased by `DynOperator`. **The engine pushes**:
+- **`marrow/engine/`** — how a plan runs. `Relation.lower(driver)` turns a
+  plan into `Phase`s: a `DynSource` of morsels (`TableSource` slices an
+  in-memory batch, `RowGroupSource` is a Parquet row group per morsel with
+  pruning decided up front, `IpcSource` a record batch, `OperatorSource` a
+  scan of unknown length) and one `Pipeline` per worker. **Scheduling is
+  pull, execution within a worker is push**: `Driver.dynamic()` hands each
+  worker the next unread morsel through `ExecContext.fan_out` and answers
+  the outputs in morsel order; a phase's operators run single-threaded when
+  it has several workers. `Driver.serial()`, `explain()` (a dry run) and
+  `analyze()` are the other strategies, each a function pointer so a binary
+  links only the ones it constructs. **Blocking nodes are barriers inside
+  lowering**: a sort, window, limit or set operation runs its input to
+  completion (`Driver.barrier`); an aggregate folds partial states on every
+  worker (`FoldMode.partial`), which `Driver.exchange` `repartition`s by key
+  hash, and combines each partition (`FoldMode.combine`); a join builds one shared `JoinBuild`,
+  every worker probes it with match marks of its own, and the build rows the
+  probes owe are an `UnmatchedSource` phase after them. A limit keeps a
+  per-worker prefix and a top-N cuts every morsel before the final cut, so
+  ordered results equal the serial ones exactly. **What ran is a value**:
+  `explain()` and `analyze()` answer a `PlanReport` (`report.mojo`) — the
+  phases in run order, each with its source, stage labels from lowering,
+  worker count and why, and the phases it reads — as text, JSON or an Arrow
+  batch. A dry run cannot fill a barrier, so it shows the input's estimate in
+  a `PlannedSource`; estimates are wired only into the reporting strategies.
+  Kernel counters (`utils/stats.mojo`, `count["hash.inserts"](n)`) exist
+  only under `-D MARROW_STATS=true`; `analyze` reports each phase's deltas.
+  `analyze()` observes by wrapping — each stage in an `ObservedOperator`,
+  the source in an `ObservedSource`, spans around barrier work — so a run
+  nobody observes executes no timing code; it is a comptime parameter of
+  `explain`, so a binary that only explains links none of it.
+- **`physical.mojo`** — the executing counterpart. `Relation.lower(driver)`
+  builds `Phase`s (`marrow/engine/`: a `DynSource` of morsels and one
+  `Pipeline` of `Operator`s per worker), the operators owning all mutable state
+  (grouper table, accumulator slots), erased by `DynOperator`. A blocking node
+  runs its input through the `Driver` while it lowers. **The engine pushes**:
   `push(batch)` answers with what it produced, `drain()` with what is left, and
-  `collect()` runs a plan down to one `StructArray`. **A `Datum` broadcasts a
+  `Driver.collect` runs the root phases down to one `StructArray`. **A `Datum` broadcasts a
   scalar through the `ArrowScalar.to_array` of the type it was built from** —
   pass the typed scalar (`PrimitiveScalar[T]`, `ListScalar`, …), not
   `.to_dyn()`: only an erased `DynScalar` reaches `DynScalar.to_array`, which
@@ -627,7 +659,7 @@ share no node types**:
   `ParquetScanOperator`, `FileScanOperator[F]`, `IcebergScanOperator`,
   `BatchSourceOperator` — plus `Pipeline`, `EvalOperator`, and the two a join
   chain lowers through: `SelectOperator` (its output, by position, after a
-  filter on its root) and `RenamedPredicate` (a filter between two joins,
+  filter on its root; a union's later inputs too) and `RenamedPredicate` (a filter between two joins,
   reading its columns by position).
 - **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
   `boolean.mojo`, `strings.mojo`, `temporal.mojo`, `nested.mojo`, `casts.mojo`,
@@ -755,9 +787,10 @@ share no node types**:
   pruning is visible in a printed plan, and a plan nobody optimized reads every
   row group. The rule descends through `Filter` and nothing else, which is what
   stops a predicate at a `Window`, `Limit`, `Project`, `Aggregate` or `JoinChain`
-  without a per-node table saying so. `ParquetScanOperator.drain` builds the
-  index and the read plan on first use, with this execution's `Bindings` — a
-  predicate may name a `param`, which is the AOT lane's whole surface.
+  without a per-node table saying so. `RowGroupSource` (`marrow/engine/`)
+  builds the index and the read plan when the scan lowers, with this
+  execution's `Bindings` — a predicate may name a `param`, which is the AOT
+  lane's whole surface.
   *Projection* pushdown is `ColumnPruning`, also in `optimizer.mojo`.
 - **Page pruning is the same decision one level down.** `page_selections`
   reads the Parquet **page** index and returns a `RowSelection` per surviving
@@ -778,7 +811,7 @@ share no node types**:
   `ScanPruning` on every plan; that made `query_cli`'s `__text` 1,467,352 bytes
   larger (+33%), because `Optimizer.run` walks the plan through
   `DynRelation._dispatch`, whose ten arms each rebuild their node and so
-  register `_to_operator_tramp[X]` — linking every physical operator and its
+  register `_lower_tramp[X]` — linking every physical operator and its
   kernels into a binary whose plan names two node types. A plan prunes because
   its author wrote `.optimize[ScanPruning]()`.
 
@@ -857,7 +890,7 @@ destructors, with the spec's null-release handshake as the double-free guard.
 round trip: `ParquetFile` and `RecordBatchFileReader` both open a file by
 reading its last 64 KiB and parsing the footer out of that tail, never
 `read_at(0, size())`. The seam is `marrow/io/` — `ByteSource`/`ByteSink`, a
-local backend, an OpenDAL one, and `DynSource`/`DynSink` picking between them
+local backend, an OpenDAL one, and `DynByteSource`/`DynByteSink` picking between them
 by URI scheme — and both formats read and write through it, so a backend is
 written once and every format gains it. A new `dlopen`ed library must also be
 added to the wheel staging in `python/marrow/compile.py`; nothing links it, so
@@ -934,6 +967,7 @@ marrow/
 │   ├── window.mojo       # partition extents, ranking, frame gathers
 │   ├── concat.mojo       # concat
 │   └── tests/            # test_*.mojo + bench_*.mojo
+├── engine/               # driver (Driver, Phase, barriers), sources, report
 ├── expr/
 │   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
 │   ├── physical.mojo     # Operator / DynOperator push engine
@@ -1239,6 +1273,13 @@ looks obvious. Terse on purpose — the reproductions are in git history.
   without. Ruled out by experiment, do not re-derive: recursion, the explicit
   `__deinit__`, `IsTriviallyDeinitable`, the `Writable` reflection defaults, and
   variant member count.
+
+- **No struct field's type may name a type whose fields name the struct
+  back.** `Driver` held a `def(DynRelation) thin -> Int` while `DynRelation`'s
+  lowering slot takes `mut Driver`; every symbol mentioning either then
+  spelled both layouts nested, up to 1.3 MB, and any larger `mojo build`
+  failed in Apple `ld` (`name.size() <= maxLength`). Tests JIT and the size
+  gates are small, so neither saw it. Erase one side (`OpaquePointer`).
 
 - **A recursive type must spell out *both* `write_to` and `write_repr_to`.**
   Both have reflection-based defaults that walk every field at comptime, and the

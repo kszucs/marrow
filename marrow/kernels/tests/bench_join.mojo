@@ -24,7 +24,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import PrimitiveArray, DynArray, StructArray
 from ...builders import PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, Int64Type, struct_, Field
-from ...kernels.join import JOIN_INNER, JOIN_ALL
+from ...kernels.join import JOIN_INNER, JOIN_LEFT, JOIN_FULL, JOIN_ALL, JoinKind
 from ...kernels.join import HashJoin, HashJoinKernel
 from ...kernels.aggregate import Fold, SumFold
 from ...kernels.groupby import Groups
@@ -154,6 +154,54 @@ def bench_join_build_1m(mut b: Benchmark) raises:
 
 def bench_join_build_10m(mut b: Benchmark) raises:
     _bench_build(b, 10_000_000)
+
+
+def _bench_build_repeated(
+    mut b: Benchmark, n: Int, distinct: Int, threads: Int
+) raises:
+    """Measure only the build on ``n`` left rows holding ``distinct`` keys,
+    scattered — rows grouped by key — on ``threads`` threads."""
+    var kb = Int64Builder(capacity=n)
+    var vb = Int64Builder(capacity=n)
+    for i in range(n):
+        kb.append(Scalar[int64.native]((i * 7_919) % distinct))
+        vb.append(Scalar[int64.native](i))
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
+    var left = StructArray(
+        dtype=struct_(Field("k", int64), Field("v", int64)),
+        length=n,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        children=cols^,
+    )
+    var keys = List[Int]()
+    keys.append(0)
+    var ctx = ExecContext.parallel(threads)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        var j = HashJoin(left, keys, ctx.copy())
+        keep(j.num_build_rows())
+
+    b.iter(call)
+    keep(left)
+    keep(keys)
+
+
+def bench_join_build_10m_100k_keys_t1(mut b: Benchmark) raises:
+    _bench_build_repeated(b, 10_000_000, 100_000, 1)
+
+
+def bench_join_build_10m_100k_keys_t8(mut b: Benchmark) raises:
+    _bench_build_repeated(b, 10_000_000, 100_000, 8)
+
+
+def bench_join_build_10m_1k_keys_t8(mut b: Benchmark) raises:
+    _bench_build_repeated(b, 10_000_000, 1_000, 8)
 
 
 # ---------------------------------------------------------------------------
@@ -400,3 +448,38 @@ def bench_join_drift_control_sum_1m(mut b: Benchmark) raises:
 
     b.iter(call)
     keep(vals)
+
+
+# ---------------------------------------------------------------------------
+# outer joins — half of each side unmatched, so both tails are emitted
+# ---------------------------------------------------------------------------
+
+
+def _bench_outer(mut b: Benchmark, n: Int, kind: JoinKind) raises:
+    """Measure HashJoinKernel.apply for an outer join: build keys `0..n`, probe keys
+    `0, 2, .., 2n`, so half of each side has no match."""
+    var left = _make_struct(n)
+    var right = _make_struct(n, key_stride=2)
+    var keys = List[Int]()
+    keys.append(0)
+    b.throughput(BenchMetric.elements, 2 * n)
+
+    @always_inline
+    def call() raises {imm}:
+        var r = HashJoinKernel.apply(
+            left, right, keys, keys, kind, JOIN_ALL, ctx=ExecContext.serial()
+        )
+        keep(len(r))
+
+    b.iter(call)
+    keep(left)
+    keep(right)
+    keep(keys)
+
+
+def bench_join_left_1m(mut b: Benchmark) raises:
+    _bench_outer(b, 1_000_000, JOIN_LEFT)
+
+
+def bench_join_outer_full_1m(mut b: Benchmark) raises:
+    _bench_outer(b, 1_000_000, JOIN_FULL)

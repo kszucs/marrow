@@ -1195,24 +1195,130 @@ them.
 
 #### 2.1 Parallelism above the kernel
 
-**What exists.** Data parallelism *inside* kernels only — `ExecContext`'s
-`stripe`, `run` and `fan_out` over marrow's own `ThreadPool`
-(`utils/threads.mojo`), called from `partition.mojo`, `views.mojo`,
-`hashtable.mojo`, `hashing.mojo`, `join.mojo`, `sort.mojo`, `filter.mojo` and
-the Parquet and OpenDAL readers.
-**Group-by placement is parallel**, as of the radix-partitioned `HashIndex`
-— one `SwissHashTable` per partition of the key hash's top 6 bits, so no
-aggregate state is ever split and no merge step exists. Aggregate *accumulation*
-is still serial, and deliberately: a thread-local partial would need a `merge`
-on every `AggKernel`, which `mean` and the Welford triple make non-uniform and
-exact `count_distinct` makes impossible. There is no pipeline parallelism:
-`Pipeline._flow` pushes one morsel through the stages on the calling thread.
+**What exists.** A morsel-driven engine (`marrow/engine/`): `Driver.dynamic()`
+— the default for `execute()`, Python and `QueryCli` — runs each phase's
+morsels on one worker per thread, pulling from one shared claim counter.
+In-memory tables, Parquet row groups and IPC record batches are morsels;
+aggregates combine partial states over `repartition`ed partitions; joins share
+one build and stream every kind; sort, window, limit and set operations run
+their input in parallel and finish at a one-worker barrier.
+`marrow/expr/tests/test_workers.mojo` holds every one of them to the serial
+answer. Inside kernels, `ExecContext`'s `stripe`, `run` and `fan_out` still
+apply wherever a phase has one worker.
 
-**What it would take.** True pipeline parallelism is the remaining item: the
-push `Operator` contract is a good foundation, and `ThreadPool` is the substrate
-a scheduler would run on — its task queue, `TaskScope` spawning, and a `fan_out`
-whose body can stop early for a `LIMIT`. What is missing is the scheduler: nothing
-runs pipelines or morsels on it yet.
+**What it would take.** Open, roughly by value:
+
+How far each `bench_workers.mojo` shape scales, 1 thread against 12, on an
+M4 Max (12 performance and 4 efficiency cores) under load 6-9 from other
+work, so the 12-thread column is pessimistic. Polars, 16 threads, same data
+and load, for reference:
+
+| Query | 1 thread | 12 threads | Scaling | Polars | Where the 12-thread time goes |
+|---|---|---|---|---|---|
+| `topn` | 53 ms | 3.8 ms | 14x | 72.7 ms | |
+| `sum16` | 17 ms | 2.1 ms | 8x | 3.3 ms | |
+| `filter` | 11.5 ms | 2.5 ms | 4.6x | 4.1 ms | 0.5 ms concatenating the result; ~100 GB/s of memory traffic |
+| `sort` | 119 ms | 28-40 ms | 3-4x | 57.7 ms | 99% one worker at the barrier |
+| `join` | 67 ms | 17 ms | 3.9x | 27.4 ms | probe and output 6.5 ms, the aggregate it joins 4.1, repartition 2.2, result 1.4 |
+| `sum100k` | 23.6 ms | 9.4 ms | 2.5x | 14.7 ms | partial at 5.8 ns/row/thread against 3 on one thread; repartition 2.4; combine 2.4 |
+| `sum1m` | 48 ms | 33.5 ms | 1.4x | 34.2 ms | repartition 16.7 ms (44%); handed-on rows 14 ns each; combine 8.6 |
+
+- **Partial states and handed-on rows take a second pass to be
+  repartitioned.** The exchange hashes every partial row again and copies it
+  into partitions (`repartition`, between the phases), which is 44% of
+  `sum1m` once its rows are handed on. A partial stage that hashes once and
+  scatters its states, and the rows it hands on, into per-partition buffers
+  inside the worker would remove the pass: `sum1m` estimated ~33 → ~20 ms,
+  and every high-cardinality group-by gains. The original plan's "scatter
+  misses inside the worker".
+- **A worker's group-by table is not capped.** A partial stage whose table
+  stops reducing — a morsel of mostly new keys — hands its rows on unencoded
+  and lets the combine group them (`GroupedAggregateOperator`, the
+  pass-through half of the plan's policy). The flush and freeze halves for
+  keys that repeat but outgrow the cache are not built: `sum100k`'s partial
+  stage costs ~2x per row per thread at 12 workers what it does on one, the
+  twelve tables competing for cache. Capped, radix-partitioned worker tables
+  would keep each in cache.
+- **A full sort sorts once, on one worker** with the parallel context — the
+  largest absolute gap left. A `sample` profile of `bench-scaling`'s sort at
+  12 threads puts ~30% of that worker's time in `SortIndices.apply`'s serial
+  null partition and key encoding and ~26% in the final `TakeKernel`, with
+  the other 11 workers idle. A range exchange (sample splitters, partition by
+  key, sort each partition) was estimated at ~23 ms against 24-29 ms and not
+  built: it copies all rows twice more. Encoding the keys and taking the rows
+  in parallel at the barrier is the cheaper lever (~28-40 → ~10 ms
+  estimated), but a pool instantiation per primitive type costs every binary
+  that sorts.
+- **The result is concatenated after the last phase**: 0.5 ms of `filter`'s
+  2.5 and 1.4 ms of `join`'s 17. Handing the batches on unconcatenated where
+  the caller takes batches, or concatenating into the final buffer in one
+  parallel pass, would save it.
+- **Window and multiset run on one worker**, after their input ran in
+  parallel; a window partitioned by key could split.
+- **JSON and Iceberg scans are read in order**, as one worker's source: NDJSON
+  needs a block split, Iceberg a file-per-morsel source like `RowGroupSource`.
+- **Independent join builds run one after another.**
+- **A join's unmatched tail is one morsel on one worker.** A large LEFT or
+  ANTI build scans and gathers every unmatched build row serially;
+  `HashJoin.unmatched` already takes a `[start, end)` range, so
+  `UnmatchedSource` could offer several.
+- **`explain` and `analyze` estimate every node they lower**
+  (`Driver.entering`), each over its whole subtree, which is quadratic in
+  the plan's depth and lands in what `analyze` measures. Estimating once per
+  node, or lazily for the one consumer that reads it, would not.
+- **No NUMA placement** and no work stealing: one claim counter, which
+  simulates within a few percent of stealing on one socket.
+
+Tried in the 2026-10-09 optimisation pass and reverted, each slower than
+what it replaced (interleaved A/B, 12 workers):
+
+- **Combining each exchange partition on its own** — one batch per
+  partition, a fresh encoder per partition, the combine answering as it
+  reads: `sum100k` 11.4 → 13.2 ms, `sum1m` 44.1 → 54.6 ms; reserving each
+  partition's table from its rows did not recover it.
+- **Splitting large Parquet row groups into row ranges** when there are fewer
+  groups than workers (flat, page-indexed files only): 8 groups of 1M rows
+  4.3-4.5 → 4.7-4.8 ms. Two ranges per group still leave two rounds for 12
+  workers, and each range re-reads its dictionary and straddled pages.
+
+What the pass changed: the first commit of the pass (`fbd7fa45`) against its
+last, interleaved best-of runs, 8M rows, `bench_workers.mojo` shapes, load 3:
+
+| Query | Before | After | Change |
+|---|---|---|---|
+| `join`, 12 threads | 49.3 ms | 16.9 ms | builds the smaller commuting side |
+| `join`, 1 thread | 88.5 ms | 67.1 ms | same |
+| `topn`, 12 threads | 10.2 ms | 4.2 ms | top-N selects instead of sorting |
+| `topn`, 1 thread | 108.8 ms | 53.2 ms | same |
+| `sum1m`, 12 threads | 58.8 ms | 33.3 ms | bulk state growth, pass-through |
+| `sum1m`, 1 thread | 63.8 ms | 48.0 ms | bulk state growth |
+| `sum100k`, 12 threads | 14.3 ms | 9.7 ms | bulk state growth and partials |
+| `sum100k`, 1 thread | 25.9 ms | 23.6 ms | same |
+| `sum16`, `sort`, `sort2`, `filter`, 12 threads | | | unchanged (x0.94-0.99) |
+
+A join build of 10M rows on 100k keys, 8 threads, went from 37.5 to 26.5 ms
+(rows grouped by code in parallel). The pass adds at most +0.64% of `__text`
+to any AOT gate (`query_*_agg_fused`, `query_join`), +0.39% to `query_sort`
+and at most +0.02% to the rest, against its first commit.
+
+**The whole engine is outside the recorded size floors.** Against
+`baseline.json`'s floors (mojo 1.2.0.dev2026100805), the default parallel
+build is +5.8% to +15.8% (the three `*_agg_fused` gates +15.2% to +15.8%),
+and `-D MARROW_DRIVER=serial` still +1.3% to +5.2% (`*_agg_fused` +1.6% to
++1.7%, `query_join` +5.2%, `query_sort` +4.4%). Which build the gates hold,
+and the re-baseline that follows, is undecided.
+
+Pass-through hands each row of a worker that stops reducing its own slot,
+so an aggregate with a heavy state per slot (`approx_count_distinct`, 2,048
+registers) holds that state per row until the combine; the 7/8 rule bounds
+the slots at about 1.14x the keys the table would have held. Handing rows on
+still holds them until the worker drains; emitting each morsel's partial
+states as it is pushed, as DuckDB and Velox abandon a partial table, needs
+the fold operators to emit and reset mid-stream.
+
+`-D MARROW_DRIVER=serial` compiles the parallel paths out of a size-critical
+binary; the lowering through phases and the driver stays, which is the
++1.3% to +5.2% above.
 
 Group-by placement has three open costs, all measured by the "Calibration
 sweeps" in `bench_groupby.mojo`:

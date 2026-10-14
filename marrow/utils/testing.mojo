@@ -33,9 +33,10 @@ from std.testing import TestSuite as _StdTestSuite
 from std.testing.suite import TestResult, TestSuiteReport
 from std.time import perf_counter_ns
 
-from ..arrays import DynArray
+from ..arrays import DynArray, StructArray
 from ..kernels.aggregate import AllKernel
 from ..kernels.numeric import EqualKernel
+from ..kernels.sort import SortKernel
 
 
 struct CLIFlags:
@@ -665,6 +666,18 @@ def assert_values_equal(
         raise Error(
             "assert_values_equal: values differ, ", a, " != ", b, " " + msg
         )
+
+
+def canonical_rows(rows: StructArray) raises -> StructArray:
+    """`rows` in a canonical order — sorted on every column — for comparing
+    results whose row order is unspecified. A multiset comparison rather than
+    a set one: sorting keeps duplicate rows."""
+    var keys = List[Int]()
+    var ascending = List[Bool]()
+    for i in range(len(rows.dtype.as_struct().fields)):
+        keys.append(i)
+        ascending.append(True)
+    return SortKernel.apply(rows, keys, ascending)
 
 
 struct ScratchDir:

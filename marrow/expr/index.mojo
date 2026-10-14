@@ -86,7 +86,7 @@ which chunks are left to read. A source knows how to describe itself, and
 
 They are members rather than free functions because that is what they are:
 a constructor from a source, and the one verb an index has. They are not
-inlined into `ParquetScanOperator.drain`, their only caller, because the
+inlined into `RowGroupSource`, their only caller, because the
 decision has to be reachable without executing a query — every case in
 `test_scan_pruning.mojo` builds an index and asks for a read plan directly.
 """

@@ -42,6 +42,7 @@ from ...schema import Schema
 from ...tabular import record_batch, RecordBatch
 from ...utils import Hasher, KeyHash, TruncatedHash64
 from ...kernels.join import (
+    BuildMatches,
     JoinHashTable,
     JoinIndex,
     HashJoinKernel,
@@ -64,7 +65,8 @@ from ...kernels.join import (
     BUILD_LEFT,
     BUILD_RIGHT,
 )
-from ...kernels.sort import SortKernel
+from ...utils.testing import canonical_rows
+from std.builtin.sort import sort as sort_list
 
 
 # ---------------------------------------------------------------------------
@@ -1394,20 +1396,6 @@ def _swap_right() raises -> StructArray:
     ).to_struct_array()
 
 
-def _canonical(result: StructArray) raises -> StructArray:
-    """`result` with its rows in a canonical order — sorted on every column.
-
-    A multiset comparison rather than a set one: sorting keeps duplicate rows,
-    which a join over duplicate keys produces on purpose.
-    """
-    var keys = List[Int](capacity=len(result.children))
-    var asc = List[Bool](capacity=len(result.children))
-    for i in range(len(result.children)):
-        keys.append(i)
-        asc.append(True)
-    return SortKernel.apply(result, keys, asc)
-
-
 def _assert_build_sides_agree(kind: JoinKind) raises:
     var left = _swap_left()
     var right = _swap_right()
@@ -1434,7 +1422,7 @@ def _assert_build_sides_agree(kind: JoinKind) raises:
         String("kind ", kind, ": row count changed with the build side"),
     )
     assert_true(
-        _canonical(built_left) == _canonical(built_right),
+        canonical_rows(built_left) == canonical_rows(built_right),
         String("kind ", kind, ": the rows differ"),
     )
 
@@ -1557,7 +1545,7 @@ def test_build_side_agrees_on_a_multi_column_key() raises:
             String("kind ", kind, ": row count changed with the build side"),
         )
         assert_true(
-            _canonical(built_left) == _canonical(built_right),
+            canonical_rows(built_left) == canonical_rows(built_right),
             String("kind ", kind, ": the rows differ"),
         )
 
@@ -1774,7 +1762,7 @@ def test_right_semi_is_a_mirrored_semi_over_swapped_inputs() raises:
         right, left, _right_on(), _left_on(), JOIN_RIGHT_SEMI
     )
     assert_true(semi.dtype == mirrored.dtype)
-    assert_true(_canonical(semi) == _canonical(mirrored))
+    assert_true(canonical_rows(semi) == canonical_rows(mirrored))
 
 
 # ---------------------------------------------------------------------------
@@ -2000,6 +1988,36 @@ def _join_pairs[
     return JoinHashTable[H](build).candidates(probe, single_match)
 
 
+def _mod_keys(n: Int, distinct: Int) raises -> List[DynArray]:
+    """`n` keys of `distinct` values, scattered: `(i * 7919) % distinct`."""
+    var b = UInt64Builder(capacity=n)
+    for i in range(n):
+        b.append(UInt64((i * 7_919) % distinct))
+    var keys = List[DynArray]()
+    keys.append(b.finish())
+    return keys^
+
+
+def test_join_table_groups_rows_alike_on_any_context() raises:
+    """A build side indexed on many threads pairs every probe row with the
+    same build rows, in the same order, as one indexed on a single thread —
+    whichever placement its keys take."""
+    var shapes: List[Tuple[Int, Int]] = [
+        (200_000, 100),
+        (200_000, 150_000),
+        (300_000, 3),
+    ]
+    for ref shape in shapes:
+        var build = _mod_keys(shape[0], shape[1])
+        var probe = _mod_keys(shape[1], shape[1])
+        var serial = JoinHashTable(build, ExecContext.serial())
+        var parallel = JoinHashTable(build, ExecContext.parallel(8))
+        var want = serial.candidates(probe)
+        var got = parallel.candidates(probe)
+        assert_true(got.build == want.build, String(shape[0], " rows"))
+        assert_true(got.probe == want.probe, String(shape[0], " rows"))
+
+
 def test_join_table_empty_sides() raises:
     assert_equal(len(_join_pairs(_range_keys(0), _uint64_keys(1, 2))), 0)
     assert_equal(len(_join_pairs(_uint64_keys(1, 2), _range_keys(0))), 0)
@@ -2086,3 +2104,214 @@ def test_join_any_existence_reads_every_build_row() raises:
             left, right, _left_on(), _right_on(), JOIN_SEMI, JOIN_ANY, side
         )
         assert_equal(len(semi), 2)
+
+
+# ---------------------------------------------------------------------------
+# a probe split into parts, then the unmatched tail
+# ---------------------------------------------------------------------------
+
+
+def _keyed_side(n: Int, modulo: Int, null_every: Int) raises -> StructArray:
+    """`k = i % modulo` (so keys repeat), NULL at every `null_every`-th row,
+    and `v = i`."""
+    var k = Int32Builder(capacity=n)
+    var v = Int32Builder(capacity=n)
+    for i in range(n):
+        if i % null_every == 0:
+            k.append_null()
+        else:
+            k.append(Scalar[int32.native](i % modulo))
+        v.append(Scalar[int32.native](i))
+    var cols = List[DynArray]()
+    cols.append(k.finish().to_dyn())
+    cols.append(v.finish().to_dyn())
+    return record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+
+def _row_strings(result: StructArray) raises -> List[String]:
+    """Every row, rendered, in order."""
+    var out = List[String]()
+    for j in range(len(result)):
+        var row = String()
+        for i in range(len(result.children)):
+            var col = result.field(i)
+            row += (
+                String(col.as_int32()[j].value()) if col.is_valid(j) else "null"
+            ) + ","
+        out.append(row^)
+    return out^
+
+
+def _split_probe(
+    join: HashJoin,
+    probe: StructArray,
+    kind: JoinKind,
+    strictness: UInt8,
+    build_side: JoinBuildSide,
+    parts: Int,
+) raises -> List[String]:
+    """`probe` in `parts` slices, each on a serial context with matches of
+    its own, then the merged tail in two ranges."""
+    var out = List[String]()
+    var merged = BuildMatches(join.num_codes())
+    var step = (len(probe) + parts - 1) // parts
+    for p in range(parts):
+        var off = min(p * step, len(probe))
+        var part = probe.slice(off, min(step, len(probe) - off))
+        var matches = BuildMatches(join.num_codes())
+        out.extend(
+            _row_strings(
+                join.probe(
+                    part,
+                    _right_on(),
+                    kind,
+                    strictness,
+                    build_side,
+                    matches,
+                    ExecContext.serial(),
+                )
+            )
+        )
+        merged.merge(matches)
+    var n = join.num_build_rows()
+    var bounds: List[Int] = [0, n // 3, n]
+    for b in range(2):
+        var start = bounds[b]
+        var end = bounds[b + 1]
+        out.extend(
+            _row_strings(
+                join.unmatched(
+                    merged,
+                    probe.slice(0, 0),
+                    kind,
+                    strictness,
+                    build_side,
+                    start,
+                    end,
+                    ExecContext.serial(),
+                )
+            )
+        )
+    return out^
+
+
+def _check_split(
+    build: StructArray, probe: StructArray, ctx: ExecContext
+) raises:
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for kind in kinds:
+        for strictness in [JOIN_ALL, JOIN_ANY]:
+            for build_side in [BUILD_LEFT, BUILD_RIGHT]:
+                var join = HashJoin(build, _left_on(), ctx.copy())
+                var whole = _row_strings(
+                    join.probe(probe, _right_on(), kind, strictness, build_side)
+                )
+                # RIGHT and FULL emit each part's unmatched probe rows with
+                # the part, so only their multiset matches the whole side's.
+                var physical = build_side.physical(kind)
+                var ordered = not physical.emits_unmatched_right()
+                if not ordered:
+                    sort_list(whole)
+                for parts in [1, 2, 3, 7]:
+                    var split = _split_probe(
+                        join, probe, kind, strictness, build_side, parts
+                    )
+                    if not ordered:
+                        sort_list(split)
+                    assert_true(
+                        split == whole,
+                        String(
+                            kind, " ", strictness, " ", build_side, " ", parts
+                        ),
+                    )
+
+
+def test_join_split_probe_matches_whole() raises:
+    _check_split(
+        _keyed_side(300, 37, 13), _keyed_side(200, 53, 17), ExecContext.serial()
+    )
+
+
+def test_join_split_probe_empty_sides() raises:
+    _check_split(
+        _keyed_side(300, 37, 13), _keyed_side(0, 53, 17), ExecContext.serial()
+    )
+    _check_split(
+        _keyed_side(0, 37, 13), _keyed_side(200, 53, 17), ExecContext.serial()
+    )
+
+
+def test_join_split_probe_of_a_partitioned_build() raises:
+    """Parts probed on serial contexts against a radix-built table."""
+    var build = _join_side(150_000, 0, 10)
+    var probe = _join_side(20_000, 140_000, 100)
+    var join = HashJoin(build, _left_on(), ExecContext.parallel(4))
+    _expect_partitioned(join.built_parallel(), "split probe")
+    for kind in [JOIN_INNER, JOIN_LEFT, JOIN_ANTI]:
+        var whole = _row_strings(
+            join.probe(probe, _right_on(), kind, JOIN_ALL, BUILD_LEFT)
+        )
+        assert_true(
+            _split_probe(join, probe, kind, JOIN_ALL, BUILD_LEFT, 3) == whole
+        )
+
+
+def test_join_concurrent_probes() raises:
+    """Four threads probe one built table at once, each part with matches of
+    its own, and the merged tail completes a LEFT join."""
+    var build = _keyed_side(3_000, 370, 13)
+    var probe = _keyed_side(4_000, 530, 17)
+    var join = HashJoin(build, _left_on(), ExecContext.serial())
+    var whole = _row_strings(
+        join.probe(probe, _right_on(), JOIN_LEFT, JOIN_ALL, BUILD_LEFT)
+    )
+    comptime PARTS = 4
+    var step = len(probe) // PARTS
+    var outputs = List[List[String]](length=PARTS, fill=List[String]())
+    var matches = List[BuildMatches]()
+    for _ in range(PARTS):
+        matches.append(BuildMatches(join.num_codes()))
+
+    def part(wid: Int, p: Int) raises {mut outputs, mut matches, imm}:
+        outputs[p] = _row_strings(
+            join.probe(
+                probe.slice(p * step, step),
+                _right_on(),
+                JOIN_LEFT,
+                JOIN_ALL,
+                BUILD_LEFT,
+                matches[p],
+                ExecContext.serial(),
+            )
+        )
+
+    ExecContext.parallel(PARTS).fan_out(PARTS, part, PARTS)
+    var got = List[String]()
+    var merged = BuildMatches(join.num_codes())
+    for p in range(PARTS):
+        got.extend(outputs[p].copy())
+        merged.merge(matches[p])
+    got.extend(
+        _row_strings(
+            join.unmatched(
+                merged,
+                probe.slice(0, 0),
+                JOIN_LEFT,
+                JOIN_ALL,
+                BUILD_LEFT,
+                0,
+                join.num_build_rows(),
+                ExecContext.serial(),
+            )
+        )
+    )
+    assert_true(got == whole)

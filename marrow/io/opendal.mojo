@@ -714,7 +714,7 @@ struct OpenDalSource(ByteSource):
         )
 
     def read_ranges(
-        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
         """Every range at once, in a batch the caller owns.
 

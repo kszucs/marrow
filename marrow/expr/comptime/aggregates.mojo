@@ -75,13 +75,16 @@ from ..logical import (
     reject_non_boolean_filter,
 )
 from ..logical import Bindings
-from ...execution import ExecContext
+from ...execution import PARALLEL_ENABLED, ExecContext
 from ...kernels.groupby import Groups
 from ...kernels.window import WindowExtents, WindowFrame
 from ...arrays import DynArray
 from ..physical import (
     BufferedAggregateOperator,
     ColumnEvaluator,
+    CombineAggregateOperator,
+    FoldMode,
+    emit_fold,
     FrameEvaluator,
     PerFrameEvaluator,
     Evaluable,
@@ -242,7 +245,11 @@ struct Aggregate[
     # -- to_operator --------------------------------------------------------
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         """Pick the machine and the placement, once, when the plan is built.
 
@@ -277,6 +284,11 @@ struct Aggregate[
                 " filter on the rows instead"
             )
             reject_non_boolean_filter(self._where.dtype(schema))
+        comptime if PARALLEL_ENABLED:
+            if mode.is_combine():
+                return CombineAggregateOperator[Self.Agg](
+                    mode.column, grouped, self._input.dtype(schema)
+                )
         comptime if Self.fuses:
             if grouped:
                 return ScatteredAggregateOperator[Self.Agg, Self.A, Self.P](
@@ -284,12 +296,14 @@ struct Aggregate[
                     self._where.copy(),
                     bindings.copy(),
                     self._input.dtype(schema),
+                    mode.is_partial(),
                 )
             return RegisterAggregateOperator[Self.Agg, Self.A, Self.P](
                 self._input.copy(),
                 self._where.copy(),
                 bindings.copy(),
                 self._input.dtype(schema),
+                mode.is_partial(),
             )
         else:
             var predicate: Optional[DynOperator] = None
@@ -303,6 +317,7 @@ struct Aggregate[
                 bindings.copy(),
                 grouped,
                 self._input.dtype(schema),
+                mode.is_partial(),
             )
 
     comptime Evaluator = AggregateEvaluator[Self.Agg, Self.A, Self.P]
@@ -438,26 +453,6 @@ comptime StringApproxCountDistinct[A: StringValue] = Aggregate[
 # ---------------------------------------------------------------------------
 
 
-def _emit_fold[Agg: AggKernel](mut state: Agg, slots: Int) raises -> Datum:
-    """Seed `slots` slots, then finalize — the tail all three operators share.
-
-    **A free function, not a method and not a trait default.** A method body on
-    an operator struct elaborates unconditionally, which is the trap that
-    forced the fused `push` bodies inline: `comptime if` prunes an untaken
-    *branch* before name resolution, but never a method. This takes the state
-    as an argument instead, so it is elaborated once per `Agg` and names
-    nothing from the operator that calls it.
-
-    `reserve` is what makes an aggregate over **zero** morsels answer at all.
-    The fused operators return early at `n == 0` and a buffered one over an
-    empty stream never sees `update`, so nothing grew a slot; a keyless query
-    still owes exactly one row. `reserve(0)` is a no-op in every conformer, so
-    a grouped query that saw no rows correctly answers no rows.
-    """
-    state.reserve(slots)
-    return Datum(state.finish().to_dyn())
-
-
 @no_inline
 def _admitted_validity[
     A: PrimitiveValue, P: Evaluable
@@ -530,6 +525,8 @@ struct ScatteredAggregateOperator[
     before the first morsel, which is what let `AggKernel.open` and the
     `_opened` latch that guarded it disappear."""
 
+    var _partial: Bool
+    """Whether `drain` answers the state rather than the aggregate."""
     var _emitted: Bool
 
     def __init__(
@@ -538,11 +535,13 @@ struct ScatteredAggregateOperator[
         var predicate: Self.P,
         var bindings: Bindings,
         in_dtype: DynType,
+        partial: Bool = False,
     ) raises:
         self._input = input^
         self._where = predicate^
         self._bindings = bindings^
         self._state = Self.Agg(in_dtype)
+        self._partial = partial
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -617,7 +616,7 @@ struct ScatteredAggregateOperator[
         self._emitted = True
         # Nothing to seed: `push` reserved every group a morsel named, and over
         # no morsel at all a grouped query correctly emits no rows.
-        return _emit_fold(self._state, 0)
+        return emit_fold(self._state, 0, self._partial)
 
 
 struct AggregateEvaluator[
@@ -792,6 +791,8 @@ struct RegisterAggregateOperator[
     var _state: Self.Agg
     """The accumulator, built at construction from the operand's dtype."""
 
+    var _partial: Bool
+    """Whether `drain` answers the state rather than the aggregate."""
     var _emitted: Bool
 
     def __init__(
@@ -800,11 +801,13 @@ struct RegisterAggregateOperator[
         var predicate: Self.P,
         var bindings: Bindings,
         in_dtype: DynType,
+        partial: Bool = False,
     ) raises:
         self._input = input^
         self._where = predicate^
         self._bindings = bindings^
         self._state = Self.Agg(in_dtype)
+        self._partial = partial
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -902,4 +905,4 @@ struct RegisterAggregateOperator[
         self._emitted = True
         # One slot, always: `sum` of nothing is one NULL, not no rows. `push`
         # returns early at `n == 0` and never grew it, so the seed is here.
-        return _emit_fold(self._state, 1)
+        return emit_fold(self._state, 1, self._partial)

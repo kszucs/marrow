@@ -203,7 +203,7 @@ from ..logical import DynValue, References, Shape, Value
 from ..logical import Bindings
 from ..index import Index, keep_every
 from ..physical import Datum
-from ..physical import Evaluable, DynOperator, EvalOperator
+from ..physical import Evaluable, DynOperator, EvalOperator, FoldMode
 from .aggregates import RuntimeAggregate
 
 
@@ -519,7 +519,11 @@ struct RuntimeValue(Evaluable, Movable, Value):
         )
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         """The runtime lane's half of the same contract. Its operator is the
         same adapter the comptime lane uses — the lanes differ in how they

@@ -984,7 +984,9 @@ def read_json(
     path is a zero-copy memory map, anything else goes through OpenDAL with
     `options` as its service configuration.
     """
-    return read_json(DynSource.open(uri, options), read_options, parse_options)
+    return read_json(
+        DynSource.open(uri, options), read_options, parse_options
+    )
 
 
 def open_json(

@@ -103,6 +103,8 @@ website:
         contents:
           - text: "Architecture"
             href: reference/architecture.qmd
+          - text: "How a query runs"
+            href: reference/engine.qmd
           - text: "Comptime vs runtime lane"
             href: reference/comptime.qmd
           - text: "Status & limitations"

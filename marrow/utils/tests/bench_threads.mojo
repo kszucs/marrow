@@ -25,6 +25,10 @@ a change to the pool can regress:
   a thread.
 - **nested_run** — a `run` inside every index of a `run`.
 - **submitters_4** — four threads submitting jobs to one pool at once.
+- **serial_calls_1** / **serial_calls_all** — one thread, then every thread,
+  each making serial `ExecContext` calls, as each worker of a parallel query
+  does through the kernels it runs. Their per-call times should match: a
+  serial call consults no pool, so the threads have nothing to meet at.
 - **io_fan_out** — one 100 us blocking wait per thread of the I/O pool, whose
   threads sleep when idle, so every job wakes the pool.
 
@@ -46,6 +50,7 @@ from std.time import sleep
 
 from max.algorithm.functional import sync_parallelize
 
+from ...execution import ExecContext
 from ..testing import Benchmark, busy_wait_us
 from ..threads import TaskScope, ThreadPool
 
@@ -340,6 +345,37 @@ def bench_threads_submitters_4(mut b: Benchmark) raises:
 
     b.iter(call)
     keep(pool)
+
+
+def _bench_serial_calls(mut b: Benchmark, workers: Int) raises:
+    comptime CALLS = 100_000
+    var pool = ThreadPool.shared()
+    b.throughput(BenchMetric.elements, workers * CALLS)
+
+    def worker(wid: Int, i: Int) raises:
+        var ctx = ExecContext.serial()
+
+        @always_inline
+        def item(w: Int, j: Int) raises:
+            keep(j)
+
+        for _ in range(CALLS):
+            ctx.fan_out(1, item, 1)
+
+    @always_inline
+    def call() raises {imm pool, imm workers}:
+        pool[].fan_out(workers, worker, workers)
+
+    b.iter(call)
+    keep(pool)
+
+
+def bench_threads_serial_calls_1(mut b: Benchmark) raises:
+    _bench_serial_calls(b, 1)
+
+
+def bench_threads_serial_calls_all(mut b: Benchmark) raises:
+    _bench_serial_calls(b, _widths())
 
 
 def bench_threads_io_fan_out(mut b: Benchmark) raises:

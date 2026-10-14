@@ -113,7 +113,15 @@ from .expr import (
     rank,
     row_number,
 )
-from .lazy import LazyTable, memtable, read_iceberg, read_json, read_parquet, sql
+from .lazy import (
+    LazyTable,
+    PlanReport,
+    memtable,
+    read_iceberg,
+    read_json,
+    read_parquet,
+    sql,
+)
 from . import compute, datasets, expr, lazy
 
 ExecContext = libmarrow.ExecContext
@@ -158,6 +166,7 @@ __all__ = [
     "JOIN_RIGHT",
     "JOIN_SEMI",
     "LazyTable",
+    "PlanReport",
     "RecordBatch",
     "Scalar",
     "Schema",

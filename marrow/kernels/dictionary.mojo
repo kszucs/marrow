@@ -41,6 +41,7 @@ once per row. A dictionary column among several key columns is decoded.
 Keys stay columnar throughout; nothing is serialised into rows.
 """
 
+from ..utils.stats import count
 from ..arrays import (
     ChunkedArray,
     DictionaryArray,
@@ -155,19 +156,36 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         against them first. ``expected_new`` sizes the tables once, as
         ``HashIndex.insert`` describes."""
         self._check_types(columns)
+        var placement: Placement
         if self._by_entries and len(columns[0]) > 0:
-            return self._encode_entries(columns[0].as_dictionary())
-        return self._encode(self._decoded(columns), expected_new)
+            placement = self._encode_entries(columns[0].as_dictionary())
+        else:
+            placement = self._encode(
+                self._decoded(columns, self._ctx), expected_new
+            )
+        count["hash.inserts"](len(placement.ids))
+        count["hash.new_keys"](len(placement.firsts))
+        return placement^
 
-    def lookup(self, columns: List[DynArray]) raises -> Int32Array:
+    def lookup(
+        self, columns: List[DynArray], ctx: ExecContext
+    ) raises -> Int32Array:
         """The code of every row's key, or ``-1`` where the key has none.
-        Encodes nothing; ``columns`` are checked as ``encode`` checks them."""
-        self._check_types(columns)
-        if self._by_entries and len(columns[0]) > 0:
-            return self._lookup_entries(columns[0].as_dictionary())
-        return self._lookup(self._decoded(columns))
+        Encodes nothing; ``columns`` are checked as ``encode`` checks them.
 
-    def _decoded(self, columns: List[DynArray]) raises -> StructArray:
+        Runs on ``ctx``, the caller's, rather than the context the keys were
+        encoded with, so a lookup from a thread that must stay on it never
+        fans out — however the keys were placed."""
+        self._check_types(columns)
+        if len(columns) > 0:
+            count["hash.lookups"](len(columns[0]))
+        if self._by_entries and len(columns[0]) > 0:
+            return self._lookup_entries(columns[0].as_dictionary(), ctx)
+        return self._lookup(self._decoded(columns, ctx), ctx)
+
+    def _decoded(
+        self, columns: List[DynArray], ctx: ExecContext
+    ) raises -> StructArray:
         """``columns`` as a key batch, every dictionary column replaced by
         its values."""
         # The list is borrowed and copied here, not owned by `encode`: owning
@@ -178,7 +196,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             if column.dtype().is_dictionary():
                 out.append(
                     decode_dictionary(
-                        column.as_dictionary(), self._ctx.for_batch(len(column))
+                        column.as_dictionary(), ctx.for_batch(len(column))
                     )
                 )
             else:
@@ -189,15 +207,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         """The key of every code, one array per key column, in the columns'
         declared types — a dictionary column as a dictionary array whose entry
         ``i`` is code ``i``'s value."""
-        while len(self._keys.chunks) >= 2:
-            self._merge_last_two()
-        var keys: DynArray
-        if len(self._keys.chunks) == 1:
-            keys = self._keys.chunks[0].copy()
-        else:
-            var empty = DynBuilder(self._keys.dtype)
-            keys = empty.finish()
-        var columns = keys.as_struct().flatten()
+        var columns = self._plain_values()
         var out = List[DynArray](capacity=len(columns))
         for k in range(len(columns)):
             if self._types[k].is_dictionary():
@@ -282,9 +292,11 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             firsts=used.first_rows(entries.firsts),
         )
 
-    def _lookup_entries(self, key: DictionaryArray) raises -> Int32Array:
+    def _lookup_entries(
+        self, key: DictionaryArray, ctx: ExecContext
+    ) raises -> Int32Array:
         var used = _UsedEntries(key)
-        var entry_codes = self._lookup(Self._batch(used.values(key)))
+        var entry_codes = self._lookup(Self._batch(used.values(key)), ctx)
         return used.codes_of_rows(entry_codes)
 
     @staticmethod
@@ -322,7 +334,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             return Placement(
                 ids=Int32Array.empty(int32), firsts=Int32Array.empty(int32)
             )
-        var hashes = self._hash(keys)
+        var hashes = self._hash(keys, self._ctx)
         var placed = self._index.insert(hashes, expected_new)
         var codes = placed.ids.copy()
         var firsts = placed.firsts.copy()
@@ -331,7 +343,8 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         # An injective key is one column; the struct around it is never NULL.
         if self._injective and keys.field(0).null_count() != 0:
             self._seen_null = True
-        var wrong = self._wrong_nominations(codes, keys, hashes)
+        var wrong = self._wrong_nominations(codes, keys, hashes, self._ctx)
+        count["hash.collisions"](len(wrong))
         if len(wrong) == 0:
             return Placement(ids=codes^, firsts=firsts^)
         # Place each true collision among every code its hash holds; a code it
@@ -366,13 +379,13 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             ids=Self._replaced(codes, wrong, right), firsts=firsts^
         )
 
-    def _lookup(self, keys: StructArray) raises -> Int32Array:
+    def _lookup(self, keys: StructArray, ctx: ExecContext) raises -> Int32Array:
         """``lookup`` over plain keys."""
         if len(keys) == 0:
             return Int32Array.empty(int32)
-        var hashes = self._hash(keys)
-        var codes = self._index.find(hashes)
-        var wrong = self._wrong_nominations(codes, keys, hashes)
+        var hashes = self._hash(keys, ctx)
+        var codes = self._index.find(hashes, ctx)
+        var wrong = self._wrong_nominations(codes, keys, hashes, ctx)
         if len(wrong) == 0:
             return codes^
         var right = List[Int32](capacity=len(wrong))
@@ -383,15 +396,41 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             )
         return Self._replaced(codes, wrong, right)
 
+    def extend_unindexed(mut self, var keys: List[DynArray]) raises:
+        """Append `keys`, one array per declared key column, after the keys
+        of every code, without indexing them: `values` answers them after the
+        codes' keys, and no lookup finds them — for a caller that has stopped
+        looking keys up and still wants one column of every key it saw.
+
+        Nothing may be encoded afterwards: a new code's key would land after
+        these rather than at its code. A dictionary-typed key column is not
+        accepted, since the keys are kept as plain values."""
+        self._check_types(keys)
+        for k in range(len(keys)):
+            debug_assert(
+                not self._types[k].is_dictionary(),
+                "extend_unindexed: a dictionary-typed key column",
+            )
+        self._keys.append(Self._batch(keys^))
+
+    def _plain_values(mut self) raises -> List[DynArray]:
+        """The key of every code, one plain array per key column, by code."""
+        if len(self._keys.chunks) == 0:
+            var empty = DynBuilder(self._keys.dtype)
+            return empty.finish().as_struct().flatten()
+        if len(self._keys.chunks) >= 2:
+            self._merge_from(0)
+        return self._keys.chunks[0].as_struct().flatten()
+
     # --- the keys -----------------------------------------------------------
 
-    def _hash(self, keys: StructArray) raises -> UInt64Array:
-        """Every row's hash: ``Fmix64``'s for an injective key, ``Hash``'s
-        for any other."""
-        var ctx = self._ctx.for_batch(len(keys))
+    def _hash(self, keys: StructArray, ctx: ExecContext) raises -> UInt64Array:
+        """Every row's hash, on ``ctx``: ``Fmix64``'s for an injective key,
+        ``Hash``'s for any other."""
+        var batch_ctx = ctx.for_batch(len(keys))
         if self._injective:
-            return HashKernel[Fmix64].apply(keys, ctx)
-        return HashKernel[Self.Hash].apply(keys, ctx)
+            return HashKernel[Fmix64].apply(keys, batch_ctx)
+        return HashKernel[Self.Hash].apply(keys, batch_ctx)
 
     def _append(
         mut self, keys: StructArray, rows: Int32Array, in_row_order: Bool
@@ -418,17 +457,18 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
                 self._keys.chunks[c - 1]
             ):
                 break
-            self._merge_last_two()
+            self._merge_from(len(self._keys.chunks) - 2)
 
-    def _merge_last_two(mut self) raises:
-        """The last two chunks as one, in place."""
+    def _merge_from(mut self, first: Int) raises:
+        """The chunks from `first` on as one, in place — all of them at
+        once, since merging pairwise copies the front again for each chunk
+        behind it."""
         ref chunks = self._keys.chunks
-        var c = len(chunks)
         var merged = DynBuilder(self._keys.dtype)
-        merged.extend(chunks[c - 2])
-        merged.extend(chunks[c - 1])
-        chunks[c - 2] = merged.finish()
-        chunks.shrink(c - 1)
+        for i in range(first, len(chunks)):
+            merged.extend(chunks[i])
+        chunks.shrink(first)
+        chunks.append(merged.finish())
 
     def _compare(
         self,
@@ -532,7 +572,11 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
     # --- verification -------------------------------------------------------
 
     def _wrong_nominations(
-        self, codes: Int32Array, keys: StructArray, hashes: UInt64Array
+        self,
+        codes: Int32Array,
+        keys: StructArray,
+        hashes: UInt64Array,
+        ctx: ExecContext,
     ) raises -> Int32Array:
         """The rows whose nominated code is not their key's — true hash
         collisions. A row nominated nothing (``-1``) is not among them.
@@ -568,7 +612,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             return rows^
         var equal = Bitmap.alloc_uninit(len(rows))
         equal.set_range(0, len(rows), True)
-        self._compare(at, keys, rows, equal, self._ctx.for_batch(len(rows)))
+        self._compare(at, keys, rows, equal, ctx.for_batch(len(rows)))
         if equal.unset_count() == 0:
             return Int32Array.empty(int32)
         return FilterKernel.apply(rows, (~equal.view()).view())

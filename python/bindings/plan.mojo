@@ -42,7 +42,7 @@ from marrow.expr import Bindings
 from marrow.expr.builders import scan as _scan, table as _table
 from marrow.expr.logical import DynRelation, DynValue
 from marrow.expr.optimizer import AllRules
-from marrow.expr.physical import Pipeline
+from marrow.engine import Driver, PlanReport
 from marrow.expr.runtime.aggregates import RuntimeAggregate
 from marrow.expr.runtime.values import RuntimeValue, column as _column
 from expressions import (
@@ -412,29 +412,45 @@ def _plan_batches(
 ) raises -> PythonObject:
     """The result as its natural batches, rather than concatenated into one.
 
-    `execute()` calls `Pipeline.collect`, which drains the chain and concatenates
-    everything into a single `StructArray`. That is the wrong shape for a
-    multi-row-group scan: the batch boundaries the engine already produced are
-    thrown away and then paid for again in one large allocation. `drain` is
-    resumable and answers one batch at a time, so this walks it instead.
-
-    The list is still materialised here. Handing back a live iterator would
-    mean registering a Python type holding the `Pipeline`, and an `Operator` is
-    `Movable` but not `Copyable` — so that is a separate change, not a
-    parameter to this one."""
+    `execute()` concatenates everything into a single batch. That is the wrong
+    shape for a multi-row-group scan: the batch boundaries the engine already
+    produced are thrown away and then paid for again in one large allocation.
+    `Driver.run` answers the batches as they were produced, so this hands
+    them on."""
     var rel = _plan(py_self)
-    var pipeline = rel.to_operator(ExecContext.parallel(Int(py=num_threads)))
+    var driver = Driver.dynamic(ExecContext.parallel(Int(py=num_threads)))
+    var batches = driver.run(rel.lower(driver))
     var builtins = Python.import_module("builtins")
     var out = builtins.list()
-    while True:
-        var datum = pipeline.drain()
-        if not datum:
-            break
+    for ref batch in batches:
         _ = out.append(
-            RecordBatch.from_struct_array(
-                datum.value().struct_array()
-            ).to_python_object()
+            RecordBatch.from_struct_array(batch.copy()).to_python_object()
         )
+    return out
+
+
+def _plan_report(
+    py_self: PythonObject,
+    analyze: PythonObject,
+    trace: PythonObject,
+    num_threads: PythonObject,
+) raises -> PythonObject:
+    """`DynRelation.explain`, run under `analyze`: the report as its text,
+    its JSON, its phases as a batch and, under `trace`, its timeline as
+    Chrome trace JSON; see `LazyTable.explain`."""
+    var rel = _plan(py_self)
+    var ctx = ExecContext.parallel(Int(py=num_threads))
+    var report: PlanReport
+    if Bool(py=analyze):
+        report = rel.explain[analyze=True](ctx, trace=Bool(py=trace))
+    else:
+        report = rel.explain(ctx)
+    var builtins = Python.import_module("builtins")
+    var out = builtins.list()
+    _ = out.append(PythonObject(String(report)))
+    _ = out.append(PythonObject(report.to_json()))
+    _ = out.append(report.to_batch().to_python_object())
+    _ = out.append(PythonObject(report.to_trace_json()))
     return out
 
 
@@ -602,6 +618,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_optimize]("optimize")
         .def_method[_plan_analyze]("analyze")
         .def_method[_plan_batches]("batches")
+        .def_method[_plan_report]("report")
         .def_method[_plan_str]("__str__")
         .def_method[_plan_repr]("__repr__")
     )

@@ -82,7 +82,7 @@ struct _Counting(ByteSource):
         )
 
     def read_ranges(
-        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
         for ref r in ranges:
             self._read[] += r[1]

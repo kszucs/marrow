@@ -116,6 +116,7 @@ def test_query_cli_help_lists_every_parameter_and_builtin() raises:
         "upper bound",
         "(required)",
         "--describe",
+        "--explain",
         "-o, --output",
         "--format",
         "--max-rows",
@@ -130,6 +131,34 @@ def test_query_cli_describe_needs_no_parameters() raises:
     assert_true(args.flag("describe"))
     with assert_raises(contains="max-id"):
         _ = cli.parse([])
+
+
+def test_query_cli_explain_takes_the_parameters() raises:
+    """Lowering resolves what a scan reads from the parameters, so unlike
+    `--describe` the explain still needs them."""
+    var cli = QueryCli(_report_plan())
+    with assert_raises(contains="max-id"):
+        _ = cli.parse(["--explain"])
+    var args = cli.parse(["--explain", "--max-id", "3"])
+    assert_true(args.flag("explain"))
+    var report = _report_plan().explain(bindings=cli.bindings(args))
+    assert_equal(len(report.phases), 1)
+
+
+def test_query_cli_analyze_writes_the_report_as_json() raises:
+    """`--analyze` runs the plan for its report; `--report-json` names where
+    the JSON goes."""
+    var cli = QueryCli(_report_plan())
+    var args = cli.parse(
+        ["--analyze", "--report-json", "report.json", "--max-id", "3"]
+    )
+    assert_true(args.flag("analyze"))
+    assert_equal(args.get("report-json"), "report.json")
+    var report = _report_plan().explain[analyze=True](
+        bindings=cli.bindings(args)
+    )
+    assert_true(report.ns >= 0)
+    assert_true(report.to_json().startswith('{"ns":'))
 
 
 def test_query_cli_parses_typed_bindings() raises:

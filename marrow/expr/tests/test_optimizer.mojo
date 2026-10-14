@@ -1412,9 +1412,9 @@ def test_join_ordering_returns_the_same_rows_for_a_left_join() raises:
     """The kind whose *physical* kind changes when the side flips.
 
     A LEFT join built on its right input is a physical RIGHT join, which is
-    also the case where `JoinOperator._blocks_on_probe_side` has to ask the
-    physical kind: a logical LEFT buffers its probe side, the physical RIGHT
-    it becomes streams. Getting that backwards is a wrong answer, not a slow
+    also the case where `JoinOperator` has to ask the physical kind: a
+    logical LEFT owes unmatched build rows at `drain`, the physical RIGHT it
+    becomes owes none. Getting that backwards is a wrong answer, not a slow
     one, and only an end-to-end case sees it.
     """
     var plan = (
@@ -1602,13 +1602,13 @@ def test_join_order_three_way_returns_the_same_rows() raises:
 
 
 def test_join_order_declines_an_outer_join() raises:
-    """Associativity is a property of the *inner* join.
+    """An outer join manufactures rows for non-matches, so a join below it
+    keeps its place: `(dim LEFT mid) INNER leaf` keeps its tree.
 
-    An outer join manufactures rows for non-matches, and when it does so
-    depends on the association, so it keeps its place and its children.
-    Checked in both positions, because a guard that read only one of the two
-    kinds would pass the other.
-    """
+    Above it is another matter. `(dim INNER mid) LEFT leaf` may become
+    `dim INNER (mid LEFT leaf)`, since the outer join's keys read only `mid`
+    and `leaf` -- and whichever tree is chosen returns the written one's
+    rows."""
     var outer_inner = table(_dim()).join(table(_mid()), [1], [0], JOIN_LEFT)
     var plan = outer_inner.join(table(_leaf()), [2], [0], JOIN_INNER)
     var optimized = plan.optimize[AllRules]()
@@ -1616,8 +1616,7 @@ def test_join_order_declines_an_outer_join() raises:
 
     var inner = table(_dim()).join(table(_mid()), [1], [0], JOIN_INNER)
     var plan2 = inner.join(table(_leaf()), [2], [0], JOIN_LEFT)
-    var optimized2 = plan2.optimize[AllRules]()
-    assert_equal(_shape(optimized2), _shape(plan2), String(optimized2))
+    _same_rows(plan2.optimize[AllRules](), plan2)
 
 
 def test_join_order_is_a_no_op_when_nothing_is_known() raises:

@@ -15,8 +15,9 @@ place. They count destructions rather than measuring memory, so they fail
 deterministically rather than statistically.
 
 **One test per box, and the set must stay complete.** `rebind[ArcPointer[
-NoneType]]` appears in exactly two places in the package — `DynValue.__init__`
-and `DynOperator.__init__` — and each needs a `_drop` field, a `_drop_tramp`,
+NoneType]]` appears in exactly three places in the package —
+`DynValue.__init__`, `DynOperator.__init__` and `DynSource.__init__` — and
+each needs a `_drop` field, a `_drop_tramp`,
 and a `__deinit__` that calls it. The virtual methods plus a pointer look
 complete and are not, so a box added without the drop trampoline leaks
 silently — add its case here in the same commit. `DynRelation` is the third box
@@ -47,7 +48,16 @@ from ..builders import col, row_number
 from ...arrays import BoolArray
 from ...builders import BoolBuilder
 from ..index import Index
-from ..physical import Datum, DynOperator, Morsel, Operator, Pipeline
+from ..physical import (
+    Datum,
+    DynOperator,
+    FoldMode,
+    Morsel,
+    Operator,
+    Pipeline,
+)
+from ...arrays import StructArray
+from ...engine import DynSource, Source
 
 
 comptime Deaths = ArcPointer[List[Int]]
@@ -102,7 +112,11 @@ struct _ValueProbe(Copyable, Movable, Value, Writable):
         return int64
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         raise Error("probe is not runnable")
 
@@ -141,6 +155,38 @@ def test_dyn_operator_destroys_its_operator() raises:
     var boxed = DynOperator(_OpProbe(deaths.copy()))
     assert_equal(boxed.done(), True)
     assert_equal(len(deaths[]), 0, "the operator was moved into the box")
+    _ = boxed^
+    assert_equal(len(deaths[]), 1, "erasure must not drop the destructor")
+
+
+struct _SourceProbe(Source):
+    var _deaths: Deaths
+
+    def __init__(out self, var deaths: Deaths):
+        self._deaths = deaths^
+
+    def __deinit__(deinit self):
+        self._deaths[].append(1)
+
+    def count(self) -> Int:
+        return 0
+
+    def rows(self) -> Int:
+        return 0
+
+    def read(self, i: Int, ctx: ExecContext) raises -> List[StructArray]:
+        return List[StructArray]()
+
+    def describe(self) -> String:
+        return "probe"
+
+
+def test_dyn_source_destroys_its_source() raises:
+    """Every phase holds its source in this box."""
+    var deaths = _tally()
+    var boxed = DynSource(_SourceProbe(deaths.copy()))
+    assert_equal(boxed.describe(), "probe")
+    assert_equal(len(deaths[]), 0, "the source was moved into the box")
     _ = boxed^
     assert_equal(len(deaths[]), 1, "erasure must not drop the destructor")
 

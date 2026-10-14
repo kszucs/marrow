@@ -754,6 +754,15 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
         self._null_count += count
         self._length += count
 
+    def extend_value(mut self, value: Self.ScalarType, count: Int) raises:
+        """Append `count` valid copies of `value`, growing once."""
+        debug_assert(count >= 0, "extend_value: a negative count")
+        self.reserve(count)
+        self._bitmap.set_range(self._length, count, True)
+        for i in range(count):
+            self._buffer.unsafe_set[Self.T.native](self._length + i, value)
+        self._length += count
+
     def extend(mut self, values: List[Self.ScalarType]) raises:
         self.reserve(len(values))
         for value in values:

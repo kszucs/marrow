@@ -36,7 +36,12 @@ from std.math import ceildiv
 from std.memory import ArcPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from std.sys import has_accelerator, CompilationTarget, get_defined_bool
+from std.sys import (
+    has_accelerator,
+    CompilationTarget,
+    get_defined_bool,
+    get_defined_string,
+)
 
 from .buffers import Bitmap, Buffer
 from .utils.threads import ThreadPool
@@ -70,6 +75,14 @@ from .utils.threads import ThreadPool
 # It does not shed the MAX runtime, though — a binary built with the flag off
 # still links `libmax` / AsyncRT exactly as one built with it on.
 comptime GPU_ENABLED = get_defined_bool["MARROW_GPU", False]()
+
+comptime PARALLEL_ENABLED = (
+    get_defined_string["MARROW_DRIVER", "dynamic"]() != "serial"
+)
+"""Whether a plan's phases may run on several workers. `-D
+MARROW_DRIVER=serial` compiles the parallel paths out — every driver runs one
+worker on the calling thread, and no aggregate is split into partial states —
+for a binary that has to be as small as it can be."""
 
 comptime _STRIPE_MIN_SIZE = 32_768
 """The default ``min_parallel_size`` of ``wants_parallel``, ``for_batch``,
@@ -371,11 +384,14 @@ struct ExecContext(
         cost ~1213 us against ~76 us on the calling thread. The default
         crossover is ``stripe``'s own, asked about the batch rather than about
         a whole column.
+
+        The calling thread's context is derived from this one, so it keeps the
+        pool and drops only the device.
         """
         if self.worth_parallel(rows, min_parallel_size):
             return self.copy()
         else:
-            return Self.serial()
+            return self.with_threads(1).on_cpu()
 
     # --- striped execution ------------------------------------------------
 
@@ -484,8 +500,18 @@ struct ExecContext(
         """``ThreadPool.run`` on this context's ``thread_pool()``: call
         ``body(i)`` for every ``i`` in ``[0, n)`` on at most
         ``resolved_num_threads()`` threads, the caller included, and return
-        once every call has. One thread under ``serial()``."""
-        self.thread_pool()[].run(n, body, self.resolved_num_threads())
+        once every call has. Under ``serial()`` that is the calling thread,
+        and no pool is consulted."""
+        if self._on_caller(n):
+            for i in range(n):
+                body(i)
+        else:
+            self.thread_pool()[].run(n, body, self.resolved_num_threads())
+
+    def _on_caller(self, lanes: Int) -> Bool:
+        """Whether work over at most ``lanes`` lanes runs on the calling
+        thread alone: under ``serial()``, or with one lane to run."""
+        return self.num_threads == 1 or lanes <= 1
 
     def fan_out[
         Body: def(Int, Int) raises -> None
@@ -500,10 +526,16 @@ struct ExecContext(
         ``stripe``'s counterpart for a body that raises. A body that blocks —
         a remote fetch waiting on a socket — goes through
         ``fan_out_blocking`` instead.
+
+        Under ``serial()``, or with one lane, it runs on the calling thread
+        and no pool is consulted.
         """
-        self.thread_pool()[].fan_out(
-            n, body, min(lanes, self.resolved_num_threads())
-        )
+        if self._on_caller(lanes):
+            ThreadPool.fan_out_inline(n, body)
+        else:
+            self.thread_pool()[].fan_out(
+                n, body, min(lanes, self.resolved_num_threads())
+            )
 
     def fan_out[
         Body: def(Int, Int) raises -> Bool
@@ -511,9 +543,12 @@ struct ExecContext(
         """``fan_out`` for a body that can stop early: it returns whether the
         items after ``i`` are still wanted, and False hands out no more — a
         serial loop's ``break``. See ``ThreadPool.fan_out``."""
-        self.thread_pool()[].fan_out(
-            n, body, min(lanes, self.resolved_num_threads())
-        )
+        if self._on_caller(lanes):
+            ThreadPool.fan_out_inline(n, body)
+        else:
+            self.thread_pool()[].fan_out(
+                n, body, min(lanes, self.resolved_num_threads())
+            )
 
     def fan_out_blocking[
         Body: def(Int, Int) raises -> None

@@ -1119,29 +1119,15 @@ struct Cost(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
         return Self(rows=rows, compares=rows)
 
     @staticmethod
-    def hash_join(
-        left: Size, right: Size, build_side: JoinBuildSide, kind: JoinKind
-    ) -> Self:
+    def hash_join(left: Size, right: Size, build_side: JoinBuildSide) -> Self:
         """One hash join over inputs of these sizes, its inputs' own cost
-        excluded: hashing and holding the build side, probing with the other —
-        and holding that one too when `kind`, built on `build_side`, answers
-        only once every probe row has arrived, as a join emitting the build
-        side's unmatched rows or only its matched ones does. Over bare sizes,
-        so a search pricing a join it has not built uses the formula a built
-        one is priced by."""
+        excluded: hashing and holding the build side, and probing with the
+        other, which streams whatever the join's kind. Over bare sizes, so a search
+        pricing a join it has not built uses the formula a built one is priced
+        by."""
         var build = left if build_side == BUILD_LEFT else right
         var probe = right if build_side == BUILD_LEFT else left
-        var out = Self.hash_build(build) + Self.hash_probe(probe.rows)
-        try:
-            var physical = build_side.physical(kind)
-            if (
-                physical.emits_unmatched_left()
-                or not physical.emits_right_columns()
-            ):
-                out = out + Self(bytes=probe.bytes())
-        except:
-            pass
-        return out
+        return Self.hash_build(build) + Self.hash_probe(probe.rows)
 
     @staticmethod
     def sort(size: Size) -> Self:

@@ -91,7 +91,7 @@ def _profile(path: String) raises:
         pattern.append(i < first and i % keep_every == 0)
 
     # Built once, outside the timed loop, because that is what a caller does:
-    # `ParquetScanOperator` copies a selection it already has, which is a
+    # `RowGroupSource` copies a selection it already has, which is a
     # refcount bump. Building one per iteration would time a megabyte of
     # allocation that no read performs.
     var built = List[RowSelection](capacity=num_groups)

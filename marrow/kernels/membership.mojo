@@ -55,7 +55,7 @@ struct IsInKernel(Kernel):
         _ = encoder.encode(set_column)
         var value_column = List[DynArray]()
         value_column.append(values.copy())
-        var codes = encoder.lookup(value_column)
+        var codes = encoder.lookup(value_column, ctx)
         var n = len(values)
         var found = Bitmap.alloc_uninit(n)
         apply[int32.native, has_code](codes.values(), found.view())

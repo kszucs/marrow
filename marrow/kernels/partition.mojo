@@ -16,11 +16,15 @@ whose radix placement every hash consumer reaches: the group-by, the join,
 ``is_in`` and ``count_distinct``.
 """
 
-from ..arrays import Int32Array, UInt64Array
+from ..utils.stats import count
+from ..arrays import Int32Array, StructArray, UInt64Array
 from ..buffers import Buffer
 from ..dtypes import int32, uint64
 from ..execution import ExecContext
 from ..views import BufferView
+from ..utils import KeyHash
+from .filter import TakeKernel
+from .hashing import HashKernel
 
 
 comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
@@ -217,6 +221,7 @@ struct RadixPartitioner(Movable):
         contiguous slot computed by the prefix sum.
         """
         var n = len(hashes)
+        count["partition.rows"](n)
         var p = 1 << self.num_bits
         var bits = self.num_bits
         var src = hashes.values()
@@ -317,3 +322,77 @@ struct RadixPartitioner(Movable):
         for i in range(p):
             out.append(slots[i].take())
         return (partitions^, out^)
+
+
+def _partition_major(partitions: List[Partition], rows: Int) -> Int32Array:
+    """Every row of ``RadixPartitioner.partition``'s result, partition by
+    partition: the buffer their ``row_indices`` slice."""
+    return Int32Array(
+        length=rows,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=partitions[0].row_indices.buffer.copy(),
+    )
+
+
+def partition_bits(workers: Int) -> Int:
+    """How many hash bits split a parallel merge across ``workers``: enough
+    for about four partitions per worker, so a slow partition holds up little,
+    and at least 16 and at most 512 partitions."""
+    var bits = 4
+    while (1 << bits) < 4 * workers and bits < 9:
+        bits += 1
+    return bits
+
+
+def repartition(
+    batches: List[StructArray],
+    key_indices: List[Int],
+    num_bits: Int,
+    ctx: ExecContext,
+) raises -> List[List[StructArray]]:
+    """Every row of ``batches`` in one of ``2^num_bits`` partitions, by the
+    hash of its key columns: partition ``p``'s rows, batch by batch, are
+    ``result[p]``. Equal keys land in one partition, whichever batch holds
+    them, and a batch's rows keep their order within a partition.
+
+    Each batch is gathered once, partition-major, so its partitions are
+    slices of one copy. Batches are spread over ``ctx``'s workers.
+    """
+    var num_batches = len(batches)
+    var num_partitions = 1 << num_bits
+    var parts = List[List[StructArray]](capacity=num_batches)
+    for _ in range(num_batches):
+        parts.append(List[StructArray]())
+
+    def split(wid: Int, b: Int) raises {mut parts, imm}:
+        ref batch = batches[b]
+        var serial = ExecContext.serial()
+        var hashes = HashKernel[KeyHash].apply(
+            batch.select(key_indices), serial
+        )
+        var routed = RadixPartitioner(num_bits, serial.copy()).partition(
+            hashes^
+        )
+        # One gather in partition order gives every partition as a slice of
+        # one copy.
+        var gathered = TakeKernel.apply(
+            batch, _partition_major(routed, len(batch)), serial
+        )
+        var out = List[StructArray](capacity=num_partitions)
+        var start = 0
+        for p in range(num_partitions):
+            var size = len(routed[p].row_indices)
+            out.append(gathered.slice(start, size))
+            start += size
+        parts[b] = out^
+
+    ctx.fan_out(num_batches, split, num_batches)
+    var result = List[List[StructArray]](capacity=num_partitions)
+    for p in range(num_partitions):
+        var partition = List[StructArray](capacity=num_batches)
+        for b in range(num_batches):
+            partition.append(parts[b][p].copy())
+        result.append(partition^)
+    return result^

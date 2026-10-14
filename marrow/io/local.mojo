@@ -111,7 +111,7 @@ struct BufferSource(ByteSource):
         )
 
     def read_ranges(
-        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
         # `ctx` is unused: nothing here is fetched, so there is nothing to
         # spread across workers. One allocation, N handles: a `Buffer` copy is

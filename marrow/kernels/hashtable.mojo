@@ -6,7 +6,7 @@
 Two types, one job at two scales:
 
 - ``SwissHashTable`` (``marrow.utils``) — one open-addressing table, filled on
-  one thread; ``insert_hashes`` / ``find_hashes`` are its
+  one thread; ``insert_hashes`` / ``find_hashes`` / ``hashes_of`` are its
   batch paths over arrays.
 - ``HashIndex`` — the same mapping over one table or, once a batch is large
   and distinct enough, ``2**6`` radix-partitioned tables filled in parallel,
@@ -103,6 +103,16 @@ def find_hashes(
     )
 
 
+def hashes_of(table: SwissHashTable) raises -> UInt64Array:
+    """The hash of every id, in id order."""
+    var n = len(table)
+    var buf = Buffer.alloc_uninit[DType.uint64](max(n, 1))
+    buf.extend(table.hash_view(), 0, n)
+    return UInt64Array(
+        length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
+    )
+
+
 # ---------------------------------------------------------------------------
 # HashIndex
 # ---------------------------------------------------------------------------
@@ -158,6 +168,36 @@ known only once their inserts are done. Removing that dependency means fixed id
 blocks, which makes the ids sparse — and they are dense because a consumer
 allocates one slot per id. The idle is a cost of dense ids."""
 
+def expected_distinct(distinct: Int, draws: Int) -> Int:
+    """Distinct values expected among `draws` uniform draws, with
+    replacement, from `distinct` equally frequent values:
+    `d (1 - e^(-draws/d))`. Non-raising so it can run at comptime."""
+    if distinct <= 0:
+        return 0
+    return Int(
+        Float64(distinct) * (1.0 - exp(-Float64(draws) / Float64(distinct)))
+    )
+
+
+def estimated_distinct(rows: Int, draws: Int, seen: Int) -> Int:
+    """How many distinct values `rows` rows hold, when `draws` uniform draws
+    from them, with replacement, saw `seen`: the domain `d` whose expected
+    distinct draws, `d (1 - e^(-draws/d))`, is `seen`, at most `rows`. A
+    sample that saw nearly every draw distinct cannot tell domains apart past
+    a few times `draws`, and answers `rows`."""
+    var lo = max(seen, 1)
+    var hi = max(rows, lo)
+    if expected_distinct(hi, draws) <= seen:
+        return hi
+    while lo < hi:
+        var mid = lo + (hi - lo) // 2
+        if expected_distinct(mid, draws) < seen:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
 comptime _SAMPLE_ROWS: Int = 4096
 """How many rows the cardinality probe draws. Small enough that its table stays
 in L1 and the probe costs tens of microseconds on a million rows."""
@@ -180,7 +220,7 @@ Measured by the calibration sweep, at 1M rows, as serial time over radix time:
     string  0.98  0.94     —  0.95     —     —     —  0.97  1.04   1.07   1.24
 
 The int32 edge is 30,000; strings cross later, near 65,000. The probe cannot
-count distinct hashes directly — see `HashIndex._looks_high_cardinality` — so
+count distinct hashes directly — see `HashIndex._sample_distinct` — so
 the gate compares its sample against `HashIndex._MIN_SAMPLE_DISTINCT`.
 Overridable with
 `-D MARROW_GROUPBY_RADIX_MIN_GROUPS=N`; `0` opens the gate for every batch.
@@ -243,30 +283,27 @@ struct HashIndex(Movable, Sized):
         ``_parts``: only ``_migrate`` creates them."""
         return len(self._parts) > 0
 
-    def _partitioner(self) -> RadixPartitioner:
+    def _partitioner(self, ctx: ExecContext) -> RadixPartitioner:
         """How this index splits a batch — the same bits for every batch, so
-        partition ``i`` always routes to table ``i``."""
-        return RadixPartitioner(num_bits=_RADIX_BITS, ctx=self._ctx.copy())
+        partition ``i`` always routes to table ``i`` — on ``ctx``."""
+        return RadixPartitioner(num_bits=_RADIX_BITS, ctx=ctx.copy())
 
     # --- the radix gate -----------------------------------------------------
 
-    comptime _MIN_SAMPLE_DISTINCT: Int = Int(
-        Float64(_RADIX_MIN_DISTINCT)
-        * (1.0 - exp(-Float64(_SAMPLE_ROWS) / Float64(_RADIX_MIN_DISTINCT)))
+    comptime _MIN_SAMPLE_DISTINCT: Int = expected_distinct(
+        _RADIX_MIN_DISTINCT, _SAMPLE_ROWS
     )
-    """`_RADIX_MIN_DISTINCT` in the sample's units — the distinct values
-    expected among `_SAMPLE_ROWS` uniform draws, with replacement, from that
-    many equally frequent values, `d (1 - e^(-draws/d))`: 3,828 of 4,096 at
-    30,000.
+    """`_RADIX_MIN_DISTINCT` in the sample's units: 3,828 of 4,096 at 30,000.
 
     A batch 10% either side of the gate lands ~25 draws away, so the edge is
     soft by about ±15%; the sweep puts the cost of misplacing a batch in that
     band under 5%. A gate much past 100,000 needs a larger sample."""
 
     @staticmethod
-    def _looks_high_cardinality(hashes: UInt64Array) raises -> Bool:
-        """Does this batch hold at least ``_RADIX_MIN_DISTINCT`` distinct
-        hashes?
+    def _sample_distinct(hashes: UInt64Array) raises -> Int:
+        """How many distinct hashes a sample of this batch holds — at least
+        ``_MIN_SAMPLE_DISTINCT`` when the batch holds at least
+        ``_RADIX_MIN_DISTINCT``.
 
         Draws ``_SAMPLE_ROWS`` rows **at pseudo-random positions, with
         replacement**, and counts the distinct hashes among them, which makes
@@ -296,7 +333,7 @@ struct HashIndex(Movable, Sized):
                 buffer=sample^.to_immutable(),
             ),
         )
-        return len(table) >= Self._MIN_SAMPLE_DISTINCT
+        return len(table)
 
     # --- batch --------------------------------------------------------------
 
@@ -311,25 +348,34 @@ struct HashIndex(Movable, Sized):
         ``expected_new`` sizes the tables this insert places on once instead
         of growing them — a join's build side, whose rows are usually its keys.
         A group-by, which cannot know, passes nothing and grows on demand."""
+        var expect = expected_new
         if len(hashes) == 0:
             return Placement(
                 ids=Int32Array.empty(int32), firsts=Int32Array.empty(int32)
             )
-        if (
-            not self.is_partitioned()
-            and self._ctx.worth_parallel(len(hashes), _RADIX_MIN_ROWS)
-            and Self._looks_high_cardinality(hashes)
+        if not self.is_partitioned() and self._ctx.worth_parallel(
+            len(hashes), _RADIX_MIN_ROWS
         ):
-            self._migrate()
+            var seen = Self._sample_distinct(hashes)
+            if expect > 0:
+                # An expectation counts rows, which overstates the ids of keys
+                # that repeat: the sample's estimate caps it, a quarter over,
+                # so that falling short of it doubles a table once.
+                var ids = estimated_distinct(len(hashes), _SAMPLE_ROWS, seen)
+                expect = min(expect, ids + ids // 4)
+            if seen >= Self._MIN_SAMPLE_DISTINCT:
+                self._migrate()
         var placed: Placement
         if self.is_partitioned():
-            placed = self._insert_radix(hashes, expected_new)
+            placed = self._insert_radix(hashes, expect)
         else:
-            placed = self._insert_serial(hashes, expected_new)
+            placed = self._insert_serial(hashes, expect)
         return placed^
 
-    def find(self, hashes: UInt64Array) raises -> Int32Array:
-        """The id of every hash, or ``-1`` where there is none.
+    def find(self, hashes: UInt64Array, ctx: ExecContext) raises -> Int32Array:
+        """The id of every hash, or ``-1`` where there is none, looked up on
+        ``ctx`` — the caller's context, not the one the ids were placed with,
+        so a lookup from a thread that must stay on it never fans out.
 
         On partitioned tables, a batch too small to share out is looked up in
         place — each hash in its own partition's table — because splitting it
@@ -339,18 +385,15 @@ struct HashIndex(Movable, Sized):
         """
         if not self.is_partitioned():
             return find_hashes(self._table, hashes)
-        if not self._ctx.worth_parallel(len(hashes), _RADIX_MIN_ROWS):
+        if not ctx.worth_parallel(len(hashes), _RADIX_MIN_ROWS):
             return self._find_in_place(hashes)
-        # Split by partition so each worker searches one table: striping the
-        # in-place lookup instead, every worker touching all 64 tables, was
-        # 4-5x slower probing 1M rows on 4-8 workers.
 
         def find_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises {imm} -> Int32Array:
             return find_hashes(self._parts[i], part_hashes)
 
-        var split = self._partitioner().map_partitions[Int32Array](
+        var split = self._partitioner(ctx).map_partitions[Int32Array](
             hashes.copy(), find_partition
         )
         ref routed = split[0]
@@ -369,7 +412,7 @@ struct HashIndex(Movable, Sized):
                     Int(rows.unsafe_get(j)), Int32(-1) if id < 0 else l2g[id]
                 )
 
-        self._ctx.run(len(routed), scatter)
+        ctx.run(len(routed), scatter)
         return Int32Array(
             length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
         )
@@ -476,18 +519,9 @@ struct HashIndex(Movable, Sized):
         for _ in range(p):
             parts.append(SwissHashTable())
             l2g.append(List[Int32]())
-        var n = len(self._table)
-        var held = Buffer.alloc_uninit[DType.uint64](max(n, 1))
-        held.extend(self._table.hash_view(), 0, n)
-        var existing = UInt64Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=held^.to_immutable(),
-        )
+        var existing = hashes_of(self._table)
         if len(existing) > 0:
-            var routed = self._partitioner().partition(existing^)
+            var routed = self._partitioner(self._ctx).partition(existing^)
             for i in range(p):
                 ref ids = routed[i].row_indices
                 ref part_hashes = routed[i].hashes
@@ -547,7 +581,9 @@ struct HashIndex(Movable, Sized):
             # `_RADIX_MIN_DISTINCT`", and a high guess costs one power of two.
             var expect = len(part_hashes) // 2
             if expected_new > 0:
-                expect = ceildiv(expected_new * len(part_hashes), len(hashes))
+                expect = ceildiv(
+                    expected_new * len(part_hashes), len(hashes)
+                )
             self._parts[i].reserve(before + expect)
             var placed = insert_hashes(self._parts[i], part_hashes)
             # The table reports positions within the partition; the batch's
@@ -571,7 +607,7 @@ struct HashIndex(Movable, Sized):
                 ),
             )
 
-        var split = self._partitioner().map_partitions[Placement](
+        var split = self._partitioner(self._ctx).map_partitions[Placement](
             hashes.copy(), insert_partition
         )
         ref routed = split[0]

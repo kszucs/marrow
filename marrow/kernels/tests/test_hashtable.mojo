@@ -4,13 +4,17 @@
 """Tests for the hash indexes: `SwissHashTable` and `HashIndex` map 64-bit
 hashes to dense ids, and know nothing of keys."""
 
-from std.testing import assert_equal, assert_true
+from std.testing import assert_equal, assert_raises, assert_true
 
-from ...arrays import Int32Array, UInt64Array
-from ...builders import UInt64Builder
+from ...arrays import DynArray, Int32Array, UInt64Array
+from ...builders import Int64Builder, UInt64Builder, array
+from ...dtypes import DynType, int32, int64
 from ...execution import ExecContext
+from ...kernels.dictionary import DictionaryEncoder
 from ...kernels.hashtable import (
     HashIndex,
+    estimated_distinct,
+    expected_distinct,
     find_hashes,
     insert_hashes,
 )
@@ -178,8 +182,8 @@ def test_hash_index_keeps_ids_across_the_move_to_radix() raises:
     var placed = index.insert(big)
     # The first batch's 500 values are among the second batch's 60,000.
     assert_equal(len(index), 60_000)
-    assert_true(index.find(small) == before)
-    assert_true(index.find(big) == placed.ids)
+    assert_true(index.find(small, ExecContext.parallel(4)) == before)
+    assert_true(index.find(big, ExecContext.parallel(4)) == placed.ids)
 
 
 def test_hash_index_radix_find_and_one() raises:
@@ -188,14 +192,17 @@ def test_hash_index_radix_find_and_one() raises:
     var big = _spread(n, 60_000)
     _ = index.insert(big)
     var absent = _spread(10, 10, salt=1_000_000)
-    for id in _ids(index.find(absent)):
+    for id in _ids(index.find(absent, ExecContext.parallel(4))):
         assert_equal(id, -1)
 
     def any_id(id: Int) raises {imm} -> Bool:
         return True
 
     var h = UInt64(big.unsafe_get(0))
-    assert_equal(index.find_one(h, any_id), Int(index.find(big).unsafe_get(0)))
+    assert_equal(
+        index.find_one(h, any_id),
+        Int(index.find(big, ExecContext.parallel(4)).unsafe_get(0)),
+    )
 
     def none(id: Int) raises {imm} -> Bool:
         return False
@@ -210,3 +217,75 @@ def test_hash_index_radix_find_and_one() raises:
     # A new id lands in its hash's partition and is found there again.
     assert_equal(index.find_one(h, only_new), 60_000)
     assert_equal(index.find_one(h, none), -1)
+
+
+def test_hash_index_finds_on_the_callers_context() raises:
+    """A batch big enough to split on the context the ids were placed with
+    finds the same ids when the lookup is asked to stay on one thread."""
+    var index = HashIndex(ExecContext.parallel(4))
+    var big = _spread(100_000, 60_000)
+    var placed = index.insert(big)
+    assert_true(index.is_partitioned())
+    assert_true(index.find(big, ExecContext.serial()) == placed.ids)
+    assert_true(index.find(big, ExecContext.parallel(4)) == placed.ids)
+
+
+def test_encoder_extends_its_keys_unindexed() raises:
+    """Keys appended without codes follow the codes' keys in `values`, and
+    no lookup finds them."""
+    var types: List[DynType] = [int64]
+    var encoder = DictionaryEncoder(types^)
+    var first: List[DynArray] = [array([1, 2, 1], int64)]
+    _ = encoder.encode(first)
+    var later: List[DynArray] = [array([5, 6], int64)]
+    encoder.extend_unindexed(later^)
+    assert_equal(len(encoder), 2)
+    var values = encoder.values()
+    assert_true(values[0].as_int64() == array([1, 2, 5, 6], int64))
+    var probe: List[DynArray] = [array([5], int64)]
+    assert_true(
+        encoder.lookup(probe, ExecContext.serial()) == array([-1], int32)
+    )
+    # Many appended runs come back whole, in order.
+    for i in range(40):
+        var run: List[DynArray] = [array([100 + i], int64)]
+        encoder.extend_unindexed(run^)
+    var all = encoder.values()[0].as_int64().copy()
+    assert_equal(len(all), 44)
+    assert_equal(Int(all[43].value()), 139)
+
+
+def test_encoder_refuses_unindexed_keys_of_another_type() raises:
+    var types: List[DynType] = [int64]
+    var encoder = DictionaryEncoder(types^)
+    var wrong: List[DynArray] = [array([1, 2], int32)]
+    with assert_raises(contains="key column 0"):
+        encoder.extend_unindexed(wrong^)
+
+
+def test_encoder_lookup_on_the_callers_context() raises:
+    """A radix-built encoder looked up on a serial context answers what it
+    answers on the context it was built with."""
+    var types: List[DynType] = [int64]
+    var encoder = DictionaryEncoder(types^, ExecContext.parallel(4))
+    var b = Int64Builder(150_000)
+    for i in range(150_000):
+        b.append(Int64((i * 7919) % 120_000))
+    var keys: List[DynArray] = [b.finish()]
+    var placed = encoder.encode(keys)
+    assert_true(encoder.is_partitioned())
+    assert_true(encoder.lookup(keys, ExecContext.serial()) == placed.ids)
+    assert_true(encoder.lookup(keys, ExecContext.parallel(4)) == placed.ids)
+
+
+def test_estimated_distinct_inverts_the_sample() raises:
+    """From how many distinct values a uniform sample saw, the domain it was
+    drawn from: within 5% where the sample can tell, the row count where it
+    saw every draw distinct."""
+    assert_equal(estimated_distinct(1_000_000, 4096, 4096), 1_000_000)
+    assert_equal(estimated_distinct(500, 4096, 500), 500)
+    var domains: List[Int] = [1_000, 10_000, 50_000]
+    for d in domains:
+        var seen = expected_distinct(d, 4096)
+        var est = estimated_distinct(1_000_000, 4096, seen)
+        assert_true(abs(est - d) <= d // 20, String(d, " -> ", est))

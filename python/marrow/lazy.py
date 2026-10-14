@@ -531,12 +531,58 @@ class LazyTable(_Wrapper):
         it first, so the join search sees how many values a key holds."""
         return LazyTable.wrap(self._binding.analyze())
 
-    def explain(self):
+    def explain(self, physical=False, analyze=False, num_threads=0, trace=None):
         """The plan as text, without running it.
 
         Renders recursively — a ``Filter`` names the node it filters — so this
-        is the whole tree, not just the root."""
-        return self._plan_text()
+        is the whole tree, not just the root.
+
+        With ``physical=True``, the phases that would run it instead: a
+        :class:`PlanReport` of each phase's source, stages, workers and the
+        phases it reads, without reading a row. With ``analyze=True``, the
+        plan runs, and the report shows what each phase, stage and worker did
+        and how long it took. ``num_threads`` is the worker budget, as on
+        :meth:`collect`. With ``analyze`` and ``trace`` a path, the run's
+        timeline — every stage call and morsel read, per thread — is written
+        there as Chrome trace JSON, which ui.perfetto.dev opens."""
+        if not (physical or analyze):
+            return self._plan_text()
+        text, json, batch, timeline = self._binding.report(
+            analyze, bool(trace), num_threads
+        )
+        if analyze and trace:
+            with open(trace, "w") as f:
+                f.write(timeline)
+        return PlanReport(text, json, RecordBatch.wrap(batch))
+
+
+class PlanReport:
+    """The phases that run a plan, and under ``analyze`` what they did.
+
+    Prints as text; :meth:`to_dict` is the same report as data, and
+    :meth:`to_batch` its phases as a batch, one row per phase."""
+
+    def __init__(self, text, json, batch):
+        self._text = text
+        self._json = json
+        self._batch = batch
+
+    def __str__(self):
+        return self._text
+
+    def __repr__(self):
+        return self._text
+
+    def to_dict(self):
+        """The report as a dict: the run's ``ns``, ``rows`` and ``estimate``
+        (-1 when unknown), its ``phases`` and the ``spans`` between them."""
+        import json
+
+        return json.loads(self._json)
+
+    def to_batch(self):
+        """The phases as a :class:`~marrow.RecordBatch`, one row per phase."""
+        return self._batch
 
 
 def _is_direction_list(args):

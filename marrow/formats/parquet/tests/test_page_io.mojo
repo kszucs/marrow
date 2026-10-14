@@ -81,7 +81,7 @@ struct _Recorder(ByteSource):
         )
 
     def read_ranges(
-        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
         # Every range of a batch is recorded individually, so the byte-level
         # assertions below read the same whether the reader asked one range at a

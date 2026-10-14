@@ -120,7 +120,7 @@ trait ByteSource(Deinitable, Movable):
         ...
 
     def read_ranges(
-        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
         """Every `(offset, length)` at once, in one caller-owned batch.
 
@@ -130,6 +130,10 @@ trait ByteSource(Deinitable, Movable):
         how a scan run under `ExecContext.serial()` used to fetch on every
         core anyway -- the context stopped at the operator and nobody noticed.
         A source with nothing to fetch ignores it.
+
+        Read-only: threads reading one source at once each call this, so it
+        leaves the source untouched and everything it fetched is in the
+        returned `Fetched`.
 
         Declared abstract rather than defaulted: a default would have to produce
         an owning `Buffer` out of `read_at`'s borrowed `Span`, which it cannot,

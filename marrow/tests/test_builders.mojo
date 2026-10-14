@@ -964,3 +964,20 @@ def test_dictionary_builder_set_dictionary() raises:
     b.as_dictionary().append(1)
     var d = b.finish().as_dictionary().copy()
     assert_true(d.dictionary().as_string() == array(["x", "y"]))
+
+
+def test_primitive_builder_extend_value() raises:
+    """A run of one value appends valid copies, between whatever came before
+    and after it."""
+    var b = Int64Builder()
+    b.append(1)
+    b.extend_value(7, 70)
+    b.append_null()
+    var a = b.finish()
+    assert_equal(len(a), 72)
+    assert_equal(a.null_count(), 1)
+    assert_equal(Int(a[0].value()), 1)
+    for i in range(1, 71):
+        assert_true(a.is_valid(i))
+        assert_equal(Int(a[i].value()), 7)
+    assert_false(a.is_valid(71))

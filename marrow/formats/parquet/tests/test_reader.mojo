@@ -11,12 +11,18 @@ spanning many row groups, and pre-epoch dates."""
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.math import isnan, isinf
 from std.python import Python, PythonObject
+from std.memory import ArcPointer
 from std.os.path import join
 from ....utils.testing import ScratchDir
 from ...parquet import read_table, ParquetFile
-from ....io import BufferSource
-from ....tabular import Table
-from ....dtypes import binary_view
+from ..reader import RowSelection
+from ..compression import Compression
+from ..writer import FileWriter
+from ....io import BufferSource, ByteSource, Fetched, FileSink
+from ....tabular import Table, record_batch
+from ....builders import StringBuilder, array
+from ....dtypes import binary_view, int64
+from ....execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -1339,3 +1345,99 @@ def test_read_plain_byte_array_refuses_an_overrunning_length() raises:
             _ = read_table(path)
         with assert_raises(contains="runs past"):
             _ = read_table(path, binary_type=binary_view)
+
+
+struct _ArenaSource(ByteSource):
+    """A local file that, like an object store, keeps every `read_at` answer
+    in an arena it appends to without a lock -- what `ByteSource.read_at`
+    allows, and why it is one thread's call."""
+
+    var _inner: BufferSource
+    var _arena: ArcPointer[List[Tuple[Int, Int]]]
+
+    def __init__(out self, path: String) raises:
+        self._inner = BufferSource(path)
+        self._arena = ArcPointer(List[Tuple[Int, Int]]())
+
+    def size(self) -> Int:
+        return self._inner.size()
+
+    def read_at(
+        ref self, offset: Int, length: Int
+    ) raises -> Span[UInt8, origin_of(self)]:
+        self._arena[].append((offset, length))
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._inner.read_at(offset, length)
+        )
+
+    def read_ranges(
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+    ) raises -> Fetched:
+        return self._inner.read_ranges(ranges, ctx)
+
+
+def _read_group(f: ParquetFile, rg: Int, selected: Bool) raises -> String:
+    """Row group `rg`, every row or every third, on a serial context. A
+    selection makes the read fetch the group's offset index."""
+    var groups: List[Int] = [rg]
+    if not selected:
+        return String(f.read(row_groups=groups^, ctx=ExecContext.serial()))
+    var keep = List[Bool](capacity=500)
+    for i in range(500):
+        keep.append(i % 3 == 0)
+    var selections: List[RowSelection] = [RowSelection(keep^)]
+    return String(
+        f.read(
+            row_groups=groups^,
+            row_selections=selections^,
+            ctx=ExecContext.serial(),
+        )
+    )
+
+
+def test_parquet_file_says_whether_it_needs_codec_libraries() raises:
+    """Snappy pages decode in Mojo, so a native read opens no library and a
+    read through the C codecs does."""
+    var batch = record_batch([array([1, 2, 3], int64)], names=["v"])
+    var table = Table.from_batches(batch.schema.copy(), [batch^])
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_needs_libs.parquet")
+        var w = FileWriter(FileSink(path), table.schema, Compression.SNAPPY)
+        w.write(table)
+        w.close()
+        assert_false(ParquetFile(path).needs_libs())
+        assert_true(ParquetFile(path, native_codecs=False).needs_libs())
+
+
+def test_parquet_read_one_file_from_many_threads() raises:
+    """Threads reading row groups of one open file at once, each on a serial
+    context, each get what a lone read gets. Snappy pages, decoded by every
+    thread at once."""
+    comptime GROUPS = 8
+    var b = StringBuilder(GROUPS * 500)
+    for i in range(GROUPS * 500):
+        b.append(String("value-", i % 37, "-", i))
+    var batch = record_batch([b.finish()], names=["s"])
+    var schema = batch.schema.copy()
+    var table = Table.from_batches(schema, [batch^])
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_concurrent_read.parquet")
+        var w = FileWriter(
+            FileSink(path), schema, Compression.SNAPPY, row_group_size=500
+        )
+        w.write(table)
+        w.close()
+        # The threads read first, so the file's first reads are concurrent,
+        # through a source whose `read_at` must stay on one thread.
+        var f = ParquetFile(_ArenaSource(path))
+        assert_equal(f.num_row_groups(), GROUPS)
+        # Item `i` reads group `i % GROUPS`, the second half with a selection.
+        var got = List[String](length=2 * GROUPS, fill="")
+
+        def read(wid: Int, i: Int) raises {mut got, imm f}:
+            got[i] = _read_group(f, i % GROUPS, i >= GROUPS)
+
+        ExecContext.parallel(GROUPS).fan_out(2 * GROUPS, read, GROUPS)
+        var alone = ParquetFile(path)
+        for i in range(2 * GROUPS):
+            assert_equal(got[i], _read_group(alone, i % GROUPS, i >= GROUPS))

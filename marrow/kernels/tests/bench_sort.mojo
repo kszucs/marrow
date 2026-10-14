@@ -103,6 +103,18 @@ def _bench_sort_float64(mut b: Benchmark, n: Int) raises:
     keep(data)
 
 
+def _bench_top10(mut b: Benchmark, var data: DynArray) raises:
+    """The ten smallest of `data`, in order: a limited sort."""
+    b.throughput(BenchMetric.elements, len(data))
+
+    @always_inline
+    def call() raises {imm}:
+        keep(SortIndices.dispatch(data.copy(), limit=10))
+
+    b.iter(call)
+    keep(data)
+
+
 # ---------------------------------------------------------------------------
 # Benchmark entry points
 # ---------------------------------------------------------------------------
@@ -270,3 +282,11 @@ def bench_sort_float64_4k_unstable(mut b: Benchmark) raises:
 
 def bench_sort_float64_16k_unstable(mut b: Benchmark) raises:
     _bench_unstable(b, _random_float64(16_000), 16_000)
+
+
+def bench_sort_indices_limit10_int64_1m(mut b: Benchmark) raises:
+    _bench_top10(b, _random_int64(1_000_000))
+
+
+def bench_sort_indices_limit10_float64_1m(mut b: Benchmark) raises:
+    _bench_top10(b, _random_float64(1_000_000))

@@ -20,15 +20,16 @@ A group-by is two phases:
    ``AggKernel`` (``aggregate.mojo``). The keyless case has no encoder at all:
    ``Groups.single``, an empty id array.
 
-**Parallelism lives in placement only, and that is the whole design.** The
-alternative — thread-local partial aggregation merged at the end — needs a
-``merge`` on every ``AggKernel``, and the merges are not uniform: ``mean``
-combines ``(sum, count)``, the variance family needs the Chan/Golub/LeVeque
-formula, and exact ``count_distinct`` has **no** correct merge, since two
-thread-local tables number the same value differently. Placing by the **top
-bits of the key hash** (``HashIndex`` in ``hashtable.mojo``) puts every row of
-a group in one partition and still hands out one dense numbering, so each
-aggregate sees each of its rows once, in one slot, and nothing is merged.
+**Placement is parallel.** Placing by the **top bits of the key hash**
+(``HashIndex`` in ``hashtable.mojo``) puts every row of a group in one
+partition and still hands out one dense numbering, so each aggregate sees each
+of its rows once, in one slot.
+
+**Aggregates over separate parts of an input combine.** Every ``AggKernel``
+exports its per-slot state as columns (``partials``) and folds another's back
+in (``combine``): ``mean`` as ``(sum, count)``, the variance family by Chan's
+formula, and exact ``count_distinct`` as each slot's distinct *values*, which
+two numberings of the same value agree on where their codes would not.
 """
 
 from ..arrays import Int32Array

@@ -7,8 +7,8 @@ Paired with `physical.mojo`, which holds what these become when they run, and
 with `optimizer.mojo`, which rewrites one plan into a simpler one.
 
 A `Relation` says *what* to compute. It owns nothing that runs, so a plan is
-freely copyable, shareable, inspectable and rewritable. `to_operator(ctx)` turns
-it into the physical operator that owns the running state.
+freely copyable, shareable, inspectable and rewritable. `lower(driver)` turns
+it into phases of physical operators that own the running state.
 
 **A variant for inspection, a trampoline for lowering.** `DynRelation` erases
 the thirteen node types behind a `Variant`, so `isa[R]()`/`get[R]()` let an
@@ -18,11 +18,11 @@ flags and eight scattered calls inside `to_operator` with no file to read.
 
 Lowering is the exception, and the reason is measured. `_dispatch` resolves the
 active member with a `comptime for` over every member, so anything routed
-through it is instantiated thirteen times; for `to_operator` that makes
-`Sort.to_operator` reach `kernels::sort` and `ParquetScan.to_operator` reach the
+through it is instantiated thirteen times; for lowering that makes
+`Sort.lower` reach `kernels::sort` and `ParquetScan.lower` reach the
 Parquet reader and `kernels::cast`, in plans containing neither. It cost
 **+348%** of `__text` on `query_streaming`, with `kernels::cast` going from 0 to
-694 symbols in the fused gates. So `to_operator` binds a per-type trampoline at
+694 symbols in the fused gates. So `lower` binds a per-type trampoline at
 construction and links only what a plan actually uses.
 
 This supersedes the rule that used to head this file — "nothing may name every
@@ -51,9 +51,10 @@ from ..errors import (
     TypeError,
 )
 from ..arrays import BoolArray, DynArray, StructArray
-from ..execution import ExecContext
+from ..execution import PARALLEL_ENABLED, ExecContext
 from ..kernels.join import (
     BUILD_LEFT,
+    BUILD_RIGHT,
     JOIN_ALL,
     JOIN_ANTI,
     JOIN_INNER,
@@ -97,6 +98,8 @@ from .optimizer import RuleSet, optimize
 from .`comptime`.leaves import StringParam
 from .physical import (
     CallEvaluator,
+    ColumnOperator,
+    FoldMode,
     Datum,
     EvalOperator,
     Evaluable,
@@ -104,28 +107,41 @@ from .physical import (
     AggregateLowering,
     GroupedAggregateOperator,
     UngroupedAggregateOperator,
-    BatchSourceOperator,
     DynOperator,
     LimitOperator,
     Pipeline,
     FilterOperator,
+    JoinBuild,
     JoinOperator,
     JoinOrder,
     FileScanOperator,
     IcebergScanOperator,
-    ParquetScanOperator,
     ProjectOperator,
     MultisetOperator,
     RenamedPredicate,
     SelectOperator,
     SortOperator,
-    UnionOperator,
     WindowOperator,
 )
 from ..formats.avro import AvroFormat
 from ..formats import Format
 from ..formats.ipc import IpcFormat
 from ..formats.json import JsonFormat
+from ..engine import (
+    Driver,
+    IpcSource,
+    OperatorSource,
+    RowGroupSource,
+    Phase,
+    PlanReport,
+    TableSource,
+    UnmatchedSource,
+    all_blocking,
+    append_each,
+    rows_bound,
+    rows_of,
+    runs_in_parallel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +363,11 @@ trait Value(Copyable, Deinitable, Writable):
         ...
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         """The stateful thing that runs this value.
 
@@ -360,7 +380,9 @@ trait Value(Copyable, Deinitable, Writable):
         construct `AggregateOperator[Fold[K, V], RuntimeValue, G]` outright.
         Every relation has its input's schema where it calls this.
 
-        `grouped` picks a fold's placement and is ignored by everything else.
+        `grouped` picks a fold's placement and `mode` what it answers — its
+        result, its partial state, or the combination of partial states it is
+        pushed — and both are ignored by everything else.
         `bindings` supplies this execution's parameter values — the operator
         carries them and hands them back down to `bind`, where a `NumericParam` reads
         them. That is why a plan holds no parameter state and two executions
@@ -487,7 +509,7 @@ struct DynValue(Copyable, Movable, Writable):
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
     var _write: def(ArcPointer[NoneType]) thin -> String
     var _to_operator: def(
-        ArcPointer[NoneType], Schema, Bool, Bindings
+        ArcPointer[NoneType], Schema, Bool, Bindings, FoldMode
     ) thin raises -> DynOperator
     var _mask: def(
         ArcPointer[NoneType], Index, Bindings
@@ -565,9 +587,10 @@ struct DynValue(Copyable, Movable, Writable):
         schema: Schema,
         grouped: Bool,
         bindings: Bindings,
+        mode: FoldMode,
     ) raises -> DynOperator:
         return rebind[ArcPointer[V]](ptr)[].to_operator(
-            schema, grouped, bindings
+            schema, grouped, bindings, mode
         )
 
     @staticmethod
@@ -692,7 +715,11 @@ struct DynValue(Copyable, Movable, Writable):
         return self._dtype(self._boxed, schema)
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         """The stateful thing that runs this value.
 
@@ -702,7 +729,7 @@ struct DynValue(Copyable, Movable, Writable):
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
-        return self._to_operator(self._boxed, schema, grouped, bindings)
+        return self._to_operator(self._boxed, schema, grouped, bindings, mode)
 
     def aggregates(self) -> Bool:
         """Whether the boxed value answers from `drain` rather than per batch.
@@ -930,7 +957,11 @@ struct Nothing(Absent):
         raise InternalError("an empty operand slot has no type")
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         raise InternalError("an empty operand slot cannot run")
 
@@ -984,7 +1015,11 @@ struct FieldRef(Evaluable, Value):
         return self._field.dtype.copy()
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         return EvalOperator(self.copy(), bindings.copy())
 
@@ -1183,7 +1218,11 @@ struct Over[F: WindowFunction](WindowValue):
         self._spec.references(into)
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         var rendered = String(self)
         raise InvalidError(
@@ -1259,12 +1298,10 @@ trait Relation(Copyable, Deinitable, Movable, Writable):
         """
         return Cost.unknown()
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        """The running operator for this description."""
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        """The phases that run this description on `driver`, in order."""
         ...
 
 
@@ -1281,9 +1318,9 @@ struct DynRelation(Copyable, Movable, Writable):
     `rebind[ArcPointer[NoneType]]` erasure forgot the destructor entirely.
 
     **Lowering is a trampoline**, and that split is the whole design. Resolving
-    `to_operator` through the variant's `comptime for` instantiates it for
-    *every* member, so `Sort.to_operator` reaches `kernels::sort` and
-    `ParquetScan.to_operator` reaches the Parquet reader and `kernels::cast` —
+    `lower` through the variant's `comptime for` instantiates it for
+    *every* member, so `Sort.lower` reaches `kernels::sort` and
+    `ParquetScan.lower` reaches the Parquet reader and `kernels::cast` —
     in a plan containing neither. Measured at **+348%** of `__text` on
     `query_streaming`, with `kernels::cast` going 0 -> 694 symbols in the fused
     gates. A trampoline binds the single type its caller constructed, so a
@@ -1322,30 +1359,30 @@ struct DynRelation(Copyable, Movable, Writable):
 
     var _v: Self.VariantType
 
-    var _virt_to_operator: def(
-        Self.VariantType, ExecContext, Bindings
-    ) thin raises -> Pipeline
+    var _virt_lower: def(
+        Self.VariantType, mut Driver, Bindings
+    ) thin raises -> List[Phase]
     """Lowering, wired per **constructed** node type. See the struct docstring
     for the 348% this one slot is worth."""
 
     @staticmethod
-    def _to_operator_tramp[
+    def _lower_tramp[
         R: Relation
     ](
         v: Self.VariantType,
-        ctx: ExecContext,
+        mut driver: Driver,
         bindings: Bindings,
-    ) raises -> Pipeline:
-        return v[R].to_operator(ctx, bindings)
+    ) raises -> List[Phase]:
+        return v[R].lower(driver, bindings)
 
     @implicit
     def __init__[R: Relation](out self, var value: R):
         self._v = Self.VariantType(value^)
-        self._virt_to_operator = Self._to_operator_tramp[R]
+        self._virt_lower = Self._lower_tramp[R]
 
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
-        self._virt_to_operator = copy._virt_to_operator
+        self._virt_lower = copy._virt_lower
 
     def isa[R: Relation](self) -> Bool:
         """Is this node an `R`? The question every rule opens with."""
@@ -1360,7 +1397,7 @@ struct DynRelation(Copyable, Movable, Writable):
     ](self, func: Func) raises -> R:
         """Run `func` on the active member, narrowed to `Relation`.
 
-        Instantiates `func` once per member, which is why `to_operator` does
+        Instantiates `func` once per member, which is why `lower` does
         **not** come through here. Written out rather than routed through a
         shared helper, for the reason `DynArray._dispatch` records: a narrowing
         closure between caller and ladder is inlined into every arm of every
@@ -1472,12 +1509,13 @@ struct DynRelation(Copyable, Movable, Writable):
 
         return self._dispatch(job)
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        return self._virt_to_operator(self._v, ctx, bindings)
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        # The node's estimate is taken here, where the node is already boxed:
+        # boxing a node inside its own lowering wires that lowering again.
+        driver.entering(self)
+        return self._virt_lower(self._v, driver, bindings)
 
     def write_to[W: Writer](self, mut writer: W):
         def job[T: Relation](node: T) raises {imm} -> String:
@@ -1858,11 +1896,40 @@ struct DynRelation(Copyable, Movable, Writable):
         ctx: ExecContext = ExecContext.auto(),
         bindings: Bindings = Bindings(),
     ) raises -> RecordBatch:
-        """Run this plan and drain it into one batch."""
-        var p = self.to_operator(ctx, bindings)
-        # The shim: operators work in struct arrays, the public API hands back
-        # a batch. Cheap — children move, schema comes off the struct dtype.
-        return RecordBatch.from_struct_array(p.collect(self.schema()))
+        """Run this plan and drain it into one batch, its phases on as many
+        workers as `ctx` has threads."""
+        var driver = Driver.dynamic(ctx)
+        var phases = self.lower(driver, bindings)
+        # Operators work in struct arrays, the public API hands back a batch.
+        # Cheap: children move, schema comes off the struct dtype.
+        return RecordBatch.from_struct_array(
+            driver.collect(phases^, self.schema())
+        )
+
+    def explain[
+        analyze: Bool = False, estimates: Bool = True
+    ](
+        self,
+        ctx: ExecContext = ExecContext.auto(),
+        bindings: Bindings = Bindings(),
+        trace: Bool = False,
+    ) raises -> PlanReport:
+        """The phases that would run this plan, in the order they would run,
+        without reading a row. With `analyze`, the plan runs, and the report
+        shows what each phase, stage and worker did and how long it took.
+
+        Where a dry run leaves a barrier unfilled, the report shows the
+        input's estimated rows; `estimates=False` leaves them unknown and the
+        optimizer's estimates unlinked. Both are comptime, so a binary links
+        only the inspection it asks for. With `analyze` and `trace`, the report
+        also holds every stage call and morsel read as a timeline slice, for
+        `PlanReport.to_trace_json`."""
+        comptime if analyze:
+            var driver = Driver.analyze[estimates](ctx, trace=trace)
+            return driver.inspect(self, bindings)
+        else:
+            var driver = Driver.explain[estimates](ctx)
+            return driver.inspect(self, bindings)
 
 
 struct EmptyRelation(Relation, Writable):
@@ -1875,17 +1942,17 @@ struct EmptyRelation(Relation, Writable):
     also keeps the schema, so everything above it still type-checks and still
     reports the right columns for an empty result.
 
-    Its operator emits nothing and reports `done` immediately, which is what
-    lets a `LIMIT 0` stop a scan before it reads a byte.
+    It reads nothing, which is what lets a `LIMIT 0` rewritten into one skip
+    its scan entirely.
     """
 
     var batch: RecordBatch
     """A zero-row batch of the right schema.
 
     Holding a batch rather than a bare `Schema` means this reuses
-    `BatchSourceOperator` unchanged instead of introducing a second kind of
-    source that yields nothing — one fewer operator, and the empty case travels
-    exactly the code path the non-empty one does."""
+    `TableSource` unchanged instead of introducing a second kind of source
+    that yields nothing, and the empty case travels exactly the code path the
+    non-empty one does."""
 
     def __init__(out self, var batch: RecordBatch):
         self.batch = batch^
@@ -1906,12 +1973,15 @@ struct EmptyRelation(Relation, Writable):
         what lets a `LIMIT 0` stop a scan before it reads a byte."""
         return Cost()
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        return Pipeline(BatchSourceOperator(self.batch.to_struct_array()))
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        return [
+            Phase(
+                TableSource.of([self.batch.to_struct_array()]),
+                driver.ctx.copy(),
+            )
+        ]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Empty(", len(self.batch.schema), " cols)")
@@ -1983,13 +2053,18 @@ struct InMemoryTable(Relation, Writable):
         var estimate = self.estimate()
         return Cost.source(estimate.size())
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        """The one relation that *creates* a pipeline; every other appends."""
-        return Pipeline(BatchSourceOperator(self.batch.to_struct_array()))
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        """A source relation: every other node appends to, or runs, the
+        phases below it."""
+        return [
+            driver.phase(
+                TableSource.sliced(
+                    self.batch.to_struct_array(), driver.morsel_rows
+                )
+            )
+        ]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("InMemoryTable(", self.batch.num_rows(), " rows)")
@@ -2141,21 +2216,19 @@ struct Filter(Relation, Writable):
         """
         return self.input[].cost() + Cost.per_row(self.input[].estimate().rows)
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(ctx, bindings)
-        pipe.append(
-            FilterOperator(
-                self.predicate.to_operator(
-                    self.input[].schema(), False, bindings
-                ),
-                ctx.copy(),
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var phases = self.input[].lower(driver, bindings)
+        var schema = self.input[].schema()
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            return FilterOperator(
+                self.predicate.to_operator(schema, False, bindings), ctx.copy()
             )
-        )
-        return pipe^
+
+        append_each(phases, make, String("Filter(", self.predicate, ")"))
+        return phases^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Filter(", self.input[], ", ", self.predicate, ")")
@@ -2309,17 +2382,24 @@ struct Project(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(ctx, bindings)
-        var values = List[DynOperator](capacity=len(self.values))
-        for ref v in self.values:
-            values.append(v.to_operator(self.input[].schema(), False, bindings))
-        pipe.append(ProjectOperator(values^, self._schema.copy()))
-        return pipe^
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var phases = self.input[].lower(driver, bindings)
+        var schema = self.input[].schema()
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            var values = List[DynOperator](capacity=len(self.values))
+            for ref v in self.values:
+                values.append(v.to_operator(schema, False, bindings))
+            return ProjectOperator(values^, self._schema.copy())
+
+        append_each(
+            phases,
+            make,
+            String("Project(", String(", ").join(self._schema.names()), ")"),
+        )
+        return phases^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Project(", self.input[], ", ")
@@ -2491,23 +2571,100 @@ struct Aggregate(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        # Before the input lowers, which enters in turn.
+        var rows = driver.entered()
+        var phases = self.input[].lower(driver, bindings)
+        comptime if PARALLEL_ENABLED:
+            if runs_in_parallel(phases):
+                # Every worker folds what it reads into partial states; the
+                # states of one group, wherever they were folded, then meet
+                # in one morsel and are combined there.
+                for i in range(len(phases)):
+                    self._append(
+                        phases[i],
+                        FoldMode.partial(),
+                        bindings,
+                        self._label("partial"),
+                    )
+                var num_keys = len(self.keys)
+                var phase = driver.exchange(
+                    phases^, num_keys, "aggregate", rows
+                )
+                # The partial stage put the keys first, then one column of
+                # states per aggregate.
+                self._append(
+                    phase,
+                    FoldMode.combine(num_keys),
+                    bindings,
+                    self._label("combine"),
+                )
+                return [phase^]
+        var phase = driver.barrier(phases^, "aggregate input", self.input[])
+        self._append(phase, FoldMode.final(), bindings, self._label(""))
+        return [phase^]
+
+    def _append(
         self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        var grouped = len(self.keys) > 0
-        var folds = List[DynOperator](capacity=len(self.aggs))
-        for ref a in self.aggs:
-            folds.append(
-                a.to_operator(self.input[].schema(), grouped, bindings)
+        mut phase: Phase,
+        mode: FoldMode,
+        bindings: Bindings,
+        label: String,
+    ) raises:
+        """This aggregate's stage on every worker of `phase`. Combining reads
+        the keys by position and aggregate `i`'s states at `mode.column + i`.
+        """
+        var schema = self.input[].schema()
+        var num_keys = len(self.keys)
+        var grouped = num_keys > 0
+        for w in range(phase.workers()):
+            var folds = List[DynOperator](capacity=len(self.aggs))
+            for i in range(len(self.aggs)):
+                var fold_mode = mode
+                if mode.is_combine():
+                    fold_mode = FoldMode.combine(mode.column + i)
+                folds.append(
+                    self.aggs[i].to_operator(
+                        schema, grouped, bindings, fold_mode
+                    )
+                )
+            var keys = List[DynOperator](capacity=num_keys)
+            for i in range(num_keys):
+                if mode.is_combine():
+                    keys.append(ColumnOperator(i))
+                else:
+                    keys.append(
+                        self.keys[i].to_operator(schema, False, bindings)
+                    )
+            self._lowering(
+                phase.pipelines[w],
+                keys^,
+                folds^,
+                self._schema.copy(),
+                phase.ctx.copy(),
+                mode.is_partial(),
             )
-        var pipe = self.input[].to_operator(ctx, bindings)
-        var keys = List[DynOperator](capacity=len(self.keys))
-        for ref k in self.keys:
-            keys.append(k.to_operator(self.input[].schema(), False, bindings))
-        self._lowering(pipe, keys^, folds^, self._schema.copy(), ctx.copy())
-        return pipe^
+        phase.stages.append(label)
+        phase.blocking = True
+
+    def _label(self, mode: String) -> String:
+        """This aggregate's stage, for a plan report: `mode`, the aggregates
+        and the keys."""
+        var out = String("Aggregate(")
+        if mode:
+            out += mode + ": "
+        for i in range(len(self.aggs)):
+            out += String(", " if i > 0 else "", self.aggs[i])
+            var name = self.aggs[i].name()
+            if name:
+                out += " as " + name
+        if len(self.keys) > 0:
+            out += " by "
+            for i in range(len(self.keys)):
+                out += String(", " if i > 0 else "", self.keys[i])
+        return out + ")"
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Aggregate(", self.input[])
@@ -2560,14 +2717,40 @@ struct Limit(Relation, Writable):
         """
         return self.input[].cost() + Cost.per_row(self.estimate().rows)
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(ctx, bindings)
-        pipe.append(LimitOperator(self.offset, self.length))
-        return pipe^
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        # Each worker reads morsels in order, so the first rows of the whole
+        # are among the first `offset + length` each worker reads: a worker
+        # keeps those and reads no further.
+        var keep = (
+            self.offset + self.length if self.length
+            <= Int.MAX - self.offset else Int.MAX
+        )
+
+        def prefix(ctx: ExecContext) raises {imm} -> DynOperator:
+            return LimitOperator(0, keep)
+
+        # A worker that stops at its prefix stops probing, so a join below
+        # it owes a tail built from incomplete marks — wrong rows, but every
+        # one of them past the cut: at least `offset + length` probe rows
+        # precede the tail in morsel order.
+        var phase = driver.barrier(
+            self.input[].lower(driver, bindings),
+            "limit input",
+            self.input[],
+            prefix,
+            String("Limit(first ", keep, " per worker)"),
+        )
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            return LimitOperator(self.offset, self.length)
+
+        phase.append_each(
+            make,
+            String("Limit(offset=", self.offset, ", length=", self.length, ")"),
+        )
+        return [phase^]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -2674,31 +2857,68 @@ struct Sort(Relation, Writable):
         var input = self.input[].estimate()
         return self.input[].cost() + Cost.sort(input.size())
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(ctx, bindings)
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var phases = self.input[].lower(driver, bindings)
 
         # The key operators are built **once**, here, where the plan becomes
         # physical -- not per batch. Anything a key needs to resolve or cache
         # before the first row arrives has a place to live now.
         var input_schema = self.input[].schema()
-        var keys = List[DynOperator](capacity=len(self.keys))
-        for ref k in self.keys:
-            keys.append(k.to_operator(input_schema, False, bindings))
 
-        pipe.append(
-            SortOperator(
-                keys^,
+        def keys() raises {imm} -> List[DynOperator]:
+            var out = List[DynOperator](capacity=len(self.keys))
+            for ref k in self.keys:
+                out.append(k.to_operator(input_schema, False, bindings))
+            return out^
+
+        var phase: Phase
+        if self.limit:
+            # The first rows of the whole are among the first of the morsels
+            # holding them: each morsel is cut to its own first rows, in
+            # morsel order, and the cut ones sorted again.
+            def top(ctx: ExecContext) raises {imm} -> DynOperator:
+                return SortOperator(
+                    keys(),
+                    self.ascending.copy(),
+                    self.nulls_first,
+                    self.limit,
+                    ctx.copy(),
+                    per_morsel=True,
+                )
+
+            phase = driver.barrier(
+                phases^,
+                "sort input",
+                self.input[],
+                top,
+                String("TopN(", self.limit.value(), " per morsel)"),
+            )
+        else:
+            phase = driver.barrier(phases^, "sort input", self.input[])
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            return SortOperator(
+                keys(),
                 self.ascending.copy(),
                 self.nulls_first,
                 self.limit,
                 ctx.copy(),
             )
-        )
-        return pipe^
+
+        var label = String("Sort(")
+        for i in range(len(self.keys)):
+            label += String(
+                ", " if i > 0 else "",
+                self.keys[i],
+                " asc" if self.ascending[i] else " desc",
+            )
+        if self.limit:
+            label += String(", top ", self.limit.value())
+        phase.append_each(make, label + ")")
+        phase.blocking = True
+        return [phase^]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Sort(", self.input[])
@@ -2817,11 +3037,9 @@ struct Window(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
         # **No predicate may reach a scan through this node.** A window
         # function reads its whole partition, so pruning row groups below it
         # would have every rank, row number and running total computed over the
@@ -2831,17 +3049,25 @@ struct Window(Relation, Writable):
         # `PushFilterIntoScan` is the only way a predicate reaches a scan, and
         # it descends through `Filter` alone. `Window` is not a `Filter`, so a
         # predicate above one cannot pass. `test_window.mojo` pins it.
-        var pipe = self.input[].to_operator(ctx, bindings)
-        pipe.append(
-            WindowOperator(
+        var phase = driver.barrier(
+            self.input[].lower(driver, bindings), "window input", self.input[]
+        )
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            return WindowOperator(
                 self.values.copy(),
                 self.input[].schema(),
                 self._schema.copy(),
                 bindings.copy(),
                 ctx.copy(),
             )
-        )
-        return pipe^
+
+        var label = String("Window(")
+        for i in range(len(self.values)):
+            label += String(", " if i > 0 else "", self.values[i])
+        phase.append_each(make, label + ")")
+        phase.blocking = True
+        return [phase^]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Window(", self.input[])
@@ -2898,10 +3124,14 @@ struct JoinLink(Copyable, Equatable, Movable, Writable):
     `0 … k`, for the chain's `k`-th link.
 
     `left_keys` read columns of the participants before it, `right_keys`
-    columns of its own. The build side is a hint the planner may overrule —
-    except under `JOIN_ANY`, which keeps one match per *probe* row and so
-    answers differently built from the other side. Which match it keeps is
-    unspecified.
+    columns of its own. The build side is a hint the planner may overrule,
+    and so may the engine: once it has run the side written to be built, it
+    builds the other instead when that side has at most half as many rows,
+    as far as it can tell without running it — a side that grows rows, such
+    as a join's output, is never swapped in. `explain` runs nothing, so it
+    shows the hint. Under `JOIN_ANY`, which keeps one match per *probe* row
+    and so answers differently built from the other side, the hint holds.
+    Which match it keeps is unspecified.
     """
 
     var kind: JoinKind
@@ -2951,6 +3181,11 @@ struct JoinLink(Copyable, Equatable, Movable, Writable):
         `(A ⋈ C) ⟕ B` when `C`'s keys do not read `B`.
         """
         return self.passes(True) and not self.passes(False)
+
+    def swappable(self) -> Bool:
+        """May the side built change without changing the answer? Not under
+        `JOIN_ANY`, which keeps one match per probe row."""
+        return self.strictness == JOIN_ALL and self.kind.commutes()
 
     def passes(self, left: Bool) -> Bool:
         """May a filter over the left side — or the right, when `left` is
@@ -3469,9 +3704,7 @@ struct JoinPricing(Movable):
     def join(mut self, a: Set[Int], b: Set[Int], link: JoinLink) raises -> Cost:
         """Joining `a` to `b` by `link`, hashing its build side, and
         evaluating the filters it is the first to hold over its rows."""
-        var cost = Cost.hash_join(
-            self.size(a), self.size(b), link.build_side, link.kind
-        )
+        var cost = Cost.hash_join(self.size(a), self.size(b), link.build_side)
         var s = a | b
         for ref f in self.filters:
             if (
@@ -3901,13 +4134,11 @@ struct JoinChain(Relation, Writable):
         or left-deep in link order."""
         return self._order[].copy()
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        """The planned tree, bottom-up: each participant's pipeline and each
-        join's `JoinOperator` — probe side the pipeline, build side a stage —
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        """The planned tree, bottom-up: each participant's phases and each
+        join's `JoinOperator` over its probe side, its build side run first,
         with the filters landing on it after it, and at the root the chain's
         output picked by position."""
         ref order = self._order[]
@@ -3918,7 +4149,7 @@ struct JoinChain(Relation, Writable):
             for ref f in self.filters:
                 landings.append(order.landing(held, rules, f))
         var cols = List[JoinRef]()
-        return self._lower(order.root(), landings, ctx, bindings, cols)
+        return self._lower(order.root(), landings, driver, bindings, cols)
 
     def _fields(self, cols: List[JoinRef]) raises -> Schema:
         """The participants' own fields behind `cols`, as they are: names may
@@ -3946,57 +4177,52 @@ struct JoinChain(Relation, Writable):
             out.append(at)
         return out^
 
-    def _stages(
+    def _land(
         self,
+        mut phases: List[Phase],
         node: Int,
         cols: List[JoinRef],
         landings: List[Int],
-        ctx: ExecContext,
         bindings: Bindings,
-    ) raises -> List[DynOperator]:
-        """The filters landing on `node`, in chain order, each reading its
-        columns at their positions in `cols`."""
-        var out = List[DynOperator]()
+    ) raises:
+        """The filters landing on `node`, in chain order, on every worker of
+        `phases`, each reading its columns at their positions in `cols`."""
         for i in range(len(self.filters)):
             if landings[i] == node:
                 ref f = self.filters[i]
-                out.append(
-                    f.stage(
-                        self._fields(f.refs).fields,
-                        Self._positions(cols, f.refs),
-                        ctx,
-                        bindings,
-                    )
-                )
-        return out^
+                var fields = self._fields(f.refs).fields.copy()
+                var at = Self._positions(cols, f.refs)
+
+                def make(ctx: ExecContext) raises {imm} -> DynOperator:
+                    return f.stage(fields, at, ctx, bindings)
+
+                append_each(phases, make, String("Filter(", f.predicate, ")"))
 
     def _lower(
         self,
         node: Int,
         landings: List[Int],
-        ctx: ExecContext,
+        mut driver: Driver,
         bindings: Bindings,
         mut cols: List[JoinRef],
-    ) raises -> Pipeline:
-        """`node` of the planned tree as a pipeline, and in `cols` the
+    ) raises -> List[Phase]:
+        """`node` of the planned tree as phases, and in `cols` the
         participant column each of its output positions holds — the chain's
         own output at the root."""
         ref order = self._order[]
         if not order.is_join(node):
-            var pipe = self.inputs[node][].to_operator(ctx, bindings)
+            var phases = self.inputs[node][].lower(driver, bindings)
             cols = List[JoinRef]()
             for ref f in self.inputs[node][].schema().fields:
                 cols.append(JoinRef(node, f.name.copy()))
-            var stages = self._stages(node, cols, landings, ctx, bindings)
-            while len(stages) > 0:
-                pipe.append(stages.pop(0))
-            return pipe^
+            self._land(phases, node, cols, landings, bindings)
+            return phases^
 
         ref j = order.join(node)
         var lcols = List[JoinRef]()
         var rcols = List[JoinRef]()
-        var left = self._lower(j.left, landings, ctx, bindings, lcols)
-        var right = self._lower(j.right, landings, ctx, bindings, rcols)
+        var left = self._lower(j.left, landings, driver, bindings, lcols)
+        var right = self._lower(j.right, landings, driver, bindings, rcols)
         var left_on = Self._positions(lcols, j.link.left_keys)
         var right_on = Self._positions(rcols, j.link.right_keys)
         cols = List[JoinRef]()
@@ -4005,7 +4231,9 @@ struct JoinChain(Relation, Writable):
         if j.link.kind.emits_right_columns():
             cols.extend(rcols.copy())
         var joined = self._fields(cols)
-        var stages = self._stages(node, cols, landings, ctx, bindings)
+        # What this join emits, by position: the columns its filters read.
+        var emitted = cols.copy()
+        var landed = node in landings
 
         # The root answers with the chain's output, picked by position: in
         # the join, or after the filters landing on it, which may read a
@@ -4014,7 +4242,7 @@ struct JoinChain(Relation, Writable):
         var pick = Self._positions(cols, self.refs) if root else List[Int]()
         var select: List[Int]
         var output: Schema
-        if root and len(stages) == 0:
+        if root and not landed:
             select = pick.copy()
             output = self.schema()
         else:
@@ -4025,50 +4253,109 @@ struct JoinChain(Relation, Writable):
         if root:
             cols = self.refs.copy()
 
-        # Two arrangements, spelled out: picking the roles into locals and
-        # building one `JoinOperator` measured +3,840 bytes on `query_join`.
-        var pipe: Pipeline
-        if j.link.build_side == BUILD_LEFT:
-            right.append(
-                JoinOperator(
-                    left^,
-                    left_on^,
-                    right_on^,
-                    j.link.kind,
-                    j.link.strictness,
-                    j.link.build_side,
-                    joined^,
-                    self._fields(lcols),
-                    self._fields(rcols),
-                    select^,
-                    output^,
-                    ctx.copy(),
-                )
+        # The build side runs first, to completion; its batches are what each
+        # probe pipeline's `JoinOperator` indexes. The roles are picked into
+        # locals so one `JoinOperator` construction serves both arrangements.
+        # From here `left` is the side built and `right` the side probed.
+        if j.link.build_side != BUILD_LEFT:
+            swap(left, right)
+            swap(left_on, right_on)
+            swap(lcols, rcols)
+        var side = j.link.build_side
+        var build = driver.run(left^, "join build")
+        var built = driver.last()
+        # The written side is a hint: a join whose answer does not depend on
+        # the side built builds the side with at most half the rows, once it
+        # knows both. A blocking probe side runs first, which costs nothing,
+        # as it emits only when drained; any other is bounded by its source's
+        # rows.
+        var build_rows = rows_of(build)
+        var flip = False
+        if build_rows > 0 and j.link.swappable():
+            if all_blocking(right):
+                var probed = driver.run(right^, "join input")
+                var probed_from = driver.last()
+                flip = 2 * rows_of(probed) < build_rows
+                if flip:
+                    right = [driver.materialised(build^, built^)]
+                    build = probed^
+                    built = probed_from^
+                else:
+                    right = [driver.materialised(probed^, probed_from^)]
+            else:
+                var bound = rows_bound(right)
+                flip = bound >= 0 and 2 * bound < build_rows
+                if flip:
+                    var flipped = driver.run(right^, "join build")
+                    right = [driver.materialised(build^, built^)]
+                    build = flipped^
+                    built = driver.last()
+        if flip:
+            swap(left_on, right_on)
+            swap(lcols, rcols)
+            side = BUILD_RIGHT if side == BUILD_LEFT else BUILD_LEFT
+        var build_fields = self._fields(lcols)
+        var probe_fields = self._fields(rcols)
+        var since = driver.clock()
+        var shared = ArcPointer(
+            JoinBuild(
+                build^,
+                left_on,
+                right_on^,
+                j.link.kind,
+                j.link.strictness,
+                side,
+                joined^,
+                build_fields^,
+                probe_fields^,
+                select^,
+                output^,
+                driver.ctx,
             )
-            pipe = right^
-        else:
-            left.append(
-                JoinOperator(
-                    right^,
-                    right_on^,
-                    left_on^,
-                    j.link.kind,
-                    j.link.strictness,
-                    j.link.build_side,
-                    joined^,
-                    self._fields(rcols),
-                    self._fields(lcols),
-                    select^,
-                    output^,
-                    ctx.copy(),
-                )
+        )
+        driver.span(String("hash build for Join(", j.link.kind, ")"), since)
+
+        # Every worker probes the one index, with marks of its own; the build
+        # rows the probes owe follow in a phase of their own, once every probe
+        # phase has run.
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            return JoinOperator(shared, shared[].probe_matches(), ctx.copy())
+
+        var phases = right^
+        append_each(
+            phases,
+            make,
+            String(
+                "Join(",
+                j.link.kind,
+                ", built on the ",
+                "left" if side == BUILD_LEFT else "right",
+                ")",
+            ),
+        )
+        for p in range(len(phases)):
+            phases[p].inputs.extend(built.copy())
+            # A probe may answer several rows for one it is pushed.
+            phases[p].grows = True
+        if shared[].owes_rows():
+            var tail = Phase(
+                UnmatchedSource(shared), driver.ctx.copy(), why="one morsel"
             )
-            pipe = left^
-        if len(stages) > 0 and root:
-            stages.append(self.filters[0].selection(pick, self.schema()))
-        while len(stages) > 0:
-            pipe.append(stages.pop(0))
-        return pipe^
+            tail.follows = len(phases)
+            phases.append(tail^)
+        self._land(phases, node, emitted, landings, bindings)
+        if landed and root:
+            var out = self.schema()
+
+            def pick_output(ctx: ExecContext) raises {imm} -> DynOperator:
+                return self.filters[0].selection(pick, out)
+
+            append_each(
+                phases,
+                pick_output,
+                String("Select(", String(", ").join(out.names()), ")"),
+            )
+        return phases^
 
     # -- rendering -----------------------------------------------------------
     def write_to[W: Writer](self, mut writer: W):
@@ -4166,20 +4453,26 @@ struct Union(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        """The left side is the pipeline and the right side a stage in it,
-        the arrangement `Join` uses for its build side."""
-        var pipe = self.left[].to_operator(ctx, bindings)
-        pipe.append(
-            UnionOperator(
-                self.right[].to_operator(ctx, bindings), self._schema.copy()
-            )
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        """The left side's phases, then the right side's, each relabelled to
+        this node's schema."""
+        var phases = self.left[].lower(driver, bindings)
+        phases.extend(self.right[].lower(driver, bindings))
+        var positions = List[Int](capacity=len(self._schema.fields))
+        for i in range(len(self._schema.fields)):
+            positions.append(i)
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            return SelectOperator(positions.copy(), self._schema.copy())
+
+        append_each(
+            phases,
+            make,
+            String("Relabel(", String(", ").join(self._schema.names()), ")"),
         )
-        return pipe^
+        return phases^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Union(", self.left[], ", ", self.right[], ")")
@@ -4277,21 +4570,29 @@ struct Multiset[M: Multiplicity](Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        var pipe = self.left[].to_operator(ctx, bindings)
-        pipe.append(
-            MultisetOperator[Self.M](
-                self.right[].to_operator(ctx, bindings),
-                self.all,
-                self._schema.copy(),
-                ctx.copy(),
-            )
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        # The right side is counted only once the left side is spent, so it
+        # runs first and its rows wait as a batch.
+        var right = driver.run(
+            self.right[].lower(driver, bindings), "set operand"
         )
-        return pipe^
+        var phase = driver.barrier(
+            self.left[].lower(driver, bindings), "set operand", self.left[]
+        )
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            return MultisetOperator[Self.M](
+                right.copy(), self.all, self._schema.copy(), ctx.copy()
+            )
+
+        phase.append_each(
+            make,
+            String(Self.M.name(), "(all)" if self.all else ""),
+        )
+        phase.blocking = True
+        return [phase^]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.M.name(), "(", self.left[], ", ", self.right[])
@@ -4508,28 +4809,27 @@ struct ParquetScan(FileScan, Writable):
         **Pruning is not subtracted**, though it is the whole reason the
         pruners are on this node: which row groups survive depends on this
         execution's `Bindings`, which a plan does not have — `param` is
-        resolved per run, and `ParquetScanOperator.drain` builds the read plan
-        with the values it was given. A cost that guessed at it would be a
+        resolved per run, and `RowGroupSource` builds the read plan with the
+        values it was given. A cost that guessed at it would be a
         different number for the same plan on every run.
         """
         var estimate = self.estimate()
         return Cost.source(estimate.size())
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        return Pipeline(
-            ParquetScanOperator(
-                self.path.resolve(bindings),
-                self._schema.copy(),
-                ctx.copy(),
-                self.pruners.copy(),
-                bindings.copy(),
-                self.path.options(),
-            )
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var since = driver.clock()
+        var source = RowGroupSource(
+            self.path.resolve(bindings),
+            self._schema,
+            self.pruners,
+            bindings,
+            driver.ctx,
+            self.path.options(),
         )
+        driver.span("read Parquet footers and prune", since)
+        return [driver.phase(source^)]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("ParquetScan(", self.path, ")")
@@ -4584,18 +4884,15 @@ struct FormatScan[Fmt: Format](FileScan, Writable):
         var estimate = self.estimate()
         return Cost.source(estimate.size())
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
-        return Pipeline(
-            FileScanOperator[Self.Fmt](
-                self.path.resolve(bindings),
-                self._schema.copy(),
-                self.path.options(),
-            )
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var paths = self.path.resolve(bindings)
+        var name = String(Self.Fmt.name(), "Scan(", self.path, ")")
+        var scan = FileScanOperator[Self.Fmt](
+            paths^, self._schema.copy(), self.path.options()
         )
+        return [driver.phase(OperatorSource(scan^, name^))]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.Fmt.name(), "Scan(", self.path, ")")
@@ -4676,22 +4973,19 @@ struct IcebergScan(FileScan, Writable):
         var estimate = self.estimate()
         return Cost.source(estimate.size())
 
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-    ) raises -> Pipeline:
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
         ref s = self._source[]
-        return Pipeline(
-            IcebergScanOperator(
-                s.table.copy(),
-                s.snapshot_id,
-                s.schema.copy(),
-                ctx.copy(),
-                s.pruners.copy(),
-                bindings.copy(),
-            )
+        var scan = IcebergScanOperator(
+            s.table.copy(),
+            s.snapshot_id,
+            s.schema.copy(),
+            driver.ctx.copy(),
+            s.pruners.copy(),
+            bindings.copy(),
         )
+        return [driver.phase(OperatorSource(scan^, String("IcebergScan")))]
 
     def write_to[W: Writer](self, mut writer: W):
         ref s = self._source[]

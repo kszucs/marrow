@@ -120,6 +120,88 @@ fits in L1 per thread; wider passes would thrash the 512 KB L2 shared cache.
 """
 
 
+comptime _SELECT_FRACTION = 16
+"""A limit selects its rows rather than sorting all of them when it keeps at
+most one row in this many."""
+
+
+@no_inline
+def _kth_smallest(
+    keys: Buffer[mut=True], n: Int, k: Int, bits: Int
+) -> Tuple[UInt64, Int]:
+    """The `k`-th smallest of the `n` `keys`, from 0, and how many keys
+    equal to it come before it: an MSD radix select from bit `bits` down,
+    narrowing to the bucket holding it, `_BITS_PER_PASS` bits at a time.
+    The bits above `bits` are alike in every key, so they decide nothing."""
+    comptime bucket_count = 1 << _BITS_PER_PASS
+    var kv = keys.view[DType.uint64](0, n)
+    var candidates = List[UInt64]()
+    var narrowed = False
+    var size = n
+    var rank = k
+    var shift = bits
+    while shift > 0 and size > 1:
+        var width = min(_BITS_PER_PASS, shift)
+        shift -= width
+        var mask = UInt64((1 << width) - 1)
+        var counts = List[Int](length=bucket_count, fill=0)
+        if narrowed:
+            for v in candidates:
+                counts[Int((v >> UInt64(shift)) & mask)] += 1
+        else:
+            for i in range(n):
+                counts[Int((kv.unsafe_get(i) >> UInt64(shift)) & mask)] += 1
+        var b = 0
+        while rank >= counts[b]:
+            rank -= counts[b]
+            b += 1
+        # Every candidate in one bucket: these bits decide nothing.
+        if counts[b] < size:
+            var kept = List[UInt64](capacity=counts[b])
+            if narrowed:
+                for v in candidates:
+                    if Int((v >> UInt64(shift)) & mask) == b:
+                        kept.append(v)
+            else:
+                for i in range(n):
+                    var v = kv.unsafe_get(i)
+                    if Int((v >> UInt64(shift)) & mask) == b:
+                        kept.append(v)
+            candidates = kept^
+            narrowed = True
+            size = counts[b]
+    var t = candidates[rank] if narrowed else kv.unsafe_get(0)
+    return (t, rank)
+
+
+@no_inline
+def _first_rows(
+    var keys: Buffer[mut=True],
+    var rows: Buffer[mut=True],
+    n: Int,
+    k: Int,
+    bits: Int,
+) -> Buffer[]:
+    """The first `k` of `n` rows ordered by their `keys`, ties in row order,
+    for `k` of at least 1: the rows of the `k` smallest keys are selected,
+    then only they are sorted."""
+    var kv = keys.view[DType.uint64](0, n)
+    var rv = rows.view[DType.int32](0, n)
+    var found = _kth_smallest(keys, n, k - 1, bits)
+    var t = found[0]
+    # The `k`-th smallest has `found[1]` equal keys before it, so `k` rows
+    # take that many and one more of them.
+    var ties = found[1] + 1
+    var picked = List[Scalar[KeySort[64].Composite]](capacity=k)
+    for i in range(n):
+        var key = kv.unsafe_get(i)
+        if key < t or (key == t and ties > 0):
+            if key == t:
+                ties -= 1
+            picked.append(KeySort[64].pack(key, rv.unsafe_get(i)))
+    return KeySort[64].packed(picked, Buffer.alloc_uninit[DType.int32](k))
+
+
 # ---------------------------------------------------------------------------
 # KeySort — rows ordered by their encoded keys, independent of the dtype
 # ---------------------------------------------------------------------------
@@ -262,8 +344,8 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             ascending: Sort direction. ``True`` = smallest first.
             nulls_first: Where to place null elements in the output.
             limit: If set, return only the first ``limit`` indices (top-K).
-                Phase 1: implemented as full sort + truncation. Phase 3 will
-                add O(N) quickselect.
+                A small limit over a fixed-width column selects its rows
+                rather than sorting every one.
             ctx: Execution context — controls CPU thread count and GPU device.
 
         Returns:
@@ -305,7 +387,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             # three more spellings of this one call.
             def primitive[T: PrimitiveType](d: T) raises {imm} -> Int32Array:
                 return Self.apply(
-                    array.as_primitive[T](), ascending, nulls_first, ctx
+                    array.as_primitive[T](), ascending, nulls_first, ctx, limit
                 )
 
             result = dt.dispatch_primitive(primitive)
@@ -406,6 +488,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         ascending: Bool = True,
         nulls_first: Bool = False,
         ctx: ExecContext = ExecContext.serial(),
+        limit: Optional[Int] = None,
     ) raises -> Int32Array:
         """Return the indices that would sort a typed primitive array.
 
@@ -415,6 +498,9 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         direction. That is Arrow's placement: NaN is not ordered against a
         number, so it goes to the end the caller chose for values without an
         order.
+
+        With a `limit`, the answer may stop after its first `limit` rows;
+        they are the full sort's first `limit` rows, ties in input order.
         """
         var n = len(arr)
         if n == 0:
@@ -443,11 +529,19 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                 vv.unsafe_set(vi, Int32(i))
                 vi += 1
 
+        # A small limit needs only its first values: they are selected, then
+        # sorted alone.
+        var keep = vi
+        if limit:
+            var before = len(null_list) + len(nan_list) if nulls_first else 0
+            var wanted = min(max(limit.value() - before, 0), vi)
+            if wanted * _SELECT_FRACTION <= vi:
+                keep = wanted
         var sorted_valid = Self._sort_valid[T](
-            arr, valid_buf^, vi, ascending, ctx
+            arr, valid_buf^, vi, keep, ascending, ctx
         )
         return Self._assemble(
-            sorted_valid, vi, null_list, nan_list, n, nulls_first
+            sorted_valid, keep, null_list, nan_list, nulls_first
         )
 
     @staticmethod
@@ -457,11 +551,13 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         arr: PrimitiveArray[T],
         var valid_buf: Buffer[mut=True],
         n_valid: Int,
+        keep: Int,
         ascending: Bool,
         ctx: ExecContext,
     ) raises -> Buffer[]:
         """Order the `n_valid` non-null row indices in `valid_buf` -- NaN
-        rows among them only under `nan_largest`.
+        rows among them only under `nan_largest` -- at least as far as the
+        first `keep` of them.
 
         Values of at most 64 bits are encoded once into `UInt64` keys and
         ordered by `KeySort`: LSD radix from the crossover up, the packed
@@ -469,7 +565,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         crossover. Decimal128/256 exceed a `UInt64` key and take
         `_comparison_sort`.
         """
-        if n_valid <= 1:
+        if n_valid <= 1 or keep == 0:
             return valid_buf^.to_immutable()
 
         comptime if size_of[Scalar[T.native]]() <= 8:
@@ -486,17 +582,22 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                     values.unsafe_get(Int(rows.unsafe_get(i))), ascending
                 )
 
-            if n_valid >= radix_from:
+            if keep < n_valid or n_valid >= radix_from:
                 var keys = Buffer.alloc_uninit[DType.uint64](n_valid)
                 var kv = keys.view[DType.uint64](0, n_valid)
                 for i in range(n_valid):
                     kv.unsafe_set(i, key_of(i))
+                if keep < n_valid:
+                    return _first_rows(
+                        keys^, valid_buf^, n_valid, keep, Sorter.bits
+                    )
                 return Sorter.radix(keys^, valid_buf^, n_valid, ctx)
             var composites = List[Scalar[Sorter.Composite]](capacity=n_valid)
             for i in range(n_valid):
                 composites.append(Sorter.pack(key_of(i), rows.unsafe_get(i)))
             return Sorter.packed(composites, valid_buf^)
         else:
+            # Wider than a key: sorted whole, and the caller cuts.
             return Self._comparison_sort[T](arr, valid_buf^, n_valid, ascending)
 
     @staticmethod
@@ -560,12 +661,12 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         n_valid: Int,
         null_list: List[Int32],
         nan_list: List[Int32],
-        n: Int,
         nulls_first: Bool,
     ) raises -> Int32Array:
         """Merge sorted valid, NaN and null indices into the final Int32Array:
         `[nulls, NaNs, values]` with `nulls_first`, else `[values, NaNs, nulls]`.
         """
+        var n = n_valid + len(null_list) + len(nan_list)
         var out = Buffer.alloc_uninit[DType.int32](n)
         var ov = out.view[DType.int32](0, n)
         var sv = sorted_valid.view[DType.int32](0, n_valid)

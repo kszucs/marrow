@@ -222,7 +222,7 @@ from .temporal import (
 )
 from ...utils import CalendarUnit, WallClock
 from ..physical import Datum
-from ..physical import Evaluable, DynOperator, EvalOperator
+from ..physical import Evaluable, DynOperator, EvalOperator, FoldMode
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,11 @@ trait ComptimeValue(Evaluable, Value):
         ...
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         """Every comptime node becomes the same operator — one that forwards
         each batch to the fused driver. `grouped` is ignored: an elementwise

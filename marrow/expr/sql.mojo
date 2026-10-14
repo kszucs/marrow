@@ -1383,7 +1383,7 @@ struct Parser(Copyable, Movable):
 
 
 @fieldwise_init
-struct Source(Copyable, Movable):
+struct CatalogTable(Copyable, Movable):
     """One named table the query may read, as the plan that produces it."""
 
     var name: String
@@ -1394,7 +1394,7 @@ struct Catalog(Copyable, Movable):
     """The tables a query may name.
 
     A table is any plan: an in-memory batch, a file or table scan, or a query
-    built from either. A list of `Source` rather than parallel lists, and not
+    built from either. A list of `CatalogTable` rather than parallel lists, and not
     a `Dict`
     because the binding marshals this from a Python mapping and a `Dict` would
     put an iteration order between the two sides to keep in step. A query's
@@ -1403,16 +1403,16 @@ struct Catalog(Copyable, Movable):
     Lookup is case-insensitive, which is SQL's rule for unquoted names.
     """
 
-    var sources: List[Source]
+    var sources: List[CatalogTable]
 
     def __init__(out self):
-        self.sources = List[Source]()
+        self.sources = List[CatalogTable]()
 
     def add(mut self, var name: String, var batch: RecordBatch) raises:
-        self.sources.append(Source(name^, table(batch^)))
+        self.sources.append(CatalogTable(name^, table(batch^)))
 
     def add(mut self, var name: String, var relation: DynRelation):
-        self.sources.append(Source(name^, relation^))
+        self.sources.append(CatalogTable(name^, relation^))
 
     def get(self, name: String) raises -> DynRelation:
         var wanted = Ascii.upper(name)

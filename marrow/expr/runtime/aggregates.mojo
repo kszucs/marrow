@@ -110,13 +110,15 @@ from ..logical import (
 )
 from .values import RuntimeValue
 from ..logical import Bindings
-from ...execution import ExecContext
+from ...execution import PARALLEL_ENABLED, ExecContext
 from std.memory import ArcPointer
 
 from ...kernels.groupby import Groups
 from ..physical import (
     BufferedAggregateOperator,
     ColumnEvaluator,
+    CombineAggregateOperator,
+    FoldMode,
     FrameEvaluator,
     PerFrameEvaluator,
     Datum,
@@ -467,7 +469,11 @@ struct RuntimeAggregate(Value, WindowFunction):
     # -- to_operator --------------------------------------------------------
 
     def to_operator(
-        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
+        self,
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings = Bindings(),
+        mode: FoldMode = FoldMode.final(),
     ) raises -> DynOperator:
         """Resolve the name against the input dtype and hand back a **fully
         typed** operator, in the box every operator already pays for.
@@ -491,12 +497,18 @@ struct RuntimeAggregate(Value, WindowFunction):
             reject_non_boolean_filter(self._where.value().dtype(schema))
 
         def job[Agg: AggKernel]() raises {imm} -> DynOperator:
+            comptime if PARALLEL_ENABLED:
+                if mode.is_combine():
+                    return CombineAggregateOperator[Agg](
+                        mode.column, grouped, d
+                    )
             return BufferedAggregateOperator[Agg, RuntimeValue](
                 self._input.copy(),
                 _lower_filter(self._where, schema, bindings),
                 bindings.copy(),
                 grouped,
                 d,
+                mode.is_partial(),
             )
 
         return resolve_aggregate(self._name, d, job)

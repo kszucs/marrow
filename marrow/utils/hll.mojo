@@ -46,6 +46,20 @@ struct HyperLogLog[p: Int](Movable, Sized):
         if rho > self._registers[idx]:
             self._registers[idx] = rho
 
+    def sketch(self, sketch: Int) -> Span[UInt8, origin_of(self._registers)]:
+        """Sketch `sketch`'s registers."""
+        return Span(self._registers)[
+            sketch * Self.registers : (sketch + 1) * Self.registers
+        ]
+
+    def merge(mut self, sketch: Int, registers: Span[UInt8, _]):
+        """Fold `registers`, a sketch of the same precision, into sketch
+        `sketch`: each register keeps the larger, which counts the union."""
+        var base = sketch * Self.registers
+        for r in range(Self.registers):
+            if registers[r] > self._registers[base + r]:
+                self._registers[base + r] = registers[r]
+
     def estimate(self, sketch: Int) -> Int64:
         """The cardinality estimate of sketch `sketch`."""
         comptime m = Self.registers

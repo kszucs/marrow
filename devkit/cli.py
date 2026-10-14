@@ -155,6 +155,11 @@ def _report(runs, winner, record):
     )
     for line in lines:
         click.echo(line)
+    if len(runs) == 2:
+        from .benches import phase_deltas
+
+        for line in phase_deltas(runs[0][1], runs[1][1]):
+            click.echo(line)
     if failed:
         sys.exit(1)
 

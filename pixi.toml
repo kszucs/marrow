@@ -153,6 +153,9 @@ precompile = { cmd = "python -m devkit build precompile" }
 selftest = { cmd = "pytest devkit/tests -q" }
 # The comptime lane against the runtime lane: see docs/reference/comptime.qmd.
 bench-comptime = { cmd = "pytest marrow/expr/tests/bench_comptime.mojo --competition-winner comptime --competition-json docs/data/comptime.json" }
+# The engine on 1, 2, 4, 8 and 12 threads; the scaling table in
+# docs/reference/engine.qmd reads the record. Run on a quiet machine.
+bench-scaling = { cmd = "pytest --benchmark --competition marrow/expr/tests/bench_workers.mojo --competition-json docs/data/scaling.json" }
 # marrow's thread pool against MAX's `sync_parallelize`, per operation.
 bench-threads = { cmd = "pytest marrow/utils/tests/bench_threads.mojo --benchmark --competition" }
 # The thread pool's benchmarks at each commit: `pixi run -e dev
@@ -173,7 +176,7 @@ test_gpu = { cmd = "pytest --gpu -v" }
 # on macOS); `MARROW_TSAN` swaps Mojo's tcmalloc, which TSAN cannot follow,
 # for libc's allocator. A race report fails the case whose stack names it;
 # `--repeat N` runs the build N times.
-test_tsan = { cmd = "pytest --mojo --tsan -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo" }
+test_tsan = { cmd = "pytest --mojo --tsan -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo marrow/parquet/tests/test_reader.mojo::test_parquet_read_one_file_from_many_threads marrow/kernels/tests/test_join.mojo::test_join_concurrent_probes marrow/expr/tests/test_workers.mojo" }
 # The thread pool, and `ExecContext` dispatching through it, once.
 test_threads = { cmd = "pytest --mojo -v marrow/utils/tests/test_threads.mojo marrow/kernels/tests/test_execution.mojo" }
 # The thread pool's suite built once and run in 30 fresh processes, each soak

@@ -1688,16 +1688,18 @@ def test_estimate_a_variable_width_column_takes_a_default_width() raises:
     assert_equal(ColumnEstimate.width_of(list_(int64)).known().value(), 8)
 
 
-def test_estimate_a_join_holding_its_probe_side_pays_for_it() raises:
-    """A LEFT join built on its left side emits that side's unmatched rows
-    only once every probe row is in, so it holds the probe side as well; built
-    on its right side, it streams."""
+def test_estimate_a_join_streams_its_probe_side_whatever_its_kind() raises:
+    """Every kind streams its probe side: a LEFT join built on its left side
+    emits that side's unmatched rows after the last probe row, from the build
+    keys each probe row marked. So a join holds only its build side."""
     var left = Size(Approx.exact(100), Approx.exact(8))
     var right = Size(Approx.exact(1_000), Approx.exact(8))
-    var held = Cost.hash_join(left, right, BUILD_LEFT, JOIN_LEFT)
-    var streamed = Cost.hash_join(left, right, BUILD_LEFT, JOIN_INNER)
-    assert_equal(held.bytes.known().value(), 800 + 8_000)
-    assert_equal(streamed.bytes.known().value(), 800)
+    assert_equal(
+        Cost.hash_join(left, right, BUILD_LEFT).bytes.known().value(), 800
+    )
+    assert_equal(
+        Cost.hash_join(left, right, BUILD_RIGHT).bytes.known().value(), 8_000
+    )
 
 
 def test_estimate_disjoint_chunks_sum_their_distinct_counts() raises:

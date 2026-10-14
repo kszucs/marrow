@@ -94,7 +94,7 @@ struct DynSource(ByteSource):
         raise InternalError("DynSource.read_at: no arm matched")
 
     def read_ranges(
-        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
         comptime for i in range(len(Self.VariantType.Ts)):
             comptime T = Self.VariantType.Ts[i]

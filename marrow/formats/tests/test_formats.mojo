@@ -89,7 +89,7 @@ struct _Recorder(ByteSource):
         )
 
     def read_ranges(
-        ref self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
+        self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
         for ref r in ranges:
             self._reads[].append((r[0], r[1]))

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from devkit import mojo
 from devkit.benches import (
     THROUGHPUT_KEY,
     BenchmarkEnvelope,
@@ -21,6 +22,7 @@ from devkit.benches import (
     HistorySweep,
     contenders,
     judge_competition,
+    phase_deltas,
 )
 
 
@@ -537,6 +539,39 @@ def test_judging_writes_the_record_with_its_provenance(tmp_path):
     )
 
 
+def test_conditions_say_whether_the_machine_was_quiet(monkeypatch):
+    monkeypatch.setattr(mojo.os, "getloadavg", lambda: (0.5, 0.5, 0.5))
+    assert mojo.conditions()["quiet"]
+    assert mojo.unquiet_warning(mojo.conditions()) is None
+    monkeypatch.setattr(mojo.os, "getloadavg", lambda: (7.25, 5.0, 4.0))
+    loaded = mojo.conditions()
+    assert not loaded["quiet"]
+    assert loaded["load_1m"] == 7.25
+    assert "not a number to cite" in mojo.unquiet_warning(loaded)
+
+
+def test_judging_warns_about_a_record_measured_under_load(tmp_path):
+    lines, _ = judge_competition(
+        CompetitionReport(
+            competitors(("comptime", "sum", 10, 1e-6), ("runtime", "sum", 10, 3e-6))
+        ),
+        "",
+        tmp_path / "record.json",
+        lambda: {
+            "commit": "abc",
+            "conditions": {"load_1m": 9.0, "cpus": 12, "quiet": False},
+        },
+    )
+    assert any("not a number to cite" in line for line in lines)
+    record = json.loads((tmp_path / "record.json").read_text())
+    assert record["conditions"]["load_1m"] == 9.0
+
+
+def test_an_envelope_records_how_busy_the_machine_was():
+    made = envelope().to_dict()
+    assert set(made["conditions"]) == {"load_1m", "cpus", "quiet"}
+
+
 def test_judging_never_writes_an_empty_record(tmp_path):
     """A failed build must not erase the last record."""
     lines, failed = judge(tmp_path, [], record="record.json")
@@ -665,3 +700,22 @@ def test_competition_formats_each_magnitude():
     assert CompetitionReport._format(5e-6) == "5.00 µs"
     assert CompetitionReport._format(5e-3) == "5.00 ms"
     assert CompetitionReport._format(5.0) == "5.00 s"
+
+
+def test_phase_deltas_point_at_the_phase_that_moved():
+    def snapshot(phase_ns, build_ns):
+        report = {
+            "phases": [
+                {"id": 1, "role": "join build", "ns": 1_000_000},
+                {"id": 2, "role": "result", "ns": phase_ns},
+            ],
+            "spans": [{"name": "hash build", "ns": build_ns, "after": 1}],
+        }
+        return {
+            "results": [
+                {"name": "bench_w12_join", "extra_info": {"report": json.dumps(report)}}
+            ]
+        }
+
+    lines = phase_deltas(snapshot(4_000_000, 2_000_000), snapshot(2_000_000, 2_050_000))
+    assert lines == ["bench_w12_join: Phase 2 [result] 4.00ms -> 2.00ms (-50%)"]

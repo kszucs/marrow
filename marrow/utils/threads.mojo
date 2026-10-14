@@ -1750,8 +1750,7 @@ struct ThreadPool(Movable):
         """
         var nt = max(1, min(lanes, n, self.concurrency()))
         if nt == 1:
-            for i in range(n):
-                body(0, i)
+            Self.fan_out_inline[E, Body](n, body)
         else:
             var shared = _Shared.of(self._state)
             # `cursor` is the next item to hand out. The closure captures it
@@ -1796,9 +1795,7 @@ struct ThreadPool(Movable):
         """
         var nt = max(1, min(lanes, n, self.concurrency()))
         if nt == 1:
-            for i in range(n):
-                if not body(0, i):
-                    break
+            Self.fan_out_inline[E, Body](n, body)
         else:
             var shared = _Shared.of(self._state)
             # As above: the closure captures `cursor` and `outcome` itself.
@@ -1821,6 +1818,24 @@ struct ThreadPool(Movable):
             self.run(nt, task, nt)
             if outcome.ends_in_failure():
                 raise outcome.take_error()
+
+    @staticmethod
+    def fan_out_inline[
+        E: Movable & Deinitable, Body: def(Int, Int) raises E -> None
+    ](n: Int, body: Body) raises E:
+        """`fan_out` on the calling thread alone, without a pool: `body(0, i)`
+        for every `i` in order, its first error raised as it happens."""
+        for i in range(n):
+            body(0, i)
+
+    @staticmethod
+    def fan_out_inline[
+        E: Movable & Deinitable, Body: def(Int, Int) raises E -> Bool
+    ](n: Int, body: Body) raises E:
+        """`fan_out_inline` for a body that can stop early."""
+        for i in range(n):
+            if not body(0, i):
+                break
 
     def scope[
         Body: def(TaskScope) -> None

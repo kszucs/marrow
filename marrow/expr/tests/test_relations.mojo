@@ -17,7 +17,7 @@ corrupt whatever reads them by index.
 from std.testing import assert_equal, assert_raises, assert_true
 from std.os.path import join
 
-from ...utils.testing import ScratchDir
+from ...utils.testing import ScratchDir, canonical_rows
 from ...arrays import StructArray, DynArray, StringArray
 from ...builders import array
 from ...dtypes import (
@@ -45,7 +45,6 @@ from ...kernels.join import (
     JOIN_ALL,
     JOIN_ANY,
 )
-from ...kernels.sort import SortKernel
 from ..optimizer import (
     AllRules,
     ColumnPruning,
@@ -60,6 +59,7 @@ from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue
 from ..logical import Bindings
+from ...engine import Driver
 from ..physical import (
     Datum,
     JoinOrder,
@@ -881,18 +881,10 @@ def test_filter_above_limit_with_offset_reads_the_limited_rows() raises:
 
 
 def _canonical_rows(batch: RecordBatch) raises -> StructArray:
-    """`batch`'s rows in a canonical order — sorted on every column.
-
-    Row order follows the probe side, so it genuinely differs between the two
-    build sides; the multiset of rows is what must not.
-    """
-    var sa = batch.to_struct_array()
-    var keys = List[Int](capacity=len(sa.children))
-    var asc = List[Bool](capacity=len(sa.children))
-    for i in range(len(sa.children)):
-        keys.append(i)
-        asc.append(True)
-    return SortKernel.apply(sa, keys, asc)
+    """`batch`'s rows in a canonical order. Row order follows the probe side,
+    so it genuinely differs between the two build sides; the multiset of rows
+    is what must not."""
+    return canonical_rows(batch.to_struct_array())
 
 
 def _assert_plan_build_sides_agree(kind: JoinKind) raises:
@@ -1062,9 +1054,9 @@ def test_a_right_built_left_join_still_streams_its_morsels() raises:
 
     Its extra rows are then unmatched *probe* rows, each of which belongs to
     exactly one morsel, so it streams — and key 1 must still appear exactly
-    once rather than once per morsel. `_blocks_on_probe_side` asking the
-    logical kind would buffer here for nothing; asking the physical kind and
-    getting the mirror wrong would duplicate the tail.
+    once rather than once per morsel. `JoinOperator` asking the logical kind
+    would emit a build-side tail here; asking the physical kind and getting
+    the mirror wrong would duplicate it.
     """
     var plan = table(_left()).join(
         table(_right()), [0], [0], JOIN_LEFT, BUILD_RIGHT
@@ -1523,11 +1515,10 @@ def _tree(chain: JoinChain, var joins: List[PlannedJoin]) -> JoinOrder:
 
 def _run(chain: JoinChain, order: JoinOrder) raises -> StructArray:
     """`chain` computed by `order`, its rows in canonical order."""
-    var pipe = chain.with_order(order.copy()).to_operator(
-        ExecContext(), Bindings()
-    )
+    var driver = Driver.serial(ExecContext())
+    var phases = chain.with_order(order.copy()).lower(driver, Bindings())
     return _canonical_rows(
-        RecordBatch.from_struct_array(pipe.collect(chain.schema()))
+        RecordBatch.from_struct_array(driver.collect(phases^, chain.schema()))
     )
 
 

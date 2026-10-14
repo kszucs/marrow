@@ -18,8 +18,9 @@ def main() raises:
 **The plan is the declaration.** Every parameter the plan reads becomes a
 `--name VALUE` option, found by `DynRelation.params()` — the same walk that
 answers `columns()` — so the command line cannot drift from the query and
-nothing is declared twice. `--help`, `--describe`, `-o/--output`, `--format`
-and `--max-rows` are built in.
+nothing is declared twice. `--help`, `--describe`, `--explain`, `--analyze`,
+`--report-json`, `--trace`, `-o/--output`, `--format` and `--max-rows` are
+built in.
 
 **Nothing here is paid for unless named.** Each parameter carries a parser
 instantiated for its own dtype, so a program with one `int64` parameter links
@@ -32,6 +33,7 @@ can pull in. And no optimizer runs here: a plan prunes because its author wrote
 from std.sys import argv, exit, stderr
 
 from ..errors import DynError, InvalidError, NotImplementedError
+from ..engine import PlanReport
 from ..execution import ExecContext
 from ..formats import BatchWriter
 from ..io import DynSink
@@ -250,6 +252,35 @@ struct QueryCli(Movable):
             help=String("print the query plan and exit"),
             short_circuit=True,
         )
+        parser.flag(
+            String("explain"),
+            help=String("print the phases that would run the query, and exit"),
+        )
+        parser.flag(
+            String("analyze"),
+            help=String(
+                "run the query and print what each phase, stage and worker"
+                " did, instead of the result"
+            ),
+        )
+        parser.option(
+            String("trace"),
+            metavar=String("PATH"),
+            help=String(
+                "with --analyze, write a timeline of every worker as Chrome"
+                " trace JSON here, for ui.perfetto.dev"
+            ),
+            required=False,
+        )
+        parser.option(
+            String("report-json"),
+            metavar=String("PATH"),
+            help=String(
+                "with --explain or --analyze, also write the report here as"
+                " JSON"
+            ),
+            required=False,
+        )
         parser.option(
             String("output"),
             short=String("o"),
@@ -306,7 +337,10 @@ struct QueryCli(Movable):
         return out^
 
     def run[
-        parquet: Bool = False, ipc: Bool = False
+        parquet: Bool = False,
+        ipc: Bool = False,
+        estimates: Bool = False,
+        analyze: Bool = False,
     ](self, ctx: ExecContext = ExecContext.auto()) raises:
         """Parse `argv`, then print help, describe the plan, or execute it and
         write the result where `-o` / `--format` say.
@@ -314,7 +348,9 @@ struct QueryCli(Movable):
         A usage error prints the usage line and **exits 2**; an execution error
         **exits 1**. Both go to stderr, so a failure never lands inside
         `--format csv > out.csv`. `parquet=True` / `ipc=True` link the
-        corresponding writer.
+        corresponding writer, `estimates=True` the optimizer's estimates the
+        report shows behind a barrier, and `analyze=True` the timing behind
+        `--analyze` and the JSON behind `--report-json` and `--trace`.
         """
         var raw = argv()
         var tokens = List[String](capacity=len(raw))
@@ -342,11 +378,59 @@ struct QueryCli(Movable):
             print(self._parser.help_text())
         elif args.flag(String("describe")):
             print(self._plan)
+        elif args.flag(String("explain")) or args.flag(String("analyze")):
+            # Refused before anything is printed: the JSON renderings are
+            # linked with `analyze`, so a binary built for `--explain` alone
+            # stays as small as it was.
+            comptime if not analyze:
+                if args.get_or(String("report-json"), String()) or (
+                    args.get_or(String("trace"), String())
+                ):
+                    _exit_with(
+                        self._parser.prog
+                        + ": error: --report-json and --trace: this binary"
+                        " was built without them; build it with"
+                        " `QueryCli(plan).run[analyze=True]()`",
+                        1,
+                    )
+                    return
+            try:
+                var report = self._report[estimates, analyze](args, values, ctx)
+                print(report)
+                comptime if analyze:
+                    var path = args.get_or(String("report-json"), String())
+                    if path:
+                        _write_text(path, report.to_json())
+                    var trace = args.get_or(String("trace"), String())
+                    if trace:
+                        _write_text(trace, report.to_trace_json())
+            except e:
+                _exit_with(self._parser.prog + ": error: " + _unprefixed(e), 1)
         else:
             try:
                 self._execute[parquet, ipc](args, values, ctx)
             except e:
                 _exit_with(self._parser.prog + ": error: " + _unprefixed(e), 1)
+
+    def _report[
+        estimates: Bool, analyze: Bool
+    ](
+        self, args: ParsedArgs, values: Bindings, ctx: ExecContext
+    ) raises -> PlanReport:
+        """The plan's report: run under `--analyze`, a dry run otherwise."""
+        if args.flag(String("analyze")):
+            comptime if analyze:
+                return self._plan.explain[analyze=True, estimates=estimates](
+                    ctx,
+                    bindings=values,
+                    trace=Bool(args.get_or(String("trace"), String())),
+                )
+            else:
+                raise NotImplementedError(
+                    "--analyze: this binary was built without it; build it"
+                    " with `QueryCli(plan).run[analyze=True]()`"
+                )
+        return self._plan.explain[estimates=estimates](ctx, bindings=values)
 
     def _execute[
         parquet: Bool, ipc: Bool

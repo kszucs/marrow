@@ -1,0 +1,197 @@
+<!--
+Copyright 2024 Szűcs Krisztián
+SPDX-License-Identifier: Apache-2.0
+-->
+
+---
+title: "How a query runs"
+subtitle: "Phases, morsels and workers — and how to see them"
+execute:
+  freeze: false
+  cache: false
+---
+
+A plan is a description. Running it turns it into **phases**, and a phase is
+what actually runs: a **source** of morsels, and one pipeline of operators per
+**worker**. Workers take the next unread morsel as they finish one, so a phase
+over a large input runs on every core, and its results come back in input
+order. This page shows how to see those phases — before a query runs, and
+after.
+
+```{python}
+#| echo: false
+import marrow as ma
+from marrow import col
+
+n = 1_000_000
+orders = ma.memtable(
+    ma.record_batch(
+        {
+            "customer": ma.array([i % 1_000 for i in range(n)], type=ma.int64()),
+            "amount": ma.array([i % 101 for i in range(n)], type=ma.int64()),
+        }
+    )
+)
+customers = ma.memtable(
+    ma.record_batch(
+        {
+            "customer": ma.array(list(range(1_000)), type=ma.int64()),
+            "segment": ma.array([i % 5 for i in range(1_000)], type=ma.int64()),
+        }
+    )
+)
+```
+
+## Before it runs: `explain(physical=True)`
+
+`explain()` prints the plan as written. `explain(physical=True)` prints the
+phases that would run it, without reading a row:
+
+```{python}
+query = (
+    orders.filter(col("amount") > 50)
+    .aggregate(by=["customer"], total=("sum", "amount"), n=("count", "amount"))
+)
+print(query.explain(physical=True, num_threads=4))
+```
+
+Each phase lists:
+
+- its **role** — what its rows are for: the `result`, or the input of a
+  later step (`aggregate`, `join build`, `sort input`);
+- its **source** and how many **morsels** it has: an in-memory table in slices
+  of 131,072 rows, a Parquet file a row group each, an IPC file a record batch
+  each;
+- its **workers**, and *why* when it has fewer than the driver: few morsels,
+  a barrier, a source that can only be read in order;
+- the **stages** every worker's pipeline runs, labelled with what they compute;
+- `═══ read by Phase N`: which later phase reads what this one produced.
+
+A group-by runs in two phases: every worker folds the rows it reads into
+partial states, and the states of each group meet afterwards — repartitioned
+by key when there are many — to be combined. A worker whose keys almost never
+repeat stops grouping them and hands its rows on, for the combine to group
+once. A dry run cannot know how many
+states there will be, so the second phase shows the optimizer's **estimate**
+(`est=`) in place of rows.
+
+## After it runs: `explain(analyze=True)`
+
+`explain(analyze=True)` runs the plan and reports what happened:
+
+```{python}
+joined = query.join(customers, on="customer")
+print(joined.explain(analyze=True, num_threads=4))
+```
+
+The header is the whole run — its time, its rows, and the largest costs
+first. Then, per phase:
+
+- `out=` the rows it produced and `time=` how long it ran;
+- `busy` — each worker's time in its stages: `max` and `mean`, and the
+  **skew**, the busiest over the mean. 1.00 is perfectly even; a skew near the
+  worker count means one worker did all the work;
+- `read=` the time spent reading the source;
+- `est=` beside the actual rows, with the factor between them, where the
+  optimizer estimated a count — the farther from 1, the less its join order
+  and costs can be trusted;
+- which side each join built: a join whose answer does not depend on it
+  builds the side that turned out smaller, so the report can name the other
+  side from the one the plan was written to build;
+- per stage, the rows in and out and the time, over all workers, and `max=` the
+  slowest worker's share.
+
+Lines marked `┄┄` are work done **between** phases, on the calling thread:
+building a join's hash table, repartitioning partial states, reading Parquet
+footers and pruning row groups, concatenating the result.
+
+## As data
+
+The same report is a value. `to_dict()` gives it as nested dicts — the JSON a
+tool would read — and `to_batch()` gives its phases as a batch, one row per
+phase, to query like any other table:
+
+```{python}
+report = joined.explain(analyze=True, num_threads=4)
+phases = report.to_batch()
+for row in phases.select(["id", "role", "workers", "output", "ns"]).to_pylist():
+    print(row)
+```
+
+## How it scales
+
+Each query in
+[`bench_workers.mojo`](https://github.com/kszucs/marrow/blob/main/marrow/expr/tests/bench_workers.mojo)
+runs on 1, 2, 4, 8 and 12 threads over the same in-memory batch;
+`pixi run -e dev bench-scaling` records the comparison this table reads.
+
+```{python}
+#| echo: false
+#| output: asis
+import json
+from pathlib import Path
+
+record = json.loads(Path("../data/scaling.json").read_text())
+threads = ["w1", "w2", "w4", "w8", "w12"]
+
+
+def ms(ns):
+    return f"{ns / 1e6:.1f} ms"
+
+
+print("| Query | " + " | ".join(t[1:] + " thr" for t in threads) + " | Speedup |")
+print("|---|" + "--:|" * (len(threads) + 1))
+for op in record["operations"]:
+    t = op["timings_ns"]
+    best = min(t[w] for w in threads if w in t)
+    cells = [ms(t[w]) if w in t else "—" for w in threads]
+    print(f"| `{op['operation']}` | " + " | ".join(cells) + f" | **{t['w1'] / best:.1f}×** |")
+conds = record.get("conditions", {})
+machine = record["machine"]
+note = (
+    ""
+    if conds.get("quiet", True)
+    else f" **Measured at load {conds['load_1m']}: indicative, not a number to cite.**"
+)
+print(
+    f"\n: Mean over each case's rounds, {record['operations'][0]['n']:,} rows, on "
+    f"{machine['cpu']} ({conds.get('cpus', '?')} CPUs) at commit "
+    f"`{record['commit'][:8]}`.{note}"
+)
+```
+
+## From the command line
+
+A query compiled into a program with `QueryCli` prints the same report:
+
+```{.bash .fragment}
+./query --explain                          # the phases, no rows read
+./query --analyze                          # run it, print the report instead of the rows
+./query --analyze --report-json r.json     # and write the report as JSON
+./query --analyze --trace trace.json       # and every worker's timeline
+```
+
+`--analyze`, `--report-json` and `--trace` link the timing code into the
+program; build it with `QueryCli(plan).run[analyze=True]()`.
+`run[estimates=True]()` adds the optimizer's estimates to the report.
+
+## Inside the kernels
+
+A build with `-D MARROW_STATS=true` also counts what happens inside the
+kernels, and `explain(analyze=True)` shows how much each counter moved in
+every phase, on a `counters:` line: rows a hash table looked up or encoded and
+how many new keys it took, collisions it resolved, how often it grew and how
+many rows it re-placed, rows radix-partitioned, rows a join probed and the
+pairs it matched, and the row groups and bytes a Parquet scan read and the row
+groups its predicates pruned. Without the define the counters compile to
+nothing. They are global to the process, so the numbers are exact for a query
+that runs alone.
+
+## A timeline
+
+`explain(analyze=True, trace="trace.json")` — or `--trace` — also writes the
+run as Chrome trace events: one track per thread, a slice for every morsel a
+worker read and every stage call it made, and the phases and the work between
+them on the calling thread. Open it in [Perfetto](https://ui.perfetto.dev) to
+see where workers sat idle, which morsel straggled, and how long the serial
+gaps between phases are.

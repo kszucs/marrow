@@ -1248,7 +1248,7 @@ struct _Choices(Movable):
             right = {own}
             left = s - right
         var link = pricing.rules.link(left, right)
-        if link.strictness == JOIN_ALL and link.kind.commutes():
+        if link.swappable():
             # The other side only when strictly cheaper, and neither when
             # either cannot be priced: a side that can be priced is not
             # cheaper than one nobody can bound.
@@ -1257,8 +1257,8 @@ struct _Choices(Movable):
             var other = (
                 BUILD_RIGHT if link.build_side == BUILD_LEFT else BUILD_LEFT
             )
-            var here = Cost.hash_join(l, r, link.build_side, link.kind)
-            var there = Cost.hash_join(l, r, other, link.kind)
+            var here = Cost.hash_join(l, r, link.build_side)
+            var there = Cost.hash_join(l, r, other)
             var here_total = here.total().known()
             var there_total = there.total().known()
             if not here_total or not there_total:

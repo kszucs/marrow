@@ -22,7 +22,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from .mojo import machine, write_if_changed
+from .mojo import conditions, machine, unquiet_warning, write_if_changed
 
 #: The extra_info key the terminal report reads a throughput off.  Spelled with
 #: its unit because pytest-benchmark prints the key verbatim as a column header.
@@ -424,6 +424,43 @@ def utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _costs(report):
+    """`{label: ns}` for each phase and span of an analyze report."""
+    out = {}
+    for phase in report.get("phases", []):
+        if phase.get("ns", -1) >= 0:
+            out[f"Phase {phase['id']} [{phase['role']}]"] = phase["ns"]
+    for span in report.get("spans", []):
+        out[span["name"]] = out.get(span["name"], 0) + span["ns"]
+    return out
+
+
+def phase_deltas(before, after, threshold=0.10):
+    """What moved between two snapshots, phase by phase: for each benchmark
+    both ran that carries an analyze report (`extra_info["report"]`), every
+    phase or span whose time changed by more than *threshold*, as lines."""
+    lines = []
+    reports = {}
+    for result in before.get("results", []):
+        text = (result.get("extra_info") or {}).get("report")
+        if text:
+            reports[result["name"]] = json.loads(text)
+    for result in after.get("results", []):
+        text = (result.get("extra_info") or {}).get("report")
+        if not text or result["name"] not in reports:
+            continue
+        old = _costs(reports[result["name"]])
+        new = _costs(json.loads(text))
+        for label in old.keys() & new.keys():
+            a, b = old[label], new[label]
+            if a > 0 and abs(b - a) / a > threshold:
+                lines.append(
+                    f"{result['name']}: {label} {a / 1e6:.2f}ms -> "
+                    f"{b / 1e6:.2f}ms ({(b - a) / a:+.0%})"
+                )
+    return sorted(lines)
+
+
 def judge_competition(report, winner, record, provenance):
     """`--competition-winner` and `--competition-json`, for a pytest session
     and for `devkit bench compare` alike.
@@ -443,6 +480,10 @@ def judge_competition(report, winner, record, provenance):
         }
         write_if_changed(Path(record), json.dumps(payload, indent=2) + "\n")
         lines.append(f"--competition-json: written to {record}")
+        conds = payload.get("conditions")
+        warning = conds and unquiet_warning(conds)
+        if warning:
+            lines.append(f"--competition-json: {warning}")
     failure = winner and report.failure(winner)
     if failure:
         lines.append(f"--competition-winner: {failure}")
@@ -450,8 +491,13 @@ def judge_competition(report, winner, record, provenance):
 
 
 def session_provenance(repo, toolchain):
-    """The commit and machine a pytest session measured on."""
-    return {"commit": repo.vcs.commit, "machine": machine(toolchain)}
+    """The commit and machine a pytest session measured on, and how busy the
+    machine was."""
+    return {
+        "commit": repo.vcs.commit,
+        "machine": machine(toolchain),
+        "conditions": conditions(),
+    }
 
 
 def contenders(snapshots):
@@ -559,6 +605,8 @@ class BenchmarkEnvelope:
     timestamp: str
     ref: str
     results: list = field(default_factory=list)
+    conditions: dict = field(default_factory=dict)
+    """How busy the machine was; see `conditions`."""
 
     #: Per-result keys the rolling history carries alongside the headline mean.
     DETAIL_KEYS = (
@@ -578,6 +626,7 @@ class BenchmarkEnvelope:
             timestamp=utc_now(),
             ref=vcs.ref,
             results=[cls._result(bench) for bench in benchmarks],
+            conditions=conditions(),
         )
 
     @staticmethod
@@ -615,6 +664,7 @@ class BenchmarkEnvelope:
             "commit": self.commit,
             "timestamp": self.timestamp,
             "ref": self.ref,
+            "conditions": self.conditions,
             "results": self.results,
         }
 

@@ -13,7 +13,7 @@ this module is the entire deserialization layer; the metadata / statistics /
 page-index readers reuse the same footer decode without touching column data.
 """
 
-from std.memory import ArcPointer
+from ...utils.stats import STATS_ENABLED, count
 from std.builtin.rebind import downcast
 from std.bit import bit_width
 from std.sys import size_of
@@ -2908,16 +2908,18 @@ struct ParquetFile[
             self._source.read_at(offset, length)
         )
 
+    def _metadata_length(self, offset: Int, length: Int) -> Int:
+        """The length of a metadata region (page index, bloom filter) whose
+        recorded `length` may be absent — writers may omit it. Then the region
+        has to be bounded by the end of the file, and only the Thrift reader
+        knows where it really stops."""
+        return length if length > 0 else self._source.size() - offset
+
     def _metadata_at(
         ref self, offset: Int, length: Int
     ) raises -> Span[UInt8, origin_of(self)]:
-        """A metadata region (page index, bloom filter) whose recorded `length`
-        may be absent — writers may omit it. Then the region has to be bounded
-        by the end of the file, and only the Thrift reader knows where it really
-        stops."""
-        return self._read_at(
-            offset, length if length > 0 else self._source.size() - offset
-        )
+        """A metadata region, its length as `_metadata_length` bounds it."""
+        return self._read_at(offset, self._metadata_length(offset, length))
 
     def metadata(ref self) -> ref[self._meta] FileMetaData:
         """The file's footer metadata (row groups, column chunks, statistics),
@@ -2930,6 +2932,18 @@ struct ParquetFile[
 
     def num_row_groups(self) -> Int:
         return len(self._meta.row_groups)
+
+    def needs_libs(self) -> Bool:
+        """Whether reading any of this file's column chunks opens a codec
+        library — which must be opened on one thread first, before several
+        read at once (`Codecs.preload`)."""
+        for ref rg in self._meta.row_groups:
+            for ref cc in rg.columns:
+                if Compression(cc.meta_data.codec).needs_libs(
+                    self._native_codecs
+                ):
+                    return True
+        return False
 
     def num_rows(self) -> Int:
         return self._meta.num_rows
@@ -3009,6 +3023,11 @@ struct ParquetFile[
         # race is a property of the types rather than a rule to remember. It is
         # what `Fetched` was built for.
         var fetched = self._source.read_ranges(plan.ranges, ctx)
+        comptime if STATS_ENABLED:
+            var bytes = 0
+            for ref r in plan.ranges:
+                bytes += r[1]
+            count["parquet.bytes"](bytes)
 
         def decode(w: Int, t: Int) raises {mut decoded, imm}:
             ref chunk = plan.chunks[t]
@@ -3177,10 +3196,19 @@ struct ParquetFile[
         """
         if cc.offset_index_offset < 0:
             return OffsetIndex()
-        var r = ThriftCompactReader(
-            self._metadata_at(cc.offset_index_offset, cc.offset_index_length),
-            0,
-        )
+        # Through `read_ranges`, not `_metadata_at`: `read` plans on every
+        # thread that reads the file, and only a fetch the caller owns
+        # leaves the source untouched.
+        var ranges: List[Tuple[Int, Int]] = [
+            (
+                cc.offset_index_offset,
+                self._metadata_length(
+                    cc.offset_index_offset, cc.offset_index_length
+                ),
+            )
+        ]
+        var fetched = self._source.read_ranges(ranges, ExecContext.serial())
+        var r = ThriftCompactReader(fetched.span(0), 0)
         # Copied rather than moved out: a field cannot be taken from a value
         # that still has to be destroyed, and three ints per page is nothing
         # beside the `ColumnIndex` this does not decode.
