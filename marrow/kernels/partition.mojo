@@ -145,6 +145,7 @@ struct RadixHistogram[mut: Bool, //, origin: Origin[mut=mut]](Movable):
 # ---------------------------------------------------------------------------
 
 
+@fieldwise_init
 struct Partition(Copyable, Movable):
     """A subset of rows with pre-computed hashes.
 
@@ -152,20 +153,8 @@ struct Partition(Copyable, Movable):
     row number it came from.
     """
 
-    var row_indices: Int32Array
     var hashes: UInt64Array
-
-    def __init__(
-        out self,
-        var hashes: UInt64Array,
-        var row_indices: Int32Array,
-    ):
-        self.hashes = hashes^
-        self.row_indices = row_indices^
-
-    def __init__(out self, *, copy: Self):
-        self.hashes = copy.hashes.copy()
-        self.row_indices = copy.row_indices.copy()
+    var row_indices: Int32Array
 
 
 struct RadixPartitioner(Movable):
@@ -190,9 +179,6 @@ struct RadixPartitioner(Movable):
     var num_bits: Int
     """Number of top hash bits consumed by partition routing."""
 
-    var _num_partitions: Int
-    """Cached ``1 << num_bits``."""
-
     var ctx: ExecContext
     """How the histogram + scatter passes execute. Held whole rather than
     reduced to a worker count, so a caller's device survives and both passes
@@ -204,11 +190,7 @@ struct RadixPartitioner(Movable):
         var ctx: ExecContext = ExecContext(),
     ):
         self.num_bits = num_bits
-        self._num_partitions = 1 << num_bits
         self.ctx = ctx^
-
-    def num_partitions(self) -> Int:
-        return self._num_partitions
 
     @staticmethod
     @always_inline
@@ -218,7 +200,7 @@ struct RadixPartitioner(Movable):
         return Int(h >> UInt64(64 - num_bits))
 
     def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        """Split ``hashes`` into ``num_partitions()`` partitions by top bits.
+        """Split ``hashes`` into ``2^num_bits`` partitions by top bits.
 
         Each returned ``Partition`` carries the per-partition hash array
         and an ``Int32`` ``row_indices`` mapping partition-local rows back
@@ -235,7 +217,7 @@ struct RadixPartitioner(Movable):
         contiguous slot computed by the prefix sum.
         """
         var n = len(hashes)
-        var p = self._num_partitions
+        var p = 1 << self.num_bits
         var bits = self.num_bits
         var src = hashes.values()
 

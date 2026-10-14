@@ -103,6 +103,9 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
     """One dictionary-encoded column, encoded by its entries."""
     var _keys: ChunkedArray
     """The key of every code, by code, as structs of the plain key columns."""
+    var _injective: Bool
+    """Whether equal hashes are equal keys, but for NULL, which hashes to the
+    sentinel one value shares (see the module docstring)."""
     var _index: HashIndex
     var _seen_null: Bool
     """Whether a NULL key has been encoded — until then no injective hash is
@@ -122,6 +125,10 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
                 .copy() if t.is_dictionary() else t.copy()
             )
         self._by_entries = len(types) == 1 and types[0].is_dictionary()
+        self._injective = len(plain) == 1 and (
+            plain[0].is_bool()
+            or (plain[0].is_primitive() and plain[0].byte_width() <= 8)
+        )
         self._types = types^
         self._keys = ChunkedArray(Self._struct_of(plain), List[DynArray]())
         self._index = HashIndex(ctx.copy())
@@ -136,24 +143,21 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         """Whether codes are placed on radix-partitioned tables."""
         return self._index.is_partitioned()
 
-    def reserve(mut self, n: Int):
-        """Expect ``n`` new keys from the next ``encode``, so its tables are
-        sized once instead of grown — a join's build side, whose rows are
-        usually its keys."""
-        self._index.reserve(n)
-
-    def encode(mut self, columns: List[DynArray]) raises -> Placement:
+    def encode(
+        mut self, columns: List[DynArray], expected_new: Int = 0
+    ) raises -> Placement:
         """The code of every row's key (``ids``), giving a new code to each key
         not seen before. Codes are dense and stable — a key seen in an earlier
         batch keeps its code — and ``firsts[j]`` is the row that introduced
         code ``len_before + j``, in code order.
 
         ``columns`` are the key columns, one per declared type, checked
-        against them first."""
+        against them first. ``expected_new`` sizes the tables once, as
+        ``HashIndex.insert`` describes."""
         self._check_types(columns)
         if self._by_entries and len(columns[0]) > 0:
             return self._encode_entries(columns[0].as_dictionary())
-        return self._encode(self._decoded(columns))
+        return self._encode(self._decoded(columns), expected_new)
 
     def lookup(self, columns: List[DynArray]) raises -> Int32Array:
         """The code of every row's key, or ``-1`` where the key has none.
@@ -185,7 +189,15 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         """The key of every code, one array per key column, in the columns'
         declared types — a dictionary column as a dictionary array whose entry
         ``i`` is code ``i``'s value."""
-        var columns = self._plain_values()
+        while len(self._keys.chunks) >= 2:
+            self._merge_last_two()
+        var keys: DynArray
+        if len(self._keys.chunks) == 1:
+            keys = self._keys.chunks[0].copy()
+        else:
+            var empty = DynBuilder(self._keys.dtype)
+            keys = empty.finish()
+        var columns = keys.as_struct().flatten()
         var out = List[DynArray](capacity=len(columns))
         for k in range(len(columns)):
             if self._types[k].is_dictionary():
@@ -264,7 +276,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         entry's code. An unused entry is never encoded — it would become a key
         no row has — and a NULL index is encoded as one NULL entry."""
         var used = _UsedEntries(key)
-        var entries = self._encode(Self._batch(used.values(key)))
+        var entries = self._encode(Self._batch(used.values(key)), 0)
         return Placement(
             ids=used.codes_of_rows(entries.ids),
             firsts=used.first_rows(entries.firsts),
@@ -302,19 +314,22 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
 
     # --- exact encoding of plain key structs --------------------------------
 
-    def _encode(mut self, keys: StructArray) raises -> Placement:
+    def _encode(
+        mut self, keys: StructArray, expected_new: Int
+    ) raises -> Placement:
         """``encode`` over plain keys."""
         if len(keys) == 0:
             return Placement(
                 ids=Int32Array.empty(int32), firsts=Int32Array.empty(int32)
             )
         var hashes = self._hash(keys)
-        var placed = self._index.insert(hashes)
+        var placed = self._index.insert(hashes, expected_new)
         var codes = placed.ids.copy()
         var firsts = placed.firsts.copy()
         if len(firsts) > 0:
             self._append(keys, firsts, not self._index.is_partitioned())
-        if self._injective() and Self._has_nulls(keys):
+        # An injective key is one column; the struct around it is never NULL.
+        if self._injective and keys.field(0).null_count() != 0:
             self._seen_null = True
         var wrong = self._wrong_nominations(codes, keys, hashes)
         if len(wrong) == 0:
@@ -368,38 +383,13 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             )
         return Self._replaced(codes, wrong, right)
 
-    def _plain_values(mut self) raises -> List[DynArray]:
-        """The key of every code, one plain array per key column, by code."""
-        if len(self._keys.chunks) == 0:
-            var empty = DynBuilder(self._keys.dtype)
-            return empty.finish().as_struct().flatten()
-        while len(self._keys.chunks) >= 2:
-            self._merge_last_two()
-        return self._keys.chunks[0].as_struct().flatten()
-
     # --- the keys -----------------------------------------------------------
-
-    def _injective(self) -> Bool:
-        """Whether equal hashes are equal keys — one fixed-width column of at
-        most 64 bits — but for NULL, which hashes to the sentinel one value
-        shares (see the module docstring)."""
-        ref fields = self._keys.dtype.as_struct().fields
-        if len(fields) != 1:
-            return False
-        ref t = fields[0].dtype
-        return t.is_bool() or (t.is_primitive() and t.byte_width() <= 8)
-
-    @staticmethod
-    def _has_nulls(keys: StructArray) raises -> Bool:
-        """Whether a key of the batch is NULL. Asked only of an injective
-        key, which is one column; the struct around it is never NULL."""
-        return keys.field(0).null_count() != 0
 
     def _hash(self, keys: StructArray) raises -> UInt64Array:
         """Every row's hash: ``Fmix64``'s for an injective key, ``Hash``'s
         for any other."""
         var ctx = self._ctx.for_batch(len(keys))
-        if self._injective():
+        if self._injective:
             return HashKernel[Fmix64].apply(keys, ctx)
         return HashKernel[Self.Hash].apply(keys, ctx)
 
@@ -551,8 +541,12 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         and only once a NULL has been seen, in this batch or an earlier one.
         Any other key is compared with the key of its nominated code."""
         var n = len(codes)
-        var injective = self._injective()
-        if injective and not self._seen_null and not Self._has_nulls(keys):
+        var injective = self._injective
+        if (
+            injective
+            and not self._seen_null
+            and keys.field(0).null_count() == 0
+        ):
             return Int32Array.empty(int32)
         var check = Bitmap.alloc_uninit(n)
         apply[int32.native, has_code](codes.values(), check.view())

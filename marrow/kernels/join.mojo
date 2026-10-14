@@ -438,8 +438,7 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
             types.append(key.dtype())
         self._keys = DictionaryEncoder[Self.Hash](types^, ctx^)
         var num_rows = len(keys[0])
-        self._keys.reserve(num_rows)
-        var placed = self._keys.encode(keys)
+        var placed = self._keys.encode(keys, expected_new=num_rows)
         ref codes = placed.ids
         var num_codes = len(self._keys)
         if num_codes == num_rows:

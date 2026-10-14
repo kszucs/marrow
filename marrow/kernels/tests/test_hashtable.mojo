@@ -12,7 +12,6 @@ from ...execution import ExecContext
 from ...kernels.hashtable import (
     HashIndex,
     find_hashes,
-    hashes_of,
     insert_hashes,
 )
 from ...utils import SwissHashTable
@@ -111,8 +110,7 @@ def test_insert_new_keeps_equal_hashes_apart() raises:
     assert_equal(t.insert_new(7), 1)
     assert_equal(t.insert_new(9), 2)
     assert_equal(len(t), 3)
-    var h = hashes_of(t)
-    assert_true(h[0].value() == 7 and h[1].value() == 7 and h[2].value() == 9)
+    assert_true(t.hash_of(0) == 7 and t.hash_of(1) == 7 and t.hash_of(2) == 9)
 
 
 def test_find_one_and_insert_new_separate_keys_sharing_a_hash() raises:

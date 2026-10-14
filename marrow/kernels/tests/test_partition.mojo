@@ -62,11 +62,6 @@ def _assert_covers_every_row(
         assert_equal(seen[i], 1)
 
 
-def test_partition_count_follows_num_bits() raises:
-    assert_equal(RadixPartitioner(num_bits=6).num_partitions(), 64)
-    assert_equal(RadixPartitioner(num_bits=3).num_partitions(), 8)
-
-
 def test_partition_serial_covers_every_row_once() raises:
     """The serial path is the reference: no row lost, none duplicated."""
     var n = 5_000
