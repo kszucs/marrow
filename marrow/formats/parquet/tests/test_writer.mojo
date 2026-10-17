@@ -647,6 +647,24 @@ def test_write_delta_int32_narrow() raises:
     )
 
 
+def test_write_delta_int8() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array([-128, 127, 0, None, -1, 5, -100, 99], type=pa.int8()),
+        Encoding.DELTA_BINARY_PACKED,
+        "DELTA_BINARY_PACKED",
+    )
+
+
+def test_write_delta_int16() raises:
+    var pa = Python.import_module("pyarrow")
+    _encoding_check(
+        pa.array([-32768, 32767, 0, None, -1, 300, -2000], type=pa.int16()),
+        Encoding.DELTA_BINARY_PACKED,
+        "DELTA_BINARY_PACKED",
+    )
+
+
 def test_write_delta_byte_array_string() raises:
     var pa = Python.import_module("pyarrow")
     _encoding_check(

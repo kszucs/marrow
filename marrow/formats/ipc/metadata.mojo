@@ -321,32 +321,8 @@ struct IpcEncoder(Movable):
             var ts = self._fb.offset()
             return self._fb.write_table(List[FieldOffset](), ts)
         elif dtype.is_integer():
-            var bw: Int32
-            var signed: Bool
-            if dtype == dt.int8:
-                bw = 8
-                signed = True
-            elif dtype == dt.int16:
-                bw = 16
-                signed = True
-            elif dtype == dt.int32:
-                bw = 32
-                signed = True
-            elif dtype == dt.int64:
-                bw = 64
-                signed = True
-            elif dtype == dt.uint8:
-                bw = 8
-                signed = False
-            elif dtype == dt.uint16:
-                bw = 16
-                signed = False
-            elif dtype == dt.uint32:
-                bw = 32
-                signed = False
-            else:
-                bw = 64
-                signed = False
+            var bw = Int32(dtype.byte_width() * 8)
+            var signed = dtype.is_signed_integer()
             var ts = self._fb.offset()
             var signed_at = self._fb.prepend_bool(signed)
             var bw_at = self._fb.prepend_i32(bw)
