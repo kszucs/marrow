@@ -469,9 +469,7 @@ trait PrimitiveValue(ComptimeValue):
             return Datum(
                 PrimitiveScalar[Self.Type](
                     Optional(self.lane[1](bound, 0)[0]),
-                    self.dtype(Schema.from_dtype(batch.dtype)).as_type[
-                        Self.Type
-                    ](),
+                    self.dtype(Schema.from_dtype(batch.dtype)).get[Self.Type](),
                 )
             )
         else:
@@ -487,7 +485,7 @@ trait PrimitiveValue(ComptimeValue):
             # Validity once, from the bound — never per lane.
             var v = self.validity(bound)
             var arr = PrimitiveArray[Self.Type](
-                dtype=self.dtype(Schema.from_dtype(batch.dtype)).as_type[
+                dtype=self.dtype(Schema.from_dtype(batch.dtype)).get[
                     Self.Type
                 ](),
                 length=length,

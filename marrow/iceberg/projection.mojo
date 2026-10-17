@@ -426,10 +426,14 @@ def _promotes(src: DynType, dst: DynType) raises -> Bool:
         return dst.is_float64()
     elif src.is_decimal() and dst.is_decimal():
 
-        def digits[T: DecimalType](d: T) raises {} -> Tuple[Int, Int]:
+        def digits[T: DecimalType](d: T) raises {imm} -> Tuple[Int, Int]:
             return (d.precision(), d.scale())
 
-        var have = src.dispatch_decimal(digits)
-        var want = dst.dispatch_decimal(digits)
+        var have = src.try_visit[Tuple[Int, Int], DecimalType](
+            digits, "dtype is not decimal"
+        )
+        var want = dst.try_visit[Tuple[Int, Int], DecimalType](
+            digits, "dtype is not decimal"
+        )
         return want[1] == have[1] and want[0] >= have[0]
     return False

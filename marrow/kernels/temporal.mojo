@@ -154,7 +154,7 @@ def _shift[
             raw = clock.to_local(raw)
         dst.unsafe_set(i, Scalar[T.native](raw))
     return PrimitiveArray[T](
-        like=array, dtype=to.as_type[T]().copy(), buffer=out^.to_immutable()
+        like=array, dtype=to.get[T]().copy(), buffer=out^.to_immutable()
     )
 
 
@@ -191,7 +191,9 @@ struct LocalTimestampKernel(Kernel):
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T]()).to_dyn()
 
-        return array.dtype().dispatch_temporal(leaf)
+        return array.dtype().try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
 
 
 comptime DATES = one_of[Date32Type, Date64Type, TimestampType]
@@ -273,7 +275,9 @@ trait TemporalExtractKernel(Kernel):
                 LocalTimestampKernel.apply(array.as_primitive[T]())
             ).to_dyn()
 
-        return array.dtype().dispatch_temporal(leaf)
+        return array.dtype().try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +421,9 @@ struct DateTruncKernel(Kernel):
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), unit).to_dyn()
 
-        return dt.dispatch_temporal(leaf)
+        return dt.try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +506,9 @@ trait TemporalExtract64Kernel(Kernel):
                 LocalTimestampKernel.apply(array.as_primitive[T]())
             ).to_dyn()
 
-        return array.dtype().dispatch_temporal(leaf)
+        return array.dtype().try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
 
 
 # -- ISO-8601 week numbering ------------------------------------------------
@@ -616,7 +624,9 @@ struct LastDayKernel(Kernel):
                 LocalTimestampKernel.apply(array.as_primitive[T]())
             ).to_dyn()
 
-        return array.dtype().dispatch_temporal(leaf)
+        return array.dtype().try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -685,7 +695,9 @@ trait TemporalNameKernel(Kernel):
                 LocalTimestampKernel.apply(array.as_primitive[T]())
             ).to_dyn()
 
-        return array.dtype().dispatch_temporal(leaf)
+        return array.dtype().try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
 
 
 struct DayNameKernel(TemporalNameKernel):
@@ -757,7 +769,9 @@ struct AssumeTimezoneKernel(Kernel):
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), zone).to_dyn()
 
-        return dt.dispatch_temporal(leaf)
+        return dt.try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
 
 
 struct ConvertTimezoneKernel(Kernel):
@@ -790,4 +804,6 @@ struct ConvertTimezoneKernel(Kernel):
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), zone).to_dyn()
 
-        return dt.dispatch_temporal(leaf)
+        return dt.try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )

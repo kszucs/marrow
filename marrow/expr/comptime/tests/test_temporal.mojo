@@ -91,7 +91,7 @@ def _as_ts(v: Some[TemporalValue], b: RecordBatch) raises -> TimestampArray:
     return (
         v.evaluate(b.to_struct_array(), Bindings())
         .to_array(b.num_rows())
-        .as_type[TimestampArray]()
+        .get[TimestampArray]()
         .copy()
     )
 

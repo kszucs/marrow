@@ -112,7 +112,9 @@ struct FilterKernel(Kernel):
                     array.as_primitive[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.dispatch_primitive(primitive)
+            return dt.try_visit[DynArray, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
         elif dt.is_binary_like():
 
             def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
@@ -120,7 +122,9 @@ struct FilterKernel(Kernel):
                     array.as_binary_like[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.dispatch_binarylike(binarylike)
+            return dt.try_visit[DynArray, BinaryLikeType](
+                binarylike, "dtype is not binarylike"
+            )
         elif dt.is_string_view() or dt.is_binary_view():
 
             def viewlike[T: BinaryViewLikeType](d: T) raises {imm} -> DynArray:
@@ -128,7 +132,9 @@ struct FilterKernel(Kernel):
                     array.as_binary_view_like[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.dispatch_binaryview(viewlike)
+            return dt.try_visit[DynArray, BinaryViewLikeType](
+                viewlike, "dtype is not a binary view"
+            )
         elif dt.is_null():
             return FilterKernel.apply(array.as_null(), mask, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
@@ -144,7 +150,9 @@ struct FilterKernel(Kernel):
                     array.as_list_like[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.dispatch_listlike(listlike)
+            return dt.try_visit[DynArray, ListLikeType](
+                listlike, "dtype is not listlike"
+            )
         elif dt.is_fixed_size_list():
             return FilterKernel.apply(
                 array.as_fixed_size_list(), mask, ctx
@@ -699,7 +707,9 @@ struct TakeKernel(Kernel):
                     array.as_primitive[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.dispatch_primitive(primitive)
+            return dt.try_visit[DynArray, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
         elif dt.is_binary_like():
 
             def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
@@ -707,7 +717,9 @@ struct TakeKernel(Kernel):
                     array.as_binary_like[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.dispatch_binarylike(binarylike)
+            return dt.try_visit[DynArray, BinaryLikeType](
+                binarylike, "dtype is not binarylike"
+            )
         elif dt.is_string_view() or dt.is_binary_view():
 
             def viewlike[T: BinaryViewLikeType](d: T) raises {imm} -> DynArray:
@@ -715,7 +727,9 @@ struct TakeKernel(Kernel):
                     array.as_binary_view_like[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.dispatch_binaryview(viewlike)
+            return dt.try_visit[DynArray, BinaryViewLikeType](
+                viewlike, "dtype is not a binary view"
+            )
         elif dt.is_null():
             return TakeKernel.apply(array.as_null(), indices, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
@@ -731,7 +745,9 @@ struct TakeKernel(Kernel):
                     array.as_list_like[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.dispatch_listlike(listlike)
+            return dt.try_visit[DynArray, ListLikeType](
+                listlike, "dtype is not listlike"
+            )
         elif dt.is_fixed_size_list():
             return TakeKernel.apply(
                 array.as_fixed_size_list(), indices, ctx

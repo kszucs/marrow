@@ -356,7 +356,9 @@ struct _Column[o: ImmOrigin](TrivialRegisterPassable):
                     buf.unsafe_set[T.native](i, data[i].integer[T.native]())
             return buf^.to_immutable()
 
-        return dtype.dispatch_primitive(fill)
+        return dtype.try_visit[Buffer[mut=False], PrimitiveType](
+            fill, "dtype is not primitive"
+        )
 
     def binary(self, offsets: List[Int], hex: Bool) raises -> Buffer[mut=False]:
         """`DATA` of a binary or string column, laid out at `offsets`."""

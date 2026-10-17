@@ -10,7 +10,7 @@ since that is the order Avro's encoding has.
 """
 
 from ...arrays import DynArray
-from ...dtypes import DynType
+from ...dtypes import DynType, IntegerType
 from ...errors import InvalidError, TypeError
 from ...tabular import RecordBatch
 from .binary import AvroBytes
@@ -179,26 +179,15 @@ struct _Node(Copyable, Movable):
             raise InvalidError(t"avro: '{s}' is not a symbol of the enum")
         out.bytes(s.as_bytes())
 
-    def _index(self, i: Int) -> Int:
+    def _index(self, i: Int) raises -> Int:
         """Row `i` of a dictionary column's indices, whichever integer type
         they are."""
         ref a = self.array
-        var t = a.dtype()
-        if t.is_int8():
-            return Int(a.as_int8().unsafe_get(i))
-        elif t.is_int16():
-            return Int(a.as_int16().unsafe_get(i))
-        elif t.is_int32():
-            return Int(a.as_int32().unsafe_get(i))
-        elif t.is_int64():
-            return Int(a.as_int64().unsafe_get(i))
-        elif t.is_uint8():
-            return Int(a.as_uint8().unsafe_get(i))
-        elif t.is_uint16():
-            return Int(a.as_uint16().unsafe_get(i))
-        elif t.is_uint32():
-            return Int(a.as_uint32().unsafe_get(i))
-        return Int(a.as_uint64().unsafe_get(i))
+
+        def f[T: IntegerType](t: T) raises {imm} -> Int:
+            return Int(a.as_primitive[T]().unsafe_get(i))
+
+        return a.dtype().try_visit[Int, IntegerType](f, "dtype is not integer")
 
 
 def _mismatch(avro: AvroSchema, dtype: DynType) -> TypeError:

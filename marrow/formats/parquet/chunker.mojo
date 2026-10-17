@@ -349,7 +349,9 @@ struct ContentDefinedChunker(Movable):
                     table, arr, defs, reps, num_levels
                 )
 
-            return values.dispatch_bytes(bytes_leaf)
+            return values.try_visit[List[Chunk], BytesArray](
+                bytes_leaf, "expected a binary or string array"
+            )
         elif vt.is_fixed_size_binary():
             var fsb = values.as_fixed_size_binary().copy()
 
@@ -383,7 +385,7 @@ struct ContentDefinedChunker(Movable):
         else:
             # One arm for every fixed-width family: numeric, temporal,
             # interval and decimal all satisfy `PrimitiveType`, so this single
-            # `dispatch_primitive` call carries all of them -- the dispatch
+            # `try_visit[PrimitiveType]` call carries all of them -- the dispatch
             # `filter`/`take` narrowed per-family and silently lost decimal
             # and interval columns over.
             def primitive_leaf[
@@ -400,7 +402,9 @@ struct ContentDefinedChunker(Movable):
                     table, values.as_primitive[T](), defs, reps, num_levels
                 )
 
-            return vt.dispatch_primitive(primitive_leaf)
+            return vt.try_visit[List[Chunk], dt.PrimitiveType](
+                primitive_leaf, "dtype is not primitive"
+            )
 
     def _chunks_binary_like_typed[
         A: BytesArray

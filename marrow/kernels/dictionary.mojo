@@ -266,7 +266,9 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
                 buffer=buf^.to_immutable(),
             )
 
-        var index = index_type.dispatch_integer(indices)
+        var index = index_type.try_visit[DynArray, IntegerType](
+            indices, "dtype is not integer"
+        )
         return DictionaryArray.from_arrays(index^, values^, ordered=dt.ordered)
 
     def _check_types(self, columns: List[DynArray]) raises:

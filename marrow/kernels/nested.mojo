@@ -84,7 +84,9 @@ struct ArrayLengthKernel(Kernel):
         def leaf[T: ListLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_list_like[T]()).to_dyn()
 
-        return dt.dispatch_listlike(leaf)
+        return dt.try_visit[DynArray, ListLikeType](
+            leaf, "dtype is not listlike"
+        )
 
 
 struct ArrayContainsKernel(Kernel):
@@ -157,6 +159,10 @@ struct ArrayContainsKernel(Kernel):
                     list.as_list_like[T](), elem.as_primitive[V](), ctx
                 ).to_dyn()
 
-            return list_dt.dispatch_listlike(outer)
+            return list_dt.try_visit[DynArray, ListLikeType](
+                outer, "dtype is not listlike"
+            )
 
-        return elem.dtype().dispatch_numeric(leaf)
+        return elem.dtype().try_visit[DynArray, NumericType](
+            leaf, "dtype is not numeric"
+        )

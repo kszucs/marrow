@@ -2068,7 +2068,7 @@ struct Planner(Copyable, Movable):
         if op == "=" or op == "<>":
             # `ne`/`eq` dispatch on primitives, and `bool` is bit-packed
             # rather than primitive, so comparing two boolean columns reaches
-            # `dispatch_primitive` and aborts. `xor` is the same question
+            # `try_visit[PrimitiveType]` and aborts. `xor` is the same question
             # asked in the form marrow answers.
             if self.both_boolean(lhs, rhs):
                 var differ = xor(lhs^, rhs^)

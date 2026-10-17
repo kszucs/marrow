@@ -537,7 +537,7 @@ def test_erased_compare_accepts_decimal128() raises:
 #
 # `nullif` is built on this. It used to pick its kernel family with
 # `is_string() or is_large_string()`, so `binary` fell into the numeric arm and
-# `dispatch_primitive` raised. The family test is
+# `try_visit[PrimitiveType]` raised. The family test is
 # `is_binary_like()` now: what selects the kernel is whether the payload is
 # variable-width, not whether it is text.
 # ---------------------------------------------------------------------------
@@ -598,7 +598,7 @@ def test_equal_binary_nulls_propagate() raises:
 def test_equal_mismatched_dtypes_raise() raises:
     """`equal` resolves the comptime type from the *left* dtype and reads
     the right operand at that same type, so mismatched dtypes must be rejected
-    before the downcast rather than reaching `as_type` with the wrong one."""
+    before the downcast rather than reaching `get` with the wrong one."""
     var sb = StringBuilder(1)
     sb.append("a")
     var bb = BinaryLikeBuilder[BinaryType](1)

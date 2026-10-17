@@ -348,7 +348,9 @@ def _from_type(f: Field, namespace: String) raises -> AvroSchema:
             s.scale = d.scale()
             return s^
 
-        return dt.dispatch_decimal(fixed)
+        return dt.try_visit[AvroSchema, DecimalType](
+            fixed, "dtype is not decimal"
+        )
     elif dt.is_month_day_nano_interval():
         var s = AvroSchema.fixed(path, 12)
         s.logical = "duration"
@@ -428,11 +430,13 @@ def writes_as(dtype: DynType, avro: AvroSchema) raises -> Bool:
         expected.is_decimal128() or expected.is_decimal256()
     ):
 
-        def digits[T: DecimalType](d: T) raises {} -> Tuple[Int, Int]:
+        def digits[T: DecimalType](d: T) raises {imm} -> Tuple[Int, Int]:
             return (d.precision(), d.scale())
 
-        return dtype.dispatch_decimal(digits) == expected.dispatch_decimal(
-            digits
+        return dtype.try_visit[Tuple[Int, Int], DecimalType](
+            digits, "dtype is not decimal"
+        ) == expected.try_visit[Tuple[Int, Int], DecimalType](
+            digits, "dtype is not decimal"
         )
     return dtype == expected
 

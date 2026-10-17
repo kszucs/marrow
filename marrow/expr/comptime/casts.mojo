@@ -27,7 +27,7 @@ not have (`"x"` -> null), and it is still `ColumnBound`'s
 
 The two breakers also call the kernels' **typed** `apply` rather than
 `dispatch`. The previous layer erased to `DynArray` and narrowed back with
-`as_type` because its operand's type was reachable only at runtime; here `A.Type` is a
+`get` because its operand's type was reachable only at runtime; here `A.Type` is a
 comptime parameter, so the dispatch and the round trip both disappear.
 """
 
@@ -214,7 +214,7 @@ struct StringToNum[To: NumericType, A: StringValue](
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
         return StringToNumKernel.apply[Self.From, Self.To, False](
-            arr.as_type[BinaryLikeArray[Self.From]]()
+            arr.get[BinaryLikeArray[Self.From]]()
         )
 
     @always_inline
@@ -247,7 +247,7 @@ struct NumToString[To: StringLikeType, A: NumericValue](
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
         return NumToStringKernel.apply[Self.From, Self.To](
-            arr.as_type[PrimitiveArray[Self.From]]()
+            arr.get[PrimitiveArray[Self.From]]()
         )
 
     @always_inline
@@ -293,9 +293,7 @@ struct TimestampToString[To: StringLikeType, A: TemporalValue](
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
-        return TimestampToStringKernel.apply[Self.To](
-            arr.as_type[TimestampArray]()
-        )
+        return TimestampToStringKernel.apply[Self.To](arr.get[TimestampArray]())
 
     @always_inline
     def lane(

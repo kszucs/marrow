@@ -3349,10 +3349,10 @@ def test_empty_string_view() raises:
 
 
 def test_dispatch_bytes_reaches_every_byte_layout() raises:
-    """`DynArray.dispatch_bytes` hands the typed array to the callback for
+    """`DynArray.try_visit[BytesArray]` hands the typed array to the callback for
     all six byte-string types, and refuses anything else."""
 
-    def total_bytes[A: BytesArray](a: A) raises -> Int:
+    def total_bytes[A: BytesArray](a: A) raises {imm} -> Int:
         var n = 0
         for i in range(len(a)):
             if a.is_valid(i):
@@ -3363,12 +3363,36 @@ def test_dispatch_bytes_reaches_every_byte_layout() raises:
     var v: StringViewArray = ["ab", "a value longer than twelve"]
     var lb_values: List[Optional[String]] = ["xyz", None]
     var lb = LargeBinaryArray.from_values(lb_values)
-    assert_equal(s^.to_dyn().dispatch_bytes(total_bytes), 28)
-    assert_equal(v^.to_dyn().dispatch_bytes(total_bytes), 28)
-    assert_equal(lb^.to_dyn().dispatch_bytes(total_bytes), 3)
+    assert_equal(
+        s
+        ^.to_dyn().try_visit[Int, BytesArray](
+            total_bytes, "expected a binary or string array"
+        ),
+        28,
+    )
+    assert_equal(
+        v
+        ^.to_dyn().try_visit[Int, BytesArray](
+            total_bytes, "expected a binary or string array"
+        ),
+        28,
+    )
+    assert_equal(
+        lb
+        ^.to_dyn().try_visit[Int, BytesArray](
+            total_bytes, "expected a binary or string array"
+        ),
+        3,
+    )
     var raised = False
     try:
-        _ = array([1, 2], int32).to_dyn().dispatch_bytes(total_bytes)
+        _ = (
+            array([1, 2], int32)
+            .to_dyn()
+            .try_visit[Int, BytesArray](
+                total_bytes, "expected a binary or string array"
+            )
+        )
     except:
         raised = True
     assert_true(raised)

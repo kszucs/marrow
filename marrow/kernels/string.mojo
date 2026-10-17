@@ -137,8 +137,8 @@ struct LengthKernel(Kernel):
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
         # Guard before dispatching so the diagnostic names *this kernel* and the
-        # family it wanted. `dispatch_stringlike` would otherwise fall through to
-        # `_dispatch`'s generic "no arm matched", which says neither.
+        # family it wanted. `try_visit[StringLikeType]` would otherwise fall through to
+        # `visit`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
         if dt.is_string_view():
             return Self.apply(array.as_string_view()).to_dyn()
@@ -148,7 +148,9 @@ struct LengthKernel(Kernel):
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.dispatch_stringlike(leaf)
+        return dt.try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +198,8 @@ trait StringMapKernel(Kernel):
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
         # Guard before dispatching so the diagnostic names *this kernel* and the
-        # family it wanted. `dispatch_stringlike` would otherwise fall through to
-        # `_dispatch`'s generic "no arm matched", which says neither.
+        # family it wanted. `try_visit[StringLikeType]` would otherwise fall through to
+        # `visit`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
         if dt.is_string_view():
             return Self.apply(array.as_string_view()).to_dyn()
@@ -207,7 +209,9 @@ trait StringMapKernel(Kernel):
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.dispatch_stringlike(leaf)
+        return dt.try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )
 
 
 struct UpperKernel(StringMapKernel):
@@ -385,7 +389,9 @@ struct ConcatKernel(Kernel):
                 left.as_binary_like[T](), right.as_binary_like[T]()
             ).to_dyn()
 
-        return dt.dispatch_stringlike(leaf)
+        return dt.try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )
 
     @staticmethod
     def apply[
@@ -512,9 +518,11 @@ trait StringPredicateKernel(Kernel):
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
         def leaf[A: BytesArray](l: A) raises {imm} -> DynArray:
-            return Self.apply(l, right.as_type[A]()).to_dyn()
+            return Self.apply(l, right.get[A]()).to_dyn()
 
-        return left.dispatch_bytes(leaf)
+        return left.try_visit[DynArray, BytesArray](
+            leaf, "expected a binary or string array"
+        )
 
 
 struct StartsWithKernel(StringPredicateKernel):
@@ -703,7 +711,9 @@ struct MatchLikeKernel[ignore_case: Bool](StringPredicateKernel):
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T](), pattern).to_dyn()
 
-        return dt.dispatch_stringlike(leaf)
+        return dt.try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )
 
 
 comptime LikeKernel = MatchLikeKernel[False]
@@ -748,7 +758,9 @@ def dispatch_text[
     def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
         return func(array.as_binary_like[T]())
 
-    return dt.dispatch_stringlike(leaf)
+    return dt.try_visit[DynArray, StringLikeType](
+        leaf, "dtype is not stringlike"
+    )
 
 
 # -- string -> string ------------------------------------------------------
@@ -1287,7 +1299,9 @@ trait StringToIntKernel(Kernel):
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.dispatch_stringlike(leaf)
+        return dt.try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )
 
 
 struct CharLengthKernel(StringToIntKernel):
@@ -1401,4 +1415,6 @@ struct PositionKernel(Kernel):
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T](), needle).to_dyn()
 
-        return dt.dispatch_stringlike(leaf)
+        return dt.try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )

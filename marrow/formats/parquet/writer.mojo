@@ -140,7 +140,9 @@ struct ColumnWriter(Movable):
                 PlainValues.encode_bytes(arr, body)
                 return True
 
-            _ = col.dispatch_bytes(encode_bytes)
+            _ = col.try_visit[Bool, BytesArray](
+                encode_bytes, "expected a binary or string array"
+            )
         elif has_plain_physical(vt):
 
             def encode_fixed[
@@ -151,7 +153,9 @@ struct ColumnWriter(Movable):
                 ](col.as_primitive[T](), body)
                 return True
 
-            _ = vt.dispatch_primitive(encode_fixed)
+            _ = vt.try_visit[Bool, PrimitiveType](
+                encode_fixed, "dtype is not primitive"
+            )
         else:
             raise NotImplementedError(t"parquet: cannot write column type {vt}")
 
@@ -229,7 +233,9 @@ struct ColumnWriter(Movable):
                 Self._hash_bytes(arr, hashes)
                 return True
 
-            _ = col.dispatch_bytes(hash_bytes)
+            _ = col.try_visit[Bool, BytesArray](
+                hash_bytes, "expected a binary or string array"
+            )
         elif has_plain_physical(vt):
 
             def hash_fixed[
@@ -245,7 +251,9 @@ struct ColumnWriter(Movable):
                     )
                 return True
 
-            _ = vt.dispatch_primitive(hash_fixed)
+            _ = vt.try_visit[Bool, PrimitiveType](
+                hash_fixed, "dtype is not primitive"
+            )
         else:
             # bool, and anything else marrow does not bloom-filter
             return False
@@ -404,7 +412,9 @@ struct ColumnWriter(Movable):
                 self._encode_bytes_delta(arr, out)
                 return True
 
-            _ = col.dispatch_bytes(delta_bytes)
+            _ = col.try_visit[Bool, BytesArray](
+                delta_bytes, "expected a binary or string array"
+            )
 
     # -----------------------------------------------------------------------
     # Page splitting — a column chunk is split into data pages of at most
@@ -465,7 +475,9 @@ struct ColumnWriter(Movable):
             def total[A: BytesArray](arr: A) raises {imm} -> Int:
                 return Self._bytes_total(arr)
 
-            est = values.dispatch_bytes(total)
+            est = values.try_visit[Int, BytesArray](
+                total, "expected a binary or string array"
+            )
         else:
             est = num_present * self._phys_width()
         if est <= 0 or num_rows == 0:

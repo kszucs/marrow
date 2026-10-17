@@ -393,13 +393,17 @@ struct Transform(Copyable, Equatable, Movable, Writable):
             def decimal[T: DecimalType](d: T) raises {imm} -> DynArray:
                 return _bucket_decimals(array.as_primitive[T](), n)
 
-            return dtype.dispatch_decimal(decimal)
+            return dtype.try_visit[DynArray, DecimalType](
+                decimal, "dtype is not decimal"
+            )
         elif dtype.is_binary_like():
 
             def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
                 return _bucket_bytes(array.as_binary_like[T](), n)
 
-            return dtype.dispatch_binarylike(binarylike)
+            return dtype.try_visit[DynArray, BinaryLikeType](
+                binarylike, "dtype is not binarylike"
+            )
         # fixed and uuid: the raw bytes of each slot.
         ref arr = array.as_fixed_size_binary()
         var width = arr.byte_width
@@ -424,12 +428,16 @@ struct Transform(Copyable, Equatable, Movable, Writable):
             def decimal[T: DecimalType](d: T) raises {imm} -> DynArray:
                 return _truncate_values(array.as_primitive[T](), w)
 
-            return dtype.dispatch_decimal(decimal)
+            return dtype.try_visit[DynArray, DecimalType](
+                decimal, "dtype is not decimal"
+            )
 
         def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
             return _truncate_bytes(array.as_binary_like[T](), w)
 
-        return dtype.dispatch_binarylike(binarylike)
+        return dtype.try_visit[DynArray, BinaryLikeType](
+            binarylike, "dtype is not binarylike"
+        )
 
     def _calendar(self, array: DynArray, dtype: DynType) raises -> DynArray:
         if dtype.is_date32():

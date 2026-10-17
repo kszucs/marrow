@@ -568,49 +568,22 @@ struct DictionaryValues:
         """Build the dictionary page bytes + per-value indices for `col`; returns
         the dictionary size. Dispatches on the Arrow type like the PLAIN encoders
         (bool is never dictionary-encoded)."""
-        if dtype == dt.int32:
-            return Self._encode_prim[dt.Int32Type, DType.int32](
-                col.as_int32(), dict_body, indices
+
+        # Integers narrower than 32 bits are stored as INT32; every other
+        # numeric keeps its own type (FLOAT16 included).
+        def numeric[
+            T: dt.NumericType
+        ](t: T) raises {imm col, mut dict_body, mut indices} -> Int:
+            comptime phys = DType.int32 if T.native.is_integral() and size_of[
+                T.native
+            ]() < 4 else T.native
+            return Self._encode_prim[T, phys](
+                col.get[PrimitiveArray[T]](), dict_body, indices
             )
-        elif dtype == dt.int64:
-            return Self._encode_prim[dt.Int64Type, DType.int64](
-                col.as_int64(), dict_body, indices
-            )
-        elif dtype == dt.uint32:
-            return Self._encode_prim[dt.UInt32Type, DType.uint32](
-                col.as_uint32(), dict_body, indices
-            )
-        elif dtype == dt.uint64:
-            return Self._encode_prim[dt.UInt64Type, DType.uint64](
-                col.as_uint64(), dict_body, indices
-            )
-        elif dtype == dt.float32:
-            return Self._encode_prim[dt.Float32Type, DType.float32](
-                col.as_float32(), dict_body, indices
-            )
-        elif dtype == dt.float64:
-            return Self._encode_prim[dt.Float64Type, DType.float64](
-                col.as_float64(), dict_body, indices
-            )
-        elif dtype == dt.float16:
-            return Self._encode_prim[dt.Float16Type, DType.float16](
-                col.as_float16(), dict_body, indices
-            )
-        elif dtype == dt.int8:
-            return Self._encode_prim[dt.Int8Type, DType.int32](
-                col.as_int8(), dict_body, indices
-            )
-        elif dtype == dt.int16:
-            return Self._encode_prim[dt.Int16Type, DType.int32](
-                col.as_int16(), dict_body, indices
-            )
-        elif dtype == dt.uint8:
-            return Self._encode_prim[dt.UInt8Type, DType.int32](
-                col.as_uint8(), dict_body, indices
-            )
-        elif dtype == dt.uint16:
-            return Self._encode_prim[dt.UInt16Type, DType.int32](
-                col.as_uint16(), dict_body, indices
+
+        if dtype.is_numeric():
+            return dtype.try_visit[Int, dt.NumericType](
+                numeric, "dtype is not numeric"
             )
         elif (
             dtype.is_binary_like()
@@ -623,7 +596,9 @@ struct DictionaryValues:
             ](arr: A) raises {mut dict_body, mut indices, imm} -> Int:
                 return Self._encode_bytes(arr, dict_body, indices)
 
-            return col.dispatch_bytes(encode_bytes)
+            return col.try_visit[Int, BytesArray](
+                encode_bytes, "expected a binary or string array"
+            )
         else:
             raise NotImplementedError(
                 t"parquet: cannot dictionary-encode column type {dtype}"

@@ -16,15 +16,12 @@ from std.python._cpython import (
     PyTypeObjectPtr,
 )
 from std.ffi import c_char, c_int, c_ssize_t
-from std.memory import ArcPointer, Pointer
+from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
-from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
-from std.builtin.rebind import downcast
 from marrow.errors import (
     IndexError,
-    InternalError,
     InvalidError,
     NotImplementedError,
     TypeError,
@@ -55,6 +52,7 @@ from marrow.builders import (
     StructBuilder,
 )
 from marrow.scalars import DynScalar
+from marrow.utils.enum import Enum, SharedVariant, widen
 import marrow.dtypes as dt
 
 
@@ -526,14 +524,12 @@ trait PyConverter(Deinitable, Movable):
 # ---------------------------------------------------------------------------
 
 
-struct PyAnyConverter(ImplicitlyCopyable, Movable):
-    """Type-erased converter using Variant + comptime-for dispatch.
+struct PyAnyConverter(Enum, ImplicitlyCopyable):
+    """Type-erased converter. Copies share one converter, as `DynBuilder`'s
+    copies share one builder."""
 
-    Holds `ArcPointer[VariantType]` so copying is O(1) (ref-count bump),
-    mirroring `DynBuilder._ptr: ArcPointer[DynBuilder.VariantType]`.
-    """
-
-    comptime VariantType = Variant[
+    comptime Storage = SharedVariant[
+        PyConverter,
         PyBoolConverter,
         PyPrimitiveConverter[dt.Int8Type],
         PyPrimitiveConverter[dt.Int16Type],
@@ -555,18 +551,22 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         PyStructConverter,
     ]
 
-    var _v: ArcPointer[Self.VariantType]
+    var _storage: Self.Storage
+
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
+
+    def __init__(out self, *, copy: Self):
+        self._storage = copy._storage.copy()
 
     @implicit
     def __init__[T: PyConverter](out self, var value: T):
-        self._v = ArcPointer(Self.VariantType(value^))
-
-    def __init__(out self, *, copy: Self):
-        self._v = copy._v.copy()
+        self._storage = Self.Storage(value^)
 
     # Explicit (empty) destructor so this type is Deinitable despite
     # the `PyStructConverter -> List[PyAnyConverter] -> PyAnyConverter` cycle;
-    # the ArcPointer field is still destroyed automatically after the body.
+    # the storage is still destroyed automatically after the body.
     def __deinit__(deinit self):
         pass
 
@@ -576,44 +576,30 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         dtype: dt.DynType,
         has_nulls: Bool = True,
     ) raises:
+        def numeric[
+            T: dt.NumericType
+        ](d: T) raises {imm builder, imm has_nulls} -> PyAnyConverter:
+            return PyPrimitiveConverter[T](builder, has_nulls)
+
+        def views[
+            T: dt.BinaryViewLikeType
+        ](d: T) raises {imm builder} -> PyAnyConverter:
+            return PyViewConverter[T](builder)
+
         if dtype == dt.bool_:
             self = Self(PyBoolConverter(builder, has_nulls))
-        elif dtype == dt.int8:
-            self = Self(PyPrimitiveConverter[dt.Int8Type](builder, has_nulls))
-        elif dtype == dt.int16:
-            self = Self(PyPrimitiveConverter[dt.Int16Type](builder, has_nulls))
-        elif dtype == dt.int32:
-            self = Self(PyPrimitiveConverter[dt.Int32Type](builder, has_nulls))
-        elif dtype == dt.int64:
-            self = Self(PyPrimitiveConverter[dt.Int64Type](builder, has_nulls))
-        elif dtype == dt.uint8:
-            self = Self(PyPrimitiveConverter[dt.UInt8Type](builder, has_nulls))
-        elif dtype == dt.uint16:
-            self = Self(PyPrimitiveConverter[dt.UInt16Type](builder, has_nulls))
-        elif dtype == dt.uint32:
-            self = Self(PyPrimitiveConverter[dt.UInt32Type](builder, has_nulls))
-        elif dtype == dt.uint64:
-            self = Self(PyPrimitiveConverter[dt.UInt64Type](builder, has_nulls))
-        elif dtype == dt.float16:
-            self = Self(
-                PyPrimitiveConverter[dt.Float16Type](builder, has_nulls)
-            )
-        elif dtype == dt.float32:
-            self = Self(
-                PyPrimitiveConverter[dt.Float32Type](builder, has_nulls)
-            )
-        elif dtype == dt.float64:
-            self = Self(
-                PyPrimitiveConverter[dt.Float64Type](builder, has_nulls)
+        elif dtype.is_numeric():
+            self = dtype.try_visit[PyAnyConverter, dt.NumericType](
+                numeric, "dtype is not numeric"
             )
         elif dtype.is_string():
             self = Self(PyStringConverter(builder, has_nulls))
         elif dtype.is_binary():
             self = Self(PyBinaryConverter(builder, has_nulls))
-        elif dtype.is_string_view():
-            self = Self(PyViewConverter[dt.StringViewType](builder))
-        elif dtype.is_binary_view():
-            self = Self(PyViewConverter[dt.BinaryViewType](builder))
+        elif dtype.is_string_view() or dtype.is_binary_view():
+            self = dtype.try_visit[PyAnyConverter, dt.BinaryViewLikeType](
+                views, "dtype is not a binary view"
+            )
         elif dtype.is_list():
             self = Self(PyListConverter(builder, has_nulls))
         elif dtype.is_fixed_size_list():
@@ -623,31 +609,23 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         else:
             raise NotImplementedError(t"unsupported type: {dtype}")
 
-    # The `isa` ladder is written out here rather than delegated to a shared
-    # helper, matching `DynArray._dispatch` and for the same measured reason:
-    # interposing a narrowing closure between the caller and the ladder costs a
-    # fully inlined copy of the adapter in every arm (+662,740 bytes on one
-    # gate, e5509c3). These two were the last callers of the helper that commit
-    # deleted, and were missed because CI has not run since 2026-05-11 -- the
-    # Python extension has not built since.
-
     def append(mut self, value: PyObjectPtr) raises:
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, PyConverter):
-                if self._v[].isa[T]():
-                    ref c = rebind[downcast[T, PyConverter]](self._v[][T])
-                    return c.append(value)
-        raise InternalError("PyConverter dispatch: no arm matched")
+        def f[T: PyConverter](mut c: T) raises {imm} -> Bool:
+            c.append(value)
+            return True
+
+        _ = self.try_visit_mut[Bool, PyConverter](
+            f, "PyAnyConverter: no member matched"
+        )
 
     def extend(mut self, values: PyObjectPtr) raises:
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, PyConverter):
-                if self._v[].isa[T]():
-                    ref c = rebind[downcast[T, PyConverter]](self._v[][T])
-                    return c.extend(values)
-        raise InternalError("PyConverter dispatch: no arm matched")
+        def f[T: PyConverter](mut c: T) raises {imm} -> Bool:
+            c.extend(values)
+            return True
+
+        _ = self.try_visit_mut[Bool, PyConverter](
+            f, "PyAnyConverter: no member matched"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -667,9 +645,7 @@ struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[][PrimitiveBuilder[Self.T]]] PrimitiveBuilder[
-        Self.T
-    ]:
+    ) -> ref[self._builder] PrimitiveBuilder[Self.T]:
         return self._builder.as_primitive[Self.T]()
 
     def extend(mut self, values: PyObjectPtr) raises:
@@ -714,7 +690,7 @@ struct PyBoolConverter(PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    def builder(ref self) -> ref[self._builder._ptr[][BoolBuilder]] BoolBuilder:
+    def builder(ref self) -> ref[self._builder] BoolBuilder:
         return self._builder.as_bool()
 
     def extend(mut self, values: PyObjectPtr) raises:
@@ -763,7 +739,7 @@ struct PyStringConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[][StringBuilder]] StringBuilder:
+    ) -> ref[self._builder] StringBuilder:
         return self._builder.as_string()
 
     @always_inline
@@ -822,7 +798,7 @@ struct PyBinaryConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[][BinaryBuilder]] BinaryBuilder:
+    ) -> ref[self._builder] BinaryBuilder:
         return self._builder.as_binary()
 
     @always_inline
@@ -882,12 +858,12 @@ struct PyViewConverter[T: dt.BinaryViewLikeType](PyConverter):
 
     def extend(mut self, values: PyObjectPtr) raises:
         var n = self.py.length(values)
-        self._builder.as_type[BinaryViewLikeBuilder[Self.T]]().reserve(n)
+        self._builder.get[BinaryViewLikeBuilder[Self.T]]().reserve(n)
         for i in range(n):
             self.append(self.py.list_getitem(values, i))
 
     def append(mut self, value: PyObjectPtr) raises:
-        ref b = self._builder.as_type[BinaryViewLikeBuilder[Self.T]]()
+        ref b = self._builder.get[BinaryViewLikeBuilder[Self.T]]()
         if self.py.is_none(value):
             b.append_null()
         else:
@@ -920,7 +896,7 @@ struct PyListConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[][ListBuilder]] ListBuilder:
+    ) -> ref[self._builder] ListBuilder:
         return self._builder.as_list()
 
     def extend(mut self, values: PyObjectPtr) raises:
@@ -1036,7 +1012,7 @@ struct PyStructConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[][StructBuilder]] StructBuilder:
+    ) -> ref[self._builder] StructBuilder:
         return self._builder.as_struct()
 
     def extend(mut self, values: PyObjectPtr) raises:

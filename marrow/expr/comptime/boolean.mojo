@@ -59,8 +59,8 @@ def _as_bool(d: Datum, n: Int) raises -> BoolArray:
 
     **The dtype check is the reason this exists**, not the narrowing. Operands
     are bound on `ComptimeValue`, so an `int64` operand type-checks here and is
-    only wrong at run time. `DynArray.as_bool()` is `as_type[BoolArray]()`,
-    whose failure is a `debug_assert` — *"as_type: wrong type, holds int64"* —
+    only wrong at run time. `DynArray.as_bool()` is `get[BoolArray]()`,
+    whose failure is a `debug_assert` — *"Variant.get: wrong member type"* —
     which aborts the process rather than raising. Verified 2026-08-22 by
     deleting the check: the abort took down the whole test runner, failing all
     seven cases in the file rather than the one that was wrong.
@@ -326,7 +326,7 @@ struct ValuePredicate[K: ValuePredicateKernel, A: NumericValue](
         # The typed `apply`: `A.Type` is a comptime parameter here, so nothing
         # has to resolve a runtime dtype first.
         var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
-        return Self.K.apply(arr.as_type[PrimitiveArray[Self.A.Type]]())
+        return Self.K.apply(arr.get[PrimitiveArray[Self.A.Type]]())
 
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:

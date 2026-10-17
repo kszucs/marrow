@@ -352,7 +352,7 @@ exception. `DynArray`, `DynScalar`, `DynBuilder`, `DynType` and `DynValue`
 expose the same surface as `Array`, `ArrowScalar`, `Builder`, `DataType` and
 `Value`, but as their own API — they are not substitutable for a typed value in
 generic code, and nothing in the tree asks them to be: every `[T: Array]`-style
-bound lives inside a box's own `_dispatch`. Dropping the conformances changed no
+bound lives inside a box's own visit closures. Dropping the conformances changed no
 behaviour and no binary size. **A box may *hold* trait-bound values; it should
 not *be* one.** The exception is `DynSource`/`DynSink` in `marrow/io/`, which
 do conform, because `ParquetFile[S: ByteSource]` and friends are real generic
@@ -488,25 +488,25 @@ Rules:
 its `code` field and carries an optional `native` `DType`. Nested types are built
 with `list_(DataType)`, `fixed_size_list_(DataType, size)`, `struct_(Field, ...)`.
 
-There is **no visitor module**. Runtime dispatch is the `DynType.dispatch_*`
-family — `dispatch_primitive` / `dispatch_numeric` / `dispatch_integer` /
-`dispatch_floating` / `dispatch_temporal` / `dispatch_decimal` /
-`dispatch_stringlike` / `dispatch_binarylike` / `dispatch_listlike` — each
-resolving a runtime `DataType` to a comptime type parameter and running a job
-passed **as a value**: `dt.dispatch_numeric(job)`, not `dt.dispatch_numeric[job]()`.
+**Every erased handle is an `Enum`** (`marrow/utils/enum.mojo`), and the
+variant ladders live there and nowhere else. A handle holds one storage field,
+`comptime Storage = UniqueVariant[Array, BoolArray, Int64Array, ...]` (or
+`SharedVariant[Builder, ...]` when copies share one value), whose first
+parameter is the family every member belongs to, plus its own
+`@implicit __init__[T: Family]`. `Enum` supplies the rest: `isa[T]()`,
+`get[T]()` (what every `as_<type>()` accessor returns), and the visits, each
+running a job passed **as a value**:
 
-Each of the nine writes out its own `comptime for` over `DynType.VariantType.Ts`,
-guarded by `comptime if conforms_to(T, Family)`, and calls `func` directly.
-`DynArray`, `DynScalar` and `DynBuilder` each have one `_dispatch` of the same
-shape at their own trait.
+- `x.visit[R](job)` — over the whole family; `x.visit[R, F](job)` over a
+  sub-family every member belongs to. A raise aborts.
+- `dt.try_visit[R, NumericType](job, "dtype is not numeric")` — narrows to a
+  family, raising a `TypeError` carrying the message for any other member.
+- `visit_mut` / `try_visit_mut` pass the member `mut`.
 
-**This duplication is deliberate and measured.** Factoring the ladder into one
-generic `variant_dispatch(v, func)` helper needs a narrowing closure between the
-caller and the loop — a closure type cannot be generic over its own trait bound,
-so the helper must bind `func` on `Movable` and let the caller narrow. That
-adapter is inlined into *every* arm of *every* instantiation: it cost
-**+662,740 bytes (+31.9% of `__text`)** on `query_streaming_agg_fused`. Prefer
-the local ladder; do not reintroduce the shared helper.
+`R` is explicit and every job is declared `raises`: both are compiler limits,
+listed in `backlog.md` §1.3 with the rest of what `enum.mojo` works around.
+Never reach a handle's storage by reflection — over a recursive handle, inside
+its own recursion, that deadlocks the compiler.
 
 ### Kernels
 
@@ -531,7 +531,7 @@ shared by several kernels are the exception.
 
 **The comptime expression lane calls the typed `apply`, never `dispatch`.** A
 comptime node knows its operand dtype as a type parameter (`Self.A.Type`), so it
-narrows the evaluated column once (`.as_type[PrimitiveArray[Self.A.Type]]()`)
+narrows the evaluated column once (`.get[PrimitiveArray[Self.A.Type]]()`)
 and calls `K.apply`; going through `dispatch` puts a runtime dtype ladder, and
 every arm of it, into a lane whose point is that nothing is resolved at run
 time. A kernel the comptime lane needs gains a typed `apply` first.
@@ -827,7 +827,7 @@ share no node types**:
   exit 1. **It applies no rules.** An earlier draft had `run` force
   `ScanPruning` on every plan; that made `query_cli`'s `__text` 1,467,352 bytes
   larger (+33%), because `Optimizer.run` walks the plan through
-  `DynRelation._dispatch`, whose ten arms each rebuild their node and so
+  `DynRelation.try_visit`, whose arms each rebuild their node and so
   register `_lower_tramp[X]` — linking every physical operator and its
   kernels into a binary whose plan names two node types. A plan prunes because
   its author wrote `.optimize[ScanPruning]()`.
@@ -876,7 +876,7 @@ Three standing constraints:
 - **The box is the erasure boundary — a node never needs an erased variant.**
   `DynValue` erases; the nodes do not. Before adding a `Dyn*` node, check the
   existing one: either its type is known where it is constructed (a literal, a
-  cast target — resolve a runtime dtype with `dispatch_*` and box each arm), or
+  cast target — resolve a runtime dtype with `try_visit` and box each arm), or
   it does not depend on the type at all (a column read by name).
   `DynColumn`/`DynLiteral`/`DynCast` were all added and all removed for this
   reason. **`FieldRef` is the deliberate exception**: the relational verbs
@@ -940,7 +940,7 @@ a scan reads one file on several workers.
 
 ```
 marrow/
-├── dtypes.mojo           # DataType traits, Field, DynType.dispatch_*
+├── dtypes.mojo           # DataType traits, Field, DynType
 ├── buffers.mojo          # Buffer[mut], Bitmap[mut], Allocation
 ├── views.mojo            # BufferView, BitmapView, apply/_apply_dispatch
 ├── arrays.mojo           # Array trait, DynArray, ArrayData, typed arrays
@@ -1176,8 +1176,8 @@ vectors at dim >= 384.
   write `var a: DynArray = array([1, 2], int32)` and
   `ListBuilder(Int32Builder())`. The explicit call is only required when
   constructing a `DynBuilder` from a runtime `DataType` or with explicit capacity.
-- **`.as_<type>()` returns a reference** (`ref self` → `ref[self._data[]] T`) — a
-  zero-cost borrow tied to the allocation inside the `ArcPointer`, no ownership
+- **`.as_<type>()` returns a reference** (`ref self` → `ref[self] T`, through
+  `get[T]()`) — a zero-cost borrow of the handle's member, no ownership
   transfer. Use `ref x = val.as_int32()` to borrow, `.copy()` to own.
 - **`.to_<type>()` transfers ownership** — use that name for conversions and new
   allocations (`.to_dyn()`, `.to_python_object()`, `.to_device()`, `.to_cpu()`).
@@ -1425,10 +1425,10 @@ Two project-specific traps, neither of which produces a diagnostic:
   an `imm` capture points into the host stack frame, so the device silently
   computes garbage. `views._gpu_launch` copies before capturing.
 - **A closure type cannot be generic over its own trait bound.** A shared
-  dispatch loop would have to bind `func` on `Movable` and let the caller narrow
-  through an extra closure; that adapter inlines into every arm —
-  **+662,740 bytes** on one gate — which is why each erased box writes its own
-  `isa` ladder.
+  dispatch loop binding `func` on `Movable` and narrowing through an extra
+  closure inlines that adapter into every arm — **+662,740 bytes** on one
+  gate. `Enum`'s visits avoid it by reinterpreting the caller's closure in
+  place rather than wrapping it.
 
 ### Associated types, traits, reflection
 

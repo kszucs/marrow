@@ -249,36 +249,33 @@ struct Statistics:
         when there is nothing to summarise (all-null / empty) or the type carries
         no statistics. Byte arrays store raw bytes with no length prefix; the
         numeric widen/normalise rules live in `_int_stats` / `_float_stats`."""
+
+        # Integers up to 32 bits are stored as INT32, wider ones as INT64; a
+        # float keeps its own width (FLOAT16 as the 2-byte half bit pattern,
+        # bounds in IEEE float order).
+        def ints[
+            T: dt.IntegerType
+        ](t: T) raises {imm col, mut min_out, mut max_out} -> Bool:
+            comptime width = 8 if size_of[T.native]() == 8 else 4
+            return Self._int_stats[width=width](
+                col.get[PrimitiveArray[T]](), min_out, max_out
+            )
+
+        def floats[
+            T: dt.FloatingType
+        ](t: T) raises {imm col, mut min_out, mut max_out} -> Bool:
+            return Self._float_stats[width=size_of[T.native]()](
+                col.get[PrimitiveArray[T]](), min_out, max_out
+            )
+
         ref vt = dtype
-        if vt == dt.int8:
-            return Self._int_stats[width=4](col.as_int8(), min_out, max_out)
-        elif vt == dt.int16:
-            return Self._int_stats[width=4](col.as_int16(), min_out, max_out)
-        elif vt == dt.int32:
-            return Self._int_stats[width=4](col.as_int32(), min_out, max_out)
-        elif vt == dt.uint8:
-            return Self._int_stats[width=4](col.as_uint8(), min_out, max_out)
-        elif vt == dt.uint16:
-            return Self._int_stats[width=4](col.as_uint16(), min_out, max_out)
-        elif vt == dt.uint32:
-            return Self._int_stats[width=4](col.as_uint32(), min_out, max_out)
-        elif vt == dt.int64:
-            return Self._int_stats[width=8](col.as_int64(), min_out, max_out)
-        elif vt == dt.uint64:
-            return Self._int_stats[width=8](col.as_uint64(), min_out, max_out)
-        elif vt == dt.float32:
-            return Self._float_stats[width=4](
-                col.as_float32(), min_out, max_out
+        if vt.is_integer():
+            return vt.try_visit[Bool, dt.IntegerType](
+                ints, "dtype is not integer"
             )
-        elif vt == dt.float64:
-            return Self._float_stats[width=8](
-                col.as_float64(), min_out, max_out
-            )
-        elif vt == dt.float16:
-            # FLOAT16 bounds follow IEEE float ordering, stored as the 2-byte
-            # little-endian half bit pattern (the FLBA(2) value encoding).
-            return Self._float_stats[width=2](
-                col.as_float16(), min_out, max_out
+        elif vt.is_floating_point():
+            return vt.try_visit[Bool, dt.FloatingType](
+                floats, "dtype is not floating"
             )
         elif vt == dt.bool_:
             ref b = col.as_bool()
@@ -304,7 +301,9 @@ struct Statistics:
             ](arr: A) raises {mut min_out, mut max_out, imm} -> Bool:
                 return Self._bytes_stats(arr, min_out, max_out)
 
-            return col.dispatch_bytes(bytes_stats)
+            return col.try_visit[Bool, BytesArray](
+                bytes_stats, "expected a binary or string array"
+            )
         elif vt.is_date32():
             # temporal stored as INT32/INT64 — signed integer ordering
             return Self._int_stats[width=4](col.as_date32(), min_out, max_out)
@@ -420,7 +419,9 @@ struct Statistics:
                             return None
                     return PrimitiveScalar[T](v, witness).to_dyn()
 
-            return dtype.dispatch_primitive(decode_fixed)
+            return dtype.try_visit[Optional[DynScalar], PrimitiveType](
+                decode_fixed, "dtype is not primitive"
+            )
         else:
             # binary / large_binary have no scalar type; the raw min/max bytes are
             # still available via `read_metadata`.

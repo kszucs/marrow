@@ -446,7 +446,7 @@ def test_chunker_dispatches_every_leaf_type() raises:
 
     # Temporal, decimal and interval are the families a per-family dispatch
     # ladder silently drops -- `filter`/`take` shipped exactly that defect.
-    # They all satisfy `PrimitiveType`, so a single `dispatch_primitive` arm
+    # They all satisfy `PrimitiveType`, so a single `try_visit[PrimitiveType]` arm
     # has to carry them, and this list is what proves it did.
     var cases: List[DynArray] = [
         _int64_array(i64),

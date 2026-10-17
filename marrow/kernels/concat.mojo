@@ -237,7 +237,9 @@ def _concat_parallel(
         def numeric[T: NumericType](d: T) raises {imm} -> Optional[DynArray]:
             return _concat_primitive[T](arrays, total, ctx)
 
-        return dtype.dispatch_numeric(numeric)
+        return dtype.try_visit[Optional[DynArray], NumericType](
+            numeric, "dtype is not numeric"
+        )
     if (
         dtype.is_string()
         or dtype.is_large_string()
@@ -248,7 +250,9 @@ def _concat_parallel(
         def binary[T: BinaryLikeType](d: T) raises {imm} -> Optional[DynArray]:
             return _concat_binary[T](arrays, total, ctx)
 
-        return dtype.dispatch_binarylike(binary)
+        return dtype.try_visit[Optional[DynArray], BinaryLikeType](
+            binary, "dtype is not binarylike"
+        )
     return None
 
 
@@ -262,7 +266,7 @@ def _concat_primitive[
     comptime width = size_of[Scalar[T.native]]()
     var pieces = _Pieces(len(arrays))
     for ref d in arrays:
-        ref a = d.as_type[PrimitiveArray[T]]()
+        ref a = d.get[PrimitiveArray[T]]()
         pieces.add(
             a.buffer,
             a.offset * width,
@@ -274,7 +278,7 @@ def _concat_primitive[
         )
     return Optional[DynArray](
         PrimitiveArray[T](
-            arrays[0].as_type[PrimitiveArray[T]]().dtype,
+            arrays[0].get[PrimitiveArray[T]]().dtype,
             length=total,
             nulls=pieces.nulls(),
             offset=0,
@@ -295,7 +299,7 @@ def _concat_binary[
     var pieces = _Pieces(len(arrays))
     var offsets = List[Buffer[mut=False]](capacity=len(arrays))
     for ref d in arrays:
-        ref s = d.as_type[BinaryLikeArray[T]]()
+        ref s = d.get[BinaryLikeArray[T]]()
         var view = s.offsets.view[O]()
         var first = Int(view[s.offset])
         pieces.add(

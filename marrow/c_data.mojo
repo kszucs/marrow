@@ -560,14 +560,16 @@ struct CArrowSchema(Copyable, Movable):
             fmt = "tin"
         elif dtype.is_decimal():
 
-            def decimal[T: DecimalType](d: T) raises {} -> String:
+            def decimal[T: DecimalType](d: T) raises {imm} -> String:
                 var fmt = String(t"d:{d.precision()},{d.scale()}")
                 # decimal128 keeps the legacy form, which has no width.
                 if d.bit_width() != 128:
                     fmt += String(",", d.bit_width())
                 return fmt^
 
-            fmt = dtype.dispatch_decimal(decimal)
+            fmt = dtype.try_visit[String, DecimalType](
+                decimal, "dtype is not decimal"
+            )
         elif dtype.is_struct():
             fmt = "+s"
             ref st = dtype.as_struct()

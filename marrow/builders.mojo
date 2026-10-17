@@ -28,7 +28,6 @@ Example
 """
 
 from std.memory import ArcPointer
-from std.utils import Variant
 
 from .errors import (
     InternalError,
@@ -37,6 +36,7 @@ from .errors import (
     TypeError,
     debug_assert_lazy,
 )
+from .utils.enum import Enum, SharedVariant, widen
 from .buffers import Buffer, Bitmap
 
 from std.builtin.rebind import downcast
@@ -194,23 +194,24 @@ trait Builder(Deinitable, Movable, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct DynBuilder(ImplicitlyCopyable, Movable):
+struct DynBuilder(Enum, ImplicitlyCopyable):
     """Type-erased builder container.
 
     **Does not conform to `Builder`.** It exposes the same surface, but as its
     own API rather than as a trait implementation: nothing in the tree is
-    generic over `Builder` except this struct's own `_dispatch` closures, so the
+    generic over `Builder` except this struct's own `visit` closures, so the
     conformance constrained the typed builders without ever being used. It was
     added in `8334bf0` for a lane unification that `7d57398` then abandoned.
 
     Wraps any `Builder`-conforming type in a Variant on the heap behind an
     `ArcPointer`. Copies are O(1) ref-count bumps (shared-mutation semantics).
-    Dispatch goes through `_dispatch` / `_dispatch_mut`, which iterate the
+    Dispatch goes through `visit` / `try_visit_mut`, which iterate the
     Variant members at compile time and select the active type via `isa[T]()`.
     No unsafe `rebind` casts or function-pointer trampolines are used.
     """
 
-    comptime VariantType = Variant[
+    comptime Storage = SharedVariant[
+        Builder,
         NullBuilder,
         BoolBuilder,
         Int8Builder,
@@ -252,56 +253,51 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         StringViewBuilder,
     ]
 
-    var _ptr: ArcPointer[Self.VariantType]
+    var _storage: Self.Storage
+
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
+
+    def __init__(out self, *, copy: Self):
+        self._storage = copy._storage.copy()
 
     # --- construction ---
 
     @implicit
     def __init__[T: Builder](out self, var value: T):
-        self._ptr = ArcPointer(Self.VariantType(value^))
-
-    def __init__(out self, *, copy: Self):
-        self._ptr = copy._ptr.copy()
+        self._storage = Self.Storage(value^)
 
     def __init__(out self, dtype: DynType, capacity: Int = 0) raises:
+        def primitive[
+            T: PrimitiveType
+        ](t: T) raises {imm capacity} -> DynBuilder:
+            return PrimitiveBuilder[T](t, capacity)
+
+        def bytes[T: BinaryLikeType](t: T) raises {imm capacity} -> DynBuilder:
+            return BinaryLikeBuilder[T](capacity)
+
+        def views[
+            T: BinaryViewLikeType
+        ](t: T) raises {imm capacity} -> DynBuilder:
+            return BinaryViewLikeBuilder[T](capacity)
+
         if dtype.is_null():
             self = NullBuilder(capacity)
         elif dtype == bool_:
             self = BoolBuilder(capacity)
-        elif dtype == int8:
-            self = Int8Builder(capacity)
-        elif dtype == int16:
-            self = Int16Builder(capacity)
-        elif dtype == int32:
-            self = Int32Builder(capacity)
-        elif dtype == int64:
-            self = Int64Builder(capacity)
-        elif dtype == uint8:
-            self = UInt8Builder(capacity)
-        elif dtype == uint16:
-            self = UInt16Builder(capacity)
-        elif dtype == uint32:
-            self = UInt32Builder(capacity)
-        elif dtype == uint64:
-            self = UInt64Builder(capacity)
-        elif dtype == float16:
-            self = Float16Builder(capacity)
-        elif dtype == float32:
-            self = Float32Builder(capacity)
-        elif dtype == float64:
-            self = Float64Builder(capacity)
-        elif dtype.is_string():
-            self = StringBuilder(capacity)
-        elif dtype.is_binary():
-            self = BinaryBuilder(capacity)
-        elif dtype.is_large_string():
-            self = LargeStringBuilder(capacity)
-        elif dtype.is_large_binary():
-            self = LargeBinaryBuilder(capacity)
-        elif dtype.is_string_view():
-            self = StringViewBuilder(capacity)
-        elif dtype.is_binary_view():
-            self = BinaryViewBuilder(capacity)
+        elif dtype.is_primitive():
+            self = dtype.try_visit[DynBuilder, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
+        elif dtype.is_binary_like():
+            self = dtype.try_visit[DynBuilder, BinaryLikeType](
+                bytes, "dtype is not binary-like"
+            )
+        elif dtype.is_string_view() or dtype.is_binary_view():
+            self = dtype.try_visit[DynBuilder, BinaryViewLikeType](
+                views, "dtype is not a binary view"
+            )
         elif dtype.is_list():
             ref item = dtype.as_list().value_field()
             self = ListBuilder(item.copy(), DynBuilder(item.dtype), capacity)
@@ -318,34 +314,6 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
             self = FixedSizeBinaryBuilder(
                 dtype.as_fixed_size_binary().byte_width, capacity
             )
-        elif dtype.is_date32():
-            self = Date32Builder(Date32Type(), capacity)
-        elif dtype.is_date64():
-            self = Date64Builder(Date64Type(), capacity)
-        elif dtype.is_time32():
-            self = Time32Builder(dtype.as_time32(), capacity)
-        elif dtype.is_time64():
-            self = Time64Builder(dtype.as_time64(), capacity)
-        elif dtype.is_timestamp():
-            self = TimestampBuilder(dtype.as_timestamp(), capacity)
-        elif dtype.is_duration():
-            self = DurationBuilder(dtype.as_duration(), capacity)
-        elif dtype.is_year_month_interval():
-            self = YearMonthIntervalBuilder(YearMonthIntervalType(), capacity)
-        elif dtype.is_day_time_interval():
-            self = DayTimeIntervalBuilder(DayTimeIntervalType(), capacity)
-        elif dtype.is_month_day_nano_interval():
-            self = MonthDayNanoIntervalBuilder(
-                MonthDayNanoIntervalType(), capacity
-            )
-        elif dtype.is_decimal32():
-            self = Decimal32Builder(dtype.as_decimal32(), capacity)
-        elif dtype.is_decimal64():
-            self = Decimal64Builder(dtype.as_decimal64(), capacity)
-        elif dtype.is_decimal128():
-            self = Decimal128Builder(dtype.as_decimal128(), capacity)
-        elif dtype.is_decimal256():
-            self = Decimal256Builder(dtype.as_decimal256(), capacity)
         elif dtype.is_map():
             self = MapBuilder(dtype.as_map(), capacity)
         elif dtype.is_struct():
@@ -359,78 +327,50 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         else:
             raise NotImplementedError(t"unsupported type: {dtype}")
 
-    def _dispatch[
-        R: Movable, //, Func: def[T: Builder](T) -> R
-    ](self, func: Func) -> R:
-        """Run `func` on the active variant member, narrowed to `Builder`.
-
-        The one narrowing adapter for this type. `Builder` is named concretely
-        because a closure type cannot be generic over its own trait bound, and
-        the `isa` ladder is written out here rather than delegated to a shared
-        helper: interposing a narrowing closure between the caller and the
-        ladder costs a fully inlined copy of the adapter in *every* arm.
-        Routing the four boxes through one generic `variant_dispatch` helper
-        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
-        `__text`. Duplicating five lines of `comptime for` per box is the price.
-        """
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, Builder):
-                if self._ptr[].isa[T]():
-                    return func(rebind[downcast[T, Builder]](self._ptr[][T]))
-        abort("DynBuilder._dispatch: no arm matched")
-
-    def _dispatch_mut[
-        R: Movable, //, Func: def[T: Builder](mut T) raises -> R
-    ](mut self, func: Func) raises -> R:
-        """Mutating, raising counterpart of `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, Builder):
-                if self._ptr[].isa[T]():
-                    return func(rebind[downcast[T, Builder]](self._ptr[][T]))
-        raise InternalError("DynBuilder._dispatch: no arm matched")
-
     def length(self) -> Int:
-        def f[T: Builder](b: T) {imm} -> Int:
+        def f[T: Builder](b: T) raises {imm} -> Int:
             return b.length()
 
-        return self._dispatch(f)
+        return self.visit[Int](f)
 
     def null_count(self) -> Int:
-        def f[T: Builder](b: T) {imm} -> Int:
+        def f[T: Builder](b: T) raises {imm} -> Int:
             return b.null_count()
 
-        return self._dispatch(f)
+        return self.visit[Int](f)
 
     def dtype(self) -> DynType:
-        def f[T: Builder](b: T) {imm} -> DynType:
+        def f[T: Builder](b: T) raises {imm} -> DynType:
             return b.dtype()
 
-        return self._dispatch(f)
+        return self.visit[DynType](f)
 
     def reserve(mut self, additional: Int) raises:
         def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.reserve(additional)
             return True
 
-        _ = self._dispatch_mut(f)
+        _ = self.try_visit_mut[Bool, Builder](
+            f, "DynBuilder: no member matched"
+        )
 
     def append_null(mut self) raises:
         def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.append_null()
             return True
 
-        _ = self._dispatch_mut(f)
+        _ = self.try_visit_mut[Bool, Builder](
+            f, "DynBuilder: no member matched"
+        )
 
     def extend(mut self, arr: DynArray) raises:
         def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.extend(arr)
             return True
 
-        _ = self._dispatch_mut(f)
+        _ = self.try_visit_mut[Bool, Builder](
+            f, "DynBuilder: no member matched"
+        )
 
     @staticmethod
     def concat(arrays: List[DynArray]) raises -> DynArray:
@@ -453,180 +393,173 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
         def f[T: Builder](mut b: T) raises {imm} -> DynArray:
             return b.finish(shrink_to_fit=shrink_to_fit).to_dyn()
 
-        return self._dispatch_mut(f)
+        return self.try_visit_mut[DynArray, Builder](
+            f, "DynBuilder: no member matched"
+        )
 
     def reset(mut self) raises:
         def f[T: Builder](mut b: T) raises {imm} -> Bool:
             b.reset()
             return True
 
-        _ = self._dispatch_mut(f)
+        _ = self.try_visit_mut[Bool, Builder](
+            f, "DynBuilder: no member matched"
+        )
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
-    def as_type[T: Builder](ref self) -> ref[self._ptr[][T]] T:
-        """This builder as the concrete `T` it holds — a borrow, no copy."""
-
-        def held() {imm} -> DynType:
-            return self.dtype()
-
-        debug_assert_lazy(self._ptr[].isa[T](), "_as: wrong type, holds ", held)
-        return self._ptr[][T]
-
     def as_primitive[
         T: PrimitiveType
-    ](ref self) -> ref[self._ptr[][PrimitiveBuilder[T]]] PrimitiveBuilder[T]:
-        return self.as_type[PrimitiveBuilder[T]]()
+    ](ref self) -> ref[self] PrimitiveBuilder[T]:
+        return self.get[PrimitiveBuilder[T]]()
 
-    def as_null(ref self) -> ref[self._ptr[][NullBuilder]] NullBuilder:
-        return self.as_type[NullBuilder]()
+    def as_null(ref self) -> ref[self] NullBuilder:
+        return self.get[NullBuilder]()
 
-    def as_bool(ref self) -> ref[self._ptr[][BoolBuilder]] BoolBuilder:
-        return self.as_type[BoolBuilder]()
+    def as_bool(ref self) -> ref[self] BoolBuilder:
+        return self.get[BoolBuilder]()
 
-    def as_int8(ref self) -> ref[self._ptr[][Int8Builder]] Int8Builder:
-        return self.as_type[Int8Builder]()
+    def as_int8(ref self) -> ref[self] Int8Builder:
+        return self.get[Int8Builder]()
 
-    def as_int16(ref self) -> ref[self._ptr[][Int16Builder]] Int16Builder:
-        return self.as_type[Int16Builder]()
+    def as_int16(ref self) -> ref[self] Int16Builder:
+        return self.get[Int16Builder]()
 
-    def as_int32(ref self) -> ref[self._ptr[][Int32Builder]] Int32Builder:
-        return self.as_type[Int32Builder]()
+    def as_int32(ref self) -> ref[self] Int32Builder:
+        return self.get[Int32Builder]()
 
-    def as_int64(ref self) -> ref[self._ptr[][Int64Builder]] Int64Builder:
-        return self.as_type[Int64Builder]()
+    def as_int64(ref self) -> ref[self] Int64Builder:
+        return self.get[Int64Builder]()
 
-    def as_uint8(ref self) -> ref[self._ptr[][UInt8Builder]] UInt8Builder:
-        return self.as_type[UInt8Builder]()
+    def as_uint8(ref self) -> ref[self] UInt8Builder:
+        return self.get[UInt8Builder]()
 
-    def as_uint16(ref self) -> ref[self._ptr[][UInt16Builder]] UInt16Builder:
-        return self.as_type[UInt16Builder]()
+    def as_uint16(ref self) -> ref[self] UInt16Builder:
+        return self.get[UInt16Builder]()
 
-    def as_uint32(ref self) -> ref[self._ptr[][UInt32Builder]] UInt32Builder:
-        return self.as_type[UInt32Builder]()
+    def as_uint32(ref self) -> ref[self] UInt32Builder:
+        return self.get[UInt32Builder]()
 
-    def as_uint64(ref self) -> ref[self._ptr[][UInt64Builder]] UInt64Builder:
-        return self.as_type[UInt64Builder]()
+    def as_uint64(ref self) -> ref[self] UInt64Builder:
+        return self.get[UInt64Builder]()
 
-    def as_float16(ref self) -> ref[self._ptr[][Float16Builder]] Float16Builder:
-        return self.as_type[Float16Builder]()
+    def as_float16(ref self) -> ref[self] Float16Builder:
+        return self.get[Float16Builder]()
 
-    def as_float32(ref self) -> ref[self._ptr[][Float32Builder]] Float32Builder:
-        return self.as_type[Float32Builder]()
+    def as_float32(ref self) -> ref[self] Float32Builder:
+        return self.get[Float32Builder]()
 
-    def as_float64(ref self) -> ref[self._ptr[][Float64Builder]] Float64Builder:
-        return self.as_type[Float64Builder]()
+    def as_float64(ref self) -> ref[self] Float64Builder:
+        return self.get[Float64Builder]()
 
-    def as_string(ref self) -> ref[self._ptr[][StringBuilder]] StringBuilder:
-        return self.as_type[StringBuilder]()
+    def as_string(ref self) -> ref[self] StringBuilder:
+        return self.get[StringBuilder]()
 
-    def as_binary(ref self) -> ref[self._ptr[][BinaryBuilder]] BinaryBuilder:
-        return self.as_type[BinaryBuilder]()
+    def as_binary(ref self) -> ref[self] BinaryBuilder:
+        return self.get[BinaryBuilder]()
 
     def as_large_string(
         ref self,
-    ) -> ref[self._ptr[][LargeStringBuilder]] LargeStringBuilder:
-        return self.as_type[LargeStringBuilder]()
+    ) -> ref[self] LargeStringBuilder:
+        return self.get[LargeStringBuilder]()
 
     def as_large_binary(
         ref self,
-    ) -> ref[self._ptr[][LargeBinaryBuilder]] LargeBinaryBuilder:
-        return self.as_type[LargeBinaryBuilder]()
+    ) -> ref[self] LargeBinaryBuilder:
+        return self.get[LargeBinaryBuilder]()
 
     def as_string_view(
         ref self,
-    ) -> ref[self._ptr[][StringViewBuilder]] StringViewBuilder:
-        return self.as_type[StringViewBuilder]()
+    ) -> ref[self] StringViewBuilder:
+        return self.get[StringViewBuilder]()
 
     def as_binary_view(
         ref self,
-    ) -> ref[self._ptr[][BinaryViewBuilder]] BinaryViewBuilder:
-        return self.as_type[BinaryViewBuilder]()
+    ) -> ref[self] BinaryViewBuilder:
+        return self.get[BinaryViewBuilder]()
 
-    def as_list(ref self) -> ref[self._ptr[][ListBuilder]] ListBuilder:
-        return self.as_type[ListBuilder]()
+    def as_list(ref self) -> ref[self] ListBuilder:
+        return self.get[ListBuilder]()
 
     def as_large_list(
         ref self,
-    ) -> ref[self._ptr[][LargeListBuilder]] LargeListBuilder:
-        return self.as_type[LargeListBuilder]()
+    ) -> ref[self] LargeListBuilder:
+        return self.get[LargeListBuilder]()
 
     def as_fixed_size_list(
         ref self,
-    ) -> ref[self._ptr[][FixedSizeListBuilder]] FixedSizeListBuilder:
-        return self.as_type[FixedSizeListBuilder]()
+    ) -> ref[self] FixedSizeListBuilder:
+        return self.get[FixedSizeListBuilder]()
 
     def as_fixed_size_binary(
         ref self,
-    ) -> ref[self._ptr[][FixedSizeBinaryBuilder]] FixedSizeBinaryBuilder:
-        return self.as_type[FixedSizeBinaryBuilder]()
+    ) -> ref[self] FixedSizeBinaryBuilder:
+        return self.get[FixedSizeBinaryBuilder]()
 
-    def as_date32(ref self) -> ref[self._ptr[][Date32Builder]] Date32Builder:
-        return self.as_type[Date32Builder]()
+    def as_date32(ref self) -> ref[self] Date32Builder:
+        return self.get[Date32Builder]()
 
-    def as_date64(ref self) -> ref[self._ptr[][Date64Builder]] Date64Builder:
-        return self.as_type[Date64Builder]()
+    def as_date64(ref self) -> ref[self] Date64Builder:
+        return self.get[Date64Builder]()
 
-    def as_time32(ref self) -> ref[self._ptr[][Time32Builder]] Time32Builder:
-        return self.as_type[Time32Builder]()
+    def as_time32(ref self) -> ref[self] Time32Builder:
+        return self.get[Time32Builder]()
 
-    def as_time64(ref self) -> ref[self._ptr[][Time64Builder]] Time64Builder:
-        return self.as_type[Time64Builder]()
+    def as_time64(ref self) -> ref[self] Time64Builder:
+        return self.get[Time64Builder]()
 
     def as_duration(
         ref self,
-    ) -> ref[self._ptr[][DurationBuilder]] DurationBuilder:
-        return self.as_type[DurationBuilder]()
+    ) -> ref[self] DurationBuilder:
+        return self.get[DurationBuilder]()
 
     def as_timestamp(
         ref self,
-    ) -> ref[self._ptr[][TimestampBuilder]] TimestampBuilder:
-        return self.as_type[TimestampBuilder]()
+    ) -> ref[self] TimestampBuilder:
+        return self.get[TimestampBuilder]()
 
     def as_year_month_interval(
         ref self,
-    ) -> ref[self._ptr[][YearMonthIntervalBuilder]] YearMonthIntervalBuilder:
-        return self.as_type[YearMonthIntervalBuilder]()
+    ) -> ref[self] YearMonthIntervalBuilder:
+        return self.get[YearMonthIntervalBuilder]()
 
     def as_day_time_interval(
         ref self,
-    ) -> ref[self._ptr[][DayTimeIntervalBuilder]] DayTimeIntervalBuilder:
-        return self.as_type[DayTimeIntervalBuilder]()
+    ) -> ref[self] DayTimeIntervalBuilder:
+        return self.get[DayTimeIntervalBuilder]()
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[
-        self._ptr[][MonthDayNanoIntervalBuilder]
-    ] MonthDayNanoIntervalBuilder:
-        return self.as_type[MonthDayNanoIntervalBuilder]()
+    ) -> ref[self] MonthDayNanoIntervalBuilder:
+        return self.get[MonthDayNanoIntervalBuilder]()
 
     def as_decimal32(
         ref self,
-    ) -> ref[self._ptr[][Decimal32Builder]] Decimal32Builder:
-        return self.as_type[Decimal32Builder]()
+    ) -> ref[self] Decimal32Builder:
+        return self.get[Decimal32Builder]()
 
     def as_decimal64(
         ref self,
-    ) -> ref[self._ptr[][Decimal64Builder]] Decimal64Builder:
-        return self.as_type[Decimal64Builder]()
+    ) -> ref[self] Decimal64Builder:
+        return self.get[Decimal64Builder]()
 
     def as_decimal128(
         ref self,
-    ) -> ref[self._ptr[][Decimal128Builder]] Decimal128Builder:
-        return self.as_type[Decimal128Builder]()
+    ) -> ref[self] Decimal128Builder:
+        return self.get[Decimal128Builder]()
 
     def as_decimal256(
         ref self,
-    ) -> ref[self._ptr[][Decimal256Builder]] Decimal256Builder:
-        return self.as_type[Decimal256Builder]()
+    ) -> ref[self] Decimal256Builder:
+        return self.get[Decimal256Builder]()
 
-    def as_struct(ref self) -> ref[self._ptr[][StructBuilder]] StructBuilder:
-        return self.as_type[StructBuilder]()
+    def as_struct(ref self) -> ref[self] StructBuilder:
+        return self.get[StructBuilder]()
 
     def as_dictionary(
         ref self,
-    ) -> ref[self._ptr[][DictionaryBuilder]] DictionaryBuilder:
-        return self.as_type[DictionaryBuilder]()
+    ) -> ref[self] DictionaryBuilder:
+        return self.get[DictionaryBuilder]()
 
 
 # ---------------------------------------------------------------------------
@@ -930,11 +863,11 @@ struct BinaryLikeBuilder[T: BinaryLikeType](BytesBuilder):
         `Self.T.offset` was int32, `as_large_string()` otherwise) named a
         `stringlike` type for a `binarylike` builder: feeding a `BinaryBuilder`
         a `binary` array downcast the variant to `BinaryLikeArray[StringType]`
-        and aborted the process in `DynArray.as_type`. The offset width is the
+        and aborted the process in `DynArray.get`. The offset width is the
         builder's, and says nothing about whether the *source* holds text or
         bytes.
 
-        An explicit ladder rather than `dispatch_binarylike`: capturing
+        An explicit ladder rather than `try_visit[BinaryLikeType]`: capturing
         `mut self` in the dispatch closure miscompiles for the builders (see
         `ListLikeBuilder.extend`, where the same shape fails the pass manager
         outright). `BinaryLikeType` is closed over exactly these four."""
@@ -1451,7 +1384,7 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
     def dtype(self) -> DynType:
         return self._dtype.copy()
 
-    def values(self) -> DynBuilder:
+    def values(ref self) -> ref[self._child] DynBuilder:
         return self._child
 
     def append_null(mut self) raises:
@@ -1492,7 +1425,7 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
         too, so picking `as_list()` off `Self.T.offset == int32` aborted on a
         `map` source instead of reaching the typed leaf, which accepts any `U`.
 
-        Written as an explicit ladder rather than `dispatch_listlike`, unlike
+        Written as an explicit ladder rather than `try_visit[ListLikeType]`, unlike
         its `binarylike` sibling. The closure form is what this module would
         prefer, but capturing `mut self` here crashes the compiler backend —
         `error: 'kgen.call' op callee argument #1 expected type ...` out of the
@@ -1710,7 +1643,7 @@ struct FixedSizeListBuilder(Builder):
     def dtype(self) -> DynType:
         return self._dtype.copy()
 
-    def values(self) -> DynBuilder:
+    def values(ref self) -> ref[self._child] DynBuilder:
         return self._child
 
     def append_null(mut self) raises:
@@ -2016,27 +1949,17 @@ struct DictionaryBuilder(Builder):
 
     def append(mut self, index: Int) raises:
         """Append an integer index into the dictionary."""
-        ref index_type = self._dtype.as_dictionary().index_type()
-        if index_type.is_int8():
-            self._indices.as_int8().append(Int8(index))
-        elif index_type.is_int16():
-            self._indices.as_int16().append(Int16(index))
-        elif index_type.is_int32():
-            self._indices.as_int32().append(Int32(index))
-        elif index_type.is_int64():
-            self._indices.as_int64().append(Int64(index))
-        elif index_type.is_uint8():
-            self._indices.as_uint8().append(UInt8(index))
-        elif index_type.is_uint16():
-            self._indices.as_uint16().append(UInt16(index))
-        elif index_type.is_uint32():
-            self._indices.as_uint32().append(UInt32(index))
-        elif index_type.is_uint64():
-            self._indices.as_uint64().append(UInt64(index))
-        else:
-            raise TypeError(
-                t"DictionaryBuilder.append: unexpected index type: {index_type}"
-            )
+        var indices = self._indices  # shares the builder
+
+        def f[T: IntegerType](t: T) raises {mut indices, imm} -> Bool:
+            indices.as_primitive[T]().append(Scalar[T.native](index))
+            return True
+
+        _ = (
+            self._dtype.as_dictionary()
+            .index_type()
+            .try_visit[Bool, IntegerType](f, "dtype is not integer")
+        )
 
     def extend(mut self, arr: DynArray) raises:
         """Append ``arr``'s values, each still the entry its index named.
@@ -2095,22 +2018,15 @@ struct DictionaryBuilder(Builder):
         var start = self._indices.length()
         self._indices.extend(indices)
         var end = self._indices.length()
-        if t.is_int8():
-            Self._shift(self._indices.as_int8(), start, end, shift)
-        elif t.is_int16():
-            Self._shift(self._indices.as_int16(), start, end, shift)
-        elif t.is_int32():
-            Self._shift(self._indices.as_int32(), start, end, shift)
-        elif t.is_int64():
-            Self._shift(self._indices.as_int64(), start, end, shift)
-        elif t.is_uint8():
-            Self._shift(self._indices.as_uint8(), start, end, shift)
-        elif t.is_uint16():
-            Self._shift(self._indices.as_uint16(), start, end, shift)
-        elif t.is_uint32():
-            Self._shift(self._indices.as_uint32(), start, end, shift)
-        else:
-            Self._shift(self._indices.as_uint64(), start, end, shift)
+        var shared = self._indices  # shares the builder
+
+        def f[T: IntegerType](d: T) raises {mut shared, imm} -> Bool:
+            DictionaryBuilder._shift(
+                shared.as_primitive[T](), start, end, shift
+            )
+            return True
+
+        _ = t.try_visit[Bool, IntegerType](f, "dtype is not integer")
 
     @staticmethod
     def _shift[

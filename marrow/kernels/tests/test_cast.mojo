@@ -1093,7 +1093,7 @@ def test_cast_map_casts_the_entry_values() raises:
 
     assert_true(out.dtype() == target)
     assert_equal(len(out), 1)
-    ref got = out.as_type[MapArray]()
+    ref got = out.get[MapArray]()
     var got_entries = got.values().copy()
     assert_equal(
         got_entries.as_struct().field(1).as_int32()[0].value(), Int32(7)

@@ -101,14 +101,18 @@ def decode_bound(
         def decimal[T: DecimalType](d: T) raises {imm} -> DynScalar:
             return PrimitiveScalar[T](from_big_endian[T.native](data), d)
 
-        return dtype.dispatch_decimal(decimal)
+        return dtype.try_visit[DynScalar, DecimalType](
+            decimal, "dtype is not decimal"
+        )
     elif dtype.is_primitive():
 
         def fixed[T: PrimitiveType](d: T) raises {imm} -> DynScalar:
             _expect(dtype, data, size_of[Scalar[T.native]]())
             return PrimitiveScalar[T](LittleEndian.fixed[T.native](data, 0), d)
 
-        return dtype.dispatch_primitive(fixed)
+        return dtype.try_visit[DynScalar, PrimitiveType](
+            fixed, "dtype is not primitive"
+        )
     elif dtype.is_string():
         return StringScalar(_string_of(data))
     elif dtype.is_large_string():
@@ -142,7 +146,9 @@ def encode_bound(value: DynScalar) raises -> List[UInt8]:
         def decimal[T: DecimalType](d: T) raises {imm} -> List[UInt8]:
             return min_big_endian(value.as_primitive[T]().value())
 
-        out = dtype.dispatch_decimal(decimal)
+        out = dtype.try_visit[List[UInt8], DecimalType](
+            decimal, "dtype is not decimal"
+        )
     elif dtype.is_primitive():
 
         def fixed[T: PrimitiveType](d: T) raises {imm} -> List[UInt8]:
@@ -153,7 +159,9 @@ def encode_bound(value: DynScalar) raises -> List[UInt8]:
             )
             return _list_of(Span(le))
 
-        out = dtype.dispatch_primitive(fixed)
+        out = dtype.try_visit[List[UInt8], PrimitiveType](
+            fixed, "dtype is not primitive"
+        )
     elif dtype.is_string():
         out = _list_of(value.as_string().value().as_bytes())
     elif dtype.is_large_string():

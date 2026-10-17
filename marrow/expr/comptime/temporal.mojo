@@ -131,7 +131,7 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
         # that wants a `PrimitiveArray`. Only the family's `Type` projects.
         var t = self.a.evaluate(batch, bindings).to_array(len(batch))
         return Self.K.apply(
-            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+            LocalTimestampKernel.apply(t.get[PrimitiveArray[Self.A.Type]]())
         )
 
     @always_inline
@@ -197,7 +197,7 @@ struct DateTrunc[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var t = self.a.evaluate(batch, bindings).to_array(len(batch))
         return DateTruncKernel.apply(
-            t.as_type[PrimitiveArray[Self.Type]](), self._unit
+            t.get[PrimitiveArray[Self.Type]](), self._unit
         )
 
     @always_inline
@@ -239,7 +239,7 @@ struct TemporalExtract64[K: TemporalExtract64Kernel, A: TemporalValue](
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var t = self.a.evaluate(batch, bindings).to_array(len(batch))
         return Self.K.apply(
-            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+            LocalTimestampKernel.apply(t.get[PrimitiveArray[Self.A.Type]]())
         )
 
     @always_inline
@@ -289,7 +289,7 @@ struct LastDay[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var t = self.a.evaluate(batch, bindings).to_array(len(batch))
         return LastDayKernel.apply(
-            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+            LocalTimestampKernel.apply(t.get[PrimitiveArray[Self.A.Type]]())
         )
 
     @always_inline
@@ -330,7 +330,7 @@ struct TemporalName[K: TemporalNameKernel, A: TemporalValue](
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var t = self.a.evaluate(batch, bindings).to_array(len(batch))
         return Self.K.apply(
-            LocalTimestampKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+            LocalTimestampKernel.apply(t.get[PrimitiveArray[Self.A.Type]]())
         )
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -396,7 +396,7 @@ struct ZonedTimestamp[A: TemporalValue, convert: Bool](
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var t = self.a.evaluate(batch, bindings).to_array(len(batch))
-        ref typed = t.as_type[PrimitiveArray[Self.Type]]()
+        ref typed = t.get[PrimitiveArray[Self.Type]]()
         comptime if Self.convert:
             return ConvertTimezoneKernel.apply(typed, self._zone)
         else:

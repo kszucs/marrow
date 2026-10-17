@@ -41,7 +41,8 @@ Comptime singletons (same names as before):
 
 """
 
-from std.utils import Variant
+from std.os import abort
+from std.builtin.rebind import downcast, rebind_var
 
 from std.sys import size_of, bit_width_of
 
@@ -50,9 +51,8 @@ from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 
 
-from std.builtin.rebind import downcast
-from std.os import abort
 from .errors import InternalError, InvalidError, TypeError
+from .utils.enum import Enum, UniqueVariant, widen
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ trait BinaryViewLikeType(DataType, Defaultable, ImplicitlyCopyable):
     Each element is a 16-byte view — an `int32` length followed either by up to
     12 inline bytes or by a 4-byte prefix, a data-buffer index and an offset —
     and the bytes live in any number of variadic data buffers. Conforming to
-    `BinaryLikeType` would let every `dispatch_binarylike` caller instantiate
+    `BinaryLikeType` would let every `try_visit[BinaryLikeType]` caller instantiate
     the offsets layout over it.
     """
 
@@ -189,7 +189,7 @@ trait DecimalType(PrimitiveType):
 
     Logical type carries precision and scale — runtime values on the dtype
     instance, read through `precision()` and `scale()` because a trait cannot
-    require a field. An erased dtype reaches them with `dispatch_decimal`.
+    require a field. An erased dtype reaches them with `try_visit[DecimalType]`.
     """
 
     comptime max_precision: Int
@@ -973,8 +973,8 @@ struct DynType(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    Enum,
     Equatable,
-    Movable,
     Writable,
 ):
     """The type-erased dtype: a `Variant` over every concrete Arrow type.
@@ -991,7 +991,8 @@ struct DynType(
     body was `DynType(self^)`, which for `Self = DynType` would ask the variant
     to hold a `DynType` — and it deliberately does not list itself."""
 
-    comptime VariantType = Variant[
+    comptime Storage = UniqueVariant[
+        DataType,
         NullType,
         BoolType,
         Int8Type,
@@ -1032,196 +1033,30 @@ struct DynType(
         BinaryViewType,
         StringViewType,
     ]
+    var _storage: Self.Storage
 
-    var _v: Self.VariantType
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
+
+    def __init__(out self, *, copy: Self):
+        self._storage = copy._storage.copy()
 
     @implicit
     def __init__[T: DataType](out self, var value: T):
-        self._v = Self.VariantType(value^)
+        self._storage = Self.Storage(value^)
 
-    def _dispatch[
-        R: Movable, //, Func: def[T: DataType](T) -> R
-    ](self, func: Func) -> R:
-        """Run `func` on the active variant member, narrowed to `DataType`.
-
-        The one narrowing adapter for this type. `DataType` is named concretely
-        because a closure type cannot be generic over its own trait bound, and
-        the `isa` ladder is written out here rather than delegated to a shared
-        helper: interposing a narrowing closure between the caller and the
-        ladder costs a fully inlined copy of the adapter in *every* arm.
-        Routing the four boxes through one generic `variant_dispatch` helper
-        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
-        `__text`. Duplicating five lines of `comptime for` per box is the price.
-        """
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, DataType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, DataType]](self._v[T]))
-        abort("DynType._dispatch: no arm matched")
-
-    def _dispatch[
-        R: Movable, //, Func: def[T: DataType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Raising counterpart of `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, DataType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, DataType]](self._v[T]))
-        raise InternalError("DynType._dispatch: no arm matched")
-
-    # --- per-dtype-family dispatch adapters ---
+    # A kernel narrows an erased dtype to a family with `try_visit`:
+    # `dt.try_visit[DynArray, NumericType](leaf, "dtype is not numeric")` runs
+    # `leaf` at the concrete comptime type `T` instead of an 11-way
+    # `if dtype == int8 ... elif ...` cascade, and raises a `TypeError` for a
+    # dtype outside the family — the aggregate boundary relies on this to
+    # reject non-numeric columns catchably.
     #
-    # Thin wrappers over `_dispatch` that narrow the trait to a dtype family, so
-    # a kernel's runtime dispatch reads as `array.dtype().dispatch_numeric(leaf)`
-    # instead of an 11-way `if dtype == int8 ... elif ...` cascade. `func`
-    # receives the runtime dtype resolved to its concrete comptime type `T`; the
-    # return type `R` is inferred from `func`. A dtype outside the family raises
-    # — the aggregate boundary relies on this to reject non-numeric columns
-    # catchably.
-    #
-    # One member per dtype family trait above, so a kernel never has to spell
-    # out its own ladder: adding a dtype to `DynType.VariantType` extends every
-    # family it conforms to at once. Pick the *narrowest* family that covers the
-    # leaf — each member instantiates `func` once per conforming variant arm, so
-    # `dispatch_primitive` costs roughly twice `dispatch_numeric` in code size.
-
-    def dispatch_primitive[
-        R: Movable, //, Func: def[T: PrimitiveType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_primitive` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, PrimitiveType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, PrimitiveType]](self._v[T]))
-        raise TypeError("dispatch_primitive: dtype is not primitive")
-
-    def dispatch_numeric[
-        R: Movable, //, Func: def[T: NumericType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_numeric` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, NumericType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, NumericType]](self._v[T]))
-        raise TypeError("dispatch_numeric: dtype is not numeric")
-
-    def dispatch_integer[
-        R: Movable, //, Func: def[T: IntegerType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_integer` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, IntegerType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, IntegerType]](self._v[T]))
-        raise TypeError("dispatch_integer: dtype is not integer")
-
-    def dispatch_floating[
-        R: Movable, //, Func: def[T: FloatingType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_floating` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, FloatingType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, FloatingType]](self._v[T]))
-        raise TypeError("dispatch_floating: dtype is not floating")
-
-    def dispatch_temporal[
-        R: Movable, //, Func: def[T: TemporalType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_temporal` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, TemporalType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, TemporalType]](self._v[T]))
-        raise TypeError("dispatch_temporal: dtype is not temporal")
-
-    def dispatch_decimal[
-        R: Movable, //, Func: def[T: DecimalType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_decimal` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, DecimalType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, DecimalType]](self._v[T]))
-        raise TypeError("dispatch_decimal: dtype is not decimal")
-
-    def dispatch_stringlike[
-        R: Movable, //, Func: def[T: StringLikeType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_stringlike` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, StringLikeType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, StringLikeType]](self._v[T]))
-        raise TypeError("dispatch_stringlike: dtype is not stringlike")
-
-    def dispatch_binarylike[
-        R: Movable, //, Func: def[T: BinaryLikeType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_binarylike` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, BinaryLikeType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, BinaryLikeType]](self._v[T]))
-        raise TypeError("dispatch_binarylike: dtype is not binarylike")
-
-    def dispatch_binaryview[
-        R: Movable, //, Func: def[T: BinaryViewLikeType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_binaryview` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, BinaryViewLikeType):
-                if self._v.isa[T]():
-                    return func(
-                        rebind[downcast[T, BinaryViewLikeType]](self._v[T])
-                    )
-        raise TypeError("dispatch_binaryview: dtype is not a binary view")
-
-    def dispatch_listlike[
-        R: Movable, //, Func: def[T: ListLikeType](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Value-taking `dispatch_listlike` — see `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, ListLikeType):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, ListLikeType]](self._v[T]))
-        raise TypeError("dispatch_listlike: dtype is not listlike")
-
-    def __init__(out self):
-        """An erased dtype that has not been told what it holds: Arrow `null`.
-
-        A real Arrow type meaning "no value", rather than a numeric width picked
-        arbitrarily. This used to be justified as "the identity `Defaultable`
-        requires", because `DynType` conformed to `NumericType`; it conforms to
-        no dtype trait now, so the default stands on its own merits."""
-        self._v = Self.VariantType(NullType())
-
-    def __init__(out self, *, copy: Self):
-        self._v = Self.VariantType(copy=copy._v)
+    # Adding a dtype to the box extends every family it conforms to at once.
+    # Pick the *narrowest* family that covers the leaf — each member
+    # instantiates `leaf` once per conforming arm, so `PrimitiveType` costs
+    # roughly twice `NumericType` in code size.
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema
@@ -1261,68 +1096,68 @@ struct DynType(
         unexpected width as an error — `TemporalCast.dispatch` and
         `DateTruncKernel.apply` both reject anything that is not 4 or 8 — so a 0
         surfaces loudly there rather than being mistaken for a real width."""
-        if not self.is_primitive():
+        try:
+            return self.try_visit[Int, PrimitiveType](
+                lambda [T: PrimitiveType](
+                    t: T
+                ) raises {} -> Int: t.byte_width(),
+                "not fixed-width",
+            )
+        except:
             return 0
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, PrimitiveType):
-                if self._v.isa[T]():
-                    return self._v[T].byte_width()
-        return 0
 
     # --- convenience predicates ---
 
     def is_bool(self) -> Bool:
-        return self._v.isa[BoolType]()
+        return self.isa[BoolType]()
 
     def is_int8(self) -> Bool:
-        return self._v.isa[Int8Type]()
+        return self.isa[Int8Type]()
 
     def is_int16(self) -> Bool:
-        return self._v.isa[Int16Type]()
+        return self.isa[Int16Type]()
 
     def is_int32(self) -> Bool:
-        return self._v.isa[Int32Type]()
+        return self.isa[Int32Type]()
 
     def is_int64(self) -> Bool:
-        return self._v.isa[Int64Type]()
+        return self.isa[Int64Type]()
 
     def is_uint8(self) -> Bool:
-        return self._v.isa[UInt8Type]()
+        return self.isa[UInt8Type]()
 
     def is_uint16(self) -> Bool:
-        return self._v.isa[UInt16Type]()
+        return self.isa[UInt16Type]()
 
     def is_uint32(self) -> Bool:
-        return self._v.isa[UInt32Type]()
+        return self.isa[UInt32Type]()
 
     def is_uint64(self) -> Bool:
-        return self._v.isa[UInt64Type]()
+        return self.isa[UInt64Type]()
 
     def is_float16(self) -> Bool:
-        return self._v.isa[Float16Type]()
+        return self.isa[Float16Type]()
 
     def is_float32(self) -> Bool:
-        return self._v.isa[Float32Type]()
+        return self.isa[Float32Type]()
 
     def is_float64(self) -> Bool:
-        return self._v.isa[Float64Type]()
+        return self.isa[Float64Type]()
 
     def is_signed_integer(self) -> Bool:
         return (
-            self._v.isa[Int8Type]()
-            or self._v.isa[Int16Type]()
-            or self._v.isa[Int32Type]()
-            or self._v.isa[Int64Type]()
+            self.isa[Int8Type]()
+            or self.isa[Int16Type]()
+            or self.isa[Int32Type]()
+            or self.isa[Int64Type]()
         )
 
     def is_unsigned_integer(self) -> Bool:
         return (
-            self._v.isa[UInt8Type]()
-            or self._v.isa[UInt16Type]()
-            or self._v.isa[UInt32Type]()
-            or self._v.isa[UInt64Type]()
+            self.isa[UInt8Type]()
+            or self.isa[UInt16Type]()
+            or self.isa[UInt32Type]()
+            or self.isa[UInt64Type]()
         )
 
     def is_integer(self) -> Bool:
@@ -1330,9 +1165,9 @@ struct DynType(
 
     def is_floating_point(self) -> Bool:
         return (
-            self._v.isa[Float16Type]()
-            or self._v.isa[Float32Type]()
-            or self._v.isa[Float64Type]()
+            self.isa[Float16Type]()
+            or self.isa[Float32Type]()
+            or self.isa[Float64Type]()
         )
 
     def is_numeric(self) -> Bool:
@@ -1344,7 +1179,7 @@ struct DynType(
 
         Exactly the set that conforms to the `PrimitiveType` trait, which is
         what this predicate is for — every caller uses it to guard a
-        `dispatch_primitive`.
+        `try_visit[PrimitiveType]`.
 
         **Deliberately narrower than PyArrow and Arrow C++**, which both count
         bool (`pa.types.is_primitive(pa.bool_())` is True; Arrow C++'s
@@ -1368,10 +1203,10 @@ struct DynType(
         )
 
     def is_string(self) -> Bool:
-        return self._v.isa[StringType]()
+        return self.isa[StringType]()
 
     def is_large_string(self) -> Bool:
-        return self._v.isa[LargeStringType]()
+        return self.isa[LargeStringType]()
 
     def layout(self) -> ArrayLayout:
         """The buffers and children an array of this type holds."""
@@ -1423,20 +1258,20 @@ struct DynType(
             return self.as_fixed_size_list().value_type()
 
     def is_null(self) -> Bool:
-        return self._v.isa[NullType]()
+        return self.isa[NullType]()
 
     def is_binary(self) -> Bool:
-        return self._v.isa[BinaryType]()
+        return self.isa[BinaryType]()
 
     def is_large_binary(self) -> Bool:
-        return self._v.isa[LargeBinaryType]()
+        return self.isa[LargeBinaryType]()
 
     def is_string_like(self) -> Bool:
         """A UTF-8 string of either offset width.
 
         The narrower half of `is_binary_like`: the kernels that require *text*
         rather than any variable-width payload guard with this, so their
-        diagnostic can name the family before `dispatch_stringlike` reduces the
+        diagnostic can name the family before `try_visit[StringLikeType]` reduces the
         dtype to a comptime type.
         """
         return self.is_string() or self.is_large_string()
@@ -1447,28 +1282,28 @@ struct DynType(
         )
 
     def is_string_view(self) -> Bool:
-        return self._v.isa[StringViewType]()
+        return self.isa[StringViewType]()
 
     def is_binary_view(self) -> Bool:
-        return self._v.isa[BinaryViewType]()
+        return self.isa[BinaryViewType]()
 
     def is_list(self) -> Bool:
-        return self._v.isa[ListType]()
+        return self.isa[ListType]()
 
     def is_large_list(self) -> Bool:
-        return self._v.isa[LargeListType]()
+        return self.isa[LargeListType]()
 
     def is_list_like(self) -> Bool:
         # Map included: `MapType` conforms to `ListLikeType` and
-        # `dispatch_listlike` walks it, so a predicate that excluded it forced
+        # `try_visit[ListLikeType]` walks it, so a predicate that excluded it forced
         # every caller to write `is_list_like() or is_map()` by hand.
         return self.is_list() or self.is_large_list() or self.is_map()
 
     def is_fixed_size_list(self) -> Bool:
-        return self._v.isa[FixedSizeListType]()
+        return self.isa[FixedSizeListType]()
 
     def is_fixed_size_binary(self) -> Bool:
-        return self._v.isa[FixedSizeBinaryType]()
+        return self.isa[FixedSizeBinaryType]()
 
     def children(self) -> List[Field]:
         """The child fields, as a schema lists them: a struct's fields, a
@@ -1493,31 +1328,31 @@ struct DynType(
         return []
 
     def is_struct(self) -> Bool:
-        return self._v.isa[StructType]()
+        return self.isa[StructType]()
 
     def is_map(self) -> Bool:
-        return self._v.isa[MapType]()
+        return self.isa[MapType]()
 
     def is_dictionary(self) -> Bool:
-        return self._v.isa[DictionaryType]()
+        return self.isa[DictionaryType]()
 
     def is_date32(self) -> Bool:
-        return self._v.isa[Date32Type]()
+        return self.isa[Date32Type]()
 
     def is_date64(self) -> Bool:
-        return self._v.isa[Date64Type]()
+        return self.isa[Date64Type]()
 
     def is_time32(self) -> Bool:
-        return self._v.isa[Time32Type]()
+        return self.isa[Time32Type]()
 
     def is_time64(self) -> Bool:
-        return self._v.isa[Time64Type]()
+        return self.isa[Time64Type]()
 
     def is_timestamp(self) -> Bool:
-        return self._v.isa[TimestampType]()
+        return self.isa[TimestampType]()
 
     def is_duration(self) -> Bool:
-        return self._v.isa[DurationType]()
+        return self.isa[DurationType]()
 
     def is_temporal(self) -> Bool:
         return (
@@ -1530,13 +1365,13 @@ struct DynType(
         )
 
     def is_year_month_interval(self) -> Bool:
-        return self._v.isa[YearMonthIntervalType]()
+        return self.isa[YearMonthIntervalType]()
 
     def is_day_time_interval(self) -> Bool:
-        return self._v.isa[DayTimeIntervalType]()
+        return self.isa[DayTimeIntervalType]()
 
     def is_month_day_nano_interval(self) -> Bool:
-        return self._v.isa[MonthDayNanoIntervalType]()
+        return self.isa[MonthDayNanoIntervalType]()
 
     def is_interval(self) -> Bool:
         return (
@@ -1546,16 +1381,16 @@ struct DynType(
         )
 
     def is_decimal32(self) -> Bool:
-        return self._v.isa[Decimal32Type]()
+        return self.isa[Decimal32Type]()
 
     def is_decimal64(self) -> Bool:
-        return self._v.isa[Decimal64Type]()
+        return self.isa[Decimal64Type]()
 
     def is_decimal128(self) -> Bool:
-        return self._v.isa[Decimal128Type]()
+        return self.isa[Decimal128Type]()
 
     def is_decimal256(self) -> Bool:
-        return self._v.isa[Decimal256Type]()
+        return self.isa[Decimal256Type]()
 
     def is_decimal(self) -> Bool:
         return (
@@ -1566,114 +1401,98 @@ struct DynType(
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        def f[T: DataType](t: T) {mut writer, imm} -> Bool:
+        def f[T: DataType](t: T) raises {mut writer} -> Bool:
             t.write_to(writer)
             return True
 
-        _ = self._dispatch(f)
+        # The storage's own `visit`, not `Enum`'s: `Enum` reaches the field by
+        # reflection, and formatting a dtype from inside a recursion over nested
+        # types (an error message, an assertion) would then put that reflection
+        # on the recursion and deadlock the compiler.
+        _ = self.visit[Bool](f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
     def __eq__(self, other: Self) -> Bool:
-        return self._v == other._v
+        return self.storage() == other.storage()
 
     def __is__(self, other: Self) -> Bool:
         return self == other
 
     # --- compound type accessors ---
 
-    def holds[T: DataType](self) -> Bool:
-        """Whether this dtype is a `T` — the check `as_type` only asserts.
-
-        `as_type`'s `debug_assert` **aborts the process** on a mismatch, which
-        under `ASSERT=all` takes the whole test runner down and fails every
-        case in the file rather than the one that was wrong. Generic code that
-        narrows a runtime dtype to a comptime type must gate on this and raise;
-        the assert is for invariants a caller has already established.
-        """
-        return self._v.isa[T]()
-
-    def as_type[T: DataType](ref self) -> ref[self._v[T]] T:
-        """This dtype as the concrete `T` it holds — a borrow, no copy.
-
-        The named accessors below are one-liners over it; generic code (a
-        `PrimitiveArray[T]` reading its own dtype) needs the parameterized form.
-        """
-        debug_assert(self._v.isa[T](), "as_type: wrong type, holds ", self)
-        return self._v[T]
-
-    def as_list(ref self) -> ref[self._v[ListType]] ListType:
+    def as_list(ref self) -> ref[self] ListType:
         """For list types, returns the inner ListType."""
-        return self.as_type[ListType]()
+        return self.get[ListType]()
 
-    def as_large_list(ref self) -> ref[self._v[LargeListType]] LargeListType:
+    def as_large_list(ref self) -> ref[self] LargeListType:
         """For large_list types, returns the inner LargeListType."""
-        return self.as_type[LargeListType]()
+        return self.get[LargeListType]()
 
     def as_fixed_size_list(
         ref self,
-    ) -> ref[self._v[FixedSizeListType]] FixedSizeListType:
+    ) -> ref[self] FixedSizeListType:
         """For fixed-size list types, returns the inner FixedSizeListType."""
-        return self.as_type[FixedSizeListType]()
+        return self.get[FixedSizeListType]()
 
-    def as_struct(ref self) -> ref[self._v[StructType]] StructType:
+    def as_struct(ref self) -> ref[self] StructType:
         """For struct types, returns the inner StructType."""
-        return self.as_type[StructType]()
+        return self.get[StructType]()
 
-    def as_map(ref self) -> ref[self._v[MapType]] MapType:
+    def as_map(ref self) -> ref[self] MapType:
         """For map types, returns the inner MapType."""
-        return self.as_type[MapType]()
+        return self.get[MapType]()
 
-    def as_dictionary(ref self) -> ref[self._v[DictionaryType]] DictionaryType:
+    def as_dictionary(ref self) -> ref[self] DictionaryType:
         """For dictionary types, returns the inner DictionaryType."""
-        return self.as_type[DictionaryType]()
+        return self.get[DictionaryType]()
 
     def as_fixed_size_binary(
         ref self,
-    ) -> ref[self._v[FixedSizeBinaryType]] FixedSizeBinaryType:
+    ) -> ref[self] FixedSizeBinaryType:
         """For fixed-size binary types, returns the inner FixedSizeBinaryType.
         """
-        return self.as_type[FixedSizeBinaryType]()
+        return self.get[FixedSizeBinaryType]()
 
-    def as_time32(ref self) -> ref[self._v[Time32Type]] Time32Type:
-        return self.as_type[Time32Type]()
+    def as_time32(ref self) -> ref[self] Time32Type:
+        return self.get[Time32Type]()
 
-    def as_time64(ref self) -> ref[self._v[Time64Type]] Time64Type:
-        return self.as_type[Time64Type]()
+    def as_time64(ref self) -> ref[self] Time64Type:
+        return self.get[Time64Type]()
 
-    def as_timestamp(ref self) -> ref[self._v[TimestampType]] TimestampType:
-        return self.as_type[TimestampType]()
+    def as_timestamp(ref self) -> ref[self] TimestampType:
+        return self.get[TimestampType]()
 
-    def as_duration(ref self) -> ref[self._v[DurationType]] DurationType:
-        return self.as_type[DurationType]()
+    def as_duration(ref self) -> ref[self] DurationType:
+        return self.get[DurationType]()
 
     def as_year_month_interval(
         ref self,
-    ) -> ref[self._v[YearMonthIntervalType]] YearMonthIntervalType:
-        return self.as_type[YearMonthIntervalType]()
+    ) -> ref[self] YearMonthIntervalType:
+        return self.get[YearMonthIntervalType]()
 
     def as_day_time_interval(
         ref self,
-    ) -> ref[self._v[DayTimeIntervalType]] DayTimeIntervalType:
-        return self.as_type[DayTimeIntervalType]()
+    ) -> ref[self] DayTimeIntervalType:
+        return self.get[DayTimeIntervalType]()
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[self._v[MonthDayNanoIntervalType]] MonthDayNanoIntervalType:
-        return self.as_type[MonthDayNanoIntervalType]()
+    ) -> ref[self] MonthDayNanoIntervalType:
+        return self.get[MonthDayNanoIntervalType]()
 
-    def as_decimal32(ref self) -> ref[self._v[Decimal32Type]] Decimal32Type:
-        return self.as_type[Decimal32Type]()
+    def as_decimal32(ref self) -> ref[self] Decimal32Type:
+        return self.get[Decimal32Type]()
 
-    def as_decimal64(ref self) -> ref[self._v[Decimal64Type]] Decimal64Type:
-        return self.as_type[Decimal64Type]()
+    def as_decimal64(ref self) -> ref[self] Decimal64Type:
+        return self.get[Decimal64Type]()
 
-    def as_decimal128(ref self) -> ref[self._v[Decimal128Type]] Decimal128Type:
-        return self.as_type[Decimal128Type]()
+    def as_decimal128(ref self) -> ref[self] Decimal128Type:
+        return self.get[Decimal128Type]()
 
-    def as_decimal256(ref self) -> ref[self._v[Decimal256Type]] Decimal256Type:
-        return self.as_type[Decimal256Type]()
+    def as_decimal256(ref self) -> ref[self] Decimal256Type:
+        return self.get[Decimal256Type]()
 
 
 # ---------------------------------------------------------------------------

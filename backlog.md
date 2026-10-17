@@ -146,8 +146,34 @@ bytes, `ld` asserted (`name.size() <= maxLength`) and `libmarrow.so` failed to
 link; the tree builds without it. A new relation node with large by-value
 fields can trip it; holding them behind an `ArcPointer` is the known fix.
 
+**`utils/enum.mojo` works around four compiler limits; revisit each on a
+nightly upgrade.**
+
+- *Reflection over a recursive handle inside its own recursion deadlocks the
+  compiler* (0% CPU, `-j 1` included): a recursive kernel formatting a dtype
+  never finished building once `DynType.write_to` reached its storage through
+  `reflect[...].field_ref`. So `Enum` never reflects: its `storage()` default
+  reinterprets a handle whose box is its only field as that box (a
+  `size_of` assert guards it), and `DynRelation`, which also holds a
+  trampoline, writes its own with `widen`.
+- *An inherited default whose signature spells a closure type crashes the
+  compiler* when called on a concrete handle (`CallParamInf::inferForCall`),
+  aliased or not. The visits take `Func: AnyType` and reinterpret it in the
+  body, which is also why `R` is explicit at every call site.
+- *Reinterpreting a non-raising closure fails to build* ("does not have
+  witness table for trait '__mojo_closure__'"). Every visit closure is
+  declared `raises`, and the total visits catch once and abort.
+- *An inherited constructor bound on `Self.Storage.Trait` matches no conformer*,
+  and an unbounded `[T: Movable]` one makes every value convert to every
+  handle: `ILikeKernel.dispatch(a, String)` resolved its pattern to a
+  `DynArray`. So each handle writes its own `@implicit __init__[T: Family]`.
+- *A handle's synthesized copy constructor costs ~70 KB per size gate* over
+  the hand-written `self._storage = copy._storage.copy()`, while on the
+  `UniqueVariant` itself the synthesized one is ~75 KB smaller. Each handle
+  keeps its explicit copy constructor; the newtype has none.
+
 **A capturing closure returning `None` cannot go through an `R: Movable, //`
-dispatch helper** (`_dispatch`, `_dispatch_mut`, `dispatch_*`) since nightly
+dispatch helper** (the `Enum` visits) since nightly
 `dev2026092905`. `precompile` passes; the instantiation fails with *"struct
 '…::f::__storage' does not have witness table for trait '__mojo_closure__'"*.
 Spelling `-> None` does not help; returning a value does, so the affected

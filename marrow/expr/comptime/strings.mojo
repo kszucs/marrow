@@ -201,7 +201,7 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue, Unnamed):
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
-        return Self.K.apply[Self.Type](arr.as_type[Self.Bound]())
+        return Self.K.apply[Self.Type](arr.get[Self.Bound]())
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         # A map transforms values, never validity: `upper(null)` is null, and
@@ -291,14 +291,14 @@ struct StringPredicate[
             var rb = self.r.bind(batch, bindings)
             var pattern = self.r.lane(rb, 0)
             return Self.K.apply_scalar(
-                left.as_type[BinaryLikeArray[Self.L.Type]](),
+                left.get[BinaryLikeArray[Self.L.Type]](),
                 StringSlice(pattern),
             )
         else:
             var right = self.r.evaluate(batch, bindings).to_array(n)
             return Self.K.apply(
-                left.as_type[BinaryLikeArray[Self.L.Type]](),
-                right.as_type[BinaryLikeArray[Self.R.Type]](),
+                left.get[BinaryLikeArray[Self.L.Type]](),
+                right.get[BinaryLikeArray[Self.R.Type]](),
             )
 
     @always_inline
@@ -345,7 +345,7 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
         # The typed `apply`, not `dispatch`: `A.Type` is a comptime parameter
         # here, so the runtime dtype resolution the previous layer needed is
         # gone.
-        return LengthKernel.apply(s.as_type[BinaryLikeArray[Self.A.Type]]())
+        return LengthKernel.apply(s.get[BinaryLikeArray[Self.A.Type]]())
 
     @always_inline
     def lane[
@@ -380,7 +380,7 @@ def _text[
     return (
         value.evaluate(batch, bindings)
         .to_array(len(batch))
-        .as_type[BinaryLikeArray[V.Type]]()
+        .get[BinaryLikeArray[V.Type]]()
         .copy()
     )
 
@@ -394,7 +394,7 @@ def _number[
     return (
         value.evaluate(batch, bindings)
         .to_array(len(batch))
-        .as_type[PrimitiveArray[V.Type]]()
+        .get[PrimitiveArray[V.Type]]()
         .copy()
     )
 
@@ -816,8 +816,8 @@ struct StringConcat[L: StringValue, R: StringValue](StringValue, Unnamed):
         var left = self.l.evaluate(batch, bindings).to_array(n)
         var right = self.r.evaluate(batch, bindings).to_array(n)
         return ConcatKernel.apply(
-            left.as_type[BinaryLikeArray[Self.L.Type]](),
-            right.as_type[BinaryLikeArray[Self.R.Type]](),
+            left.get[BinaryLikeArray[Self.L.Type]](),
+            right.get[BinaryLikeArray[Self.R.Type]](),
         )
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:

@@ -370,7 +370,7 @@ struct DecimalRescale[To: DecimalType, A: DecimalValue](DecimalValue, Unnamed):
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var source = self.a.dtype(Schema.from_dtype(batch.dtype))
-        var delta = self._dtype.scale() - source.as_type[Self.A.Type]().scale()
+        var delta = self._dtype.scale() - source.get[Self.A.Type]().scale()
         return (
             self.a.bind(batch, bindings),
             pow(Scalar[Self.M](10), abs(delta)),
@@ -470,7 +470,7 @@ struct DecimalToNum[To: NumericType, A: DecimalValue](NumericValue, Unnamed):
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var source = self.a.dtype(Schema.from_dtype(batch.dtype))
-        var scale = source.as_type[Self.A.Type]().scale()
+        var scale = source.get[Self.A.Type]().scale()
         return (self.a.bind(batch, bindings), pow(Scalar[Self.F](10), scale))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -517,7 +517,7 @@ struct DecimalToString[To: StringLikeType, A: DecimalValue](
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
         return DecimalToStringKernel.apply[Self.From, Self.To](
-            arr.as_type[PrimitiveArray[Self.From]]()
+            arr.get[PrimitiveArray[Self.From]]()
         )
 
     @always_inline
@@ -561,7 +561,7 @@ struct StringToDecimal[To: DecimalType, A: StringValue](
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
         return StringToDecimalKernel.apply[Self.From, Self.To](
-            arr.as_type[BinaryLikeArray[Self.From]](), self._dtype, False
+            arr.get[BinaryLikeArray[Self.From]](), self._dtype, False
         )
 
     @always_inline

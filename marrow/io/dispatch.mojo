@@ -44,9 +44,9 @@ is still supplied as the comptime `S` -- which is how
 """
 
 from std.os import abort
-from std.utils import Variant
 
 from ..errors import InternalError
+from ..utils.enum import Enum, UniqueVariant, widen
 from .opendal import OpenDalStore, OpenDalWriter, OpenDalSource
 from .core import ByteSink, ByteSource, Fetched
 from .local import BufferSource, FileSink, MemorySink
@@ -54,54 +54,57 @@ from ..execution import ExecContext
 from .uri import StorageOptions, Uri
 
 
-struct DynSource(ByteSource):
+struct DynSource(ByteSource, Enum):
     """A `ByteSource` chosen at run time."""
 
-    comptime VariantType = Variant[BufferSource, OpenDalSource]
+    comptime Storage = UniqueVariant[ByteSource, BufferSource, OpenDalSource]
     """Every member is pointer-, `Int`- or `String`-backed, so all are
     8-aligned. That matters: a `List` of a `Variant` whose largest member is not
     its most-aligned one silently loses every other element (see CLAUDE.md).
     Do not add a 32-aligned member without re-reading that note."""
 
-    var _v: Self.VariantType
+    var _storage: Self.Storage
+
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
 
     @implicit
     def __init__(out self, var s: BufferSource):
-        self._v = Self.VariantType(s^)
+        self._storage = Self.Storage(s^)
 
     @implicit
     def __init__(out self, var s: OpenDalSource):
-        self._v = Self.VariantType(s^)
+        self._storage = Self.Storage(s^)
 
     def size(self) -> Int:
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, ByteSource):
-                if self._v.isa[T]():
-                    return self._v[T].size()
-        abort("DynSource.size: no arm matched")
+        return self.visit[Int](
+            lambda [T: ByteSource](t: T) raises {} -> Int: t.size()
+        )
 
     def read_at(
         ref self, offset: Int, length: Int
     ) raises -> Span[UInt8, origin_of(self)]:
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
+        # A ladder, not `try_visit`: the result borrows `self` at whatever
+        # origin `ref self` binds, and a closure cannot be generic over it.
+        comptime for i in range(len(Self.Storage.Ts)):
+            comptime T = Self.Storage.Ts[i]
             comptime if conforms_to(T, ByteSource):
-                if self._v.isa[T]():
+                if self.storage().isa[T]():
                     return rebind[Span[UInt8, origin_of(self)]](
-                        self._v[T].read_at(offset, length)
+                        self.storage().get[T]().read_at(offset, length)
                     )
-        raise InternalError("DynSource.read_at: no arm matched")
+        raise InternalError("DynSource.read_at: no member matched")
 
     def read_ranges(
         self, ranges: List[Tuple[Int, Int]], ctx: ExecContext
     ) raises -> Fetched:
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, ByteSource):
-                if self._v.isa[T]():
-                    return self._v[T].read_ranges(ranges, ctx)
-        raise InternalError("DynSource.read_ranges: no arm matched")
+        def f[T: ByteSource](t: T) raises {imm} -> Fetched:
+            return t.read_ranges(ranges, ctx)
+
+        return self.try_visit[Fetched, ByteSource](
+            f, "DynSource: no member matched"
+        )
 
     @staticmethod
     def open(
@@ -121,41 +124,45 @@ struct DynSource(ByteSource):
         return Self(OpenDalSource(_store_for(u, options), u.object_key()))
 
 
-struct DynSink(ByteSink):
+struct DynSink(ByteSink, Enum):
     """A `ByteSink` chosen at run time. See `DynSource`."""
 
-    comptime VariantType = Variant[FileSink, MemorySink, OpenDalWriter]
-    var _v: Self.VariantType
+    comptime Storage = UniqueVariant[
+        ByteSink, FileSink, MemorySink, OpenDalWriter
+    ]
+    var _storage: Self.Storage
+
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
 
     @implicit
     def __init__(out self, var s: FileSink):
-        self._v = Self.VariantType(s^)
+        self._storage = Self.Storage(s^)
 
     @implicit
     def __init__(out self, var s: MemorySink):
-        self._v = Self.VariantType(s^)
+        self._storage = Self.Storage(s^)
 
     @implicit
     def __init__(out self, var s: OpenDalWriter):
-        self._v = Self.VariantType(s^)
+        self._storage = Self.Storage(s^)
 
     def write[o: Origin[mut=False]](mut self, data: Span[UInt8, o]) raises:
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, ByteSink):
-                if self._v.isa[T]():
-                    self._v[T].write(data)
-                    return
-        raise InternalError("DynSink.write: no arm matched")
+        def f[T: ByteSink](mut t: T) raises {imm} -> Bool:
+            t.write(data)
+            return True
+
+        _ = self.try_visit_mut[Bool, ByteSink](f, "DynSink: no member matched")
 
     def close(mut self) raises:
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, ByteSink):
-                if self._v.isa[T]():
-                    self._v[T].close()
-                    return
-        raise InternalError("DynSink.close: no arm matched")
+        var done = True
+
+        def f[T: ByteSink](mut t: T) raises {imm} -> Bool:
+            t.close()
+            return done
+
+        _ = self.try_visit_mut[Bool, ByteSink](f, "DynSink: no member matched")
 
     @staticmethod
     def open(

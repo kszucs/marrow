@@ -329,7 +329,7 @@ def lit[T: DecimalType](value: PrimitiveScalar[T]) raises -> DecimalLiteral[T]:
     and scale and holds the full `decimal128`/`decimal256` range. A null
     scalar raises: a literal has no validity to carry it."""
     _check_valid(value.is_valid())
-    return DecimalLiteral[T](value.value(), value.type().as_type[T]())
+    return DecimalLiteral[T](value.value(), value.type().get[T]())
 
 
 def lit[T: IntervalType](value: Int, dtype: T) -> IntervalLiteral[T]:

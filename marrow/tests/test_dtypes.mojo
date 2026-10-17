@@ -20,7 +20,7 @@ def test_bool_type() raises:
     # which call bool primitive. marrow has something neither has: a
     # `PrimitiveType` *trait* that generic code dispatches on, which `BoolType`
     # cannot conform to because bool is bit-packed. `is_primitive()` exists to
-    # guard `dispatch_primitive`, so a True here is a trap — it
+    # guard `try_visit[PrimitiveType]`, so a True here is a trap — it
     # aborted `byte_width()`. Do not "fix" this back.
     assert_false(t.is_primitive())
     assert_false(t.is_string())
@@ -615,20 +615,28 @@ def test_layout_dictionary_follows_its_index_type() raises:
 
 def test_dispatch_binaryview() raises:
     """Resolves both view dtypes to their comptime type and refuses the
-    offsets layout, which `dispatch_binarylike` owns."""
+    offsets layout, which `try_visit[BinaryLikeType]` owns."""
 
-    def name[T: BinaryViewLikeType](d: T) raises -> String:
+    def name[T: BinaryViewLikeType](d: T) raises {imm} -> String:
         return String(d)
 
     assert_equal(
-        DynType(dt.string_view).dispatch_binaryview(name), "string_view"
+        DynType(dt.string_view).try_visit[String, BinaryViewLikeType](
+            name, "dtype is not a binary view"
+        ),
+        "string_view",
     )
     assert_equal(
-        DynType(dt.binary_view).dispatch_binaryview(name), "binary_view"
+        DynType(dt.binary_view).try_visit[String, BinaryViewLikeType](
+            name, "dtype is not a binary view"
+        ),
+        "binary_view",
     )
     var raised = False
     try:
-        _ = DynType(dt.string).dispatch_binaryview(name)
+        _ = DynType(dt.string).try_visit[String, BinaryViewLikeType](
+            name, "dtype is not a binary view"
+        )
     except:
         raised = True
     assert_true(raised)

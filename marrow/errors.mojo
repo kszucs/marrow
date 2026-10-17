@@ -30,7 +30,7 @@ Choosing a kind:
   ("writer is closed"), a parse or usage error in user text, arithmetic
   overflow, a lossy conversion, or a value exceeding an offset or id space.
 - `TypeError` — a dtype this operation cannot take, or two that do not match.
-  A `dispatch_*` refusing a dtype is a `TypeError`, not an `InternalError`: the
+  A `try_visit` refusing a dtype is a `TypeError`, not an `InternalError`: the
   runtime lane reaches it with user data.
 - `KeyError` — a name that does not resolve: column, field, parameter.
 - `IndexError` — a position the *caller* supplied is out of bounds.
@@ -158,14 +158,14 @@ def debug_assert_lazy[
     A `debug_assert` message is an ordinary argument, evaluated before the
     call whether assertions are on or not. One that copies or dispatches —
     `self.dtype()` on an erased container — then costs every passing call;
-    `DynBuilder.as_type` copying a struct dtype per value was ~21% of an
+    `DynBuilder.get` copying a struct dtype per value was ~21% of an
     NDJSON read. Hand such a message over as a closure instead:
 
     ```mojo
     def held() {imm} -> DynType:
         return self.dtype()
 
-    debug_assert_lazy(self._v.isa[T](), "as_type: wrong type, holds ", held)
+    debug_assert_lazy(self._v.isa[T](), "get: wrong type, holds ", held)
     ```
     """
     if not cond:

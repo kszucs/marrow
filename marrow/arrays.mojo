@@ -20,7 +20,7 @@ DynArray — the type-erased handle
 Copies are O(1) — all typed arrays hold their data behind ref-counted `Buffer` /
 `Bitmap` handles, so copying the variant is just a few ref-count bumps.
 
-Runtime dispatch goes through `_dispatch`, which iterates the variant members at
+Runtime dispatch goes through `visit`, which iterates the variant members at
 compile time and selects the active type via `isa[T]()`.  No unsafe `rebind`
 casts or function-pointer trampolines are used.
 
@@ -43,7 +43,6 @@ from std.bit import byte_swap
 from max.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from std.utils import Variant
 
 from .errors import (
     IndexError,
@@ -56,6 +55,7 @@ from .errors import (
 )
 from .buffers import Buffer, Bitmap
 from .utils.byteorder import LittleEndian
+from .utils.enum import Enum, UniqueVariant, widen
 from .views import BufferView, BitmapView
 from std.builtin.rebind import downcast
 from std.os import abort
@@ -340,7 +340,7 @@ struct ArrayData(Copyable, Equatable, Movable):
         recursive at instantiation; the elaborator never resolves that, parking
         at 0% CPU with no diagnostic, and it kept every case in
         `marrow/tests/test_arrays.mojo` from compiling. Measured: `_v == _v`,
-        `_dispatch` narrowing and `@no_inline` all still deadlock — only a path
+        `visit` narrowing and `@no_inline` all still deadlock — only a path
         that never names a typed `__eq__` works.
         """
         if self.dtype != other.dtype:
@@ -495,7 +495,9 @@ struct ArrayData(Copyable, Equatable, Movable):
                 bad = (
                     self.dtype.as_dictionary()
                     .index_type()
-                    .dispatch_integer(first_bad)
+                    .try_visit[Int, IntegerType](
+                        first_bad, "dtype is not integer"
+                    )
                 )
             except:
                 raise InvalidError(
@@ -923,7 +925,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         if len(data.buffers) != 1:
             raise InvalidError("PrimitiveArray requires exactly one buffer")
         self = Self(
-            dtype=data.dtype.as_type[Self.T]().copy(),
+            dtype=data.dtype.get[Self.T]().copy(),
             length=data.length,
             nulls=data.nulls,
             offset=data.offset,
@@ -3057,27 +3059,15 @@ struct DictionaryArray(Array):
         an erased element is the thing to avoid.
         """
         var idx_scalar = self._indices[][self._offset + index]
-        ref index_type = self._dtype.as_dictionary().index_type()
-        if index_type.is_int8():
-            return Int(idx_scalar.as_int8().value())
-        elif index_type.is_int16():
-            return Int(idx_scalar.as_int16().value())
-        elif index_type.is_int32():
-            return Int(idx_scalar.as_int32().value())
-        elif index_type.is_int64():
-            return Int(idx_scalar.as_int64().value())
-        elif index_type.is_uint8():
-            return Int(idx_scalar.as_uint8().value())
-        elif index_type.is_uint16():
-            return Int(idx_scalar.as_uint16().value())
-        elif index_type.is_uint32():
-            return Int(idx_scalar.as_uint32().value())
-        elif index_type.is_uint64():
-            return Int(idx_scalar.as_uint64().value())
-        else:
-            raise TypeError(
-                t"DictionaryArray: unexpected index type: {index_type}"
-            )
+
+        def f[T: IntegerType](t: T) raises {imm} -> Int:
+            return Int(idx_scalar.as_primitive[T]().value())
+
+        return (
+            self._dtype.as_dictionary()
+            .index_type()
+            .try_visit[Int, IntegerType](f, "dtype is not integer")
+        )
 
     def __getitem__(self, index: Int) raises -> DictionaryScalar:
         if index < 0 or index >= self._length:
@@ -3172,16 +3162,16 @@ struct DictionaryArray(Array):
             return True
 
         def on_bytes[A: BytesArray](lhs: A) raises {imm} -> Bool:
-            return rows(lhs, other._values[].as_type[A]())
+            return rows(lhs, other._values[].get[A]())
 
         def on_primitive[T: PrimitiveType](t: T) raises {imm} -> Bool:
             return rows(
-                self._values[].as_type[PrimitiveArray[T]](),
-                other._values[].as_type[PrimitiveArray[T]](),
+                self._values[].get[PrimitiveArray[T]](),
+                other._values[].get[PrimitiveArray[T]](),
             )
 
         # `is_bool` and `is_fixed_size_binary` are named on their own because
-        # neither belongs to a `dispatch_*` family -- bool is bit-packed rather
+        # neither belongs to a `try_visit` family -- bool is bit-packed rather
         # than fixed-byte-width, so `is_primitive` deliberately excludes it, and
         # `FixedSizeBinaryArray` takes no type parameter. Both are flat, so both
         # can be compared row by row like the rest.
@@ -3197,9 +3187,13 @@ struct DictionaryArray(Array):
             or value_type.is_string_view()
             or value_type.is_binary_view()
         ):
-            return self._values[].dispatch_bytes(on_bytes)
+            return self._values[].try_visit[Bool, BytesArray](
+                on_bytes, "expected a binary or string array"
+            )
         elif value_type.is_primitive():
-            return value_type.dispatch_primitive(on_primitive)
+            return value_type.try_visit[Bool, PrimitiveType](
+                on_primitive, "dtype is not primitive"
+            )
         else:
             # A dictionary over a nested type. Decoding one of those needs the
             # element comparison this method exists to avoid, so answer on the
@@ -3302,8 +3296,8 @@ struct DynArray(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    Enum,
     Equatable,
-    Movable,
     Sized,
     Writable,
 ):
@@ -3311,7 +3305,7 @@ struct DynArray(
 
     **Does not conform to `Array`.** The surface is the same, but it is this
     struct's own API rather than a trait implementation: every `[T: Array]`
-    bound in the tree lives inside the `_dispatch` closures below, so the
+    bound in the tree lives inside the `visit` closures below, so the
     conformance had no consumer — while forcing `Array.slice` to be `raises`
     for all nine typed arrays. It was added in `8334bf0` for a lane
     unification that `7d57398` then abandoned.
@@ -3320,7 +3314,7 @@ struct DynArray(
     hold their data behind ref-counted `Buffer` / `Bitmap` handles, so
     copying the variant bumps a few ref-counts and copies some small ints.
 
-    Runtime dispatch goes through `_dispatch`, which iterates the variant
+    Runtime dispatch goes through `visit`, which iterates the variant
     members at compile time and selects the active type via `isa[T]()`.
     No unsafe `rebind` casts or function-pointer trampolines are used.
 
@@ -3329,7 +3323,8 @@ struct DynArray(
     Use `to_data()` to extract a generic `ArrayData` for interop.
     """
 
-    comptime VariantType = Variant[
+    comptime Storage = UniqueVariant[
+        Array,
         NullArray,
         BoolArray,
         Int8Array,
@@ -3371,72 +3366,20 @@ struct DynArray(
         StringViewArray,
     ]
 
-    var _v: Self.VariantType
+    var _storage: Self.Storage
 
-    def _dispatch[
-        R: Movable, //, Func: def[T: Array](T) -> R
-    ](self, func: Func) -> R:
-        """Run `func` on the active variant member, narrowed to `Array`.
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
 
-        The one narrowing adapter for this type. `Array` is named concretely
-        because a closure type cannot be generic over its own trait bound, and
-        the `isa` ladder is written out here rather than delegated to a shared
-        helper: interposing a narrowing closure between the caller and the
-        ladder costs a fully inlined copy of the adapter in *every* arm.
-        Routing the four boxes through one generic `variant_dispatch` helper
-        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
-        `__text`. Duplicating five lines of `comptime for` per box is the price.
-        """
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, Array):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, Array]](self._v[T]))
-        abort("DynArray._dispatch: no arm matched")
-
-    def _dispatch[
-        R: Movable, //, Func: def[T: Array](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Raising counterpart of `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, Array):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, Array]](self._v[T]))
-        raise InternalError("DynArray._dispatch: no arm matched")
-
-    def dispatch_bytes[
-        R: Movable, //, Func: def[A: BytesArray](A) raises -> R
-    ](self, func: Func) raises -> R:
-        """Run `func` on this array as a `BytesArray` -- a binary or string
-        array in either layout, offsets or views.
-
-        For the consumers that only read elements: one arm instead of an
-        offsets arm and a views arm at every call site. The same local `isa`
-        ladder as `_dispatch`, narrowed to `BytesArray`; any other array raises
-        a `TypeError`.
-        """
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, BytesArray):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, BytesArray]](self._v[T]))
-        raise TypeError(
-            t"dispatch_bytes: expected a binary or string array, got"
-            t" {self.dtype()}"
-        )
+    def __init__(out self, *, copy: Self):
+        self._storage = Self.Storage(copy=copy._storage)
 
     # --- construction ---
 
     @implicit
     def __init__[T: Array](out self, var array: T):
-        self._v = Self.VariantType(array^)
-
-    def __init__(out self, *, copy: Self):
-        self._v = Self.VariantType(copy=copy._v)
+        self._storage = Self.Storage(array^)
 
     # Explicit (empty) destructor so this type is Deinitable despite
     # the `StructArray -> List[DynArray] -> DynArray` reference cycle; the
@@ -3472,28 +3415,28 @@ struct DynArray(
     # --- dispatch-based methods ---
 
     def length(self) -> Int:
-        def f[T: Array](a: T) {imm} -> Int:
+        def f[T: Array](a: T) raises {imm} -> Int:
             return len(a)
 
-        return self._dispatch(f)
+        return self.visit[Int](f)
 
     def dtype(self) -> DynType:
-        def f[T: Array](a: T) {imm} -> DynType:
+        def f[T: Array](a: T) raises {imm} -> DynType:
             return a.type()
 
-        return self._dispatch(f)
+        return self.visit[DynType](f)
 
     def null_count(self) -> Int:
-        def f[T: Array](a: T) {imm} -> Int:
+        def f[T: Array](a: T) raises {imm} -> Int:
             return a.null_count()
 
-        return self._dispatch(f)
+        return self.visit[Int](f)
 
     def is_valid(self, index: Int) -> Bool:
-        def f[T: Array](a: T) {imm} -> Bool:
+        def f[T: Array](a: T) raises {imm} -> Bool:
             return a.is_valid(index)
 
-        return self._dispatch(f)
+        return self.visit[Bool](f)
 
     def is_null(self, index: Int) -> Bool:
         return not self.is_valid(index)
@@ -3504,11 +3447,11 @@ struct DynArray(
         Matches PyArrow's Array.slice(offset, length) API.
         """
 
-        def f[T: Array](a: T) {imm} -> DynArray:
+        def f[T: Array](a: T) raises {imm} -> DynArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
 
-        return self._dispatch(f)
+        return self.visit[DynArray](f)
 
     def view(self, var dtype: DynType) raises -> DynArray:
         """Reinterpret this array's buffers under a same-layout `dtype`.
@@ -3535,7 +3478,9 @@ struct DynArray(
         def f[T: Array](a: T) raises {imm} -> ArrayData:
             return a.to_data()
 
-        return self._dispatch(f)
+        return self.try_visit[ArrayData, Array](
+            f, "DynArray: no member matched"
+        )
 
     def to_device(self, ctx: DeviceContext) raises -> DynArray:
         """Upload this array to the GPU device."""
@@ -3543,7 +3488,7 @@ struct DynArray(
         def f[T: Array](a: T) raises {imm} -> DynArray:
             return a.to_device(ctx)
 
-        return self._dispatch(f)
+        return self.try_visit[DynArray, Array](f, "DynArray: no member matched")
 
     def to_cpu(self, ctx: DeviceContext) raises -> DynArray:
         """Download this array from the GPU device to CPU memory."""
@@ -3551,14 +3496,14 @@ struct DynArray(
         def f[T: Array](a: T) raises {imm} -> DynArray:
             return a.to_cpu(ctx)
 
-        return self._dispatch(f)
+        return self.try_visit[DynArray, Array](f, "DynArray: no member matched")
 
     def write_to[W: Writer](self, mut writer: W):
-        def f[T: Array](a: T) {mut writer, imm} -> Bool:
+        def f[T: Array](a: T) raises {mut writer, imm} -> Bool:
             a.write_to(writer)
             return True
 
-        _ = self._dispatch(f)
+        _ = self.visit[Bool](f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -3566,7 +3511,7 @@ struct DynArray(
     def __eq__(self, other: DynArray) -> Bool:
         """Compare the two arrays' fields, via their flat layout.
 
-        Deliberately **not** `self._v == other._v`. `Variant.__eq__` resolves
+        Deliberately **not** `self._storage == other.box`. `Variant.__eq__` resolves
         the active member on both sides and so dispatches into every typed
         `__eq__`, including the nested ones — which hold `DynArray` fields and
         come straight back here. That cycle deadlocks the compiler (see
@@ -3600,199 +3545,168 @@ struct DynArray(
         def f[T: Array](a: T) raises {imm} -> DynScalar:
             return a[index].to_dyn()
 
-        return self._dispatch(f)
+        return self.try_visit[DynScalar, Array](
+            f, "DynArray: no member matched"
+        )
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
-    def as_type[T: Array](ref self) -> ref[self._v[T]] T:
-        """This array as the concrete `T` it holds — a borrow, no copy.
-
-        The named accessors below are one-liners over it; generic code
-        (a fused node reading a typed slot) needs the parameterized form.
-
-        **A wrong `T` kills the process, and only says so in a debug build.**
-        The `debug_assert` — the one thing here that names the held dtype — is
-        compiled out under release, so a mismatch falls through to
-        `Variant.__getitem__` and aborts with a bare `get: wrong variant type`
-        naming this line and nothing else. Every array type shares this
-        accessor, so that message identifies neither the type held nor the type
-        asked for; from a pool worker it also prints once per
-        thread. Diagnosing one costs an afternoon.
-
-        So: **only call this where the type has actually been proven** — inside
-        a `dispatch_*` arm, or off a `comptime` type the caller owns. Deriving
-        `T` from a property that merely correlates with the type is what caused
-        that incident: `BinaryLikeBuilder.extend` picked `StringType` vs
-        `LargeStringType` off the *builder's* offset width, which says nothing
-        about whether the *source* holds text or bytes, and a `binary` column
-        aborted every group-by that crossed into the thread-local path."""
-
-        def held() {imm} -> DynType:
-            return self.dtype()
-
-        debug_assert_lazy(self._v.isa[T](), "as_type: wrong type, holds ", held)
-        return self._v[T]
-
-    def as_primitive[
-        T: PrimitiveType
-    ](ref self) -> ref[self._v[PrimitiveArray[T]]] PrimitiveArray[T]:
-        return self.as_type[PrimitiveArray[T]]()
+    def as_primitive[T: PrimitiveType](ref self) -> ref[self] PrimitiveArray[T]:
+        return self.get[PrimitiveArray[T]]()
 
     def as_binary_like[
         T: BinaryLikeType
-    ](ref self) -> ref[self._v[BinaryLikeArray[T]]] BinaryLikeArray[T]:
-        return self.as_type[BinaryLikeArray[T]]()
+    ](ref self) -> ref[self] BinaryLikeArray[T]:
+        return self.get[BinaryLikeArray[T]]()
 
     def as_binary_view_like[
         T: BinaryViewLikeType
-    ](ref self) -> ref[self._v[BinaryViewLikeArray[T]]] BinaryViewLikeArray[T]:
-        return self.as_type[BinaryViewLikeArray[T]]()
+    ](ref self) -> ref[self] BinaryViewLikeArray[T]:
+        return self.get[BinaryViewLikeArray[T]]()
 
-    def as_null(ref self) -> ref[self._v[NullArray]] NullArray:
-        return self.as_type[NullArray]()
+    def as_null(ref self) -> ref[self] NullArray:
+        return self.get[NullArray]()
 
-    def as_bool(ref self) -> ref[self._v[BoolArray]] BoolArray:
-        return self.as_type[BoolArray]()
+    def as_bool(ref self) -> ref[self] BoolArray:
+        return self.get[BoolArray]()
 
-    def as_int8(ref self) -> ref[self._v[Int8Array]] Int8Array:
-        return self.as_type[Int8Array]()
+    def as_int8(ref self) -> ref[self] Int8Array:
+        return self.get[Int8Array]()
 
-    def as_int16(ref self) -> ref[self._v[Int16Array]] Int16Array:
-        return self.as_type[Int16Array]()
+    def as_int16(ref self) -> ref[self] Int16Array:
+        return self.get[Int16Array]()
 
-    def as_int32(ref self) -> ref[self._v[Int32Array]] Int32Array:
-        return self.as_type[Int32Array]()
+    def as_int32(ref self) -> ref[self] Int32Array:
+        return self.get[Int32Array]()
 
-    def as_int64(ref self) -> ref[self._v[Int64Array]] Int64Array:
-        return self.as_type[Int64Array]()
+    def as_int64(ref self) -> ref[self] Int64Array:
+        return self.get[Int64Array]()
 
-    def as_uint8(ref self) -> ref[self._v[UInt8Array]] UInt8Array:
-        return self.as_type[UInt8Array]()
+    def as_uint8(ref self) -> ref[self] UInt8Array:
+        return self.get[UInt8Array]()
 
-    def as_uint16(ref self) -> ref[self._v[UInt16Array]] UInt16Array:
-        return self.as_type[UInt16Array]()
+    def as_uint16(ref self) -> ref[self] UInt16Array:
+        return self.get[UInt16Array]()
 
-    def as_uint32(ref self) -> ref[self._v[UInt32Array]] UInt32Array:
-        return self.as_type[UInt32Array]()
+    def as_uint32(ref self) -> ref[self] UInt32Array:
+        return self.get[UInt32Array]()
 
-    def as_uint64(ref self) -> ref[self._v[UInt64Array]] UInt64Array:
-        return self.as_type[UInt64Array]()
+    def as_uint64(ref self) -> ref[self] UInt64Array:
+        return self.get[UInt64Array]()
 
-    def as_float16(ref self) -> ref[self._v[Float16Array]] Float16Array:
-        return self.as_type[Float16Array]()
+    def as_float16(ref self) -> ref[self] Float16Array:
+        return self.get[Float16Array]()
 
-    def as_float32(ref self) -> ref[self._v[Float32Array]] Float32Array:
-        return self.as_type[Float32Array]()
+    def as_float32(ref self) -> ref[self] Float32Array:
+        return self.get[Float32Array]()
 
-    def as_float64(ref self) -> ref[self._v[Float64Array]] Float64Array:
-        return self.as_type[Float64Array]()
+    def as_float64(ref self) -> ref[self] Float64Array:
+        return self.get[Float64Array]()
 
-    def as_string(ref self) -> ref[self._v[StringArray]] StringArray:
-        return self.as_type[StringArray]()
+    def as_string(ref self) -> ref[self] StringArray:
+        return self.get[StringArray]()
 
-    def as_binary(ref self) -> ref[self._v[BinaryArray]] BinaryArray:
-        return self.as_type[BinaryArray]()
+    def as_binary(ref self) -> ref[self] BinaryArray:
+        return self.get[BinaryArray]()
 
     def as_large_string(
         ref self,
-    ) -> ref[self._v[LargeStringArray]] LargeStringArray:
-        return self.as_type[LargeStringArray]()
+    ) -> ref[self] LargeStringArray:
+        return self.get[LargeStringArray]()
 
     def as_large_binary(
         ref self,
-    ) -> ref[self._v[LargeBinaryArray]] LargeBinaryArray:
-        return self.as_type[LargeBinaryArray]()
+    ) -> ref[self] LargeBinaryArray:
+        return self.get[LargeBinaryArray]()
 
     def as_string_view(
         ref self,
-    ) -> ref[self._v[StringViewArray]] StringViewArray:
-        return self.as_type[StringViewArray]()
+    ) -> ref[self] StringViewArray:
+        return self.get[StringViewArray]()
 
     def as_binary_view(
         ref self,
-    ) -> ref[self._v[BinaryViewArray]] BinaryViewArray:
-        return self.as_type[BinaryViewArray]()
+    ) -> ref[self] BinaryViewArray:
+        return self.get[BinaryViewArray]()
 
-    def as_list(ref self) -> ref[self._v[ListArray]] ListArray:
-        return self.as_type[ListArray]()
+    def as_list(ref self) -> ref[self] ListArray:
+        return self.get[ListArray]()
 
-    def as_list_like[
-        T: ListLikeType
-    ](ref self) -> ref[self._v[ListLikeArray[T]]] ListLikeArray[T]:
-        return self.as_type[ListLikeArray[T]]()
+    def as_list_like[T: ListLikeType](ref self) -> ref[self] ListLikeArray[T]:
+        return self.get[ListLikeArray[T]]()
 
-    def as_large_list(ref self) -> ref[self._v[LargeListArray]] LargeListArray:
-        return self.as_type[LargeListArray]()
+    def as_large_list(ref self) -> ref[self] LargeListArray:
+        return self.get[LargeListArray]()
 
     def as_fixed_size_list(
         ref self,
-    ) -> ref[self._v[FixedSizeListArray]] FixedSizeListArray:
-        return self.as_type[FixedSizeListArray]()
+    ) -> ref[self] FixedSizeListArray:
+        return self.get[FixedSizeListArray]()
 
     def as_fixed_size_binary(
         ref self,
-    ) -> ref[self._v[FixedSizeBinaryArray]] FixedSizeBinaryArray:
-        return self.as_type[FixedSizeBinaryArray]()
+    ) -> ref[self] FixedSizeBinaryArray:
+        return self.get[FixedSizeBinaryArray]()
 
-    def as_date32(ref self) -> ref[self._v[Date32Array]] Date32Array:
-        return self.as_type[Date32Array]()
+    def as_date32(ref self) -> ref[self] Date32Array:
+        return self.get[Date32Array]()
 
-    def as_date64(ref self) -> ref[self._v[Date64Array]] Date64Array:
-        return self.as_type[Date64Array]()
+    def as_date64(ref self) -> ref[self] Date64Array:
+        return self.get[Date64Array]()
 
-    def as_time32(ref self) -> ref[self._v[Time32Array]] Time32Array:
-        return self.as_type[Time32Array]()
+    def as_time32(ref self) -> ref[self] Time32Array:
+        return self.get[Time32Array]()
 
-    def as_time64(ref self) -> ref[self._v[Time64Array]] Time64Array:
-        return self.as_type[Time64Array]()
+    def as_time64(ref self) -> ref[self] Time64Array:
+        return self.get[Time64Array]()
 
     def as_year_month_interval(
         ref self,
-    ) -> ref[self._v[YearMonthIntervalArray]] YearMonthIntervalArray:
-        return self.as_type[YearMonthIntervalArray]()
+    ) -> ref[self] YearMonthIntervalArray:
+        return self.get[YearMonthIntervalArray]()
 
     def as_day_time_interval(
         ref self,
-    ) -> ref[self._v[DayTimeIntervalArray]] DayTimeIntervalArray:
-        return self.as_type[DayTimeIntervalArray]()
+    ) -> ref[self] DayTimeIntervalArray:
+        return self.get[DayTimeIntervalArray]()
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[self._v[MonthDayNanoIntervalArray]] MonthDayNanoIntervalArray:
-        return self.as_type[MonthDayNanoIntervalArray]()
+    ) -> ref[self] MonthDayNanoIntervalArray:
+        return self.get[MonthDayNanoIntervalArray]()
 
-    def as_duration(ref self) -> ref[self._v[DurationArray]] DurationArray:
-        return self.as_type[DurationArray]()
+    def as_duration(ref self) -> ref[self] DurationArray:
+        return self.get[DurationArray]()
 
-    def as_timestamp(ref self) -> ref[self._v[TimestampArray]] TimestampArray:
-        return self.as_type[TimestampArray]()
+    def as_timestamp(ref self) -> ref[self] TimestampArray:
+        return self.get[TimestampArray]()
 
-    def as_decimal32(ref self) -> ref[self._v[Decimal32Array]] Decimal32Array:
-        return self.as_type[Decimal32Array]()
+    def as_decimal32(ref self) -> ref[self] Decimal32Array:
+        return self.get[Decimal32Array]()
 
-    def as_decimal64(ref self) -> ref[self._v[Decimal64Array]] Decimal64Array:
-        return self.as_type[Decimal64Array]()
+    def as_decimal64(ref self) -> ref[self] Decimal64Array:
+        return self.get[Decimal64Array]()
 
     def as_decimal128(
         ref self,
-    ) -> ref[self._v[Decimal128Array]] Decimal128Array:
-        return self.as_type[Decimal128Array]()
+    ) -> ref[self] Decimal128Array:
+        return self.get[Decimal128Array]()
 
     def as_decimal256(
         ref self,
-    ) -> ref[self._v[Decimal256Array]] Decimal256Array:
-        return self.as_type[Decimal256Array]()
+    ) -> ref[self] Decimal256Array:
+        return self.get[Decimal256Array]()
 
-    def as_struct(ref self) -> ref[self._v[StructArray]] StructArray:
-        return self.as_type[StructArray]()
+    def as_struct(ref self) -> ref[self] StructArray:
+        return self.get[StructArray]()
 
-    def as_map(ref self) -> ref[self._v[MapArray]] MapArray:
-        return self.as_type[MapArray]()
+    def as_map(ref self) -> ref[self] MapArray:
+        return self.get[MapArray]()
 
     def as_dictionary(
         ref self,
-    ) -> ref[self._v[DictionaryArray]] DictionaryArray:
-        return self.as_type[DictionaryArray]()
+    ) -> ref[self] DictionaryArray:
+        return self.get[DictionaryArray]()
 
     # --- factory from generic layout ---
 
@@ -3803,146 +3717,47 @@ struct DynArray(
         Used by the C Data Interface and other interop paths where a flat
         7-field layout is the natural representation.
         """
-        var dt = data.dtype.copy()
+
+        def primitive[T: PrimitiveType](t: T) raises {imm data} -> DynArray:
+            return PrimitiveArray[T](data)
+
+        def bytes[T: BinaryLikeType](t: T) raises {imm data} -> DynArray:
+            return BinaryLikeArray[T](data)
+
+        def views[T: BinaryViewLikeType](t: T) raises {imm data} -> DynArray:
+            return BinaryViewLikeArray[T](data)
+
+        def lists[T: ListLikeType](t: T) raises {imm data} -> DynArray:
+            return ListLikeArray[T](data)
+
+        ref dt = data.dtype
         if dt.is_null():
             return NullArray(data)
         elif dt == bool_:
             return BoolArray(data)
-        elif dt == int8:
-            return Int8Array(data)
-        elif dt == int16:
-            return Int16Array(data)
-        elif dt == int32:
-            return Int32Array(data)
-        elif dt == int64:
-            return Int64Array(data)
-        elif dt == uint8:
-            return UInt8Array(data)
-        elif dt == uint16:
-            return UInt16Array(data)
-        elif dt == uint32:
-            return UInt32Array(data)
-        elif dt == uint64:
-            return UInt64Array(data)
-        elif dt == float16:
-            return Float16Array(data)
-        elif dt == float32:
-            return Float32Array(data)
-        elif dt == float64:
-            return Float64Array(data)
-        if dt.is_string():
-            return StringArray(data)
-        elif dt.is_binary():
-            return BinaryArray(data)
-        elif dt.is_large_string():
-            return LargeStringArray(data)
-        elif dt.is_large_binary():
-            return LargeBinaryArray(data)
-        elif dt.is_string_view():
-            return StringViewArray(data)
-        elif dt.is_binary_view():
-            return BinaryViewArray(data)
-        elif dt.is_list():
-            return ListArray(data)
-        elif dt.is_large_list():
-            return LargeListArray(data)
+        elif dt.is_primitive():
+            return dt.try_visit[DynArray, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
+        elif dt.is_binary_like():
+            return dt.try_visit[DynArray, BinaryLikeType](
+                bytes, "dtype is not binary-like"
+            )
+        elif dt.is_string_view() or dt.is_binary_view():
+            return dt.try_visit[DynArray, BinaryViewLikeType](
+                views, "dtype is not a binary view"
+            )
+        elif dt.is_list_like():
+            return dt.try_visit[DynArray, ListLikeType](
+                lists, "dtype is not list-like"
+            )
         elif dt.is_fixed_size_list():
             return FixedSizeListArray(data)
         elif dt.is_fixed_size_binary():
             return FixedSizeBinaryArray(data)
-        elif dt.is_date32():
-            return Date32Array(data)
-        elif dt.is_date64():
-            return Date64Array(data)
-        elif dt.is_time32():
-            return Time32Array(data)
-        elif dt.is_time64():
-            return Time64Array(data)
-        elif dt.is_timestamp():
-            return TimestampArray(data)
-        elif dt.is_duration():
-            return DurationArray(data)
-        elif dt.is_year_month_interval():
-            return YearMonthIntervalArray(data)
-        elif dt.is_day_time_interval():
-            return DayTimeIntervalArray(data)
-        elif dt.is_month_day_nano_interval():
-            return MonthDayNanoIntervalArray(data)
-        elif dt.is_decimal32():
-            return Decimal32Array(data)
-        elif dt.is_decimal64():
-            return Decimal64Array(data)
-        elif dt.is_decimal128():
-            return Decimal128Array(data)
-        elif dt.is_decimal256():
-            return Decimal256Array(data)
         elif dt.is_struct():
             return StructArray(data)
-        elif dt.is_map():
-            return MapArray(data)
         elif dt.is_dictionary():
             return DictionaryArray(data)
         else:
             raise NotImplementedError("from_data: unsupported dtype")
-
-
-def dispatch_array[
-    R: Movable, //, Func: def[A: Array]() raises -> R
-](in_dtype: DynType, func: Func) raises -> R:
-    """Resolve a runtime dtype to the **array type** that holds it, and run
-        `func` at that type.
-
-        The tenth member of the `dispatch_*` family, and the only free function in
-        it: the other nine are methods on `DynType`, which narrow a dtype to a
-        *dtype* parameter, while this one narrows it to an *array* type -- so it
-        belongs beside `DynArray` rather than on `DynType`.
-
-        It was `kernels.aggregate.dispatch_agg_array`, which named neither of the
-        two things it does: it takes no array, and knows nothing about aggregates.
-        It was also the only free `dispatch_*` in the kernels package, and read as
-        a sibling of `expr.runtime.resolve_aggregate` (then `dispatch_agg`), a
-        completely different operation in a different layer.
-
-        The counterpart of the `dispatch` static every value kernel exposes
-        (`HashKernel.dispatch`, `kernels/hashing.mojo`). Those
-        narrow an erased *array* and run immediately, because they are stateless.
-        An aggregate is a state machine that must exist before its first morsel, so
-        this narrows a *dtype* instead and hands back whatever the caller builds at
-        that type — an accumulator, or an operator holding one.
-
-    Its motivating callers are `ValidCount[A]` and `DistinctCount[A]`,
-        which it is what lets be typed at all. Both are dtype-generic in what they *compute* — a cardinality is an
-        int64 whatever was counted — but not in how they *read*: a valid count
-        wants a validity bitmap and a distinct count wants to hash values, and both
-        are faster knowing the array type than walking an erased one per row.
-        Without this they had to declare `InArray = DynArray`, which made
-        `AggKernel.InArray` mean "some column-ish thing" and put an unchecked
-        reinterpret at every call site.
-
-        Four arms rather than one ladder over every layout: each existing family
-        dispatcher already knows its own array, and `dispatch_primitive` spans
-        numeric, temporal, interval and decimal. A layout outside them raises here,
-        at plan time, rather than at the first morsel.
-    """
-    if in_dtype.is_bool():
-        return func[BoolArray]()
-    elif in_dtype.is_string() or in_dtype.is_large_string():
-
-        def stringly[T: StringLikeType](d: T) raises {imm func} -> R:
-            return func[BinaryLikeArray[T]]()
-
-        return in_dtype.dispatch_stringlike(stringly)
-    elif in_dtype.is_string_view():
-
-        def viewly[T: BinaryViewLikeType](d: T) raises {imm func} -> R:
-            return func[BinaryViewLikeArray[T]]()
-
-        return in_dtype.dispatch_binaryview(viewly)
-    elif in_dtype.is_primitive():
-
-        def primitive[T: PrimitiveType](d: T) raises {imm func} -> R:
-            return func[PrimitiveArray[T]]()
-
-        return in_dtype.dispatch_primitive(primitive)
-    else:
-        raise TypeError(t"no array type for {in_dtype} columns")

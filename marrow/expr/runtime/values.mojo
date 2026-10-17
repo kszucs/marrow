@@ -409,7 +409,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
                         return index.statistics[T](name, w, upper).to_dyn()
 
                     try:
-                        return dt.dispatch_primitive(arm)
+                        return dt.try_visit[DynArray, PrimitiveType](
+                            arm, "dtype is not primitive"
+                        )
                     except:
                         return NullArray(length=index.chunks()).to_dyn()
             if self._tag == "literal" and self._payload.isa[DynScalar]():
@@ -716,7 +718,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         `DynScalar.to_array` is the same broadcast a literal operand takes.
         The zeros are built in the divisor's own type, so there is no cast
         pass; a decimal's zero is the unscaled 0 whatever its scale. Two
-        narrow dispatches rather than `dispatch_primitive`, which would build
+        narrow dispatches rather than `try_visit[PrimitiveType]`, which would build
         zeros for every temporal and interval type too.
 
         `DivisionBinary` reaches the same result the other way, from the lane,
@@ -734,8 +736,18 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
         var dt = divisor.dtype()
         if dt.is_decimal():
-            return NullifKernel.dispatch(divisor, dt.dispatch_decimal(decimal))
-        return NullifKernel.dispatch(divisor, dt.dispatch_numeric(numeric))
+            return NullifKernel.dispatch(
+                divisor,
+                dt.try_visit[DynArray, DecimalType](
+                    decimal, "dtype is not decimal"
+                ),
+            )
+        return NullifKernel.dispatch(
+            divisor,
+            dt.try_visit[DynArray, NumericType](
+                numeric, "dtype is not numeric"
+            ),
+        )
 
     @staticmethod
     def _arith[

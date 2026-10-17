@@ -37,7 +37,7 @@ from ...buffers import Bitmap
 # the value encoder and bloom hasher (`writer.mojo`) and the statistics decoder
 # (`statistics.mojo`). Each of those used to carry its own dtype ladder --
 # 13, 13 and 22 arms -- restating the same relation and free to drift apart.
-# With the mapping named, each collapses onto `DynType.dispatch_*`, which
+# With the mapping named, each collapses onto `DynType.try_visit`, which
 # resolves a runtime dtype to its comptime type.
 # ---------------------------------------------------------------------------
 comptime physical_type[T: dt.PrimitiveType] = DType.int32 if (
@@ -66,7 +66,7 @@ comptime flba_width[T: dt.PrimitiveType] = bit_width_of[T.native]() // 8
 def has_plain_physical(vt: dt.DynType) -> Bool:
     """Whether `vt` maps onto a fixed-width Parquet physical type.
 
-    `dispatch_primitive` covers every fixed-width dtype, including `date64`,
+    `try_visit[PrimitiveType]` covers every fixed-width dtype, including `date64`,
     `duration` and the intervals, which marrow's Parquet layer has never
     written or read. They are excluded explicitly so that widening a ladder
     into a dispatch does not silently start accepting them."""
@@ -330,7 +330,10 @@ struct SchemaNode(Copyable, Movable):
                 return la.child_slice()
 
             self.children[0].collect_leaf_arrays(
-                self.field.dtype.dispatch_listlike(visited), leaf_arrays
+                self.field.dtype.try_visit[DynArray, dt.ListLikeType](
+                    visited, "dtype is not listlike"
+                ),
+                leaf_arrays,
             )
         else:
             raise InternalError("parquet: unsupported schema node kind")
@@ -463,7 +466,9 @@ struct SchemaNode(Copyable, Movable):
                         )
                 return True
 
-            _ = self.field.dtype.dispatch_listlike(slot)
+            _ = self.field.dtype.try_visit[Bool, dt.ListLikeType](
+                slot, "dtype is not listlike"
+            )
 
     def _emit_absent(
         self,
@@ -1274,10 +1279,12 @@ struct SchemaMapping(Movable):
 
             def decimal[
                 T: dt.DecimalType
-            ](d: T) raises {} -> Tuple[Int, Int, Int]:
+            ](d: T) raises {imm} -> Tuple[Int, Int, Int]:
                 return (d.byte_width(), d.precision(), d.scale())
 
-            var width, precision, scale = dtype.dispatch_decimal(decimal)
+            var width, precision, scale = dtype.try_visit[
+                Tuple[Int, Int, Int], dt.DecimalType
+            ](decimal, "dtype is not decimal")
             el.precision = precision
             el.scale = scale
             if width == 4:

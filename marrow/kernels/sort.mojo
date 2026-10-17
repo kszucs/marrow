@@ -22,7 +22,7 @@ as in Arrow, unless `nan_largest` orders it above every number, as SQL does;
   - BytesArray (either string layout): stdlib comparison sort (bytewise
     lexicographic).
 
-`SortIndices.dispatch` resolves a runtime dtype through the `DynType.dispatch_*`
+`SortIndices.dispatch` resolves a runtime dtype through the `DynType.try_visit`
 family. Temporal, interval, and decimal32/64 columns sort through their
 typed leaf (bound on `PrimitiveType`); dictionary columns sort by their
 decoded values. `SortIndices.multi` composes single-column permutations into a
@@ -317,7 +317,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
     beside the nulls, which is Arrow's.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``DynType.dispatch_*`` family
+    runtime-typed array to the matching leaf via the ``DynType.try_visit``
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. ``multi`` composes single-column permutations
     into a multi-key ordering.
@@ -363,7 +363,9 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             def bytes_leaf[A: BytesArray](arr: A) raises {imm} -> Int32Array:
                 return Self.apply(arr, ascending, nulls_first, ctx)
 
-            result = array.dispatch_bytes(bytes_leaf)
+            result = array.try_visit[Int32Array, BytesArray](
+                bytes_leaf, "expected a binary or string array"
+            )
         elif dt.is_dictionary():
             # Order by the *decoded* values: dictionary index order is an
             # encoding artefact (`ordered=False` is the norm), not a value
@@ -392,7 +394,9 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                     array.as_primitive[T](), ascending, nulls_first, ctx, limit
                 )
 
-            result = dt.dispatch_primitive(primitive)
+            result = dt.try_visit[Int32Array, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
         else:
             raise Self.error[TypeError](t"unsupported dtype {dt}")
 

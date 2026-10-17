@@ -334,7 +334,9 @@ trait ValuePredicateKernel(Kernel):
         def leaf[T: FloatingType](d: T) raises {imm} -> DynArray:
             return Self.apply(arr.as_primitive[T](), ctx).to_dyn()
 
-        return arr.dtype().dispatch_floating(leaf)
+        return arr.dtype().try_visit[DynArray, FloatingType](
+            leaf, "dtype is not floating"
+        )
 
 
 struct IsNullKernel(NullPredicateKernel):

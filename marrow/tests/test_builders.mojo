@@ -869,7 +869,7 @@ def test_any_builder_finish_dispatch_list() raises:
 # *builder's* offset width: `as_string()` for a 32-bit-offset builder,
 # `as_large_string()` otherwise. That names a `stringlike` type for a builder
 # whose family is `binarylike`, so feeding a `BinaryBuilder` a `binary` array
-# hit `DynArray.as_type` with the wrong variant member and aborted the process
+# hit `DynArray.get` with the wrong variant member and aborted the process
 # — a release-build abort, since the `debug_assert` guarding it is compiled
 # out. These are the tightest tests for it; `concat` and the thread-local
 # group-by are the two callers that made it reachable.

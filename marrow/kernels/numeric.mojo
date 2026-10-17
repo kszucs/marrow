@@ -4,7 +4,7 @@
 """Element-wise kernels over numeric arrays — arithmetic and comparison.
 
 One module because they are one kind of thing: both are numeric-only, both are
-three-tier, both resolve a runtime dtype through `DynType.dispatch_numeric`.
+three-tier, both resolve a runtime dtype through `DynType.try_visit[NumericType]`.
 What separates an `AddKernel` from an `LtKernel` is the `core` functor and the
 output layout — values for arithmetic, a bit-packed `BoolArray` for comparison.
 
@@ -23,8 +23,8 @@ Three tiers per operation:
 - **Tier 1 (apply)** — `KernelStruct.apply[T: PrimitiveType]`: allocates an
   output buffer, propagates null bitmaps, dispatches CPU/GPU via `apply()`.
 - **Tier 2 (dispatch)** — `KernelStruct.dispatch(DynArray)`: runtime-typed entry
-  point; resolves the dtype to the typed `apply` via `DynType.dispatch_numeric`
-  / `.dispatch_floating`.
+  point; resolves the dtype to the typed `apply` via `DynType.try_visit[NumericType]`
+  / `.try_visit[FloatingType]`.
 
 Structural kernels (filter, sort, concat, …) operate on array layout rather than
 element values and are **not** part of this tier scheme.
@@ -103,7 +103,9 @@ trait BinaryKernel(Kernel):
             else:
                 raise Self.error[TypeError](t"unsupported dtype {d}")
 
-        return left.dtype().dispatch_numeric(leaf)
+        return left.dtype().try_visit[DynArray, NumericType](
+            leaf, "dtype is not numeric"
+        )
 
     @staticmethod
     def apply[
@@ -181,7 +183,9 @@ trait UnaryKernel(Kernel):
             else:
                 raise Self.error[TypeError](t"unsupported dtype {d}")
 
-        return array.dtype().dispatch_numeric(leaf)
+        return array.dtype().try_visit[DynArray, NumericType](
+            leaf, "dtype is not numeric"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +635,9 @@ trait NumericCompareKernel(Kernel):
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_dyn()
 
-        return left.dtype().dispatch_primitive(leaf)
+        return left.dtype().try_visit[DynArray, PrimitiveType](
+            leaf, "dtype is not primitive"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +671,7 @@ struct EqualKernel(Kernel):
     ) raises -> BoolArray:
         # Checked before every arm, and before the downcast below: `leaf` resolves
         # `T` from the *left* dtype and then reads `right` at that same `T`, so a
-        # mismatch here would be one more wrong `as_type` — the exact failure this
+        # mismatch here would be one more wrong `get` — the exact failure this
         # function's binarylike arm was added to fix. `expect_same_dtype` rather
         # than a hand-rolled raise, so one condition has one message whichever
         # entry point reached it.
@@ -673,7 +679,7 @@ struct EqualKernel(Kernel):
 
         if left.dtype() == bool_dt:
             # Booleans are bit-packed, so `BoolArray` is not a `PrimitiveArray` and
-            # `dispatch_primitive` raised "dtype is not primitive" on them — a
+            # `try_visit[PrimitiveType]` raised "dtype is not primitive" on them — a
             # `bool` join key was impossible for the same reason a `binary` one was.
             # Equality over packed bits is XNOR, which the boolean kernels already
             # spell: `Xor` gives "the two differ" with Arrow's validity (valid only
@@ -692,15 +698,17 @@ struct EqualKernel(Kernel):
             # Every byte-string dtype, not just the text ones. `binary` and
             # `large_binary` are perfectly ordinary hash-join key columns, but an
             # earlier `is_string() or is_large_string()` test dropped them into the
-            # numeric arm and `dispatch_primitive` raised "dtype is not primitive"
+            # numeric arm and `try_visit[PrimitiveType]` raised "dtype is not primitive"
             # -- joining on a `binary` key was impossible while the same join on
             # `string` worked. Anything else (a nested key) raises in the dispatch.
             # `apply` through a local leaf, not `StringEqKernel.dispatch`, which
             # round-trips the result through an erased array.
             def leaf[A: BytesArray](arr: A) raises {imm} -> BoolArray:
-                return StringEqKernel.apply(arr, right.as_type[A]())
+                return StringEqKernel.apply(arr, right.get[A]())
 
-            return left.dispatch_bytes(leaf)
+            return left.try_visit[BoolArray, BytesArray](
+                leaf, "expected a binary or string array"
+            )
 
 
 struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):

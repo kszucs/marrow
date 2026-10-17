@@ -300,9 +300,13 @@ struct NumericCastKernel(CastArm):
                     return Self.apply[From, To, True](typed, ctx).to_dyn()
                 return Self.apply[From, To, False](typed, ctx).to_dyn()
 
-            return to.dispatch_numeric(on_target)
+            return to.try_visit[DynArray, NumericType](
+                on_target, "dtype is not numeric"
+            )
 
-        return array.dtype().dispatch_numeric(on_source)
+        return array.dtype().try_visit[DynArray, NumericType](
+            on_source, "dtype is not numeric"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -478,9 +482,13 @@ struct DecimalRescaleKernel(CastArm):
                     data, to, delta, d.precision(), safe
                 )
 
-            return to.dispatch_decimal(on_to)
+            return to.try_visit[DynArray, DecimalType](
+                on_to, "dtype is not decimal"
+            )
 
-        return array.dtype().dispatch_decimal(on_from)
+        return array.dtype().try_visit[DynArray, DecimalType](
+            on_from, "dtype is not decimal"
+        )
 
 
 struct IntToDecimalKernel(CastArm):
@@ -504,9 +512,13 @@ struct IntToDecimalKernel(CastArm):
                     data, to, d.scale(), d.precision(), safe
                 )
 
-            return to.dispatch_decimal(on_to)
+            return to.try_visit[DynArray, DecimalType](
+                on_to, "dtype is not decimal"
+            )
 
-        return array.dtype().dispatch_integer(on_from)
+        return array.dtype().try_visit[DynArray, IntegerType](
+            on_from, "dtype is not integer"
+        )
 
 
 struct DecimalToIntKernel(CastArm):
@@ -533,9 +545,13 @@ struct DecimalToIntKernel(CastArm):
                     data, to, -s.scale(), 0, safe
                 )
 
-            return to.dispatch_integer(on_to)
+            return to.try_visit[DynArray, IntegerType](
+                on_to, "dtype is not integer"
+            )
 
-        return array.dtype().dispatch_decimal(on_from)
+        return array.dtype().try_visit[DynArray, DecimalType](
+            on_from, "dtype is not decimal"
+        )
 
 
 struct FloatToDecimalKernel(CastArm):
@@ -598,9 +614,13 @@ struct FloatToDecimalKernel(CastArm):
 
                 return _map_decimal[FromN, ToN](data, to, to_dec)
 
-            return to.dispatch_decimal(on_to)
+            return to.try_visit[DynArray, DecimalType](
+                on_to, "dtype is not decimal"
+            )
 
-        return array.dtype().dispatch_floating(on_from)
+        return array.dtype().try_visit[DynArray, FloatingType](
+            on_from, "dtype is not floating"
+        )
 
 
 struct DecimalToFloatKernel(CastArm):
@@ -632,9 +652,13 @@ struct DecimalToFloatKernel(CastArm):
 
                 return _map_decimal[FromN, ToN](data, to, to_flt)
 
-            return to.dispatch_floating(on_to)
+            return to.try_visit[DynArray, FloatingType](
+                on_to, "dtype is not floating"
+            )
 
-        return array.dtype().dispatch_decimal(on_from)
+        return array.dtype().try_visit[DynArray, DecimalType](
+            on_from, "dtype is not decimal"
+        )
 
 
 struct DecimalCastKernel(CastArm):
@@ -708,7 +732,9 @@ struct NumToBoolKernel(CastArm):
         def from_num[From: NumericType](s: From) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[From](), ctx).to_dyn()
 
-        return array.dtype().dispatch_numeric(from_num)
+        return array.dtype().try_visit[DynArray, NumericType](
+            from_num, "dtype is not numeric"
+        )
 
     @staticmethod
     def apply[
@@ -752,7 +778,9 @@ struct BoolToNumKernel(CastArm):
         def to_num[To: NumericType](d: To) raises {imm} -> DynArray:
             return Self.apply[To](b, ctx).to_dyn()
 
-        return to.dispatch_numeric(to_num)
+        return to.try_visit[DynArray, NumericType](
+            to_num, "dtype is not numeric"
+        )
 
     @staticmethod
     def apply[
@@ -1100,9 +1128,13 @@ struct StringToNumKernel(CastArm):
                     return Self.apply[From, To, True](a).to_dyn()
                 return Self.apply[From, To, False](a).to_dyn()
 
-            return to.dispatch_numeric(to_num)
+            return to.try_visit[DynArray, NumericType](
+                to_num, "dtype is not numeric"
+            )
 
-        return array.dtype().dispatch_stringlike(on_str)
+        return array.dtype().try_visit[DynArray, StringLikeType](
+            on_str, "dtype is not stringlike"
+        )
 
     @staticmethod
     def _parse[native: DType](s: StringSlice) raises -> Scalar[native]:
@@ -1176,7 +1208,9 @@ struct StringToBoolKernel(CastArm):
                 return Self.apply[From, True](a).to_dyn()
             return Self.apply[From, False](a).to_dyn()
 
-        return array.dtype().dispatch_stringlike(on_str)
+        return array.dtype().try_visit[DynArray, StringLikeType](
+            on_str, "dtype is not stringlike"
+        )
 
     @staticmethod
     def apply[
@@ -1224,9 +1258,13 @@ struct NumToStringKernel(CastArm):
             def from_num[From: NumericType](s: From) raises {imm} -> DynArray:
                 return Self.apply[From, To](array.as_primitive[From]()).to_dyn()
 
-            return array.dtype().dispatch_numeric(from_num)
+            return array.dtype().try_visit[DynArray, NumericType](
+                from_num, "dtype is not numeric"
+            )
 
-        return to.dispatch_stringlike(on_target)
+        return to.try_visit[DynArray, StringLikeType](
+            on_target, "dtype is not stringlike"
+        )
 
     @staticmethod
     def apply[
@@ -1262,7 +1300,9 @@ struct TimestampToStringKernel(CastArm):
         def on_target[To: StringLikeType](d: To) raises {imm} -> DynArray:
             return Self.apply[To](ts).to_dyn()
 
-        return to.dispatch_stringlike(on_target)
+        return to.try_visit[DynArray, StringLikeType](
+            on_target, "dtype is not stringlike"
+        )
 
     @staticmethod
     def apply[
@@ -1307,7 +1347,9 @@ struct BoolToStringKernel(CastArm):
         def on_target[To: StringLikeType](d: To) raises {imm} -> DynArray:
             return Self.apply[To](b).to_dyn()
 
-        return to.dispatch_stringlike(on_target)
+        return to.try_visit[DynArray, StringLikeType](
+            on_target, "dtype is not stringlike"
+        )
 
     @staticmethod
     def apply[
@@ -1341,9 +1383,13 @@ struct DecimalToStringKernel(CastArm):
             def from_dec[From: DecimalType](s: From) raises {imm} -> DynArray:
                 return Self.apply[From, To](array.as_primitive[From]()).to_dyn()
 
-            return array.dtype().dispatch_decimal(from_dec)
+            return array.dtype().try_visit[DynArray, DecimalType](
+                from_dec, "dtype is not decimal"
+            )
 
-        return to.dispatch_stringlike(on_target)
+        return to.try_visit[DynArray, StringLikeType](
+            on_target, "dtype is not stringlike"
+        )
 
     @staticmethod
     def apply[
@@ -1384,9 +1430,13 @@ struct StringToDecimalKernel(CastArm):
             def to_dec[T: DecimalType](d: T) raises {imm} -> DynArray:
                 return Self.apply[From, T](a, d, safe).to_dyn()
 
-            return to.dispatch_decimal(to_dec)
+            return to.try_visit[DynArray, DecimalType](
+                to_dec, "dtype is not decimal"
+            )
 
-        return array.dtype().dispatch_stringlike(on_str)
+        return array.dtype().try_visit[DynArray, StringLikeType](
+            on_str, "dtype is not stringlike"
+        )
 
     @staticmethod
     def apply[
@@ -1455,9 +1505,13 @@ struct BinaryLikeCastKernel(CastArm):
                     return Self.apply[From, To, True](a).to_dyn()
                 return Self.apply[From, To, False](a).to_dyn()
 
-            return to.dispatch_binarylike(on_to)
+            return to.try_visit[DynArray, BinaryLikeType](
+                on_to, "dtype is not binarylike"
+            )
 
-        return array.dtype().dispatch_binarylike(on_src)
+        return array.dtype().try_visit[DynArray, BinaryLikeType](
+            on_src, "dtype is not binarylike"
+        )
 
     @staticmethod
     def apply[
@@ -1592,7 +1646,9 @@ struct FixedSizeBinaryCastKernel(CastArm):
             def to_bin[To: BinaryLikeType](d: To) raises {imm} -> DynArray:
                 return Self.to_binary[To](fsb).to_dyn()
 
-            return to.dispatch_binarylike(to_bin)
+            return to.try_visit[DynArray, BinaryLikeType](
+                to_bin, "dtype is not binarylike"
+            )
         else:  # binary → fsb
             var width = to.as_fixed_size_binary().byte_width
 
@@ -1602,7 +1658,9 @@ struct FixedSizeBinaryCastKernel(CastArm):
                 var a = BinaryLikeArray[From](array.to_data())
                 return Self.from_binary[From](a, width).to_dyn()
 
-            return array.dtype().dispatch_binarylike(from_bin)
+            return array.dtype().try_visit[DynArray, BinaryLikeType](
+                from_bin, "dtype is not binarylike"
+            )
 
     @staticmethod
     def to_binary[
@@ -1789,7 +1847,7 @@ def normalized_indices(array: DictionaryArray) raises -> Int32Array:
             buffer=buf^.to_immutable(),
         )
 
-    return dt.dispatch_integer(widen)
+    return dt.try_visit[Int32Array, IntegerType](widen, "dtype is not integer")
 
 
 def decode_dictionary(
@@ -1871,16 +1929,22 @@ struct ViewCastKernel(CastArm):
                     ](d: To) raises {imm} -> DynArray:
                         return Self.relabel[From, To](a, safe).to_dyn()
 
-                    return to.dispatch_binaryview(to_view)
+                    return to.try_visit[DynArray, BinaryViewLikeType](
+                        to_view, "dtype is not a binary view"
+                    )
 
                 def to_offsets[
                     To: BinaryLikeType
                 ](d: To) raises {imm} -> DynArray:
                     return Self.to_offsets[From, To](a, safe).to_dyn()
 
-                return to.dispatch_binarylike(to_offsets)
+                return to.try_visit[DynArray, BinaryLikeType](
+                    to_offsets, "dtype is not binarylike"
+                )
 
-            return src.dispatch_binaryview(from_view)
+            return src.try_visit[DynArray, BinaryViewLikeType](
+                from_view, "dtype is not a binary view"
+            )
 
         def from_offsets[
             From: BinaryLikeType
@@ -1890,9 +1954,13 @@ struct ViewCastKernel(CastArm):
             def to_view[To: BinaryViewLikeType](d: To) raises {imm} -> DynArray:
                 return Self.to_views[From, To](a, safe).to_dyn()
 
-            return to.dispatch_binaryview(to_view)
+            return to.try_visit[DynArray, BinaryViewLikeType](
+                to_view, "dtype is not a binary view"
+            )
 
-        return src.dispatch_binarylike(from_offsets)
+        return src.try_visit[DynArray, BinaryLikeType](
+            from_offsets, "dtype is not binarylike"
+        )
 
     @staticmethod
     def _needs_utf8_check[From: DataType, To: DataType](safe: Bool) -> Bool:

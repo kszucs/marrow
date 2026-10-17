@@ -573,13 +573,13 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
         values.append(
             self.then.evaluate(batch, bindings)
             .to_array(n)
-            .as_type[PrimitiveArray[Self.Type]]()
+            .get[PrimitiveArray[Self.Type]]()
             .copy()
         )
         var else_ = Optional(
             self.otherwise.evaluate(batch, bindings)
             .to_array(n)
-            .as_type[PrimitiveArray[Self.Type]]()
+            .get[PrimitiveArray[Self.Type]]()
             .copy()
         )
         return CaseWhenKernel.apply(conditions, values, else_^)
@@ -764,8 +764,8 @@ struct ConditionalBinary[
         var l = self.l.evaluate(batch, bindings).to_array(n)
         var r = self.r.evaluate(batch, bindings).to_array(n)
         return Self.K.apply(
-            l.as_type[PrimitiveArray[Self.Type]](),
-            r.as_type[PrimitiveArray[Self.Type]](),
+            l.get[PrimitiveArray[Self.Type]](),
+            r.get[PrimitiveArray[Self.Type]](),
         )
 
     @always_inline

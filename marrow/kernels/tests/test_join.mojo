@@ -916,7 +916,7 @@ def test_join_kind_writes_its_name() raises:
 #
 # Key equality once picked its kernel family with
 # `is_string() or is_large_string()`, so a `binary` key column fell through to
-# the numeric arm and `dispatch_primitive` raised — joining on `binary` was
+# the numeric arm and `try_visit[PrimitiveType]` raised — joining on `binary` was
 # impossible while the identical join on `string` worked.
 # ---------------------------------------------------------------------------
 
@@ -1289,7 +1289,7 @@ def test_parallel_inner_join_drops_null_keys() raises:
 #
 # Booleans are bit-packed, so a `bool` key column is a `BoolArray` and never a
 # `PrimitiveArray[bool_]`. Key verification used to route it through
-# `dispatch_primitive`, which raised "dtype is not primitive" — joining on a
+# `try_visit[PrimitiveType]`, which raised "dtype is not primitive" — joining on a
 # bool key was impossible.
 # ---------------------------------------------------------------------------
 

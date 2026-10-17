@@ -465,7 +465,9 @@ struct IpcEncoder(Movable):
                 flds.append(FieldOffset(2, bw_at))
                 return self._fb.write_table(flds, ts)
 
-            return dtype.dispatch_decimal(decimal)
+            return dtype.try_visit[UInt32, dt.DecimalType](
+                decimal, "dtype is not decimal"
+            )
         elif dtype.is_dictionary():
             return self._write_type_table(dtype.as_dictionary().value_type())
         else:

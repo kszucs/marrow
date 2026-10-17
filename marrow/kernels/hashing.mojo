@@ -29,7 +29,7 @@ Public API — ``HashKernel[H]``, generic over the ``Hasher``:
     - StructArray: per-column hash with combining (multi-key)
     - ListLikeArray[T] / FixedSizeListArray: fold the child hashes per row
   - ``dispatch``: runtime-typed dispatch, routed through the
-    ``DynType.dispatch_*`` family rather than a hand-written dtype ladder.
+    ``DynType.try_visit`` rather than a hand-written dtype ladder.
     Temporal, interval, and decimal32/64 columns are hashed through their
     typed leaf (bound on ``PrimitiveType``); dictionary columns through their
     decoded values,
@@ -96,7 +96,7 @@ struct HashKernel[H: Hasher](Kernel):
     the choice is a parameter rather than a rewrite.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``DynType.dispatch_*`` family
+    runtime-typed array to the matching leaf via the ``DynType.try_visit``
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. Null elements hash to ``NULL_HASH_SENTINEL`` so
     that "null == null" holds for grouping and joining (Arrow's `hash_*`
@@ -257,13 +257,17 @@ struct HashKernel[H: Hasher](Kernel):
             def bytes_leaf[A: BytesArray](arr: A) raises {imm} -> UInt64Array:
                 return Self.apply(arr, ctx)
 
-            return keys.dispatch_bytes(bytes_leaf)
+            return keys.try_visit[UInt64Array, BytesArray](
+                bytes_leaf, "expected a binary or string array"
+            )
         elif dt.is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> UInt64Array:
                 return Self.apply(keys.as_list_like[T](), ctx)
 
-            return dt.dispatch_listlike(listlike)
+            return dt.try_visit[UInt64Array, ListLikeType](
+                listlike, "dtype is not listlike"
+            )
         elif dt.is_struct():
             return Self.apply(keys.as_struct(), ctx)
         elif dt.is_fixed_size_list():
@@ -288,7 +292,9 @@ struct HashKernel[H: Hasher](Kernel):
             def primitive[T: PrimitiveType](d: T) raises {imm} -> UInt64Array:
                 return Self.apply(keys.as_primitive[T](), ctx)
 
-            return dt.dispatch_primitive(primitive)
+            return dt.try_visit[UInt64Array, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
         else:
             raise Self.error[TypeError](String("unsupported dtype ", dt))
 
@@ -663,7 +669,9 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.dispatch_primitive(primitive)
+            _ = dt.try_visit[Bool, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
         elif dt.is_binary_like():
 
             def binarylike[
@@ -679,7 +687,9 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.dispatch_binarylike(binarylike)
+            _ = dt.try_visit[Bool, BinaryLikeType](
+                binarylike, "dtype is not binarylike"
+            )
         elif dt.is_string_view() or dt.is_binary_view():
 
             def viewlike[
@@ -695,7 +705,9 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.dispatch_binaryview(viewlike)
+            _ = dt.try_visit[Bool, BinaryViewLikeType](
+                viewlike, "dtype is not a binary view"
+            )
         elif dt.is_fixed_size_binary():
             Self.apply(
                 left.as_fixed_size_binary(),
@@ -738,7 +750,9 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.dispatch_listlike(listlike)
+            _ = dt.try_visit[Bool, ListLikeType](
+                listlike, "dtype is not listlike"
+            )
         elif dt.is_fixed_size_list():
             Self.apply(
                 left.as_fixed_size_list(),

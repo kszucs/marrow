@@ -85,7 +85,7 @@ struct Datum(Copyable, Movable):
     def _broadcast[
         S: ArrowScalar
     ](scalar: DynScalar, rows: Int) raises -> DynArray:
-        return scalar.as_type[S]().to_array(rows)
+        return scalar.get[S]().to_array(rows)
 
     def is_scalar(self) -> Bool:
         """Whether this is still one value.

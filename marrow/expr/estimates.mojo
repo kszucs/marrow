@@ -477,7 +477,9 @@ struct ColumnEstimate(Copyable, Movable, Writable):
                 return Approx.unknown()
 
         try:
-            return dtype.dispatch_primitive(arm)
+            return dtype.try_visit[Approx, PrimitiveType](
+                arm, "dtype is not primitive"
+            )
         except:
             return Approx.unknown()
 
@@ -571,7 +573,9 @@ struct ColumnEstimate(Copyable, Movable, Writable):
             else:
                 return Index()
 
-        return self.min.type().dispatch_primitive(arm)
+        return self.min.type().try_visit[Index, PrimitiveType](
+            arm, "dtype is not primitive"
+        )
 
     def bounded_by(self, other: Self) -> Self:
         """This column with its bounds narrowed to `other`'s where those are
@@ -606,7 +610,9 @@ struct ColumnEstimate(Copyable, Movable, Writable):
             return out^
 
         try:
-            return dtype.dispatch_primitive(arm)
+            return dtype.try_visit[Self, PrimitiveType](
+                arm, "dtype is not primitive"
+            )
         except:
             return self.copy()
 
@@ -794,7 +800,9 @@ struct Estimate(Copyable, Movable, Writable):
                         disjoint = False
             return (bounds[0].copy(), bounds[1].copy(), disjoint)
 
-        return zones.dtype.dispatch_primitive(arm)
+        return zones.dtype.try_visit[
+            Tuple[DynScalar, DynScalar, Bool], PrimitiveType
+        ](arm, "dtype is not primitive")
 
     # -----------------------------------------------------------------------
     # Per-node formulas

@@ -230,7 +230,9 @@ def primitive_name(dtype: DynType) raises -> String:
                 )
             return String(t"decimal({d.precision()}, {d.scale()})")
 
-        return dtype.dispatch_decimal(decimal)
+        return dtype.try_visit[String, DecimalType](
+            decimal, "dtype is not decimal"
+        )
     raise TypeError(t"iceberg type: {dtype} has no Iceberg primitive type")
 
 

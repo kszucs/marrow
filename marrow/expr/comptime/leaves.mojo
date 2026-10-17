@@ -441,7 +441,7 @@ struct StringColumn[T: StringLikeType](ColumnBound, StringValue):
     # -- StringValue --------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        return batch.field(self._name).as_type[Self.Bound]().copy()
+        return batch.field(self._name).get[Self.Bound]().copy()
 
     @always_inline
     def lane(
@@ -848,7 +848,7 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
     def bind(
         self, batch: StructArray, bindings: Bindings
     ) raises -> ListLikeArray[Self.Type]:
-        return batch.field(self._name).as_type[ListLikeArray[Self.T]]().copy()
+        return batch.field(self._name).get[ListLikeArray[Self.T]]().copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
@@ -947,7 +947,7 @@ def _bound[
                 t"parameter '{name}' is {dtype} but was bound to a scalar of "
                 t"another kind"
             )
-        ref typed = got.value().as_type[S]()
+        ref typed = got.value().get[S]()
         var actual = typed.type()
         if actual != dtype:
             raise TypeError(
@@ -2166,7 +2166,7 @@ struct ListLiteral[T: ListLikeType](ColumnBound, ListValue):
     """A list constant, held as a scalar and broadcast when bound.
 
     `lit` checks the scalar's dtype against `T` when it builds one, which is
-    what makes the unchecked `as_type` in `bind` sound.
+    what makes the unchecked `get` in `bind` sound.
     """
 
     comptime Type = Self.T
@@ -2200,9 +2200,7 @@ struct ListLiteral[T: ListLikeType](ColumnBound, ListValue):
         self, batch: StructArray, bindings: Bindings
     ) raises -> ListLikeArray[Self.Type]:
         return (
-            self._value.repeat(len(batch))
-            .as_type[ListLikeArray[Self.T]]()
-            .copy()
+            self._value.repeat(len(batch)).get[ListLikeArray[Self.T]]().copy()
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -2270,7 +2268,7 @@ struct ListParam[T: ListLikeType](ColumnBound, ListValue):
         return (
             self._scalar(bindings)
             .repeat(len(batch))
-            .as_type[ListLikeArray[Self.T]]()
+            .get[ListLikeArray[Self.T]]()
             .copy()
         )
 
@@ -2325,7 +2323,7 @@ struct BinaryColumn[T: BinaryLikeType](BinaryValue, ColumnBound):
     def bind(
         self, batch: StructArray, bindings: Bindings
     ) raises -> BinaryLikeArray[Self.Type]:
-        return batch.field(self._name).as_type[BinaryLikeArray[Self.T]]().copy()
+        return batch.field(self._name).get[BinaryLikeArray[Self.T]]().copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")

@@ -27,7 +27,6 @@ ArrowScalar trait:
 
 from std.collections import Array
 from std.sys.info import Endian, size_of
-from std.utils import Variant
 
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleToPython
@@ -40,6 +39,7 @@ from .errors import (
     NotImplementedError,
     debug_assert_lazy,
 )
+from .utils.enum import Enum, UniqueVariant, widen
 from .arrays import (
     ArrayData,
     BinaryLikeArray,
@@ -213,7 +213,7 @@ struct BoolScalar(ArrowScalar):
 
     # Spelled out rather than left to `Writable`'s reflection default. The
     # default walks every field at comptime, and `BoolScalar` is a member of
-    # `DynScalar.VariantType` -- which is mutually recursive through
+    # `DynScalar.Storage` -- which is mutually recursive through
     # `StructScalar -> List[DynScalar] -> DynScalar`. The trait's own docs call
     # that out: for such a cycle the reflection default must be overridden on
     # at least one type in it. Every other scalar here already does; this one
@@ -853,7 +853,9 @@ struct DictionaryScalar(ArrowScalar):
             length=times,
             nulls=0 if valid else times,
             offset=0,
-            indices=dt.index_type().dispatch_integer(indices),
+            indices=dt.index_type().try_visit[DynArray, IntegerType](
+                indices, "dtype is not integer"
+            ),
             values=values^,
         )
 
@@ -902,11 +904,11 @@ def _validity(valid: Bool, times: Int) -> Optional[Bitmap[mut=False]]:
 # ---------------------------------------------------------------------------
 
 
-struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
+struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
     """Type-erased scalar container backed by a Variant.
 
     Wraps any typed scalar inline in a discriminated union.
-    Runtime dispatch goes through the `_dispatch` helper.
+    Runtime dispatch goes through the `visit` helper.
 
     **Does not conform to `ArrowScalar`.** It exposes the same surface as its
     own API. The conformance existed to satisfy `DynArray.ScalarType`, which in
@@ -917,7 +919,8 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     create the divergence this removal is undoing.
     """
 
-    comptime VariantType = Variant[
+    comptime Storage = UniqueVariant[
+        ArrowScalar,
         NullScalar,
         BoolScalar,
         Int8Scalar,
@@ -956,50 +959,20 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         StringViewScalar,
     ]
 
-    var _v: Self.VariantType
+    var _storage: Self.Storage
 
-    def _dispatch[
-        R: Movable, //, Func: def[T: ArrowScalar](T) -> R
-    ](self, func: Func) -> R:
-        """Run `func` on the active variant member, narrowed to `ArrowScalar`.
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
 
-        The one narrowing adapter for this type. `ArrowScalar` is named concretely
-        because a closure type cannot be generic over its own trait bound, and
-        the `isa` ladder is written out here rather than delegated to a shared
-        helper: interposing a narrowing closure between the caller and the
-        ladder costs a fully inlined copy of the adapter in *every* arm.
-        Routing the four boxes through one generic `variant_dispatch` helper
-        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
-        `__text`. Duplicating five lines of `comptime for` per box is the price.
-        """
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, ArrowScalar):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, ArrowScalar]](self._v[T]))
-        abort("DynScalar._dispatch: no arm matched")
-
-    def _dispatch[
-        R: Movable, //, Func: def[T: ArrowScalar](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Raising counterpart of `_dispatch`."""
-
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, ArrowScalar):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, ArrowScalar]](self._v[T]))
-        raise InternalError("DynScalar._dispatch: no arm matched")
+    def __init__(out self, *, copy: Self):
+        self._storage = Self.Storage(copy=copy._storage)
 
     # --- construction ---
 
     @implicit
     def __init__[T: ArrowScalar](out self, var typed: T):
-        self._v = Self.VariantType(typed^)
-
-    def __init__(out self, *, copy: Self):
-        self._v = Self.VariantType(copy=copy._v)
+        self._storage = Self.Storage(typed^)
 
     # Explicit (empty) destructor so this type is Deinitable despite
     # the `StructScalar -> List[DynScalar] -> DynScalar` reference cycle; the
@@ -1010,16 +983,16 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     # --- dispatch-based methods ---
 
     def type(self) -> DynType:
-        def f[T: ArrowScalar](t: T) {imm} -> DynType:
+        def f[T: ArrowScalar](t: T) raises {imm} -> DynType:
             return t.type()
 
-        return self._dispatch(f)
+        return self.visit[DynType](f)
 
     def is_valid(self) -> Bool:
-        def f[T: ArrowScalar](t: T) {imm} -> Bool:
+        def f[T: ArrowScalar](t: T) raises {imm} -> Bool:
             return t.is_valid()
 
-        return self._dispatch(f)
+        return self.visit[Bool](f)
 
     def to_array(self, length: Int) raises -> DynArray:
         """This scalar repeated into a column of `length` rows, whatever it
@@ -1030,193 +1003,185 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         def f[T: ArrowScalar](t: T) raises {imm} -> DynArray:
             return t.to_array(length)
 
-        return self._dispatch(f)
+        return self.try_visit[DynArray, ArrowScalar](
+            f, "DynScalar: no member matched"
+        )
 
     def is_null(self) -> Bool:
         return not self.is_valid()
 
     # --- typed downcasts ---
 
-    def isa[T: ArrowScalar](self) -> Bool:
-        """Whether the held scalar is a `T` — one discriminant compare, where
-        `type()` walks the whole variant to build a `DynType`."""
-        return self._v.isa[T]()
+    def as_null(ref self) -> ref[self] NullScalar:
+        return self.get[NullScalar]()
 
-    def as_type[T: ArrowScalar](ref self) -> ref[self._v[T]] T:
-        """This scalar as the concrete `T` it holds — a borrow, no copy."""
-
-        def held() {imm} -> DynType:
-            return self.type()
-
-        debug_assert_lazy(self._v.isa[T](), "as_type: wrong type, holds ", held)
-        return self._v[T]
-
-    def as_null(ref self) -> ref[self._v[NullScalar]] NullScalar:
-        return self.as_type[NullScalar]()
-
-    def as_bool(ref self) -> ref[self._v[BoolScalar]] BoolScalar:
-        return self.as_type[BoolScalar]()
+    def as_bool(ref self) -> ref[self] BoolScalar:
+        return self.get[BoolScalar]()
 
     def as_primitive[
         T: PrimitiveType
-    ](ref self) -> ref[self._v[PrimitiveScalar[T]]] PrimitiveScalar[T]:
-        return self.as_type[PrimitiveScalar[T]]()
+    ](ref self) -> ref[self] PrimitiveScalar[T]:
+        return self.get[PrimitiveScalar[T]]()
 
-    def as_int8(ref self) -> ref[self._v[Int8Scalar]] Int8Scalar:
-        return self.as_type[Int8Scalar]()
+    def as_int8(ref self) -> ref[self] Int8Scalar:
+        return self.get[Int8Scalar]()
 
-    def as_int16(ref self) -> ref[self._v[Int16Scalar]] Int16Scalar:
-        return self.as_type[Int16Scalar]()
+    def as_int16(ref self) -> ref[self] Int16Scalar:
+        return self.get[Int16Scalar]()
 
-    def as_int32(ref self) -> ref[self._v[Int32Scalar]] Int32Scalar:
-        return self.as_type[Int32Scalar]()
+    def as_int32(ref self) -> ref[self] Int32Scalar:
+        return self.get[Int32Scalar]()
 
-    def as_int64(ref self) -> ref[self._v[Int64Scalar]] Int64Scalar:
-        return self.as_type[Int64Scalar]()
+    def as_int64(ref self) -> ref[self] Int64Scalar:
+        return self.get[Int64Scalar]()
 
-    def as_uint8(ref self) -> ref[self._v[UInt8Scalar]] UInt8Scalar:
-        return self.as_type[UInt8Scalar]()
+    def as_uint8(ref self) -> ref[self] UInt8Scalar:
+        return self.get[UInt8Scalar]()
 
-    def as_uint16(ref self) -> ref[self._v[UInt16Scalar]] UInt16Scalar:
-        return self.as_type[UInt16Scalar]()
+    def as_uint16(ref self) -> ref[self] UInt16Scalar:
+        return self.get[UInt16Scalar]()
 
-    def as_uint32(ref self) -> ref[self._v[UInt32Scalar]] UInt32Scalar:
-        return self.as_type[UInt32Scalar]()
+    def as_uint32(ref self) -> ref[self] UInt32Scalar:
+        return self.get[UInt32Scalar]()
 
-    def as_uint64(ref self) -> ref[self._v[UInt64Scalar]] UInt64Scalar:
-        return self.as_type[UInt64Scalar]()
+    def as_uint64(ref self) -> ref[self] UInt64Scalar:
+        return self.get[UInt64Scalar]()
 
-    def as_float16(ref self) -> ref[self._v[Float16Scalar]] Float16Scalar:
-        return self.as_type[Float16Scalar]()
+    def as_float16(ref self) -> ref[self] Float16Scalar:
+        return self.get[Float16Scalar]()
 
-    def as_float32(ref self) -> ref[self._v[Float32Scalar]] Float32Scalar:
-        return self.as_type[Float32Scalar]()
+    def as_float32(ref self) -> ref[self] Float32Scalar:
+        return self.get[Float32Scalar]()
 
-    def as_float64(ref self) -> ref[self._v[Float64Scalar]] Float64Scalar:
-        return self.as_type[Float64Scalar]()
+    def as_float64(ref self) -> ref[self] Float64Scalar:
+        return self.get[Float64Scalar]()
 
     def as_binary_like[
         T: BinaryLikeType
-    ](ref self) -> ref[self._v[BinaryLikeScalar[T]]] BinaryLikeScalar[T]:
-        return self.as_type[BinaryLikeScalar[T]]()
+    ](ref self) -> ref[self] BinaryLikeScalar[T]:
+        return self.get[BinaryLikeScalar[T]]()
 
-    def as_string(ref self) -> ref[self._v[StringScalar]] StringScalar:
-        return self.as_type[StringScalar]()
+    def as_string(ref self) -> ref[self] StringScalar:
+        return self.get[StringScalar]()
 
     def as_large_string(
         ref self,
-    ) -> ref[self._v[LargeStringScalar]] LargeStringScalar:
-        return self.as_type[LargeStringScalar]()
+    ) -> ref[self] LargeStringScalar:
+        return self.get[LargeStringScalar]()
 
-    def as_binary(ref self) -> ref[self._v[BinaryScalar]] BinaryScalar:
-        return self.as_type[BinaryScalar]()
+    def as_binary(ref self) -> ref[self] BinaryScalar:
+        return self.get[BinaryScalar]()
 
     def as_large_binary(
         ref self,
-    ) -> ref[self._v[LargeBinaryScalar]] LargeBinaryScalar:
-        return self.as_type[LargeBinaryScalar]()
+    ) -> ref[self] LargeBinaryScalar:
+        return self.get[LargeBinaryScalar]()
 
     def as_binary_view_like[
         T: BinaryViewLikeType
-    ](ref self) -> ref[self._v[BinaryViewLikeScalar[T]]] BinaryViewLikeScalar[
-        T
-    ]:
-        return self.as_type[BinaryViewLikeScalar[T]]()
+    ](ref self) -> ref[self] BinaryViewLikeScalar[T]:
+        return self.get[BinaryViewLikeScalar[T]]()
 
     def as_string_view(
         ref self,
-    ) -> ref[self._v[StringViewScalar]] StringViewScalar:
-        return self.as_type[StringViewScalar]()
+    ) -> ref[self] StringViewScalar:
+        return self.get[StringViewScalar]()
 
     def as_binary_view(
         ref self,
-    ) -> ref[self._v[BinaryViewScalar]] BinaryViewScalar:
-        return self.as_type[BinaryViewScalar]()
+    ) -> ref[self] BinaryViewScalar:
+        return self.get[BinaryViewScalar]()
 
     def as_fixed_size_binary(
         ref self,
-    ) -> ref[self._v[FixedSizeBinaryScalar]] FixedSizeBinaryScalar:
-        return self.as_type[FixedSizeBinaryScalar]()
+    ) -> ref[self] FixedSizeBinaryScalar:
+        return self.get[FixedSizeBinaryScalar]()
 
-    def as_date32(ref self) -> ref[self._v[Date32Scalar]] Date32Scalar:
-        return self.as_type[Date32Scalar]()
+    def as_date32(ref self) -> ref[self] Date32Scalar:
+        return self.get[Date32Scalar]()
 
-    def as_date64(ref self) -> ref[self._v[Date64Scalar]] Date64Scalar:
-        return self.as_type[Date64Scalar]()
+    def as_date64(ref self) -> ref[self] Date64Scalar:
+        return self.get[Date64Scalar]()
 
-    def as_time32(ref self) -> ref[self._v[Time32Scalar]] Time32Scalar:
-        return self.as_type[Time32Scalar]()
+    def as_time32(ref self) -> ref[self] Time32Scalar:
+        return self.get[Time32Scalar]()
 
-    def as_time64(ref self) -> ref[self._v[Time64Scalar]] Time64Scalar:
-        return self.as_type[Time64Scalar]()
+    def as_time64(ref self) -> ref[self] Time64Scalar:
+        return self.get[Time64Scalar]()
 
-    def as_duration(ref self) -> ref[self._v[DurationScalar]] DurationScalar:
-        return self.as_type[DurationScalar]()
+    def as_duration(ref self) -> ref[self] DurationScalar:
+        return self.get[DurationScalar]()
 
-    def as_timestamp(ref self) -> ref[self._v[TimestampScalar]] TimestampScalar:
-        return self.as_type[TimestampScalar]()
+    def as_timestamp(
+        ref self,
+    ) -> ref[self] TimestampScalar:
+        return self.get[TimestampScalar]()
 
     def as_year_month_interval(
         ref self,
-    ) -> ref[self._v[YearMonthIntervalScalar]] YearMonthIntervalScalar:
-        return self.as_type[YearMonthIntervalScalar]()
+    ) -> ref[self] YearMonthIntervalScalar:
+        return self.get[YearMonthIntervalScalar]()
 
     def as_day_time_interval(
         ref self,
-    ) -> ref[self._v[DayTimeIntervalScalar]] DayTimeIntervalScalar:
-        return self.as_type[DayTimeIntervalScalar]()
+    ) -> ref[self] DayTimeIntervalScalar:
+        return self.get[DayTimeIntervalScalar]()
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[self._v[MonthDayNanoIntervalScalar]] MonthDayNanoIntervalScalar:
-        return self.as_type[MonthDayNanoIntervalScalar]()
+    ) -> ref[self] MonthDayNanoIntervalScalar:
+        return self.get[MonthDayNanoIntervalScalar]()
 
-    def as_decimal32(ref self) -> ref[self._v[Decimal32Scalar]] Decimal32Scalar:
-        return self.as_type[Decimal32Scalar]()
+    def as_decimal32(
+        ref self,
+    ) -> ref[self] Decimal32Scalar:
+        return self.get[Decimal32Scalar]()
 
-    def as_decimal64(ref self) -> ref[self._v[Decimal64Scalar]] Decimal64Scalar:
-        return self.as_type[Decimal64Scalar]()
+    def as_decimal64(
+        ref self,
+    ) -> ref[self] Decimal64Scalar:
+        return self.get[Decimal64Scalar]()
 
     def as_decimal128(
         ref self,
-    ) -> ref[self._v[Decimal128Scalar]] Decimal128Scalar:
-        return self.as_type[Decimal128Scalar]()
+    ) -> ref[self] Decimal128Scalar:
+        return self.get[Decimal128Scalar]()
 
     def as_decimal256(
         ref self,
-    ) -> ref[self._v[Decimal256Scalar]] Decimal256Scalar:
-        return self.as_type[Decimal256Scalar]()
+    ) -> ref[self] Decimal256Scalar:
+        return self.get[Decimal256Scalar]()
 
-    def as_list(ref self) -> ref[self._v[ListScalar]] ListScalar:
-        return self.as_type[ListScalar]()
+    def as_list(ref self) -> ref[self] ListScalar:
+        return self.get[ListScalar]()
 
-    def as_fixed_size_list(ref self) -> ref[self._v[ListScalar]] ListScalar:
-        return self.as_type[ListScalar]()
+    def as_fixed_size_list(ref self) -> ref[self] ListScalar:
+        return self.get[ListScalar]()
 
-    def as_struct(ref self) -> ref[self._v[StructScalar]] StructScalar:
-        return self.as_type[StructScalar]()
+    def as_struct(ref self) -> ref[self] StructScalar:
+        return self.get[StructScalar]()
 
     def as_dictionary(
         ref self,
-    ) -> ref[self._v[DictionaryScalar]] DictionaryScalar:
-        return self.as_type[DictionaryScalar]()
+    ) -> ref[self] DictionaryScalar:
+        return self.get[DictionaryScalar]()
 
     def __eq__(self, other: Self) -> Bool:
-        return self._v == other._v
+        return self.storage() == other.storage()
 
     def write_to[W: Writer](self, mut writer: W):
-        def f[T: ArrowScalar](t: T) {mut writer, imm} -> Bool:
+        def f[T: ArrowScalar](t: T) raises {mut writer, imm} -> Bool:
             t.write_to(writer)
             return True
 
-        _ = self._dispatch(f)
+        _ = self.visit[Bool](f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
-        def f[T: ArrowScalar](t: T) {mut writer, imm} -> Bool:
+        def f[T: ArrowScalar](t: T) raises {mut writer, imm} -> Bool:
             t.write_repr_to(writer)
             return True
 
-        _ = self._dispatch(f)
+        _ = self.visit[Bool](f)
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
@@ -1243,7 +1208,9 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
             def numeric[T: PrimitiveType](d: T) raises {imm} -> PythonObject:
                 return PythonObject(self.as_primitive[T]().value())
 
-            return dt.dispatch_primitive(numeric)
+            return dt.try_visit[PythonObject, PrimitiveType](
+                numeric, "dtype is not primitive"
+            )
         elif dt.is_binary_like():
 
             def binarylike[
@@ -1251,7 +1218,9 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
             ](d: T) raises {imm} -> PythonObject:
                 return PythonObject(self.as_binary_like[T]().to_string())
 
-            return dt.dispatch_binarylike(binarylike)
+            return dt.try_visit[PythonObject, BinaryLikeType](
+                binarylike, "dtype is not binarylike"
+            )
         elif dt.is_string_view() or dt.is_binary_view():
 
             def viewlike[
@@ -1259,7 +1228,9 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
             ](d: T) raises {imm} -> PythonObject:
                 return PythonObject(self.as_binary_view_like[T]().to_string())
 
-            return dt.dispatch_binaryview(viewlike)
+            return dt.try_visit[PythonObject, BinaryViewLikeType](
+                viewlike, "dtype is not a binary view"
+            )
         elif dt.is_list():
             return self.as_list().value().to_python_object()
         elif dt.is_fixed_size_list():

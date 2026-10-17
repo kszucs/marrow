@@ -51,14 +51,16 @@ from ...arrays import (
     Array,
     BinaryLikeArray,
     BinaryViewLikeArray,
+    BoolArray,
     DynArray,
+    PrimitiveArray,
     StructArray,
-    dispatch_array,
 )
 from ...dtypes import (
     DecimalType,
     DynType,
     NumericType,
+    PrimitiveType,
     StringLikeType,
     BinaryViewLikeType,
     TemporalType,
@@ -136,7 +138,7 @@ def _fold_agg[
     `take` and `cast`.
 
     Numeric, temporal and decimal are separate arms rather than one
-    `dispatch_primitive`, so a kernel is never instantiated over a family its
+    `try_visit[PrimitiveType]`, so a kernel is never instantiated over a family its
     domain marker (`ArithmeticAgg`, `DecimalAgg`) excludes: `AggState`'s
     compile-time domain assertion would fail the *build* rather than raise.
     """
@@ -156,21 +158,31 @@ def _fold_agg[
                 t"aggregate '{K.name}' is the decimal kernel, so it is not"
                 t" defined for {in_dtype} columns"
             )
-        return in_dtype.dispatch_decimal(decimal)
+        return in_dtype.try_visit[R, DecimalType](
+            decimal, "dtype is not decimal"
+        )
     elif conforms_to(K, ArithmeticAgg):
         if not in_dtype.is_numeric():
             raise TypeError(
                 t"aggregate '{K.name}' needs arithmetic, so it is not defined "
                 t"for {in_dtype} columns"
             )
-        return in_dtype.dispatch_numeric(numeric)
+        return in_dtype.try_visit[R, NumericType](
+            numeric, "dtype is not numeric"
+        )
     else:
         if in_dtype.is_numeric():
-            return in_dtype.dispatch_numeric(numeric)
+            return in_dtype.try_visit[R, NumericType](
+                numeric, "dtype is not numeric"
+            )
         elif in_dtype.is_temporal():
-            return in_dtype.dispatch_temporal(temporal)
+            return in_dtype.try_visit[R, TemporalType](
+                temporal, "dtype is not temporal"
+            )
         elif in_dtype.is_decimal():
-            return in_dtype.dispatch_decimal(decimal)
+            return in_dtype.try_visit[R, DecimalType](
+                decimal, "dtype is not decimal"
+            )
         else:
             raise TypeError(
                 t"aggregate '{K.name}' is not defined for {in_dtype} columns"
@@ -188,7 +200,7 @@ def resolve_aggregate[
     `timestamp[us]` declaring `timestamp[s]` is a `Variant` misaccess at emit
     rather than a raise.
 
-    The job is a parametric *value*, the same mechanism `DynType.dispatch_*`
+    The job is a parametric *value*, the same mechanism `DynType.try_visit`
     uses. That is what lets one ladder serve two callers: a closure cannot be
     generic over its own trait bound, but a job whose signature names
     `AggKernel` directly can be.
@@ -203,7 +215,36 @@ def resolve_aggregate[
             else:
                 return func[ApproxDistinctCount[A]]()
 
-        return dispatch_array(in_dtype, counted)
+        # A count reads its input as the array type that holds it: a valid
+        # count wants the validity bitmap, a distinct count hashes values.
+        if in_dtype.is_bool():
+            return counted[BoolArray]()
+        elif in_dtype.is_string() or in_dtype.is_large_string():
+
+            def stringly[T: StringLikeType](d: T) raises {imm counted} -> R:
+                return counted[BinaryLikeArray[T]]()
+
+            return in_dtype.try_visit[R, StringLikeType](
+                stringly, "dtype is not stringlike"
+            )
+        elif in_dtype.is_string_view():
+
+            def viewly[T: BinaryViewLikeType](d: T) raises {imm counted} -> R:
+                return counted[BinaryViewLikeArray[T]]()
+
+            return in_dtype.try_visit[R, BinaryViewLikeType](
+                viewly, "dtype is not a binary view"
+            )
+        elif in_dtype.is_primitive():
+
+            def primitive[T: PrimitiveType](d: T) raises {imm counted} -> R:
+                return counted[PrimitiveArray[T]]()
+
+            return in_dtype.try_visit[R, PrimitiveType](
+                primitive, "dtype is not primitive"
+            )
+        else:
+            raise TypeError(t"no array type for {in_dtype} columns")
     elif (
         name == VARIANCE
         or name == STDDEV
@@ -230,7 +271,9 @@ def resolve_aggregate[
                 t"aggregate '{name}' needs arithmetic, so it is not defined "
                 t"for {in_dtype} columns"
             )
-        return in_dtype.dispatch_numeric(dispersed)
+        return in_dtype.try_visit[R, NumericType](
+            dispersed, "dtype is not numeric"
+        )
     elif name == MIN or name == MAX:
         # The only place a *dtype* selects an implementation. A string extremum
         # is a bytewise scan and a fixed-width one is a fold — two kernels
@@ -251,9 +294,13 @@ def resolve_aggregate[
                 return func[LexicalExtremum[MaxOp, BinaryViewLikeArray[T]]]()
 
         if in_dtype.is_string_like():
-            return in_dtype.dispatch_stringlike(extremum)
+            return in_dtype.try_visit[R, StringLikeType](
+                extremum, "dtype is not stringlike"
+            )
         elif in_dtype.is_string_view():
-            return in_dtype.dispatch_binaryview(view_extremum)
+            return in_dtype.try_visit[R, BinaryViewLikeType](
+                view_extremum, "dtype is not a binary view"
+            )
         elif name == MIN:
             return _fold_agg[K=MinFold](in_dtype, func)
         else:

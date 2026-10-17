@@ -108,10 +108,12 @@ struct DecimalPromotion(Copyable, Movable):
         Arrow C++'s `MaxDecimalDigitsForInteger`."""
         if dt.is_decimal():
 
-            def params[T: DecimalType](d: T) raises {} -> Tuple[Int, Int]:
+            def params[T: DecimalType](d: T) raises {imm} -> Tuple[Int, Int]:
                 return (d.precision(), d.scale())
 
-            return dt.dispatch_decimal(params)
+            return dt.try_visit[Tuple[Int, Int], DecimalType](
+                params, "dtype is not decimal"
+            )
         elif dt.is_int8() or dt.is_uint8():
             return (3, 0)
         elif dt.is_int16() or dt.is_uint16():
@@ -278,7 +280,7 @@ trait DecimalBinaryKernel(Kernel):
         var l = CastKernel.dispatch(left, promo.left, True, ctx)
         var r = CastKernel.dispatch(right, promo.right, True, ctx)
 
-        # Two arms, not `dispatch_decimal`'s four: `DecimalPromotion` only
+        # Two arms, not `try_visit[DecimalType]`'s four: `DecimalPromotion` only
         # ever answers decimal128 or decimal256.
         if promo.output.is_decimal256():
             return Self.apply(

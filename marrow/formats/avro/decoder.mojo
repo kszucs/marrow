@@ -147,7 +147,7 @@ struct _Node(Copyable, Movable):
                     self.children[0].decode(cur)
             self.builder.as_list().append_valid()
         elif op == _MAP:
-            var entries = self.builder.as_type[MapBuilder]().entries()
+            var entries = self.builder.get[MapBuilder]().entries()
             while True:
                 var count = cur.block()[0]
                 if count == 0:
@@ -158,7 +158,7 @@ struct _Node(Copyable, Movable):
                     self.children[0].decode(cur)
                     self.children[1].decode(cur)
                     entries.as_struct().append_valid()
-            self.builder.as_type[MapBuilder]().append_valid()
+            self.builder.get[MapBuilder]().append_valid()
         elif op == _STRUCT:
             for ref c in self.children:
                 c.decode(cur)
@@ -213,7 +213,7 @@ def _skip(avro: AvroSchema, mut cur: AvroCursor[_]) raises:
         _skip(avro.children[i], cur)
 
 
-def _compile(avro: AvroSchema, builder: DynBuilder) raises -> _Node:
+def _compile(avro: AvroSchema, var builder: DynBuilder) raises -> _Node:
     """The node decoding `avro` into `builder`, a `DynBuilder` of the type
     `avro` maps to in Arrow; a nested node takes its builder from the
     parent's."""
@@ -245,7 +245,7 @@ def _compile(avro: AvroSchema, builder: DynBuilder) raises -> _Node:
         )
         return n^
     if dtype.is_map():
-        var entries = builder.as_type[MapBuilder]().entries()
+        var entries = builder.get[MapBuilder]().entries()
         ref fields = entries.as_struct()
         var n = _Node(_MAP, k, builder)
         if k == AvroKind.MAP:

@@ -36,11 +36,12 @@ O(1) refcount bumps, and conversions are implicit both ways.
 They expose the same surface as their own API, but they are not substitutable in
 generic code. A box may *hold* trait-bound values; it should not *be* one.
 
-Runtime → comptime dispatch is the `DynType.dispatch_*` family —
-`dispatch_primitive`, `dispatch_numeric`, `dispatch_integer`, `dispatch_floating`,
-`dispatch_temporal`, `dispatch_decimal`, `dispatch_stringlike`,
-`dispatch_binarylike`, `dispatch_listlike` — each resolving a runtime `DataType`
-to a comptime type parameter and running a job passed **as a value**.
+Runtime → comptime dispatch is one mechanism, `Enum`
+(`marrow/utils/enum.mojo`), which every erased handle conforms to.
+`dt.try_visit[R, NumericType](job, message)` resolves a runtime dtype to a
+comptime type parameter within a family and runs `job`, a closure passed **as a
+value**, at it; a dtype outside the family raises `message` as a `TypeError`.
+`visit[R, F](job)` is the total form, over a family every member belongs to.
 
 ## Buffers and views
 

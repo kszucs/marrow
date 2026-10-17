@@ -166,7 +166,9 @@ def _bounds(column: DynArray) raises -> Tuple[DynScalar, DynScalar]:
             values, values, witness
         )
 
-    return dtype.dispatch_primitive(arm)
+    return dtype.try_visit[Tuple[DynScalar, DynScalar], PrimitiveType](
+        arm, "dtype is not primitive"
+    )
 
 
 def _average_width(column: DynArray) raises -> Approx:
@@ -189,7 +191,9 @@ def _average_width(column: DynArray) raises -> Approx:
         var bytes = array.total_values_length()
         return Approx.estimated((bytes + n - 1) // n + offset_width)
 
-    return dtype.dispatch_binarylike(arm)
+    return dtype.try_visit[Approx, BinaryLikeType](
+        arm, "dtype is not binarylike"
+    )
 
 
 def _add_decoded_bytes(

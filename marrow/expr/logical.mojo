@@ -16,7 +16,7 @@ optimizer rule read a real typed node and construct one — the capability the
 previous trampoline-only box lacked, which left its "rules" as four comptime
 flags and eight scattered calls inside `to_operator` with no file to read.
 
-Lowering is the exception, and the reason is measured. `_dispatch` resolves the
+Lowering is the exception, and the reason is measured. `visit` resolves the
 active member with a `comptime for` over every member, so anything routed
 through it is instantiated thirteen times; for lowering that makes
 `Sort.lower` reach `kernels::sort` and `ParquetScan.lower` reach the
@@ -41,7 +41,6 @@ from std.builtin.rebind import downcast
 from std.collections import Dict, Set
 from std.memory import ArcPointer
 from std.os import abort
-from std.utils import Variant
 
 from ..errors import (
     IndexError,
@@ -82,6 +81,7 @@ from ..iceberg.catalog import IcebergTable
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, StringType, field, int64, null
 from ..scalars import DynScalar
+from ..utils.enum import Enum, UniqueVariant, widen
 from .estimates import (
     Approx,
     ColumnEstimate,
@@ -377,7 +377,7 @@ trait Value(Copyable, Deinitable, Writable):
         rather than on the first morsel. That is the difference between the
         runtime lane holding an erased aggregate state and holding a *typed*
         one behind the `DynOperator` box every operator already pays for:
-        `dispatch_numeric` hands each arm a concrete `V`, so the arm can
+        `try_visit[NumericType]` hands each arm a concrete `V`, so the arm can
         construct `AggregateOperator[Fold[K, V], RuntimeValue, G]` outright.
         Every relation has its input's schema where it calls this.
 
@@ -1306,7 +1306,7 @@ trait Relation(Copyable, Deinitable, Movable, Writable):
         ...
 
 
-struct DynRelation(Copyable, Movable, Writable):
+struct DynRelation(Copyable, Enum, Writable):
     """A `Relation` of any node, erased — a `Variant` for inspection, a
     trampoline for lowering.
 
@@ -1338,7 +1338,8 @@ struct DynRelation(Copyable, Movable, Writable):
     inside a variant-backed `DynArray`, so copying a plan stays O(1).
     """
 
-    comptime VariantType = Variant[
+    comptime Storage = UniqueVariant[
+        Relation,
         EmptyRelation,
         InMemoryTable,
         Filter,
@@ -1358,11 +1359,21 @@ struct DynRelation(Copyable, Movable, Writable):
         IcebergScan,
     ]
 
-    var _v: Self.VariantType
+    var _storage: Self.Storage
 
-    var _virt_lower: def(
-        Self.VariantType, mut Driver, Bindings
+    @always_inline
+    def storage(ref self) -> ref[self] Self.Storage:
+        return widen[origin_of(self)](self._storage)
+
+    def __init__(out self, *, copy: Self):
+        self._storage = Self.Storage(copy=copy._storage)
+        self._virt_lower = copy._virt_lower
+
+    comptime Lowering = def(
+        Self.Storage, mut Driver, Bindings
     ) thin raises -> List[Phase]
+
+    var _virt_lower: Self.Lowering
     """Lowering, wired per **constructed** node type. See the struct docstring
     for the 348% this one slot is worth."""
 
@@ -1370,46 +1381,18 @@ struct DynRelation(Copyable, Movable, Writable):
     def _lower_tramp[
         R: Relation
     ](
-        v: Self.VariantType,
+        v: Self.Storage,
         mut driver: Driver,
         bindings: Bindings,
-    ) raises -> List[Phase]:
-        return v[R].lower(driver, bindings)
+    ) raises -> List[
+        Phase
+    ]:
+        return v.get[R]().lower(driver, bindings)
 
     @implicit
     def __init__[R: Relation](out self, var value: R):
-        self._v = Self.VariantType(value^)
+        self._storage = Self.Storage(value^)
         self._virt_lower = Self._lower_tramp[R]
-
-    def __init__(out self, *, copy: Self):
-        self._v = Self.VariantType(copy=copy._v)
-        self._virt_lower = copy._virt_lower
-
-    def isa[R: Relation](self) -> Bool:
-        """Is this node an `R`? The question every rule opens with."""
-        return self._v.isa[R]()
-
-    def get[R: Relation](ref self) -> ref[self._v[R]] R:
-        """This node as an `R`, borrowed. Undefined unless `isa[R]()`."""
-        return self._v[R]
-
-    def _dispatch[
-        R: Movable, //, Func: def[T: Relation](T) raises -> R
-    ](self, func: Func) raises -> R:
-        """Run `func` on the active member, narrowed to `Relation`.
-
-        Instantiates `func` once per member, which is why `lower` does
-        **not** come through here. Written out rather than routed through a
-        shared helper, for the reason `DynArray._dispatch` records: a narrowing
-        closure between caller and ladder is inlined into every arm of every
-        instantiation, measured at +662,740 bytes on one gate.
-        """
-        comptime for i in range(len(Self.VariantType.Ts)):
-            comptime T = Self.VariantType.Ts[i]
-            comptime if conforms_to(T, Relation):
-                if self._v.isa[T]():
-                    return func(rebind[downcast[T, Relation]](self._v[T]))
-        abort("DynRelation._dispatch: no arm matched")
 
     def traverse[
         F: def(DynRelation) raises -> DynRelation
@@ -1419,7 +1402,9 @@ struct DynRelation(Copyable, Movable, Writable):
         def job[T: Relation](node: T) raises {imm} -> DynRelation:
             return node.traverse(f)
 
-        return self._dispatch(job)
+        return self.try_visit[DynRelation, Relation](
+            job, "DynRelation: no member matched"
+        )
 
     def children(self) raises -> List[DynRelation]:
         """This node's inputs, in the order `with_children` takes them."""
@@ -1446,7 +1431,7 @@ struct DynRelation(Copyable, Movable, Writable):
     def references(self, mut into: References):
         """`references` on whichever node this is.
 
-        Through `_dispatch`, with each arm collecting into its own `References`
+        Through `visit`, with each arm collecting into its own `References`
         and one merge afterwards. An inline `isa` ladder writing straight into
         `into` was tried and measured 24,152 bytes against this one's 3,132 on
         `query_cli`: it inlines every node's walk into every arm."""
@@ -1457,7 +1442,11 @@ struct DynRelation(Copyable, Movable, Writable):
             return refs^
 
         try:
-            into.extend(self._dispatch(job))
+            into.extend(
+                self.try_visit[References, Relation](
+                    job, "DynRelation: no member matched"
+                )
+            )
         except:
             abort("DynRelation.references: no arm matched")
 
@@ -1483,7 +1472,9 @@ struct DynRelation(Copyable, Movable, Writable):
             return node.schema()
 
         try:
-            return self._dispatch(job)
+            return self.try_visit[Schema, Relation](
+                job, "DynRelation: no member matched"
+            )
         except:
             abort("DynRelation.schema: no arm matched")
 
@@ -1499,7 +1490,9 @@ struct DynRelation(Copyable, Movable, Writable):
         def job[T: Relation](node: T) raises {imm} -> Estimate:
             return node.estimate()
 
-        return self._dispatch(job)
+        return self.try_visit[Estimate, Relation](
+            job, "DynRelation: no member matched"
+        )
 
     def cost(self) raises -> Cost:
         """`cost` on whichever node this is — the subtree's cost, not this
@@ -1508,7 +1501,9 @@ struct DynRelation(Copyable, Movable, Writable):
         def job[T: Relation](node: T) raises {imm} -> Cost:
             return node.cost()
 
-        return self._dispatch(job)
+        return self.try_visit[Cost, Relation](
+            job, "DynRelation: no member matched"
+        )
 
     def lower(
         self, mut driver: Driver, bindings: Bindings = Bindings()
@@ -1519,7 +1514,7 @@ struct DynRelation(Copyable, Movable, Writable):
         driver.entering(self._erased())
         var phases: List[Phase]
         try:
-            phases = self._virt_lower(self._v, driver, bindings)
+            phases = self._virt_lower(self.storage(), driver, bindings)
         except e:
             driver.leaving()
             raise e^
@@ -1557,7 +1552,11 @@ struct DynRelation(Copyable, Movable, Writable):
             return String(node)
 
         try:
-            writer.write(self._dispatch(job))
+            writer.write(
+                self.try_visit[String, Relation](
+                    job, "DynRelation: no member matched"
+                )
+            )
         except:
             writer.write("<relation>")
 

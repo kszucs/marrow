@@ -711,7 +711,7 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
     (`Acc = K.AccType[V]`), `update` takes a `PrimitiveArray[V]`, and `finish`
     returns a `PrimitiveArray[Acc]` — no `DynBuilder`/`DynArray`/`DynScalar`
     anywhere, so the hot loops are fully monomorphized. The runtime dtype was
-    resolved once at the boundary (`DynType.dispatch_numeric`) before this type existed.
+    resolved once at the boundary (`DynType.try_visit[NumericType]`) before this type existed.
     A richer aggregate (variance, distinct, ...) pairs its kernel with a
     different state struct of this shape."""
 
@@ -1012,7 +1012,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
     **Never `DynArray`.** A bound admitting both `DynArray` and
     `PrimitiveArray[Int64Type]` says only "some column-ish thing" and has no
     readable members to write a kernel body against. Resolving the array type
-    at the *dispatch site* — where `dispatch_primitive` already binds a
+    at the *dispatch site* — where `try_visit[PrimitiveType]` already binds a
     concrete `T` — is what lets the bound mean what it says.
     """
 
@@ -1317,7 +1317,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
 
     def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
         self._state = AggState[Self.K, Self.V](
-            Self.K.acc_dtype[Self.V](Self._domain(in_dtype).as_type[Self.V]())
+            Self.K.acc_dtype[Self.V](Self._domain(in_dtype).get[Self.V]())
         )
         if not grouped:
             self._state.reserve(1)
@@ -1325,7 +1325,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
         var checked = Self._domain(in_dtype)
-        return DynType(Self.K.acc_dtype[Self.V](checked.as_type[Self.V]()))
+        return DynType(Self.K.acc_dtype[Self.V](checked.get[Self.V]()))
 
     @staticmethod
     def _domain(in_dtype: DynType) raises -> DynType:
@@ -1334,7 +1334,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
         **Not a family gate.** Whether an arithmetic fold accepts this column
         is settled twice before control arrives here: `AggState` asserts it at
         compile time, and every caller binds `V` *from* `in_dtype` through
-        `dispatch_numeric`/`dispatch_primitive`, so a family check could only
+        `try_visit[NumericType]`/`try_visit[PrimitiveType]`, so a family check could only
         fire after a different caller had already resolved wrong. It used to be
         written out anyway, and in the comptime lane it could not fire at all —
         `NumericColumn[T].dtype` ignores the schema and answers `DynType(Self.T())`,
@@ -1345,10 +1345,10 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
         This check is different, and *is* reachable: `TemporalColumn[T].dtype`
         genuinely reads the schema, so a `TemporalColumn[TimestampType]` over a
         `date32` field arrives here with a `V` that does not match. Without it
-        that reaches `as_type` and **aborts the process** rather than raising —
+        that reaches `get` and **aborts the process** rather than raising —
         which under `ASSERT=all` fails every case in the file.
         """
-        if not in_dtype.holds[Self.V]():
+        if not in_dtype.isa[Self.V]():
             raise Self.error[TypeError](
                 t"was resolved for a different column type than {in_dtype}",
             )
@@ -1492,7 +1492,7 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
         rooted one is not even in the input's units squared.
 
         No domain check: `V: NumericType` is the domain, and every caller binds
-        `V` *from* `in_dtype` through `dispatch_numeric`, so the two cannot
+        `V` *from* `in_dtype` through `try_visit[NumericType]`, so the two cannot
         disagree. The check that used to be here restated the bound at run
         time and could only fire if a caller had already resolved wrong."""
         return DynType(float64)
@@ -1625,7 +1625,7 @@ struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         """No dispatch: `T` is the input's type, so the scan is monomorphized.
-        The `dispatch_stringlike` this ran once per morsel is gone."""
+        The `try_visit[StringLikeType]` this ran once per morsel is gone."""
         self.reserve(groups.num_groups)
         var has_null = input.null_count() > 0
         if groups.is_single():
@@ -1668,7 +1668,7 @@ struct ValidCount[A: Array](Windowable):
 
     The comptime lane does **not** route numeric `count` here — it fuses
     `Aggregate[Fold[CountFold], A]` when its operand is numeric, which pays
-    one typed `bitmap.test()` per row where this pays a `DynArray._dispatch`
+    one typed `bitmap.test()` per row where this pays a `DynArray.visit`
     walk: a linear `comptime for` over 37 variant arms plus an indirect call
     *per row*, inside an already cache-hostile random-write loop. Measured at
     1M rows / 100k groups on a nullable column: 1.7159 ms (sd 0.0702) against
@@ -1707,7 +1707,7 @@ struct ValidCount[A: Array](Windowable):
             return
         var gids = groups.ids.values()
         # The bitmap once, not `is_valid(i)` per row — on an erased column that
-        # per-row call was a `_dispatch` walk and measured 4.9x against a typed
+        # per-row call was a `visit` walk and measured 4.9x against a typed
         # fold. Typed now, so it is a direct call either way; reading the view
         # once is still the cheaper shape and needs nothing from the dtype.
         var data = column.to_data()
@@ -1883,7 +1883,7 @@ struct DistinctCount[A: Array](AggKernel):
         ref lists = partials[0].as_list()
         var values = lists.child_slice()
         if groups.is_single():
-            self.update(Groups.single(len(values)), values.as_type[Self.A]())
+            self.update(Groups.single(len(values)), values.get[Self.A]())
         else:
             var slot_of = Int32Builder(len(values))
             for i in range(len(lists)):
@@ -1893,7 +1893,7 @@ struct DistinctCount[A: Array](AggKernel):
                     slot_of.append(g)
             self.update(
                 Groups(slot_of.finish(), groups.num_groups),
-                values.as_type[Self.A](),
+                values.get[Self.A](),
             )
 
 
