@@ -155,6 +155,10 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         ``columns`` are the key columns, one per declared type, checked
         against them first. ``expected_new`` sizes the tables once, as
         ``HashIndex.insert`` describes."""
+        debug_assert(
+            self._keys.length == len(self._index),
+            "encode: keys were appended unindexed (extend_unindexed)",
+        )
         self._check_types(columns)
         var placement: Placement
         if self._by_entries and len(columns[0]) > 0:
@@ -407,10 +411,11 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         accepted, since the keys are kept as plain values."""
         self._check_types(keys)
         for k in range(len(keys)):
-            debug_assert(
-                not self._types[k].is_dictionary(),
-                "extend_unindexed: a dictionary-typed key column",
-            )
+            if self._types[k].is_dictionary():
+                raise InvalidError(
+                    t"extend_unindexed: key column {k} is dictionary-typed;"
+                    t" unindexed keys are kept as plain values"
+                )
         self._keys.append(Self._batch(keys^))
 
     def _plain_values(mut self) raises -> List[DynArray]:

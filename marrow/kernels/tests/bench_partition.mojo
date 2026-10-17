@@ -1,7 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""`repartition`: the rows of several batches split by key hash.
+"""`RadixPartitioner.repartition`: the rows of several batches split by key hash.
 
 What a parallel group-by's merge pays before it combines: one batch per
 worker, each hashed, partitioned and gathered once. Rows are an int64 key and
@@ -13,7 +13,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import DynArray, StructArray
 from ...builders import Int64Builder
 from ...execution import ExecContext
-from ...kernels.partition import repartition
+from ...kernels.partition import RadixPartitioner
 from ...tabular import record_batch
 from ...utils.testing import Benchmark
 
@@ -45,7 +45,7 @@ def _bench_repartition(
 
     @always_inline
     def call() raises {imm batches, imm keys, imm ctx}:
-        keep(len(repartition(batches, keys, 6, ctx)))
+        keep(len(RadixPartitioner(6, ctx.copy()).repartition(batches, keys)))
 
     b.iter(call)
     keep(batches)

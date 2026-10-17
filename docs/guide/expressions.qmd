@@ -142,10 +142,11 @@ This is what [compiling a query](compile.qmd) is built on.
 
 ## The push engine
 
-`Relation.to_operator(ctx)` lowers a plan node into an `Operator` that owns all
-the mutable state. **The engine pushes**: `push(batch)` answers with what it
-produced, `drain()` with what is left, and `collect()` runs a plan down to one
-`StructArray`. There is one operator per plan node.
+`Relation.lower(driver)` turns a plan node into phases: a source of morsels and
+one pipeline of `Operator`s per worker, the operators owning all the mutable
+state. **The engine pushes**: `push(batch)` answers with what it produced,
+`drain()` with what is left, and `Driver.collect` runs the phases down to one
+`StructArray`.
 
 ## Choosing a lane
 

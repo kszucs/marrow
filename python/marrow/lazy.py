@@ -493,9 +493,9 @@ class LazyTable(_Wrapper):
     def batches(self, num_threads=0):
         """Run the plan and return the engine's own batches, unconcatenated.
 
-        `collect()` calls `Pipeline.collect`, which drains the chain and
-        concatenates into one batch; this keeps the boundaries the engine
-        already produced, which is the shape `Table.from_batches` wants."""
+        `collect()` concatenates what the plan's phases produce into one
+        batch; this keeps the boundaries the engine already produced, which is
+        the shape `Table.from_batches` wants."""
         return [RecordBatch.wrap(b) for b in self._binding.batches(num_threads)]
 
     def to_table(self, num_threads=0):
@@ -545,27 +545,25 @@ class LazyTable(_Wrapper):
         :meth:`collect`. With ``analyze`` and ``trace`` a path, the run's
         timeline — every stage call and morsel read, per thread — is written
         there as Chrome trace JSON, which ui.perfetto.dev opens."""
-        if not (physical or analyze):
-            return self._plan_text()
-        text, json, batch, timeline = self._binding.report(
-            analyze, bool(trace), num_threads
-        )
-        if analyze and trace:
-            with open(trace, "w") as f:
-                f.write(timeline)
-        return PlanReport(text, json, RecordBatch.wrap(batch))
+        if analyze:
+            text, json, timeline = self._binding.profile(bool(trace), num_threads)
+            if trace:
+                with open(trace, "w") as f:
+                    f.write(timeline)
+            return PlanReport(text, json)
+        if physical:
+            return PlanReport(*self._binding.report(num_threads))
+        return self._plan_text()
 
 
 class PlanReport:
     """The phases that run a plan, and under ``analyze`` what they did.
 
-    Prints as text; :meth:`to_dict` is the same report as data, and
-    :meth:`to_batch` its phases as a batch, one row per phase."""
+    Prints as text; :meth:`to_dict` is the same report as data."""
 
-    def __init__(self, text, json, batch):
+    def __init__(self, text, json):
         self._text = text
         self._json = json
-        self._batch = batch
 
     def __str__(self):
         return self._text
@@ -574,15 +572,12 @@ class PlanReport:
         return self._text
 
     def to_dict(self):
-        """The report as a dict: the run's ``ns``, ``rows`` and ``estimate``
-        (-1 when unknown), its ``phases`` and the ``spans`` between them."""
+        """The report as a dict: the plan's ``estimate`` (-1 when unknown)
+        and its ``phases``; under ``analyze`` also the run's ``ns`` and
+        ``rows`` and the ``spans`` between the phases."""
         import json
 
         return json.loads(self._json)
-
-    def to_batch(self):
-        """The phases as a :class:`~marrow.RecordBatch`, one row per phase."""
-        return self._batch
 
 
 def _is_direction_list(args):

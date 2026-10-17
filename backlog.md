@@ -279,6 +279,12 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
 
 ### 1.8 Test and infrastructure gaps
 
+- **TSAN reports a data race in the thread pool's `_claim`**
+  (`utils/threads.mojo`, the job's `next` counter read on a stack slot
+  while workers start), under `pytest --tsan
+  marrow/parquet/tests/test_reader.mojo`; it fails
+  `test_nulls_across_row_groups`. Present on main `a79fb1f5` (two reports),
+  so not the codec lock or the engine.
 - **No cross-lane parity test.** "One engine, two drivers" was enforced by a
   `test_parity.mojo` across four axes; it went with the previous expression
   package and has no replacement. The invariant is currently unenforced.
@@ -1000,9 +1006,10 @@ first file's schema.
   at ~40 s), on `4bf1c353` too: `scan(path, schema).filter(...)
   .optimize[AllRules]().execute()` in a `main()` is enough. Inside a test
   driver the same chain builds. The docs keep it out of compiled listings.
-- **Remote scans are latency-bound.** `ParquetScanOperator` reads one row
-  group per `drain`, and over OpenDAL each is its own request, issued only
-  when the previous one has been decoded. Hub files are often written with
+- **Remote scans are latency-bound.** `RowGroupSource` reads one row
+  group per morsel, and over OpenDAL each is its own request: a worker
+  issues its next only once it has decoded the last, so at most one per
+  worker is in flight. Hub files are often written with
   1,000-row groups: `Salesforce/wikitext` `wikitext-103-raw-v1/train` is two
   shards and ~1,800 groups, and read its one column in ~30 min where `curl`
   downloads a 157 MB shard in 5 s. A request costs ~0.45 s over `https://`
@@ -1258,14 +1265,25 @@ and load, for reference:
 - **JSON and Iceberg scans are read in order**, as one worker's source: NDJSON
   needs a block split, Iceberg a file-per-morsel source like `RowGroupSource`.
 - **Independent join builds run one after another.**
+- **An Avro scan finds its blocks one round trip at a time.** `AvroChunks`
+  walks every block header (`AvroFile.blocks`) with its own fetch before the
+  first morsel decodes: free on a memory map, minutes for a large file on an
+  object store. Splitting by byte range and finding each range's first block
+  by the file's 16-byte sync marker, as Hadoop's `AvroInputFormat` does,
+  needs no up-front walk.
+- **An Iceberg scan is one stream, read in order.** It plans the snapshot
+  while it lowers, then reads its data files one after another on one
+  worker; a source of one morsel per data file or row group would read them
+  in parallel, as `RowGroupSource` does for Parquet.
+- **Left from the engine simplification pass:** a `Phases` value for the
+  free `append_each`/`runs_in_parallel`; `SortIndices.apply`'s parameter
+  order (84 callers); the context copies `HashJoin`, `DictionaryEncoder`
+  and `HashIndex` each keep; a set operation's input edge in the report
+  graph; `PlannedJoin`/`JoinOrder` living in `physical.mojo`.
 - **A join's unmatched tail is one morsel on one worker.** A large LEFT or
   ANTI build scans and gathers every unmatched build row serially;
   `HashJoin.unmatched` already takes a `[start, end)` range, so
   `UnmatchedSource` could offer several.
-- **`explain` and `analyze` estimate every node they lower**
-  (`Driver.entering`), each over its whole subtree, which is quadratic in
-  the plan's depth and lands in what `analyze` measures. Estimating once per
-  node, or lazily for the one consumer that reads it, would not.
 - **No NUMA placement** and no work stealing: one claim counter, which
   simulates within a few percent of stealing on one socket.
 
@@ -1302,11 +1320,9 @@ to any AOT gate (`query_*_agg_fused`, `query_join`), +0.39% to `query_sort`
 and at most +0.02% to the rest, against its first commit.
 
 **The whole engine is outside the recorded size floors.** Against
-`baseline.json`'s floors (mojo 1.2.0.dev2026100805), the default parallel
-build is +5.8% to +15.8% (the three `*_agg_fused` gates +15.2% to +15.8%),
-and `-D MARROW_DRIVER=serial` still +1.3% to +5.2% (`*_agg_fused` +1.6% to
-+1.7%, `query_join` +5.2%, `query_sort` +4.4%). Which build the gates hold,
-and the re-baseline that follows, is undecided.
+`baseline.json`'s floors (mojo 1.2.0.dev2026100805), the engine is +5.8% to
++15.8% (the three `*_agg_fused` gates +15.2% to +15.8%). The parallel engine
+is always built, so the gates are to be re-baselined on it.
 
 Pass-through hands each row of a worker that stops reducing its own slot,
 so an aggregate with a heavy state per slot (`approx_count_distinct`, 2,048
@@ -1315,10 +1331,6 @@ the slots at about 1.14x the keys the table would have held. Handing rows on
 still holds them until the worker drains; emitting each morsel's partial
 states as it is pushed, as DuckDB and Velox abandon a partial table, needs
 the fold operators to emit and reset mid-stream.
-
-`-D MARROW_DRIVER=serial` compiles the parallel paths out of a size-critical
-binary; the lowering through phases and the driver stays, which is the
-+1.3% to +5.2% above.
 
 Group-by placement has three open costs, all measured by the "Calibration
 sweeps" in `bench_groupby.mojo`:

@@ -297,23 +297,6 @@ def test_codecs_library_implementations() raises:
                 )
 
 
-def test_codecs_needs_libs() raises:
-    """Only a codec a library decodes opens the libraries: BROTLI, LZ4,
-    LZ4_RAW, SNAPPY and ZSTD when they are not run in Mojo; GZIP always."""
-    assert_false(Compression.UNCOMPRESSED.needs_libs(False))
-    for codec in [
-        Compression.ZSTD,
-        Compression.LZ4,
-        Compression.LZ4_RAW,
-        Compression.SNAPPY,
-        Compression.BROTLI,
-    ]:
-        assert_false(codec.needs_libs(True))
-        assert_true(codec.needs_libs(False))
-    assert_true(Compression.GZIP.needs_libs(True))
-    assert_true(Compression(3).needs_libs(True))  # LZO: no method
-
-
 def test_decompress_refuses_sizes_the_page_cannot_hold() raises:
     """A page header's uncompressed size is checked against what the
     compressed bytes can decode to before it is allocated: as is for

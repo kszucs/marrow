@@ -6,15 +6,13 @@ hashes to dense ids, and know nothing of keys."""
 
 from std.testing import assert_equal, assert_raises, assert_true
 
-from ...arrays import DynArray, Int32Array, UInt64Array
+from ...arrays import DictionaryArray, DynArray, Int32Array, UInt64Array
 from ...builders import Int64Builder, UInt64Builder, array
-from ...dtypes import DynType, int32, int64
+from ...dtypes import DynType, Int32Type, dictionary, int32, int64, string
 from ...execution import ExecContext
 from ...kernels.dictionary import DictionaryEncoder
 from ...kernels.hashtable import (
     HashIndex,
-    estimated_distinct,
-    expected_distinct,
     find_hashes,
     insert_hashes,
 )
@@ -282,10 +280,26 @@ def test_estimated_distinct_inverts_the_sample() raises:
     """From how many distinct values a uniform sample saw, the domain it was
     drawn from: within 5% where the sample can tell, the row count where it
     saw every draw distinct."""
-    assert_equal(estimated_distinct(1_000_000, 4096, 4096), 1_000_000)
-    assert_equal(estimated_distinct(500, 4096, 500), 500)
+    assert_equal(HashIndex.estimated_distinct(1_000_000, 4096, 4096), 1_000_000)
+    assert_equal(HashIndex.estimated_distinct(500, 4096, 500), 500)
     var domains: List[Int] = [1_000, 10_000, 50_000]
     for d in domains:
-        var seen = expected_distinct(d, 4096)
-        var est = estimated_distinct(1_000_000, 4096, seen)
+        var seen = HashIndex.expected_distinct(d, 4096)
+        var est = HashIndex.estimated_distinct(1_000_000, 4096, seen)
         assert_true(abs(est - d) <= d // 20, String(d, " -> ", est))
+
+
+def test_encoder_refuses_unindexed_dictionary_keys() raises:
+    """Unindexed keys are kept as plain values, so a dictionary-typed key
+    column is refused with an error."""
+    var types: List[DynType] = [dictionary(int32, string)]
+    var encoder = DictionaryEncoder(types^)
+    var indices: List[Int32] = [0, 1]
+    var entries: List[Optional[String]] = [String("a"), String("b")]
+    var keys: List[DynArray] = [
+        DictionaryArray.from_arrays(
+            array[Int32Type](indices, int32), array(entries^)
+        ).to_dyn()
+    ]
+    with assert_raises(contains="dictionary"):
+        encoder.extend_unindexed(keys^)

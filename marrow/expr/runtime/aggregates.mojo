@@ -110,7 +110,7 @@ from ..logical import (
 )
 from .values import RuntimeValue
 from ..logical import Bindings
-from ...execution import PARALLEL_ENABLED, ExecContext
+from ...execution import ExecContext
 from std.memory import ArcPointer
 
 from ...kernels.groupby import Groups
@@ -121,11 +121,8 @@ from ..physical import (
     FoldMode,
     FrameEvaluator,
     PerFrameEvaluator,
-    Datum,
-    DynOperator,
-    Morsel,
-    Operator,
 )
+from ...engine.core import DynOperator
 
 
 def _fold_agg[
@@ -454,17 +451,9 @@ struct RuntimeAggregate(Value, WindowFunction):
 
         return resolve_aggregate(self._name, d, job)
 
-    # `empty()` — the one-row answer over an input that produced no column at
-    # all — used to live here, a four-arm switch on `_name` that only the
-    # cardinalities answered. It had **no production caller**:
-    # `GroupedAggregateOperator` holds its folds as `DynOperator`s and cannot
-    # reach a node, so there was nowhere for it to be called from, and its
-    # null-fill branch was unreachable besides — the aggregate operators always
-    # answer `Some` from their first `drain`. `AggKernel.reserve` now covers the
-    # case properly and covers all ten names rather than three: an operator with
-    # no keys seeds one slot at `drain`, so `count_distinct` of nothing is one
-    # `0` and `min` of nothing is one NULL, computed by the kernel that owns the
-    # answer instead of by a second switch that could disagree with it.
+    # The one-row answer over an input that produced no column at all is the
+    # kernel's: an ungrouped aggregate holds its one slot from construction, so
+    # `count_distinct` of nothing is one `0` and `min` of nothing is one NULL.
 
     # -- to_operator --------------------------------------------------------
 
@@ -497,11 +486,8 @@ struct RuntimeAggregate(Value, WindowFunction):
             reject_non_boolean_filter(self._where.value().dtype(schema))
 
         def job[Agg: AggKernel]() raises {imm} -> DynOperator:
-            comptime if PARALLEL_ENABLED:
-                if mode.is_combine():
-                    return CombineAggregateOperator[Agg](
-                        mode.column, grouped, d
-                    )
+            if mode.is_combine():
+                return CombineAggregateOperator[Agg](mode.column, grouped, d)
             return BufferedAggregateOperator[Agg, RuntimeValue](
                 self._input.copy(),
                 _lower_filter(self._where, schema, bindings),

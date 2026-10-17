@@ -125,83 +125,6 @@ comptime _SELECT_FRACTION = 16
 most one row in this many."""
 
 
-@no_inline
-def _kth_smallest(
-    keys: Buffer[mut=True], n: Int, k: Int, bits: Int
-) -> Tuple[UInt64, Int]:
-    """The `k`-th smallest of the `n` `keys`, from 0, and how many keys
-    equal to it come before it: an MSD radix select from bit `bits` down,
-    narrowing to the bucket holding it, `_BITS_PER_PASS` bits at a time.
-    The bits above `bits` are alike in every key, so they decide nothing."""
-    comptime bucket_count = 1 << _BITS_PER_PASS
-    var kv = keys.view[DType.uint64](0, n)
-    var candidates = List[UInt64]()
-    var narrowed = False
-    var size = n
-    var rank = k
-    var shift = bits
-    while shift > 0 and size > 1:
-        var width = min(_BITS_PER_PASS, shift)
-        shift -= width
-        var mask = UInt64((1 << width) - 1)
-        var counts = List[Int](length=bucket_count, fill=0)
-        if narrowed:
-            for v in candidates:
-                counts[Int((v >> UInt64(shift)) & mask)] += 1
-        else:
-            for i in range(n):
-                counts[Int((kv.unsafe_get(i) >> UInt64(shift)) & mask)] += 1
-        var b = 0
-        while rank >= counts[b]:
-            rank -= counts[b]
-            b += 1
-        # Every candidate in one bucket: these bits decide nothing.
-        if counts[b] < size:
-            var kept = List[UInt64](capacity=counts[b])
-            if narrowed:
-                for v in candidates:
-                    if Int((v >> UInt64(shift)) & mask) == b:
-                        kept.append(v)
-            else:
-                for i in range(n):
-                    var v = kv.unsafe_get(i)
-                    if Int((v >> UInt64(shift)) & mask) == b:
-                        kept.append(v)
-            candidates = kept^
-            narrowed = True
-            size = counts[b]
-    var t = candidates[rank] if narrowed else kv.unsafe_get(0)
-    return (t, rank)
-
-
-@no_inline
-def _first_rows(
-    var keys: Buffer[mut=True],
-    var rows: Buffer[mut=True],
-    n: Int,
-    k: Int,
-    bits: Int,
-) -> Buffer[]:
-    """The first `k` of `n` rows ordered by their `keys`, ties in row order,
-    for `k` of at least 1: the rows of the `k` smallest keys are selected,
-    then only they are sorted."""
-    var kv = keys.view[DType.uint64](0, n)
-    var rv = rows.view[DType.int32](0, n)
-    var found = _kth_smallest(keys, n, k - 1, bits)
-    var t = found[0]
-    # The `k`-th smallest has `found[1]` equal keys before it, so `k` rows
-    # take that many and one more of them.
-    var ties = found[1] + 1
-    var picked = List[Scalar[KeySort[64].Composite]](capacity=k)
-    for i in range(n):
-        var key = kv.unsafe_get(i)
-        if key < t or (key == t and ties > 0):
-            if key == t:
-                ties -= 1
-            picked.append(KeySort[64].pack(key, rv.unsafe_get(i)))
-    return KeySort[64].packed(picked, Buffer.alloc_uninit[DType.int32](k))
-
-
 # ---------------------------------------------------------------------------
 # KeySort — rows ordered by their encoded keys, independent of the dtype
 # ---------------------------------------------------------------------------
@@ -230,6 +153,85 @@ struct KeySort[bits: Int]:
         return (key.cast[Self.Composite]() << 32) | row.cast[
             DType.uint32
         ]().cast[Self.Composite]()
+
+    @staticmethod
+    @no_inline
+    def first(
+        var keys: Buffer[mut=True],
+        var rows: Buffer[mut=True],
+        n: Int,
+        k: Int,
+        key_bits: Int,
+    ) -> Buffer[]:
+        """The first `k` of `n` rows ordered by their `keys`, whose order
+        lives in their low `key_bits` bits, ties in row order, for `k` of at
+        least 1: the rows of the `k` smallest keys are selected, then only
+        they are sorted."""
+        var kv = keys.view[DType.uint64](0, n)
+        var rv = rows.view[DType.int32](0, n)
+        var found = Self.kth_smallest(keys, n, k - 1, key_bits)
+        var t = found[0]
+        # The `k`-th smallest has `found[1]` equal keys before it, so `k`
+        # rows take that many and one more of them.
+        var ties = found[1] + 1
+        var picked = List[Scalar[Self.Composite]](capacity=k)
+        for i in range(n):
+            var key = kv.unsafe_get(i)
+            if key < t or (key == t and ties > 0):
+                if key == t:
+                    ties -= 1
+                picked.append(Self.pack(key, rv.unsafe_get(i)))
+        return Self.packed(picked, Buffer.alloc_uninit[DType.int32](k))
+
+    @staticmethod
+    @no_inline
+    def kth_smallest(
+        keys: Buffer[mut=True], n: Int, k: Int, key_bits: Int
+    ) -> Tuple[UInt64, Int]:
+        """The `k`-th smallest of the `n` `keys`, from 0, and how many keys
+        equal to it come before it: an MSD radix select from bit `key_bits`
+        down, narrowing to the bucket holding it, `_BITS_PER_PASS` bits at a
+        time. The bits above `key_bits` are alike in every key, so they
+        decide nothing."""
+        comptime bucket_count = 1 << _BITS_PER_PASS
+        var kv = keys.view[DType.uint64](0, n)
+        var candidates = List[UInt64]()
+        var narrowed = False
+        var size = n
+        var rank = k
+        var shift = key_bits
+        while shift > 0 and size > 1:
+            var width = min(_BITS_PER_PASS, shift)
+            shift -= width
+            var mask = UInt64((1 << width) - 1)
+            var counts = List[Int](length=bucket_count, fill=0)
+            if narrowed:
+                for v in candidates:
+                    counts[Int((v >> UInt64(shift)) & mask)] += 1
+            else:
+                for i in range(n):
+                    counts[Int((kv.unsafe_get(i) >> UInt64(shift)) & mask)] += 1
+            var b = 0
+            while rank >= counts[b]:
+                rank -= counts[b]
+                b += 1
+            # Every candidate in one bucket: these bits decide nothing.
+            if counts[b] < size:
+                var kept = List[UInt64](capacity=counts[b])
+                if narrowed:
+                    for v in candidates:
+                        if Int((v >> UInt64(shift)) & mask) == b:
+                            kept.append(v)
+                else:
+                    for i in range(n):
+                        var v = kv.unsafe_get(i)
+                        if Int((v >> UInt64(shift)) & mask) == b:
+                            kept.append(v)
+                candidates = kept^
+                narrowed = True
+                size = counts[b]
+        var t = candidates[rank] if narrowed else kv.unsafe_get(0)
+        return (t, rank)
 
     @staticmethod
     def packed(
@@ -372,7 +374,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                 decode_dictionary(array.as_dictionary(), ctx),
                 ascending,
                 nulls_first,
-                None,
+                limit,
                 ctx,
             )
         elif dt.is_primitive():
@@ -395,14 +397,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             raise Self.error[TypeError](t"unsupported dtype {dt}")
 
         if limit:
-            var k = min(limit.value(), len(result))
-            return Int32Array(
-                length=k,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=result.buffer,
-            )
+            return result.slice(0, min(limit.value(), len(result)))
         return result^
 
     @staticmethod
@@ -499,8 +494,8 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         number, so it goes to the end the caller chose for values without an
         order.
 
-        With a `limit`, the answer may stop after its first `limit` rows;
-        they are the full sort's first `limit` rows, ties in input order.
+        With a `limit`, the answer is the full sort's first `limit` rows,
+        ties in input order.
         """
         var n = len(arr)
         if n == 0:
@@ -540,9 +535,12 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         var sorted_valid = Self._sort_valid[T](
             arr, valid_buf^, vi, keep, ascending, ctx
         )
-        return Self._assemble(
+        var order = Self._assemble(
             sorted_valid, keep, null_list, nan_list, nulls_first
         )
+        if limit:
+            return order.slice(0, min(limit.value(), len(order)))
+        return order^
 
     @staticmethod
     def _sort_valid[
@@ -588,7 +586,9 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                 for i in range(n_valid):
                     kv.unsafe_set(i, key_of(i))
                 if keep < n_valid:
-                    return _first_rows(
+                    # One instantiation for every width: a narrow key packs
+                    # into the wide composite all the same.
+                    return KeySort[64].first(
                         keys^, valid_buf^, n_valid, keep, Sorter.bits
                     )
                 return Sorter.radix(keys^, valid_buf^, n_valid, ctx)

@@ -73,10 +73,10 @@ def test_explain_physical_reports_the_phases_without_running(table):
     report = table.filter(col("qty") > 1).explain(physical=True)
     assert isinstance(report, ma.PlanReport)
     text = str(report)
-    assert text.startswith("Phase 1 [result] TableSource(4 rows)")
+    assert "Phase 1 [result] TableSource(4 rows)" in text
     assert "Filter(" in text
     data = report.to_dict()
-    assert data["ns"] == -1
+    assert "ns" not in data
     assert len(data["phases"]) == 1
     assert data["phases"][0]["stages"][0]["label"].startswith("Filter(")
 
@@ -90,9 +90,6 @@ def test_explain_analyze_reports_what_ran(table):
     assert stage["rows_in"] == 4
     assert stage["rows_out"] == 2
     assert str(report).startswith("Total ")
-    batch = report.to_batch()
-    assert batch.num_rows == 1
-    assert "stages" in batch.schema.names
 
 
 def test_explain_analyze_writes_a_trace(table, tmp_path):

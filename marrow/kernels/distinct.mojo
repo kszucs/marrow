@@ -79,7 +79,7 @@ struct ApproxCountDistinctKernel(Kernel):
     def dispatch(
         array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Int64Scalar:
-        var sketch = HyperLogLog[HLL_P](1)
+        var sketch = HyperLogLog(HLL_P, 1)
 
         var hv = HashKernel[Fmix64].dispatch(array, ctx).values()
         var n = len(array)

@@ -65,8 +65,7 @@ def _bench(mut b: Benchmark, threads: Int, row_group_size: Int) raises:
         b.throughput(BenchMetric.elements, ROWS)
         b.extra_info("lib", String("w", threads))
         if threads == 12:
-            var analyzing = Driver.analyze(ctx)
-            b.extra_info("report", analyzing.inspect(plan).to_json())
+            b.extra_info("report", plan.profile(ctx).to_json())
 
         @always_inline
         def call() raises {imm}:

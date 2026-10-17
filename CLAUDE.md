@@ -445,8 +445,9 @@ Rules:
   **A C library is declared, not wired by hand.** One declaration per module:
   `LibSet[key, [LibSpec(...), ...]]` in `utils/dylib.mojo` names the
   libraries — sonames and env overrides — and owns them behind a single
-  process-global, opened on first use with the failure recorded rather than
-  raised. Callers write `Codecs.handle["zstd"]()`, and the name is checked
+  process-global, opened on first use — by one thread, under a lock in the
+  global's cell, while any other waits — with the failure recorded rather
+  than raised. Callers write `Codecs.handle["zstd"]()`, and the name is checked
   against the set at compile time. `compress/core.mojo` declares six members,
   `io/opendal.mojo` one.
 
@@ -519,7 +520,7 @@ layer on top, and both live on the kernel struct:
    form, and delegates to `apply`. **Only `dispatch` takes a `DynArray`.** This
    is what makes a kernel usable from runtime-typed code.
 
-See `marrow/kernels/concat.mojo` and `marrow/kernels/filter.mojo`.
+See `marrow/kernels/filter.mojo`.
 
 **A kernel is a struct; avoid free-standing functions in `marrow/kernels/`.**
 Callers write `FilterKernel.dispatch(...)`, `CastKernel.dispatch(...)`,
@@ -610,39 +611,55 @@ share no node types**:
   optimizer builds a `JoinFilter`. The chain's schema sits behind an `ArcPointer`: inline, it made the
   chain the variant's largest member, and every `DynRelation` move 40 bytes
   wider cost `query_streaming` 17.7 KB.
-- **`marrow/engine/`** — how a plan runs. `Relation.lower(driver)` turns a
-  plan into `Phase`s: a `DynSource` of morsels (`TableSource` slices an
-  in-memory batch, `RowGroupSource` is a Parquet row group per morsel with
-  pruning decided up front, `IpcSource` a record batch, `OperatorSource` a
-  scan of unknown length) and one `Pipeline` per worker. **Scheduling is
+- **`marrow/engine/`** — how a plan runs, knowing no plan: it imports nothing
+  from `marrow.expr`. `core.mojo` is the operator contract (`Datum`,
+  `Morsel`, `Operator`, `DynOperator`, `Pipeline`); `Relation.lower(driver)`
+  turns a plan into `Phase`s: a `DynSource` of morsels (`TableSource` slices
+  an in-memory batch, a `StreamSource` reads a `Stream` of unknown length;
+  the scans' are `expr/scans.mojo`'s — `RowGroupSource`, a Parquet row group
+  per morsel with pruning decided up front, `IpcSource`, a record batch, and
+  the JSON and Iceberg streams) and one `Pipeline` per worker. **Scheduling is
   pull, execution within a worker is push**: `Driver.dynamic()` hands each
   worker the next unread morsel through `ExecContext.fan_out` and answers
   the outputs in morsel order; a phase's operators run single-threaded when
   it has several workers. `Driver.serial()`, `explain()` (a dry run) and
-  `analyze()` are the other strategies, each a function pointer so a binary
-  links only the ones it constructs. **Blocking nodes are barriers inside
+  `profile()` are the other strategies, each a function pointer so a binary
+  links only the ones it constructs; one `DriverMode` says what the driver
+  does beside running phases — nothing, a dry run, timing, tracing. **Blocking nodes are barriers inside
   lowering**: a sort, window, limit or set operation runs its input to
   completion (`Driver.barrier`); an aggregate folds partial states on every
   worker (`FoldMode.partial`), which `Driver.exchange` `repartition`s by key
-  hash, and combines each partition (`FoldMode.combine`); a join builds one shared `JoinBuild`,
-  every worker probes it with match marks of its own, and the build rows the
-  probes owe are an `UnmatchedSource` phase after them. A limit keeps a
+  hash, and combines each partition (`FoldMode.combine`); a join asks
+  `Driver.build_side` to run the side it builds — the smaller one, when the
+  answer does not depend on which — into one shared `JoinBuild`, every worker
+  probes it with match marks of its own, and the build rows the probes owe
+  are an `UnmatchedSource` phase after them (`Driver.owed`). **A `Phase`
+  keeps its own state**: lowering appends stages to it (`append_each`, with
+  `blocks`/`grows` flags), and only the driver numbers it and records what it
+  reads. A limit keeps a
   per-worker prefix and a top-N cuts every morsel before the final cut, so
   ordered results equal the serial ones exactly. **What ran is a value**:
-  `explain()` and `analyze()` answer a `PlanReport` (`report.mojo`) — the
-  phases in run order, each with its source, stage labels from lowering,
-  worker count and why, and the phases it reads — as text, JSON or an Arrow
-  batch. A dry run cannot fill a barrier, so it shows the input's estimate in
-  a `PlannedSource`; estimates are wired only into the reporting strategies.
+  `explain()` answers a `PlanReport` (`report.mojo`) — the phases in run
+  order, each a `PhaseReport` with its source, stage labels from lowering,
+  worker count and why, and the phases it reads, plus the plan's estimate —
+  and `profile()` a `PlanProfile`: that report, one `PhaseRun` per phase
+  (what each stage and worker did), the spans between phases and the run's
+  totals. Neither holds a field meaning "did not run". Both render as text
+  and JSON. A dry run cannot fill a barrier, so it shows the input's estimate
+  in a `PlannedSource`; `DynRelation.explain` wires the estimates into the
+  driver (`Driver.estimate_with`), so no other binary links them. Lowering
+  pushes each relation on the driver's stack (`entering`/`leaving`), and
+  `entered()` estimates the top only when a node asks.
   Kernel counters (`utils/stats.mojo`, `count["hash.inserts"](n)`) exist
-  only under `-D MARROW_STATS=true`; `analyze` reports each phase's deltas.
-  `analyze()` observes by wrapping — each stage in an `ObservedOperator`,
-  the source in an `ObservedSource`, spans around barrier work — so a run
-  nobody observes executes no timing code; it is a comptime parameter of
-  `explain`, so a binary that only explains links none of it.
-- **`physical.mojo`** — the executing counterpart. `Relation.lower(driver)`
-  builds `Phase`s (`marrow/engine/`: a `DynSource` of morsels and one
-  `Pipeline` of `Operator`s per worker), the operators owning all mutable state
+  only under `-D MARROW_STATS=true`; `profile` reports each phase's deltas.
+  `profile()` observes by wrapping (`observe.mojo`) — each stage in an
+  `ObservedOperator`, the source in an `ObservedSource`, spans around barrier
+  work — so a run nobody observes executes no timing code, and a binary that
+  only explains links none of it.
+- **`physical.mojo`** — the executing counterpart: the operators each node
+  lowers to. `Relation.lower(driver)` builds `Phase`s (`marrow/engine/`: a
+  `DynSource` of morsels and one `Pipeline` of `Operator`s per worker), the
+  operators owning all mutable state
   (grouper table, accumulator slots), erased by `DynOperator`. A blocking node
   runs its input through the `Driver` while it lowers. **The engine pushes**:
   `push(batch)` answers with what it produced, `drain()` with what is left, and
@@ -655,12 +672,10 @@ share no node types**:
   operator per plan node
   — `FilterOperator`, `ProjectOperator`, `GroupedAggregateOperator`,
   `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`, `JoinOperator`,
-  `UnionOperator`, `MultisetOperator[M]`, `LimitOperator`,
-  `ParquetScanOperator`, `FileScanOperator[F]`, `IcebergScanOperator`,
-  `BatchSourceOperator` — plus `Pipeline`, `EvalOperator`, and the two a join
-  chain lowers through: `SelectOperator` (its output, by position, after a
-  filter on its root; a union's later inputs too) and `RenamedPredicate` (a filter between two joins,
-  reading its columns by position).
+  `MultisetOperator[M]`, `LimitOperator` — plus `EvalOperator`, and the two a
+  join chain lowers through: `SelectOperator` (its output, by position, after
+  a filter on its root; a union's inputs too) and `RenamedPredicate` (a filter
+  between two joins, reading its columns by position).
 - **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
   `boolean.mojo`, `strings.mojo`, `temporal.mojo`, `nested.mojo`, `casts.mojo`,
   `aggregates.mojo`, `rules.mojo`) — every node's operands are bound on a family
@@ -787,7 +802,7 @@ share no node types**:
   pruning is visible in a printed plan, and a plan nobody optimized reads every
   row group. The rule descends through `Filter` and nothing else, which is what
   stops a predicate at a `Window`, `Limit`, `Project`, `Aggregate` or `JoinChain`
-  without a per-node table saying so. `RowGroupSource` (`marrow/engine/`)
+  without a per-node table saying so. `RowGroupSource` (`expr/scans.mojo`)
   builds the index and the read plan when the scan lowers, with this
   execution's `Bindings` — a predicate may name a `param`, which is the AOT
   lane's whole surface.
@@ -965,12 +980,16 @@ marrow/
 │   ├── temporal.mojo     # date/time field extraction, date_trunc
 │   ├── nested.mojo       # array_length, array_contains
 │   ├── window.mojo       # partition extents, ranking, frame gathers
-│   ├── concat.mojo       # concat
+│   ├── concat.mojo       # batch concat on a context, in parallel when large
 │   └── tests/            # test_*.mojo + bench_*.mojo
-├── engine/               # driver (Driver, Phase, barriers), sources, report
+├── engine/               # core (Operator, Pipeline), driver (Driver, Phase,
+│                         #   barriers), sources, observe, report; imports
+│                         #   no expr
 ├── expr/
 │   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
-│   ├── physical.mojo     # Operator / DynOperator push engine
+│   ├── physical.mojo     # the operators each plan node lowers to
+│   ├── scans.mojo        # RowGroupSource, IpcSource, the JSON and Iceberg
+│                         #   streams — what a scan's morsels are
 │   ├── builders.mojo     # col, lit, if_else, is_in, minimum/maximum,
 │                         #   array_length/array_contains, param, count_star,
 │                         #   table, scan
@@ -1178,8 +1197,8 @@ vectors at dim >= 384.
   Each kind writes its name first (`"KeyError: ..."`), so `DynError(e)`
   recovers it and `python/marrow/errors.py` maps it to the PyArrow-named class.
   Never match on message text to learn a kind.
-- **Re-raising with context keeps the kind**: `var err = DynError(e)`, then
-  `raise DynError(err.kind, t"context: {err.message}")`.
+- **Re-raising with context keeps the kind**:
+  `raise DynError(e).prefixed("context")`.
 
 ### Python API
 

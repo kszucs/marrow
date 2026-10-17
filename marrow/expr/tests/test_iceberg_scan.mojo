@@ -8,14 +8,17 @@ it, pushed into it as a pruner, `ColumnPruning` narrowing it, and time
 travel to an older snapshot and schema.
 """
 
-from std.testing import assert_equal, assert_true
+from std.os.path import join
+from std.python import Python
+from std.testing import assert_equal, assert_raises, assert_true
 
 from ...builders import array
 from ...dtypes import int64
 from ...iceberg.catalog import IcebergTable
 from ..builders import col, lit, scan_iceberg
 from ..logical import IcebergScan
-from ..optimizer import ColumnPruning, ScanPruning
+from ..optimizer import AllRules, ColumnPruning, ScanPruning
+from ...utils.testing import ScratchDir
 
 comptime DATA = "marrow/iceberg/tests/data/"
 
@@ -72,3 +75,40 @@ def test_iceberg_scan_time_travel_reads_the_old_schema() raises:
     var now = scan_iceberg(table^)
     assert_true(now.schema().names() == ["a", "b", "c2", "s", "e"])
     assert_equal(now.execute().num_rows(), 4)
+
+
+def test_iceberg_scan_reads_its_manifests_only_when_it_runs() raises:
+    """Building, printing and optimizing a plan read nothing: a snapshot
+    whose manifest list is gone fails only once the plan is explained or
+    executed."""
+    var table = IcebergTable.open(DATA + "partitioned")
+    for i in range(len(table.metadata.snapshots)):
+        table.metadata.snapshots[i].manifest_list = (
+            DATA + "partitioned/metadata/no-such-manifest-list.avro"
+        )
+    var plan = scan_iceberg(table^).filter(col("id", int64) > lit(1, int64))
+    var optimized = plan.optimize[AllRules]()
+    _ = String(optimized)
+    with assert_raises():
+        _ = optimized.explain()
+    with assert_raises():
+        _ = optimized.execute()
+
+
+def test_iceberg_scan_errors_name_the_data_file() raises:
+    """A data file that cannot be read fails the scan with its path."""
+    with ScratchDir() as dir:
+        var root = join(dir, "table")
+        var shutil = Python.import_module("shutil")
+        var glob = Python.import_module("glob")
+        _ = shutil.copytree(DATA + "simple_v2", root)
+        for path in glob.glob(join(root, "data", "*.parquet")):
+            var f = Python.import_module("builtins").open(path, "wb")
+            _ = f.write(Python.import_module("builtins").bytes(16))
+            _ = f.close()
+        try:
+            with assert_raises(contains=join(root, "data")):
+                _ = scan_iceberg(root).execute()
+        finally:
+            # The scratch directory removes files, not a copied tree.
+            _ = shutil.rmtree(root)

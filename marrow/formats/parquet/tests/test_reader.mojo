@@ -1395,20 +1395,6 @@ def _read_group(f: ParquetFile, rg: Int, selected: Bool) raises -> String:
     )
 
 
-def test_parquet_file_says_whether_it_needs_codec_libraries() raises:
-    """Snappy pages decode in Mojo, so a native read opens no library and a
-    read through the C codecs does."""
-    var batch = record_batch([array([1, 2, 3], int64)], names=["v"])
-    var table = Table.from_batches(batch.schema.copy(), [batch^])
-    with ScratchDir() as dir:
-        var path = join(dir, "marrow_needs_libs.parquet")
-        var w = FileWriter(FileSink(path), table.schema, Compression.SNAPPY)
-        w.write(table)
-        w.close()
-        assert_false(ParquetFile(path).needs_libs())
-        assert_true(ParquetFile(path, native_codecs=False).needs_libs())
-
-
 def test_parquet_read_one_file_from_many_threads() raises:
     """Threads reading row groups of one open file at once, each on a serial
     context, each get what a lone read gets. Snappy pages, decoded by every

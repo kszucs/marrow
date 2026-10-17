@@ -48,14 +48,8 @@ from ..builders import col, row_number
 from ...arrays import BoolArray
 from ...builders import BoolBuilder
 from ..index import Index
-from ..physical import (
-    Datum,
-    DynOperator,
-    FoldMode,
-    Morsel,
-    Operator,
-    Pipeline,
-)
+from ..physical import FoldMode
+from ...engine.core import Datum, DynOperator, Morsel, Operator, Pipeline
 from ...arrays import StructArray
 from ...engine import DynSource, Source
 

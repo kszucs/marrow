@@ -77,17 +77,6 @@ struct Method(Equatable, ImplicitlyCopyable, Movable, Writable):
         else:
             writer.write("unknown(", self.code, ")")
 
-    def needs_libs(self, native: Bool) -> Bool:
-        """Whether decompressing by this method may call into a `dlopen`ed
-        library: GZIP and DEFLATE always, NONE never, and the rest unless
-        `native`."""
-        if self == Self.NONE:
-            return False
-        elif self == Self.GZIP or self == Self.DEFLATE:
-            return True
-        else:
-            return not native
-
     def _unsupported(self) -> NotImplementedError:
         return NotImplementedError(t"{self} compression is not supported here")
 

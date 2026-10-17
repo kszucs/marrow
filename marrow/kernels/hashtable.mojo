@@ -168,36 +168,6 @@ known only once their inserts are done. Removing that dependency means fixed id
 blocks, which makes the ids sparse — and they are dense because a consumer
 allocates one slot per id. The idle is a cost of dense ids."""
 
-def expected_distinct(distinct: Int, draws: Int) -> Int:
-    """Distinct values expected among `draws` uniform draws, with
-    replacement, from `distinct` equally frequent values:
-    `d (1 - e^(-draws/d))`. Non-raising so it can run at comptime."""
-    if distinct <= 0:
-        return 0
-    return Int(
-        Float64(distinct) * (1.0 - exp(-Float64(draws) / Float64(distinct)))
-    )
-
-
-def estimated_distinct(rows: Int, draws: Int, seen: Int) -> Int:
-    """How many distinct values `rows` rows hold, when `draws` uniform draws
-    from them, with replacement, saw `seen`: the domain `d` whose expected
-    distinct draws, `d (1 - e^(-draws/d))`, is `seen`, at most `rows`. A
-    sample that saw nearly every draw distinct cannot tell domains apart past
-    a few times `draws`, and answers `rows`."""
-    var lo = max(seen, 1)
-    var hi = max(rows, lo)
-    if expected_distinct(hi, draws) <= seen:
-        return hi
-    while lo < hi:
-        var mid = lo + (hi - lo) // 2
-        if expected_distinct(mid, draws) < seen:
-            lo = mid + 1
-        else:
-            hi = mid
-    return lo
-
-
 comptime _SAMPLE_ROWS: Int = 4096
 """How many rows the cardinality probe draws. Small enough that its table stays
 in L1 and the probe costs tens of microseconds on a million rows."""
@@ -290,7 +260,37 @@ struct HashIndex(Movable, Sized):
 
     # --- the radix gate -----------------------------------------------------
 
-    comptime _MIN_SAMPLE_DISTINCT: Int = expected_distinct(
+    @staticmethod
+    def expected_distinct(distinct: Int, draws: Int) -> Int:
+        """Distinct values expected among `draws` uniform draws, with
+        replacement, from `distinct` equally frequent values:
+        `d (1 - e^(-draws/d))`. Non-raising so it can run at comptime."""
+        if distinct <= 0:
+            return 0
+        return Int(
+            Float64(distinct) * (1.0 - exp(-Float64(draws) / Float64(distinct)))
+        )
+
+    @staticmethod
+    def estimated_distinct(rows: Int, draws: Int, seen: Int) -> Int:
+        """How many distinct values `rows` rows hold, when `draws` uniform draws
+        from them, with replacement, saw `seen`: the domain `d` whose expected
+        distinct draws, `d (1 - e^(-draws/d))`, is `seen`, at most `rows`. A
+        sample that saw nearly every draw distinct cannot tell domains apart past
+        a few times `draws`, and answers `rows`."""
+        var lo = max(seen, 1)
+        var hi = max(rows, lo)
+        if Self.expected_distinct(hi, draws) <= seen:
+            return hi
+        while lo < hi:
+            var mid = lo + (hi - lo) // 2
+            if Self.expected_distinct(mid, draws) < seen:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    comptime _MIN_SAMPLE_DISTINCT: Int = Self.expected_distinct(
         _RADIX_MIN_DISTINCT, _SAMPLE_ROWS
     )
     """`_RADIX_MIN_DISTINCT` in the sample's units: 3,828 of 4,096 at 30,000.
@@ -361,7 +361,9 @@ struct HashIndex(Movable, Sized):
                 # An expectation counts rows, which overstates the ids of keys
                 # that repeat: the sample's estimate caps it, a quarter over,
                 # so that falling short of it doubles a table once.
-                var ids = estimated_distinct(len(hashes), _SAMPLE_ROWS, seen)
+                var ids = Self.estimated_distinct(
+                    len(hashes), _SAMPLE_ROWS, seen
+                )
                 expect = min(expect, ids + ids // 4)
             if seen >= Self._MIN_SAMPLE_DISTINCT:
                 self._migrate()

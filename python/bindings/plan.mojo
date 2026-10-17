@@ -42,7 +42,7 @@ from marrow.expr import Bindings
 from marrow.expr.builders import scan as _scan, table as _table
 from marrow.expr.logical import DynRelation, DynValue
 from marrow.expr.optimizer import AllRules
-from marrow.engine import Driver, PlanReport
+from marrow.engine import Driver
 from marrow.expr.runtime.aggregates import RuntimeAggregate
 from marrow.expr.runtime.values import RuntimeValue, column as _column
 from expressions import (
@@ -430,27 +430,33 @@ def _plan_batches(
 
 
 def _plan_report(
-    py_self: PythonObject,
-    analyze: PythonObject,
-    trace: PythonObject,
-    num_threads: PythonObject,
+    py_self: PythonObject, num_threads: PythonObject
 ) raises -> PythonObject:
-    """`DynRelation.explain`, run under `analyze`: the report as its text,
-    its JSON, its phases as a batch and, under `trace`, its timeline as
-    Chrome trace JSON; see `LazyTable.explain`."""
-    var rel = _plan(py_self)
-    var ctx = ExecContext.parallel(Int(py=num_threads))
-    var report: PlanReport
-    if Bool(py=analyze):
-        report = rel.explain[analyze=True](ctx, trace=Bool(py=trace))
-    else:
-        report = rel.explain(ctx)
+    """`DynRelation.explain`: the report as its text and its JSON; see
+    `LazyTable.explain`."""
+    var report = _plan(py_self).explain(
+        ExecContext.parallel(Int(py=num_threads))
+    )
     var builtins = Python.import_module("builtins")
     var out = builtins.list()
     _ = out.append(PythonObject(String(report)))
     _ = out.append(PythonObject(report.to_json()))
-    _ = out.append(report.to_batch().to_python_object())
-    _ = out.append(PythonObject(report.to_trace_json()))
+    return out
+
+
+def _plan_profile(
+    py_self: PythonObject, trace: PythonObject, num_threads: PythonObject
+) raises -> PythonObject:
+    """`DynRelation.profile`: the profile as its text, its JSON and, under
+    `trace`, its timeline as Chrome trace JSON; see `LazyTable.explain`."""
+    var profile = _plan(py_self).profile(
+        ExecContext.parallel(Int(py=num_threads)), trace=Bool(py=trace)
+    )
+    var builtins = Python.import_module("builtins")
+    var out = builtins.list()
+    _ = out.append(PythonObject(String(profile)))
+    _ = out.append(PythonObject(profile.to_json()))
+    _ = out.append(PythonObject(profile.to_trace_json()))
     return out
 
 
@@ -619,6 +625,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_analyze]("analyze")
         .def_method[_plan_batches]("batches")
         .def_method[_plan_report]("report")
+        .def_method[_plan_profile]("profile")
         .def_method[_plan_str]("__str__")
         .def_method[_plan_repr]("__repr__")
     )

@@ -40,7 +40,6 @@ from std.sys import (
     has_accelerator,
     CompilationTarget,
     get_defined_bool,
-    get_defined_string,
 )
 
 from .buffers import Bitmap, Buffer
@@ -75,14 +74,6 @@ from .utils.threads import ThreadPool
 # It does not shed the MAX runtime, though — a binary built with the flag off
 # still links `libmax` / AsyncRT exactly as one built with it on.
 comptime GPU_ENABLED = get_defined_bool["MARROW_GPU", False]()
-
-comptime PARALLEL_ENABLED = (
-    get_defined_string["MARROW_DRIVER", "dynamic"]() != "serial"
-)
-"""Whether a plan's phases may run on several workers. `-D
-MARROW_DRIVER=serial` compiles the parallel paths out — every driver runs one
-worker on the calling thread, and no aggregate is split into partial states —
-for a binary that has to be as small as it can be."""
 
 comptime _STRIPE_MIN_SIZE = 32_768
 """The default ``min_parallel_size`` of ``wants_parallel``, ``for_batch``,

@@ -2151,14 +2151,14 @@ def _split_probe(
     parts: Int,
 ) raises -> List[String]:
     """`probe` in `parts` slices, each on a serial context with matches of
-    its own, then the merged tail in two ranges."""
+    its own, then the tail the merged matches owe."""
     var out = List[String]()
-    var merged = BuildMatches(join.num_codes())
+    var merged = join.matches(kind, build_side)
     var step = (len(probe) + parts - 1) // parts
     for p in range(parts):
         var off = min(p * step, len(probe))
         var part = probe.slice(off, min(step, len(probe) - off))
-        var matches = BuildMatches(join.num_codes())
+        var matches = join.matches(kind, build_side)
         out.extend(
             _row_strings(
                 join.probe(
@@ -2173,25 +2173,18 @@ def _split_probe(
             )
         )
         merged.merge(matches)
-    var n = join.num_build_rows()
-    var bounds: List[Int] = [0, n // 3, n]
-    for b in range(2):
-        var start = bounds[b]
-        var end = bounds[b + 1]
-        out.extend(
-            _row_strings(
-                join.unmatched(
-                    merged,
-                    probe.slice(0, 0),
-                    kind,
-                    strictness,
-                    build_side,
-                    start,
-                    end,
-                    ExecContext.serial(),
-                )
+    out.extend(
+        _row_strings(
+            join.owed(
+                merged,
+                probe.slice(0, 0),
+                kind,
+                strictness,
+                build_side,
+                ExecContext.serial(),
             )
         )
+    )
     return out^
 
 
@@ -2250,6 +2243,92 @@ def test_join_split_probe_empty_sides() raises:
     )
 
 
+def _owed_values(
+    build: StructArray, probe: StructArray, matched: Bool, first_only: Bool
+) raises -> List[Int]:
+    """The `v` of every build row that matched (`matched`) or did not, worked
+    out by brute force: a NULL key matches nothing, and with `first_only` only
+    the first row of a matched key counts as matched."""
+    var probe_keys = List[Int32]()
+    var pk = probe.field(0)
+    for j in range(len(probe)):
+        if pk.is_valid(j):
+            probe_keys.append(pk.as_int32()[j].value())
+    var bk = build.field(0)
+    var seen = List[Int32]()
+    var out = List[Int]()
+    for i in range(len(build)):
+        var hit = False
+        var first = True
+        if bk.is_valid(i):
+            var key = bk.as_int32()[i].value()
+            hit = key in probe_keys
+            first = key not in seen
+            seen.append(key)
+        if (hit and (first or not first_only)) == matched:
+            out.append(i)
+    return out^
+
+
+def _build_values(result: StructArray, owed_only: Bool) raises -> List[Int]:
+    """The build side's `v` of every row of `result` — with `owed_only`, of
+    the rows no probe row joined, whose probe `v` is NULL."""
+    var out = List[Int]()
+    var v = result.field(1)
+    for j in range(len(result)):
+        if not owed_only or not result.field(3).is_valid(j):
+            out.append(Int(v.as_int32()[j].value()))
+    return out^
+
+
+def test_join_owes_build_rows_from_either_table_layout() raises:
+    """The build rows SEMI, ANTI, LEFT and FULL owe, in ascending order, both when
+    every build key is distinct and the table keeps no offsets, and when
+    keys repeat. LEFT under JOIN_ANY owes the rows after a matched key's
+    first, which its probe rows did not pair with."""
+    var probe = _keyed_side(200, 53, 17)
+    var builds: List[StructArray] = [
+        _keyed_side(300, 300, 1000),
+        _keyed_side(300, 37, 13),
+    ]
+    for b in range(len(builds)):
+        ref build = builds[b]
+        var join = HashJoin(build, _left_on(), ExecContext.serial())
+        var at = String("build ", b)
+        assert_true(
+            _build_values(
+                join.probe(probe, _right_on(), JOIN_SEMI, JOIN_ALL, BUILD_LEFT),
+                False,
+            )
+            == _owed_values(build, probe, True, False),
+            at + " semi",
+        )
+        assert_true(
+            _build_values(
+                join.probe(probe, _right_on(), JOIN_ANTI, JOIN_ALL, BUILD_LEFT),
+                False,
+            )
+            == _owed_values(build, probe, False, False),
+            at + " anti",
+        )
+        for kind in [JOIN_LEFT, JOIN_FULL]:
+            for strictness in [JOIN_ALL, JOIN_ANY]:
+                # FULL's unmatched probe rows carry a probe `v`, so the
+                # rows with none are the build rows it owes.
+                assert_true(
+                    _build_values(
+                        join.probe(
+                            probe, _right_on(), kind, strictness, BUILD_LEFT
+                        ),
+                        True,
+                    )
+                    == _owed_values(
+                        build, probe, False, strictness == JOIN_ANY
+                    ),
+                    String(at, " ", kind, " ", strictness),
+                )
+
+
 def test_join_split_probe_of_a_partitioned_build() raises:
     """Parts probed on serial contexts against a radix-built table."""
     var build = _join_side(150_000, 0, 10)
@@ -2279,7 +2358,7 @@ def test_join_concurrent_probes() raises:
     var outputs = List[List[String]](length=PARTS, fill=List[String]())
     var matches = List[BuildMatches]()
     for _ in range(PARTS):
-        matches.append(BuildMatches(join.num_codes()))
+        matches.append(join.matches(JOIN_LEFT, BUILD_LEFT))
 
     def part(wid: Int, p: Int) raises {mut outputs, mut matches, imm}:
         outputs[p] = _row_strings(
@@ -2296,20 +2375,18 @@ def test_join_concurrent_probes() raises:
 
     ExecContext.parallel(PARTS).fan_out(PARTS, part, PARTS)
     var got = List[String]()
-    var merged = BuildMatches(join.num_codes())
+    var merged = join.matches(JOIN_LEFT, BUILD_LEFT)
     for p in range(PARTS):
         got.extend(outputs[p].copy())
         merged.merge(matches[p])
     got.extend(
         _row_strings(
-            join.unmatched(
+            join.owed(
                 merged,
                 probe.slice(0, 0),
                 JOIN_LEFT,
                 JOIN_ALL,
                 BUILD_LEFT,
-                0,
-                join.num_build_rows(),
                 ExecContext.serial(),
             )
         )

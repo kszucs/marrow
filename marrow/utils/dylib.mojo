@@ -16,7 +16,16 @@ What is deliberately *not* here is any one library's conventions -- OpenDAL's
 not a general fact about C.
 """
 
-from std.ffi import OwnedDLHandle, _DLHandle, _Global, _try_find_dylib, c_char
+from std.atomic import Atomic
+from std.ffi import (
+    OwnedDLHandle,
+    _DLHandle,
+    _Global,
+    _try_find_dylib,
+    c_char,
+    c_int,
+    external_call,
+)
 from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 from std.os import getenv
@@ -203,6 +212,33 @@ struct LibSpec(Copyable, Movable):
     """Environment variables holding an absolute path, highest priority."""
 
 
+struct _LibCell(Movable):
+    """Where a library set lives, in the runtime's registry of globals: a
+    lock, and the set's libraries once one thread has opened them.
+
+    The registry runs its creating function outside any lock and keeps
+    whichever result lands first, so it cannot open the libraries itself:
+    threads racing on first use would each open them. A cell is cheap to
+    create and to lose, and its lock lets exactly one thread open them."""
+
+    var lock: Atomic[Int64]
+    var opened: Atomic[Int64]
+    """1 once `libs` is set, which it then stays: a reader that sees it skips
+    the lock."""
+    var libs: Optional[List[Dylib]]
+    """None until the first handle is asked for."""
+
+    def __init__(out self):
+        self.lock = Atomic[Int64](0)
+        self.opened = Atomic[Int64](0)
+        self.libs = None
+
+    @staticmethod
+    def empty() -> Self:
+        """A cell holding nothing yet: the registry's creating function."""
+        return Self()
+
+
 struct LibSet[key: StaticString, specs: List[LibSpec]](Movable):
     """A set of optional C libraries behind **one** process-global.
 
@@ -246,7 +282,26 @@ struct LibSet[key: StaticString, specs: List[LibSpec]](Movable):
             out.append(Dylib.open_spec(s))
         return out^
 
-    comptime _GLOBAL = _Global[Self.key, Self._open]
+    comptime _GLOBAL = _Global[Self.key, _LibCell.empty]
+
+    @staticmethod
+    @no_inline
+    def _member(index: Int) raises -> _DLHandle:
+        """Member `index`'s handle, every member opened on the first call by
+        whichever thread takes the lock first."""
+        var cell = Self._GLOBAL.get_or_create_ptr()
+        if cell[].opened.load() == 0:
+            while True:
+                var free = Int64(0)
+                if cell[].lock.compare_exchange(free, 1):
+                    break
+                _ = external_call["sched_yield", c_int]()
+            if not cell[].libs:
+                cell[].libs = Self._open()
+                cell[].opened.store(1)
+            cell[].lock.store(0)
+        # Read outside the lock: once opened, the set never changes.
+        return cell[].libs.value()[index].get()
 
     @staticmethod
     def handle[name: StaticString]() raises -> _DLHandle:
@@ -257,7 +312,7 @@ struct LibSet[key: StaticString, specs: List[LibSpec]](Movable):
         """
         comptime index = Self._index_of(Self.specs, name)
         comptime assert index >= 0, "not in this library set: " + String(name)
-        return Self._GLOBAL.get_or_create_ptr()[][index].get()
+        return Self._member(index)
 
     @staticmethod
     def handle() raises -> _DLHandle:
@@ -269,17 +324,7 @@ struct LibSet[key: StaticString, specs: List[LibSpec]](Movable):
         comptime assert (
             len(Self.specs) == 1
         ), "handle() needs a name unless the set has exactly one member"
-        return Self._GLOBAL.get_or_create_ptr()[][0].get()
-
-    @staticmethod
-    def preload() raises:
-        """Open every member now, on the calling thread.
-
-        `_Global` vends its pointer without locking and says nothing about
-        racing *creation*, so the first touch must not be several workers at
-        once.
-        """
-        _ = Self._GLOBAL.get_or_create_ptr()
+        return Self._member(0)
 
 
 # ---------------------------------------------------------------------------

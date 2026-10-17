@@ -44,7 +44,7 @@ from ...tabular import RecordBatch
 from ..logical import DynValue, Shape
 from ..logical import Bindings
 from ..index import Index, keep_every
-from ..physical import Datum
+from ...engine.core import Datum
 from .core import (
     BoolValue,
     ColumnBound,

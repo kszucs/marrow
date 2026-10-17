@@ -44,7 +44,7 @@ from ...kernels.join import (
     JoinKind,
 )
 from ...tabular import RecordBatch, Table, record_batch
-from ...utils.stats import STATS_ENABLED, counter
+from ...utils.stats import STATS_ENABLED
 from ...utils.testing import (
     ScratchDir,
     assert_values_equal,
@@ -199,9 +199,8 @@ def _distinct_keys(n: Int) raises -> RecordBatch:
 def _partial_inserts(plan: DynRelation, morsel_rows: Int) raises -> Int:
     """How many rows the partial stage of `plan`'s aggregate encoded, on four
     workers, under `-D MARROW_STATS=true`."""
-    var driver = Driver.analyze(ExecContext.parallel(4), morsel_rows)
-    var report = driver.inspect(plan)
-    return counter(report.phases[0].counters, "hash.inserts")
+    var profile = plan.profile(ExecContext.parallel(4), morsel_rows=morsel_rows)
+    return profile.runs[0].counters["hash.inserts"]
 
 
 def test_workers_pass_keys_through_a_table_that_never_hits() raises:
@@ -341,11 +340,10 @@ def test_workers_join_every_kind_from_either_side() raises:
 
 
 def _stage_labels(plan: DynRelation) raises -> String:
-    """Every stage label of `plan`'s analyzed run, one per line."""
-    var driver = Driver.analyze(ExecContext.parallel(4), 5)
-    var report = driver.inspect(plan)
+    """Every stage label of `plan`'s profiled run, one per line."""
+    var profile = plan.profile(ExecContext.parallel(4), morsel_rows=5)
     var out = String()
-    for ref p in report.phases:
+    for ref p in profile.report.phases:
         for ref s in p.stages:
             out += s + "\n"
     return out^
@@ -377,6 +375,27 @@ def test_workers_build_the_smaller_join_side() raises:
         )
         _check(small, ordered=False)
         assert_true("built on the right" in _stage_labels(small))
+
+
+def test_workers_flip_a_join_onto_a_side_of_repeated_keys() raises:
+    """The side written to be probed is under half the other and repeats
+    its keys: it is built instead, and owes the rows serial owes."""
+    var kinds: List[JoinKind] = [
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+        JOIN_RIGHT_SEMI,
+        JOIN_RIGHT_ANTI,
+    ]
+    for ref kind in kinds:
+        var plan = table(_data(37, 1)).join(
+            table(_data(12, 2)), [0], [0], kind, BUILD_LEFT
+        )
+        _check(plan, ordered=False)
+        assert_true("built on the right" in _stage_labels(plan))
 
 
 def test_workers_keep_the_build_side_over_a_growing_probe() raises:

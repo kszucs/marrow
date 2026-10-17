@@ -130,24 +130,6 @@ def test_utils_method_decompress_unsized_zstd_without_size() raises:
         assert_true(out == data, String("native ", native))
 
 
-def test_utils_method_needs_libs() raises:
-    """NONE opens no library, GZIP and DEFLATE always one, the rest only
-    when not run in Mojo."""
-    assert_true(not Method.NONE.needs_libs(False))
-    for m in [Method.GZIP, Method.DEFLATE]:
-        assert_true(m.needs_libs(True))
-    for m in [
-        Method.SNAPPY,
-        Method.BROTLI,
-        Method.LZ4,
-        Method.LZ4_FRAME,
-        Method.LZ4_HADOOP,
-        Method.ZSTD,
-    ]:
-        assert_true(not m.needs_libs(True))
-        assert_true(m.needs_libs(False))
-
-
 def test_utils_method_names() raises:
     assert_true(String(Method.ZSTD) == "zstd")
     assert_true(String(Method.LZ4_HADOOP) == "lz4_hadoop")

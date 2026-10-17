@@ -5,8 +5,9 @@
 
 Re-exports the compute surface so callers can ``import marrow.kernels as mk``
 and use e.g. ``mk.AddKernel.dispatch``, ``mk.filter`` or ``mk.cast``.
-Concatenation is not a kernel: it is ``DynBuilder.concat`` and each typed
-builder's ``concat``.
+Concatenation is a builder's: ``DynBuilder.concat`` and each typed builder's
+``concat``. ``concat.mojo`` holds only what a builder cannot do, joining large
+batches on several threads.
 
 A name ending ``Kernel`` is something you *apply* to arrays. A ``*Fold`` (such
 as ``SumFold``, ``Widening[SumOp]``) is an algebra you *drive*: ``Fold[K, V]``,
@@ -37,7 +38,7 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
   - *not re-exported* — `dictionary.mojo` / `join.mojo` / `hashtable.mojo` /
     `hashing.mojo` / `partition.mojo` (the hash machinery group-by, join and
-    `is_in` share)
+    `is_in` share), and `concat.mojo` (batches joined in parallel)
 """
 
 from marrow.dtypes import (

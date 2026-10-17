@@ -24,7 +24,7 @@ else held equal. See Q4.6.
 
 **Why it is degenerate now.** `marrow.expr`'s `ParquetScan`
 (`marrow/expr/logical.mojo`) takes no parameters at all, and
-`RowGroupSource` (`marrow/engine/sources.mojo`) hardcodes
+`RowGroupSource` (`marrow/expr/scans.mojo`) hardcodes
 `ParquetFile[DynSource, LeafSet.all()]`. There is no way to narrow the leaf
 set through the plan layer, so this program can only be `query_scan` again —
 it links the *whole* ladder, which is precisely the thing it was written to

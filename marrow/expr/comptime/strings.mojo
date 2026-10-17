@@ -88,7 +88,7 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
 from ..logical import Bindings
-from ..physical import Datum
+from ...engine.core import Datum
 
 from .rules import widest_shape
 from .core import BoolValue, ColumnBound, NumericValue, StringValue, Unnamed

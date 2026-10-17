@@ -2545,6 +2545,13 @@ struct FixedSizeBinaryArray(Array):
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
+    def values(self) -> BufferView[DType.uint8, origin_of(self.buffer)]:
+        """Every element's bytes, back to back from this array's first:
+        element `i` is bytes `[i * byte_width, (i + 1) * byte_width)`."""
+        return self.buffer.view[DType.uint8](
+            self.offset * self.byte_width, self.length * self.byte_width
+        )
+
     def null_count(self) -> Int:
         return self.nulls
 

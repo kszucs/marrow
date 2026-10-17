@@ -56,7 +56,7 @@ from ...schema import Schema
 from ...utils.argparse import parse_bool
 from ..logical import Bindings, ParamSpec, References, Shape
 from ..index import Index
-from ..physical import Datum
+from ...engine.core import Datum
 from .core import (
     BinaryValue,
     BoolValue,

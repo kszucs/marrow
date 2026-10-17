@@ -109,6 +109,6 @@ def test_concat_in_parallel_keeps_a_parameterised_dtype() raises:
     _assert_parallel_matches_serial(_batch([b.finish().to_dyn()]))
 
 
-def test_concat_in_parallel_matches_serial_for_a_struct() raises:
-    var inner = _batch([_ints(), _strings()])
-    _assert_parallel_matches_serial(_batch([inner^.to_dyn(), _ints()]))
+def test_concat_in_parallel_matches_serial_for_several_columns() raises:
+    """A batch is a struct: each of its columns is copied on its own."""
+    _assert_parallel_matches_serial(_batch([_ints(), _strings()]))

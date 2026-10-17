@@ -221,8 +221,8 @@ from .temporal import (
     Year,
 )
 from ...utils import CalendarUnit, WallClock
-from ..physical import Datum
-from ..physical import Evaluable, DynOperator, EvalOperator, FoldMode
+from ...engine.core import Datum, DynOperator
+from ..physical import Evaluable, EvalOperator, FoldMode
 
 
 # ---------------------------------------------------------------------------

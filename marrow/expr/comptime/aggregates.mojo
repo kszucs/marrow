@@ -75,7 +75,7 @@ from ..logical import (
     reject_non_boolean_filter,
 )
 from ..logical import Bindings
-from ...execution import PARALLEL_ENABLED, ExecContext
+from ...execution import ExecContext
 from ...kernels.groupby import Groups
 from ...kernels.window import WindowExtents, WindowFrame
 from ...arrays import DynArray
@@ -88,13 +88,10 @@ from ..physical import (
     FrameEvaluator,
     PerFrameEvaluator,
     Evaluable,
-    Datum,
     EvalOperator,
-    DynOperator,
-    Morsel,
-    Operator,
     admitted_bits,
 )
+from ...engine.core import Datum, DynOperator, Morsel, Operator
 
 from .core import ComptimeValue, NumericValue, PrimitiveValue, StringValue
 
@@ -284,11 +281,10 @@ struct Aggregate[
                 " filter on the rows instead"
             )
             reject_non_boolean_filter(self._where.dtype(schema))
-        comptime if PARALLEL_ENABLED:
-            if mode.is_combine():
-                return CombineAggregateOperator[Self.Agg](
-                    mode.column, grouped, self._input.dtype(schema)
-                )
+        if mode.is_combine():
+            return CombineAggregateOperator[Self.Agg](
+                mode.column, grouped, self._input.dtype(schema)
+            )
         comptime if Self.fuses:
             if grouped:
                 return ScatteredAggregateOperator[Self.Agg, Self.A, Self.P](
@@ -535,12 +531,12 @@ struct ScatteredAggregateOperator[
         var predicate: Self.P,
         var bindings: Bindings,
         in_dtype: DynType,
-        partial: Bool = False,
+        partial: Bool,
     ) raises:
         self._input = input^
         self._where = predicate^
         self._bindings = bindings^
-        self._state = Self.Agg(in_dtype)
+        self._state = Self.Agg(in_dtype, True)
         self._partial = partial
         self._emitted = False
 
@@ -614,9 +610,7 @@ struct ScatteredAggregateOperator[
         if self._emitted:
             return None
         self._emitted = True
-        # Nothing to seed: `push` reserved every group a morsel named, and over
-        # no morsel at all a grouped query correctly emits no rows.
-        return emit_fold(self._state, 0, self._partial)
+        return emit_fold(self._state, self._partial)
 
 
 struct AggregateEvaluator[
@@ -748,7 +742,7 @@ struct FoldEvaluator[Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing](
             for i in range(n):
                 if not bits[i]:
                     leaves[i] = Leaf.identity()
-        var agg = Self.Agg(self._in_dtype)
+        var agg = Self.Agg(self._in_dtype, True)
         agg.fold_frames(leaves, extents, self._frame)
         return agg.finish().to_dyn()
 
@@ -801,12 +795,12 @@ struct RegisterAggregateOperator[
         var predicate: Self.P,
         var bindings: Bindings,
         in_dtype: DynType,
-        partial: Bool = False,
+        partial: Bool,
     ) raises:
         self._input = input^
         self._where = predicate^
         self._bindings = bindings^
-        self._state = Self.Agg(in_dtype)
+        self._state = Self.Agg(in_dtype, False)
         self._partial = partial
         self._emitted = False
 
@@ -895,14 +889,10 @@ struct RegisterAggregateOperator[
         # morsel rather than once per row.
         if count > 0:
             agg.combine_at(0, acc, count)
-        else:
-            agg.combine_at(0, ident, 0)
         return None
 
     def drain(mut self) raises -> Optional[Datum]:
         if self._emitted:
             return None
         self._emitted = True
-        # One slot, always: `sum` of nothing is one NULL, not no rows. `push`
-        # returns early at `n == 0` and never grew it, so the seed is here.
-        return emit_fold(self._state, 1, self._partial)
+        return emit_fold(self._state, self._partial)

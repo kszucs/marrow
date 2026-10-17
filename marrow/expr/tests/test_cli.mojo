@@ -154,11 +154,9 @@ def test_query_cli_analyze_writes_the_report_as_json() raises:
     )
     assert_true(args.flag("analyze"))
     assert_equal(args.get("report-json"), "report.json")
-    var report = _report_plan().explain[analyze=True](
-        bindings=cli.bindings(args)
-    )
-    assert_true(report.ns >= 0)
-    assert_true(report.to_json().startswith('{"ns":'))
+    var profile = _report_plan().profile(bindings=cli.bindings(args))
+    assert_true(profile.ns >= 0)
+    assert_true(profile.to_json().startswith('{"ns":'))
 
 
 def test_query_cli_parses_typed_bindings() raises:

@@ -6,42 +6,48 @@
 import std.math as math
 from std.bit import count_leading_zeros
 
+from ..errors import InvalidError
 
-struct HyperLogLog[p: Int](Movable, Sized):
-    """A row of HyperLogLog sketches, `2**p` one-byte registers each, stored
-    back to back so one allocation serves every group.
 
-    A hash's top `p` bits pick a register, and the leading-zero run of the bits
-    below them is kept as that register's maximum. The estimate is the
-    harmonic mean with the standard bias constant, falling back to linear
+struct HyperLogLog(Movable, Sized):
+    """A row of HyperLogLog sketches, `2**precision` one-byte registers each,
+    stored back to back so one allocation serves every group.
+
+    A hash's top `precision` bits pick a register, and the leading-zero run of
+    the bits below them is kept as that register's maximum. The estimate is
+    the harmonic mean with the standard bias constant, falling back to linear
     counting while many registers are still empty; 64-bit hashes make the
     large-range correction unnecessary.
     """
 
-    comptime registers = 1 << Self.p
-    """Registers per sketch."""
-
+    var _p: Int
     var _registers: List[UInt8]
 
-    def __init__(out self, sketches: Int = 0):
-        self._registers = List[UInt8](length=sketches * Self.registers, fill=0)
+    def __init__(out self, precision: Int, sketches: Int = 0):
+        self._p = precision
+        self._registers = List[UInt8](length=sketches << precision, fill=0)
+
+    def registers(self) -> Int:
+        """Registers per sketch: one sketch's width in bytes."""
+        return 1 << self._p
 
     def __len__(self) -> Int:
         """The number of sketches."""
-        return len(self._registers) // Self.registers
+        return len(self._registers) >> self._p
 
     def grow(mut self, sketches: Int):
         """Make room for at least `sketches` sketches; new ones are empty."""
         if sketches > len(self):
-            self._registers.resize(sketches * Self.registers, 0)
+            self._registers.resize(sketches << self._p, 0)
 
     @always_inline
     def add(mut self, sketch: Int, h: UInt64):
         """Fold hash `h` into sketch `sketch`."""
-        var idx = sketch * Self.registers + Int(h >> UInt64(64 - Self.p))
+        var p = self._p
+        var idx = (sketch << p) + Int(h >> UInt64(64 - p))
         # 1 + the leading-zero run below the top `p` bits; the sentinel bit
         # caps it at `64 - p + 1`.
-        var w = (h << UInt64(Self.p)) | (UInt64(1) << UInt64(Self.p - 1))
+        var w = (h << UInt64(p)) | (UInt64(1) << UInt64(p - 1))
         var rho = UInt8(count_leading_zeros(w) + 1)
         if rho > self._registers[idx]:
             self._registers[idx] = rho
@@ -49,20 +55,26 @@ struct HyperLogLog[p: Int](Movable, Sized):
     def sketch(self, sketch: Int) -> Span[UInt8, origin_of(self._registers)]:
         """Sketch `sketch`'s registers."""
         return Span(self._registers)[
-            sketch * Self.registers : (sketch + 1) * Self.registers
+            sketch << self._p : (sketch + 1) << self._p
         ]
 
-    def merge(mut self, sketch: Int, registers: Span[UInt8, _]):
+    def merge(mut self, sketch: Int, registers: Span[UInt8, _]) raises:
         """Fold `registers`, a sketch of the same precision, into sketch
         `sketch`: each register keeps the larger, which counts the union."""
-        var base = sketch * Self.registers
-        for r in range(Self.registers):
+        var m = self.registers()
+        if len(registers) != m:
+            raise InvalidError(
+                t"HyperLogLog: a sketch of {len(registers)} registers merged"
+                t" into one of {m}, another precision"
+            )
+        var base = sketch * m
+        for r in range(m):
             if registers[r] > self._registers[base + r]:
                 self._registers[base + r] = registers[r]
 
     def estimate(self, sketch: Int) -> Int64:
         """The cardinality estimate of sketch `sketch`."""
-        comptime m = Self.registers
+        var m = self.registers()
         var base = sketch * m
         var inv_sum = Float64(0)
         var zeros = 0

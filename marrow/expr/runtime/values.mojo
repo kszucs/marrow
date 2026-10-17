@@ -202,8 +202,12 @@ from ...tabular import RecordBatch
 from ..logical import DynValue, References, Shape, Value
 from ..logical import Bindings
 from ..index import Index, keep_every
-from ..physical import Datum
-from ..physical import Evaluable, DynOperator, EvalOperator, FoldMode
+from ...engine.core import Datum, DynOperator
+from ..physical import (
+    Evaluable,
+    EvalOperator,
+    FoldMode,
+)
 from .aggregates import RuntimeAggregate
 
 

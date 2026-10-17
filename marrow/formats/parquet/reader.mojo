@@ -59,7 +59,6 @@ from ...dtypes import (
 )
 
 from ...codecs import Encoded, Rle
-from ...compress import Codecs
 from .compression import Compression
 from .encodings import DictionaryValues, Encoding, PlainValues
 from ...utils import Epoch, Crc32
@@ -2710,8 +2709,6 @@ struct ChunkRead(Copyable, Movable):
     """The chunk's offset in the file."""
     var ranges: List[Tuple[Int, Int]]
     """Chunk-relative `(offset, length)` of each byte range to fetch."""
-    var needs_libs: Bool
-    """Whether the chunk's codec is a `dlopen`ed library."""
 
     def __init__(
         out self,
@@ -2721,16 +2718,12 @@ struct ChunkRead(Copyable, Movable):
         num_rows: Int,
         var selection: Optional[RowSelection],
         var locs: OffsetIndex,
-        native_codecs: Bool,
     ) raises:
         var start, length = cc.meta_data.byte_range()
         self.row_group = row_group
         self.leaf = leaf
         self.num_rows = num_rows
         self.start = start
-        self.needs_libs = Compression(cc.meta_data.codec).needs_libs(
-            native_codecs
-        )
         # **Only as far into the chunk as the selection reaches.** The
         # offset index says where the page holding the last selected row
         # ends; nothing after it will be decoded, so nothing after it is
@@ -2770,9 +2763,6 @@ struct ReadPlan(Movable):
     var chunks: List[ChunkRead]
     var ranges: List[Tuple[Int, Int]]
     """Every chunk's file-absolute byte ranges, in chunk order."""
-    var needs_libs: Bool
-    """Whether any chunk's codec is a `dlopen`ed library -- which decides
-    whether to open them."""
     var _first: List[Int]
     """Chunk `t`'s ranges start at `ranges[_first[t]]`."""
 
@@ -2783,7 +2773,6 @@ struct ReadPlan(Movable):
         self.row_groups = row_groups^
         self.chunks = List[ChunkRead]()
         self.ranges = List[Tuple[Int, Int]]()
-        self.needs_libs = False
         self._first = List[Int]()
 
     def add(mut self, var chunk: ChunkRead):
@@ -2791,7 +2780,6 @@ struct ReadPlan(Movable):
         self._first.append(len(self.ranges))
         for ref r in chunk.ranges:
             self.ranges.append((chunk.start + r[0], r[1]))
-        self.needs_libs = self.needs_libs or chunk.needs_libs
         self.chunks.append(chunk^)
 
     def segments(
@@ -2933,18 +2921,6 @@ struct ParquetFile[
     def num_row_groups(self) -> Int:
         return len(self._meta.row_groups)
 
-    def needs_libs(self) -> Bool:
-        """Whether reading any of this file's column chunks opens a codec
-        library — which must be opened on one thread first, before several
-        read at once (`Codecs.preload`)."""
-        for ref rg in self._meta.row_groups:
-            for ref cc in rg.columns:
-                if Compression(cc.meta_data.codec).needs_libs(
-                    self._native_codecs
-                ):
-                    return True
-        return False
-
     def num_rows(self) -> Int:
         return self._meta.num_rows
 
@@ -2993,16 +2969,6 @@ struct ParquetFile[
         var decoded = List[Optional[DecodedLeaf]](capacity=total)
         for _ in range(total):
             decoded.append(None)
-
-        # Open the compression libraries here, on the calling thread, if any
-        # chunk about to be decoded uses one. `_Global` vends its pointer
-        # without locking and promises nothing about racing *creation*, so the
-        # first touch must not be several workers at once; after this every
-        # worker's use of the handle set is a pure read. Guarded rather than
-        # unconditional so a file of uncompressed, LZ4, LZ4_RAW or ZSTD pages
-        # `dlopen`s nothing.
-        if plan.needs_libs:
-            Codecs.preload()
 
         # --- plan, then fetch, then decode -------------------------------
         #
@@ -3126,7 +3092,6 @@ struct ParquetFile[
                         rg.num_rows,
                         sel^,
                         locs^,
-                        self._native_codecs,
                     )
                 )
         return plan^

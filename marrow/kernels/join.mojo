@@ -39,8 +39,6 @@ code's build rows, stored contiguously.
 """
 
 
-from std.math import ceildiv
-
 from ..utils.stats import count
 from ..arrays import (
     DynArray,
@@ -61,6 +59,7 @@ from ..errors import InvalidError, NotImplementedError
 from .core import Kernel
 from .filter import FilterKernel, TakeKernel
 from .boolean import NotNullKernel
+from .groupby import Groups
 from .dictionary import DictionaryEncoder
 from ..utils import Hasher, KeyHash
 
@@ -385,97 +384,6 @@ comptime BUILD_RIGHT = JoinBuildSide(1)
 """Index the right input, stream the left. Same answer, different cost."""
 
 
-comptime _PARALLEL_GROUP_ROWS = 65_536
-"""Build rows from which grouping them by code runs on several threads."""
-
-comptime _GROUP_RANGES = 256
-"""How many ranges of codes the parallel grouping deals out to threads."""
-
-
-@no_inline
-def _group_by_code_parallel(
-    codes: Int32Array,
-    num_codes: Int,
-    mut offsets: Buffer[mut=True],
-    mut rows: Buffer[mut=True],
-    ctx: ExecContext,
-) raises:
-    """Rows `[0, len(codes))` grouped by code into `rows`, ascending within
-    a code, with `offsets[c]` where code `c`'s rows start and
-    `offsets[num_codes]` their total — what the serial counting sort answers.
-
-    The codes are cut into contiguous ranges. Each thread counts its stripe
-    of rows per range, and deals them out by range into the slots a prefix
-    sum gave it, so each range's rows stay in row order; then each range is
-    counted and placed on its own thread, into its own slice."""
-    var n = len(codes)
-    var ranges = min(_GROUP_RANGES, num_codes)
-    var threads = max(1, min(ctx.resolved_num_threads(), n // 4096))
-    var stripe = ceildiv(n, threads)
-    var counts = Buffer.alloc_zeroed[DType.int64](threads * ranges)
-    var cv = counts.view[DType.int64](0, threads * ranges)
-    var starts = Buffer.alloc_uninit[DType.int64](ranges + 1)
-    var sv = starts.view[DType.int64](0, ranges + 1)
-    var dealt = Buffer.alloc_uninit[int32.native](n)
-    var dv = dealt.view[int32.native](0, n)
-    var ov = offsets.view[int32.native](0, num_codes + 1)
-    var rv = rows.view[int32.native](0, n)
-    var phase = Buffer.alloc_zeroed[DType.int64](1)
-    var pv = phase.view[DType.int64](0, 1)
-
-    # One body for the three steps, so the pool is instantiated once.
-    def step(i: Int) {imm}:
-        var which = pv.unsafe_get(0)
-        if which < 2:
-            var base = i * ranges
-            for row in range(i * stripe, min(n, (i + 1) * stripe)):
-                var r = Int(codes.unsafe_get(row)) * ranges // num_codes
-                var at = Int(cv.unsafe_get(base + r))
-                if which == 1:
-                    dv.unsafe_set(at, Int32(row))
-                cv.unsafe_set(base + r, Int64(at + 1))
-        else:
-            var lo = ceildiv(i * num_codes, ranges)
-            var hi = ceildiv((i + 1) * num_codes, ranges)
-            var first = Int(sv.unsafe_get(i))
-            var last = Int(sv.unsafe_get(i + 1))
-            var at = List[Int](length=hi - lo, fill=0)
-            for p in range(first, last):
-                at[Int(codes.unsafe_get(Int(dv.unsafe_get(p)))) - lo] += 1
-            var pos = first
-            for c in range(hi - lo):
-                ov.unsafe_set(lo + c, Int32(pos))
-                var count = at[c]
-                at[c] = pos
-                pos += count
-            for p in range(first, last):
-                var row = dv.unsafe_get(p)
-                var c = Int(codes.unsafe_get(Int(row))) - lo
-                rv.unsafe_set(at[c], row)
-                at[c] += 1
-
-    ctx.run(threads, step)
-    # Range-major, thread-minor: thread t's rows of range r follow every
-    # earlier thread's, which is what keeps each range in row order.
-    var running = 0
-    for r in range(ranges):
-        sv.unsafe_set(r, Int64(running))
-        for t in range(threads):
-            var count = Int(cv.unsafe_get(t * ranges + r))
-            cv.unsafe_set(t * ranges + r, Int64(running))
-            running += count
-    sv.unsafe_set(ranges, Int64(running))
-    pv.unsafe_set(0, 1)
-    ctx.run(threads, step)
-    pv.unsafe_set(0, 2)
-    ctx.run(ranges, step)
-    ov.unsafe_set(num_codes, Int32(n))
-    _ = counts^
-    _ = starts^
-    _ = dealt^
-    _ = phase^
-
-
 @fieldwise_init
 struct JoinIndex(Copyable, Movable, Sized):
     """Which build row pairs with which probe row, one entry per output row.
@@ -499,6 +407,18 @@ struct JoinIndex(Copyable, Movable, Sized):
 
     def __len__(self) -> Int:
         return len(self.build)
+
+    @staticmethod
+    def build_only(var rows: Int32Array) raises -> Self:
+        """Build `rows`, each paired with no probe row."""
+        var n = len(rows)
+        return Self(rows^, nulls(n, int32))
+
+    @staticmethod
+    def probe_only(var rows: Int32Array) raises -> Self:
+        """Probe `rows`, each paired with no build row."""
+        var n = len(rows)
+        return Self(nulls(n, int32), rows^)
 
 
 # ---------------------------------------------------------------------------
@@ -558,8 +478,6 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
     """
 
     var _keys: DictionaryEncoder[Self.Hash]
-    var _codes: Int32Array
-    """The code of every build row."""
     var _rows: Int32Array
     """Build rows, grouped by code."""
     var _offsets: Buffer[mut=True]
@@ -578,7 +496,6 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
         var num_rows = len(keys[0])
         var placed = self._keys.encode(keys, expected_new=num_rows)
         ref codes = placed.ids
-        self._codes = codes.copy()
         var num_codes = len(self._keys)
         if num_codes == num_rows:
             # Every row introduced its own code, so the rows that introduced
@@ -586,35 +503,10 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
             self._rows = placed.firsts.copy()
             self._offsets = Buffer.alloc_uninit(0)
         else:
-            # Several rows share a code: a counting sort by code.
+            # Several rows share a code: grouped by it.
             self._offsets = Buffer.alloc_uninit[int32.native](num_codes + 1)
-            var rows = Buffer.alloc_uninit[int32.native](max(num_rows, 1))
-            if grouping.worth_parallel(num_rows, _PARALLEL_GROUP_ROWS):
-                _group_by_code_parallel(
-                    codes, num_codes, self._offsets, rows, grouping
-                )
-            else:
-                var at = List[Int](length=num_codes, fill=0)
-                for i in range(num_rows):
-                    at[Int(codes.unsafe_get(i))] += 1
-                self._offsets.unsafe_set[int32.native](0, 0)
-                for c in range(num_codes):
-                    self._offsets.unsafe_set[int32.native](
-                        c + 1,
-                        self._offsets.unsafe_get[int32.native](c)
-                        + Int32(at[c]),
-                    )
-                    at[c] = Int(self._offsets.unsafe_get[int32.native](c))
-                for i in range(num_rows):
-                    var c = Int(codes.unsafe_get(i))
-                    rows.unsafe_set[int32.native](at[c], Int32(i))
-                    at[c] += 1
-            self._rows = Int32Array(
-                length=num_rows,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=rows^.to_immutable(),
+            self._rows = Groups(codes.copy(), num_codes).rows_by_group(
+                self._offsets, grouping
             )
 
     def is_partitioned(self) -> Bool:
@@ -743,25 +635,28 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
         return (start, Int(self._offsets.unsafe_get[int32.native](code + 1)))
 
     def rows(
-        self,
-        matches: BuildMatches,
-        strictness: UInt8,
-        matched: Bool,
-        start: Int,
-        end: Int,
+        self, matches: BuildMatches, first_only: Bool, matched: Bool
     ) raises -> Int32Array:
-        """The build rows in ``[start, end)``, ascending, that have matched
-        (``matched``) or have not.
+        """The build rows, ascending, that have matched (``matched``) or have
+        not.
 
-        A row has matched when its key has — under ``JOIN_ANY`` only the
-        first row of each key, the one a probe row was paired with."""
-        var out = Int32Builder(capacity=max(end - start, 0))
-        for row in range(start, end):
-            var code = Int(self._codes.unsafe_get(row))
-            var hit = matches[code]
-            if hit and strictness == JOIN_ANY:
-                hit = Int(self._rows.unsafe_get(self._first(code))) == row
-            if hit == matched:
+        A row has matched when its key has — with ``first_only`` only the
+        first row of each key, the one a ``JOIN_ANY`` probe row was paired
+        with."""
+        var num_rows = len(self._rows)
+        var keep = Bitmap.alloc_zeroed(max(num_rows, 1))
+        for code in range(self.num_codes()):
+            var first = self._first(code)
+            var end = first + 1
+            if len(self._offsets) > 0:
+                end = Int(self._offsets.unsafe_get[int32.native](code + 1))
+            for j in range(first, end):
+                var hit = matches[code] and (not first_only or j == first)
+                if hit == matched:
+                    keep.set(Int(self._rows.unsafe_get(j)))
+        var out = Int32Builder(capacity=num_rows)
+        for row in range(num_rows):
+            if keep[row]:
                 out.append(Int32(row))
         return out.finish()
 
@@ -845,42 +740,21 @@ struct HashJoin[Hash: Hasher = KeyHash]:
 
         `kind` is the caller's, read against its own `(left, right)`, and
         `build_side` says which of those was built. The rows come in one
-        order: the matched pairs in probe order, then the unmatched build
-        rows, then the unmatched probe rows.
+        order: what one part of the probe side answers, then the build rows
+        owed once every part has (`owed`).
         """
         var keys = Self._key_columns(data, key_indices)
         var ctx = self._ctx.for_batch(len(data))
         var physical = build_side.physical(kind)
         var codes = self._table.codes(keys, ctx)
-        # Only the kinds that emit build rows by whether they matched read
-        # the marks.
-        var marked = physical.needs_left_matches()
-        var matches = BuildMatches(self._table.num_codes() if marked else 0)
-        if marked:
+        var index = self._part(codes, physical, strictness, ctx)
+        if physical.needs_left_matches():
+            var matches = self.matches(kind, build_side)
             matches.mark(codes)
-        var n = self._build.length
-        var index: JoinIndex
-        if physical == JOIN_SEMI or physical == JOIN_ANTI:
-            # Whether a build row has a match is not which match a probe row
-            # keeps: SEMI and ANTI over the build side read every match,
-            # JOIN_ANY or not.
-            var rows = self._table.rows(
-                matches, JOIN_ALL, physical == JOIN_SEMI, 0, n
-            )
-            index = JoinIndex(rows.copy(), nulls(len(rows), int32))
-        elif physical == JOIN_RIGHT_SEMI or physical == JOIN_RIGHT_ANTI:
-            var rows = Self._probe_rows(codes, physical == JOIN_RIGHT_SEMI)
-            index = JoinIndex(nulls(len(rows), int32), rows^)
-        else:
             var parts: List[JoinIndex] = [
-                self._table.expand(codes, strictness == JOIN_ANY, ctx)
+                index^,
+                JoinIndex.build_only(self._owed(matches, physical, strictness)),
             ]
-            if physical.emits_unmatched_left():
-                var rows = self._table.rows(matches, strictness, False, 0, n)
-                parts.append(JoinIndex(rows.copy(), nulls(len(rows), int32)))
-            if physical.emits_unmatched_right():
-                var rows = Self._probe_rows(codes, False)
-                parts.append(JoinIndex(nulls(len(rows), int32), rows^))
             index = Self._concat(parts)
         return self._assemble(data, index, kind, build_side, self._ctx)
 
@@ -895,13 +769,13 @@ struct HashJoin[Hash: Hasher = KeyHash]:
         ctx: ExecContext,
     ) raises -> StructArray:
         """Probe one part of the probe side, on `ctx`, recording in `matches`
-        which build keys it matched.
+        (from `matches`) which build keys it matched.
 
         What a part answers alone: the matched pairs in probe order, then —
         for RIGHT and FULL — its own unmatched probe rows, and for the
         existence filters on the probe side, its own rows. The build rows
         LEFT, FULL, SEMI and ANTI emit are only known once every part has
-        been probed, and come from `unmatched` over the merged `matches`.
+        been probed, and come from `owed` over the merged `matches`.
         """
         var keys = Self._key_columns(data, key_indices)
         var batch_ctx = ctx.for_batch(len(data))
@@ -909,71 +783,78 @@ struct HashJoin[Hash: Hasher = KeyHash]:
         var codes = self._table.codes(keys, batch_ctx)
         if physical.needs_left_matches():
             matches.mark(codes)
-        var index: JoinIndex
-        if physical == JOIN_SEMI or physical == JOIN_ANTI:
-            index = JoinIndex(nulls(0, int32), nulls(0, int32))
-        elif physical == JOIN_RIGHT_SEMI or physical == JOIN_RIGHT_ANTI:
-            var rows = Self._probe_rows(codes, physical == JOIN_RIGHT_SEMI)
-            index = JoinIndex(nulls(len(rows), int32), rows^)
-        else:
-            index = self._table.expand(codes, strictness == JOIN_ANY, batch_ctx)
-            if physical.emits_unmatched_right():
-                var rows = Self._probe_rows(codes, False)
-                var parts: List[JoinIndex] = [
-                    index^,
-                    JoinIndex(nulls(len(rows), int32), rows^),
-                ]
-                index = Self._concat(parts)
+        var index = self._part(codes, physical, strictness, batch_ctx)
         count["join.probe_rows"](len(data))
         count["join.matches"](len(index))
         return self._assemble(data, index, kind, build_side, ctx)
 
-    def mark(
-        self,
-        data: StructArray,
-        key_indices: List[Int],
-        mut matches: BuildMatches,
-        ctx: ExecContext,
-    ) raises:
-        """Record in `matches` the build keys `data` matches, and nothing
-        else: all a part of the probe side contributes to SEMI and ANTI,
-        whose rows come from `unmatched`."""
-        var keys = Self._key_columns(data, key_indices)
-        matches.mark(self._table.codes(keys, ctx.for_batch(len(data))))
+    def matches(
+        self, kind: JoinKind, build_side: JoinBuildSide
+    ) raises -> BuildMatches:
+        """Marks for one part of the probe side, or for merging every part's:
+        a bit per build key when `kind` emits build rows by whether they
+        matched, none otherwise."""
+        var marks = build_side.physical(kind).needs_left_matches()
+        return BuildMatches(self._table.num_codes() if marks else 0)
 
-    def unmatched(
+    def owed(
         self,
         matches: BuildMatches,
         like: StructArray,
         kind: JoinKind,
         strictness: UInt8,
         build_side: JoinBuildSide,
-        start: Int,
-        end: Int,
         ctx: ExecContext,
     ) raises -> StructArray:
-        """The rows a split probe owes after its last part: the build rows in
-        `[start, end)` that LEFT, FULL and ANTI emit unmatched and SEMI emits
-        matched, in ascending order, by the merged `matches`. Any other kind
-        owes none.
+        """The rows the probe side owes after its last part: the build rows
+        LEFT, FULL and ANTI emit unmatched and SEMI emits matched, in
+        ascending order, by the merged `matches`. Any other kind owes none.
 
         `like` is any part of the probe side — empty will do — for its
         columns' types; they are all null here."""
-        var physical = build_side.physical(kind)
-        var rows: Int32Array
+        var rows = self._owed(matches, build_side.physical(kind), strictness)
+        # The probe side is gathered at null indices, so `like` may be empty.
+        return self._assemble(
+            like, JoinIndex.build_only(rows^), kind, build_side, ctx
+        )
+
+    def _part(
+        self,
+        codes: Int32Array,
+        physical: JoinKind,
+        strictness: UInt8,
+        ctx: ExecContext,
+    ) raises -> JoinIndex:
+        """What a part of the probe side, its keys' `codes`, answers alone
+        under the `physical` kind: see the part `probe`."""
+        if physical == JOIN_SEMI or physical == JOIN_ANTI:
+            # Only marks: the build rows come after the last part.
+            return JoinIndex.probe_only(nulls(0, int32))
+        if physical == JOIN_RIGHT_SEMI or physical == JOIN_RIGHT_ANTI:
+            return JoinIndex.probe_only(
+                Self._probe_rows(codes, physical == JOIN_RIGHT_SEMI)
+            )
+        var pairs = self._table.expand(codes, strictness == JOIN_ANY, ctx)
+        if not physical.emits_unmatched_right():
+            return pairs^
+        var parts: List[JoinIndex] = [
+            pairs^,
+            JoinIndex.probe_only(Self._probe_rows(codes, False)),
+        ]
+        return Self._concat(parts)
+
+    def _owed(
+        self, matches: BuildMatches, physical: JoinKind, strictness: UInt8
+    ) raises -> Int32Array:
+        """The build rows the `physical` kind owes after every part, by the
+        merged `matches`: see `owed`."""
         # Whether a build row has a match is not which match a probe row
         # keeps: SEMI and ANTI read every match, JOIN_ANY or not.
-        if physical == JOIN_SEMI:
-            rows = self._table.rows(matches, JOIN_ALL, True, start, end)
-        elif physical == JOIN_ANTI:
-            rows = self._table.rows(matches, JOIN_ALL, False, start, end)
-        elif physical.emits_unmatched_left():
-            rows = self._table.rows(matches, strictness, False, start, end)
-        else:
-            rows = nulls(0, int32)
-        # The probe side is gathered at null indices, so `like` may be empty.
-        var index = JoinIndex(rows.copy(), nulls(len(rows), int32))
-        return self._assemble(like, index, kind, build_side, ctx)
+        if physical == JOIN_SEMI or physical == JOIN_ANTI:
+            return self._table.rows(matches, False, physical == JOIN_SEMI)
+        if physical.emits_unmatched_left():
+            return self._table.rows(matches, strictness == JOIN_ANY, False)
+        return nulls(0, int32)
 
     @staticmethod
     def _key_columns(
@@ -1006,11 +887,6 @@ struct HashJoin[Hash: Hasher = KeyHash]:
             build.append(parts[i].build.copy())
             probe.append(parts[i].probe.copy())
         return JoinIndex(Int32Builder.concat(build), Int32Builder.concat(probe))
-
-    def num_codes(self) -> Int:
-        """How many distinct build keys there are — what a `BuildMatches`
-        for this join is sized to."""
-        return self._table.num_codes()
 
     def num_build_rows(self) -> Int:
         return self._build.length

@@ -108,7 +108,7 @@ struct BatchEncoder(Movable):
             # A sparse view node -- a slice, or a filter or take result still
             # sharing its source's buffers -- is compacted first, or the body
             # would carry every byte those buffers hold. The same ladder as
-            # `Pipeline.collect`'s.
+            # `Driver.collect`'s.
             if data.dtype.is_string_view():
                 data = (
                     StringViewArray(unsafe_from_data=data).compact().to_data()

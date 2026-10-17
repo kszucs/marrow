@@ -20,7 +20,8 @@ from ....dtypes import DynType, Int64Type, int64
 from ....tabular import RecordBatch, record_batch
 from ....scalars import DynScalar
 from ...logical import DynValue, Shape
-from ...physical import Evaluable, Morsel
+from ...physical import Evaluable
+from ....engine.core import Morsel
 from ..leaves import NumericColumn, NumericLiteral
 from ..numeric import Add, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub
 

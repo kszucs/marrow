@@ -29,15 +29,6 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
     comptime ZSTD = Self(6)
     comptime LZ4_RAW = Self(7)
 
-    def needs_libs(self, native: Bool) -> Bool:
-        """Whether decompressing this codec may call into a `dlopen`ed
-        library, as its method answers (`Method.needs_libs`). A codec with
-        no method answers True."""
-        try:
-            return self.method().needs_libs(native)
-        except:
-            return True
-
     def method(self) raises NotImplementedError -> Method:
         """The method this codec's pages are compressed with."""
         if self == Self.UNCOMPRESSED:

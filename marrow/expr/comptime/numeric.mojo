@@ -67,7 +67,7 @@ from ...views import apply
 from ..logical import Shape
 from ..logical import Bindings
 from ..index import Index, keep_every
-from ..physical import Datum
+from ...engine.core import Datum
 
 from .rules import promote, wider, widest_shape
 from .core import (

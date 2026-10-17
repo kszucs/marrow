@@ -1110,7 +1110,9 @@ def _assert_limit_is_prefix[
         limits.append(before + extra)
     for asc in [True, False]:
         for nf in [True, False]:
-            var full = SortIndices[nan_largest=nan_largest].dispatch(arr, asc, nf)
+            var full = SortIndices[nan_largest=nan_largest].dispatch(
+                arr, asc, nf
+            )
             for k in limits:
                 var top = SortIndices[nan_largest=nan_largest].dispatch(
                     arr, asc, nf, limit=k

@@ -91,12 +91,7 @@ from .logical import (
     WindowValue,
 )
 from .physical import (
-    Datum,
-    DynOperator,
     JoinOrder,
-    Morsel,
-    Operator,
-    Pipeline,
     PlannedJoin,
 )
 from .index import ColumnZones, Index, keep_every

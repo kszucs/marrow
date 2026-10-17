@@ -45,7 +45,8 @@ customers = ma.memtable(
 ## Before it runs: `explain(physical=True)`
 
 `explain()` prints the plan as written. `explain(physical=True)` prints the
-phases that would run it, without reading a row:
+phases that would run it, without reading a row, under the rows the optimizer
+estimates the plan answers:
 
 ```{python}
 query = (
@@ -85,9 +86,11 @@ print(joined.explain(analyze=True, num_threads=4))
 ```
 
 The header is the whole run — its time, its rows, and the largest costs
-first. Then, per phase:
+first. Then, per phase, what `physical=True` shows, and what it did:
 
-- `out=` the rows it produced and `time=` how long it ran;
+- `ran morsels=` how many morsels its workers read — fewer than its source
+  holds when a stage had all it needed first — `out=` the rows it produced
+  and `time=` how long it ran;
 - `busy` — each worker's time in its stages: `max` and `mean`, and the
   **skew**, the busiest over the mean. 1.00 is perfectly even; a skew near the
   worker count means one worker did all the work;
@@ -108,14 +111,12 @@ footers and pruning row groups, concatenating the result.
 ## As data
 
 The same report is a value. `to_dict()` gives it as nested dicts — the JSON a
-tool would read — and `to_batch()` gives its phases as a batch, one row per
-phase, to query like any other table:
+tool would read:
 
 ```{python}
 report = joined.explain(analyze=True, num_threads=4)
-phases = report.to_batch()
-for row in phases.select(["id", "role", "workers", "output", "ns"]).to_pylist():
-    print(row)
+for phase in report.to_dict()["phases"]:
+    print(phase["id"], phase["role"], phase["workers"], phase["output"], phase["ns"])
 ```
 
 ## How it scales

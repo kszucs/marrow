@@ -33,7 +33,6 @@ can pull in. And no optimizer runs here: a plan prunes because its author wrote
 from std.sys import argv, exit, stderr
 
 from ..errors import DynError, InvalidError, NotImplementedError
-from ..engine import PlanReport
 from ..execution import ExecContext
 from ..formats import BatchWriter
 from ..io import DynSink
@@ -332,8 +331,7 @@ struct QueryCli(Movable):
                 try:
                     out[p.name.copy()] = p.parse.value()(args.get(p.name))
                 except e:
-                    var err = DynError(e)
-                    raise DynError(err.kind, t"--{p.name}: {err.message}")
+                    raise DynError(e).prefixed(String("--", p.name))
         return out^
 
     def run[
@@ -379,31 +377,31 @@ struct QueryCli(Movable):
         elif args.flag(String("describe")):
             print(self._plan)
         elif args.flag(String("explain")) or args.flag(String("analyze")):
-            # Refused before anything is printed: the JSON renderings are
-            # linked with `analyze`, so a binary built for `--explain` alone
-            # stays as small as it was.
+            # Refused before anything is printed: running and the JSON
+            # renderings are linked with `analyze`, so a binary built for
+            # `--explain` alone stays as small as it was.
             comptime if not analyze:
-                if args.get_or(String("report-json"), String()) or (
-                    args.get_or(String("trace"), String())
+                if (
+                    args.flag(String("analyze"))
+                    or args.get_or(String("report-json"), String())
+                    or args.get_or(String("trace"), String())
                 ):
                     _exit_with(
                         self._parser.prog
-                        + ": error: --report-json and --trace: this binary"
-                        " was built without them; build it with"
+                        + ": error: --analyze, --report-json and --trace:"
+                        " this binary was built without them; build it with"
                         " `QueryCli(plan).run[analyze=True]()`",
                         1,
                     )
                     return
             try:
-                var report = self._report[estimates, analyze](args, values, ctx)
-                print(report)
                 comptime if analyze:
-                    var path = args.get_or(String("report-json"), String())
-                    if path:
-                        _write_text(path, report.to_json())
-                    var trace = args.get_or(String("trace"), String())
-                    if trace:
-                        _write_text(trace, report.to_trace_json())
+                    if args.flag(String("analyze")):
+                        self._profile[estimates](args, values, ctx)
+                    else:
+                        self._explain[estimates, analyze](args, values, ctx)
+                else:
+                    self._explain[estimates, analyze](args, values, ctx)
             except e:
                 _exit_with(self._parser.prog + ": error: " + _unprefixed(e), 1)
         else:
@@ -412,25 +410,35 @@ struct QueryCli(Movable):
             except e:
                 _exit_with(self._parser.prog + ": error: " + _unprefixed(e), 1)
 
-    def _report[
-        estimates: Bool, analyze: Bool
-    ](
-        self, args: ParsedArgs, values: Bindings, ctx: ExecContext
-    ) raises -> PlanReport:
-        """The plan's report: run under `--analyze`, a dry run otherwise."""
-        if args.flag(String("analyze")):
-            comptime if analyze:
-                return self._plan.explain[analyze=True, estimates=estimates](
-                    ctx,
-                    bindings=values,
-                    trace=Bool(args.get_or(String("trace"), String())),
-                )
-            else:
-                raise NotImplementedError(
-                    "--analyze: this binary was built without it; build it"
-                    " with `QueryCli(plan).run[analyze=True]()`"
-                )
-        return self._plan.explain[estimates=estimates](ctx, bindings=values)
+    def _explain[
+        estimates: Bool, json: Bool
+    ](self, args: ParsedArgs, values: Bindings, ctx: ExecContext) raises:
+        """Print the plan's phases, without running it; with `json`, also
+        write them where `--report-json` says."""
+        var report = self._plan.explain[estimates=estimates](
+            ctx, bindings=values
+        )
+        print(report)
+        comptime if json:
+            var path = args.get_or(String("report-json"), String())
+            if path:
+                _write_text(path, report.to_json())
+
+    def _profile[
+        estimates: Bool
+    ](self, args: ParsedArgs, values: Bindings, ctx: ExecContext) raises:
+        """Run the plan and print what each phase did; write the profile where
+        `--report-json` says and its timeline where `--trace` says."""
+        var trace = args.get_or(String("trace"), String())
+        var profile = self._plan.profile[estimates=estimates](
+            ctx, bindings=values, trace=Bool(trace)
+        )
+        print(profile)
+        var path = args.get_or(String("report-json"), String())
+        if path:
+            _write_text(path, profile.to_json())
+        if trace:
+            _write_text(trace, profile.to_trace_json())
 
     def _execute[
         parquet: Bool, ipc: Bool

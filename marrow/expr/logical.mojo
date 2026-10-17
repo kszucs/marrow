@@ -51,7 +51,7 @@ from ..errors import (
     TypeError,
 )
 from ..arrays import BoolArray, DynArray, StructArray
-from ..execution import PARALLEL_ENABLED, ExecContext
+from ..execution import ExecContext
 from ..kernels.join import (
     BUILD_LEFT,
     BUILD_RIGHT,
@@ -100,46 +100,47 @@ from .physical import (
     CallEvaluator,
     ColumnOperator,
     FoldMode,
-    Datum,
     EvalOperator,
     Evaluable,
     FrameEvaluator,
     AggregateLowering,
     GroupedAggregateOperator,
     UngroupedAggregateOperator,
-    DynOperator,
     LimitOperator,
-    Pipeline,
     FilterOperator,
     JoinBuild,
+    JoinColumns,
     JoinOperator,
     JoinOrder,
-    FileScanOperator,
-    IcebergScanOperator,
     ProjectOperator,
     MultisetOperator,
     RenamedPredicate,
     SelectOperator,
     SortOperator,
+    TopNOperator,
+    UnmatchedSource,
     WindowOperator,
 )
 from ..formats.avro import AvroFormat
 from ..formats import Format
 from ..formats.ipc import IpcFormat
 from ..formats.json import JsonFormat
-from ..engine import (
-    Driver,
-    IpcSource,
-    OperatorSource,
+from .scans import (
+    FormatStream,
+    IcebergScanStream,
     RowGroupSource,
+)
+from ..engine import (
+    MORSEL_ROWS,
+    Datum,
+    Driver,
+    DynOperator,
     Phase,
+    Pipeline,
+    PlanProfile,
     PlanReport,
-    TableSource,
-    UnmatchedSource,
-    all_blocking,
+    StreamSource,
     append_each,
-    rows_bound,
-    rows_of,
     runs_in_parallel,
 )
 
@@ -1512,10 +1513,44 @@ struct DynRelation(Copyable, Movable, Writable):
     def lower(
         self, mut driver: Driver, bindings: Bindings = Bindings()
     ) raises -> List[Phase]:
-        # The node's estimate is taken here, where the node is already boxed:
-        # boxing a node inside its own lowering wires that lowering again.
-        driver.entering(self)
-        return self._virt_lower(self._v, driver, bindings)
+        # The node enters here, where it is already boxed: boxing a node
+        # inside its own lowering wires that lowering again. It leaves even
+        # when lowering raises, so the driver keeps no pointer to it.
+        driver.entering(self._erased())
+        var phases: List[Phase]
+        try:
+            phases = self._virt_lower(self._v, driver, bindings)
+        except e:
+            driver.leaving()
+            raise e^
+        driver.leaving()
+        return phases^
+
+    def reported_rows(self, driver: Driver) -> Int:
+        """This plan's estimated rows, when `driver` reports estimates; -1
+        otherwise."""
+        return driver.estimate(self._erased())
+
+    def _erased(self) -> OpaquePointer[MutUntrackedOrigin]:
+        """This plan behind an erased pointer, which the driver estimates
+        through: valid while `self` is."""
+        return (
+            Pointer(to=self)
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+            .unsafe_bitcast[NoneType]()
+        )
+
+    @staticmethod
+    def _estimated_rows(plan: OpaquePointer[MutUntrackedOrigin]) -> Int:
+        """The estimated rows of the plan `plan` points at, or -1 when
+        nothing bounds them: what a driver reports with."""
+        try:
+            var rows = plan.unsafe_bitcast[DynRelation]()[].estimate().rows
+            var known = rows.known()
+            return known.value() if known else -1
+        except:
+            return -1
 
     def write_to[W: Writer](self, mut writer: W):
         def job[T: Relation](node: T) raises {imm} -> String:
@@ -1747,7 +1782,11 @@ struct DynRelation(Copyable, Movable, Writable):
         return Project(self.copy(), out_names^, out_values^)
 
     def limit(self, length: Int, offset: Int = 0) raises -> DynRelation:
-        """`OFFSET offset LIMIT length`."""
+        """`OFFSET offset LIMIT length`; both must be at least 0."""
+        if length < 0 or offset < 0:
+            raise InvalidError(
+                t"limit: a negative length ({length}) or offset ({offset})"
+            )
         return Limit(self.copy(), offset, length)
 
     def sort_by(
@@ -1907,29 +1946,48 @@ struct DynRelation(Copyable, Movable, Writable):
         )
 
     def explain[
-        analyze: Bool = False, estimates: Bool = True
+        estimates: Bool = True
+    ](
+        self,
+        ctx: ExecContext = ExecContext.auto(),
+        bindings: Bindings = Bindings(),
+        morsel_rows: Int = MORSEL_ROWS,
+    ) raises -> PlanReport:
+        """The phases that would run this plan, in the order they would run,
+        without reading a row.
+
+        Where a dry run leaves a barrier unfilled, the report shows the
+        input's estimated rows; `estimates=False` leaves them unknown and the
+        optimizer's estimates unlinked. `morsel_rows` sizes the morsels of an
+        in-memory table."""
+        var driver = Driver.explain(ctx, morsel_rows)
+        comptime if estimates:
+            driver.estimate_with(Self._estimated_rows)
+        _ = driver.run(self.lower(driver, bindings))
+        return driver.plan_report(self.reported_rows(driver))
+
+    def profile[
+        estimates: Bool = True
     ](
         self,
         ctx: ExecContext = ExecContext.auto(),
         bindings: Bindings = Bindings(),
         trace: Bool = False,
-    ) raises -> PlanReport:
-        """The phases that would run this plan, in the order they would run,
-        without reading a row. With `analyze`, the plan runs, and the report
-        shows what each phase, stage and worker did and how long it took.
-
-        Where a dry run leaves a barrier unfilled, the report shows the
-        input's estimated rows; `estimates=False` leaves them unknown and the
-        optimizer's estimates unlinked. Both are comptime, so a binary links
-        only the inspection it asks for. With `analyze` and `trace`, the report
-        also holds every stage call and morsel read as a timeline slice, for
-        `PlanReport.to_trace_json`."""
-        comptime if analyze:
-            var driver = Driver.analyze[estimates](ctx, trace=trace)
-            return driver.inspect(self, bindings)
-        else:
-            var driver = Driver.explain[estimates](ctx)
-            return driver.inspect(self, bindings)
+        morsel_rows: Int = MORSEL_ROWS,
+    ) raises -> PlanProfile:
+        """Run this plan and answer what each phase, stage and worker did and
+        how long it took. With `trace`, the profile also holds every stage
+        call and morsel read as a timeline slice, for
+        `PlanProfile.to_trace_json`. `estimates` and `morsel_rows` as for
+        `explain`."""
+        var driver = Driver.profile(ctx, morsel_rows, trace)
+        comptime if estimates:
+            driver.estimate_with(Self._estimated_rows)
+        var since = driver.clock()
+        var result = driver.collect(self.lower(driver, bindings), self.schema())
+        return driver.plan_profile(
+            since, len(result), self.reported_rows(driver)
+        )
 
 
 struct EmptyRelation(Relation, Writable):
@@ -1976,12 +2034,7 @@ struct EmptyRelation(Relation, Writable):
     def lower(
         self, mut driver: Driver, bindings: Bindings = Bindings()
     ) raises -> List[Phase]:
-        return [
-            Phase(
-                TableSource.of([self.batch.to_struct_array()]),
-                driver.ctx.copy(),
-            )
-        ]
+        return [driver.table(self.batch.to_struct_array())]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Empty(", len(self.batch.schema), " cols)")
@@ -2058,13 +2111,7 @@ struct InMemoryTable(Relation, Writable):
     ) raises -> List[Phase]:
         """A source relation: every other node appends to, or runs, the
         phases below it."""
-        return [
-            driver.phase(
-                TableSource.sliced(
-                    self.batch.to_struct_array(), driver.morsel_rows
-                )
-            )
-        ]
+        return [driver.table(self.batch.to_struct_array())]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("InMemoryTable(", self.batch.num_rows(), " rows)")
@@ -2574,35 +2621,34 @@ struct Aggregate(Relation, Writable):
     def lower(
         self, mut driver: Driver, bindings: Bindings = Bindings()
     ) raises -> List[Phase]:
-        # Before the input lowers, which enters in turn.
-        var rows = driver.entered()
         var phases = self.input[].lower(driver, bindings)
-        comptime if PARALLEL_ENABLED:
-            if runs_in_parallel(phases):
-                # Every worker folds what it reads into partial states; the
-                # states of one group, wherever they were folded, then meet
-                # in one morsel and are combined there.
-                for i in range(len(phases)):
-                    self._append(
-                        phases[i],
-                        FoldMode.partial(),
-                        bindings,
-                        self._label("partial"),
-                    )
-                var num_keys = len(self.keys)
-                var phase = driver.exchange(
-                    phases^, num_keys, "aggregate", rows
-                )
-                # The partial stage put the keys first, then one column of
-                # states per aggregate.
+        if runs_in_parallel(phases):
+            # Every worker folds what it reads into partial states; the
+            # states of one group, wherever they were folded, then meet
+            # in one morsel and are combined there.
+            for i in range(len(phases)):
                 self._append(
-                    phase,
-                    FoldMode.combine(num_keys),
+                    phases[i],
+                    FoldMode.partial(),
                     bindings,
-                    self._label("combine"),
+                    self._label("partial"),
                 )
-                return [phase^]
-        var phase = driver.barrier(phases^, "aggregate input", self.input[])
+            var num_keys = len(self.keys)
+            var phase = driver.exchange(
+                phases^, num_keys, "aggregate", driver.entered()
+            )
+            # The partial stage put the keys first, then one column of
+            # states per aggregate.
+            self._append(
+                phase,
+                FoldMode.combine(num_keys),
+                bindings,
+                self._label("combine"),
+            )
+            return [phase^]
+        var phase = driver.barrier(
+            phases^, "aggregate input", self.input[].reported_rows(driver)
+        )
         self._append(phase, FoldMode.final(), bindings, self._label(""))
         return [phase^]
 
@@ -2619,7 +2665,8 @@ struct Aggregate(Relation, Writable):
         var schema = self.input[].schema()
         var num_keys = len(self.keys)
         var grouped = num_keys > 0
-        for w in range(phase.workers()):
+
+        def stage(mut pipeline: Pipeline, ctx: ExecContext) raises {imm}:
             var folds = List[DynOperator](capacity=len(self.aggs))
             for i in range(len(self.aggs)):
                 var fold_mode = mode
@@ -2639,31 +2686,32 @@ struct Aggregate(Relation, Writable):
                         self.keys[i].to_operator(schema, False, bindings)
                     )
             self._lowering(
-                phase.pipelines[w],
+                pipeline,
                 keys^,
                 folds^,
                 self._schema.copy(),
-                phase.ctx.copy(),
+                ctx.copy(),
                 mode.is_partial(),
             )
-        phase.stages.append(label)
-        phase.blocking = True
+
+        phase.append_lowered(stage, label, blocks=True)
 
     def _label(self, mode: String) -> String:
         """This aggregate's stage, for a plan report: `mode`, the aggregates
         and the keys."""
+        var aggs = List[String](capacity=len(self.aggs))
+        for ref a in self.aggs:
+            var name = a.name()
+            aggs.append(String(a, " as ", name) if name else String(a))
+        var keys = List[String](capacity=len(self.keys))
+        for ref k in self.keys:
+            keys.append(String(k))
         var out = String("Aggregate(")
         if mode:
             out += mode + ": "
-        for i in range(len(self.aggs)):
-            out += String(", " if i > 0 else "", self.aggs[i])
-            var name = self.aggs[i].name()
-            if name:
-                out += " as " + name
-        if len(self.keys) > 0:
-            out += " by "
-            for i in range(len(self.keys)):
-                out += String(", " if i > 0 else "", self.keys[i])
+        out += String(", ").join(aggs)
+        if len(keys) > 0:
+            out += " by " + String(", ").join(keys)
         return out + ")"
 
     def write_to[W: Writer](self, mut writer: W):
@@ -2738,7 +2786,7 @@ struct Limit(Relation, Writable):
         var phase = driver.barrier(
             self.input[].lower(driver, bindings),
             "limit input",
-            self.input[],
+            self.input[].reported_rows(driver),
             prefix,
             String("Limit(first ", keep, " per worker)"),
         )
@@ -2879,24 +2927,25 @@ struct Sort(Relation, Writable):
             # holding them: each morsel is cut to its own first rows, in
             # morsel order, and the cut ones sorted again.
             def top(ctx: ExecContext) raises {imm} -> DynOperator:
-                return SortOperator(
+                return TopNOperator(
                     keys(),
                     self.ascending.copy(),
                     self.nulls_first,
-                    self.limit,
+                    self.limit.value(),
                     ctx.copy(),
-                    per_morsel=True,
                 )
 
             phase = driver.barrier(
                 phases^,
                 "sort input",
-                self.input[],
+                self.input[].reported_rows(driver),
                 top,
                 String("TopN(", self.limit.value(), " per morsel)"),
             )
         else:
-            phase = driver.barrier(phases^, "sort input", self.input[])
+            phase = driver.barrier(
+                phases^, "sort input", self.input[].reported_rows(driver)
+            )
 
         def make(ctx: ExecContext) raises {imm} -> DynOperator:
             return SortOperator(
@@ -2907,17 +2956,15 @@ struct Sort(Relation, Writable):
                 ctx.copy(),
             )
 
-        var label = String("Sort(")
+        var parts = List[String](capacity=len(self.keys) + 1)
         for i in range(len(self.keys)):
-            label += String(
-                ", " if i > 0 else "",
-                self.keys[i],
-                " asc" if self.ascending[i] else " desc",
+            parts.append(
+                String(self.keys[i], " asc" if self.ascending[i] else " desc")
             )
         if self.limit:
-            label += String(", top ", self.limit.value())
-        phase.append_each(make, label + ")")
-        phase.blocking = True
+            parts.append(String("top ", self.limit.value()))
+        var label = String("Sort(", String(", ").join(parts), ")")
+        phase.append_each(make, label, blocks=True)
         return [phase^]
 
     def write_to[W: Writer](self, mut writer: W):
@@ -3050,7 +3097,9 @@ struct Window(Relation, Writable):
         # it descends through `Filter` alone. `Window` is not a `Filter`, so a
         # predicate above one cannot pass. `test_window.mojo` pins it.
         var phase = driver.barrier(
-            self.input[].lower(driver, bindings), "window input", self.input[]
+            self.input[].lower(driver, bindings),
+            "window input",
+            self.input[].reported_rows(driver),
         )
 
         def make(ctx: ExecContext) raises {imm} -> DynOperator:
@@ -3065,8 +3114,7 @@ struct Window(Relation, Writable):
         var label = String("Window(")
         for i in range(len(self.values)):
             label += String(", " if i > 0 else "", self.values[i])
-        phase.append_each(make, label + ")")
-        phase.blocking = True
+        phase.append_each(make, label + ")", blocks=True)
         return [phase^]
 
     def write_to[W: Writer](self, mut writer: W):
@@ -4262,40 +4310,18 @@ struct JoinChain(Relation, Writable):
             swap(left_on, right_on)
             swap(lcols, rcols)
         var side = j.link.build_side
-        var build = driver.run(left^, "join build")
-        var built = driver.last()
-        # The written side is a hint: a join whose answer does not depend on
-        # the side built builds the side with at most half the rows, once it
-        # knows both. A blocking probe side runs first, which costs nothing,
-        # as it emits only when drained; any other is bounded by its source's
-        # rows.
-        var build_rows = rows_of(build)
-        var flip = False
-        if build_rows > 0 and j.link.swappable():
-            if all_blocking(right):
-                var probed = driver.run(right^, "join input")
-                var probed_from = driver.last()
-                flip = 2 * rows_of(probed) < build_rows
-                if flip:
-                    right = [driver.materialised(build^, built^)]
-                    build = probed^
-                    built = probed_from^
-                else:
-                    right = [driver.materialised(probed^, probed_from^)]
-            else:
-                var bound = rows_bound(right)
-                flip = bound >= 0 and 2 * bound < build_rows
-                if flip:
-                    var flipped = driver.run(right^, "join build")
-                    right = [driver.materialised(build^, built^)]
-                    build = flipped^
-                    built = driver.last()
-        if flip:
+        # The written side is a hint to the driver for a join whose answer
+        # does not depend on the side built.
+        var sides = driver.build_side(left^, right, j.link.swappable())
+        if sides.swapped:
             swap(left_on, right_on)
             swap(lcols, rcols)
             side = BUILD_RIGHT if side == BUILD_LEFT else BUILD_LEFT
-        var build_fields = self._fields(lcols)
-        var probe_fields = self._fields(rcols)
+        var build = sides^.rows()
+        var phases = right^
+        var columns = JoinColumns(
+            joined^, self._fields(lcols), self._fields(rcols), select^, output^
+        )
         var since = driver.clock()
         var shared = ArcPointer(
             JoinBuild(
@@ -4305,11 +4331,7 @@ struct JoinChain(Relation, Writable):
                 j.link.kind,
                 j.link.strictness,
                 side,
-                joined^,
-                build_fields^,
-                probe_fields^,
-                select^,
-                output^,
+                columns^,
                 driver.ctx,
             )
         )
@@ -4319,9 +4341,9 @@ struct JoinChain(Relation, Writable):
         # rows the probes owe follow in a phase of their own, once every probe
         # phase has run.
         def make(ctx: ExecContext) raises {imm} -> DynOperator:
-            return JoinOperator(shared, shared[].probe_matches(), ctx.copy())
+            return JoinOperator(shared, ctx.copy())
 
-        var phases = right^
+        # A probe may answer several rows for one it is pushed.
         append_each(
             phases,
             make,
@@ -4332,17 +4354,10 @@ struct JoinChain(Relation, Writable):
                 "left" if side == BUILD_LEFT else "right",
                 ")",
             ),
+            grows=True,
         )
-        for p in range(len(phases)):
-            phases[p].inputs.extend(built.copy())
-            # A probe may answer several rows for one it is pushed.
-            phases[p].grows = True
         if shared[].owes_rows():
-            var tail = Phase(
-                UnmatchedSource(shared), driver.ctx.copy(), why="one morsel"
-            )
-            tail.follows = len(phases)
-            phases.append(tail^)
+            phases.append(driver.owed(UnmatchedSource(shared), len(phases)))
         self._land(phases, node, emitted, landings, bindings)
         if landed and root:
             var out = self.schema()
@@ -4579,7 +4594,9 @@ struct Multiset[M: Multiplicity](Relation, Writable):
             self.right[].lower(driver, bindings), "set operand"
         )
         var phase = driver.barrier(
-            self.left[].lower(driver, bindings), "set operand", self.left[]
+            self.left[].lower(driver, bindings),
+            "set operand",
+            self.left[].reported_rows(driver),
         )
 
         def make(ctx: ExecContext) raises {imm} -> DynOperator:
@@ -4590,8 +4607,8 @@ struct Multiset[M: Multiplicity](Relation, Writable):
         phase.append_each(
             make,
             String(Self.M.name(), "(all)" if self.all else ""),
+            blocks=True,
         )
-        phase.blocking = True
         return [phase^]
 
     def write_to[W: Writer](self, mut writer: W):
@@ -4889,10 +4906,10 @@ struct FormatScan[Fmt: Format](FileScan, Writable):
     ) raises -> List[Phase]:
         var paths = self.path.resolve(bindings)
         var name = String(Self.Fmt.name(), "Scan(", self.path, ")")
-        var scan = FileScanOperator[Self.Fmt](
+        var scan = FormatStream[Self.Fmt](
             paths^, self._schema.copy(), self.path.options()
         )
-        return [driver.phase(OperatorSource(scan^, name^))]
+        return [driver.phase(StreamSource(scan^, name^))]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.Fmt.name(), "Scan(", self.path, ")")
@@ -4924,7 +4941,8 @@ struct IcebergScan(FileScan, Writable):
     files by field id.
 
     The table's metadata is loaded when the scan is built (`scan_iceberg`);
-    its manifests are read when it first runs. `pruners` are predicates
+    its manifests are read as the plan runs or is explained, never while it
+    is built or optimized. `pruners` are predicates
     `PushFilterIntoScan` put here, used to skip data files whose recorded
     bounds and partition values cannot match.
     """
@@ -4977,15 +4995,21 @@ struct IcebergScan(FileScan, Writable):
         self, mut driver: Driver, bindings: Bindings = Bindings()
     ) raises -> List[Phase]:
         ref s = self._source[]
-        var scan = IcebergScanOperator(
-            s.table.copy(),
-            s.snapshot_id,
-            s.schema.copy(),
-            driver.ctx.copy(),
-            s.pruners.copy(),
-            bindings.copy(),
+        # Planning reads the snapshot's manifests, so it happens here, as the
+        # plan runs, never while it is built or optimized.
+        var since = driver.clock()
+        var tasks = IcebergScanStream.plan(
+            s.table, s.snapshot_id, s.schema, s.pruners, bindings, driver.ctx
         )
-        return [driver.phase(OperatorSource(scan^, String("IcebergScan")))]
+        driver.span("plan the Iceberg snapshot", since)
+        var scan = IcebergScanStream(
+            tasks^,
+            s.schema.copy(),
+            s.table.metadata.name_mapping(),
+            s.table.options.copy(),
+            driver.ctx.copy(),
+        )
+        return [driver.phase(StreamSource(scan^, String("IcebergScan")))]
 
     def write_to[W: Writer](self, mut writer: W):
         ref s = self._source[]

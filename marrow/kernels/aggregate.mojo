@@ -896,7 +896,7 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         """Every slot's accumulator and valid count, not yet finalized.
 
         The accumulator of an untouched slot is `K.identity`, and its count is
-        0, so `combine` leaves the slot it lands in unchanged."""
+        0, so `merge` leaves the slot it lands in unchanged."""
         var num_groups = self.acc.length()
         var acc = PrimitiveBuilder[Self.Acc](
             self.dtype, num_groups, zeroed=False
@@ -907,21 +907,15 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
             cnt.unsafe_append(Int64(self.cnt.unsafe_get(g)))
         return [acc.finish(), cnt.finish()]
 
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
         """Fold `partials` rows into the slots `groups` names, each through
         `combine_at`."""
-        var single = groups.is_single()
-        self.reserve(1 if single else groups.num_groups)
+        self.reserve(groups.num_groups)
         ref acc = partials[0].as_primitive[Self.Acc]()
         var accs = acc.values()
         var cnts = partials[1].as_int64().values()
-        if single:
-            for i in range(len(acc)):
-                self.combine_at(0, accs[i], Int(cnts[i]))
-        else:
-            var gids = groups.ids.values()
-            for i in range(len(acc)):
-                self.combine_at(Int(gids[i]), accs[i], Int(cnts[i]))
+        for i in range(len(acc)):
+            self.combine_at(groups.slot(i), accs[i], Int(cnts[i]))
 
     def finish(mut self) raises -> PrimitiveArray[Self.Acc]:
         """Finalize into the typed output column. A group with no valid rows is
@@ -1042,8 +1036,16 @@ trait AggKernel(Deinitable, Kernel, Movable):
         family with a different trait, not a longer list."""
         ...
 
-    def __init__(out self, in_dtype: DynType) raises:
-        """A fresh accumulator ready to absorb columns of `in_dtype`.
+    def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
+        """A fresh accumulator ready to absorb columns of `in_dtype`, into
+        slots a `GROUP BY` assigns when `grouped`, else into one.
+
+        An ungrouped aggregate holds its one slot from here on: an input that
+        produced no batch still owes one row — `sum` of nothing is one NULL,
+        `count` of nothing is one 0. A grouped one starts with no slots, so a
+        grouped query that saw no rows answers no rows. Knowing the mode up
+        front is also what lets an aggregate keep different state for the two:
+        a whole-column sketch is wider than a per-group one.
 
         **Construction, not a lifecycle step.** `Value.to_operator` takes the
         input schema, so the dtype is known wherever an aggregate is
@@ -1062,26 +1064,13 @@ trait AggKernel(Deinitable, Kernel, Movable):
         ...
 
     def reserve(mut self, slots: Int) raises:
-        """Ensure `slots` per-group slots exist, seeded with this aggregate's
-        empty answer.
+        """Ensure `slots` slots exist, seeded with this aggregate's empty
+        answer.
 
-        **The zero-morsel seed, and the fused scatter's growth.** `update`
-        grows the state on its own; this exists for the one case `update`
-        never sees — an aggregate over an input that produced no batch at all,
-        which still owes one row per slot. `sum` of nothing is one NULL,
-        `count` of nothing is one 0, and neither is "no rows". A caller of
-        `Foldable.scatter` also calls it once per morsel, since `scatter` does
-        not grow.
-
-        It replaced `Foldable.grow`, which said the same thing but only for the
-        aggregates that fold: the seed is not lane machinery, so it does not
-        belong on the lane protocol. Putting it here also unified the three
-        per-conformer `_grow` length conventions that had drifted apart.
-
-        Defaults to `pass`, so an aggregate whose state needs no per-slot
-        allocation says nothing. All five conformers do need it and all five
-        override; the default is for the sixth."""
-        pass
+        `update` and `merge` grow the state on their own; a caller of
+        `Foldable.scatter` calls this once per morsel, since `scatter` does
+        not grow, and a window seeds one slot per row with it."""
+        ...
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         """Absorb one morsel, already narrowed.
@@ -1109,12 +1098,12 @@ trait AggKernel(Deinitable, Kernel, Movable):
     def partials(mut self) raises -> List[DynArray]:
         """The state of every slot so far, as columns with one row per slot.
 
-        Nothing is finalized: the columns are what `combine` folds back in, so
+        Nothing is finalized: the columns are what `merge` folds back in, so
         aggregates over separate parts of an input combine into the aggregate
         of the whole. The state itself is left as it was."""
         ...
 
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
         """Fold rows of another aggregate's `partials` into this one.
 
         Row `i` lands in slot `groups.ids[i]`, or every row in slot 0 when
@@ -1135,7 +1124,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
         cannot be called on a temporary, so an instance `grouped` would turn
         every `Fold[SumFold, Int64Type].grouped(...)` into two statements. It
         needs no state of its own — it constructs one."""
-        var state = Self(input.type())
+        var state = Self(input.type(), not groups.is_single())
         state.update(groups, input)
         return state.finish()
 
@@ -1326,10 +1315,12 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     state to the same value — so the two were invariantly equal and the field
     was one more thing that could disagree."""
 
-    def __init__(out self, in_dtype: DynType) raises:
+    def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
         self._state = AggState[Self.K, Self.V](
             Self.K.acc_dtype[Self.V](Self._domain(in_dtype).as_type[Self.V]())
         )
+        if not grouped:
+            self._state.reserve(1)
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1403,8 +1394,8 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
         return self._state.partials()
 
     @no_inline
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
-        self._state.combine(groups, partials)
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
+        self._state.merge(groups, partials)
 
     # -- Foldable: the lane-facing half, forwarded onto `AggState` -----------
 
@@ -1442,7 +1433,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
             for i in range(len(input)):
                 if not valid[i]:
                     leaves[i] = P.identity()
-        var agg = Self(input.type())
+        var agg = Self(input.type(), True)
         agg.fold_frames(leaves, extents, frame)
         return agg.finish()
 
@@ -1488,10 +1479,12 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
     """Welford's triple, one slot each. The reason this is not a `Fold`: an
     `AggState` holds one accumulator column plus one count."""
 
-    def __init__(out self, in_dtype: DynType) raises:
+    def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
         self._n = List[Float64]()
         self._mean = List[Float64]()
         self._m2 = List[Float64]()
+        if not grouped:
+            self.reserve(1)
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1519,7 +1512,7 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
         self._m2[g] += delta * (x - self._mean[g])
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
-        self.reserve(1 if groups.is_single() else groups.num_groups)
+        self.reserve(groups.num_groups)
         ref values = input
         var has_null = values.null_count() > 0
         var vals = values.values()
@@ -1560,14 +1553,13 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
         ]
 
     @no_inline
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
-        var single = groups.is_single()
-        self.reserve(1 if single else groups.num_groups)
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
+        self.reserve(groups.num_groups)
         var n = partials[0].as_float64().values()
         var mean = partials[1].as_float64().values()
         var m2 = partials[2].as_float64().values()
         for i in range(len(partials[0])):
-            var g = 0 if single else Int(groups.ids.unsafe_get(i))
+            var g = groups.slot(i)
             var nb = Float64(n[i])
             if nb == 0.0:
                 continue
@@ -1603,8 +1595,10 @@ struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
     """The winning value per slot, not its row index — an index is only
     meaningful inside the morsel it came from."""
 
-    def __init__(out self, in_dtype: DynType) raises:
+    def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
         self._best = List[Optional[String]]()
+        if not grouped:
+            self.reserve(1)
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1632,7 +1626,7 @@ struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         """No dispatch: `T` is the input's type, so the scan is monomorphized.
         The `dispatch_stringlike` this ran once per morsel is gone."""
-        self.reserve(1 if groups.is_single() else groups.num_groups)
+        self.reserve(groups.num_groups)
         var has_null = input.null_count() > 0
         if groups.is_single():
             for i in range(len(input)):
@@ -1654,15 +1648,12 @@ struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
         return [Self.A.from_values(self._best)]
 
     @no_inline
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
-        var single = groups.is_single()
-        self.reserve(1 if single else groups.num_groups)
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
+        self.reserve(groups.num_groups)
         var best = Self.A(partials[0].to_data())
         for i in range(len(best)):
-            if not best.is_valid(i):
-                continue
-            var g = 0 if single else Int(groups.ids.unsafe_get(i))
-            self._offer(g, best.unsafe_get(UInt(i)))
+            if best.is_valid(i):
+                self._offer(groups.slot(i), best.unsafe_get(UInt(i)))
 
 
 struct ValidCount[A: Array](Windowable):
@@ -1697,8 +1688,10 @@ struct ValidCount[A: Array](Windowable):
     """One running count per slot. Grows with `groups.num_groups`; ids already
     handed out are never renumbered, so growing in place is sound."""
 
-    def __init__(out self, in_dtype: DynType) raises:
+    def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
         self._counts = List[Int64]()
+        if not grouped:
+            self.reserve(1)
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1706,13 +1699,12 @@ struct ValidCount[A: Array](Windowable):
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         ref column = input
+        self.reserve(groups.num_groups)
         if groups.is_single():
             # A valid count is metadata. Losing this branch would turn
             # `count(x)` with no GROUP BY from O(1) into O(n).
-            self.reserve(1)
             self._counts[0] += Int64(len(column) - column.null_count())
             return
-        self.reserve(groups.num_groups)
         var gids = groups.ids.values()
         # The bitmap once, not `is_valid(i)` per row — on an erased column that
         # per-row call was a `_dispatch` walk and measured 4.9x against a typed
@@ -1744,13 +1736,11 @@ struct ValidCount[A: Array](Windowable):
         return [self.finish()]
 
     @no_inline
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
-        var single = groups.is_single()
-        self.reserve(1 if single else groups.num_groups)
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
+        self.reserve(groups.num_groups)
         var counts = partials[0].as_int64().values()
         for i in range(len(partials[0])):
-            var g = 0 if single else Int(groups.ids.unsafe_get(i))
-            self._counts[g] += Int64(counts[i])
+            self._counts[groups.slot(i)] += Int64(counts[i])
 
     @staticmethod
     def over(
@@ -1794,17 +1784,22 @@ struct DistinctCount[A: Array](AggKernel):
     comptime InArray = Self.A
     comptime OutArray = Int64Array
 
-    var _in_dtype: DynType
-    var _encoder: Optional[DictionaryEncoder[KeyHash]]
-    """The pairs seen so far — the value alone at one slot. Built at the first
-    `update`, which is when the slot count is known."""
+    var _grouped: Bool
+    var _encoder: DictionaryEncoder[KeyHash]
+    """The `(slot, value)` pairs seen so far — the value alone at one slot."""
     var _counts: List[Int64]
     """The running distinct count per slot."""
 
-    def __init__(out self, in_dtype: DynType) raises:
-        self._in_dtype = in_dtype.copy()
-        self._encoder = None
+    def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
+        self._grouped = grouped
+        var types = List[DynType]()
+        if grouped:
+            types.append(DynType(int32))
+        types.append(in_dtype.copy())
+        self._encoder = DictionaryEncoder[KeyHash](types^, ExecContext.serial())
         self._counts = List[Int64]()
+        if not grouped:
+            self.reserve(1)
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1817,26 +1812,24 @@ struct DistinctCount[A: Array](AggKernel):
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         ref value = input
-        var single = groups.is_single()
-        self.reserve(1 if single else groups.num_groups)
+        self.reserve(groups.num_groups)
         var has_null = value.null_count() > 0
-        self._encoder_for(single)
         # The pair `(group, value)` is what makes one encoder serve every
         # slot: a row is new when its pair is new, which is when the pair is
         # given a code. At one slot the group is constant, so the value alone
         # identifies the pair.
         var columns = List[DynArray]()
-        if not single:
+        if self._grouped:
             columns.append(groups.ids.copy().to_dyn())
         columns.append(input.copy().to_dyn())
-        var firsts = self._encoder.value().encode(columns).firsts.copy()
+        var firsts = self._encoder.encode(columns).firsts.copy()
         # Each new pair is counted once, at the row that introduced it; a pair
         # whose value is NULL is not counted at all.
         for j in range(len(firsts)):
             var i = Int(firsts.unsafe_get(j))
             if has_null and not value.is_valid(i):
                 continue
-            var g = 0 if single else Int(groups.ids.unsafe_get(i))
+            var g = groups.slot(i)
             self._counts[g] += 1
 
     def finish(mut self) raises -> Self.OutArray:
@@ -1844,17 +1837,6 @@ struct DistinctCount[A: Array](AggKernel):
         for g in range(len(self._counts)):
             out.append(Scalar[int64.native](self._counts[g]))
         return out.finish()
-
-    def _encoder_for(mut self, single: Bool):
-        """Create the pair encoder on first use: the value alone at one slot,
-        `(slot, value)` otherwise."""
-        if self._encoder:
-            return
-        var types = List[DynType]()
-        if not single:
-            types.append(DynType(int32))
-        types.append(self._in_dtype.copy())
-        self._encoder = DictionaryEncoder[KeyHash](types^, ExecContext.serial())
 
     @no_inline
     def partials(mut self) raises -> List[DynArray]:
@@ -1869,36 +1851,33 @@ struct DistinctCount[A: Array](AggKernel):
             start.append(total)
             total += Int(self._counts[g])
             offsets.append(Int32(total))
-        var values: DynArray
-        if self._encoder:
-            var keys = self._encoder.value().values()
-            ref value = keys[len(keys) - 1]
-            var single = len(keys) == 1
-            # A counting sort of the pairs by slot: `order[start[g] + k]` is the
-            # code of slot `g`'s k-th value.
-            var order = List[Int32](length=total, fill=0)
-            if single:
-                for code in range(len(value)):
-                    if value.is_valid(code):
-                        order[start[0]] = Int32(code)
-                        start[0] += 1
-            else:
-                var gids = keys[0].as_int32().values()
-                for code in range(len(value)):
-                    if value.is_valid(code):
-                        var g = Int(gids[code])
-                        order[start[g]] = Int32(code)
-                        start[g] += 1
-            var indices = Int32Builder(total)
-            for k in range(total):
-                indices.append(order[k])
-            values = TakeKernel.dispatch(value, indices.finish(), ExecContext.serial())
+        var keys = self._encoder.values()
+        ref value = keys[len(keys) - 1]
+        # A counting sort of the pairs by slot: `order[start[g] + k]` is the
+        # code of slot `g`'s k-th value.
+        var order = List[Int32](length=total, fill=0)
+        if self._grouped:
+            var gids = keys[0].as_int32().values()
+            for code in range(len(value)):
+                if value.is_valid(code):
+                    var g = Int(gids[code])
+                    order[start[g]] = Int32(code)
+                    start[g] += 1
         else:
-            values = array(self._in_dtype)
+            for code in range(len(value)):
+                if value.is_valid(code):
+                    order[start[0]] = Int32(code)
+                    start[0] += 1
+        var indices = Int32Builder(total)
+        for k in range(total):
+            indices.append(order[k])
+        var values = TakeKernel.dispatch(
+            value, indices.finish(), ExecContext.serial()
+        )
         return [ListArray.from_arrays(offsets.finish(), values^)]
 
     @no_inline
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
         # A partial's values are rows like any other, each counted at most
         # once per slot: `update` over them, every element at its list's slot.
         ref lists = partials[0].as_list()
@@ -1933,15 +1912,16 @@ struct ApproxDistinctCount[A: Array](AggKernel):
     comptime InArray = Self.A
     comptime OutArray = Int64Array
 
-    var _groups: HyperLogLog[11]
-    """One sketch per slot: 2**11 registers, 2 KiB a group, bounds memory when
-    the group count is large."""
-    var _whole: HyperLogLog[HLL_P]
-    """Ungrouped: one sketch at the whole-array precision, else empty."""
+    var _sketches: HyperLogLog
+    """One sketch per slot: 2**11 registers, 2 KiB a group, which bounds memory
+    when the group count is large -- or, ungrouped, the one sketch at the
+    whole-column precision."""
 
-    def __init__(out self, in_dtype: DynType) raises:
-        self._groups = HyperLogLog[11]()
-        self._whole = HyperLogLog[HLL_P]()
+    def __init__(out self, in_dtype: DynType, grouped: Bool) raises:
+        if grouped:
+            self._sketches = HyperLogLog(11)
+        else:
+            self._sketches = HyperLogLog(HLL_P, 1)
 
     @staticmethod
     def dtype(in_dtype: DynType) raises -> DynType:
@@ -1949,16 +1929,11 @@ struct ApproxDistinctCount[A: Array](AggKernel):
         return DynType(int64)
 
     def reserve(mut self, slots: Int) raises:
-        if len(self._whole) == 0:
-            self._groups.grow(slots)
+        self._sketches.grow(slots)
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
         ref value = input
-        var single = groups.is_single()
-        if single:
-            self._whole.grow(1)
-        else:
-            self.reserve(groups.num_groups)
+        self.reserve(groups.num_groups)
         var has_null = value.null_count() > 0
         # `dispatch` and not `apply`: `apply` is overloaded per array family
         # and there is no `apply[A: Array]`, so a generic `A` selects none of
@@ -1968,58 +1943,38 @@ struct ApproxDistinctCount[A: Array](AggKernel):
             .dispatch(input.copy().to_dyn(), ExecContext.serial())
             .values()
         )
-        var n = len(value) if single else len(groups.ids)
-        for i in range(n):
+        for i in range(len(value)):
             if has_null and not value.is_valid(i):
                 continue
-            var h = UInt64(hv[i])
-            if single:
-                self._whole.add(0, h)
-            else:
-                self._groups.add(Int(groups.ids.unsafe_get(i)), h)
+            self._sketches.add(groups.slot(i), UInt64(hv[i]))
 
     def finish(mut self) raises -> Self.OutArray:
-        if len(self._whole) > 0:
-            var out = Int64Builder(1)
-            out.append(Scalar[int64.native](self._whole.estimate(0)))
-            return out.finish()
-        var out = Int64Builder(len(self._groups))
-        for g in range(len(self._groups)):
-            out.append(Scalar[int64.native](self._groups.estimate(g)))
+        var out = Int64Builder(len(self._sketches))
+        for g in range(len(self._sketches)):
+            out.append(Scalar[int64.native](self._sketches.estimate(g)))
         return out.finish()
 
     @no_inline
     def partials(mut self) raises -> List[DynArray]:
-        # The one ungrouped sketch travels whole, at its own precision.
-        if len(self._whole) > 0:
-            var whole = FixedSizeBinaryBuilder(self._whole.registers, 1)
-            whole.append(self._whole.sketch(0))
-            return [whole.finish()]
         var out = FixedSizeBinaryBuilder(
-            self._groups.registers, len(self._groups)
+            self._sketches.registers(), len(self._sketches)
         )
-        for g in range(len(self._groups)):
-            out.append(self._groups.sketch(g))
+        for g in range(len(self._sketches)):
+            out.append(self._sketches.sketch(g))
         return [out.finish()]
 
     @no_inline
-    def combine(mut self, groups: Groups, partials: List[DynArray]) raises:
-        var single = groups.is_single()
+    def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
         ref sketches = partials[0].as_fixed_size_binary()
         var width = sketches.byte_width
-        var whole = single and width == self._whole.registers
-        if whole:
-            self._whole.grow(1)
-        else:
-            self.reserve(1 if single else groups.num_groups)
-        # No typed accessor yields an element's bytes, so read the buffer.
-        var bytes = sketches.buffer.view[DType.uint8](sketches.offset * width)
+        if width != self._sketches.registers():
+            raise InvalidError(
+                t"approx_count_distinct: a sketch of {width} registers merged"
+                t" into sketches of {self._sketches.registers()}"
+            )
+        self.reserve(groups.num_groups)
+        var bytes = sketches.values()
         for i in range(len(sketches)):
-            var registers = bytes[i * width : (i + 1) * width].as_span()
-            if whole:
-                self._whole.merge(0, registers)
-            elif width == self._groups.registers:
-                self._groups.merge(
-                    0 if single else Int(groups.ids.unsafe_get(i)), registers
-                )
-            # Otherwise a part that saw no rows: its slot was never a sketch.
+            self._sketches.merge(
+                groups.slot(i), bytes[i * width : (i + 1) * width].as_span()
+            )

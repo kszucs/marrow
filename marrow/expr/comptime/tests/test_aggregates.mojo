@@ -37,7 +37,7 @@ from ....builders import TimestampBuilder
 from ....tabular import RecordBatch, record_batch
 from ....kernels.groupby import Groups
 from ...logical import DynValue
-from ...physical import Morsel
+from ....engine.core import Morsel
 from ..aggregates import Count, Max, Mean, Min, Product, Sum
 from ..leaves import NumericColumn, NumericLiteral
 from ..numeric import Mul

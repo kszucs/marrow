@@ -1,26 +1,24 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""The execution engine: phases, their sources, and the drivers that run
-them."""
+"""The execution engine: operators and their pipelines, phases, their sources,
+and the drivers that run them. It knows no plan: a plan lowers itself into
+phases (`marrow.expr`)."""
 
+from .core import Datum, DynOperator, Morsel, Operator, Pipeline
 from .driver import (
+    MORSEL_ROWS,
     Driver,
     Phase,
-    all_blocking,
     append_each,
-    rows_bound,
-    rows_of,
     runs_in_parallel,
 )
-from .report import PhaseReport, PlanReport
+from .report import PhaseReport, PhaseRun, PlanProfile, PlanReport
 from .sources import (
     DynSource,
-    IpcSource,
-    OperatorSource,
-    PlannedSource,
-    RowGroupSource,
     Source,
+    Stream,
+    StreamSource,
     TableSource,
-    UnmatchedSource,
+    rows_of,
 )

@@ -136,6 +136,12 @@ struct DynError(ImplicitlyCopyable, Writable):
         """Whether this is an `E`."""
         return self.kind == E.kind
 
+    @no_inline
+    def prefixed(self, context: String) -> Self:
+        """This error, its message prefixed by `context` — where it happened
+        — and its kind kept."""
+        return Self(self.kind, t"{context}: {self.message}")
+
     def write_to(self, mut writer: Some[Writer]):
         if self.kind:
             writer.write(self.kind, ": ")

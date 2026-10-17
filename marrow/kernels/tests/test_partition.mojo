@@ -22,12 +22,7 @@ from ...arrays import DynArray, StructArray, UInt64Array
 from ...builders import Int64Builder, UInt64Builder
 from ...dtypes import uint64
 from ...execution import ExecContext
-from ...kernels.partition import (
-    RadixPartitioner,
-    Partition,
-    partition_bits,
-    repartition,
-)
+from ...kernels.partition import Partition, RadixPartitioner
 from ...tabular import record_batch
 
 
@@ -149,13 +144,13 @@ def _batch(start: Int, n: Int) raises -> StructArray:
     return record_batch(cols^, names=["k", "v"]).to_struct_array()
 
 
-def test_partition_bits() raises:
-    assert_equal(partition_bits(1), 4)
-    assert_equal(partition_bits(4), 4)
-    assert_equal(partition_bits(12), 6)
-    assert_equal(partition_bits(16), 6)
-    assert_equal(partition_bits(17), 7)
-    assert_equal(partition_bits(1000), 9)
+def test_partitioner_bits_for_workers() raises:
+    assert_equal(RadixPartitioner.bits_for(1), 4)
+    assert_equal(RadixPartitioner.bits_for(4), 4)
+    assert_equal(RadixPartitioner.bits_for(12), 6)
+    assert_equal(RadixPartitioner.bits_for(16), 6)
+    assert_equal(RadixPartitioner.bits_for(17), 7)
+    assert_equal(RadixPartitioner.bits_for(1000), 9)
 
 
 def test_repartition_places_every_row_once_by_key() raises:
@@ -165,7 +160,9 @@ def test_repartition_places_every_row_once_by_key() raises:
         _batch(1000, 2500),
     ]
     var keys: List[Int] = [0]
-    var parts = repartition(batches, keys, 4, ExecContext.parallel(3))
+    var parts = RadixPartitioner(4, ExecContext.parallel(3)).repartition(
+        batches, keys
+    )
     assert_equal(len(parts), 16)
     # The partition each key (NULL as -1) landed in, and every value seen.
     var home = List[Int](length=98, fill=-1)
@@ -193,7 +190,9 @@ def test_repartition_places_every_row_once_by_key() raises:
 def test_repartition_no_batches() raises:
     var batches = List[StructArray]()
     var keys: List[Int] = [0]
-    var parts = repartition(batches, keys, 4, ExecContext.serial())
+    var parts = RadixPartitioner(4, ExecContext.serial()).repartition(
+        batches, keys
+    )
     assert_equal(len(parts), 16)
     for p in range(16):
         assert_equal(len(parts[p]), 0)

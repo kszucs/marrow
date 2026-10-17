@@ -18,7 +18,7 @@ from ...scalars import DynScalar, Int64Scalar
 from ...tabular import RecordBatch, record_batch
 from ..builders import col, lit
 from ..logical import DynValue, Shape
-from ..physical import Morsel
+from ...engine.core import Morsel
 
 
 def _batch() raises -> RecordBatch:

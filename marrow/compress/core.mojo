@@ -90,9 +90,8 @@ comptime Codecs = LibSet[
 """The system compression libraries every `Lib*` compressor calls into:
 what each is called, where to look for it, and one process-global holding
 all six. A program that reads only uncompressed Parquet opens nothing,
-because nothing touches this until a library method runs. Several threads
-about to call into these first open them with `Codecs.preload()`, as
-opening races."""
+because nothing touches this until a library method runs; the first thread
+that does opens them, while any other waits."""
 # One global for the set, not one per library: six cost `query_cli` ~16 KB
 # of `__text`, and the AOT lane is size-gated.
 
