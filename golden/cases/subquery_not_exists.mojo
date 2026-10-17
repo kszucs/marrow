@@ -15,11 +15,13 @@ def plan() raises -> DynRelation:
     so it is the twin that asks marrow's question. eid 5 (NULL dept) is
     the row that separates them.
 
+    -- skip python
+
     -- expected
     eid:int64	dept:int64
     4	99
     5	NULL
     """
-    var left = table("emp")
-    var joined = left.join(table("dept"), [1], [0], JOIN_ANTI)
-    return joined.sort_by([col("eid", int64)], [True])
+    var matching = table("dept").filter(eq(col("did"), outer("dept")))
+    var plan = table("emp").filter(not_(exists(matching)))
+    return plan.optimize[SubqueryRules]().sort_by([col("eid", int64)], [True])

@@ -475,3 +475,273 @@ def test_a_join_under_a_where_optimizes_to_one_join_chain(emp, dept):
         "cid",
     ]
     assert sorted(r["name"] for r in plan.collect().to_pylist()) == ["ann", "cid"]
+
+
+# ── subqueries, derived tables, CTEs and comma joins ───────────────────────
+
+
+@pytest.fixture
+def subq():
+    """`staff` has a NULL `dept` (eid 5) and a `dept` no unit has (eid 4):
+    the rows that tell EXISTS from IN and NOT EXISTS from NOT IN. `part`,
+    `partsupp`, `lineitem` and `supp` are TPC-H's, cut down to the columns
+    its subquery queries read; `lines` is three orders, one with a late
+    supplier."""
+    i64 = ma.int64()
+    return {
+        "staff": ma.record_batch(
+            {
+                "eid": ma.array([1, 2, 3, 4, 5], type=i64),
+                "dept": ma.array([10, 20, 20, 99, None], type=i64),
+            }
+        ),
+        "units": ma.record_batch(
+            {
+                "did": ma.array([10, 20, 30], type=i64),
+                "budget": ma.array([100, 300, 50], type=i64),
+            }
+        ),
+        "part": ma.record_batch(
+            {
+                "p_partkey": ma.array([1, 2, 3], type=i64),
+                "p_brand": ma.array(["a", "a", "b"]),
+            }
+        ),
+        "partsupp": ma.record_batch(
+            {
+                "ps_partkey": ma.array([1, 1, 2, 2, 3], type=i64),
+                "ps_suppkey": ma.array([7, 8, 8, 9, 9], type=i64),
+                "ps_availqty": ma.array([5, 6, 1, 3, 100], type=i64),
+            }
+        ),
+        "lineitem": ma.record_batch(
+            {
+                "l_partkey": ma.array([1, 1, 1, 2, 2, 3], type=i64),
+                "l_suppkey": ma.array([7, 7, 8, 8, 9, 9], type=i64),
+                "l_quantity": ma.array([1, 10, 10, 4, 4, 1], type=i64),
+                "l_price": ma.array([100, 200, 300, 400, 500, 600], type=i64),
+            }
+        ),
+        "supp": ma.record_batch(
+            {
+                "sid": ma.array([7, 8, 9], type=i64),
+                "sname": ma.array(["s7", "s8", "s9"]),
+            }
+        ),
+        "lines": ma.record_batch(
+            {
+                "l_orderkey": ma.array([1, 1, 2, 3, 3], type=i64),
+                "l_suppkey": ma.array([7, 8, 7, 7, 9], type=i64),
+                "late": ma.array([0, 0, 0, 0, 1], type=i64),
+            }
+        ),
+    }
+
+
+def column(query, tables, name):
+    return [r[name] for r in ma.sql(query, tables).collect().to_pylist()]
+
+
+def test_in_subquery(subq):
+    query = "SELECT eid FROM staff WHERE dept IN (SELECT did FROM units) ORDER BY eid"
+    assert column(query, subq, "eid") == [1, 2, 3]
+
+
+def test_a_planned_subquery_is_a_join(subq):
+    """`sql` decorrelates, so the plan it answers runs as it stands."""
+    plan = ma.sql("SELECT eid FROM staff WHERE dept IN (SELECT did FROM units)", subq)
+    assert "semi" in plan.explain()
+
+
+def test_not_in_subquery_is_three_valued(subq):
+    """A NULL operand is unknown against a non-empty subquery, true against
+    an empty one; a NULL in the subquery makes every miss unknown."""
+    assert column(
+        "SELECT eid FROM staff WHERE dept NOT IN (SELECT did FROM units) ORDER BY eid",
+        subq,
+        "eid",
+    ) == [4]
+    assert column(
+        "SELECT eid FROM staff WHERE dept NOT IN "
+        "(SELECT did FROM units WHERE did > 1000) ORDER BY eid",
+        subq,
+        "eid",
+    ) == [1, 2, 3, 4, 5]
+    assert (
+        column(
+            "SELECT did FROM units WHERE did NOT IN (SELECT dept FROM staff)",
+            subq,
+            "did",
+        )
+        == []
+    )
+
+
+def test_exists_and_not_exists(subq):
+    exists = (
+        "SELECT eid FROM staff s WHERE {} EXISTS "
+        "(SELECT 1 FROM units u WHERE u.did = s.dept) ORDER BY eid"
+    )
+    assert column(exists.format(""), subq, "eid") == [1, 2, 3]
+    # The NULL key matches nothing, so NOT EXISTS keeps it.
+    assert column(exists.format("NOT"), subq, "eid") == [4, 5]
+
+
+def test_an_unqualified_column_falls_back_to_the_enclosing_query(subq):
+    query = (
+        "SELECT eid FROM staff WHERE EXISTS "
+        "(SELECT * FROM units WHERE did = dept AND budget > 200) ORDER BY eid"
+    )
+    assert column(query, subq, "eid") == [2, 3]
+
+
+def test_uncorrelated_scalar_subquery(subq):
+    query = (
+        "SELECT eid FROM staff WHERE eid > (SELECT count(*) FROM units) ORDER BY eid"
+    )
+    assert column(query, subq, "eid") == [4, 5]
+    query = "SELECT eid, (SELECT max(budget) FROM units) AS top FROM staff ORDER BY eid"
+    assert column(query, subq, "top") == [300] * 5
+
+
+def test_correlated_count_is_zero_where_nothing_matches(subq):
+    query = (
+        "SELECT eid, (SELECT count(*) FROM units u WHERE u.did = s.dept) AS n "
+        "FROM staff s ORDER BY eid"
+    )
+    assert column(query, subq, "n") == [1, 1, 1, 0, 0]
+
+
+def test_scalar_subquery_with_two_rows_raises(subq):
+    with pytest.raises(Exception, match="at most one"):
+        ma.sql(
+            "SELECT eid FROM staff WHERE eid > (SELECT did FROM units)", subq
+        ).collect()
+
+
+def test_scalar_subquery_must_select_one_column(subq):
+    with pytest.raises(ma.ArrowInvalid, match="sql: a subquery used as a value"):
+        ma.sql(
+            "SELECT eid FROM staff WHERE eid > (SELECT did, budget FROM units)", subq
+        )
+
+
+def test_q17_correlated_aggregate(subq):
+    query = (
+        "SELECT sum(l_price) AS total FROM lineitem, part "
+        "WHERE p_partkey = l_partkey AND p_brand = 'a' AND l_quantity < "
+        "(SELECT 0.5 * avg(l_quantity) FROM lineitem WHERE l_partkey = p_partkey)"
+    )
+    assert column(query, subq, "total") == [100]
+
+
+def test_q21_residual_correlation_by_alias(subq):
+    """`lines` is read three times; only the alias says which."""
+    query = (
+        "SELECT s.sname, l1.l_orderkey FROM supp s, lines l1 "
+        "WHERE s.sid = l1.l_suppkey "
+        "AND EXISTS (SELECT * FROM lines l2 WHERE l2.l_orderkey = l1.l_orderkey "
+        "AND l2.l_suppkey <> l1.l_suppkey) "
+        "AND NOT EXISTS (SELECT * FROM lines l3 WHERE l3.l_orderkey = l1.l_orderkey "
+        "AND l3.l_suppkey <> l1.l_suppkey AND l3.late = 1) "
+        "ORDER BY l1.l_orderkey, s.sname"
+    )
+    assert ma.sql(query, subq).collect().to_pylist() == [
+        {"sname": "s7", "l_orderkey": 1},
+        {"sname": "s8", "l_orderkey": 1},
+        {"sname": "s9", "l_orderkey": 3},
+    ]
+
+
+def test_q20_nested_subqueries(subq):
+    query = (
+        "SELECT sname FROM supp WHERE sid IN (SELECT ps_suppkey FROM partsupp "
+        "WHERE ps_partkey IN (SELECT p_partkey FROM part WHERE p_brand = 'a') "
+        "AND ps_availqty > (SELECT 0.5 * sum(l_quantity) FROM lineitem "
+        "WHERE l_partkey = ps_partkey AND l_suppkey = ps_suppkey)) ORDER BY sname"
+    )
+    assert column(query, subq, "sname") == ["s8", "s9"]
+
+
+def test_q15_cte_read_twice(subq):
+    query = (
+        "WITH revenue AS (SELECT l_suppkey AS supplier_no, sum(l_price) AS total "
+        "FROM lineitem GROUP BY l_suppkey) "
+        "SELECT s.sid, r.total FROM supp s, revenue r "
+        "WHERE s.sid = r.supplier_no AND r.total = (SELECT max(total) FROM revenue)"
+    )
+    assert ma.sql(query, subq).collect().to_pylist() == [{"sid": 9, "total": 1100}]
+
+
+def test_a_cte_reads_an_earlier_one_and_shadows_a_table(subq):
+    query = (
+        "WITH units AS (SELECT did FROM units WHERE budget > 60), "
+        "big AS (SELECT did FROM units WHERE did > 10) "
+        "SELECT eid FROM staff WHERE dept IN (SELECT did FROM big) ORDER BY eid"
+    )
+    assert column(query, subq, "eid") == [2, 3]
+
+
+def test_derived_table(subq):
+    query = (
+        "SELECT x.dept, x.n FROM (SELECT dept, count(*) AS n FROM staff "
+        "GROUP BY dept) AS x WHERE x.n > 1"
+    )
+    assert ma.sql(query, subq).collect().to_pylist() == [{"dept": 20, "n": 2}]
+
+
+def test_comma_join_picks_its_keys_out_of_where(subq):
+    """`supp` shares no column with `part`, so it waits for `partsupp`; `*`
+    still lists the tables as written."""
+    plan = ma.sql(
+        "SELECT * FROM part p, supp s, partsupp ps "
+        "WHERE p.p_partkey = ps.ps_partkey AND s.sid = ps.ps_suppkey "
+        "AND p.p_brand = 'b'",
+        subq,
+    )
+    assert plan.column_names == [
+        "p_partkey",
+        "p_brand",
+        "sid",
+        "sname",
+        "ps_partkey",
+        "ps_suppkey",
+        "ps_availqty",
+    ]
+    assert plan.collect().to_pylist() == [
+        {
+            "p_partkey": 3,
+            "p_brand": "b",
+            "sid": 9,
+            "sname": "s9",
+            "ps_partkey": 3,
+            "ps_suppkey": 9,
+            "ps_availqty": 100,
+        }
+    ]
+
+
+def test_comma_and_explicit_joins_mix(subq):
+    query = (
+        "SELECT s.sname, ps.ps_partkey FROM supp s JOIN partsupp ps "
+        "ON s.sid = ps.ps_suppkey, part p "
+        "WHERE p.p_partkey = ps.ps_partkey AND p.p_brand = 'b'"
+    )
+    assert ma.sql(query, subq).collect().to_pylist() == [
+        {"sname": "s9", "ps_partkey": 3}
+    ]
+
+
+def test_comma_join_without_an_equality_is_refused(subq):
+    with pytest.raises(NotImplementedError, match="cross joins are not supported"):
+        ma.sql("SELECT eid FROM staff, units WHERE eid > did", subq)
+
+
+def test_correlation_two_levels_out_is_refused(subq):
+    with pytest.raises(NotImplementedError, match="2 levels out"):
+        ma.sql(
+            "SELECT eid FROM staff s WHERE EXISTS (SELECT 1 FROM units u "
+            "WHERE u.did = s.dept AND EXISTS "
+            "(SELECT 1 FROM part p WHERE p.p_partkey = s.eid))",
+            subq,
+        )

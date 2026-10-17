@@ -44,6 +44,12 @@ def render(ast: Ast, i: Int) -> String:
         return String("*") if n.qualifier == "" else n.qualifier + ".*"
     if n.kind == "cast":
         return "(cast " + render(ast, n.a) + " " + n.text + ")"
+    if n.kind == "subquery" or n.kind == "exists":
+        return "(" + n.kind + " #" + String(n.value) + ")"
+    if n.kind.endswith("in_subquery"):
+        return (
+            "(" + n.kind + " " + render(ast, n.a) + " #" + String(n.value) + ")"
+        )
 
     var out = "(" + (n.text if n.kind == "func" else n.kind)
     if n.distinct:
@@ -392,6 +398,113 @@ def test_bare_join_is_inner() raises:
     var ast = Parser.parse("SELECT * FROM a JOIN b ON a.x = b.x")
     assert_true(ast.ok(), ast.error)
     assert_equal(ast.select.joins[0].kind, "inner")
+
+
+def test_comma_separated_from_items() raises:
+    var ast = Parser.parse("SELECT * FROM a x, b, c z JOIN d ON z.k = d.k")
+    assert_true(ast.ok(), ast.error)
+    assert_equal(len(ast.select.joins), 3)
+    assert_equal(ast.select.joins[0].kind, "comma")
+    assert_equal(ast.select.joins[0].table, "b")
+    assert_equal(ast.select.joins[0].alias_name, "")
+    assert_equal(ast.select.joins[1].alias_name, "z")
+    assert_equal(ast.select.joins[2].kind, "inner")
+
+
+# -- subqueries -------------------------------------------------------------
+
+
+def test_scalar_subquery_is_a_value() raises:
+    var ast = Parser.parse(
+        "SELECT a FROM t WHERE a > (SELECT max(b) FROM u WHERE u.c = t.c)"
+    )
+    assert_true(ast.ok(), ast.error)
+    assert_equal(render(ast, ast.select.predicate), "(> a (subquery #0))")
+    assert_equal(len(ast.queries), 1)
+    ref inner = ast.queries[0].select
+    assert_equal(inner.table, "u")
+    assert_equal(render(ast, inner.items[0].node), "(MAX b)")
+    assert_equal(render(ast, inner.predicate), "(= u.c t.c)")
+
+
+def test_exists_and_not_exists() raises:
+    assert_equal(
+        where_of(
+            "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u) AND NOT EXISTS"
+            " (SELECT 1 FROM v)"
+        ),
+        "(and (exists #0) (not (exists #1)))",
+    )
+
+
+def test_in_and_not_in_subquery() raises:
+    assert_equal(
+        where_of(
+            "SELECT a FROM t WHERE a IN (SELECT b FROM u) OR a NOT IN (SELECT"
+            " c FROM v)"
+        ),
+        "(or (in_subquery a #0) (not_in_subquery a #1))",
+    )
+
+
+def test_nested_subqueries_precede_their_parent() raises:
+    """A query is appended when its `)` is reached, so the inner one first."""
+    var ast = Parser.parse(
+        "SELECT a FROM t WHERE a IN (SELECT b FROM u WHERE b IN (SELECT c"
+        " FROM v))"
+    )
+    assert_true(ast.ok(), ast.error)
+    assert_equal(len(ast.queries), 2)
+    assert_equal(ast.queries[0].select.table, "v")
+    assert_equal(ast.queries[1].select.table, "u")
+    assert_equal(render(ast, ast.select.predicate), "(in_subquery a #1)")
+    # The enclosing statement is back in place after the nested parse.
+    assert_equal(ast.select.table, "t")
+
+
+def test_derived_table() raises:
+    var ast = Parser.parse(
+        "SELECT x.k FROM (SELECT k FROM t ORDER BY k LIMIT 3) AS x, u WHERE"
+        " x.k = u.k"
+    )
+    assert_true(ast.ok(), ast.error)
+    assert_equal(ast.select.table, "")
+    assert_equal(ast.select.table_query, 0)
+    assert_equal(ast.select.table_alias, "x")
+    assert_equal(ast.queries[0].select.limit, 3)
+    assert_equal(ast.select.joins[0].table, "u")
+    assert_equal(ast.select.joins[0].query, NONE)
+
+
+def test_with_clause() raises:
+    var ast = Parser.parse(
+        "WITH a AS (SELECT k FROM t), b AS (SELECT k FROM a) SELECT k FROM b"
+    )
+    assert_true(ast.ok(), ast.error)
+    assert_equal(len(ast.ctes), 2)
+    assert_equal(ast.ctes[0].name, "a")
+    assert_equal(ast.ctes[1].name, "b")
+    assert_equal(ast.queries[ast.ctes[1].query].select.table, "a")
+    assert_equal(ast.select.table, "b")
+
+
+def test_subquery_with_set_operation() raises:
+    var ast = Parser.parse(
+        "SELECT a FROM t WHERE a IN (SELECT b FROM u UNION SELECT c FROM v)"
+    )
+    assert_true(ast.ok(), ast.error)
+    assert_equal(len(ast.queries[0].branches), 2)
+    assert_equal(len(ast.branches), 0)
+
+
+def test_error_on_unclosed_subquery() raises:
+    assert_false(Parser.parse("SELECT a FROM t WHERE EXISTS (SELECT 1").ok())
+
+
+def test_error_on_exists_without_a_query() raises:
+    var ast = Parser.parse("SELECT a FROM t WHERE EXISTS (1)")
+    assert_false(ast.ok())
+    assert_true("subquery" in ast.error)
 
 
 # -- errors -----------------------------------------------------------------

@@ -41,11 +41,18 @@ from marrow.execution import ExecContext
 from marrow.expr import Bindings
 from marrow.expr.builders import scan as _scan, table as _table
 from marrow.expr.logical import DynRelation, DynValue
+from marrow.expr.decorrelate import Decorrelate
 from marrow.expr.optimizer import AllRules
 from marrow.engine import Driver
 from marrow.expr.runtime.aggregates import RuntimeAggregate
 from marrow.expr.runtime.values import RuntimeValue, column as _column
+from marrow.expr.runtime.values import (
+    exists as _exists,
+    in_subquery as _in_subquery,
+    scalar_subquery as _scalar_subquery,
+)
 from expressions import (
+    wrap_expr as _wrap_expr,
     bool_list as _bool_list,
     boxed as _boxed,
     boxed_list as _boxed_list,
@@ -184,6 +191,28 @@ def _wrap(var rel: DynRelation) raises -> PythonObject:
     return PythonObject(alloc=Plan(rel^))
 
 
+def _runnable(py_self: PythonObject) raises -> DynRelation:
+    """The plan, with its subqueries planned when it holds any: a subquery's
+    value is a slot only a decorrelated plan provides, and a Python caller
+    should not have to know to ask for that."""
+    return Decorrelate.apply(_plan(py_self))
+
+
+def subquery_exists(plan: PythonObject) raises -> PythonObject:
+    """`EXISTS (plan)` as an expression."""
+    return _wrap_expr(_exists(_plan(plan)))
+
+
+def subquery_scalar(plan: PythonObject) raises -> PythonObject:
+    """`(plan)`, a one-column plan's single value, as an expression."""
+    return _wrap_expr(_scalar_subquery(_plan(plan)))
+
+
+def subquery_in(value: PythonObject, plan: PythonObject) raises -> PythonObject:
+    """`value IN (plan)` as an expression."""
+    return _wrap_expr(_in_subquery(_unwrap_expr(value), _plan(plan)))
+
+
 # ---------------------------------------------------------------------------
 # Plan methods
 # ---------------------------------------------------------------------------
@@ -219,7 +248,7 @@ def _plan_execute(
     decide for every query — which is right for a Mojo caller who can pass a
     context and wrong for a Python one who then has no way to."""
     return (
-        _plan(py_self)
+        _runnable(py_self)
         .execute(ExecContext.parallel(Int(py=num_threads)))
         .to_python_object()
     )
@@ -402,6 +431,11 @@ def _plan_optimize(py_self: PythonObject) raises -> PythonObject:
     return _wrap(_plan(py_self).optimize[AllRules]())
 
 
+def _plan_shared(py_self: PythonObject) raises -> PythonObject:
+    """`DynRelation.shared`; see `LazyTable.shared`."""
+    return _wrap(_plan(py_self).shared())
+
+
 def _plan_analyze(py_self: PythonObject) raises -> PythonObject:
     """`DynRelation.analyze`; see `LazyTable.analyze`."""
     return _wrap(_plan(py_self).analyze())
@@ -417,7 +451,7 @@ def _plan_batches(
     produced are thrown away and then paid for again in one large allocation.
     `Driver.run` answers the batches as they were produced, so this hands
     them on."""
-    var rel = _plan(py_self)
+    var rel = _runnable(py_self)
     var driver = Driver.dynamic(ExecContext.parallel(Int(py=num_threads)))
     var batches = driver.run(rel.lower(driver))
     var builtins = Python.import_module("builtins")
@@ -434,7 +468,7 @@ def _plan_report(
 ) raises -> PythonObject:
     """`DynRelation.explain`: the report as its text and its JSON; see
     `LazyTable.explain`."""
-    var report = _plan(py_self).explain(
+    var report = _runnable(py_self).explain(
         ExecContext.parallel(Int(py=num_threads))
     )
     var builtins = Python.import_module("builtins")
@@ -449,7 +483,7 @@ def _plan_profile(
 ) raises -> PythonObject:
     """`DynRelation.profile`: the profile as its text, its JSON and, under
     `trace`, its timeline as Chrome trace JSON; see `LazyTable.explain`."""
-    var profile = _plan(py_self).profile(
+    var profile = _runnable(py_self).profile(
         ExecContext.parallel(Int(py=num_threads)), trace=Bool(py=trace)
     )
     var builtins = Python.import_module("builtins")
@@ -623,6 +657,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_except]("except_")
         .def_method[_plan_optimize]("optimize")
         .def_method[_plan_analyze]("analyze")
+        .def_method[_plan_shared]("shared")
         .def_method[_plan_batches]("batches")
         .def_method[_plan_report]("report")
         .def_method[_plan_profile]("profile")
@@ -631,6 +666,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     )
 
     mb.def_function[in_memory_table]("in_memory_table")
+    mb.def_function[subquery_exists]("subquery_exists")
+    mb.def_function[subquery_scalar]("subquery_scalar")
+    mb.def_function[subquery_in]("subquery_in")
     mb.def_function[parquet_scan]("parquet_scan")
     mb.def_function[json_scan]("json_scan")
     mb.def_function[load_dataset]("load_dataset")

@@ -1194,6 +1194,123 @@ struct UnmatchedSource(Source):
         return "Unmatched"
 
 
+struct ResidualJoinOperator(Operator):
+    """A semi or anti join whose condition goes beyond its keys: each probe
+    row is kept when some build row with equal keys also satisfies every
+    residual predicate (semi), or when none does (anti).
+
+    What a correlated `[NOT] EXISTS` comparing its rows to the outer row by
+    anything but equality becomes. The candidates are the key matches; each is
+    evaluated as a row holding the build columns the residuals read under
+    their own names and the probe columns as `Subquery.outer_field(name)`,
+    which is what `outer(name)` reads. A residual that is null rejects its
+    pair, as `WHERE` does.
+    """
+
+    var _join: ArcPointer[HashJoin[KeyHash]]
+    var _probe_keys: List[Int]
+    var _residuals: List[DynOperator]
+    var _build_columns: List[Int]
+    """Build column per pair field, in `_fields` order, then…"""
+    var _probe_columns: List[Int]
+    """…probe column per remaining pair field."""
+    var _fields: List[Field]
+    var _anti: Bool
+    var _ctx: ExecContext
+
+    def __init__(
+        out self,
+        var join: ArcPointer[HashJoin[KeyHash]],
+        var probe_keys: List[Int],
+        var residuals: List[DynOperator],
+        var build_columns: List[Int],
+        var probe_columns: List[Int],
+        var fields: List[Field],
+        anti: Bool,
+        var ctx: ExecContext,
+    ):
+        self._join = join^
+        self._probe_keys = probe_keys^
+        self._residuals = residuals^
+        self._build_columns = build_columns^
+        self._probe_columns = probe_columns^
+        self._fields = fields^
+        self._anti = anti
+        self._ctx = ctx^
+
+    @staticmethod
+    def index(
+        build: List[StructArray],
+        schema: Schema,
+        keys: List[Int],
+        ctx: ExecContext,
+    ) raises -> ArcPointer[HashJoin[KeyHash]]:
+        """The build side's batches indexed by `keys`, shared by every
+        worker's operator."""
+        return ArcPointer(
+            HashJoin[KeyHash](concat(build, schema, ctx), keys, ctx.copy())
+        )
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        ref batch = morsel.batch
+        var index = self._join[].pairs(batch, self._probe_keys, self._ctx)
+        if len(index) == 0:
+            # No candidate: a semi join keeps nothing, an anti join all of it.
+            if self._anti:
+                return Datum(batch.copy().to_dyn())
+            return None
+        var columns = List[DynArray](capacity=len(self._fields))
+        for i in self._build_columns:
+            columns.append(
+                TakeKernel.dispatch(
+                    self._join[].build_column(i), index.build, self._ctx
+                )
+            )
+        for i in self._probe_columns:
+            columns.append(
+                TakeKernel.dispatch(batch.field(i), index.probe, self._ctx)
+            )
+        var pairs: DynArray = StructArray.from_arrays(columns^, self._fields)
+        var probe: DynArray = index.probe.copy()
+        # Each residual drops the pairs it does not hold, null as false, so
+        # the next sees only the pairs still standing.
+        for r in range(len(self._residuals)):
+            var produced = self._residuals[r].push(
+                Morsel.ungrouped(pairs.as_struct().copy())
+            )
+            if not produced:
+                raise InternalError("join: a residual produced no value")
+            var holds = produced.value().to_array(len(pairs))
+            pairs = FilterKernel.dispatch(pairs, holds.as_bool(), self._ctx)
+            probe = FilterKernel.dispatch(probe, holds.as_bool(), self._ctx)
+        # The probe rows some pair stood for are the matched ones.
+        var n = len(batch)
+        var keep = Bitmap.alloc_zeroed(n)
+        if self._anti:
+            keep.set_range(0, n, True)
+        ref rows = probe.as_int32()
+        for k in range(len(rows)):
+            keep[Int(rows.unsafe_get(k))] = not self._anti
+        var mask = BoolArray(
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=keep^.to_immutable(length=n),
+        )
+        var out = (
+            FilterKernel.dispatch(batch.copy().to_dyn(), mask^, self._ctx)
+            .as_struct()
+            .copy()
+        )
+        if len(out) == 0:
+            return None
+        return Datum(out^.to_dyn())
+
+    def drain(mut self) raises -> Optional[Datum]:
+        return None
+
+
 struct MultisetOperator[M: Multiplicity](Operator):
     """`Intersection` and `Difference`, with or without `ALL`.
 

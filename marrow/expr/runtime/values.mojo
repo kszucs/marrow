@@ -192,14 +192,24 @@ from ...dtypes import (
     NumericType,
     PrimitiveType,
     bool_,
+    field,
     float64,
     int64,
     string,
 )
 from ...scalars import BoolScalar, DynScalar, PrimitiveScalar
 from ...schema import Schema
+from ...schema import schema as make_schema
 from ...tabular import RecordBatch
-from ..logical import DynValue, References, Shape, Value
+from ..logical import (
+    DynRelation,
+    DynValue,
+    References,
+    Shape,
+    Subquery,
+    SubqueryKind,
+    Value,
+)
 from ..logical import Bindings
 from ..index import Index, keep_every
 from ...engine.core import Datum, DynOperator
@@ -211,9 +221,11 @@ from ..physical import (
 from .aggregates import RuntimeAggregate
 
 
-comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
+comptime Payload = Variant[
+    NoneType, String, DynType, DynArray, DynScalar, Subquery
+]
 """What a node carries besides its children — a column name, a cast target, a
-literal, an `IsIn` value set.
+literal, an `IsIn` value set, a subquery.
 
 A closed variant rather than an erased box: the set is small, known, and adding
 to it should be a decision someone makes rather than something a caller can do
@@ -418,6 +430,14 @@ struct RuntimeValue(Evaluable, Movable, Value):
                 ref value = self._payload[DynScalar]
                 if value.type().is_primitive():
                     return value.to_array(index.chunks())
+            # A subquery answering once for the whole query is a constant by
+            # the time a scan prunes: the binding it reads is in hand.
+            if self._tag == "subquery" and self._payload.isa[Subquery]():
+                var slot = self._payload[Subquery].slot()
+                if slot in bindings:
+                    ref value = bindings[slot]
+                    if value.type().is_primitive():
+                        return value.to_array(index.chunks())
         return NullArray(length=index.chunks()).to_dyn()
 
     def _defined(self, index: Index) raises -> BoolArray:
@@ -437,6 +457,10 @@ struct RuntimeValue(Evaluable, Movable, Value):
         runtime value holds no parameter, so it only ever reports columns."""
         if self._tag == "column" and self._payload.isa[String]():
             into.column(self._payload[String])
+        if self._tag == "outer" and self._payload.isa[String]():
+            into.outer(self._payload[String])
+        if self._tag == "subquery" and self._payload.isa[Subquery]():
+            self._payload[Subquery].references(into)
         # The leaf case is spelled out rather than falling out of an empty
         # loop: without it the compiler reads the recursion below as
         # unconditional and warns `self recursive call will cause an infinite
@@ -485,6 +509,21 @@ struct RuntimeValue(Evaluable, Movable, Value):
         """
         return _bool_const(self)
 
+    def equates(self) -> Bool:
+        """`eq` between two bare reads, each a column or an `outer` one."""
+        if self._tag != "eq" or len(self._kids) != 2:
+            return False
+        for ref kid in self._kids:
+            if kid[]._tag != "column" and kid[]._tag != "outer":
+                return False
+        return True
+
+    def subquery(self) -> Optional[Subquery]:
+        """The subquery this node evaluates, when it is a subquery node."""
+        if self._tag == "subquery" and self._payload.isa[Subquery]():
+            return self._payload[Subquery].copy()
+        return None
+
     def name(self) -> String:
         if self._tag == "column" and self._payload.isa[String]():
             return self._payload[String].copy()
@@ -516,9 +555,30 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return schema.fields[i].dtype.copy()
         if self._tag == "literal" and self._payload.isa[DynScalar]():
             return self._payload[DynScalar].type()
+        if self._tag == "subquery" and self._payload.isa[Subquery]():
+            return self._payload[Subquery].dtype()
+        if self._tag == "outer" and self._payload.isa[String]():
+            var outer_name = Subquery.outer_field(self._payload[String])
+            var i = schema.get_field_index(outer_name)
+            if i == -1:
+                raise InvalidError(
+                    t"outer: '{self._payload[String]}' is a column of the "
+                    t"enclosing query, read only where a subquery is joined "
+                    t"to it"
+                )
+            return schema.fields[i].dtype.copy()
+        # A subquery's slot is a column only once the plan is decorrelated,
+        # so the probe holds one, typed, for each subquery this reads.
+        var fields = schema.fields.copy()
+        var refs = References()
+        self.references(refs)
+        for ref sq in refs.subqueries:
+            if schema.get_field_index(sq.slot()) == -1:
+                fields.append(field(sq.slot(), sq.dtype()))
         return (
             self.evaluate(
-                RecordBatch.empty(schema).to_struct_array(), Bindings()
+                RecordBatch.empty(make_schema(fields^)).to_struct_array(),
+                Bindings(),
             )
             .to_array(0)
             .dtype()
@@ -555,11 +615,19 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # Leaves spelled out before the recursion — see `columns`. Without the
         # guard the compiler reads the recursion below as unconditional and
         # warns `self recursive call will cause an infinite loop`.
+        if self._tag == "subquery":
+            return self._payload[Subquery].read(batch, bindings)
         if len(self._kids) == 0:
             if self._tag == "column":
                 return Datum(batch.field(self._payload[String]).copy())
             if self._tag == "literal":
                 return Datum(self._payload[DynScalar].to_array(len(batch)))
+            if self._tag == "outer":
+                return Datum(
+                    batch.field(
+                        Subquery.outer_field(self._payload[String])
+                    ).copy()
+                )
             raise InternalError(t"evaluate: unknown runtime leaf '{self._tag}'")
 
         var kids = List[DynArray](capacity=len(self._kids))
@@ -1309,6 +1377,12 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if named != "":
             writer.write(named)
             return
+        if self._tag == "outer" and self._payload.isa[String]():
+            writer.write("outer(", self._payload[String], ")")
+            return
+        if self._tag == "subquery" and self._payload.isa[Subquery]():
+            writer.write(self._payload[Subquery])
+            return
         if len(self._kids) == 0:
             writer.write(self._tag)
             return
@@ -1333,6 +1407,37 @@ def literal(var value: DynScalar) -> RuntimeValue:
     """A constant, broadcast to the batch's length on evaluation."""
 
     return RuntimeValue("literal", Payload(value^))
+
+
+def outer(var name: String) -> RuntimeValue:
+    """Column `name` of the enclosing query, read from inside a subquery —
+    what makes the subquery correlated."""
+    return RuntimeValue("outer", Payload(name^))
+
+
+def scalar_subquery(var relation: DynRelation) -> RuntimeValue:
+    """`(SELECT ...)` — the one value of a one-column relation, null when it
+    has no row."""
+    return RuntimeValue(
+        "subquery", Payload(Subquery(SubqueryKind.scalar, relation^))
+    )
+
+
+def exists(var relation: DynRelation) -> RuntimeValue:
+    """`EXISTS (SELECT ...)` — whether the relation has a row."""
+    return RuntimeValue(
+        "subquery", Payload(Subquery(SubqueryKind.exists, relation^))
+    )
+
+
+def in_subquery(var a: DynValue, var relation: DynRelation) -> RuntimeValue:
+    """`a IN (SELECT ...)` — SQL's three-valued membership in a one-column
+    relation: null when `a` is null or no row matches and the relation holds a
+    null. The operand may come from either lane: the test becomes a semi or
+    anti join and is never evaluated, so there is nothing for it to fuse."""
+    return RuntimeValue(
+        "subquery", Payload(Subquery(SubqueryKind.in_, relation^, a^))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1438,6 +1543,15 @@ def not_(var a: RuntimeValue) -> RuntimeValue:
     """
     if a._tag == "not" and len(a._kids) == 1:
         return a._kids[0][].copy()
+    # `NOT EXISTS` and `NOT IN` are tests of their own rather than `NOT` over
+    # the positive one, so the planner sees the test it plans: a `NOT IN`
+    # conjunct is a null-aware anti join, which no rule could read off a
+    # `NOT` it cannot open.
+    var sq = a.subquery()
+    if sq and sq.value().kind != SubqueryKind.scalar:
+        var out = a.copy()
+        out._payload = Payload(sq.value().negated())
+        return out^
     var c = _bool_const(a)
     if c:
         return literal(BoolScalar(not c.value()).to_dyn())

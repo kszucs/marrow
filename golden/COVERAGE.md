@@ -182,6 +182,26 @@ filter; group by a date and by a truncated timestamp.
 
 `array_length` over a list column — the one list verb the expression layer has.
 
+### Subqueries
+
+Ten cases, every one written with the subquery values — `scalar`, `exists`,
+`is_in` over a relation, `outer` for a column of the enclosing query — and
+planned by `.optimize[SubqueryRules]()`, so what each asserts is that
+decorrelation reaches DuckDB's answer. `subquery_in`, `subquery_exists` and
+`subquery_not_exists` become semi and anti joins; `subquery_exists_residual`
+correlates on an inequality as well, which no plain join can carry;
+`subquery_not_in_null_operand` and `subquery_not_in_null_in_subquery` are
+`NOT IN`'s two NULLs — in the operand, and among the subquery's rows, where
+it drops every row an anti join would keep; `subquery_nested_in` nests one
+`IN` in another; `subquery_scalar` reads an uncorrelated aggregate as a
+constant and `subquery_correlated_scalar` a correlated `count(*)`, 0 rather
+than NULL where nothing matches. `subquery_in_string_keys` is still the
+hand-written semi join, asking the same question of a string key.
+
+All but `subquery_in_string_keys` carry `-- skip python`: the Python
+expression API has no subquery verbs. The SQL lane runs every one of them
+from its recorded SQL.
+
 ### Window functions
 
 Seven cases over `OVER (PARTITION BY ... ORDER BY ...)`. `window_row_number`
@@ -202,7 +222,7 @@ bounds, and `EXCLUDE`. All seven cases run in both lanes.
 
 ## Recorded as unsupported
 
-51 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+49 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `distinct()` and
 `SELECT DISTINCT` are an `aggregate` with keys and no aggregates; `DISTINCT ON`
@@ -278,9 +298,9 @@ derived column instead.
 a sum, an element, an unnested column — because the expectation block cannot
 render a list, struct or map.
 
-**Predicates and subqueries** (5) — `filter_in_literal_list`,
-`filter_not_in_list_with_null`, `filter_is_distinct_from`, `subquery_scalar`,
-`subquery_correlated_scalar`. `IN` is a node-over-existing-kernel gap
+**Predicates** (3) — `filter_in_literal_list`,
+`filter_not_in_list_with_null`, `filter_is_distinct_from`. `IN` is a
+node-over-existing-kernel gap
 (`kernels/membership.mojo` has `is_in`), and `NOT IN` with a NULL in the list
 matching *nothing* is the trap a hash-set implementation gets wrong in the
 natural way.
@@ -364,7 +384,8 @@ Not gaps in the corpus — questions it cannot or should not ask.
   checked-arithmetic mode.
 - **`BETWEEN`.** Sugar over two comparisons; `filter_and` already asks it.
 - **CTEs.** Syntax, not semantics: a `WITH` is a `DynRelation` bound to a name,
-  and copying a plan is already an O(1) share.
+  and copying a plan is already an O(1) share. The SQL front end parses them,
+  and `marrow/expr/tests/test_sql_subquery.mojo` covers it.
 - **`PIVOT`/`UNPIVOT`, `UNION BY NAME`, `SELECT * EXCLUDE/REPLACE`,
   `LATERAL`.** DuckDB-specific or reshaping surface, far outside anything
   marrow plans to answer.
@@ -387,10 +408,10 @@ Flagged, not deleted.
   heavily with `filter_then_aggregate` and `aggregate_several`; the `aggregate_*`
   and `agg_*` prefixes are two names for one family and could be merged under
   one prefix.
-- **`subquery_exists` and `join_semi`** are the same plan under two SQL
-  spellings, as are **`subquery_not_exists` and `join_anti`**. The pairs exist
-  to document that `EXISTS` is a semi-join, which is worth one case each, not
-  two — the `subquery_*` twins carry no additional question.
+- **`subquery_exists` and `join_semi`** reach the same plan, as do
+  **`subquery_not_exists` and `join_anti`** — the `subquery_*` twins by
+  decorrelation, the `join_*` ones written as the join. The twins now ask
+  whether decorrelation produces that join; the answer is all they assert.
 - **`math_is_nan` / `math_is_nan_filter`** and **`math_is_inf` /
   `math_is_inf_filter`** each ask one predicate twice, once projected and once
   in a `WHERE`. The filter path is exercised by dozens of other cases.

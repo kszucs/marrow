@@ -318,11 +318,21 @@ class Column(_Wrapper):
         return Column.wrap(_ma.expr_cast(self._binding, unwrap(target_type), safe))
 
     def isin(self, values):
-        """Membership against a value set — a list or a :class:`~marrow.Array`.
+        """Membership against a value set — a list or a :class:`~marrow.Array`
+        — or against a one-column :class:`~marrow.LazyTable`, which is
+        ``IN (SELECT ...)``.
 
         The set is hashed once per batch rather than per row, which is why it
         is a value set and not an expression: ``col("a").isin(col("b"))`` is a
-        different question and is not this one."""
+        different question and is not this one.
+
+        Against a table the answer is SQL's: null where this value is null or
+        no row matches and the table holds a null. ``~col("a").isin(t)`` is
+        ``NOT IN``."""
+        from .lazy import LazyTable
+
+        if isinstance(values, LazyTable):
+            return Column.wrap(_ma.subquery_in(self._binding, values._binding))
         return Column.wrap(_ma.expr_isin(self._binding, _as_binding_array(values)))
 
     # ── n-ary conditionals ──────────────────────────────────────────────────
@@ -633,6 +643,23 @@ def col(name, dtype=None):
     since a fused AOT leaf fixes its type at compile time — is one expression
     both lanes run."""
     return Column.wrap(_ma.expr_column(name))
+
+
+def outer(name):
+    """Column ``name`` of the query enclosing a subquery — what makes the
+    subquery correlated::
+
+        orders.filter(
+            exists(lineitem.filter(col("l_orderkey") == outer("o_orderkey")))
+        )
+    """
+    return Column.wrap(_ma.expr_outer(name))
+
+
+def exists(table):
+    """``EXISTS (SELECT ...)`` — whether ``table`` has a row.
+    ``~exists(table)`` is ``NOT EXISTS``."""
+    return Column.wrap(_ma.subquery_exists(table._binding))
 
 
 def lit(value, type=None):

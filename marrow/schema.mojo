@@ -168,6 +168,16 @@ struct Schema(
                 return i
         return -1
 
+    def field_indices(self, names: List[String]) raises -> List[Int]:
+        """The index of each of `names`, raising for the first one absent."""
+        var out = List[Int](capacity=len(names))
+        for ref n in names:
+            var i = self.get_field_index(n)
+            if i == -1:
+                raise KeyError(t"column '{n}' not found in schema")
+            out.append(i)
+        return out^
+
     def __ne__(self, other: Schema) -> Bool:
         return not self.__eq__(other)
 

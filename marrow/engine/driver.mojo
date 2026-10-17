@@ -445,6 +445,14 @@ struct _Recording(Movable):
         )
 
 
+@fieldwise_init
+struct SharedResult(Copyable, Movable):
+    """One shared relation's batches, kept for the rest of an execution."""
+
+    var id: Int
+    var batches: List[StructArray]
+
+
 struct Driver(Movable):
     """How a plan's phases run: a strategy, picked by constructor.
 
@@ -473,6 +481,10 @@ struct Driver(Movable):
     """The ids of the phases the latest `run` was handed."""
     var _lowering: List[OpaquePointer[MutUntrackedOrigin]]
     """The relations being lowered, the innermost last."""
+    var _shared: List[SharedResult]
+    """What every `Shared` relation lowered so far produced, by id — a list
+    scanned rather than a `Dict`, since a plan shares a handful at most and
+    a hash table would link into every binary that drives one."""
 
     def __init__(
         out self,
@@ -503,6 +515,7 @@ struct Driver(Movable):
         self._ran = 0
         self._last = List[Int]()
         self._lowering = List[OpaquePointer[MutUntrackedOrigin]]()
+        self._shared = List[SharedResult]()
         comptime if STATS_ENABLED:
             # The counters are created on first touch, which several workers
             # must not race to: they are created here, on the calling thread.
@@ -613,6 +626,10 @@ struct Driver(Movable):
         """A phase reading `batch`, in morsels of the driver's size."""
         return self.phase(TableSource.sliced(batch, self._morsel_rows))
 
+    def batches(self, var batches: List[StructArray]) -> Phase:
+        """A phase reading `batches`, a morsel each."""
+        return self.phase(TableSource.of(batches^))
+
     def owed(self, var source: DynSource, after: Int) -> Phase:
         """A phase of one worker reading `source`, which holds what the
         `after` phases just before it owe once they have all run: the build
@@ -678,6 +695,18 @@ struct Driver(Movable):
             probing[p].reads(built)
         swap(probe, probing)
         return BuildSide(swapped, rows^)
+
+    def shared(self, id: Int) -> Optional[List[StructArray]]:
+        """The batches shared relation `id` produced in this execution, when
+        it has been run."""
+        for ref r in self._shared:
+            if r.id == id:
+                return r.batches.copy()
+        return None
+
+    def share(mut self, id: Int, batches: List[StructArray]):
+        """Record what shared relation `id` produced, for its other reads."""
+        self._shared.append(SharedResult(id, batches.copy()))
 
     def clock(mut self) -> Int:
         """Now, for a span, when the driver observes; 0 otherwise. The kernel
@@ -792,7 +821,14 @@ struct Driver(Movable):
                 StreamSource(PhaseCursor(phases^, self.ctx.copy()), name^),
                 "barrier",
             )
-        var batches = self.run(phases^, role)
+        return self.materialized(self.run(phases^, role), input_rows)
+
+    def materialized(
+        mut self, var batches: List[StructArray], input_rows: Int
+    ) -> Phase:
+        """One phase of one worker reading `batches`, which the latest `run`
+        produced from an input estimated at `input_rows`: what a barrier
+        reads, an estimate in their place when the driver runs nothing."""
         if self._mode.is_dry():
             return self._after_run(
                 self._alone(PlannedSource("Barrier", 1), "barrier"), input_rows

@@ -91,6 +91,7 @@ from ..logical import Bindings
 from ...engine.core import Datum
 
 from .rules import widest_shape
+from .subqueries import bare_reads
 from .core import BoolValue, ColumnBound, NumericValue, StringValue, Unnamed
 from .leaves import NumericLiteral, StringLiteral
 
@@ -145,6 +146,13 @@ struct StringCompare[K: StringPredicateKernel, L: StringValue, R: StringValue](
                 self.r.lane(bound[1], idx + j),
             )
         return out
+
+    def equates(self) -> Bool:
+        """Equality between two bare reads — a decorrelation join key."""
+        comptime if Self.K.name == StringEqKernel.name:
+            return bare_reads(self.l, self.r)
+        else:
+            return False
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

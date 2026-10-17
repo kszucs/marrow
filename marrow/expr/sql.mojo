@@ -49,9 +49,24 @@ the sugar has exactly SQL\'s semantics and the node would not:
   **skip** nulls while `maximum`/`minimum` propagate them.
 - `SELECT DISTINCT` becomes `distinct()`, an aggregate keyed by every output
   column.
+
+**Nested queries are statements of their own.** A scalar subquery, `[NOT]
+EXISTS`, `[NOT] IN (SELECT ...)`, a derived table and a `WITH` entry each
+parse into `Ast.queries` and are planned by a planner of their own. A
+subquery's column that its own `FROM` items lack but the enclosing query's
+have is `outer(name)`, named as the enclosing plan names it; the subquery
+values are planned into joins by `Decorrelate`, which `sql` applies before
+answering. A comma-separated `FROM` list is a chain of inner joins on the
+`WHERE` equalities between its items.
 """
 
-from ..errors import IndexError, InvalidError, KeyError, NotImplementedError
+from ..errors import (
+    IndexError,
+    InternalError,
+    InvalidError,
+    KeyError,
+    NotImplementedError,
+)
 from ..dtypes import (
     DynType,
     bool_,
@@ -90,6 +105,7 @@ from ..schema import Schema
 from ..tabular import RecordBatch
 from .builders import table
 from .logical import DynRelation, DynValue
+from .decorrelate import Decorrelate
 from .runtime.aggregates import RuntimeAggregate
 from .runtime.values import (
     RuntimeValue,
@@ -124,6 +140,7 @@ from .runtime.values import (
     day,
     endswith,
     eq,
+    exists,
     exp,
     fill_null,
     floor,
@@ -131,6 +148,7 @@ from .runtime.values import (
     gt,
     hour,
     ilike,
+    in_subquery,
     is_null,
     is_valid,
     le,
@@ -156,6 +174,7 @@ from .runtime.values import (
     not_,
     nullif,
     or_,
+    outer,
     position,
     pow,
     quarter,
@@ -165,6 +184,7 @@ from .runtime.values import (
     right,
     round,
     rpad,
+    scalar_subquery,
     rstrip,
     second,
     sign,
@@ -418,13 +438,19 @@ struct Join(Copyable, Movable):
     """
 
     var kind: String
+    """`"inner"`, `"left"`, `"right"`, `"full"`, or `"comma"` for an item of
+    a comma-separated `FROM` list, whose keys the planner picks out of the
+    `WHERE` clause."""
     var table: String
     var alias_name: String
     var left_keys: List[String]
     var right_keys: List[String]
+    var query: Int
+    """The derived table `(SELECT ...)` this item reads, as an index into
+    `Ast.queries`, or `NONE` when it names `table`."""
 
     def to_kind(self) raises -> JoinKind:
-        if self.kind == "inner":
+        if self.kind == "inner" or self.kind == "comma":
             return JOIN_INNER
         if self.kind == "left":
             return JOIN_LEFT
@@ -468,6 +494,8 @@ struct Select(Copyable, Movable):
     var distinct: Bool
     var items: List[Item]
     var table: String
+    var table_query: Int
+    """The derived table the first `FROM` item reads, or `NONE`."""
     var table_alias: String
     var joins: List[Join]
     var predicate: Int
@@ -488,6 +516,7 @@ struct Select(Copyable, Movable):
         self.distinct = False
         self.items = List[Item]()
         self.table = String("")
+        self.table_query = NONE
         self.table_alias = String("")
         self.joins = List[Join]()
         self.predicate = NONE
@@ -521,6 +550,37 @@ struct Compound(Copyable, Movable):
             )
 
 
+@fieldwise_init
+struct Cte(Copyable, Movable):
+    """One `WITH name AS (...)` entry: the name, and the query it binds as an
+    index into `Ast.queries`."""
+
+    var name: String
+    var query: Int
+
+
+struct Query(Copyable, Movable):
+    """A nested statement — a subquery, a derived table or a CTE body — held
+    the way `Ast` holds the outermost one, so a planner for it is the
+    outermost planner over a copy of the `Ast` with these four swapped in.
+
+    A list of these addressed by index, not a tree of pointers: nesting is an
+    index in a node's `value` or a `FROM` item's `query`, so the parse tree
+    stays a flat value however deeply queries nest.
+    """
+
+    var select: Select
+    var branches: List[Select]
+    var compounds: List[Compound]
+    var ctes: List[Cte]
+
+    def __init__(out self):
+        self.select = Select()
+        self.branches = List[Select]()
+        self.compounds = List[Compound]()
+        self.ctes = List[Cte]()
+
+
 struct Ast(Copyable, Movable):
     """Every node of one parsed statement, plus the first error if there was
     one.
@@ -539,6 +599,13 @@ struct Ast(Copyable, Movable):
     `INTERSECT`), in written order; empty for a simple one."""
     var compounds: List[Compound]
     """What joins `branches[i]` to `branches[i + 1]`."""
+    var ctes: List[Cte]
+    """The statement's `WITH` list, in written order: each may read the ones
+    before it."""
+    var queries: List[Query]
+    """Every nested statement, in the order its closing parenthesis was
+    reached — so a query's own subqueries precede it. A `"subquery"`,
+    `"exists"` or `"in_subquery"` node names one by its `value`."""
     var error: String
     var error_pos: Int
 
@@ -548,6 +615,8 @@ struct Ast(Copyable, Movable):
         self.select = Select()
         self.branches = List[Select]()
         self.compounds = List[Compound]()
+        self.ctes = List[Cte]()
+        self.queries = List[Query]()
         self.error = String("")
         self.error_pos = 0
 
@@ -565,6 +634,40 @@ struct Ast(Copyable, Movable):
 
     def ok(self) -> Bool:
         return self.error == ""
+
+    def reads(self, table: String) -> Int:
+        """How many `FROM` items, in this statement and every nested one,
+        name `table` — case-insensitively, as `Catalog.get` looks it up."""
+        var wanted = Ascii.upper(table)
+        var selects = List[Select]()
+        selects.append(self.select.copy())
+        for ref branch in self.branches:
+            selects.append(branch.copy())
+        for ref query in self.queries:
+            selects.append(query.select.copy())
+            for ref branch in query.branches:
+                selects.append(branch.copy())
+        var count = 0
+        for ref select in selects:
+            if Ascii.upper(select.table) == wanted:
+                count += 1
+            for ref join in select.joins:
+                if Ascii.upper(join.table) == wanted:
+                    count += 1
+        return count
+
+    def statement(self, query: Int) -> Ast:
+        """This `Ast` with nested statement `query`'s fields in the
+        outermost one's place — what a planner for it reads — or a copy of
+        it as it stands for `NONE`."""
+        var ast = self.copy()
+        if query != NONE:
+            ref nested = self.queries[query]
+            ast.select = nested.select.copy()
+            ast.branches = nested.branches.copy()
+            ast.compounds = nested.compounds.copy()
+            ast.ctes = nested.ctes.copy()
+        return ast^
 
     def kid(self, node: Node, i: Int) -> Int:
         """The `i`th variadic child of `node`."""
@@ -995,6 +1098,17 @@ struct Parser(Copyable, Movable):
     def in_list(mut self, lhs: Int, negated: Int) -> Int:
         if not self.expect_punct("("):
             return NONE
+        if self.peek().is_any_of("SELECT WITH"):
+            var query = self.nested_query()
+            if not self.expect_punct(")"):
+                return NONE
+            return self.emit(
+                Node(
+                    "not_in_subquery" if negated else "in_subquery",
+                    a=lhs,
+                    value=query,
+                )
+            )
         var items = self.comma_list(")")
         if not self.expect_punct(")"):
             return NONE
@@ -1044,6 +1158,13 @@ struct Parser(Copyable, Movable):
         if tok.kind == "string":
             self.advance()
             return self.ast.add(Node("string", text=tok.text.copy()))
+        if tok.is_punct("(") and self.peek(1).is_any_of("SELECT WITH"):
+            # `(SELECT ...)` in a value position: a scalar subquery.
+            self.advance()
+            var query = self.nested_query()
+            if not self.expect_punct(")"):
+                return NONE
+            return self.emit(Node("subquery", value=query))
         if tok.is_punct("("):
             self.advance()
             var inner = self.expression()
@@ -1063,6 +1184,16 @@ struct Parser(Copyable, Movable):
                 return self.case_expr()
             if tok.is_word("CAST"):
                 return self.cast_expr()
+            if tok.is_word("EXISTS") and self.peek(1).is_punct("("):
+                self.advance()
+                self.advance()
+                if not self.peek().is_any_of("SELECT WITH"):
+                    self.fail("EXISTS needs a subquery")
+                    return NONE
+                var query = self.nested_query()
+                if not self.expect_punct(")"):
+                    return NONE
+                return self.emit(Node("exists", value=query))
             if self.peek(1).is_punct("("):
                 return self.call_expr()
             return self.column_expr()
@@ -1186,14 +1317,31 @@ struct Parser(Copyable, Movable):
         return parser.ast.copy()
 
     def statement(mut self):
-        """One `SELECT`, or several joined by `UNION`, `EXCEPT` and
-        `INTERSECT`, then the clauses that order and cut the whole result.
+        """One query, and nothing after it."""
+        self.query_body()
+        if not self.ast.ok():
+            return
+        if self.peek().kind == "error":
+            self.fail(self.peek().text.copy())
+        elif self.peek().kind != "eof":
+            self.fail("unexpected trailing '" + self.peek().text + "'")
+
+    def query_body(mut self):
+        """`[WITH ...]` then one `SELECT`, or several joined by `UNION`,
+        `EXCEPT` and `INTERSECT`, then the clauses that order and cut the
+        whole result — into the `Ast`'s statement fields, whichever statement
+        `nested_query` has swapped in. Stops at the first token that does not
+        continue it, which the caller judges.
 
         A compound statement moves each finished `SELECT` into
         `ast.branches` and leaves `ast.select` holding only the trailing
         `ORDER BY`/`LIMIT`/`OFFSET`: in SQL those belong to the combined
         result, never to the last branch.
         """
+        if self.take_word("WITH"):
+            self.with_clause()
+            if not self.ast.ok():
+                return
         if not self.expect_word("SELECT"):
             return
         self.select_core()
@@ -1219,12 +1367,56 @@ struct Parser(Copyable, Movable):
             self.ast.select.limit = self.whole_number("LIMIT")
         if self.ast.ok() and self.take_word("OFFSET"):
             self.ast.select.offset = self.whole_number("OFFSET")
+
+    def nested_query(mut self) -> Int:
+        """A query inside parentheses — the `(` consumed, the `)` left for
+        the caller — appended to `Ast.queries`; its index, or `NONE`.
+
+        The clause productions all write the `Ast`'s own statement fields, so
+        the enclosing statement is moved aside while the nested one is
+        parsed into them, then put back. Its nodes share the one arena.
+        """
+        var enclosing = Query()
+        enclosing.select = self.ast.select.copy()
+        enclosing.branches = self.ast.branches.copy()
+        enclosing.compounds = self.ast.compounds.copy()
+        enclosing.ctes = self.ast.ctes.copy()
+        self.ast.select = Select()
+        self.ast.branches = List[Select]()
+        self.ast.compounds = List[Compound]()
+        self.ast.ctes = List[Cte]()
+        self.query_body()
+        var inner = Query()
+        inner.select = self.ast.select.copy()
+        inner.branches = self.ast.branches.copy()
+        inner.compounds = self.ast.compounds.copy()
+        inner.ctes = self.ast.ctes.copy()
+        self.ast.select = enclosing.select.copy()
+        self.ast.branches = enclosing.branches.copy()
+        self.ast.compounds = enclosing.compounds.copy()
+        self.ast.ctes = enclosing.ctes.copy()
         if not self.ast.ok():
-            return
-        if self.peek().kind == "error":
-            self.fail(self.peek().text.copy())
-        elif self.peek().kind != "eof":
-            self.fail("unexpected trailing '" + self.peek().text + "'")
+            return NONE
+        self.ast.queries.append(inner^)
+        return len(self.ast.queries) - 1
+
+    def with_clause(mut self):
+        """`name AS (query) [, ...]` after `WITH`."""
+        while True:
+            var name = self.identifier()
+            if not self.ast.ok() or not self.expect_word("AS"):
+                return
+            if not self.expect_punct("("):
+                return
+            if not self.peek().is_any_of("SELECT WITH"):
+                self.fail("expected a query after '" + name + " AS ('")
+                return
+            var query = self.nested_query()
+            if not self.expect_punct(")"):
+                return
+            self.ast.ctes.append(Cte(name^, query))
+            if not self.take_punct(","):
+                return
 
     def select_core(mut self):
         """`[DISTINCT] <items> [FROM ...] [WHERE] [GROUP BY] [HAVING]`, the
@@ -1272,15 +1464,49 @@ struct Parser(Copyable, Movable):
         return String("")
 
     def from_clause(mut self):
-        self.ast.select.table = self.identifier()
+        """The first `FROM` item, then any mix of `, item` and joins."""
+        var first = self.from_item()
         if not self.ast.ok():
             return
+        self.ast.select.table = first[0].copy()
+        self.ast.select.table_query = first[1]
         self.ast.select.table_alias = self.item_alias()
         while self.ast.ok():
+            if self.take_punct(","):
+                var item = self.from_item()
+                if not self.ast.ok():
+                    return
+                var alias_name = self.item_alias()
+                self.ast.select.joins.append(
+                    Join(
+                        "comma",
+                        item[0].copy(),
+                        alias_name^,
+                        List[String](),
+                        List[String](),
+                        item[1],
+                    )
+                )
+                continue
             var kind = self.join_kind()
             if kind == "":
                 return
             self.join_clause(kind^)
+
+    def from_item(mut self) -> Tuple[String, Int]:
+        """A table name, or a derived table `(SELECT ...)`: `(name, NONE)` or
+        `("", query)`."""
+        if self.take_punct("("):
+            if not self.peek().is_any_of("SELECT WITH"):
+                self.fail(
+                    "expected a subquery, found '" + self.peek().text + "'"
+                )
+                return (String(""), NONE)
+            var query = self.nested_query()
+            if not self.expect_punct(")"):
+                return (String(""), NONE)
+            return (String(""), query)
+        return (self.identifier(), NONE)
 
     def join_kind(mut self) -> String:
         """The kind of the join at the cursor, or "" if there is not one."""
@@ -1302,7 +1528,7 @@ struct Parser(Copyable, Movable):
         return kind^ if self.expect_word("JOIN") else String("")
 
     def join_clause(mut self, var kind: String):
-        var table = self.identifier()
+        var item = self.from_item()
         if not self.ast.ok():
             return
         var alias_name = self.item_alias()
@@ -1317,7 +1543,14 @@ struct Parser(Copyable, Movable):
         if not self.ast.ok():
             return
         self.ast.select.joins.append(
-            Join(kind^, table^, alias_name^, left_keys^, right_keys^)
+            Join(
+                kind^,
+                item[0].copy(),
+                alias_name^,
+                left_keys^,
+                right_keys^,
+                item[1],
+            )
         )
 
     def equijoin_keys(
@@ -1532,10 +1765,70 @@ struct Scope(Copyable, Movable):
         return -1
 
 
+@fieldwise_init
+struct Pending(Copyable, Movable):
+    """A nested statement a planner stopped for, and what planning it needs:
+    the scopes it may correlate with, nearest first, whether the nearest is
+    read after grouping, and the catalogue it reads."""
+
+    var query: Int
+    """An index into `Ast.queries`, or `NONE` for the outermost statement."""
+    var outers: List[Scope]
+    var outer_grouped: Bool
+    var catalog: Catalog
+
+
+struct Planned(Copyable, Movable):
+    """The plans of the nested statements built so far, by query index.
+
+    The plans sit in a list reserved to its final size up front and are
+    addressed through `slots`, because a `List` of `DynRelation` must never
+    grow: its element is a `Variant` (CLAUDE.md).
+    """
+
+    var slots: List[Int]
+    """Each query's position in `plans`, or -1."""
+    var plans: List[DynRelation]
+
+    def __init__(out self, queries: Int):
+        self.slots = List[Int](length=queries, fill=-1)
+        self.plans = List[DynRelation](capacity=queries)
+
+    def has(self, query: Int) -> Bool:
+        return query >= 0 and query < len(self.slots) and self.slots[query] >= 0
+
+    def get(self, query: Int) -> DynRelation:
+        return self.plans[self.slots[query]].copy()
+
+    def set(mut self, query: Int, var plan: DynRelation):
+        self.slots[query] = len(self.plans)
+        self.plans.append(plan^)
+
+
 struct Planner(Copyable, Movable):
     var ast: Ast
     var catalog: Catalog
+    """The tables a `FROM` item may name, with the statement's CTEs ahead of
+    them once `build` has planned those."""
     var scope: Scope
+
+    var outers: List[Scope]
+    """The scopes of the queries enclosing this one, nearest first; empty
+    for a statement, a derived table or a CTE. A column this query's own
+    `FROM` items lack but the nearest of these has is a correlated
+    reference, `outer(name)`."""
+    var outer_grouped: Bool
+    """Whether the enclosing query reads this subquery after grouping, where
+    the columns `outers[0]` names no longer exist."""
+
+    var where_rest: List[Int]
+    """The `WHERE` conjuncts still to filter on: all of them, less those a
+    comma-separated `FROM` list took as join keys."""
+
+    var planned: Planned
+    """The nested statements planned so far."""
+    var pending: Optional[Pending]
+    """The nested statement this planner stopped for, when it did."""
 
     var agg_nodes: List[Int]
     """AST index of each aggregate call found in the query."""
@@ -1568,10 +1861,22 @@ struct Planner(Copyable, Movable):
     """Columns added to the projection only so a sort key exists, and dropped
     again once the sort has run."""
 
-    def __init__(out self, var ast: Ast, var catalog: Catalog):
+    def __init__(
+        out self,
+        var ast: Ast,
+        var catalog: Catalog,
+        var outers: List[Scope] = List[Scope](),
+        outer_grouped: Bool = False,
+        var planned: Planned = Planned(0),
+    ):
         self.ast = ast^
         self.catalog = catalog^
         self.scope = Scope()
+        self.outers = outers^
+        self.outer_grouped = outer_grouped
+        self.where_rest = List[Int]()
+        self.planned = planned^
+        self.pending = None
         self.agg_nodes = List[Int]()
         self.agg_values = List[DynValue]()
         self.agg_outputs = List[String]()
@@ -1622,7 +1927,18 @@ struct Planner(Copyable, Movable):
         # interior reference.
         var node = self.ast.nodes[index].copy()
         if node.kind == "column":
-            return column(self.scope.resolve(node.qualifier, node.text))
+            return self.visit_column(node)
+        if node.kind == "subquery":
+            return scalar_subquery(self.value_query(node.value))
+        if node.kind == "exists":
+            return exists(self.plan_query(node.value, correlated=True))
+        if node.kind == "in_subquery" or node.kind == "not_in_subquery":
+            var probe = in_subquery(
+                self.translate(node.a), self.value_query(node.value)
+            )
+            # `not_` over the test is the test's own negation, `NOT IN`'s
+            # three-valued rule included.
+            return not_(probe^) if node.kind == "not_in_subquery" else probe^
         if node.kind == "int":
             return literal(self.integer_literal(Int(node.text)))
         if node.kind == "float":
@@ -1664,6 +1980,86 @@ struct Planner(Copyable, Movable):
         return self.apply_operator(
             node.kind, self.translate(node.a), self.translate(node.b)
         )
+
+    def visit_column(self, node: Node) raises -> RuntimeValue:
+        """A column of this query's `FROM` items, or — failing that, inside a
+        subquery — of the enclosing query's, read as `outer(name)` under the
+        name it has *there*. The qualifier decides which: `lineitem l1`
+        outside and `lineitem l2` inside share every column name, and only
+        `l1.` and `l2.` tell them apart."""
+        var local = self.scope.has(node.qualifier, node.text)
+        if local or len(self.outers) == 0:
+            return column(self.scope.resolve(node.qualifier, node.text))
+        if self.outers[0].has(node.qualifier, node.text):
+            if self.outer_grouped:
+                raise NotImplementedError(
+                    t"sql: a subquery read after GROUP BY cannot reference "
+                    t"the enclosing query's '{node.qualified_name()}'"
+                )
+            return outer(self.outers[0].resolve(node.qualifier, node.text))
+        for i in range(1, len(self.outers)):
+            if self.outers[i].has(node.qualifier, node.text):
+                raise NotImplementedError(
+                    t"sql: '{node.qualified_name()}' belongs to a query "
+                    t"{i + 1} levels out; a subquery may reference only the "
+                    t"query immediately enclosing it"
+                )
+        return column(self.scope.resolve(node.qualifier, node.text))
+
+    def plan_query(
+        mut self, query: Int, correlated: Bool
+    ) raises -> DynRelation:
+        """The nested statement `query`'s plan, once `plan_statement` has
+        built it. Until then, what it needs — this query's scope as its
+        nearest enclosing one when it may correlate, and this catalogue — is
+        recorded as `pending` and the planning stops, to be retried once
+        that plan exists.
+
+        Nested queries are planned by that loop rather than by calling
+        `build` from here: a planner reaching itself through `translate` is
+        mutual recursion, which the compiler can deadlock on.
+        """
+        if self.planned.has(query):
+            return self.planned.get(query)
+        var outers = List[Scope]()
+        if correlated:
+            outers.append(self.scope.copy())
+            for ref scope in self.outers:
+                outers.append(scope.copy())
+        self.pending = Optional(
+            Pending(
+                query, outers^, correlated and self.grouped, self.catalog.copy()
+            )
+        )
+        raise InternalError(
+            t"sql planner: nested query {query} is not planned yet"
+        )
+
+    def value_query(mut self, query: Int) raises -> DynRelation:
+        """A subquery read as a value — `(SELECT ...)` or `IN (SELECT ...)`
+        — which must answer with one column."""
+        var relation = self.plan_query(query, correlated=True)
+        var width = len(relation.schema())
+        if width != 1:
+            raise InvalidError(
+                t"sql: a subquery used as a value must select one column, "
+                t"not {width}"
+            )
+        return relation^
+
+    def plan_ctes(mut self) raises:
+        """Each `WITH` entry planned, in order, and put ahead of the tables in
+        the catalogue — so a later entry, the statement and its subqueries
+        all read it, and it shadows a table of the same name. An entry read
+        more than once is `shared`, so it is computed once per execution."""
+        for i in range(len(self.ast.ctes)):
+            var cte = self.ast.ctes[i].copy()
+            var relation = self.plan_query(cte.query, correlated=False)
+            if self.ast.reads(cte.name) > 1:
+                relation = relation.shared()
+            self.catalog.sources.insert(
+                0, CatalogTable(cte.name.copy(), relation^)
+            )
 
     @staticmethod
     def is_aggregate_name(name: String) -> Bool:
@@ -2089,19 +2485,50 @@ struct Planner(Copyable, Movable):
 
     def source(mut self) raises -> DynRelation:
         """`FROM` and its joins, with the scope they establish."""
-        ref select = self.ast.select
-        if select.table == "":
+        var select = self.ast.select.copy()
+        if select.table == "" and select.table_query == NONE:
             raise NotImplementedError("sql: FROM is required")
-        var relation = self.catalog.get(select.table)
-        var qualifier = (
-            select.table_alias.copy() if select.table_alias
-            != "" else select.table.copy()
-        )
+        var conjuncts = List[Int]()
+        self.conjuncts_of(select.predicate, conjuncts)
+        self.where_rest = conjuncts^
+        var relation = self.from_relation(select.table, select.table_query)
+        var qualifier = Planner.qualifier_of(select.table, select.table_alias)
         for ref name in relation.schema().names():
             self.scope.add(qualifier.copy(), name.copy(), name.copy())
         if len(select.joins) == 0:
             return relation^
         return self.joins(relation^)
+
+    def conjuncts_of(self, index: Int, mut into: List[Int]):
+        """`index` split on `AND`, in written order."""
+        if index == NONE:
+            return
+        ref node = self.ast.nodes[index]
+        if node.kind == "and":
+            self.conjuncts_of(node.a, into)
+            self.conjuncts_of(node.b, into)
+        else:
+            into.append(index)
+
+    def from_relation(
+        mut self, table: String, query: Int
+    ) raises -> DynRelation:
+        """A `FROM` item's relation: a derived table, planned on its own —
+        it cannot see the query it sits in — or a name the catalogue holds,
+        a CTE among them."""
+        if query != NONE:
+            return self.plan_query(query, correlated=False)
+        return self.catalog.get(table)
+
+    @staticmethod
+    def qualifier_of(table: String, alias_name: String) -> String:
+        """What a `FROM` item's columns are qualified by: its alias, else its
+        table's name, else DuckDB's name for an unaliased derived table."""
+        if alias_name != "":
+            return alias_name.copy()
+        if table != "":
+            return table.copy()
+        return String("unnamed_subquery")
 
     def joins(mut self, var relation: DynRelation) raises -> DynRelation:
         """Each join, after canonicalising both sides to `qualifier.column`.
@@ -2110,64 +2537,185 @@ struct Planner(Copyable, Movable):
         and `dept.did` would both arrive as `did` and every later reference to
         either would be ambiguous. Renaming first costs one `Project` per join
         and makes the ambiguity impossible instead of merely unlikely.
+
+        A comma-separated item is an inner join on every `WHERE` conjunct
+        equating one of its columns with one already joined; those conjuncts
+        leave the filter. Items join in written order, except that a comma
+        item with no such equality waits for the first later one that has
+        one — `FROM part, supplier, partsupp` joins `partsupp` before
+        `supplier`, as the query's keys connect them — so a `FROM` list need
+        not be written in join order. A comma item that never connects is a
+        cross join, which is refused. The scope keeps written order, so `*`
+        does too.
         """
         relation = self.canonicalise(relation^)
-        for ref join in self.ast.select.joins:
-            var right = self.catalog.get(join.table)
-            var right_qualifier = (
-                join.alias_name.copy() if join.alias_name
-                != "" else join.table.copy()
-            )
+        var joins = self.ast.select.joins.copy()
+        var first = self.scope.copy()
+        var rights = List[DynRelation](capacity=len(joins))
+        var scopes = List[Scope](capacity=len(joins))
+        for ref join in joins:
+            var right = self.from_relation(join.table, join.query)
+            var qualifier = Planner.qualifier_of(join.table, join.alias_name)
             var right_scope = Scope()
             for ref name in right.schema().names():
                 right_scope.add(
-                    right_qualifier.copy(),
-                    name.copy(),
-                    right_qualifier + "." + name,
+                    qualifier.copy(), name.copy(), qualifier + "." + name
                 )
             var right_names = List[String](capacity=len(right_scope.bindings))
             for ref binding in right_scope.bindings:
                 right_names.append(binding.output.copy())
-            right = Planner.rename(right^, right_names)
+            rights.append(Planner.rename(right^, right_names))
+            scopes.append(right_scope^)
 
+        var done = List[Bool](length=len(joins), fill=False)
+        for _ in range(len(joins)):
+            var next = 0
+            while done[next]:
+                next += 1
+            var pick = next
             var left_keys = List[Int]()
             var right_keys = List[Int]()
-            var left_schema = relation.schema()
-            var right_schema = right.schema()
-            for i in range(len(join.left_keys)):
-                var a = Scope.split_qualified(join.left_keys[i])
-                var b = Scope.split_qualified(join.right_keys[i])
-                # Either side of the `ON` may be written first, so the side a
-                # key belongs to is decided by which relation has the column.
-                # `has` and not `resolve`: `ON d.did = e.did` asks the left
-                # scope about a right-hand column, which is a question rather
-                # than an error.
-                var a_on_left = self.scope.has(a[0], a[1])
-                var left_ref = a if a_on_left else b
-                var right_ref = b if a_on_left else a
-                left_keys.append(
-                    left_schema.get_field_index(
-                        self.scope.resolve(left_ref[0], left_ref[1])
+            if joins[next].kind == "comma":
+                var j = next
+                while j < len(joins) and joins[j].kind == "comma":
+                    if not done[j]:
+                        var keys = self.comma_keys(
+                            relation, rights[j], scopes[j]
+                        )
+                        if len(keys[0]) > 0:
+                            pick = j
+                            left_keys = keys[0].copy()
+                            right_keys = keys[1].copy()
+                            var rest = List[Int]()
+                            for c in self.where_rest:
+                                if c not in keys[2]:
+                                    rest.append(c)
+                            self.where_rest = rest^
+                            break
+                    j += 1
+                if len(left_keys) == 0:
+                    var name = Planner.qualifier_of(
+                        joins[next].table, joins[next].alias_name
                     )
-                )
-                right_keys.append(
-                    right_schema.get_field_index(
-                        right_scope.resolve(right_ref[0], right_ref[1])
+                    raise NotImplementedError(
+                        t"sql: FROM item '{name}' is not equated with the "
+                        t"items before it in WHERE; cross joins are not "
+                        t"supported"
                     )
-                )
-            for i in range(len(left_keys)):
-                if left_keys[i] < 0 or right_keys[i] < 0:
-                    raise KeyError("sql: join key not found in either table")
+            else:
+                var keys = self.on_keys(relation, joins[next], scopes[next])
+                left_keys = keys[0].copy()
+                right_keys = keys[1].copy()
             relation = relation.join(
-                right^, left_keys^, right_keys^, join.to_kind()
+                rights[pick].copy(),
+                left_keys^,
+                right_keys^,
+                joins[pick].to_kind(),
             )
-            for i in range(len(right_scope.bindings)):
+            for ref binding in scopes[pick].bindings:
                 self.scope.add(
-                    right_scope.bindings[i].qualifier.copy(),
-                    right_scope.bindings[i].name.copy(),
-                    right_scope.bindings[i].output.copy(),
+                    binding.qualifier.copy(),
+                    binding.name.copy(),
+                    binding.output.copy(),
                 )
+            done[pick] = True
+
+        var written = first^
+        for ref scope in scopes:
+            for ref binding in scope.bindings:
+                written.add(
+                    binding.qualifier.copy(),
+                    binding.name.copy(),
+                    binding.output.copy(),
+                )
+        self.scope = written^
         return relation^
+
+    def on_keys(
+        self, relation: DynRelation, join: Join, right_scope: Scope
+    ) raises -> Tuple[List[Int], List[Int]]:
+        """An explicit join's `ON` keys, as positions on either side."""
+        var left_keys = List[Int]()
+        var right_keys = List[Int]()
+        var left_schema = relation.schema()
+        # The right side was renamed to its bindings' outputs, in order.
+        var right_names = List[String]()
+        for ref binding in right_scope.bindings:
+            right_names.append(binding.output.copy())
+        for i in range(len(join.left_keys)):
+            var a = Scope.split_qualified(join.left_keys[i])
+            var b = Scope.split_qualified(join.right_keys[i])
+            # Either side of the `ON` may be written first, so the side a
+            # key belongs to is decided by which relation has the column.
+            # `has` and not `resolve`: `ON d.did = e.did` asks the left
+            # scope about a right-hand column, which is a question rather
+            # than an error.
+            var a_on_left = self.scope.has(a[0], a[1])
+            var left_ref = a if a_on_left else b
+            var right_ref = b if a_on_left else a
+            left_keys.append(
+                left_schema.get_field_index(
+                    self.scope.resolve(left_ref[0], left_ref[1])
+                )
+            )
+            right_keys.append(
+                Scope.position(
+                    right_names, right_scope.resolve(right_ref[0], right_ref[1])
+                )
+            )
+        for i in range(len(left_keys)):
+            if left_keys[i] < 0 or right_keys[i] < 0:
+                raise KeyError("sql: join key not found in either table")
+        return (left_keys^, right_keys^)
+
+    def comma_keys(
+        self, relation: DynRelation, right: DynRelation, right_scope: Scope
+    ) raises -> Tuple[List[Int], List[Int], List[Int]]:
+        """The keys joining a comma-separated `FROM` item: every remaining
+        `WHERE` conjunct `a = b` where one column is only on the joined side
+        and the other only on this item. Answers the left and right positions
+        and the conjuncts they came from."""
+        var left_keys = List[Int]()
+        var right_keys = List[Int]()
+        var used = List[Int]()
+        var left_schema = relation.schema()
+        var right_schema = right.schema()
+        for c in self.where_rest:
+            ref node = self.ast.nodes[c]
+            if node.kind != "=":
+                continue
+            ref a = self.ast.nodes[node.a]
+            ref b = self.ast.nodes[node.b]
+            if a.kind != "column" or b.kind != "column":
+                continue
+            var a_left = self.scope.has(a.qualifier, a.text)
+            var a_right = right_scope.has(a.qualifier, a.text)
+            var b_left = self.scope.has(b.qualifier, b.text)
+            var b_right = right_scope.has(b.qualifier, b.text)
+            var lhs: Int
+            var rhs: Int
+            if a_left and not a_right and b_right and not b_left:
+                lhs = node.a
+                rhs = node.b
+            elif b_left and not b_right and a_right and not a_left:
+                lhs = node.b
+                rhs = node.a
+            else:
+                continue
+            ref l = self.ast.nodes[lhs]
+            ref r = self.ast.nodes[rhs]
+            left_keys.append(
+                left_schema.get_field_index(
+                    self.scope.resolve(l.qualifier, l.text)
+                )
+            )
+            right_keys.append(
+                right_schema.get_field_index(
+                    right_scope.resolve(r.qualifier, r.text)
+                )
+            )
+            used.append(c)
+        return (left_keys^, right_keys^, used^)
 
     @staticmethod
     def rename(
@@ -2288,6 +2836,7 @@ struct Planner(Copyable, Movable):
         return keys^
 
     def build(mut self) raises -> DynRelation:
+        self.plan_ctes()
         if len(self.ast.branches) > 0:
             return self.build_compound()
         else:
@@ -2299,10 +2848,16 @@ struct Planner(Copyable, Movable):
         self.schema = relation.schema()
         ref select = self.ast.select
 
-        if select.predicate != NONE:
-            if self.contains_aggregate(select.predicate):
-                raise InvalidError("sql: WHERE cannot contain an aggregate")
-            relation = relation.filter(self.translate(select.predicate))
+        if len(self.where_rest) > 0:
+            var predicate = Optional[RuntimeValue](None)
+            for c in self.where_rest.copy():
+                if self.contains_aggregate(c):
+                    raise InvalidError("sql: WHERE cannot contain an aggregate")
+                var term = self.translate(c)
+                predicate = Optional(
+                    and_(predicate.value().copy(), term^)
+                ) if predicate else Optional(term^)
+            relation = relation.filter(predicate.value().copy())
 
         var projected: Tuple[List[String], List[DynValue]]
         var having = Optional[RuntimeValue](None)
@@ -2380,8 +2935,19 @@ struct Planner(Copyable, Movable):
         for ref branch in branches:
             var ast = self.ast.copy()
             ast.select = branch.copy()
-            var planner = Planner(ast^, self.catalog.copy())
-            relations.append(planner.build_select())
+            var planner = Planner(
+                ast^,
+                self.catalog.copy(),
+                self.outers.copy(),
+                self.outer_grouped,
+                self.planned.copy(),
+            )
+            try:
+                relations.append(planner.build_select())
+            except e:
+                # A branch stopping for a nested query stops the statement.
+                self.pending = planner.pending.copy()
+                raise e^
         var compounds = self.ast.compounds.copy()
         var i = 0
         while i < len(compounds):
@@ -2494,5 +3060,46 @@ def sql(var query: String, var catalog: Catalog) raises -> DynRelation:
     var ast = Parser.parse(query^)
     if not ast.ok():
         raise InvalidError(t"sql: {ast.error} (at offset {ast.error_pos})")
-    var planner = Planner(ast^, catalog^)
-    return planner.build()
+    var plan = plan_statement(ast, catalog^)
+    # A subquery's value is read from what `Decorrelate` plans around it, so
+    # a plan holding one does not run until that pass has.
+    return Decorrelate.apply(plan)
+
+
+def plan_statement(ast: Ast, var catalog: Catalog) raises -> DynRelation:
+    """The parsed statement as a plan, its nested statements planned first.
+
+    A loop over a stack of statements rather than recursion: a planner that
+    reaches a nested statement not yet planned records it as `pending` and
+    stops; the nested one is planned — stopping in turn for its own — and the
+    stopped planner starts over with it in hand. A statement is planned at
+    most once per nested statement it holds, and planning builds a plan
+    without running anything, so starting over is cheap.
+    """
+    var planned = Planned(len(ast.queries))
+    var stack = List[Pending]()
+    stack.append(Pending(NONE, List[Scope](), False, catalog^))
+    while True:
+        var frame = stack[len(stack) - 1].copy()
+        var planner = Planner(
+            ast.statement(frame.query),
+            frame.catalog.copy(),
+            frame.outers.copy(),
+            frame.outer_grouped,
+            planned.copy(),
+        )
+        try:
+            var plan = planner.build()
+            _ = stack.pop()
+            if len(stack) == 0:
+                return plan^
+            planned.set(frame.query, plan^)
+        except e:
+            if not planner.pending:
+                raise e^
+            var next = planner.pending.value().copy()
+            if planned.has(next.query):
+                raise InternalError(
+                    t"sql planner: nested query {next.query} planned twice"
+                )
+            stack.append(next^)

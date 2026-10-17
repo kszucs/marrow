@@ -90,6 +90,7 @@ from marrow.expr.runtime.values import (
     literal as _literal,
     not_ as _not,
     or_ as _or,
+    outer as _outer,
     ternary_verbs as _ternary_verbs,
     unary_verbs as _unary_verbs,
 )
@@ -345,6 +346,10 @@ def expr_isin(
     value: PythonObject, value_set: PythonObject
 ) raises -> PythonObject:
     return wrap_expr(_isin(unwrap(value), DynArray(py=value_set)))
+
+
+def expr_outer(name: PythonObject) raises -> PythonObject:
+    return wrap_expr(_outer(String(py=name)))
 
 
 def expr_like(
@@ -646,6 +651,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[expr_not]("expr_not")
     mb.def_function[expr_cast]("expr_cast")
     mb.def_function[expr_isin]("expr_isin")
+    mb.def_function[expr_outer]("expr_outer")
     mb.def_function[expr_like]("expr_like")
     mb.def_function[expr_ilike]("expr_ilike")
     mb.def_function[expr_date_trunc]("expr_date_trunc")

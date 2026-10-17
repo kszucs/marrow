@@ -888,6 +888,21 @@ struct HashJoin[Hash: Hasher = KeyHash]:
             probe.append(parts[i].probe.copy())
         return JoinIndex(Int32Builder.concat(build), Int32Builder.concat(probe))
 
+    def pairs(
+        self, data: StructArray, key_indices: List[Int], ctx: ExecContext
+    ) raises -> JoinIndex:
+        """Every `(build_row, probe_row)` of `data` whose keys are equal under
+        `=` — the candidates a condition beyond the keys is evaluated over."""
+        return self._table.candidates(
+            Self._key_columns(data, key_indices),
+            False,
+            ctx.for_batch(len(data)),
+        )
+
+    def build_column(self, index: Int) -> DynArray:
+        """Build-side column `index`, windowed to the rows `pairs` names."""
+        return self._build_columns[index].copy()
+
     def num_build_rows(self) -> Int:
         return self._build.length
 

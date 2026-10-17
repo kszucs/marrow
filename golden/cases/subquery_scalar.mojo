@@ -14,7 +14,6 @@ def plan() raises -> DynRelation:
     smallest step beyond the join-shaped subqueries `subquery_in` and
     `subquery_exists` cover.
 
-    -- skip mojo
     -- skip python
 
     -- expected
@@ -25,7 +24,5 @@ def plan() raises -> DynRelation:
     var threshold = table("nulls").aggregate(
         aggs=[col("b", int64).mean().alias("m")]
     )
-    var t = table("basic")
-    return t.filter(col("v", int64) > scalar_of(threshold)).sort_by(
-        [col("v", int64)], [True]
-    )
+    var plan = table("basic").filter(col("v") > scalar(threshold))
+    return plan.optimize[SubqueryRules]().sort_by([col("v", int64)], [True])

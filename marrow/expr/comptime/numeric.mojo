@@ -70,6 +70,7 @@ from ..index import Index, keep_every
 from ...engine.core import Datum
 
 from .rules import promote, wider, widest_shape
+from .subqueries import bare_reads
 from .core import (
     BoolValue,
     ColumnBound,
@@ -455,6 +456,13 @@ struct NumericCompare[
             self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
         )
 
+    def equates(self) -> Bool:
+        """Equality between two bare reads — a decorrelation join key."""
+        comptime if Self.K.name == EqKernel.name:
+            return bare_reads(self.l, self.r)
+        else:
+            return False
+
     def mask(
         self, index: Index, bindings: Bindings = Bindings()
     ) raises -> BoolArray:
@@ -702,6 +710,13 @@ struct TemporalCompare[
             self.l.lane[W](bound[0], idx).cast[Self.ArgType.native](),
             self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
         )
+
+    def equates(self) -> Bool:
+        """Equality between two bare reads — a decorrelation join key."""
+        comptime if Self.K.name == EqKernel.name:
+            return bare_reads(self.l, self.r)
+        else:
+            return False
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

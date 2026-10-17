@@ -237,6 +237,18 @@ class LazyTable(_Wrapper):
     # ibis spells `with_columns` as `mutate`. Both work.
     mutate = with_columns
 
+    def shared(self):
+        """This table, computed once per ``collect()`` however many places
+        read it — a ``WITH`` query used twice. Wrap it once and use the
+        result everywhere."""
+        return LazyTable.wrap(self._binding.shared())
+
+    def as_scalar(self):
+        """``(SELECT ...)`` — this one-column table's single value, as an
+        expression another table's verbs can read: null when it has no row, an
+        error when it has more than one."""
+        return Column.wrap(_ma.subquery_scalar(self._binding))
+
     def filter(self, predicate):
         """Keep rows where ``predicate`` is true."""
         return LazyTable.wrap(self._binding.filter(unwrap(predicate)))

@@ -11,12 +11,15 @@ def plan() raises -> DynRelation:
     `IN (subquery)` is a semi join: each left row appears once however
     many right rows it matches, and a NULL key matches nothing.
 
+    -- skip python
+
     -- expected
     eid:int64	dept:int64
     1	10
     2	20
     3	20
     """
-    var left = table("emp")
-    var joined = left.join(table("dept"), [1], [0], JOIN_SEMI)
-    return joined.sort_by([col("eid", int64)], [True])
+    var plan = table("emp").filter(
+        is_in(col("dept"), table("dept").select(["did"]))
+    )
+    return plan.optimize[SubqueryRules]().sort_by([col("eid", int64)], [True])

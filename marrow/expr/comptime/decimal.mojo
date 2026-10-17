@@ -71,6 +71,7 @@ from ...schema import Schema
 from ..logical import Shape
 from ..logical import Bindings
 from .rules import wider, widest_shape
+from .subqueries import bare_reads
 from .core import (
     BoolValue,
     ColumnBound,
@@ -322,6 +323,13 @@ struct DecimalCompare[
             self.l.lane[W](bound[0], idx).cast[Self.NativeType]() * bound[2],
             self.r.lane[W](bound[1], idx).cast[Self.NativeType]() * bound[3],
         )
+
+    def equates(self) -> Bool:
+        """Equality between two bare reads — a decorrelation join key."""
+        comptime if Self.K.name == EqKernel.name:
+            return bare_reads(self.l, self.r)
+        else:
+            return False
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

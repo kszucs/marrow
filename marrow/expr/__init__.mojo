@@ -32,14 +32,17 @@ from .builders import (
     col,
     count_star,
     dense_rank,
+    exists,
     if_else,
     is_in,
     lit,
     maximum,
     minimum,
+    outer,
     param,
     rank,
     row_number,
+    scalar,
     scan,
     scan_avro,
     scan_iceberg,
@@ -78,9 +81,13 @@ from .logical import (
     Project,
     References,
     Relation,
+    ScalarBinding,
     ScanPath,
+    Shared,
     Shape,
     Sort,
+    Subquery,
+    SubqueryKind,
     Union,
     Value,
     Window,
@@ -152,6 +159,16 @@ from .`comptime`.core import (
     TemporalValue,
 )
 from .`comptime`.nested import ArrayContains, ListLength
+from .`comptime`.subqueries import (
+    DecimalScalarSubquery,
+    NumericScalarSubquery,
+    OuterDecimalColumn,
+    OuterNumericColumn,
+    OuterStringColumn,
+    OuterTemporalColumn,
+    StringScalarSubquery,
+    TemporalScalarSubquery,
+)
 from .`comptime`.leaves import (
     BinaryColumn,
     BinaryLiteral,
@@ -230,6 +247,7 @@ from .runtime.aggregates import RuntimeAggregate
 from .runtime.values import RuntimeValue
 
 from .analyze import analyze, summarize
+from .decorrelate import Decorrelate
 from .optimizer import (
     JoinOrdering,
     AllRules,
@@ -252,6 +270,7 @@ from .optimizer import (
     RemoveNoOpProject,
     RemoveRedundantSort,
     ScanPruning,
+    SubqueryRules,
     Rule,
     RuleSet,
     TopN,

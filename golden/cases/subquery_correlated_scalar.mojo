@@ -13,7 +13,6 @@ def plan() raises -> DynRelation:
     not a filter — and the unmatched rows answer 0, which is `count(*)`'s
     answer over an empty relation rather than a null from an outer join.
 
-    -- skip mojo
     -- skip python
 
     -- expected
@@ -25,11 +24,14 @@ def plan() raises -> DynRelation:
     'south'	5	1
     'south'	20	1
     """
-    var t = table("sales")
-    var counts = table("regions").aggregate(
-        keys=[col("region", string)], aggs=[count_star().alias("n")]
+    var counts = (
+        table("regions")
+        .filter(eq(col("region"), outer("region")))
+        .aggregate(aggs=[count_star().alias("n")])
     )
-    var joined = t.join(counts, [0], [0], JOIN_LEFT)
-    return joined.select(["region", "qty", "n"]).sort_by(
-        [col("region", string), col("qty", int32)], [True, True]
+    var plan = table("sales").with_columns(["n"], [scalar(counts)])
+    return (
+        plan.select(["region", "qty", "n"])
+        .optimize[SubqueryRules]()
+        .sort_by([col("region", string), col("qty", int32)], [True, True])
     )

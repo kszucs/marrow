@@ -26,6 +26,16 @@ from .`comptime`.boolean import IsIn
 from .`comptime`.numeric import CaseWhen, Maximum, Minimum
 from .`comptime`.core import BoolValue, ComptimeValue, ListValue, NumericValue
 from .`comptime`.nested import ArrayContains, ListLength
+from .`comptime`.subqueries import (
+    DecimalScalarSubquery,
+    NumericScalarSubquery,
+    OuterDecimalColumn,
+    OuterNumericColumn,
+    OuterStringColumn,
+    OuterTemporalColumn,
+    StringScalarSubquery,
+    TemporalScalarSubquery,
+)
 from .`comptime`.leaves import (
     BinaryColumn,
     BinaryLiteral,
@@ -87,6 +97,10 @@ from .runtime.values import RuntimeValue, column, literal
 from .runtime.values import array_contains as _rt_array_contains
 from .runtime.values import array_length as _rt_array_length
 from .runtime.values import isin as _rt_isin
+from .runtime.values import exists as _rt_exists
+from .runtime.values import in_subquery as _rt_in_subquery
+from .runtime.values import outer as _rt_outer
+from .runtime.values import scalar_subquery as _rt_scalar_subquery
 from .runtime.values import maximum as _rt_maximum
 from .runtime.values import minimum as _rt_minimum
 from ..arrays import DynArray
@@ -500,6 +514,105 @@ def is_in[A: ComptimeValue](var a: A, var value_set: DynArray) -> IsIn[A]:
 def is_in(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
     """The runtime lane's `is_in`, spelled `isin` inside that lane."""
     return _rt_isin(a^, value_set^)
+
+
+# ---------------------------------------------------------------------------
+# subqueries
+# ---------------------------------------------------------------------------
+# A subquery is a value over a relation. Inside it, `outer(name)` reads the
+# enclosing query's column, which is what makes it correlated. A plan holding
+# one runs once it is optimized — `.optimize[SubqueryRules]()` or
+# `.optimize[AllRules]()` — which plans each subquery as the join, aggregate
+# or binding that computes it.
+
+
+def is_in(var a: RuntimeValue, subquery: DynRelation) -> RuntimeValue:
+    """`a IN (SELECT ...)` against a one-column relation, with SQL's
+    three-valued answer; negate with `not_` for `NOT IN`."""
+    return _rt_in_subquery(a^, subquery.copy())
+
+
+def exists(subquery: DynRelation) -> RuntimeValue:
+    """`EXISTS (SELECT ...)` — whether the relation has a row; negate with
+    `not_` for `NOT EXISTS`."""
+    return _rt_exists(subquery.copy())
+
+
+def scalar(subquery: DynRelation) -> RuntimeValue:
+    """`(SELECT ...)` — the one value of a one-column relation: null when it
+    has no row, an error when it has more than one."""
+    return _rt_scalar_subquery(subquery.copy())
+
+
+def outer(var name: String) -> RuntimeValue:
+    """Column `name` of the query enclosing this subquery."""
+    return _rt_outer(name^)
+
+
+def is_in[A: ComptimeValue](var a: A, subquery: DynRelation) -> RuntimeValue:
+    """`a IN (SELECT ...)` over a fused operand.
+
+    The test is the runtime lane's node in either lane: it becomes a semi or
+    anti join and is never evaluated, so there is nothing to fuse — and being
+    one node is what lets `not_` turn it into `NOT IN`. The operand stays
+    fused, boxed whole."""
+    return _rt_in_subquery(a^, subquery.copy())
+
+
+def scalar[
+    T: NumericType
+](subquery: DynRelation, dtype: T) -> NumericScalarSubquery[T]:
+    """`(SELECT ...)` as a typed value, fused into what it is combined with.
+
+    `dtype` is the subquery's one column's, checked when the value is read.
+    Uncorrelated, it prunes row groups as a parameter does."""
+    return NumericScalarSubquery[T](subquery.copy())
+
+
+def scalar[
+    T: TemporalType
+](subquery: DynRelation, dtype: T) -> TemporalScalarSubquery[T]:
+    """`(SELECT ...)` producing a date/time/timestamp/duration."""
+    return TemporalScalarSubquery[T](subquery.copy(), dtype)
+
+
+def scalar[
+    T: DecimalType
+](subquery: DynRelation, dtype: T) -> DecimalScalarSubquery[T]:
+    """`(SELECT ...)` producing a decimal."""
+    return DecimalScalarSubquery[T](subquery.copy(), dtype)
+
+
+def scalar[
+    T: StringLikeType
+](subquery: DynRelation, dtype: T) -> StringScalarSubquery[T]:
+    """`(SELECT ...)` producing a string."""
+    return StringScalarSubquery[T](subquery.copy())
+
+
+def outer[T: NumericType](var name: String, dtype: T) -> OuterNumericColumn[T]:
+    """Numeric column `name` of the query enclosing this subquery, fused like
+    `col(name, dtype)`."""
+    return OuterNumericColumn[T](name^)
+
+
+def outer[
+    T: TemporalType
+](var name: String, dtype: T) -> OuterTemporalColumn[T]:
+    """Temporal column `name` of the enclosing query."""
+    return OuterTemporalColumn[T](name^, dtype)
+
+
+def outer[T: DecimalType](var name: String, dtype: T) -> OuterDecimalColumn[T]:
+    """Decimal column `name` of the enclosing query."""
+    return OuterDecimalColumn[T](name^, dtype)
+
+
+def outer[
+    T: StringLikeType
+](var name: String, dtype: T) -> OuterStringColumn[T]:
+    """String column `name` of the enclosing query."""
+    return OuterStringColumn[T](name^)
 
 
 # ---------------------------------------------------------------------------

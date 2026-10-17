@@ -37,8 +37,10 @@ themselves, so the optimizer holds no ladder over node types and a relation
 added later needs no change there.
 """
 
+from std.atomic import Atomic
 from std.builtin.rebind import downcast
 from std.collections import Dict, Set
+from std.ffi import _Global
 from std.memory import ArcPointer
 from std.os import abort
 
@@ -50,6 +52,7 @@ from ..errors import (
     TypeError,
 )
 from ..arrays import BoolArray, DynArray, StructArray
+from ..builders import nulls
 from ..execution import ExecContext
 from ..kernels.join import (
     BUILD_LEFT,
@@ -79,8 +82,8 @@ from ..io import StorageOptions
 from ..schema import Schema, schema
 from ..iceberg.catalog import IcebergTable
 from ..tabular import RecordBatch
-from ..dtypes import DynType, Field, StringType, field, int64, null
-from ..scalars import DynScalar
+from ..dtypes import DynType, Field, StringType, bool_, field, int64, null
+from ..scalars import BoolScalar, DynScalar
 from ..utils.enum import Enum, UniqueVariant, widen
 from .estimates import (
     Approx,
@@ -115,6 +118,7 @@ from .physical import (
     ProjectOperator,
     MultisetOperator,
     RenamedPredicate,
+    ResidualJoinOperator,
     SelectOperator,
     SortOperator,
     TopNOperator,
@@ -141,6 +145,7 @@ from ..engine import (
     PlanReport,
     StreamSource,
     append_each,
+    rows_of,
     runs_in_parallel,
 )
 
@@ -291,6 +296,26 @@ trait Value(Copyable, Deinitable, Writable):
         `RuntimeValue` overrides it; a comptime literal could too, but a fused
         predicate that is constant is a program someone wrote by hand.
         """
+        return None
+
+    def equates(self) -> Bool:
+        """Whether this is `a = b` between two bare reads — a column, or a
+        column of the enclosing query (`outer`).
+
+        What decorrelation asks of a subquery's conjunct: one that equates an
+        inner column with an outer one is a join key, anything else that reads
+        the enclosing query is evaluated per candidate pair. Read once, when a
+        value is boxed, and kept on the box, so it survives every rewrite that
+        rebuilds a filter through the erased `.filter()` overload.
+
+        Defaulted to `False`, which costs a hash key and never an answer.
+        """
+        return False
+
+    def subquery(self) -> Optional[Subquery]:
+        """The subquery this value is, when it is a subquery node and nothing
+        more — the shape a filter conjunct must have to become a semi or anti
+        join rather than a column the filter reads."""
         return None
 
     # -- the window functions that read this value --------------------------
@@ -546,6 +571,14 @@ struct DynValue(Copyable, Movable, Writable):
     var _shape: Shape
     var _aggregates: Bool
     var _windowed: Bool
+    var _subquery: Bool
+    """Whether `Value.subquery` answers, read at construction for the reason
+    `_equates` is."""
+    var _equates: Bool
+    """`Value.equates`, read at construction: the one analysis decorrelation
+    needs from a conjunct, kept here because every rewrite rebuilds filters
+    through the erased overload, after which no concrete type is left to
+    ask."""
     var _drop: def(var ArcPointer[NoneType]) thin
     """Erasure forgets the pointee's destructor; this carries it. See
     `DynOperator._virt_drop` for why the release has to happen at the true
@@ -654,6 +687,8 @@ struct DynValue(Copyable, Movable, Writable):
         self._to_operator = Self._to_operator_tramp[V]
         self._mask = Self._mask_tramp[V]
         self._windowed = conforms_to(V, WindowValue)
+        self._equates = value.equates()
+        self._subquery = Bool(value.subquery())
         comptime if conforms_to(V, WindowValue):
             self._window_spec = Self._window_spec_tramp[
                 downcast[V, WindowValue]
@@ -746,6 +781,39 @@ struct DynValue(Copyable, Movable, Writable):
         `aggregates` is one."""
         return self._windowed
 
+    def correlation(self) -> Optional[Tuple[String, String]]:
+        """`(inner, outer)` when this is `inner = outer(...)` — a subquery
+        conjunct decorrelation turns into a join key — else `None`."""
+        if not self._equates:
+            return None
+        var refs = References()
+        self.references(refs)
+        if len(refs.columns) != 1 or len(refs.outer_columns) != 1:
+            return None
+        return (refs.columns[0].copy(), refs.outer_columns[0].copy())
+
+    def subquery(self) -> Optional[Subquery]:
+        """The subquery this value *is*, when it is nothing but one."""
+        if not self._subquery:
+            return None
+        # A subquery records itself after everything it reads, an `IN`
+        # operand's own subqueries included.
+        var refs = References()
+        self.references(refs)
+        return refs.subqueries[len(refs.subqueries) - 1].copy()
+
+    def outer_columns(self) -> List[String]:
+        """The enclosing query's columns this value reads through `outer`."""
+        var refs = References()
+        self.references(refs)
+        return refs.outer_columns.copy()
+
+    def subqueries(self) -> List[Subquery]:
+        """The subqueries this value evaluates, once each."""
+        var refs = References()
+        self.references(refs)
+        return refs.subqueries.copy()
+
     def read_column(self) -> Optional[String]:
         """The column this value merely reads, or `None` when it computes: a
         read names exactly the one column it reads and is not an aggregate —
@@ -823,11 +891,211 @@ struct ParamSpec(Copyable, Movable):
 
 
 # ---------------------------------------------------------------------------
+# Subquery — a relation an expression reads
+# ---------------------------------------------------------------------------
+struct SubqueryKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
+    """What a subquery answers: its one value, whether it has a row, or
+    whether a value is among its rows."""
+
+    var _code: UInt8
+
+    comptime scalar = SubqueryKind(0)
+    """`(SELECT agg ...)` — its single row's single column, or null."""
+    comptime exists = SubqueryKind(1)
+    comptime not_exists = SubqueryKind(2)
+    comptime in_ = SubqueryKind(3)
+    """`x IN (SELECT ...)`. Trailing underscore because `in` is a keyword."""
+    comptime not_in = SubqueryKind(4)
+    """`x NOT IN (SELECT ...)` — SQL's three-valued rule, never `NOT` over
+    `IN`'s two-valued membership: a null on either side makes the answer
+    unknown rather than true."""
+
+    def __init__(out self, code: UInt8):
+        self._code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        return self._code == other._code
+
+    def __ne__(self, other: Self) -> Bool:
+        return self._code != other._code
+
+    def is_membership(self) -> Bool:
+        """`IN` or `NOT IN`: a test of an operand against the subquery's rows,
+        so its value is always a column, however uncorrelated."""
+        return self == Self.in_ or self == Self.not_in
+
+    def negated(self) -> Self:
+        """`NOT` of an existence or membership test; a scalar is unchanged."""
+        if self == Self.exists:
+            return Self.not_exists
+        if self == Self.not_exists:
+            return Self.exists
+        if self == Self.in_:
+            return Self.not_in
+        if self == Self.not_in:
+            return Self.in_
+        return self
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self == Self.scalar:
+            writer.write("scalar")
+        elif self == Self.exists:
+            writer.write("exists")
+        elif self == Self.not_exists:
+            writer.write("not_exists")
+        elif self == Self.in_:
+            writer.write("in")
+        else:
+            writer.write("not_in")
+
+
+def _no_plan_ids() -> Atomic[Int64]:
+    return Atomic[Int64](0)
+
+
+comptime _PLAN_IDS = _Global["marrow_plan_ids", _no_plan_ids]
+
+
+def _next_plan_id() -> Int:
+    """A process-unique id for a subquery or a shared relation, so two never
+    share a slot or a result however a plan was assembled."""
+    try:
+        return Int(_PLAN_IDS.get_or_create_ptr()[].fetch_add(1)) + 1
+    except e:
+        abort(String("plan: no id counter: ", e))
+
+
+struct Subquery(Copyable, Movable, Writable):
+    """A relation an expression reads, and what it asks of it.
+
+    Held by the subquery value nodes of both lanes and reported through
+    `References`, which is how the optimizer finds one inside an expression it
+    cannot open. **A subquery's value is a read of its slot**, `__sq<id>`: a
+    binding when it is uncorrelated and scalar, otherwise a column the
+    decorrelated plan adds below the node that reads it. Nothing rewrites the
+    expression, so a fused predicate stays fused.
+    """
+
+    var id: Int
+    var kind: SubqueryKind
+    var relation: ArcPointer[DynRelation]
+    var operand: Optional[ArcPointer[DynValue]]
+    """`IN`'s left operand, evaluated in the enclosing query; `None` for every
+    other kind. Held here rather than only on the value node, so a planner
+    that cannot open the node still finds the key it joins on."""
+    var outer: List[String]
+    """The enclosing query's columns the relation reads — empty when it is
+    uncorrelated. Read once: no rule rewrites a relation inside a value."""
+
+    def __init__(
+        out self,
+        kind: SubqueryKind,
+        var relation: DynRelation,
+        var operand: Optional[DynValue] = None,
+    ):
+        self.id = _next_plan_id()
+        self.kind = kind
+        self.outer = relation.outer_columns()
+        self.relation = ArcPointer(relation^)
+        if operand:
+            self.operand = ArcPointer(operand.take())
+        else:
+            self.operand = None
+
+    def negated(self) -> Self:
+        """The same subquery, its test negated. A new id: the two answer
+        different questions, so they may not share a slot."""
+        var out = self.copy()
+        out.id = _next_plan_id()
+        out.kind = self.kind.negated()
+        return out^
+
+    def slot(self) -> String:
+        """The binding or column this subquery's value is read from."""
+        return String("__sq", self.id)
+
+    @staticmethod
+    def outer_field(name: String) -> String:
+        """What the enclosing query's column `name` is called in a row the
+        subquery has been joined to — where a correlated predicate that is not
+        a join key is evaluated, and where `outer(name)` reads it."""
+        return String("__outer.", name)
+
+    def column_in(self, batch: StructArray) -> Int:
+        """Where `batch` holds this subquery's slot column, or -1."""
+        var slot = self.slot()
+        ref fields = batch.dtype.as_struct().fields
+        for i in range(len(fields)):
+            if fields[i].name == slot:
+                return i
+        return -1
+
+    def not_planned(self) -> InvalidError:
+        """The error a read of an unplanned subquery raises."""
+        return InvalidError(
+            t"subquery: {self} was not planned; optimize the plan first, "
+            t"e.g. `.optimize[SubqueryRules]()`"
+        )
+
+    def read(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        """This subquery's value over `batch`: its binding, or its column."""
+        var slot = self.slot()
+        if slot in bindings:
+            return Datum(bindings[slot].copy())
+        var i = self.column_in(batch)
+        if i == -1:
+            raise self.not_planned()
+        return Datum(batch.field(i))
+
+    def bound(self) -> Bool:
+        """Whether this subquery's value is a binding rather than a column:
+        an uncorrelated scalar or existence test answers once for the whole
+        query, so it is computed once and read as a parameter."""
+        return not self.kind.is_membership() and len(self.outer) == 0
+
+    def dtype(self) raises -> DynType:
+        """What the value produces: the relation's one column for a scalar,
+        a boolean for every test."""
+        if self.kind == SubqueryKind.scalar:
+            var schema = self.relation[].schema()
+            if len(schema) != 1:
+                raise InvalidError(
+                    t"subquery: a scalar subquery must produce one column, "
+                    t"got {len(schema)}"
+                )
+            return schema.fields[0].dtype.copy()
+        return DynType(bool_)
+
+    def references(self, mut into: References):
+        """What the value node reads in its own query: the subquery itself,
+        the enclosing query's columns it correlates on — which are ordinary
+        columns *there* — and every parameter its plan declares."""
+        if self.operand:
+            self.operand.value()[].references(into)
+        for ref c in self.outer:
+            into.column(c)
+        for ref p in self.relation[].params():
+            into.param(p.copy())
+        # A value read from a column is a read like any other, and saying so
+        # is what keeps `ColumnPruning` from narrowing the column away
+        # between the join that adds it and the node that reads it.
+        if not self.bound():
+            into.column(self.slot())
+        into.subquery(self)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.kind, "#", self.id)
+        if self.operand:
+            writer.write("(", self.operand.value()[], ")")
+
+
+# ---------------------------------------------------------------------------
 # References — what an expression reads from outside itself
 # ---------------------------------------------------------------------------
 struct References(Movable):
     """What an expression reads from outside itself: columns from the batch,
-    parameters from `Bindings`.
+    parameters from `Bindings`, the enclosing query's columns, and the
+    subqueries it evaluates.
 
     The one collector the structural walk fills, so a new kind of reference is
     a new field here rather than a second walk over every node.
@@ -839,9 +1107,32 @@ struct References(Movable):
     var params: List[ParamSpec]
     """Every occurrence, in walk order."""
 
+    var outer_columns: List[String]
+    """Columns of the *enclosing* query, read through `outer(name)`;
+    first-seen order, deduplicated. Non-empty only inside a subquery."""
+
+    var subqueries: List[Subquery]
+    """Every subquery evaluated, once per id, in walk order."""
+
     def __init__(out self):
         self.columns = List[String]()
         self.params = List[ParamSpec]()
+        self.outer_columns = List[String]()
+        self.subqueries = List[Subquery]()
+
+    def outer(mut self, name: String):
+        """Record a read of the enclosing query's column `name`, once."""
+        for ref c in self.outer_columns:
+            if c == name:
+                return
+        self.outer_columns.append(name.copy())
+
+    def subquery(mut self, sq: Subquery):
+        """Record a subquery, once per id."""
+        for ref s in self.subqueries:
+            if s.id == sq.id:
+                return
+        self.subqueries.append(sq.copy())
 
     def column(mut self, name: String):
         """Record a column read, once.
@@ -869,6 +1160,10 @@ struct References(Movable):
             self.column(c)
         for ref p in other.params:
             self.params.append(p.copy())
+        for ref c in other.outer_columns:
+            self.outer(c)
+        for ref s in other.subqueries:
+            self.subquery(s)
 
 
 def _operand_count[T: AnyType]() -> Int:
@@ -1325,7 +1620,9 @@ struct DynRelation(Copyable, Enum, Writable):
     in a plan containing neither. Measured at **+348%** of `__text` on
     `query_streaming`, with `kernels::cast` going 0 -> 694 symbols in the fused
     gates. A trampoline binds the single type its caller constructed, so a
-    binary links only the operators its plans actually use.
+    binary links only the operators its plans actually use. `references` is
+    one too: on the ladder, every node's walk was inlined into the binary
+    that reads a plan's parameters, whatever nodes its plan holds.
 
     `schema` and `write_to` stay on the variant ladder deliberately: also
     instantiated thirteen times, but one returns a stored field and the other
@@ -1357,6 +1654,9 @@ struct DynRelation(Copyable, Enum, Writable):
         JsonScan,
         AvroScan,
         IcebergScan,
+        ScalarBinding,
+        ResidualJoin,
+        Shared,
     ]
 
     var _storage: Self.Storage
@@ -1368,6 +1668,7 @@ struct DynRelation(Copyable, Enum, Writable):
     def __init__(out self, *, copy: Self):
         self._storage = Self.Storage(copy=copy._storage)
         self._virt_lower = copy._virt_lower
+        self._virt_references = copy._virt_references
 
     comptime Lowering = def(
         Self.Storage, mut Driver, Bindings
@@ -1376,6 +1677,11 @@ struct DynRelation(Copyable, Enum, Writable):
     var _virt_lower: Self.Lowering
     """Lowering, wired per **constructed** node type. See the struct docstring
     for the 348% this one slot is worth."""
+
+    var _virt_references: def(Self.Storage, mut References) thin
+    """`references`, wired per constructed node type like lowering: a ladder
+    over every member inlines every node's walk into every binary that reads
+    a plan's parameters."""
 
     @staticmethod
     def _lower_tramp[
@@ -1389,10 +1695,15 @@ struct DynRelation(Copyable, Enum, Writable):
     ]:
         return v.get[R]().lower(driver, bindings)
 
+    @staticmethod
+    def _references_tramp[R: Relation](v: Self.Storage, mut into: References):
+        v.get[R]().references(into)
+
     @implicit
     def __init__[R: Relation](out self, var value: R):
         self._storage = Self.Storage(value^)
         self._virt_lower = Self._lower_tramp[R]
+        self._virt_references = Self._references_tramp[R]
 
     def traverse[
         F: def(DynRelation) raises -> DynRelation
@@ -1429,26 +1740,9 @@ struct DynRelation(Copyable, Enum, Writable):
         return self.traverse(put)
 
     def references(self, mut into: References):
-        """`references` on whichever node this is.
-
-        Through `visit`, with each arm collecting into its own `References`
-        and one merge afterwards. An inline `isa` ladder writing straight into
-        `into` was tried and measured 24,152 bytes against this one's 3,132 on
-        `query_cli`: it inlines every node's walk into every arm."""
-
-        def job[T: Relation](node: T) raises {imm} -> References:
-            var refs = References()
-            node.references(refs)
-            return refs^
-
-        try:
-            into.extend(
-                self.try_visit[References, Relation](
-                    job, "DynRelation: no member matched"
-                )
-            )
-        except:
-            abort("DynRelation.references: no arm matched")
+        """`references` on whichever node this is, through the slot its
+        constructor wired."""
+        self._virt_references(self._storage, into)
 
     def params(self) -> List[ParamSpec]:
         """Every parameter this plan reads, once per name, in walk order —
@@ -1467,16 +1761,26 @@ struct DynRelation(Copyable, Enum, Writable):
                 out.append(spec.copy())
         return out^
 
+    def outer_columns(self) -> List[String]:
+        """The enclosing query's columns this plan reads through `outer` —
+        what makes a subquery correlated. Empty for a plan that is not one."""
+        var refs = References()
+        self.references(refs)
+        return refs.outer_columns.copy()
+
+    def subqueries(self) -> List[Subquery]:
+        """Every subquery this plan's expressions evaluate, once each — what
+        `Decorrelate` plans. A subquery nested inside another is the outer
+        one's to report, not this plan's."""
+        var refs = References()
+        self.references(refs)
+        return refs.subqueries.copy()
+
     def schema(self) -> Schema:
         def job[T: Relation](node: T) raises {imm} -> Schema:
             return node.schema()
 
-        try:
-            return self.try_visit[Schema, Relation](
-                job, "DynRelation: no member matched"
-            )
-        except:
-            abort("DynRelation.schema: no arm matched")
+        return self.visit[Schema, Relation](job)
 
     def estimate(self) raises -> Estimate:
         """`estimate` on whichever node this is.
@@ -1871,6 +2175,11 @@ struct DynRelation(Copyable, Enum, Writable):
         out.get[JoinChain]() = chain^
         return out^
 
+    def shared(self) raises -> DynRelation:
+        """This relation, computed once per execution however many places
+        read it — wrap a `WITH` query once and use the result in each."""
+        return Shared(self.copy())
+
     def distinct(self) raises -> DynRelation:
         """`SELECT DISTINCT *` — one row per distinct row, NULL equal to
         itself.
@@ -2165,6 +2474,13 @@ struct Filter(Relation, Writable):
     ](self, f: F) raises -> DynRelation:
         return self.with_input(f(self.input[]))
 
+    def terms(self) -> List[DynValue]:
+        """The predicate's conjuncts, or the whole predicate when it arrived
+        boxed and so was never split."""
+        if len(self.conjuncts) > 0:
+            return self.conjuncts.copy()
+        return [self.predicate.copy()]
+
     def with_input(self, var input: DynRelation) raises -> Filter:
         """This filter over a different input, carrying everything else.
 
@@ -2278,6 +2594,327 @@ struct Filter(Relation, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Filter(", self.input[], ", ", self.predicate, ")")
+
+
+struct ScalarBinding(Relation, Writable):
+    """`input`, with an uncorrelated subquery computed once and bound under
+    `slot` for every node below: its one value when `kind` is scalar, whether
+    it has a row when `kind` is an existence test.
+
+    What `Decorrelate` makes of `(SELECT agg FROM ...)` or `EXISTS (...)` read
+    from anywhere in `input`: the subquery runs first, its answer becomes a
+    binding, and the value node reads it as a `param` reads its own — so a
+    predicate comparing against it prunes row groups exactly as one comparing
+    against a parameter does. No row of `input` is joined to anything.
+    """
+
+    var input: ArcPointer[DynRelation]
+    var subquery: ArcPointer[DynRelation]
+    var slot: String
+    var kind: SubqueryKind
+
+    def __init__(
+        out self,
+        var input: DynRelation,
+        var subquery: DynRelation,
+        var slot: String,
+        kind: SubqueryKind = SubqueryKind.scalar,
+    ):
+        self.input = ArcPointer(input^)
+        self.subquery = ArcPointer(subquery^)
+        self.slot = slot^
+        self.kind = kind
+
+    def traverse[
+        F: def(DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        """Both children, so every rule optimizes the subquery too."""
+        return ScalarBinding(
+            f(self.input[]), f(self.subquery[]), self.slot.copy(), self.kind
+        )
+
+    def references(self, mut into: References):
+        self.input[].references(into)
+        self.subquery[].references(into)
+
+    def schema(self) -> Schema:
+        return self.input[].schema()
+
+    def estimate(self) raises -> Estimate:
+        return self.input[].estimate()
+
+    def cost(self) raises -> Cost:
+        return self.input[].cost() + self.subquery[].cost()
+
+    def _answer(self, batches: List[StructArray]) raises -> DynScalar:
+        """What the subquery's `batches` answer: for a scalar its one value,
+        null when there is no row and an error when there are more — SQL's
+        rule; for an existence test whether there is a row."""
+        var rows = rows_of(batches)
+        if self.kind != SubqueryKind.scalar:
+            var some = rows > 0
+            return BoolScalar(
+                some if self.kind == SubqueryKind.exists else not some
+            ).to_dyn()
+        if rows > 1:
+            raise InvalidError(
+                t"subquery: a scalar subquery returned {rows} rows; it may "
+                t"return at most one"
+            )
+        for ref b in batches:
+            if len(b) == 1:
+                return b.field(0)[0]
+        return nulls(1, self.subquery[].schema().fields[0].dtype)[0]
+
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var batches = driver.run(
+            self.subquery[].lower(driver, bindings), "scalar subquery"
+        )
+        var bound = bindings.copy()
+        bound[self.slot] = self._answer(batches)
+        return self.input[].lower(driver, bound)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "ScalarBinding(",
+            self.input[],
+            ", ",
+            self.slot,
+            "=",
+            self.kind,
+            "(",
+            self.subquery[],
+            "))",
+        )
+
+
+struct ResidualJoin(Relation, Writable):
+    """`left`'s rows with (semi) or without (anti) a `right` row whose keys
+    equal theirs **and** for which every residual holds.
+
+    What a correlated `[NOT] EXISTS` becomes when it compares the subquery's
+    rows to the outer row by more than equality — `l2.l_suppkey <>
+    l1.l_suppkey`. A residual reads `right`'s columns by name and `left`'s
+    through `outer(name)`. Kept out of `JoinChain`: the chain's rules reorder
+    and renumber links on keys alone, and a condition reading both sides has
+    to stay with the join that evaluates it.
+
+    `right` is built and `left` streams, so every probe row's candidates are
+    in hand when it is decided.
+    """
+
+    var left: ArcPointer[DynRelation]
+    var right: ArcPointer[DynRelation]
+    var left_keys: List[String]
+    var right_keys: List[String]
+    var residuals: List[DynValue]
+    var anti: Bool
+
+    def __init__(
+        out self,
+        var left: DynRelation,
+        var right: DynRelation,
+        var left_keys: List[String],
+        var right_keys: List[String],
+        var residuals: List[DynValue],
+        anti: Bool,
+    ) raises:
+        if len(left_keys) == 0 or len(left_keys) != len(right_keys):
+            raise InvalidError(
+                t"join: {len(left_keys)} left keys but {len(right_keys)} "
+                t"right keys"
+            )
+        self.left = ArcPointer(left^)
+        self.right = ArcPointer(right^)
+        self.left_keys = left_keys^
+        self.right_keys = right_keys^
+        self.residuals = residuals^
+        self.anti = anti
+
+    def traverse[
+        F: def(DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return ResidualJoin(
+            f(self.left[]),
+            f(self.right[]),
+            self.left_keys.copy(),
+            self.right_keys.copy(),
+            self.residuals.copy(),
+            self.anti,
+        )
+
+    def reads(self) -> Tuple[List[String], List[String]]:
+        """What the residuals read: `right`'s columns, and `left`'s through
+        `outer`."""
+        var refs = References()
+        for ref r in self.residuals:
+            r.references(refs)
+        return (refs.columns.copy(), refs.outer_columns.copy())
+
+    def references(self, mut into: References):
+        self.left[].references(into)
+        self.right[].references(into)
+        for ref c in self.left_keys:
+            into.column(c)
+        var reads = self.reads()
+        for ref c in reads[1]:
+            into.column(c)
+
+    def schema(self) -> Schema:
+        return self.left[].schema()
+
+    def estimate(self) raises -> Estimate:
+        """At most `left`'s rows; no more is known without the residuals'
+        selectivity over pairs."""
+        return self.left[].estimate()
+
+    def cost(self) raises -> Cost:
+        return (
+            self.left[].cost()
+            + self.right[].cost()
+            + Cost.per_row(self.left[].estimate().rows)
+        )
+
+    @staticmethod
+    def _positions(schema: Schema, names: List[String]) raises -> List[Int]:
+        var out = List[Int](capacity=len(names))
+        for ref n in names:
+            var i = schema.get_field_index(n)
+            if i == -1:
+                raise KeyError(t"join: column '{n}' not found")
+            out.append(i)
+        return out^
+
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var left_schema = self.left[].schema()
+        var right_schema = self.right[].schema()
+        var build = driver.run(
+            self.right[].lower(driver, bindings), "join build"
+        )
+        var join = ResidualJoinOperator.index(
+            build,
+            right_schema,
+            Self._positions(right_schema, self.right_keys),
+            driver.ctx,
+        )
+        var probe_keys = Self._positions(left_schema, self.left_keys)
+        var reads = self.reads()
+        var fields = List[Field]()
+        for ref c in reads[0]:
+            fields.append(right_schema.field(name=c).copy())
+        for ref c in reads[1]:
+            ref f = left_schema.field(name=c)
+            fields.append(
+                Field(
+                    Subquery.outer_field(c),
+                    f.dtype.copy(),
+                    f.nullable,
+                    f.metadata.copy(),
+                )
+            )
+        var pair_schema = schema(fields.copy())
+        var build_columns = Self._positions(right_schema, reads[0])
+        var probe_columns = Self._positions(left_schema, reads[1])
+        var phases = self.left[].lower(driver, bindings)
+
+        def make(ctx: ExecContext) raises {imm} -> DynOperator:
+            var residuals = List[DynOperator](capacity=len(self.residuals))
+            for ref r in self.residuals:
+                residuals.append(r.to_operator(pair_schema, False, bindings))
+            return ResidualJoinOperator(
+                join.copy(),
+                probe_keys.copy(),
+                residuals^,
+                build_columns.copy(),
+                probe_columns.copy(),
+                fields.copy(),
+                self.anti,
+                ctx.copy(),
+            )
+
+        append_each(
+            phases, make, String("anti" if self.anti else "semi", "+residual")
+        )
+        return phases^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "ResidualJoin(",
+            self.left[],
+            ", ",
+            self.right[],
+            ", anti" if self.anti else ", semi",
+            " on ",
+        )
+        for i in range(len(self.left_keys)):
+            if i > 0:
+                writer.write(" and ")
+            writer.write(self.left_keys[i], "=", self.right_keys[i])
+        for ref r in self.residuals:
+            writer.write(" and ", r)
+        writer.write(")")
+
+
+struct Shared(Relation, Writable):
+    """A relation read in more than one place, computed once per execution —
+    a `WITH` query referenced twice.
+
+    Every read of one id must compute the same thing. The rewrite rules keep
+    that: each is a function of the subtree it rewrites, so equal bodies
+    rewrite equally, and `ColumnPruning` — the one pass that narrows a
+    subtree by what its *parent* reads — does not descend into one. The
+    first read to lower runs the body through the driver; every other read of
+    the same id in that execution reads the batches it produced.
+    """
+
+    var id: Int
+    var relation: ArcPointer[DynRelation]
+
+    def __init__(out self, var relation: DynRelation):
+        self.id = _next_plan_id()
+        self.relation = ArcPointer(relation^)
+
+    def __init__(out self, id: Int, var relation: DynRelation):
+        self.id = id
+        self.relation = ArcPointer(relation^)
+
+    def traverse[
+        F: def(DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Shared(self.id, f(self.relation[]))
+
+    def references(self, mut into: References):
+        self.relation[].references(into)
+
+    def schema(self) -> Schema:
+        return self.relation[].schema()
+
+    def estimate(self) raises -> Estimate:
+        return self.relation[].estimate()
+
+    def cost(self) raises -> Cost:
+        return self.relation[].cost()
+
+    def lower(
+        self, mut driver: Driver, bindings: Bindings = Bindings()
+    ) raises -> List[Phase]:
+        var done = driver.shared(self.id)
+        if done:
+            return [driver.batches(done.take())]
+        var batches = driver.run(
+            self.relation[].lower(driver, bindings), "shared"
+        )
+        driver.share(self.id, batches)
+        return [
+            driver.materialized(batches^, self.relation[].reported_rows(driver))
+        ]
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Shared#", self.id, "(", self.relation[], ")")
 
 
 struct Project(Relation, Writable):

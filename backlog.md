@@ -1431,6 +1431,40 @@ A generic nested-loop join gives marrow exactly that degradation path and
 turns cross and non-equi joins from *unexpressible* into merely slow, which is
 a categorical improvement for a small amount of code.
 
+A semi or anti join *with* equi keys can carry a residual: `ResidualJoin`
+(`logical.mojo`), which `Decorrelate` builds for a correlated `[NOT] EXISTS`
+comparing rows by more than equality. It is not a `JoinChain` link, so the
+join search does not reorder it.
+
+#### 2.4b Subqueries — what remains
+
+**What exists.** Subqueries are values (`scalar`, `exists`, `is_in` over a
+relation, `outer(name)`), planned by `Decorrelate` (`marrow/expr/decorrelate.mojo`,
+first in `AllRules.prepare`, alone in `SubqueryRules`): `[NOT] EXISTS` / `IN`
+conjuncts as semi and anti joins, non-equality correlation as a
+`ResidualJoin`, uncorrelated scalars and existence tests as a `ScalarBinding`
+(which prunes row groups like a `param`), correlated scalar aggregates as a
+left join grouped by the correlation keys (count's 0 restored, magic-set
+reduced when the outer side is a tenth of the input), nullable uncorrelated
+`NOT IN` as an anti join under two bindings, and `Shared` for a relation read
+twice. Python's `collect()` plans them itself.
+
+**Absent**, each raising `NotImplementedError` naming the shape:
+
+- **A mark join.** A subquery test that is not a whole filter conjunct
+  (`a OR EXISTS (...)`, `EXISTS` in a select list) and a *correlated* `NOT IN`
+  over nullable columns both need `JOIN_MARK` — a three-valued column per
+  probe row. The kind is declared and rejected.
+- **A single join.** A correlated scalar subquery that does not aggregate
+  needs `JOIN_SINGLE` (at most one match, an error beyond).
+- **General unnesting.** Correlation through `Limit`, `Sort`, `Window`, a set
+  operation or a join input, a non-equality correlation below an aggregate,
+  and correlation that skips a level. Neumann & Kemper's dependent-join
+  push-down covers all of them; the classic rewrites here cover TPC-H's.
+- **The comptime lane's tests.** `exists`/`is_in` over a relation build
+  runtime-lane nodes, so an AOT binary that filters with one links the
+  interpreter's boxing for that node.
+
 #### 2.5 Aggregate breadth
 
 13 golden cases, in three distinct kinds of gap:

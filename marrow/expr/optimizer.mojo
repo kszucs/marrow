@@ -101,6 +101,7 @@ from ..kernels.join import (
 from ..schema import Field, Schema, schema
 from ..tabular import RecordBatch
 from .estimates import Cost, Estimate
+from .decorrelate import Decorrelate
 from .physical import JoinOrder, PlannedJoin
 from ..errors import InternalError, KeyError
 from .logical import (
@@ -126,6 +127,8 @@ from .logical import (
     Difference,
     Intersection,
     Project,
+    ResidualJoin,
+    ScalarBinding,
     Sort,
     Union,
     Window,
@@ -1672,6 +1675,34 @@ struct ColumnPruning(Copyable, Movable):
             )
             return out^
 
+        if node.isa[ResidualJoin]():
+            # The left side as demanded plus its keys and what the residuals
+            # read of it; the right side, its keys and what they read of it.
+            ref r = node.get[ResidualJoin]()
+            var reads = r.reads()
+            var left = Self._widened(needed.copy(), r.left_keys)
+            left = Self._widened(left^, reads[1])
+            var right = Self._widened(r.right_keys.copy(), reads[0])
+            var out: DynRelation = ResidualJoin(
+                Self.apply(r.left[], left),
+                Self.apply(r.right[], right),
+                r.left_keys.copy(),
+                r.right_keys.copy(),
+                r.residuals.copy(),
+                r.anti,
+            )
+            return out^
+
+        if node.isa[ScalarBinding]():
+            # The input as demanded; the subquery answers with its one column.
+            ref b = node.get[ScalarBinding]()
+            return node.with_children(
+                [
+                    Self.apply(b.input[], needed),
+                    Self.apply(b.subquery[], b.subquery[].schema().names()),
+                ]
+            )
+
         if node.isa[Project]():
             ref p = node.get[Project]()
             # A projection *replaces* the demand: only the columns its own
@@ -1803,6 +1834,29 @@ struct NoRules(RuleSet):
         return plan.copy()
 
 
+struct SubqueryRules(RuleSet):
+    """Only `Decorrelate`: what a plan evaluating subqueries needs before it
+    can run at all, and nothing else.
+
+    A subquery's value is a read of a slot the decorrelated plan provides, so
+    an unplanned one raises when it is evaluated. The Python frontend and the
+    SQL planner apply this when a plan holds a subquery; `AllRules` includes
+    it.
+    """
+
+    @staticmethod
+    def prepare(plan: DynRelation) raises -> DynRelation:
+        return Decorrelate.apply(plan)
+
+    @staticmethod
+    def rewrite(node: DynRelation) raises -> DynRelation:
+        return node.copy()
+
+    @staticmethod
+    def finish(plan: DynRelation) raises -> DynRelation:
+        return plan.copy()
+
+
 struct ScanPruning(RuleSet):
     """The smallest set that makes a scan skip row groups.
 
@@ -1861,9 +1915,14 @@ struct AllRules(RuleSet):
 
     @staticmethod
     def prepare(plan: DynRelation) raises -> DynRelation:
-        """Seeded from the plan's **own output schema** — the columns a caller
-        can actually observe. Anything else is dead by definition, however deep
-        the plan is."""
+        """Subqueries planned first, so every rule after sees only joins,
+        aggregates and bindings; then columns pruned, seeded from the plan's
+        **own output schema** — the columns a caller can actually observe.
+        Anything else is dead by definition, however deep the plan is."""
+        return Self._pruned(Decorrelate.apply(plan))
+
+    @staticmethod
+    def _pruned(plan: DynRelation) raises -> DynRelation:
         var wanted = List[String]()
         for ref f in plan.schema().fields:
             wanted.append(f.name.copy())
@@ -1875,7 +1934,7 @@ struct AllRules(RuleSet):
         again first: the rewrite loop can free columns — a sort it removed
         read one — and a tree is priced by the widths of what its inputs still
         hold."""
-        return JoinOrdering.apply(Self.prepare(plan))
+        return JoinOrdering.apply(Self._pruned(plan))
 
     @staticmethod
     def rewrite(node: DynRelation) raises -> DynRelation:

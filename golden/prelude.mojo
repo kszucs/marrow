@@ -30,6 +30,12 @@ silently.
 its rule set as a *comptime parameter* and `plan.optimize[AllRules]()` has no
 reading in Python. A case that names it therefore carries `-- skip python`; the
 join-reordering cases are the ones that do.
+
+The subquery vocabulary — `scalar`, `exists`, `is_in` over a relation, `outer`,
+`SubqueryRules`, and the runtime lane's `eq`, `ne` and `not_` its correlated
+predicates and negations are written with — has no Python counterpart yet
+either: the Python expression API has no subquery verbs. Those cases carry
+`-- skip python` too, and the SQL lane is what runs them outside Mojo.
 """
 
 from golden.helpers import table
@@ -48,7 +54,9 @@ from marrow.dtypes import (
 )
 from marrow.expr import array_length, col, count_star, if_else, lit
 from marrow.expr import dense_rank, rank, row_number
-from marrow.expr import AllRules, DynRelation
+from marrow.expr import AllRules, DynRelation, SubqueryRules
+from marrow.expr import exists, is_in, outer, scalar
+from marrow.expr.runtime.values import eq, ne, not_
 from marrow.kernels.join import (
     JOIN_ALL,
     JOIN_ANTI,

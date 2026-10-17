@@ -91,10 +91,12 @@ def analyze(
         var out: DynRelation = scan.with_statistics(estimate^)
         return out^
 
-    def descend(child: DynRelation) raises {imm} -> DynRelation:
-        return analyze(child, ctx, bindings)
-
-    return plan.traverse(descend)
+    # Recursing through a closure handed to `traverse` deadlocks the
+    # compiler; `children` and `with_children` do not.
+    var children = List[DynRelation]()
+    for ref child in plan.children():
+        children.append(analyze(child, ctx, bindings))
+    return plan.with_children(children)
 
 
 def summarize(
