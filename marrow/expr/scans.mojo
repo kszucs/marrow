@@ -24,6 +24,7 @@ from ..iceberg.scan import FileScanTask, IcebergFileReader
 from ..io import DynSource, StorageOptions
 from ..formats.parquet.reader import LeafSet, ParquetFile, RowSelection
 from ..schema import Schema
+from ..tabular import RecordBatch
 from ..utils.stats import count
 from .index import Index, page_selections
 from .logical import Bindings, DynValue
@@ -197,47 +198,78 @@ struct RowGroupSource(Source):
         )
 
 
-struct FormatStream[Fmt: Format](Stream):
-    """A `FormatScan[Fmt]`'s batches: its files read in order by `Fmt`'s
-    reader, one batch per `next`, its columns selected by the scan's schema.
-    Each file is opened when the stream reaches it."""
+struct FormatSource[Fmt: Format](Source):
+    """A `FormatScan[Fmt]`'s files, a chunk per morsel -- a record batch, a
+    row group, a run of blocks, a range of lines -- with the columns of the
+    scan's schema. Each file is opened when the source is built, reading only
+    what tells where its chunks are."""
 
     var _paths: List[String]
-    var _options: StorageOptions
-    """What every path is opened with -- an object store's credentials."""
-    var _current: Int
-    var _schema: Schema
+    var _files: List[Self.Fmt.Chunks]
     var _names: List[String]
-    var _reader: Optional[Self.Fmt.Reader]
-    """The file being read; none between files."""
+    var _morsels: List[Tuple[Int, Int]]
+    """The file and the chunk within it of each morsel."""
 
     def __init__(
         out self,
         var paths: List[String],
-        var schema: Schema,
-        var options: StorageOptions,
-    ):
-        self._paths = paths^
-        self._options = options^
-        self._current = 0
+        schema: Schema,
+        options: StorageOptions,
+        ctx: ExecContext,
+    ) raises:
+        """`paths`, each opened with `options` -- an object store's
+        credentials, say -- one file per worker of `ctx`, since each may be a
+        round trip."""
         self._names = schema.names()
-        self._schema = schema^
-        self._reader = None
+        var opened = List[Optional[Self.Fmt.Chunks]](capacity=len(paths))
+        for _ in range(len(paths)):
+            opened.append(None)
 
-    def next(mut self) raises -> List[StructArray]:
-        while self._current < len(self._paths):
-            if not self._reader:
-                self._reader = Self.Fmt.open(
-                    self._paths[self._current],
-                    Optional(self._schema.copy()),
-                    self._options,
+        def open(w: Int, f: Int) raises {mut opened, imm}:
+            try:
+                opened[f] = Self.Fmt.chunks(
+                    paths[f], Optional(schema.copy()), options
                 )
-            var batch = self._reader.value().read_next_batch()
-            if batch:
-                return [batch.value().select(self._names).to_struct_array()]
-            self._reader = None
-            self._current += 1
-        return []
+            except e:
+                raise DynError(e).prefixed(paths[f])
+
+        ctx.fan_out(len(paths), open, len(paths))
+        self._files = List[Self.Fmt.Chunks](capacity=len(paths))
+        self._morsels = List[Tuple[Int, Int]]()
+        for f in range(len(opened)):
+            var file = opened[f].take()
+            for c in range(file.num_chunks()):
+                self._morsels.append((f, c))
+            self._files.append(file^)
+        self._paths = paths^
+
+    def count(self) -> Int:
+        return len(self._morsels)
+
+    def rows(self) -> Int:
+        return -1
+
+    def read(self, i: Int, ctx: ExecContext) raises -> List[StructArray]:
+        var f = self._morsels[i][0]
+        var out = List[StructArray]()
+        try:
+            for ref batch in self._files[f].read_chunk(
+                self._morsels[i][1], ctx
+            ):
+                out.append(batch.select(self._names).to_struct_array())
+        except e:
+            raise DynError(e).prefixed(self._paths[f])
+        return out^
+
+    def describe(self) -> String:
+        return String(
+            Self.Fmt.name(),
+            "Scan(",
+            self._paths,
+            ", ",
+            len(self._morsels),
+            " chunks)",
+        )
 
 
 struct IcebergScanStream(Stream):
@@ -312,19 +344,27 @@ struct IcebergScanStream(Stream):
         return scan_tasks(table, files, keep^)
 
     def next(mut self) raises -> List[StructArray]:
+        # A scan over many data files must say which of them failed.
         while True:
             if self._reader:
-                var batch = self._reader.value().next()
+                var batch: Optional[RecordBatch]
+                try:
+                    batch = self._reader.value().next()
+                except e:
+                    raise DynError(e).prefixed(self._tasks[self._next - 1].path)
                 if batch:
                     return [batch.value().to_struct_array()]
                 self._reader = None
             if self._next >= len(self._tasks):
                 return []
-            self._reader = IcebergFileReader(
-                self._tasks[self._next],
-                self._schema,
-                self._mapping,
-                options=self._options,
-                ctx=self._ctx,
-            )
+            try:
+                self._reader = IcebergFileReader(
+                    self._tasks[self._next],
+                    self._schema,
+                    self._mapping,
+                    options=self._options,
+                    ctx=self._ctx,
+                )
+            except e:
+                raise DynError(e).prefixed(self._tasks[self._next].path)
             self._next += 1

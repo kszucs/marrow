@@ -354,7 +354,7 @@ expose the same surface as `Array`, `ArrowScalar`, `Builder`, `DataType` and
 generic code, and nothing in the tree asks them to be: every `[T: Array]`-style
 bound lives inside a box's own `_dispatch`. Dropping the conformances changed no
 behaviour and no binary size. **A box may *hold* trait-bound values; it should
-not *be* one.** The exception is `DynByteSource`/`DynByteSink` in `marrow/io/`, which
+not *be* one.** The exception is `DynSource`/`DynSink` in `marrow/io/`, which
 do conform, because `ParquetFile[S: ByteSource]` and friends are real generic
 consumers that predate them — see `io/dispatch.mojo`.
 
@@ -617,8 +617,10 @@ share no node types**:
   turns a plan into `Phase`s: a `DynSource` of morsels (`TableSource` slices
   an in-memory batch, a `StreamSource` reads a `Stream` of unknown length;
   the scans' are `expr/scans.mojo`'s — `RowGroupSource`, a Parquet row group
-  per morsel with pruning decided up front, `IpcSource`, a record batch, and
-  the JSON and Iceberg streams) and one `Pipeline` per worker. **Scheduling is
+  per morsel with pruning decided up front, `FormatSource[Fmt]`, a chunk per
+  morsel through the format's `ChunkedReader` -- a record batch, a run of Avro
+  blocks, the JSON lines starting in a byte range -- and the Iceberg stream)
+  and one `Pipeline` per worker. **Scheduling is
   pull, execution within a worker is push**: `Driver.dynamic()` hands each
   worker the next unread morsel through `ExecContext.fan_out` and answers
   the outputs in morsel order; a phase's operators run single-threaded when
@@ -905,7 +907,7 @@ destructors, with the spec's null-release handshake as the double-free guard.
 round trip: `ParquetFile` and `RecordBatchFileReader` both open a file by
 reading its last 64 KiB and parsing the footer out of that tail, never
 `read_at(0, size())`. The seam is `marrow/io/` — `ByteSource`/`ByteSink`, a
-local backend, an OpenDAL one, and `DynByteSource`/`DynByteSink` picking between them
+local backend, an OpenDAL one, and `DynSource`/`DynSink` picking between them
 by URI scheme — and both formats read and write through it, so a backend is
 written once and every format gains it. A new `dlopen`ed library must also be
 added to the wheel staging in `python/marrow/compile.py`; nothing links it, so
@@ -928,7 +930,9 @@ and metadata.
 
 **Formats** (`marrow/formats/`): every file format reads and writes through
 `BatchReader` / `BatchWriter` (`formats/core.mojo`), a batch, row group or
-block at a time, and `Format` names a format's reader for `FormatScan`.
+block at a time, and `Format` names a format's readers for `FormatScan`: in
+order, or as a `ChunkedReader` whose chunks decode independently, which is how
+a scan reads one file on several workers.
 `ipc/` is the Arrow IPC file and stream format, `parquet/`, `json/` and
 `avro/` the others.
 
@@ -988,8 +992,8 @@ marrow/
 ├── expr/
 │   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
 │   ├── physical.mojo     # the operators each plan node lowers to
-│   ├── scans.mojo        # RowGroupSource, IpcSource, the JSON and Iceberg
-│                         #   streams — what a scan's morsels are
+│   ├── scans.mojo        # RowGroupSource, FormatSource, the Iceberg
+│                         #   stream — what a scan's morsels are
 │   ├── builders.mojo     # col, lit, if_else, is_in, minimum/maximum,
 │                         #   array_length/array_contains, param, count_star,
 │                         #   table, scan

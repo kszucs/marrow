@@ -583,9 +583,7 @@ struct HashIndex(Movable, Sized):
             # `_RADIX_MIN_DISTINCT`", and a high guess costs one power of two.
             var expect = len(part_hashes) // 2
             if expected_new > 0:
-                expect = ceildiv(
-                    expected_new * len(part_hashes), len(hashes)
-                )
+                expect = ceildiv(expected_new * len(part_hashes), len(hashes))
             self._parts[i].reserve(before + expect)
             var placed = insert_hashes(self._parts[i], part_hashes)
             # The table reports positions within the partition; the batch's

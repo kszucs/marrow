@@ -11,7 +11,14 @@ from std.python import Python
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from ...arrays import DynArray
-from ..avro import AvroFile, AvroFormat, AvroWriter
+from ..avro import (
+    AvroChunks,
+    AvroCodec,
+    AvroFile,
+    AvroFormat,
+    AvroWriter,
+    from_arrow,
+)
 from ...builders import array
 from ...dtypes import int64
 from ...execution import ExecContext
@@ -30,14 +37,21 @@ from ..ipc import (
     RecordBatchStreamReader,
     RecordBatchStreamWriter,
 )
-from ..json import JsonFormat, JsonReader, JsonWriter
+from ..json import (
+    JsonChunks,
+    JsonFormat,
+    JsonReader,
+    JsonWriter,
+    ParseOptions,
+    ReadOptions,
+)
 from ..parquet import ParquetFile, ParquetFormat, ParquetReader, read_table
 from ..parquet.compression import Compression
 from ..parquet.writer import FileWriter
 from ...schema import Schema
-from ...tabular import RecordBatch, record_batch
+from ...tabular import RecordBatch, Table, record_batch
 from ...utils.testing import ScratchDir
-from ..core import BatchReader, BatchWriter, Format
+from ..core import BatchReader, BatchWriter, ChunkedReader, Format
 
 
 comptime Writes = ArcPointer[List[Int]]
@@ -420,3 +434,163 @@ def test_formats_open_every_column_without_a_schema() raises:
         _write_all(parquet, batches)
         parquet.close()
         assert_true(_schema_of[ParquetFormat](parquet_path) == schema)
+
+
+def _rows(schema: Schema, batches: List[RecordBatch]) raises -> RecordBatch:
+    """`batches` as one batch of `schema`."""
+    return Table.from_batches(schema, batches).combine_chunks()
+
+
+def _read_chunks[
+    C: ChunkedReader
+](reader: C, schema: Schema) raises -> RecordBatch:
+    """Every chunk's rows, read last chunk first and put back in chunk order:
+    a chunk must not depend on the one before it."""
+    var parts = List[List[RecordBatch]]()
+    for _ in range(reader.num_chunks()):
+        parts.append(List[RecordBatch]())
+    for i in range(reader.num_chunks() - 1, -1, -1):
+        parts[i] = reader.read_chunk(i, ExecContext.serial())
+    var batches = List[RecordBatch]()
+    for ref part in parts:
+        for ref batch in part:
+            batches.append(batch.copy())
+    return _rows(schema, batches)
+
+
+def _assert_chunks_read_as_a_scan[
+    F: Format
+](path: String, schema: Schema, min_chunks: Int) raises:
+    var chunks = F.chunks(path, Optional(schema.copy()), StorageOptions())
+    assert_true(chunks.num_chunks() >= min_chunks, String(F.name()))
+    var reader = F.open(path, Optional(schema.copy()), StorageOptions())
+    assert_true(
+        _read_chunks(chunks, schema) == _rows(schema, _drain(reader)),
+        String(F.name()),
+    )
+
+
+def test_formats_read_in_chunks_what_they_read_in_order() raises:
+    var batches = _batches()
+    ref schema = batches[0].schema
+    with ScratchDir() as dir:
+        var arrow = join(dir, "t.arrow")
+        var writer = RecordBatchFileWriter(arrow, schema)
+        _write_all(writer, batches)
+        writer.close()
+        _assert_chunks_read_as_a_scan[IpcFormat](arrow, schema, 3)
+
+        var parquet = join(dir, "t.parquet")
+        _write_parquet(parquet, row_group_size=3)
+        _assert_chunks_read_as_a_scan[ParquetFormat](
+            parquet, ParquetFile(parquet).schema(), 3
+        )
+
+        var jsonl = join(dir, "t.jsonl")
+        var json = JsonWriter(FileSink(jsonl))
+        _write_all(json, batches)
+        json.close()
+        _assert_chunks_read_as_a_scan[JsonFormat](jsonl, schema, 1)
+
+        var avro = join(dir, "t.avro")
+        var avro_writer = AvroWriter(avro, schema)
+        _write_all(avro_writer, batches)
+        avro_writer.close()
+        _assert_chunks_read_as_a_scan[AvroFormat](avro, schema, 1)
+
+
+def test_json_chunks_split_lines_at_any_range_size() raises:
+    """Each line is read by exactly one chunk -- the one its first byte is
+    in -- whatever the range size, including ranges shorter than a line."""
+    var batches = _batches()
+    ref schema = batches[0].schema
+    with ScratchDir() as dir:
+        var path = join(dir, "t.jsonl")
+        var json = JsonWriter(FileSink(path))
+        _write_all(json, batches)
+        json.close()
+        var expected = _rows(schema, batches)
+        for size in [1, 2, 3, 5, 7, 16, 64, 1 << 20]:
+            var options = ReadOptions()
+            options.block_size = size
+            var chunks = JsonChunks(
+                BufferSource(path), schema.copy(), options, ParseOptions(schema)
+            )
+            assert_true(
+                _read_chunks(chunks, schema) == expected,
+                String("block_size ", size),
+            )
+
+
+def test_json_chunks_read_blank_lines_and_a_missing_last_newline() raises:
+    var schema = Schema(fields=[_batches()[0].schema.fields[0].copy()])
+    with ScratchDir() as dir:
+        var path = join(dir, "t.jsonl")
+        var sink = FileSink(path)
+        var text = String('{"n": 1}\n\n{"n": 2}\n{"n": 3}')
+        sink.write(text.as_bytes())
+        sink.close()
+        var expected = record_batch([array([1, 2, 3], int64)], names=["n"])
+        for size in [1, 4, 9, 100]:
+            var options = ReadOptions()
+            options.block_size = size
+            var chunks = JsonChunks(
+                BufferSource(path), schema.copy(), options, ParseOptions(schema)
+            )
+            assert_true(
+                _read_chunks(chunks, schema) == expected,
+                String("block_size ", size),
+            )
+
+
+def test_avro_chunks_group_whole_blocks() raises:
+    """A chunk is a run of whole blocks of about `rows` records; any run size
+    reads the file's rows."""
+    var batches = _batches()
+    ref schema = batches[0].schema
+    with ScratchDir() as dir:
+        var path = join(dir, "t.avro")
+        var writer = AvroWriter(
+            FileSink(path),
+            from_arrow(schema),
+            AvroCodec.DEFLATE,
+            sync_interval=1,
+        )
+        _write_all(writer, batches)
+        writer.close()
+        var blocks = AvroFile(path).blocks()
+        assert_equal(len(blocks), 9)
+        var expected = _rows(schema, batches)
+        for rows in [1, 2, 4, 9, 100]:
+            var chunks = AvroChunks(AvroFile(path), None, rows)
+            assert_equal(chunks.num_chunks(), (9 + rows - 1) // rows)
+            assert_true(
+                _read_chunks(chunks, schema) == expected, String("rows ", rows)
+            )
+
+
+def test_json_chunks_fetch_about_their_own_range() raises:
+    """A chunk asks its source for its own range and a little either side to
+    find where its lines start and end -- not for a block's worth around each
+    end."""
+    comptime block = 1 << 16
+    with ScratchDir() as dir:
+        var path = join(dir, "t.jsonl")
+        var sink = FileSink(path)
+        for i in range(40_000):
+            var line = String('{"n": ', i, "}\n")
+            sink.write(line.as_bytes())
+        sink.close()
+        var schema = Schema(fields=[_batches()[0].schema.fields[0].copy()])
+        var reads = Reads(List[Tuple[Int, Int]]())
+        var options = ReadOptions()
+        options.block_size = block
+        var chunks = JsonChunks(
+            _Recorder(path, reads), schema.copy(), options, ParseOptions(schema)
+        )
+        assert_true(chunks.num_chunks() > 3)
+        _ = chunks.read_chunk(2, ExecContext.serial())
+        var fetched = 0
+        for ref r in reads[]:
+            fetched += r[1]
+        assert_true(fetched < block + block // 4, String(fetched))

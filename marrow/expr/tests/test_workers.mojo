@@ -25,7 +25,9 @@ from ...dtypes import float64, int64, string
 from ...engine import Driver
 from ...execution import ExecContext
 from ...io import FileSink
+from ...formats.avro import write_avro
 from ...formats.ipc import write_ipc_file
+from ...formats.json import write_json
 from ...formats.parquet.writer import Compression, FileWriter
 from ...kernels.join import (
     BUILD_LEFT,
@@ -50,7 +52,17 @@ from ...utils.testing import (
     assert_values_equal,
     canonical_rows,
 )
-from ..builders import col, count_star, lit, row_number, scan, scan_ipc, table
+from ..builders import (
+    col,
+    count_star,
+    lit,
+    row_number,
+    scan,
+    scan_avro,
+    scan_ipc,
+    scan_json,
+    table,
+)
 from ..logical import DynRelation
 from ..optimizer import AllRules
 
@@ -493,3 +505,24 @@ def test_workers_scan_ipc_a_batch_per_morsel() raises:
             path, [data.slice(0, 10), data.slice(10, 20), data.slice(30, 7)]
         )
         _check(scan_ipc(path, data.schema), ordered=True)
+
+
+def test_workers_scan_json_and_avro_by_chunk() raises:
+    """A JSON file of several megabytes is several byte ranges, an Avro file
+    of several hundred thousand records several runs of blocks: each read by
+    a worker of its own, and the rows the same as serial."""
+    with ScratchDir() as dir:
+        var data = _data(150_000, 4)
+        var table_ = Table.from_batches(data.schema, [data.copy()])
+        var json = join(dir, "rows.jsonl")
+        write_json(table_, json)
+        var avro = join(dir, "rows.avro")
+        write_avro(table_, avro)
+        for plan in [
+            scan_json(json, data.schema),
+            scan_avro(avro, data.schema),
+        ]:
+            var report = plan.explain(ExecContext.parallel(4))
+            assert_true(report.phases[0].morsels > 1, String(report))
+            assert_true(report.phases[0].workers > 1, String(report))
+            _check(plan, ordered=True)

@@ -42,7 +42,7 @@ from ...builders import (
 )
 from ...schema import Schema
 from ...tabular import Table, RecordBatch
-from ..core import BatchReader, Format
+from ..core import BatchReader, ChunkedReader, Format
 from ...scalars import DynScalar
 from ... import dtypes as dt
 from ...dtypes import (
@@ -3383,6 +3383,7 @@ struct ParquetFormat(Format):
     projected columns' chunks are fetched."""
 
     comptime Reader = ParquetReader[DynSource, LeafSet.all()]
+    comptime Chunks = ParquetChunks
 
     @staticmethod
     def name() -> StaticString:
@@ -3404,6 +3405,41 @@ struct ParquetFormat(Format):
         if schema:
             columns = schema.value().names()
         return Self.Reader(file^, columns=columns^)
+
+    @staticmethod
+    def chunks(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Chunks:
+        var columns = Optional[List[String]](None)
+        if schema:
+            columns = schema.value().names()
+        return ParquetChunks(
+            ParquetFile[DynSource, LeafSet.all()](
+                DynSource.open(path, options), schema=schema.copy()
+            ),
+            columns^,
+        )
+
+
+@fieldwise_init
+struct ParquetChunks(ChunkedReader):
+    """A Parquet file read a row group per chunk, its `columns` only."""
+
+    var _file: ParquetFile[DynSource, LeafSet.all()]
+    var _columns: Optional[List[String]]
+    """The projection; every column when `None`."""
+
+    def num_chunks(self) -> Int:
+        return self._file.num_row_groups()
+
+    def read_chunk(self, i: Int, ctx: ExecContext) raises -> List[RecordBatch]:
+        var groups: List[Int] = [i]
+        # A row group can decode to several chunks; each is a batch of its own.
+        return self._file.read(
+            columns=self._columns.copy(),
+            row_groups=Optional(groups^),
+            ctx=ctx,
+        ).to_batches()
 
 
 def read_table[

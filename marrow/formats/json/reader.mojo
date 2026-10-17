@@ -52,7 +52,7 @@ from ...dtypes import (
 )
 from ...errors import DynError, InvalidError, NotImplementedError
 from ...execution import ExecContext
-from ..core import BatchReader, Format
+from ..core import BatchReader, ChunkedReader, Format
 from ...io import ByteSource, DynSource, Fetched, StorageOptions
 from ...schema import Schema
 from ...tabular import RecordBatch, Table
@@ -936,24 +936,122 @@ struct JsonReader[S: ByteSource](BatchReader):
         """The next block's rows, or `None` at the end of the input."""
         if not self._blocks.next():
             return None
-        var dtype: DynType = struct_(self._schema.fields.copy())
-        var builder = DynBuilder(dtype)
-        var root = _Slot(dtype, False, "", builder)
-        var cur = JsonCursor(
+        var batch = _parse_rows(
             self._blocks.block(),
+            self._schema,
             self._row,
             validate=not self._blocks.is_validated(),
             ignore_unexpected=self._ignore_unexpected,
         )
-        try:
-            while cur.next_row():
-                root.append_object(cur)
-                cur.row += 1
-        except e:
-            raise cur.located(e)
-        self._row = cur.row
-        var rows = builder.finish()
-        return RecordBatch(self._schema, rows.as_struct().children.copy())
+        self._row += batch.num_rows()
+        return batch^
+
+
+def _parse_rows(
+    block: Span[UInt8, _],
+    schema: Schema,
+    first_row: Int,
+    validate: Bool,
+    ignore_unexpected: Bool,
+) raises -> RecordBatch:
+    """`block`'s rows, whole lines of newline-delimited JSON, as a batch of
+    `schema`; errors name rows counting from `first_row`."""
+    var dtype: DynType = struct_(schema.fields.copy())
+    var builder = DynBuilder(dtype)
+    var root = _Slot(dtype, False, "", builder)
+    var cur = JsonCursor(
+        block,
+        first_row,
+        validate=validate,
+        ignore_unexpected=ignore_unexpected,
+    )
+    try:
+        while cur.next_row():
+            root.append_object(cur)
+            cur.row += 1
+    except e:
+        raise cur.located(e)
+    var rows = builder.finish()
+    return RecordBatch(schema, rows.as_struct().children.copy())
+
+
+struct JsonChunks[S: ByteSource](ChunkedReader):
+    """Newline-delimited JSON read as byte ranges of `block_size`: a chunk is
+    the lines that start inside its range, so the chunks split the file
+    without reading it first. Keys outside the schema are skipped or refused
+    as `ParseOptions` says; a row's number in an error counts from its
+    chunk's first line."""
+
+    var _source: Self.S
+    var _schema: Schema
+    var _block_size: Int
+    var _ignore_unexpected: Bool
+
+    def __init__(
+        out self,
+        var source: Self.S,
+        var schema: Schema,
+        read_options: ReadOptions = ReadOptions(),
+        parse_options: ParseOptions = ParseOptions(),
+    ) raises:
+        if read_options.block_size <= 0:
+            raise InvalidError(
+                t"ReadOptions.block_size must be positive, got"
+                t" {read_options.block_size}"
+            )
+        self._source = source^
+        self._schema = schema^
+        self._block_size = read_options.block_size
+        self._ignore_unexpected = (
+            parse_options.behavior() == UnexpectedFieldBehavior.IGNORE
+        )
+
+    def num_chunks(self) -> Int:
+        var size = self._source.size()
+        return (size + self._block_size - 1) // self._block_size
+
+    def _line_end(self, at: Int) raises -> Int:
+        """One past the first newline at or after `at`, or the input's end:
+        where the line holding byte `at` ends. Probed in small windows that
+        double, since a line is usually far shorter than a chunk."""
+        var size = self._source.size()
+        var want = min(self._block_size, 4096)
+        var pos = at
+        while pos < size:
+            var n = min(want, size - pos)
+            var window = self._source.read_ranges(
+                [(pos, n)], ExecContext.serial()
+            )
+            var data = window.span(0)
+            for k in range(n):
+                if data[k] == Byte(ord("\n")):
+                    return pos + k + 1
+            pos += n
+            want *= 2
+        return size
+
+    def read_chunk(self, i: Int, ctx: ExecContext) raises -> List[RecordBatch]:
+        var lo = i * self._block_size
+        var hi = min(lo + self._block_size, self._source.size())
+        # A line belongs to the chunk its first byte is in: this one starts
+        # after the line holding `lo - 1` and runs to the end of the line
+        # holding `hi - 1`.
+        var start = 0 if lo == 0 else self._line_end(lo - 1)
+        if start >= hi:
+            return [RecordBatch.empty(self._schema)]
+        var stop = self._line_end(hi - 1)
+        var window = self._source.read_ranges(
+            [(start, stop - start)], ExecContext.serial()
+        )
+        return [
+            _parse_rows(
+                window.span(0)[: stop - start],
+                self._schema,
+                0,
+                validate=True,
+                ignore_unexpected=self._ignore_unexpected,
+            )
+        ]
 
 
 def read_json[
@@ -984,9 +1082,7 @@ def read_json(
     path is a zero-copy memory map, anything else goes through OpenDAL with
     `options` as its service configuration.
     """
-    return read_json(
-        DynSource.open(uri, options), read_options, parse_options
-    )
+    return read_json(DynSource.open(uri, options), read_options, parse_options)
 
 
 def open_json(
@@ -1007,6 +1103,7 @@ struct JsonFormat(Format):
     keys outside it are skipped rather than parsed."""
 
     comptime Reader = JsonReader[DynSource]
+    comptime Chunks = JsonChunks[DynSource]
 
     @staticmethod
     def name() -> StaticString:
@@ -1025,3 +1122,21 @@ struct JsonFormat(Format):
         if schema:
             parse = ParseOptions(schema.value(), UnexpectedFieldBehavior.IGNORE)
         return open_json(path, ReadOptions(), parse, options)
+
+    @staticmethod
+    def chunks(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Chunks:
+        # Every chunk parses into one schema: without a projection, the one
+        # the first block infers, as `open` would use.
+        var read: Schema
+        var parse: ParseOptions
+        if schema:
+            read = schema.value().copy()
+            parse = ParseOptions(read, UnexpectedFieldBehavior.IGNORE)
+        else:
+            read = Self.open(path, None, options).schema()
+            parse = ParseOptions(read)
+        return JsonChunks[DynSource](
+            DynSource.open(path, options), read^, ReadOptions(), parse
+        )

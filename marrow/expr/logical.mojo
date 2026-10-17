@@ -126,7 +126,7 @@ from ..formats import Format
 from ..formats.ipc import IpcFormat
 from ..formats.json import JsonFormat
 from .scans import (
-    FormatStream,
+    FormatSource,
     IcebergScanStream,
     RowGroupSource,
 )
@@ -4904,12 +4904,16 @@ struct FormatScan[Fmt: Format](FileScan, Writable):
     def lower(
         self, mut driver: Driver, bindings: Bindings = Bindings()
     ) raises -> List[Phase]:
-        var paths = self.path.resolve(bindings)
-        var name = String(Self.Fmt.name(), "Scan(", self.path, ")")
-        var scan = FormatStream[Self.Fmt](
-            paths^, self._schema.copy(), self.path.options()
-        )
-        return [driver.phase(StreamSource(scan^, name^))]
+        return [
+            driver.phase(
+                FormatSource[Self.Fmt](
+                    self.path.resolve(bindings),
+                    self._schema,
+                    self.path.options(),
+                    driver.ctx,
+                )
+            )
+        ]
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.Fmt.name(), "Scan(", self.path, ")")

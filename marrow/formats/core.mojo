@@ -5,10 +5,13 @@
 
 A reader hands out one `RecordBatch` at a time and a writer takes one at a
 time, so a file of any size passes through in the memory of a batch -- a row
-group, a block, a message -- rather than the whole of it. `Format` names a
-format's reader, so a scan can be written once for all of them.
+group, a block, a message -- rather than the whole of it. A chunked reader
+splits a file into parts that decode independently, so several threads can
+read one file at once. `Format` names a format's readers, so a scan can be
+written once for all of them.
 """
 
+from ..execution import ExecContext
 from ..io import StorageOptions
 from ..schema import Schema
 from ..tabular import RecordBatch, Table
@@ -54,11 +57,27 @@ trait BatchWriter(Deinitable, Movable):
         ...
 
 
+trait ChunkedReader(Deinitable, Movable):
+    """Reads a file as chunks that decode independently -- a record batch, a
+    row group, a run of blocks, the lines of a byte range -- in any order and
+    from several threads at once."""
+
+    def num_chunks(self) -> Int:
+        """How many chunks the file has."""
+        ...
+
+    def read_chunk(self, i: Int, ctx: ExecContext) raises -> List[RecordBatch]:
+        """Chunk `i`'s rows, as one or more batches, read on `ctx`."""
+        ...
+
+
 trait Format:
     """A file format, as a scan sees it: its name, the extensions its files
-    carry, and a way to open one as a `BatchReader`."""
+    carry, and the ways to open one -- in order as a `BatchReader`, or in
+    parallel as a `ChunkedReader`."""
 
     comptime Reader: BatchReader
+    comptime Chunks: ChunkedReader
 
     @staticmethod
     def name() -> StaticString:
@@ -83,4 +102,13 @@ trait Format:
         may still carry other columns, so a caller selects `schema`'s names
         from each.
         """
+        ...
+
+    @staticmethod
+    def chunks(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Chunks:
+        """Open the file at `path` as `open` does, to read it chunk by chunk,
+        reading only what it takes to know where its chunks are -- a footer, a
+        header, block headers, a size."""
         ...

@@ -11,6 +11,8 @@ from .binary import AvroBytes, AvroCursor
 from .decoder import RecordDecoder
 from .encoder import RecordEncoder
 from .file import (
+    AvroBlock,
+    AvroChunks,
     AvroCodec,
     AvroFile,
     AvroFormat,

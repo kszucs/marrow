@@ -17,7 +17,7 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ...builders import DynBuilder
 from ...utils.byteorder import LittleEndian
-from ..core import BatchReader, Format
+from ..core import BatchReader, ChunkedReader, Format
 from .format import (
     Block,
     FieldIpcInfo,
@@ -118,7 +118,9 @@ def _read_message[
 # ---------------------------------------------------------------------------
 
 
-struct RecordBatchFileReader[S: ByteSource = BufferSource](BatchReader):
+struct RecordBatchFileReader[S: ByteSource = BufferSource](
+    BatchReader, ChunkedReader
+):
     """Reader for the Arrow IPC file format with random-access batch reads.
 
     Opens a file by reading its **tail**, not its whole extent: the footer sits
@@ -254,6 +256,13 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](BatchReader):
             self._native_codecs,
         )
 
+    def num_chunks(self) -> Int:
+        """A chunk is a record batch."""
+        return len(self._blocks)
+
+    def read_chunk(self, i: Int, ctx: ExecContext) raises -> List[RecordBatch]:
+        return [self.read_batch(i)]
+
 
 struct RecordBatchStreamReader[S: ByteSource = BufferSource](BatchReader):
     """Reader for the Arrow IPC stream format.
@@ -356,6 +365,7 @@ struct IpcFormat(Format):
     holds whole columns, so the projection reads nothing less."""
 
     comptime Reader = RecordBatchFileReader[DynSource]
+    comptime Chunks = RecordBatchFileReader[DynSource]
 
     @staticmethod
     def name() -> StaticString:
@@ -370,6 +380,12 @@ struct IpcFormat(Format):
         path: String, schema: Optional[Schema], options: StorageOptions
     ) raises -> Self.Reader:
         return RecordBatchFileReader[DynSource](DynSource.open(path, options))
+
+    @staticmethod
+    def chunks(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Chunks:
+        return Self.open(path, schema, options)
 
 
 def read_ipc_file(

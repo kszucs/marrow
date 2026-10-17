@@ -29,7 +29,7 @@ from ...io import (
 )
 from ...io.core import FOOTER_READ_SIZE, Fetched
 from ...execution import ExecContext
-from ..core import BatchReader, BatchWriter, Format
+from ..core import BatchReader, BatchWriter, ChunkedReader, Format
 from ...schema import Schema
 from ...tabular import RecordBatch, Table
 from ...compress import Method
@@ -189,6 +189,16 @@ def _read_header[S: ByteSource](ref source: S) raises -> _Header:
     return _Header(head.span(0))
 
 
+@fieldwise_init
+struct AvroBlock(Copyable, Movable):
+    """Where one block's records sit: `count` of them in `length` bytes from
+    `start`, followed by the file's sync marker."""
+
+    var start: Int
+    var length: Int
+    var count: Int
+
+
 struct AvroFile[S: ByteSource = BufferSource](Movable):
     """An Avro object container file, opened: its header is read, the blocks
     are not. `read` decodes them into a `Table`, `batches` one batch at a
@@ -294,6 +304,51 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
         one block's bytes at a time."""
         return AvroReader(self^, columns, batch_size)
 
+    def blocks(self) raises -> List[AvroBlock]:
+        """Where every block sits, read from each block's two leading varints
+        and nothing else."""
+        var out = List[AvroBlock]()
+        var pos = self._header.size
+        while pos < self._source.size():
+            var block = self._block_at(pos)
+            pos = block.start + block.length + SYNC_SIZE
+            out.append(block^)
+        return out^
+
+    def decode(
+        self, blocks: Span[AvroBlock, _], columns: Optional[List[String]]
+    ) raises -> RecordBatch:
+        """`blocks`' records, `columns` of them, as one batch."""
+        var decoder = RecordDecoder(self._avro, columns)
+        for ref block in blocks:
+            self._decode(decoder, block)
+        return decoder.finish()
+
+    def _block_at(self, pos: Int) raises -> AvroBlock:
+        """The block starting at `pos`: a record count and a byte size."""
+        # Two varints take at most ten bytes each.
+        var head = _fetch(self._source, pos, min(20, self._source.size() - pos))
+        var cur = AvroCursor(head.span(0))
+        var count = cur.length()
+        var length = cur.length()
+        return AvroBlock(pos + cur.pos, length, count)
+
+    def _decode(self, mut decoder: RecordDecoder, block: AvroBlock) raises:
+        """`block`'s records into `decoder`, its sync marker checked."""
+        var fetched = _fetch(
+            self._source, block.start, block.length + SYNC_SIZE
+        )
+        var data = fetched.span(0)
+        if data[block.length :] != Span(self._header.sync):
+            raise CorruptError(
+                t"avro: sync marker mismatch at offset"
+                t" {block.start + block.length}"
+            )
+        var records = self._codec.decompress(
+            data[: block.length], self._native_codecs
+        )
+        _decode_block(decoder, records, block.count)
+
     def _fill(
         self, mut decoder: RecordDecoder, mut pos: Int, batch_size: Int
     ) raises:
@@ -306,23 +361,9 @@ struct AvroFile[S: ByteSource = BufferSource](Movable):
         held at a time."""
         var size = self._source.size()
         while pos < size and decoder.rows() < batch_size:
-            # Two varints take at most ten bytes each.
-            var head = _fetch(self._source, pos, min(20, size - pos))
-            var cur = AvroCursor(head.span(0))
-            var count = cur.length()
-            var length = cur.length()
-            var start = pos + cur.pos
-            var block = _fetch(self._source, start, length + SYNC_SIZE)
-            var data = block.span(0)
-            if data[length:] != Span(self._header.sync):
-                raise CorruptError(
-                    t"avro: sync marker mismatch at offset {start + length}"
-                )
-            var records = self._codec.decompress(
-                data[:length], self._native_codecs
-            )
-            _decode_block(decoder, records, count)
-            pos = start + length + SYNC_SIZE
+            var block = self._block_at(pos)
+            self._decode(decoder, block)
+            pos = block.start + block.length + SYNC_SIZE
 
 
 struct AvroReader[S: ByteSource = BufferSource](BatchReader):
@@ -360,10 +401,48 @@ struct AvroReader[S: ByteSource = BufferSource](BatchReader):
         return self._decoder.finish()
 
 
+struct AvroChunks[S: ByteSource](ChunkedReader):
+    """An Avro file read as runs of whole blocks of about `rows` records each,
+    `columns` of them: the blocks' positions are read up front, from their
+    headers, and each run decodes on its own."""
+
+    var _file: AvroFile[Self.S]
+    var _columns: Optional[List[String]]
+    var _runs: List[List[AvroBlock]]
+
+    def __init__(
+        out self,
+        var file: AvroFile[Self.S],
+        var columns: Optional[List[String]] = None,
+        rows: Int = 65_536,
+    ) raises:
+        self._runs = List[List[AvroBlock]]()
+        var run = List[AvroBlock]()
+        var held = 0
+        for ref block in file.blocks():
+            run.append(block.copy())
+            held += block.count
+            if held >= rows:
+                self._runs.append(run^)
+                run = List[AvroBlock]()
+                held = 0
+        if len(run) > 0:
+            self._runs.append(run^)
+        self._file = file^
+        self._columns = columns^
+
+    def num_chunks(self) -> Int:
+        return len(self._runs)
+
+    def read_chunk(self, i: Int, ctx: ExecContext) raises -> List[RecordBatch]:
+        return [self._file.decode(self._runs[i], self._columns)]
+
+
 struct AvroFormat(Format):
     """Avro object container files, as a scan opens them."""
 
     comptime Reader = AvroReader[DynSource]
+    comptime Chunks = AvroChunks[DynSource]
 
     @staticmethod
     def name() -> StaticString:
@@ -382,6 +461,16 @@ struct AvroFormat(Format):
             columns = schema.value().names()
         var file = AvroFile[DynSource](DynSource.open(path, options))
         return file^.batches(columns)
+
+    @staticmethod
+    def chunks(
+        path: String, schema: Optional[Schema], options: StorageOptions
+    ) raises -> Self.Chunks:
+        var columns = Optional[List[String]](None)
+        if schema:
+            columns = schema.value().names()
+        var file = AvroFile[DynSource](DynSource.open(path, options))
+        return AvroChunks(file^, columns^)
 
 
 def _decode_block(
