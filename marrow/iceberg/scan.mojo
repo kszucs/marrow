@@ -272,7 +272,7 @@ struct IcebergFileReader(Movable):
             var batch = self._file.read(
                 columns=self._columns.copy(),
                 row_groups=groups^,
-                row_selections=picked^,
+                row_selections=picked,
                 ctx=self._ctx,
             ).combine_chunks()
             if mask:

@@ -48,14 +48,14 @@ def _batch() raises -> RecordBatch:
         y.append(Float64(i % 37) * 0.25)
     return record_batch(
         [
-            array[Int64Type](g1^, int64).to_dyn(),
-            array[Int64Type](g4^, int64).to_dyn(),
-            array[Int64Type](g100^, int64).to_dyn(),
-            array[Int64Type](a^, int64).to_dyn(),
-            array[Int64Type](b^, int64).to_dyn(),
-            array[Int64Type](c^, int64).to_dyn(),
-            array[Float64Type](x^, float64).to_dyn(),
-            array[Float64Type](y^, float64).to_dyn(),
+            array[Int64Type](g1, int64).to_dyn(),
+            array[Int64Type](g4, int64).to_dyn(),
+            array[Int64Type](g100, int64).to_dyn(),
+            array[Int64Type](a, int64).to_dyn(),
+            array[Int64Type](b, int64).to_dyn(),
+            array[Int64Type](c, int64).to_dyn(),
+            array[Float64Type](x, float64).to_dyn(),
+            array[Float64Type](y, float64).to_dyn(),
         ],
         names=["g1", "g4", "g100", "a", "b", "c", "x", "y"],
     )
@@ -175,7 +175,7 @@ def bench_comptime_aggregate_sum(mut b: Benchmark) raises:
     def plan(batch: RecordBatch) raises {imm} -> DynRelation:
         var agg = (col("a", int64) * col("b", int64)).sum().alias("r")
         comptime assert type_of(agg).fuses, "sum(a * b) must fuse"
-        return table(batch.copy()).aggregate(aggs=[agg^])
+        return table(batch.copy()).aggregate(aggs=[agg])
 
     _bench(b, "comptime", plan)
 
@@ -193,7 +193,7 @@ def _sum_grouped_comptime(mut b: Benchmark, key: String) raises:
     def plan(batch: RecordBatch) raises {imm} -> DynRelation:
         var agg = (col("a", int64) * col("b", int64)).sum().alias("r")
         comptime assert type_of(agg).fuses, "sum(a * b) must fuse"
-        return table(batch.copy()).aggregate([agg^], [col(key.copy(), int64)])
+        return table(batch.copy()).aggregate([agg], [col(key.copy(), int64)])
 
     _bench(b, "comptime", plan)
 

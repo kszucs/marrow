@@ -533,22 +533,22 @@ def test_runtime_coalesce_and_if_else() raises:
         == array([1, 2, 30, 4], int64)
     )
     var v = if_else(gt(column("b"), _lit(20)), column("b"), _lit(0))
-    assert_true(_ints(v^) == array([0, 0, 30, 40], int64))
+    assert_true(_ints(v) == array([0, 0, 30, 40], int64))
 
 
 def test_runtime_isin_hashes_the_set_once() raises:
     """The value set is a payload, not a child — one probe table per batch."""
     var v = isin(column("b"), array([20, 40], int64).to_dyn())
-    assert_equal(_bits(v^), "ftft")
+    assert_equal(_bits(v), "ftft")
 
 
 def test_runtime_cast_carries_its_safety_on_the_tag() raises:
     """`Payload` holds one value and the target dtype is already it, so `safe`
     rides the tag. Both spellings must reach the same kernel."""
     var safe = cast(column("b"), DynType(int32))
-    assert_true(_ints(safe^).dtype() == DynType(int32))
+    assert_true(_ints(safe).dtype() == DynType(int32))
     var unsafe = cast(column("b"), DynType(int32), safe=False)
-    assert_true(_ints(unsafe^).dtype() == DynType(int32))
+    assert_true(_ints(unsafe).dtype() == DynType(int32))
 
 
 def test_runtime_string_verbs() raises:
@@ -872,7 +872,7 @@ def test_runtime_sql_string_arguments_promote_their_width() raises:
 
 def _str(var v: String) -> RuntimeValue:
     """A string literal operand — `lit` for the string half."""
-    return literal(DynScalar(StringScalar(v^)))
+    return literal(DynScalar(StringScalar(v)))
 
 
 def _runtime_lists() raises -> RecordBatch:

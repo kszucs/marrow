@@ -533,11 +533,11 @@ struct ExecContext(
     ](self, n: Int, body: Body, lanes: Int) raises:
         """``fan_out`` for a body that can stop early: it returns whether the
         items after ``i`` are still wanted, and False hands out no more — a
-        serial loop's ``break``. See ``ThreadPool.fan_out``."""
+        serial loop's ``break``. See ``ThreadPool.fan_out_until``."""
         if self._on_caller(lanes):
-            ThreadPool.fan_out_inline(n, body)
+            ThreadPool.fan_out_inline_until(n, body)
         else:
-            self.thread_pool()[].fan_out(
+            self.thread_pool()[].fan_out_until(
                 n, body, min(lanes, self.resolved_num_threads())
             )
 

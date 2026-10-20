@@ -179,7 +179,7 @@ def test_bool_file() raises:
     b.append(True)
     b.append(False)
     var arr: DynArray = b.finish()
-    var batch = _single_col_batch(arr^, field("flags", bool_))
+    var batch = _single_col_batch(arr, field("flags", bool_))
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
 
@@ -190,7 +190,7 @@ def test_string_file() raises:
     b.append("world")
     b.append("!")
     var arr: DynArray = b.finish()
-    var batch = _single_col_batch(arr^, field("s", string))
+    var batch = _single_col_batch(arr, field("s", string))
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
 
@@ -211,7 +211,7 @@ def test_list_file() raises:
     child.append(Int32(6))
     lb.append_valid()
     var arr: DynArray = lb.finish()
-    var batch = _single_col_batch(arr^, field("items", list_(int32)))
+    var batch = _single_col_batch(arr, field("items", list_(int32)))
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
 
@@ -232,7 +232,7 @@ def test_fixed_size_list_file() raises:
     fslb.append_valid()
     var arr: DynArray = fslb.finish()
     var batch = _single_col_batch(
-        arr^, field("vecs", fixed_size_list_(float32, 3))
+        arr, field("vecs", fixed_size_list_(float32, 3))
     )
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
@@ -258,7 +258,7 @@ def test_struct_file() raises:
     sb.append_valid()
     var arr: DynArray = sb.finish()
     var point_field = field("point", struct_(child_flds^))
-    var batch = _single_col_batch(arr^, point_field^)
+    var batch = _single_col_batch(arr, point_field)
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
 
@@ -372,7 +372,7 @@ def test_bool_stream() raises:
     b.append(False)
     b.append(True)
     var arr: DynArray = b.finish()
-    var batch = _single_col_batch(arr^, field("flags", bool_))
+    var batch = _single_col_batch(arr, field("flags", bool_))
     var result = _roundtrip_stream(batch)
     assert_true(batch == result)
 
@@ -850,7 +850,7 @@ def test_marrow_reads_pyarrow_dictionary() raises:
 def test_file_roundtrip_sliced_column() raises:
     var full = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([full.slice(2, 3)], names=["a"])
-    var got = _roundtrip_file(batch^)
+    var got = _roundtrip_file(batch)
     assert_equal(got.num_rows(), 3)
     assert_true(got.columns[0] == array([30, 40, 50], int64).to_dyn())
 
@@ -864,7 +864,7 @@ def test_file_roundtrip_sliced_column_with_nulls() raises:
     b.append(Int64(50))
     var full: DynArray = b.finish().to_dyn()
     var batch = record_batch([full.slice(1, 3)], names=["a"])
-    var got = _roundtrip_file(batch^)
+    var got = _roundtrip_file(batch)
     assert_equal(got.num_rows(), 3)
     assert_equal(got.columns[0].null_count(), 2)
     assert_true(got.columns[0].is_null(0))
@@ -875,7 +875,7 @@ def test_file_roundtrip_sliced_column_with_nulls() raises:
 def test_file_roundtrip_sliced_string_column() raises:
     var full = array(["a", "b", "c", "d"])
     var batch = record_batch([full.slice(1, 2)], names=["s"])
-    var got = _roundtrip_file(batch^)
+    var got = _roundtrip_file(batch)
     assert_equal(got.num_rows(), 2)
     assert_true(got.columns[0] == array(["b", "c"]).to_dyn())
 
@@ -1616,7 +1616,7 @@ def _metadata_batch() raises -> RecordBatch:
     point.metadata["unit"] = "cm"
     var columns: List[DynArray] = [sb.finish()]
     var schema = Schema(fields=[point^], metadata={"origin": "test"})
-    return RecordBatch(schema=schema^, columns=columns^)
+    return RecordBatch(schema=schema, columns=columns^)
 
 
 def test_ipc_refuses_strings_not_utf8() raises:

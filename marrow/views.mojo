@@ -2518,16 +2518,20 @@ def _reduce_dispatch[
             @always_inline
             @__parameter
             def input_refined[
-                _dtype: DType, W: Int, rank: Int
-            ](idx: IndexList[rank]) -> SIMD[_dtype, W]:
-                return input_fn[W, rank](idx)._refine[_dtype]()
+                _dtype: DType, W: Int
+            ](coord: Coord) -> SIMD[_dtype, W]:
+                return input_fn[W, 1](
+                    IndexList[1](Int(coord[0].value()))
+                )._refine[_dtype]()
 
             @always_inline
             @__parameter
             def output_refined[
-                _dtype: DType, W: SIMDLength, rank: Int
-            ](idx: IndexList[rank], val: SIMD[_dtype, W]):
-                output_fn_gpu[W, rank](idx, val._refine[T]())
+                _dtype: DType, W: SIMDLength
+            ](coord: Coord, val: SIMD[_dtype, W]):
+                output_fn_gpu[W, 1](
+                    IndexList[1](Int(coord[0].value())), val._refine[T]()
+                )
 
             @always_inline
             @__parameter

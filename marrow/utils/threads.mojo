@@ -1195,12 +1195,14 @@ def _read_text(path: String) -> Optional[String]:
         return None
     var bytes = List[UInt8](length=4096, fill=0)
     var size = 0
+    # `fd` stays a `c_int`: this must be the signature `std.io` declares
+    # `read` with, since two declarations of one C symbol in a unit must agree.
     var got = c_ssize_t(1)
     while got > 0:
         if size == len(bytes):
             bytes.resize(2 * size, 0)
         got = external_call["read", c_ssize_t](
-            Int(fd), bytes.unsafe_ptr().unsafe_offset(size), len(bytes) - size
+            fd, bytes.unsafe_ptr().unsafe_offset(size), len(bytes) - size
         )
         if got > 0:
             size += Int(got)
@@ -1774,7 +1776,7 @@ struct ThreadPool(Movable):
             if outcome.ends_in_failure():
                 raise outcome.take_error()
 
-    def fan_out[
+    def fan_out_until[
         E: Movable & Deinitable, Body: def(Int, Int) raises E -> Bool
     ](self, n: Int, body: Body, lanes: Int) raises E:
         """`fan_out` for a body that can stop early: `body(wid, i)` returns
@@ -1795,7 +1797,7 @@ struct ThreadPool(Movable):
         """
         var nt = max(1, min(lanes, n, self.concurrency()))
         if nt == 1:
-            Self.fan_out_inline[E, Body](n, body)
+            Self.fan_out_inline_until[E, Body](n, body)
         else:
             var shared = _Shared.of(self._state)
             # As above: the closure captures `cursor` and `outcome` itself.
@@ -1829,10 +1831,10 @@ struct ThreadPool(Movable):
             body(0, i)
 
     @staticmethod
-    def fan_out_inline[
+    def fan_out_inline_until[
         E: Movable & Deinitable, Body: def(Int, Int) raises E -> Bool
     ](n: Int, body: Body) raises E:
-        """`fan_out_inline` for a body that can stop early."""
+        """`fan_out_until` on the calling thread alone, without a pool."""
         for i in range(n):
             if not body(0, i):
                 break

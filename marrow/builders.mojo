@@ -759,8 +759,8 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
             length=self._length,
             nulls=null_count,
             offset=0,
-            bitmap=bm^,
-            buffer=values^,
+            bitmap=bm,
+            buffer=values,
         )
         # reset builder state for potential reuse
         self.reset()
@@ -1512,8 +1512,8 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
             length=self._length,
             nulls=null_count,
             offset=0,
-            bitmap=bm^,
-            offsets=offsets^,
+            bitmap=bm,
+            offsets=offsets,
             values=values^,
         )
         # reset builder state for potential reuse
@@ -1715,7 +1715,7 @@ struct FixedSizeListBuilder(Builder):
             length=self._length,
             nulls=null_count,
             offset=0,
-            bitmap=bm^,
+            bitmap=bm,
             values=values^,
         )
         # reset builder state for potential reuse

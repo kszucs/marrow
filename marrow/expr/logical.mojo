@@ -677,7 +677,7 @@ struct DynValue(Copyable, Movable, Writable):
     @implicit
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
-        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._boxed = rebind[ArcPointer[NoneType]](ptr)
         self._drop = Self._drop_tramp[V]
         self._aggregates = V.aggregates
         self._references = Self._references_tramp[V]
@@ -3203,7 +3203,7 @@ struct Aggregate(Relation, Writable):
             var name = k.name()
             if name == "":
                 name = "key" + String(i)
-            fields.append(field(name^, k.dtype(input)))
+            fields.append(field(name, k.dtype(input)))
         for ref a in aggs:
             fields.append(field(a.name(), a.dtype(input)))
         return schema(fields^)

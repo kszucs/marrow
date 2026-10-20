@@ -976,7 +976,7 @@ struct CArrowSchema(Copyable, Movable):
         var dtype = self.to_dtype()
         var nullable = self.flags & ARROW_FLAG_NULLABLE
         var metadata = _decode_c_metadata(self.metadata)
-        return Field(name^, dtype^, nullable != 0, metadata^)
+        return Field(name, dtype^, nullable != 0, metadata^)
 
     def to_schema(self) raises -> Schema:
         """Build a Schema from this top-level struct CArrowSchema."""
@@ -1946,4 +1946,4 @@ struct CArrowArrayStream(Movable):
         # Release the stream.
         heap[].release(heap)
         _free(heap)
-        return Table.from_batches(schema, batches^)
+        return Table.from_batches(schema, batches)

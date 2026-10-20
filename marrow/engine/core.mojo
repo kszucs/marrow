@@ -286,7 +286,7 @@ struct DynOperator(Movable):
     @implicit
     def __init__[O: Operator](out self, var value: O):
         var ptr = ArcPointer[O](value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._data = rebind[ArcPointer[NoneType]](ptr)
         self._virt_push = Self._push_tramp[O]
         self._virt_drain = Self._drain_tramp[O]
         self._virt_done = Self._done_tramp[O]

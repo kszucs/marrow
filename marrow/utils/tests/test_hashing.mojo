@@ -17,7 +17,7 @@ from std.testing import assert_equal, assert_true, assert_false, assert_raises
 
 from std.bit import pop_count
 
-from std.hashlib._ahash import AHasher
+from std.hash._ahash import AHasher
 
 from ...compress import Codecs
 from ..hashing import (
@@ -496,10 +496,10 @@ def test_rapidhash64_span_agrees_with_lane_path() raises:
 
 
 def _std_ahash(data: Span[UInt8, _]) -> UInt64:
-    """`std.hashlib`'s aHash of `data`, as the oracle for `AHash64.hash`."""
+    """`std.hash`'s aHash of `data`, as the oracle for `AHash64.hash`."""
     var h = AHasher[SIMD[DType.uint64, 4](0)]()
     h.update(data)
-    return h^.finish()
+    return h.finish()
 
 
 def _le_bytes(value: UInt64, width: Int) -> List[UInt8]:
@@ -558,7 +558,7 @@ def test_hash_lanes_agrees_with_hash_xxhash() raises:
 
 def test_hash_lanes_are_independent() raises:
     """Every lane must produce the digest it would alone — the property that
-    distinguishes this from `std.hashlib.Hasher._update_with_simd`, which folds
+    distinguishes this from `std.hash.Hasher._update_with_simd`, which folds
     a vector into one accumulator."""
     var v = SIMD[DType.uint64, 8](
         0, 1, 2, 3, 0xFF, 0x1234, 0xDEADBEEF, ~UInt64(0)
@@ -620,7 +620,7 @@ def test_combine_lanes_default_is_shared() raises:
 
 
 def test_ahash64_matches_the_standard_library() raises:
-    """`AHash64.hash` delegates, so it must equal `std.hashlib.hash` of the same
+    """`AHash64.hash` delegates, so it must equal `std.hash.hash` of the same
     bytes — there is no second aHash implementation here to drift."""
     for n in [0, 1, 3, 8, 17, 64]:
         var d = _iota_span(n)

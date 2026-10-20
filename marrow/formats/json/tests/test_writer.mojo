@@ -20,7 +20,7 @@ from ..writer import render_json, write_json
 
 
 def _strings(var values: List[Optional[String]]) raises -> DynArray:
-    return array(values^)
+    return array(values)
 
 
 def _read(text: String) raises -> RecordBatch:

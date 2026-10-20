@@ -416,7 +416,7 @@ struct HashKernel[H: Hasher](Kernel):
         every one of them. The key columns of a join or group-by still have
         to agree on a dtype: `DictionaryEncoder` checks that before encoding.
         Hashed with `H` like every other leaf. This used
-        to call `std.hashlib.hash` (aHash) regardless of `H`, because the
+        to call `std.hash.hash` (aHash) regardless of `H`, because the
         multi-branch byte-string path did not exist; a string column and a
         numeric column were therefore hashed by different algorithms. `H.hash`
         is that path.

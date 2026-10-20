@@ -1892,7 +1892,7 @@ def _keyed(
         var values = List[Optional[Int]](capacity=rows)
         for i in range(rows):
             values.append(i % modulus[j])
-        columns.append(array(values^, int64).to_dyn())
+        columns.append(array(values, int64).to_dyn())
     return table(record_batch(columns^, names=names.copy())).analyze()
 
 

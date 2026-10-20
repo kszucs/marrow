@@ -657,7 +657,7 @@ def test_filter_bool_array_after_primitive_narrowing() raises:
     mb.append(False)
     var mask = mb.finish()
 
-    var out = FilterKernel.dispatch(arr^.to_dyn(), mask^).as_bool().copy()
+    var out = FilterKernel.dispatch(arr^.to_dyn(), mask).as_bool().copy()
     assert_equal(len(out), 3)
     assert_true(out[0].value())
     assert_true(not out[1].value())
@@ -729,7 +729,7 @@ def test_cross_check_temporal_pyarrow() raises:
     var pa_mask = Python.list()
     for m in mask:
         pa_mask.append(m.value())
-    var got_f = FilterKernel.dispatch(a, (array(mask^)))
+    var got_f = FilterKernel.dispatch(a, (array(mask)))
     # `pc.filter` / `pc.take` are PyArrow's own API — this is the reference side
     # of the cross-check, so it must NOT be renamed to marrow's `FilterKernel.apply`.
     # The result is cast to int64 so `as_py()` yields the epoch value that
@@ -745,7 +745,7 @@ def test_cross_check_temporal_pyarrow() raises:
     var pa_idx = Python.list()
     for k in idx:
         pa_idx.append(k.value())
-    var got_t = TakeKernel.dispatch(a, array(idx^, int32))
+    var got_t = TakeKernel.dispatch(a, array(idx, int32))
     var pa_t = pc.take(pa_arr, pa.array(pa_idx)).cast(pa.int64())
     ref rt = got_t.as_timestamp()
     for i in range(len(got_t)):

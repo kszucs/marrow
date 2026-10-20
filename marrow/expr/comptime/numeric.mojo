@@ -510,7 +510,7 @@ struct NumericCompare[
             # matches.
             var below = LeKernel[nan_safe=True].apply(lo, rhi)
             var above = GeKernel[nan_safe=True].apply(hi, rlo)
-            return AndKernel.apply(live, AndKernel.apply(below^, above^))
+            return AndKernel.apply(live, AndKernel.apply(below, above))
         else:
             return keep_every(index.chunks())
 

@@ -173,7 +173,7 @@ struct RowGroupSource(Source):
             var table = self._files[morsel.file].file.read(
                 columns=Optional(self._columns.copy()),
                 row_groups=Optional(groups^),
-                row_selections=picked^,
+                row_selections=picked,
                 ctx=ctx,
             )
             # A row group can decode to several chunks; each is pushed on its

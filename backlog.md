@@ -308,9 +308,13 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
 - **TSAN reports a data race in the thread pool's `_claim`**
   (`utils/threads.mojo`, the job's `next` counter read on a stack slot
   while workers start), under `pytest --tsan
-  marrow/parquet/tests/test_reader.mojo`; it fails
+  marrow/formats/parquet/tests/test_reader.mojo`; it fails
   `test_nulls_across_row_groups`. Present on main `a79fb1f5` (two reports),
-  so not the codec lock or the engine.
+  so not the codec lock or the engine. The `test_tsan` task also fails two
+  `expr/tests/test_workers.mojo` cases on it, reached through
+  `concat`'s `_Pieces.gather`; identical on main `fc1a335a` and after the
+  `1.2.0.dev2026101905` bump. The task's Parquet path was stale until then,
+  so it collected nothing and the lane reported no tests.
 - **No cross-lane parity test.** "One engine, two drivers" was enforced by a
   `test_parity.mojo` across four axes; it went with the previous expression
   package and has no replacement. The invariant is currently unenforced.

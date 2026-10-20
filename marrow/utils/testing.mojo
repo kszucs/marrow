@@ -174,7 +174,7 @@ struct TestSuite:
         print("]")
 
         if report.failures > 0:
-            raise Error(report^)
+            raise Error(report)
 
 
 struct Benchmark:

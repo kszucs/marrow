@@ -526,7 +526,7 @@ def test_codecs_arrays_plain_decodes_a_prefix() raises:
     """`Plain` keeps the values as they are: decoding a node holding three
     of a buffer's four values gives those three."""
     var four: List[Int64] = [5, 6, 7, 8]
-    var arr = array[Int64Type](four^, int64)
+    var arr = array[Int64Type](four, int64)
     var node = Encoded(arr.buffer, 3 * 8)
     node.count = 3
     var plain = Plain()

@@ -891,7 +891,7 @@ struct TakeKernel(Kernel):
             length=n,
             nulls=null_count,
             offset=0,
-            bitmap=bitmap^,
+            bitmap=bitmap,
             buffer=buf.to_immutable(),
         )
 
@@ -1243,7 +1243,7 @@ struct TakeKernel(Kernel):
             length=total,
             nulls=child_nulls,
             offset=0,
-            bitmap=child_bitmap^,
+            bitmap=child_bitmap,
             buffer=child_idx_buf.to_immutable(),
         )
 

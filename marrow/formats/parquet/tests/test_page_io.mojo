@@ -719,7 +719,7 @@ def _bytes_after_open(
     var reads = Reads(List[Tuple[Int, Int]]())
     var f = ParquetFile[_Recorder, LeafSet.all()](_Recorder(path, reads.copy()))
     var opened = len(reads[])
-    var rows = f.read(row_selections=sels^).num_rows()
+    var rows = f.read(row_selections=sels).num_rows()
     return (_bytes_after(reads, opened), rows)
 
 

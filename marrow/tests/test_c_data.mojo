@@ -647,70 +647,70 @@ def test_all_numeric_array_imports() raises:
         pa.array(Python.list(1, 2, 3), type=pa.int8())
     )
     var data_i8 = arr_i8^.to_array(int8)
-    assert_equal(data_i8^.as_int8()[0].value(), 1)
+    assert_equal(data_i8.as_int8()[0].value(), 1)
 
     # uint8
     var arr_u8 = c_array_from_pyobj(
         pa.array(Python.list(10, 20, 30), type=pa.uint8())
     )
     var data_u8 = arr_u8^.to_array(uint8)
-    assert_equal(data_u8^.as_uint8()[1].value(), 20)
+    assert_equal(data_u8.as_uint8()[1].value(), 20)
 
     # int16
     var arr_i16 = c_array_from_pyobj(
         pa.array(Python.list(100, 200), type=pa.int16())
     )
     var data_i16 = arr_i16^.to_array(int16)
-    assert_equal(data_i16^.as_int16()[0].value(), 100)
+    assert_equal(data_i16.as_int16()[0].value(), 100)
 
     # uint16
     var arr_u16 = c_array_from_pyobj(
         pa.array(Python.list(300, 400), type=pa.uint16())
     )
     var data_u16 = arr_u16^.to_array(uint16)
-    assert_equal(data_u16^.as_uint16()[1].value(), 400)
+    assert_equal(data_u16.as_uint16()[1].value(), 400)
 
     # int32
     var arr_i32 = c_array_from_pyobj(
         pa.array(Python.list(-1, 0, 1), type=pa.int32())
     )
     var data_i32 = arr_i32^.to_array(int32)
-    assert_equal(data_i32^.as_int32()[0].value(), -1)
+    assert_equal(data_i32.as_int32()[0].value(), -1)
 
     # uint32
     var arr_u32 = c_array_from_pyobj(
         pa.array(Python.list(0, 4294967295), type=pa.uint32())
     )
     var data_u32 = arr_u32^.to_array(uint32)
-    assert_equal(data_u32^.as_uint32()[1].value(), 4294967295)
+    assert_equal(data_u32.as_uint32()[1].value(), 4294967295)
 
     # int64 (already covered by test_primitive_array_from_pyarrow, include for completeness)
     var arr_i64 = c_array_from_pyobj(
         pa.array(Python.list(9999999999), type=pa.int64())
     )
     var data_i64 = arr_i64^.to_array(int64)
-    assert_equal(data_i64^.as_int64()[0].value(), 9999999999)
+    assert_equal(data_i64.as_int64()[0].value(), 9999999999)
 
     # uint64
     var arr_u64 = c_array_from_pyobj(
         pa.array(Python.list(0, 1), type=pa.uint64())
     )
     var data_u64 = arr_u64^.to_array(uint64)
-    assert_equal(data_u64^.as_uint64()[0].value(), 0)
+    assert_equal(data_u64.as_uint64()[0].value(), 0)
 
     # float32
     var arr_f32 = c_array_from_pyobj(
         pa.array(Python.list(1.5, 2.5), type=pa.float32())
     )
     var data_f32 = arr_f32^.to_array(float32)
-    assert_equal(data_f32^.as_float32()[0].value(), 1.5)
+    assert_equal(data_f32.as_float32()[0].value(), 1.5)
 
     # float64
     var arr_f64 = c_array_from_pyobj(
         pa.array(Python.list(3.14, 2.71), type=pa.float64())
     )
     var data_f64 = arr_f64^.to_array(float64)
-    assert_equal(data_f64^.as_float64()[1].value(), 2.71)
+    assert_equal(data_f64.as_float64()[1].value(), 2.71)
 
 
 def test_temporal_dtype_schema_roundtrip() raises:

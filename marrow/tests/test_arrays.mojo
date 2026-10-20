@@ -3745,6 +3745,6 @@ def test_array_data_like_rebases_the_nulls() raises:
     assert_equal(data.length, 3)
     assert_equal(data.offset, 0)
     assert_equal(data.nulls, 1)
-    var out = DynArray.from_data(data^).as_int64().copy()
+    var out = DynArray.from_data(data).as_int64().copy()
     assert_false(out.is_valid(1))
     assert_equal(out[2].value(), 9)

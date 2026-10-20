@@ -2368,7 +2368,7 @@ struct Planner(Copyable, Movable):
         var output = "__agg" + String(len(self.agg_nodes))
         var value = self.to_aggregate(node, output)
         self.agg_nodes.append(index)
-        self.agg_values.append(DynValue(value^))
+        self.agg_values.append(DynValue(value))
         self.agg_outputs.append(output.copy())
         return output^
 
@@ -2390,28 +2390,26 @@ struct Planner(Copyable, Movable):
             input = self.translate(self.ast.kid(node, 0))
         var distinct = node.distinct
         if name == "SUM":
-            return input^.sum().alias(output^)
+            return input.sum().alias(output^)
         if name == "COUNT":
-            var counted = (
-                input^.count_distinct() if distinct else input^.count()
-            )
-            return counted^.alias(output^)
+            var counted = input.count_distinct() if distinct else input.count()
+            return counted.alias(output^)
         if name == "AVG" or name == "MEAN":
-            return input^.mean().alias(output^)
+            return input.mean().alias(output^)
         if name == "MIN":
-            return input^.min().alias(output^)
+            return input.min().alias(output^)
         if name == "MAX":
-            return input^.max().alias(output^)
+            return input.max().alias(output^)
         if name == "PRODUCT":
-            return input^.product().alias(output^)
+            return input.product().alias(output^)
         if name == "STDDEV" or name == "STDDEV_POP":
-            return input^.stddev().alias(output^)
+            return input.stddev().alias(output^)
         if name == "STDDEV_SAMP":
-            return input^.stddev_samp().alias(output^)
+            return input.stddev_samp().alias(output^)
         if name == "VARIANCE" or name == "VAR_POP":
-            return input^.variance().alias(output^)
+            return input.variance().alias(output^)
         if name == "VAR_SAMP":
-            return input^.var_samp().alias(output^)
+            return input.var_samp().alias(output^)
         raise NotImplementedError(t"sql: unsupported aggregate '{name}'")
 
     def same_expr(self, a: Int, b: Int) -> Bool:
@@ -2782,7 +2780,7 @@ struct Planner(Copyable, Movable):
                 != "" else self.item_name(index, value)
             )
             names.append(name^)
-            values.append(DynValue(value^))
+            values.append(DynValue(value))
         return (names^, values^)
 
     def item_name(self, index: Int, value: RuntimeValue) raises -> String:
@@ -2832,7 +2830,7 @@ struct Planner(Copyable, Movable):
             var name = key.name()
             self.key_outputs.append(name if name != "" else "key" + String(i))
             self.key_nodes.append(index)
-            keys.append(DynValue(key^))
+            keys.append(DynValue(key))
         return keys^
 
     def build(mut self) raises -> DynRelation:
@@ -3015,7 +3013,7 @@ struct Planner(Copyable, Movable):
             var extra = "__ord" + String(len(self.order_extras))
             var value = self.translate(index)
             self.order_extras.append(extra.copy())
-            self.order_extra_values.append(DynValue(value^))
+            self.order_extra_values.append(DynValue(value))
             self.order_keys.append(extra^)
 
     def apply_order(mut self, var relation: DynRelation) raises -> DynRelation:

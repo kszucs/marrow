@@ -89,7 +89,7 @@ struct DynSource(Movable):
     @implicit
     def __init__[S: Source](out self, var value: S):
         var ptr = ArcPointer[S](value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._data = rebind[ArcPointer[NoneType]](ptr)
         self._virt_count = Self._count_tramp[S]
         self._virt_rows = Self._rows_tramp[S]
         self._virt_read = Self._read_tramp[S]

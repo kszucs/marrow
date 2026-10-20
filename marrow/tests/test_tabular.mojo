@@ -94,7 +94,7 @@ def test_table_from_batches() raises:
     var batches = List[RecordBatch]()
     batches.append(b1^)
     batches.append(b2^)
-    var table = Table.from_batches(schema, batches^)
+    var table = Table.from_batches(schema, batches)
     assert_equal(table.num_rows(), 5)
     assert_equal(table.num_columns(), 1)
     assert_equal(len(table.column(0).chunks), 2)
@@ -113,7 +113,7 @@ def test_table_column_access() raises:
     var b = RecordBatch(schema=schema, columns=columns^)
     var batches = List[RecordBatch]()
     batches.append(b^)
-    var table = Table.from_batches(schema, batches^)
+    var table = Table.from_batches(schema, batches)
     assert_equal(table.column(0).length, 2)
     assert_equal(table.column("b").length, 2)
 
@@ -187,7 +187,7 @@ def _xy_batch(
     var xs: List[Optional[Int]], var ys: List[Optional[Int]]
 ) raises -> RecordBatch:
     var schema = Schema(fields=[Field("x", int32), Field("y", int64)])
-    var columns: List[DynArray] = [array(xs^, int32), array(ys^, int64)]
+    var columns: List[DynArray] = [array(xs, int32), array(ys, int64)]
     return RecordBatch(schema=schema, columns=columns^)
 
 

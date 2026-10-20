@@ -31,7 +31,7 @@ def _ids(start: Int, stop: Int) raises -> DynArray:
     var ids = List[Optional[Int]]()
     for i in range(start, stop):
         ids.append(i)
-    return array(ids^, int64).to_dyn()
+    return array(ids, int64).to_dyn()
 
 
 def _batch(start: Int, n: Int) raises -> RecordBatch:
@@ -39,7 +39,7 @@ def _batch(start: Int, n: Int) raises -> RecordBatch:
     for i in range(start, start + n):
         names.append(String("row", i))
     return record_batch(
-        [_ids(start, start + n), array(names^)], names=["id", "name"]
+        [_ids(start, start + n), array(names)], names=["id", "name"]
     )
 
 

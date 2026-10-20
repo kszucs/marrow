@@ -94,7 +94,7 @@ def _to_table(var batch: RecordBatch) raises -> Table:
     var schema = batch.schema
     var batches = List[RecordBatch]()
     batches.append(batch^)
-    return Table.from_batches(schema, batches^)
+    return Table.from_batches(schema, batches)
 
 
 # ---------------------------------------------------------------------------

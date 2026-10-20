@@ -1260,7 +1260,7 @@ def _measured(
         length=n,
         nulls=nulls,
         offset=0,
-        bitmap=bitmap^,
+        bitmap=bitmap,
         buffer=values^.to_immutable(),
     )
 

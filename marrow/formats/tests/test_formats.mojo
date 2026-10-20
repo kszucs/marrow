@@ -143,7 +143,7 @@ def _batches() raises -> List[RecordBatch]:
             record_batch(
                 [
                     array([i * 3, i * 3 + 1, i * 3 + 2], int64).to_dyn(),
-                    array(strings^),
+                    array(strings),
                 ],
                 names=["n", "s"],
             )

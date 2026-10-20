@@ -194,7 +194,7 @@ def test_agg_string_min_max_one_slot() raises:
         _in[LexicalExtremum[MinOp, StringArray]](values.copy()),
     )
     var hi = LexicalExtremum[MaxOp, StringArray].grouped(
-        Groups.single(3), _in[LexicalExtremum[MaxOp, StringArray]](values^)
+        Groups.single(3), _in[LexicalExtremum[MaxOp, StringArray]](values)
     )
     assert_true(lo == array(["a"]))
     assert_true(hi == array(["c"]))
@@ -208,7 +208,7 @@ def test_agg_string_min_max_grouped() raises:
     )
     var hi = LexicalExtremum[MaxOp, StringArray].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
-        _in[LexicalExtremum[MaxOp, StringArray]](values^),
+        _in[LexicalExtremum[MaxOp, StringArray]](values),
     )
     assert_true(lo == array(["b", "a"]))
     assert_true(hi == array(["d", "c"]))
@@ -244,7 +244,7 @@ def test_agg_temporal_min_max_keeps_unit_and_timezone() raises:
         Groups.single(3), _in[Fold[MinFold, TimestampType]](values.copy())
     )
     var hi = Fold[MaxFold, TimestampType].grouped(
-        Groups.single(3), _in[Fold[MaxFold, TimestampType]](values^)
+        Groups.single(3), _in[Fold[MaxFold, TimestampType]](values)
     )
     assert_true(lo.type() == DynType(timestamp(microsecond, "UTC")))
     assert_true(hi.type() == DynType(timestamp(microsecond, "UTC")))
@@ -269,7 +269,7 @@ def test_agg_numeric_min_one_slot_and_grouped() raises:
         Groups.single(4), _in[Fold[MinFold, Int64Type]](values.copy())
     )
     var grouped = Fold[MinFold, Int64Type].grouped(
-        Groups(_ids([0, 0, 1, 1]), 2), _in[Fold[MinFold, Int64Type]](values^)
+        Groups(_ids([0, 0, 1, 1]), 2), _in[Fold[MinFold, Int64Type]](values)
     )
     assert_true(whole == array([1], int64))
     assert_true(grouped == array([1, 1], int64))
@@ -323,7 +323,7 @@ def test_agg_unsigned_sum_accumulates_in_uint64() raises:
     assert_equal(per_group[0].value(), UInt64(1))
     assert_equal(per_group[1].value(), (UInt64(1) << 63) + 3)
     var product = Fold[ProductFold, UInt64Type].grouped(
-        Groups.single(3), _in[Fold[ProductFold, UInt64Type]](values^)
+        Groups.single(3), _in[Fold[ProductFold, UInt64Type]](values)
     )
     assert_equal(product[0].value(), UInt64(1) << 63)  # 3 * 2**63 wraps
 
@@ -369,18 +369,18 @@ def test_agg_out_dtype_agrees_with_the_column_produced() raises:
     )
     assert_true(
         StringMin.dtype(string_dtype)
-        == StringMin.grouped(Groups.single(3), _in[StringMin](strings^)).type()
+        == StringMin.grouped(Groups.single(3), _in[StringMin](strings)).type()
     )
     assert_true(
         Fold[MaxFold, TimestampType].dtype(stamp_dtype)
         == Fold[MaxFold, TimestampType]
-        .grouped(Groups.single(3), _in[Fold[MaxFold, TimestampType]](stamps^))
+        .grouped(Groups.single(3), _in[Fold[MaxFold, TimestampType]](stamps))
         .type()
     )
     assert_true(
         Fold[MinFold, Int64Type].dtype(number_dtype)
         == Fold[MinFold, Int64Type]
-        .grouped(Groups.single(3), _in[Fold[MinFold, Int64Type]](numbers^))
+        .grouped(Groups.single(3), _in[Fold[MinFold, Int64Type]](numbers))
         .type()
     )
 
@@ -461,7 +461,7 @@ def test_agg_variance_of_one_value_is_zero_but_null_when_sampled() raises:
     assert_true(_close(pop[0].value(), 0.0))
 
     var sample = Dispersion[1, False, Int64Type].grouped(
-        Groups.single(1), _in[Dispersion[1, False, Int64Type]](col^)
+        Groups.single(1), _in[Dispersion[1, False, Int64Type]](col)
     )
     assert_true(sample.is_null(0))
 
@@ -481,7 +481,7 @@ def test_agg_variance_grouped() raises:
     var ids: List[Optional[Int]] = [0, 1, 0, 1, 1]
     var col = array([1, 10, 3, 20, 30], int64).to_dyn()
     var out = Dispersion[0, False, Int64Type].grouped(
-        Groups(_ids(ids), 2), _in[Dispersion[0, False, Int64Type]](col^)
+        Groups(_ids(ids), 2), _in[Dispersion[0, False, Int64Type]](col)
     )
     assert_equal(len(out), 2)
     assert_true(_close(out[0].value(), 1.0))
@@ -493,7 +493,7 @@ def test_agg_variance_grouped_slot_with_one_row_is_null_when_sampled() raises:
     var ids: List[Optional[Int]] = [0, 1, 1]
     var col = array([7, 2, 4], int64).to_dyn()
     var out = Dispersion[1, False, Int64Type].grouped(
-        Groups(_ids(ids), 2), _in[Dispersion[1, False, Int64Type]](col^)
+        Groups(_ids(ids), 2), _in[Dispersion[1, False, Int64Type]](col)
     )
     assert_true(out.is_null(0), "one row, ddof=1 -> no answer")
     assert_true(_close(out[1].value(), 2.0))
@@ -509,7 +509,7 @@ def test_agg_variance_is_numerically_stable() raises:
     var big = 1_000_000_000
     var col = array([big + 1, big + 2, big + 3, big + 4], int64).to_dyn()
     var out = Dispersion[0, False, Int64Type].grouped(
-        Groups.single(4), _in[Dispersion[0, False, Int64Type]](col^)
+        Groups.single(4), _in[Dispersion[0, False, Int64Type]](col)
     )
     var got = out[0].value()
     assert_true(got >= 0.0, "a variance is never negative")
@@ -529,7 +529,7 @@ def test_lexical_extremum_string_view() raises:
         Groups.single(3), v.copy()
     )
     var hi = LexicalExtremum[MaxOp, StringViewArray].grouped(
-        Groups.single(3), v^
+        Groups.single(3), v
     )
     assert_equal(lo[0].value(), "apple, a long value")
     assert_equal(hi[0].value(), "zucchini, long too")

@@ -1159,7 +1159,7 @@ def _stopping_fan_out(
     if ctx:
         ctx.value().fan_out(_STOP_ITEMS, visit, lanes)
     else:
-        pool.fan_out(_STOP_ITEMS, visit, lanes)
+        pool.fan_out_until(_STOP_ITEMS, visit, lanes)
     return (ran^, ids^)
 
 
@@ -1198,7 +1198,7 @@ def test_threads_fan_out_a_stop_drops_failures_above_it() raises:
 
     for lanes in [1, 4]:
         for _ in range(30 * STRESS):
-            pool.fan_out(1_000, visit, lanes)
+            pool.fan_out_until(1_000, visit, lanes)
 
 
 def test_threads_fan_out_a_failure_below_a_stop_is_raised() raises:
@@ -1212,7 +1212,7 @@ def test_threads_fan_out_a_failure_below_a_stop_is_raised() raises:
     for lanes in [1, 4]:
         for _ in range(30 * STRESS):
             with assert_raises(contains="item 30"):
-                pool.fan_out(1_000, visit, lanes)
+                pool.fan_out_until(1_000, visit, lanes)
 
 
 def test_threads_fan_out_blocking_runs_on_the_io_pool() raises:
@@ -1695,7 +1695,7 @@ def test_threads_fan_out_inline_stops_when_asked() raises:
         seen.append(i)
         return i < 2
 
-    ThreadPool.fan_out_inline(10, visit)
+    ThreadPool.fan_out_inline_until(10, visit)
     assert_true(seen == [0, 1, 2])
 
 
@@ -1713,7 +1713,7 @@ def test_threads_exec_context_keeps_its_pool_alive() raises:
     # The context's copy of the `ArcPointer` is enough: the caller's handle
     # can go before the context does.
     var pool = ArcPointer(ThreadPool(2))
-    var ctx = ExecContext.parallel(3).with_pool(pool^)
+    var ctx = ExecContext.parallel(3).with_pool(pool)
     var copy = ctx.copy()
     _ = ctx^
     var seen = List[Int](length=3, fill=0)

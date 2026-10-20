@@ -45,11 +45,11 @@ def _batch() raises -> RecordBatch:
         x.append(Float64(i % 101) * 0.5)
     return record_batch(
         [
-            array[Int64Type](g^, int64).to_dyn(),
-            array[Int64Type](g1m^, int64).to_dyn(),
-            array[Int64Type](g16^, int64).to_dyn(),
-            array[Int64Type](a^, int64).to_dyn(),
-            array[Float64Type](x^, float64).to_dyn(),
+            array[Int64Type](g, int64).to_dyn(),
+            array[Int64Type](g1m, int64).to_dyn(),
+            array[Int64Type](g16, int64).to_dyn(),
+            array[Int64Type](a, int64).to_dyn(),
+            array[Float64Type](x, float64).to_dyn(),
         ],
         names=["g", "g1m", "g16", "a", "x"],
     )

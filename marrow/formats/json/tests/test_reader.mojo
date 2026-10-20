@@ -54,11 +54,11 @@ def _read(
 
 
 def _strings(var values: List[Optional[String]]) raises -> DynArray:
-    return array(values^)
+    return array(values)
 
 
 def _bools(var values: List[Optional[Bool]]) raises -> DynArray:
-    return array(values^)
+    return array(values)
 
 
 def _batch(text: String) raises -> RecordBatch:

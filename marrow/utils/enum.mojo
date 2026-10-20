@@ -26,7 +26,7 @@ otherwise. `visit_mut` and `try_visit_mut` pass the member `mut`.
 """
 
 from std.builtin.rebind import downcast
-from std.hashlib import Hasher
+from std.hash import Hasher
 from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant

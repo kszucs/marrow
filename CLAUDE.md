@@ -22,7 +22,7 @@ upgrade, https://docs.modular.com/mojo/changelog/.
 
 Dependencies (pinned in `pixi.toml`):
 
-- `mojo >=1.2.0.dev2026100805,<2` and `max ==26.7.0.dev2026100805` — MAX is
+- `mojo >=1.2.0.dev2026101905,<2` and `max ==26.7.0.dev2026101905` — MAX is
   pinned to the matching version line and is **load-bearing**: GPU codegen
   resolves `max.package_root`, and `std.gpu` went private as `std._gpu` in the
   `dev2026090305` nightly, so `max.gpu` is the only public source.

@@ -381,14 +381,14 @@ struct RuntimeValue(Evaluable, Movable, Value):
             var below = LeKernel[nan_safe=True].dispatch(lo, rhi)
             var above = GeKernel[nan_safe=True].dispatch(hi, rlo)
             return AndKernel.apply(
-                live^, AndKernel.apply(below.as_bool(), above.as_bool())
+                live, AndKernel.apply(below.as_bool(), above.as_bool())
             )
         return keep_every(index.chunks())
 
     @staticmethod
     def _decided(var live: BoolArray, var answer: DynArray) raises -> BoolArray:
         """The comparison's answer, kept only where both operands are live."""
-        return AndKernel.apply(live^, answer.as_bool())
+        return AndKernel.apply(live, answer.as_bool())
 
     def _statistics(
         self, index: Index, bindings: Bindings, upper: Bool
@@ -681,11 +681,11 @@ struct RuntimeValue(Evaluable, Movable, Value):
                     )
                 )
             if self._tag == "and":
-                return Datum(AndKernel.dispatch(l^, r^))
+                return Datum(AndKernel.dispatch(l, r))
             if self._tag == "or":
-                return Datum(OrKernel.dispatch(l^, r^))
+                return Datum(OrKernel.dispatch(l, r))
             if self._tag == "xor":
-                return Datum(XorKernel.dispatch(l^, r^))
+                return Datum(XorKernel.dispatch(l, r))
             var d = self._binary(kids[0].copy(), kids[1].copy())
             if d:
                 return Datum(d.take())
@@ -750,7 +750,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             and r_dt.is_primitive()
             and not (l_number and r_number)
         ):
-            return K.dispatch(l, CastKernel.dispatch(r^, l_dt))
+            return K.dispatch(l, CastKernel.dispatch(r, l_dt))
         else:
             var pair = Self._unified([l^, r^])
             if pair[0].dtype().is_primitive():
@@ -765,7 +765,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         """`+ - *`: decimal arithmetic when `DecimalPromotion.accepts`, `_arith`
         otherwise — which is also where a decimal against a float goes."""
         if DecimalPromotion.accepts(l.dtype(), r.dtype()):
-            return D.dispatch(l^, r^)
+            return D.dispatch(l, r)
         return Self._arith[K](l^, r^)
 
     @staticmethod
@@ -837,7 +837,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             var to = Self._common_type(l.dtype(), r.dtype())
             if to.is_numeric():
                 return K.dispatch(
-                    CastKernel.dispatch(l^, to), CastKernel.dispatch(r^, to)
+                    CastKernel.dispatch(l, to), CastKernel.dispatch(r, to)
                 )
         raise TypeError(
             t"arithmetic is not defined for {l.dtype()} and {r.dtype()}"
@@ -856,13 +856,13 @@ struct RuntimeValue(Evaluable, Movable, Value):
         """
         var to = DynType(float64)
         return K.dispatch(
-            CastKernel.dispatch(l^, to), CastKernel.dispatch(r^, to)
+            CastKernel.dispatch(l, to), CastKernel.dispatch(r, to)
         )
 
     @staticmethod
     def _float_unary[K: UnaryKernel](var a: DynArray) raises -> DynArray:
         """`sqrt` / `exp` / `ln` — the runtime half of `FloatUnary`."""
-        return K.dispatch(CastKernel.dispatch(a^, DynType(float64)))
+        return K.dispatch(CastKernel.dispatch(a, DynType(float64)))
 
     def _unary(self, var a: DynArray) raises -> Optional[DynArray]:
         """The one-operand tags, or `None` when this node is not one of them.
@@ -876,21 +876,21 @@ struct RuntimeValue(Evaluable, Movable, Value):
         one error message that names the unknown tag.
         """
         if self._tag == "not":
-            return NotKernel.dispatch(a^)
+            return NotKernel.dispatch(a)
         if self._tag == "neg":
-            return NegKernel.dispatch(a^)
+            return NegKernel.dispatch(a)
         if self._tag == "abs":
-            return AbsKernel.dispatch(a^)
+            return AbsKernel.dispatch(a)
         if self._tag == "sign":
-            return SignKernel.dispatch(a^)
+            return SignKernel.dispatch(a)
         if self._tag == "floor":
-            return FloorKernel.dispatch(a^)
+            return FloorKernel.dispatch(a)
         if self._tag == "ceil":
-            return CeilKernel.dispatch(a^)
+            return CeilKernel.dispatch(a)
         if self._tag == "round":
-            return RoundKernel.dispatch(a^)
+            return RoundKernel.dispatch(a)
         if self._tag == "trunc":
-            return TruncKernel.dispatch(a^)
+            return TruncKernel.dispatch(a)
         if self._tag == "sqrt":
             return Self._float_unary[SqrtKernel](a^)
         if self._tag == "exp":
@@ -924,23 +924,23 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return IsInfKernel.dispatch(a)
 
         if self._tag == "upper":
-            return UpperKernel.dispatch(a^)
+            return UpperKernel.dispatch(a)
         if self._tag == "lower":
-            return LowerKernel.dispatch(a^)
+            return LowerKernel.dispatch(a)
         if self._tag == "strip":
-            return StripKernel.dispatch(a^)
+            return StripKernel.dispatch(a)
         if self._tag == "lstrip":
-            return LStripKernel.dispatch(a^)
+            return LStripKernel.dispatch(a)
         if self._tag == "rstrip":
-            return RStripKernel.dispatch(a^)
+            return RStripKernel.dispatch(a)
         if self._tag == "reverse":
-            return ReverseKernel.dispatch(a^)
+            return ReverseKernel.dispatch(a)
         if self._tag == "capitalize":
-            return CapitalizeKernel.dispatch(a^)
+            return CapitalizeKernel.dispatch(a)
         if self._tag == "length":
-            return LengthKernel.dispatch(a^)
+            return LengthKernel.dispatch(a)
         if self._tag == "array_length":
-            return ArrayLengthKernel.dispatch(a^)
+            return ArrayLengthKernel.dispatch(a)
 
         # The SQL function surface's *nullary* half — the functions whose only
         # operand is the column.
@@ -954,41 +954,41 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # extra — this lane has carried children since it was written. See
         # `_string_fn` below.
         if self._tag == "char_length":
-            return CharLengthKernel.dispatch(a^)
+            return CharLengthKernel.dispatch(a)
         if self._tag == "ascii":
-            return AsciiKernel.dispatch(a^)
+            return AsciiKernel.dispatch(a)
 
         if self._tag == "week":
-            return WeekKernel.dispatch(a^)
+            return WeekKernel.dispatch(a)
         if self._tag == "iso_year":
-            return IsoYearKernel.dispatch(a^)
+            return IsoYearKernel.dispatch(a)
         if self._tag == "epoch":
-            return EpochKernel.dispatch(a^)
+            return EpochKernel.dispatch(a)
         if self._tag == "last_day":
-            return LastDayKernel.dispatch(a^)
+            return LastDayKernel.dispatch(a)
         if self._tag == "day_name":
-            return DayNameKernel.dispatch(a^)
+            return DayNameKernel.dispatch(a)
         if self._tag == "month_name":
-            return MonthNameKernel.dispatch(a^)
+            return MonthNameKernel.dispatch(a)
 
         if self._tag == "year":
-            return YearKernel.dispatch(a^)
+            return YearKernel.dispatch(a)
         if self._tag == "month":
-            return MonthKernel.dispatch(a^)
+            return MonthKernel.dispatch(a)
         if self._tag == "day":
-            return DayKernel.dispatch(a^)
+            return DayKernel.dispatch(a)
         if self._tag == "hour":
-            return HourKernel.dispatch(a^)
+            return HourKernel.dispatch(a)
         if self._tag == "minute":
-            return MinuteKernel.dispatch(a^)
+            return MinuteKernel.dispatch(a)
         if self._tag == "second":
-            return SecondKernel.dispatch(a^)
+            return SecondKernel.dispatch(a)
         if self._tag == "quarter":
-            return QuarterKernel.dispatch(a^)
+            return QuarterKernel.dispatch(a)
         if self._tag == "day_of_week":
-            return DayOfWeekKernel.dispatch(a^)
+            return DayOfWeekKernel.dispatch(a)
         if self._tag == "day_of_year":
-            return DayOfYearKernel.dispatch(a^)
+            return DayOfYearKernel.dispatch(a)
 
         # The payload-carrying unary nodes: the second operand is a constant
         # the kernel takes directly rather than a column it has to broadcast.
@@ -1009,7 +1009,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return IsInKernel.dispatch(pair[0], pair[1]).to_dyn()
         if self._tag == "cast" or self._tag == "cast_unsafe":
             return CastKernel.dispatch(
-                a^, self._payload[DynType].copy(), self._tag == "cast"
+                a, self._payload[DynType].copy(), self._tag == "cast"
             )
         return None
 
@@ -1052,7 +1052,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
             # Decimal division stays decimal — exact to Arrow C++'s scale and
             # truncated — and a zero divisor is NULL, as for `//`.
             if DecimalPromotion.accepts(l.dtype(), r.dtype()):
-                return DecimalDivKernel.dispatch(l^, Self._null_zeros(r^))
+                return DecimalDivKernel.dispatch(l, Self._null_zeros(r^))
             return Self._float_binary[DivKernel](l^, r^)
         if self._tag == "pow":
             return Self._float_binary[PowKernel](l^, r^)
@@ -1082,7 +1082,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # search value varies per row, so it is a column the batch supplies and
         # not a constant the plan carries.
         if self._tag == "array_contains":
-            return ArrayContainsKernel.dispatch(l^, r^)
+            return ArrayContainsKernel.dispatch(l, r)
 
         # `NullifKernel` and `FillNullKernel` both call `expect_same_dtype`,
         # so a mixed pair has to meet before the kernel sees it -- otherwise

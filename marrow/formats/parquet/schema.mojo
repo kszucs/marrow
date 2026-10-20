@@ -384,7 +384,7 @@ struct SchemaNode(Copyable, Movable):
                 nulls += 1
         d.bitmap = bm^.to_immutable(length=bits)
         d.nulls = nulls
-        return DynArray.from_data(d^)
+        return DynArray.from_data(d)
 
     # -----------------------------------------------------------------------
     # Write-side Dremel striping (inverse of `assemble`): produce per-leaf
@@ -632,7 +632,7 @@ struct SchemaMapping(Movable):
                 for ref f in declared.value().fields:
                     if f.name == name:
                         want = f.dtype.copy()
-            var node = m._parse_node(idx, 0, 0, depth=2, declared=want^)
+            var node = m._parse_node(idx, 0, 0, depth=2, declared=want)
             fields.append(node.field.copy())
             m.nodes.append(node^)
         if idx != len(m.elements):
@@ -1089,7 +1089,7 @@ struct SchemaMapping(Movable):
                 depth + 2,
                 slot_def=d + 1,
                 under_optional=under_optional,
-                declared=want_key^,
+                declared=want_key,
             )
             var val_node = self._parse_node(
                 idx,
@@ -1098,7 +1098,7 @@ struct SchemaMapping(Movable):
                 depth + 2,
                 slot_def=d + 1,
                 under_optional=under_optional,
-                declared=want_item^,
+                declared=want_item,
             )
             return Self._map_node(
                 el.name,
@@ -1139,7 +1139,7 @@ struct SchemaMapping(Movable):
                 depth + 2,
                 slot_def=d + 1,
                 under_optional=under_optional,
-                declared=want^,
+                declared=want,
             )
             return Self._list_node(
                 el.name,
@@ -1171,7 +1171,7 @@ struct SchemaMapping(Movable):
                 depth + 1,
                 slot_def=slot_def,
                 under_optional=child_optional,
-                declared=want^,
+                declared=want,
             )
             child_fields.append(cn.field.copy())
             child_nodes.append(cn^)

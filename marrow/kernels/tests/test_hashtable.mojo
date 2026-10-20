@@ -298,7 +298,7 @@ def test_encoder_refuses_unindexed_dictionary_keys() raises:
     var entries: List[Optional[String]] = [String("a"), String("b")]
     var keys: List[DynArray] = [
         DictionaryArray.from_arrays(
-            array[Int32Type](indices, int32), array(entries^)
+            array[Int32Type](indices, int32), array(entries)
         ).to_dyn()
     ]
     with assert_raises(contains="dictionary"):

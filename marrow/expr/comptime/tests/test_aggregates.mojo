@@ -68,11 +68,11 @@ def _stamps(var values: List[Int]) raises -> RecordBatch:
 
 
 def _b(var v: List[Optional[Int]]) raises -> RecordBatch:
-    return record_batch([array(v^, int64).copy()], names=["a"])
+    return record_batch([array(v, int64).copy()], names=["a"])
 
 
 def _groups(var g: List[Optional[Int]]) raises -> Int32Array:
-    return array(g^, int32).copy()
+    return array(g, int32).copy()
 
 
 def _m(var batch: RecordBatch, var ids: Int32Array, n: Int) raises -> Morsel:

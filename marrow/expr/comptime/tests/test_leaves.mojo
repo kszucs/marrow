@@ -641,7 +641,7 @@ def test_a_fixed_size_list_scalar_of_the_wrong_length_raises() raises:
     var short = ListScalar(
         dtype=dt.copy().to_dyn(), value=array(int64).to_dyn(), is_valid=False
     )
-    var plan = _table().project(["v"], [lit(short^, dt^)])
+    var plan = _table().project(["v"], [lit(short^, dt)])
     with assert_raises(contains="2 elements"):
         _ = plan.execute()
 
@@ -652,7 +652,7 @@ def test_lit_refuses_a_null_decimal_scalar() raises:
         Optional[Scalar[Decimal128Type.native]](None), decimal128(10, 2)
     )
     with assert_raises(contains="null"):
-        _ = lit(null_decimal^)
+        _ = lit(null_decimal)
 
 
 # ---------------------------------------------------------------------------

@@ -1059,7 +1059,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             # addresses the same elements; zeroing it silently turned a slice
             # into the parent's first `length` elements
             offset=self.offset,
-            bitmap=bm^,
+            bitmap=bm,
             buffer=self.buffer.to_device(ctx),
         )
 
@@ -1076,7 +1076,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             # addresses the same elements; zeroing it silently turned a slice
             # into the parent's first `length` elements
             offset=self.offset,
-            bitmap=bm^,
+            bitmap=bm,
             buffer=self.buffer.to_cpu(ctx),
         )
 
@@ -2155,11 +2155,11 @@ struct ListLikeArray[T: ListLikeType](Array):
         else:
             list_dtype = large_list_(values.dtype())
         return Self(
-            dtype=list_dtype^,
+            dtype=list_dtype,
             length=n,
             nulls=null_count,
             offset=0,
-            bitmap=bitmap^,
+            bitmap=bitmap,
             offsets=offsets.buffer,
             values=values^,
         )
@@ -2377,7 +2377,7 @@ struct FixedSizeListArray(Array):
             length=self.length,
             nulls=self.null_count(),
             offset=self.offset,
-            bitmap=bm^,
+            bitmap=bm,
             values=new_child^,
         )
 
@@ -2440,7 +2440,7 @@ struct FixedSizeListArray(Array):
             length=n,
             nulls=null_count,
             offset=0,
-            bitmap=bitmap^,
+            bitmap=bitmap,
             values=values^,
         )
 
@@ -3467,7 +3467,7 @@ struct DynArray(
         """
         var d = self.to_data()
         d.dtype = dtype^
-        return DynArray.from_data(d^)
+        return DynArray.from_data(d)
 
     def to_data(self) raises -> ArrayData:
         """Extract a generic ArrayData layout for interop (C Data Interface, etc.).

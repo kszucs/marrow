@@ -759,7 +759,7 @@ struct Buffer[*, mut: Bool = False](
         """
         var imm_ptr = rebind[Pointer[UInt8, ImmUntrackedOrigin]](self._ptr)
         return Buffer[mut=False](
-            size=self._size, ptr=imm_ptr, owner=self._owner^
+            size=self._size, ptr=imm_ptr, owner=self._owner
         )
 
     # --- CPU/device checks (mut=False only) ---

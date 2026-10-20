@@ -216,7 +216,7 @@ struct Phase(Movable):
         if not self._pipelines[0].done() and (count < 0 or morsel < count):
             var batches = self._source.read(morsel, ctx)
             if count >= 0 or len(batches) > 0:
-                self._pipelines[0].feed(batches^, out)
+                self._pipelines[0].feed(batches, out)
                 return True
         self._pipelines[0].drain(out)
         return False

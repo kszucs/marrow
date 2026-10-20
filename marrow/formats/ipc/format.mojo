@@ -156,7 +156,7 @@ struct FieldIpcInfo(Copyable, Movable):
         if dtype.is_dictionary():
             ref d = dtype.as_dictionary()
             var vt_ipc = FieldIpcInfo(-1, ipc_info.children.copy())
-            return FieldIpcInfo.find(d.value_type().copy(), vt_ipc^, target_id)
+            return FieldIpcInfo.find(d.value_type().copy(), vt_ipc, target_id)
         var n = min(dtype.layout().num_children, len(ipc_info.children))
         for i in range(n):
             var found = FieldIpcInfo.find(

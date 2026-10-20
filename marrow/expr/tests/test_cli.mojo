@@ -178,7 +178,7 @@ def test_query_cli_parses_typed_bindings() raises:
     var widths = table(_batch()).project(
         ["u", "ls"], [param("u", uint8), param("ls", large_string)]
     )
-    var typed = QueryCli(widths^)
+    var typed = QueryCli(widths)
     var bound = typed.bindings(typed.parse(["--u", "200", "--ls", "text"]))
     assert_equal(bound["u"].as_uint8().value(), UInt8(200))
     assert_true(bound["ls"].isa[LargeStringScalar]())

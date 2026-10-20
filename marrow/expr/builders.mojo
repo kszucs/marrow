@@ -529,7 +529,7 @@ def is_in(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
 def is_in(var a: RuntimeValue, subquery: DynRelation) -> RuntimeValue:
     """`a IN (SELECT ...)` against a one-column relation, with SQL's
     three-valued answer; negate with `not_` for `NOT IN`."""
-    return _rt_in_subquery(a^, subquery.copy())
+    return _rt_in_subquery(a, subquery.copy())
 
 
 def exists(subquery: DynRelation) -> RuntimeValue:
@@ -556,7 +556,7 @@ def is_in[A: ComptimeValue](var a: A, subquery: DynRelation) -> RuntimeValue:
     anti join and is never evaluated, so there is nothing to fuse — and being
     one node is what lets `not_` turn it into `NOT IN`. The operand stays
     fused, boxed whole."""
-    return _rt_in_subquery(a^, subquery.copy())
+    return _rt_in_subquery(a, subquery.copy())
 
 
 def scalar[

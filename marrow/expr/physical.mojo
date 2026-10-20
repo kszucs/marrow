@@ -937,7 +937,7 @@ struct WindowOperator(Operator):
                 self._bindings,
                 self._ctx,
             )
-            out.append(TakeKernel.dispatch(column^, inverse, self._ctx))
+            out.append(TakeKernel.dispatch(column, inverse, self._ctx))
         return out^
 
     def _permutation(
@@ -1299,7 +1299,7 @@ struct ResidualJoinOperator(Operator):
             buffer=keep^.to_immutable(length=n),
         )
         var out = (
-            FilterKernel.dispatch(batch.copy().to_dyn(), mask^, self._ctx)
+            FilterKernel.dispatch(batch.copy().to_dyn(), mask, self._ctx)
             .as_struct()
             .copy()
         )
@@ -1610,7 +1610,7 @@ struct PerFrameEvaluator[V: Value](FrameEvaluator):
         var n = len(extents)
         var dtype = self._aggregate.dtype(self._schema)
         if n == 0:
-            return nulls(0, dtype^)
+            return nulls(0, dtype)
         var reads = List[Int]()
         for name in self._aggregate.columns():
             # A name missing here is left for `to_operator` to report.

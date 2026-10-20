@@ -253,7 +253,7 @@ def test_hash_dispatch_struct() raises:
         bitmap=None,
         children=_children(a, b),
     )
-    var h = RapidHashKernel.apply(sa^)
+    var h = RapidHashKernel.apply(sa)
     assert_equal(len(h), 3)
     # (1,3) == (1,3) but row 0 and 2 same
     assert_equal(h[0], h[2])

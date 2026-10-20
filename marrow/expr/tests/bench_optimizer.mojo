@@ -99,7 +99,7 @@ def _fixture(dir: String) raises:
     for i in range(A_ROWS):
         ak.append(i % KEYS)
     _write(
-        record_batch([array(ak^, int64).to_dyn()], names=["ak"]),
+        record_batch([array(ak, int64).to_dyn()], names=["ak"]),
         join(dir, A_FILE),
         A_ROW_GROUP,
     )
@@ -111,7 +111,7 @@ def _fixture(dir: String) raises:
         bbc.append(i)
     _write(
         record_batch(
-            [array(bak^, int64).to_dyn(), array(bbc^, int64).to_dyn()],
+            [array(bak, int64).to_dyn(), array(bbc, int64).to_dyn()],
             names=["bk", "bc"],
         ),
         join(dir, B_FILE),
@@ -128,7 +128,7 @@ def _fixture(dir: String) raises:
         cv.append(i)
     _write(
         record_batch(
-            [array(cbc^, int64).to_dyn(), array(cv^, int64).to_dyn()],
+            [array(cbc, int64).to_dyn(), array(cv, int64).to_dyn()],
             names=["cc", "cv"],
         ),
         join(dir, C_FILE),
@@ -256,7 +256,7 @@ def _keyed(
         var values = List[Optional[Int]](capacity=rows)
         for i in range(rows):
             values.append(i % modulus[j])
-        columns.append(array(values^, int64).to_dyn())
+        columns.append(array(values, int64).to_dyn())
         var distinct = min(rows, modulus[j])
         summaries.append(
             ColumnEstimate(

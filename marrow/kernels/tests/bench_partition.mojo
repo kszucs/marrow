@@ -32,7 +32,7 @@ def _batches(width: Int) raises -> List[StructArray]:
                 col.append(Int64(((b * ROWS + i) * 7919 + c) % 4_000_003))
             cols.append(col.finish())
             names.append(String("c", c))
-        out.append(record_batch(cols^, names=names^).to_struct_array())
+        out.append(record_batch(cols^, names=names).to_struct_array())
     return out^
 
 

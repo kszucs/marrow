@@ -549,7 +549,7 @@ def _require_path(path: String, fmt: String) raises -> String:
 
 def _write_text(path: String, var text: String) raises:
     with open(path, "w") as f:
-        f.write(text^)
+        f.write(text)
 
 
 def _write[W: BatchWriter](var writer: W, batch: RecordBatch) raises:

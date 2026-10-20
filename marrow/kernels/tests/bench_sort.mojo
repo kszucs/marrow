@@ -194,7 +194,7 @@ def _multi_key_batch(n: Int, keys: Int) raises -> StructArray:
             col.append(v.cast[int32.native]())
         cols.append(col.finish().to_dyn())
         names.append(String("k", k))
-    return record_batch(cols^, names=names^).to_struct_array()
+    return record_batch(cols^, names=names).to_struct_array()
 
 
 def _bench_sort_multi(mut b: Benchmark, n: Int, keys: Int) raises:

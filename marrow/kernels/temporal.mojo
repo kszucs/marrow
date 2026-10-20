@@ -792,7 +792,7 @@ struct ConvertTimezoneKernel(Kernel):
         _ = WallClock.load_zone(zone)
         var data = array.to_data()
         data.dtype = DynType(TimestampType(dt.as_timestamp().unit, zone))
-        return PrimitiveArray[T](data^)
+        return PrimitiveArray[T](data)
 
     @staticmethod
     def dispatch(array: DynArray, zone: String) raises -> DynArray:

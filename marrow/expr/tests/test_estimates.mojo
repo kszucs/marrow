@@ -565,7 +565,7 @@ def test_estimate_join_against_nothing_is_exactly_nothing() raises:
         var right = _source(
             [_column(String("k"), 0, 49, ndv=Approx.exact(50))], other
         )
-        var est = empty^.join(right^, [0], [0], JOIN_INNER).estimate()
+        var est = empty.join(right^, [0], [0], JOIN_INNER).estimate()
         assert_true(est.rows.is_exact(), String("other side ", other))
         assert_equal(est.rows.known().value(), 0)
 
@@ -893,7 +893,7 @@ def test_estimate_analyze_counts_distinct_values_closely() raises:
     for i in range(100_000):
         values.append(i % 50_000)
     var est = summarize(
-        record_batch([array(values^, int64).to_dyn()], names=["k"])
+        record_batch([array(values, int64).to_dyn()], names=["k"])
     )
     var ndv = est.columns[0].ndv.known().value()
     assert_true(49_000 <= ndv and ndv <= 51_000, String("ndv ", ndv))
@@ -908,7 +908,7 @@ def test_estimate_analyze_skips_nan_in_the_bounds() raises:
         Float64(3.0),
     ]
     var est = summarize(
-        record_batch([array(values^, float64).to_dyn()], names=["x"])
+        record_batch([array(values, float64).to_dyn()], names=["x"])
     )
     assert_equal(est.columns[0].max.as_float64().value(), 3.0)
     assert_equal(est.columns[0].min.as_float64().value(), 1.0)
@@ -951,8 +951,8 @@ def test_estimate_analyze_makes_a_many_to_many_join_visible() raises:
     for i in range(1_000):
         left.append(i % 25)
         right.append((i * 7) % 25)
-    var l = table(record_batch([array(left^, int64).to_dyn()], names=["lk"]))
-    var r = table(record_batch([array(right^, int64).to_dyn()], names=["rk"]))
+    var l = table(record_batch([array(left, int64).to_dyn()], names=["lk"]))
+    var r = table(record_batch([array(right, int64).to_dyn()], names=["rk"]))
 
     var blind = l.join(r.copy(), [0], [0], JOIN_INNER)
     assert_equal(blind.estimate().rows.known().value(), 1_000)
@@ -965,7 +965,7 @@ def _strings_fixture(path: String, dictionary: Bool) raises:
     var values = List[Optional[String]](capacity=1_000)
     for i in range(1_000):
         values.append(String("v") + String(1_000 + i % 25))
-    var batch = record_batch([array(values^).copy()], names=["s"])
+    var batch = record_batch([array(values).copy()], names=["s"])
     var w = FileWriter(
         FileSink(path),
         batch.schema,
@@ -1259,7 +1259,7 @@ def test_estimate_reduces_across_mixed_dictionary_and_plain_chunks() raises:
             vals.append(i)
         for i in range(100):
             vals.append(i % 7)
-        var b = record_batch([array(vals^, int64).to_dyn()], names=["v"])
+        var b = record_batch([array(vals, int64).to_dyn()], names=["v"])
         var s = Schema(copy=b.schema)
         var w = FileWriter(
             FileSink(path), b.schema, Compression.UNCOMPRESSED, row_group_size=n
@@ -1405,7 +1405,7 @@ def _reassoc_fixture(dir: String) raises:
     # Five row groups, so the per-chunk distinct counts are reduced rather
     # than read: every group holds all 25 values, and the maximum is right.
     _reassoc_write(
-        record_batch([array(ak^, int64).to_dyn()], names=["ak"]),
+        record_batch([array(ak, int64).to_dyn()], names=["ak"]),
         join(dir, _A_FILE),
         5_000,
     )
@@ -1417,7 +1417,7 @@ def _reassoc_fixture(dir: String) raises:
         bbc.append(i)
     _reassoc_write(
         record_batch(
-            [array(bak^, int64).to_dyn(), array(bbc^, int64).to_dyn()],
+            [array(bak, int64).to_dyn(), array(bbc, int64).to_dyn()],
             names=["ak", "bc"],
         ),
         join(dir, _B_FILE),
@@ -1431,7 +1431,7 @@ def _reassoc_fixture(dir: String) raises:
         cv.append(i)
     _reassoc_write(
         record_batch(
-            [array(cbc^, int64).to_dyn(), array(cv^, int64).to_dyn()],
+            [array(cbc, int64).to_dyn(), array(cv, int64).to_dyn()],
             names=["bc", "cv"],
         ),
         join(dir, _C_FILE),

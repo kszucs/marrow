@@ -2220,7 +2220,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
         var arr: DynArray = sink.builder.finish()
         if retag_to:
-            arr = arr^.view(retag_to.take())
+            arr = arr.view(retag_to.take())
         return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_bytes[
@@ -2442,7 +2442,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         self._drive_leveled(native, floor, max_def, rep_out, def_out, sink)
         var arr: DynArray = sink.builder.finish()
         return DecodedLeaf(
-            arr^.view(self.pages.leaf.dtype.copy()), rep_out^, def_out^
+            arr.view(self.pages.leaf.dtype.copy()), rep_out^, def_out^
         )
 
     def _emit_int96[
@@ -3369,7 +3369,7 @@ struct ParquetReader[
             var table = self._file.read(
                 columns=Optional(self._columns.copy()),
                 row_groups=Optional(groups^),
-                row_selections=picked^,
+                row_selections=picked,
                 ctx=self._ctx,
             )
             # A row group can decode to several chunks; each is a batch of
@@ -3404,7 +3404,7 @@ struct ParquetFormat(Format):
         var columns = Optional[List[String]](None)
         if schema:
             columns = schema.value().names()
-        return Self.Reader(file^, columns=columns^)
+        return Self.Reader(file^, columns=columns)
 
     @staticmethod
     def chunks(

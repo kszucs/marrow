@@ -30,7 +30,7 @@ lane at a time, `combine_lanes` to fold one column's digest into another's, and
 a `name`. `HashKernel` is generic over it, so choosing an algorithm is a
 parameter rather than a rewrite.
 
-`std.hashlib`'s own `Hasher` trait is deliberately not reused: it is a
+`std.hash`'s own `Hasher` trait is deliberately not reused: it is a
 *streaming* protocol (`__init__` / `_update_with_bytes` / `update` /
 `finish(var self)`) for feeding arbitrary `Hashable` values into a dictionary.
 Conforming would turn a one-shot span hash into a stateful accumulator and put a
@@ -68,7 +68,7 @@ from std.bit import (
     pop_count,
     rotate_bits_left,
 )
-from std.hashlib._ahash import AHasher
+from std.hash._ahash import AHasher
 from std.memory import pack_bits
 from std.sys import get_defined_int, size_of
 from std.sys.info import is_gpu
@@ -132,7 +132,7 @@ def mul_fold[
 trait Hasher:
     """A 64-bit hash of a byte span — the contract for swapping the algorithm.
 
-    Deliberately *not* `std.hashlib.Hasher`: that is a streaming protocol
+    Deliberately *not* `std.hash.Hasher`: that is a streaming protocol
     (`__init__` / `_update_with_bytes` / `update` / `finish(var self)`) for
     feeding arbitrary `Hashable` values into a dictionary, and conforming would
     mean turning a one-shot span hash into a stateful accumulator, then paying a
@@ -160,7 +160,7 @@ trait Hasher:
         """One digest per lane, for `W` fixed-width values already widened to
         `uint64` — the hot path.
 
-        Not expressible through `std.hashlib.Hasher`: that folds a whole vector
+        Not expressible through `std.hash.Hasher`: that folds a whole vector
         into a single accumulator (one digest for W rows) and its `finish`
         consumes the hasher, so per-row hashing would need W instances per
         vector. This is a pure arithmetic function of the lane, with no memory
@@ -410,7 +410,7 @@ struct RapidHash64(Hasher):
         `tests/test_hashing.mojo`.
 
         This replaced an AHash fallback: `marrow.kernels.hashing` hashed numeric
-        columns with rapidhash and string columns with `std.hashlib.hash`,
+        columns with rapidhash and string columns with `std.hash.hash`,
         because the multi-branch byte-string path did not exist yet.
         """
         return Self.hash_with(data, materialize[RapidSecret.DEFAULT](), seed)
@@ -752,7 +752,7 @@ struct AHash64(Hasher):
     """AHash — the third selectable algorithm, and the one marrow does not
     implement itself.
 
-    `hash` delegates to `std.hashlib`'s `AHasher`, so the digest is the standard
+    `hash` delegates to `std.hash`'s `AHasher`, so the digest is the standard
     library's, bit for bit; there is no second implementation of aHash here to
     drift. `hash_lanes` is marrow's, because std cannot express it: its `Hasher`
     folds a whole SIMD vector into one accumulator, and `finish` consumes the
@@ -760,7 +760,7 @@ struct AHash64(Hasher):
 
     The lane form reproduces aHash's own short-input path — `buffer` seeded from
     the pi-derived key, one `_large_update`, then `finish`'s folded multiply and
-    rotate — which the tests pin against `std.hashlib.hash` of the same bytes.
+    rotate — which the tests pin against `std.hash.hash` of the same bytes.
 
     aHash is **not** a drop-in for the other two where digests are persisted: it
     is explicitly a hash-table hash, not a checksum, and the standard library
@@ -780,11 +780,11 @@ struct AHash64(Hasher):
 
     @staticmethod
     def hash(data: Span[UInt8, _], seed: UInt64 = 0) -> UInt64:
-        """Delegates to `std.hashlib`, so this is exactly the standard
+        """Delegates to `std.hash`, so this is exactly the standard
         library's aHash."""
         var hasher = AHasher[SIMD[DType.uint64, 4](0)]()
         hasher.update(data)
-        var h = hasher^.finish()
+        var h = hasher.finish()
         return h if seed == 0 else h ^ seed
 
     @staticmethod

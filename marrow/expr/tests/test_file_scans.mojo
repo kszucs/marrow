@@ -52,7 +52,7 @@ def _ipc_batch() raises -> RecordBatch:
     var names: List[Optional[String]] = [String("a"), String("b"), String("c")]
     var notes: List[Optional[String]] = [String("x"), String("y"), None]
     return record_batch(
-        [array([1, 2, 3], int64).to_dyn(), array(names^), array(notes^)],
+        [array([1, 2, 3], int64).to_dyn(), array(names), array(notes)],
         names=["id", "name", "note"],
     )
 
