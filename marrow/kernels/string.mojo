@@ -49,6 +49,7 @@ from ..dtypes import (
     StringLikeType,
     StringType,
     StringViewLikeType,
+    StringViewType,
     string,
 )
 from .cast import CastKernel
@@ -139,16 +140,17 @@ struct LengthKernel(Kernel):
         # Guard before dispatching so the diagnostic names *this kernel* and the
         # family it wanted. `try_visit[StringLikeType]` would otherwise fall through to
         # `visit`'s generic "no arm matched", which says neither.
-        var dt = array.dtype()
-        if dt.is_string_view():
+        if array.dtype().isa[StringViewType]():
             return Self.apply(array.as_string_view()).to_dyn()
-        if not dt.is_string_like():
-            raise Self.error[TypeError](t"expected a string array, got {dt}")
+        if not array.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {array.dtype()}"
+            )
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.try_visit[DynArray, StringLikeType](
+        return array.dtype().try_visit[DynArray, StringLikeType](
             leaf, "dtype is not stringlike"
         )
 
@@ -200,16 +202,17 @@ trait StringMapKernel(Kernel):
         # Guard before dispatching so the diagnostic names *this kernel* and the
         # family it wanted. `try_visit[StringLikeType]` would otherwise fall through to
         # `visit`'s generic "no arm matched", which says neither.
-        var dt = array.dtype()
-        if dt.is_string_view():
+        if array.dtype().isa[StringViewType]():
             return Self.apply(array.as_string_view()).to_dyn()
-        if not dt.is_string_like():
-            raise Self.error[TypeError](t"expected a string array, got {dt}")
+        if not array.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {array.dtype()}"
+            )
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.try_visit[DynArray, StringLikeType](
+        return array.dtype().try_visit[DynArray, StringLikeType](
             leaf, "dtype is not stringlike"
         )
 
@@ -372,16 +375,17 @@ struct ConcatKernel(Kernel):
         The erased counterpart of `apply`. `DynValue.__add__` needs it: `+` over
         erased operands cannot know at build time whether it means addition or
         concatenation, so the choice is made on the runtime dtype."""
-        var dt = left.dtype()
-        if dt.is_string_view():
-            Self.expect_same_dtype(dt, right.dtype())
+        if left.dtype().isa[StringViewType]():
+            Self.expect_same_dtype(left, right)
             Self.expect_same_length(len(left), len(right))
             return Self.apply(
                 left.as_string_view(), right.as_string_view()
             ).to_dyn()
-        if not dt.is_string_like():
-            raise Self.error[TypeError](t"expected a string array, got {dt}")
-        Self.expect_same_dtype(dt, right.dtype())
+        if not left.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {left.dtype()}"
+            )
+        Self.expect_same_dtype(left, right)
         Self.expect_same_length(len(left), len(right))
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
@@ -389,7 +393,7 @@ struct ConcatKernel(Kernel):
                 left.as_binary_like[T](), right.as_binary_like[T]()
             ).to_dyn()
 
-        return dt.try_visit[DynArray, StringLikeType](
+        return left.dtype().try_visit[DynArray, StringLikeType](
             leaf, "dtype is not stringlike"
         )
 
@@ -515,7 +519,7 @@ trait StringPredicateKernel(Kernel):
 
     @staticmethod
     def dispatch(left: DynArray, right: DynArray) raises -> DynArray:
-        Self.expect_same_dtype(left.dtype(), right.dtype())
+        Self.expect_same_dtype(left, right)
 
         def leaf[A: BytesArray](l: A) raises {imm} -> DynArray:
             return Self.apply(l, right.get[A]()).to_dyn()
@@ -702,16 +706,17 @@ struct MatchLikeKernel[ignore_case: Bool](StringPredicateKernel):
 
     @staticmethod
     def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
-        var dt = array.dtype()
-        if dt.is_string_view():
+        if array.dtype().isa[StringViewType]():
             return Self.apply(array.as_string_view(), pattern).to_dyn()
-        if not dt.is_string_like():
-            raise Self.error[TypeError](t"expected a string array, got {dt}")
+        if not array.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {array.dtype()}"
+            )
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T](), pattern).to_dyn()
 
-        return dt.try_visit[DynArray, StringLikeType](
+        return array.dtype().try_visit[DynArray, StringLikeType](
             leaf, "dtype is not stringlike"
         )
 
@@ -748,17 +753,18 @@ def dispatch_text[
     through the offsets layout and back: each of these functions builds a new
     string per row anyway, so the conversion is one more copy of bytes it was
     about to write."""
-    var dt = array.dtype()
-    if dt.is_string_view():
+    if array.dtype().isa[StringViewType]():
         var flat = CastKernel.dispatch(array, string.to_dyn())
-        return CastKernel.dispatch(func(flat.as_string()), dt)
-    if not dt.is_string_like():
-        raise K.error[TypeError](t"expected a string array, got {dt}")
+        return CastKernel.dispatch(func(flat.as_string()), array.dtype())
+    if not array.dtype().is_string_like():
+        raise K.error[TypeError](
+            t"expected a string array, got {array.dtype()}"
+        )
 
     def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
         return func(array.as_binary_like[T]())
 
-    return dt.try_visit[DynArray, StringLikeType](
+    return array.dtype().try_visit[DynArray, StringLikeType](
         leaf, "dtype is not stringlike"
     )
 
@@ -1290,16 +1296,17 @@ trait StringToIntKernel(Kernel):
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        var dt = array.dtype()
-        if dt.is_string_view():
+        if array.dtype().isa[StringViewType]():
             return Self.apply(array.as_string_view()).to_dyn()
-        if not dt.is_string_like():
-            raise Self.error[TypeError](t"expected a string array, got {dt}")
+        if not array.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {array.dtype()}"
+            )
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.try_visit[DynArray, StringLikeType](
+        return array.dtype().try_visit[DynArray, StringLikeType](
             leaf, "dtype is not stringlike"
         )
 
@@ -1406,15 +1413,16 @@ struct PositionKernel(Kernel):
 
     @staticmethod
     def dispatch(array: DynArray, needle: StringArray) raises -> DynArray:
-        var dt = array.dtype()
-        if dt.is_string_view():
+        if array.dtype().isa[StringViewType]():
             return Self.apply(array.as_string_view(), needle).to_dyn()
-        if not dt.is_string_like():
-            raise Self.error[TypeError](t"expected a string array, got {dt}")
+        if not array.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {array.dtype()}"
+            )
 
         def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T](), needle).to_dyn()
 
-        return dt.try_visit[DynArray, StringLikeType](
+        return array.dtype().try_visit[DynArray, StringLikeType](
             leaf, "dtype is not stringlike"
         )

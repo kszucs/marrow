@@ -74,7 +74,7 @@ def _as_bool(d: Datum, n: Int) raises -> BoolArray:
     broadcast.
     """
     var arr = d.to_array(n)
-    if arr.dtype() != DynType(BoolType()):
+    if not arr.dtype().isa[BoolType]():
         raise TypeError(
             t"boolean operator: expected bool operand, got {arr.dtype()}"
         )

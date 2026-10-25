@@ -1063,8 +1063,9 @@ struct FileWriter[S: ByteSink = FileSink](BatchWriter):
                 # A leaf written in another unit (`SchemaMapping._written_type`)
                 # is cast to it; the cast raises where the scale overflows.
                 ref leaf_type = self.leaves[gi].dtype
-                if leaf_type.is_temporal() and not (
-                    leaf_values[k].dtype() == leaf_type
+                if (
+                    leaf_type.is_temporal()
+                    and leaf_values[k].dtype() != leaf_type
                 ):
                     leaf_values[k] = TemporalCastKernel.dispatch(
                         leaf_values[k], leaf_type

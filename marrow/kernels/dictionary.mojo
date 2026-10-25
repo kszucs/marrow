@@ -197,7 +197,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         # destructor for every array type into each caller.
         var out = List[DynArray](capacity=len(columns))
         for ref column in columns:
-            if column.dtype().is_dictionary():
+            if column.isa[DictionaryArray]():
                 out.append(
                     decode_dictionary(
                         column.as_dictionary(), ctx.for_batch(len(column))

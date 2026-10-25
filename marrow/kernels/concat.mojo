@@ -200,8 +200,8 @@ def _concat_parallel(
 ) raises -> Optional[DynArray]:
     """`arrays` copied into one output at once, or `None` for a type this
     does not cover, which the caller hands to the builder."""
-    var dtype = arrays[0].dtype()
-    if dtype.is_struct():
+    ref head = arrays[0]
+    if head.isa[StructArray]():
         # Each child on its own; a struct with null rows of its own goes to
         # the builder.
         for ref a in arrays:
@@ -232,25 +232,20 @@ def _concat_parallel(
     # Numeric only: every type covered is an arm of its own in every binary
     # that collects, so temporal, decimal and interval columns keep the
     # builder.
-    if dtype.is_numeric():
+    if head.dtype().is_numeric():
 
         def numeric[T: NumericType](d: T) raises {imm} -> Optional[DynArray]:
             return _concat_primitive[T](arrays, total, ctx)
 
-        return dtype.try_visit[Optional[DynArray], NumericType](
+        return head.dtype().try_visit[Optional[DynArray], NumericType](
             numeric, "dtype is not numeric"
         )
-    if (
-        dtype.is_string()
-        or dtype.is_large_string()
-        or dtype.is_binary()
-        or dtype.is_large_binary()
-    ):
+    if head.dtype().is_binary_like():
 
         def binary[T: BinaryLikeType](d: T) raises {imm} -> Optional[DynArray]:
             return _concat_binary[T](arrays, total, ctx)
 
-        return dtype.try_visit[Optional[DynArray], BinaryLikeType](
+        return head.dtype().try_visit[Optional[DynArray], BinaryLikeType](
             binary, "dtype is not binarylike"
         )
     return None

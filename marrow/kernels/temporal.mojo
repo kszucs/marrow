@@ -414,14 +414,13 @@ struct DateTruncKernel(Kernel):
     @staticmethod
     def dispatch(array: DynArray, unit: CalendarUnit) raises -> DynArray:
         """The typed `apply` for `array`'s temporal dtype."""
-        var dt = array.dtype()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"unsupported type {dt}")
+        if not array.dtype().is_temporal():
+            raise Self.error[TypeError](t"unsupported type {array.dtype()}")
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), unit).to_dyn()
 
-        return dt.try_visit[DynArray, TemporalType](
+        return array.dtype().try_visit[DynArray, TemporalType](
             leaf, "dtype is not temporal"
         )
 
@@ -762,14 +761,15 @@ struct AssumeTimezoneKernel(Kernel):
     @staticmethod
     def dispatch(array: DynArray, zone: String) raises -> DynArray:
         """The typed `apply` for `array`'s temporal dtype."""
-        var dt = array.dtype()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"expected a timestamp array, got {dt}")
+        if not array.dtype().is_temporal():
+            raise Self.error[TypeError](
+                t"expected a timestamp array, got {array.dtype()}"
+            )
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), zone).to_dyn()
 
-        return dt.try_visit[DynArray, TemporalType](
+        return array.dtype().try_visit[DynArray, TemporalType](
             leaf, "dtype is not temporal"
         )
 
@@ -797,13 +797,14 @@ struct ConvertTimezoneKernel(Kernel):
     @staticmethod
     def dispatch(array: DynArray, zone: String) raises -> DynArray:
         """The typed `apply` for `array`'s temporal dtype."""
-        var dt = array.dtype()
-        if not dt.is_temporal():
-            raise Self.error[TypeError](t"expected a timestamp array, got {dt}")
+        if not array.dtype().is_temporal():
+            raise Self.error[TypeError](
+                t"expected a timestamp array, got {array.dtype()}"
+            )
 
         def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), zone).to_dyn()
 
-        return dt.try_visit[DynArray, TemporalType](
+        return array.dtype().try_visit[DynArray, TemporalType](
             leaf, "dtype is not temporal"
         )

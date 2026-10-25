@@ -71,10 +71,16 @@ from ..errors import InvalidError, TypeError
 from ..dtypes import (
     BinaryLikeType,
     BinaryViewLikeType,
+    BoolType,
+    DictionaryType,
+    FixedSizeBinaryType,
+    FixedSizeListType,
     Int32Type,
     IntegerType,
+    NullType,
     PrimitiveType,
     ListLikeType,
+    StructType,
     bool_,
     uint64,
 )
@@ -249,10 +255,11 @@ struct HashKernel[H: Hasher](Kernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Resolve `keys`'s runtime dtype and hash it."""
-        var dt = keys.dtype()
-        if dt == bool_:
+        if keys.dtype().isa[BoolType]():
             return Self.apply(keys.as_bool(), ctx)
-        elif dt.is_binary_like() or dt.is_string_view() or dt.is_binary_view():
+        elif (
+            keys.dtype().is_binary_like() or keys.dtype().is_binary_view_like()
+        ):
 
             def bytes_leaf[A: BytesArray](arr: A) raises {imm} -> UInt64Array:
                 return Self.apply(arr, ctx)
@@ -260,26 +267,26 @@ struct HashKernel[H: Hasher](Kernel):
             return keys.try_visit[UInt64Array, BytesArray](
                 bytes_leaf, "expected a binary or string array"
             )
-        elif dt.is_list_like():
+        elif keys.dtype().is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> UInt64Array:
                 return Self.apply(keys.as_list_like[T](), ctx)
 
-            return dt.try_visit[UInt64Array, ListLikeType](
+            return keys.dtype().try_visit[UInt64Array, ListLikeType](
                 listlike, "dtype is not listlike"
             )
-        elif dt.is_struct():
+        elif keys.dtype().isa[StructType]():
             return Self.apply(keys.as_struct(), ctx)
-        elif dt.is_fixed_size_list():
+        elif keys.dtype().isa[FixedSizeListType]():
             return Self.apply(keys.as_fixed_size_list(), ctx)
-        elif dt.is_dictionary():
+        elif keys.dtype().isa[DictionaryType]():
             # Hash the decoded values: a dictionary-encoded key must hash the
             # same as the equivalent plain column, otherwise two batches with
             # different dictionaries would never group together.
             return Self.dispatch(
                 decode_dictionary(keys.as_dictionary(), ctx), ctx
             )
-        elif dt.is_primitive():
+        elif keys.dtype().is_primitive():
             # One arm for every fixed-width type. `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and *all four*
             # decimal widths hash through the typed leaf directly — the hash
@@ -292,11 +299,13 @@ struct HashKernel[H: Hasher](Kernel):
             def primitive[T: PrimitiveType](d: T) raises {imm} -> UInt64Array:
                 return Self.apply(keys.as_primitive[T](), ctx)
 
-            return dt.try_visit[UInt64Array, PrimitiveType](
+            return keys.dtype().try_visit[UInt64Array, PrimitiveType](
                 primitive, "dtype is not primitive"
             )
         else:
-            raise Self.error[TypeError](String("unsupported dtype ", dt))
+            raise Self.error[TypeError](
+                String("unsupported dtype ", keys.dtype())
+            )
 
     @staticmethod
     def apply(
@@ -645,16 +654,15 @@ struct KeyCompare(Kernel):
             raise Self.error[InvalidError](
                 String("result has ", len(equal), " bits for ", n, " rows")
             )
-        var dt = left.dtype()
-        Self.expect_same_dtype(dt, right.dtype())
-        if dt.is_null():
+        Self.expect_same_dtype(left, right)
+        if left.dtype().isa[NullType]():
             # Every row is NULL on both sides, and NULL is one key.
             pass
-        elif dt.is_bool():
+        elif left.dtype().isa[BoolType]():
             Self.apply(
                 left.as_bool(), left_rows, right.as_bool(), right_rows, equal
             )
-        elif dt.is_primitive():
+        elif left.dtype().is_primitive():
 
             def primitive[
                 T: PrimitiveType
@@ -669,10 +677,10 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.try_visit[Bool, PrimitiveType](
+            _ = left.dtype().try_visit[Bool, PrimitiveType](
                 primitive, "dtype is not primitive"
             )
-        elif dt.is_binary_like():
+        elif left.dtype().is_binary_like():
 
             def binarylike[
                 T: BinaryLikeType
@@ -687,10 +695,10 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.try_visit[Bool, BinaryLikeType](
+            _ = left.dtype().try_visit[Bool, BinaryLikeType](
                 binarylike, "dtype is not binarylike"
             )
-        elif dt.is_string_view() or dt.is_binary_view():
+        elif left.dtype().is_binary_view_like():
 
             def viewlike[
                 T: BinaryViewLikeType
@@ -705,10 +713,10 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.try_visit[Bool, BinaryViewLikeType](
+            _ = left.dtype().try_visit[Bool, BinaryViewLikeType](
                 viewlike, "dtype is not a binary view"
             )
-        elif dt.is_fixed_size_binary():
+        elif left.dtype().isa[FixedSizeBinaryType]():
             Self.apply(
                 left.as_fixed_size_binary(),
                 left_rows,
@@ -717,7 +725,7 @@ struct KeyCompare(Kernel):
                 equal,
                 ctx,
             )
-        elif dt.is_dictionary():
+        elif left.dtype().isa[DictionaryType]():
             # By decoded value: two arrays of one column may carry different
             # dictionaries, and the hash is taken over decoded values too.
             Self.dispatch(
@@ -728,7 +736,7 @@ struct KeyCompare(Kernel):
                 equal,
                 ctx,
             )
-        elif dt.is_struct():
+        elif left.dtype().isa[StructType]():
             Self.apply(
                 left.as_struct(),
                 left_rows,
@@ -737,7 +745,7 @@ struct KeyCompare(Kernel):
                 equal,
                 ctx,
             )
-        elif dt.is_list_like():
+        elif left.dtype().is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {mut equal, imm} -> Bool:
                 Self.apply(
@@ -750,10 +758,10 @@ struct KeyCompare(Kernel):
                 )
                 return True
 
-            _ = dt.try_visit[Bool, ListLikeType](
+            _ = left.dtype().try_visit[Bool, ListLikeType](
                 listlike, "dtype is not listlike"
             )
-        elif dt.is_fixed_size_list():
+        elif left.dtype().isa[FixedSizeListType]():
             Self.apply(
                 left.as_fixed_size_list(),
                 left_rows,
@@ -763,7 +771,9 @@ struct KeyCompare(Kernel):
                 ctx,
             )
         else:
-            raise Self.error[TypeError](String("unsupported dtype ", dt))
+            raise Self.error[TypeError](
+                String("unsupported dtype ", left.dtype())
+            )
 
     # --- typed leaves -------------------------------------------------------
 

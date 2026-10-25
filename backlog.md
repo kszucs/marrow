@@ -146,31 +146,73 @@ bytes, `ld` asserted (`name.size() <= maxLength`) and `libmarrow.so` failed to
 link; the tree builds without it. A new relation node with large by-value
 fields can trip it; holding them behind an `ArcPointer` is the known fix.
 
-**`utils/enum.mojo` works around four compiler limits; revisit each on a
-nightly upgrade.**
+**`utils/enum.mojo` works around these compiler limits; revisit each on a
+nightly upgrade.** All re-tested on `1.2.0.dev2026101905`.
 
-- *Reflection over a recursive handle inside its own recursion deadlocks the
-  compiler* (0% CPU, `-j 1` included): a recursive kernel formatting a dtype
-  never finished building once `DynType.write_to` reached its storage through
-  `reflect[...].field_ref`. So `Enum` never reflects: its `storage()` default
-  reinterprets a handle whose box is its only field as that box (a
-  `size_of` assert guards it), and `DynRelation`, which also holds a
-  trampoline, writes its own with `widen`.
-- *An inherited default whose signature spells a closure type crashes the
-  compiler* when called on a concrete handle (`CallParamInf::inferForCall`),
-  aliased or not. The visits take `Func: AnyType` and reinterpret it in the
-  body, which is also why `R` is explicit at every call site.
+- *A capturing closure does not convert to a typed `def[U: F](U) raises -> R`
+  argument* ("cannot be converted from 'def[T: Shape](s: T) raises -> Float64'
+  to 'def[U: Shape](U) raises -> Float64'"), non-capturing ones neither. The
+  visits take `Func: AnyType` and reinterpret it with
+  `rebind[downcast[Func, def[...]]]`, which is also why `R` is explicit at
+  every call site. (An inherited default spelling the closure type also
+  crashed the compiler, `CallParamInf::inferForCall`; moot while the first
+  holds.)
 - *Reinterpreting a non-raising closure fails to build* ("does not have
   witness table for trait '__mojo_closure__'"). Every visit closure is
   declared `raises`, and the total visits catch once and abort.
+- *`comptime if conforms_to(T, F)` narrows a pack member for a concrete trait
+  but not for a trait parameter `F`*: `.copy()`, `==` and `write_to` resolve
+  on the narrowed member, but passing it to a `def[U: F](U)` closure fails
+  ("cannot be converted from 'T' to '$1'"). The visits hand the closure
+  `rebind[downcast[T, F]](member)`.
+- *A field access carries the field's origin, not its owner's*, and so does
+  `Variant`'s checked subscript (an interior origin): returning either from a
+  `-> ref[self]` method is refused. Each handle's `storage()`, the storages'
+  `_member` and the policies' `read` go through `widen`.
+- *Choosing a variant slot type by a member's layout never finishes building*
+  when the member holds the handle back, even behind a pointer (`ListType` ->
+  `Field` -> `DynType`): `size_of[T]() == 0` and
+  `reflect[T].field_count() == 0` in the slot type both hung a three-line
+  `DynType` program at 100% CPU, as a plain map alias and again as the
+  `Arc` policy's `Slot`. A standalone model of the same recursion builds, so
+  the trigger needs the real tree. Field-less members opt in with the
+  `FieldLess` marker instead.
+- *A struct comptime parameter compared inside a slot type does not reduce*:
+  the slot stays unevaluated ("Type does not exist in Variant"), and over a
+  recursive member the build never finishes. `EnumVariant`'s policy is a
+  type, whose `Slot` the variant maps, never a value it compares.
+- *A conditional slot type is not reduced by `comptime if`* on its
+  condition: inside `comptime if conforms_to(T, FieldLess)` the slot is
+  still neither `T` nor `ArcPointer[T]`. The `Arc` and `Owned` policies
+  `rebind` between a member and its slot.
+- *A trait default does not meet another trait's requirement*: a storage
+  trait refining `Equatable`, or a storage declaring `Equatable where ...`,
+  is refused ("does not implement all requirements for 'Equatable'") though
+  the storage trait defines `__eq__`. `EnumStorage` defines `_eq`, `_hash`,
+  `_write_to` and `_write_repr_to`, and `EnumVariant` writes the four
+  conformance methods as one-line calls to them.
+- *A member reached through a mapped slot type reads as held by value* to the
+  recursion check, even when every slot is a pointer: `DynBuilder` over
+  per-member `ArcPointer`s fails with "must not contain itself by value"
+  because `ListLikeBuilder` holds its child `DynBuilder`. `SharedVariant`
+  keeps one `ArcPointer` around a `UniqueVariant`, and the nested arrays and
+  dtypes hold their children behind `ArcPointer`s.
+- *Reflection over a recursive handle inside its own recursion deadlocks the
+  compiler* (0% CPU, `-j 1` included): a recursive kernel formatting a dtype
+  never finished building once `DynType.write_to` reached its storage through
+  `reflect[...].field_ref`. So nothing in `enum.mojo` reflects, and each
+  handle writes `storage()` as a `widen` of its field.
 - *An inherited constructor bound on `Self.Storage.Trait` matches no conformer*,
   and an unbounded `[T: Movable]` one makes every value convert to every
   handle: `ILikeKernel.dispatch(a, String)` resolved its pattern to a
   `DynArray`. So each handle writes its own `@implicit __init__[T: Family]`.
 - *A handle's synthesized copy constructor costs ~70 KB per size gate* over
-  the hand-written `self._storage = copy._storage.copy()`, while on the
-  `UniqueVariant` itself the synthesized one is ~75 KB smaller. Each handle
-  keeps its explicit copy constructor; the newtype has none.
+  the hand-written `self._storage = copy._storage.copy()`, so each handle
+  keeps its explicit one. `EnumVariant` writes one too, copying the held
+  slot through its policy: an `OwnedPointer` slot is not `Copyable`.
+- *Inlining `OwnedVariant`'s constructor over a recursive member sends
+  `mojo build -O3` into an endless loop.* `EnumVariant`'s constructor is
+  `@always_inline` and calls `Owned.wrap`, which is not.
 
 **A capturing closure returning `None` cannot go through an `R: Movable, //`
 dispatch helper** (the `Enum` visits) since nightly

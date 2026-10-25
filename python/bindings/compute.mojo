@@ -15,11 +15,11 @@ in the file that performs it.
 
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from marrow.arrays import BoolArray, DynArray
+from marrow.arrays import BoolArray, DynArray, Int32Array
 from marrow.builders import DynBuilder
 from marrow.scalars import BoolScalar
 from marrow.errors import InvalidError
-from marrow.dtypes import DynType, bool_, int32
+from marrow.dtypes import DynType, IntegerType, bool_, int32
 import marrow.kernels as mk
 
 from marrow.kernels.boolean import IsNullKernel, NotNullKernel
@@ -171,7 +171,7 @@ def _take(
     # index array -- what `array([2, 0])` infers -- used to abort the process
     # rather than raise. Cast instead: PyArrow's `take` accepts any integer
     # index type, and an abort is not a diagnosis.
-    if not idx.dtype().is_int32():
+    if not idx.isa[Int32Array]():
         idx = mk.CastKernel.dispatch(idx, DynType(int32), True, context)
     var values = DynArray(py=array)
     mk.TakeKernel.check_bounds(len(values), idx.as_int32(), context)

@@ -394,7 +394,7 @@ struct ColumnEstimate(Copyable, Movable, Writable):
             return Self.width_of(dtype.as_dictionary().index_type())
         if dtype.is_fixed_size_list():
             ref fixed = dtype.as_fixed_size_list()
-            return Self.width_of(fixed.item[].dtype).times(fixed.size)
+            return Self.width_of(fixed.item.dtype).times(fixed.size)
         if dtype.is_struct():
             var total = Approx.exact(0)
             for ref f in dtype.as_struct().fields:

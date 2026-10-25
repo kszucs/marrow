@@ -31,7 +31,7 @@ from std.sys.info import Endian, size_of
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleToPython
 from std.builtin.rebind import downcast
-from std.memory import OwnedPointer
+from std.memory import ArcPointer
 
 from .errors import (
     InternalError,
@@ -39,7 +39,7 @@ from .errors import (
     NotImplementedError,
     debug_assert_lazy,
 )
-from .utils.enum import Enum, UniqueVariant, widen
+from .utils.enum import ArcMembers, Enum, widen
 from .arrays import (
     ArrayData,
     BinaryLikeArray,
@@ -611,20 +611,15 @@ struct ListScalar(ArrowScalar):
     """
 
     var _dtype: DynType
-    var _value: OwnedPointer[DynArray]
+    var _value: DynArray
     var _is_valid: Bool
 
     def __init__(
         out self, *, dtype: DynType, var value: DynArray, is_valid: Bool
     ):
         self._dtype = dtype.copy()
-        self._value = OwnedPointer(value^)
+        self._value = value^
         self._is_valid = is_valid
-
-    def __init__(out self, *, copy: Self):
-        self._dtype = copy._dtype.copy()
-        self._value = OwnedPointer(copy._value[].copy())
-        self._is_valid = copy._is_valid
 
     def type(self) -> DynType:
         return self._dtype.copy()
@@ -634,7 +629,7 @@ struct ListScalar(ArrowScalar):
 
     def value(self) -> DynArray:
         """Get the child elements array."""
-        return self._value[].copy()
+        return self._value.copy()
 
     def to_array(self, length: Int) raises -> DynArray:
         return self.repeat(length)
@@ -652,7 +647,7 @@ struct ListScalar(ArrowScalar):
         rather than building a child the dtype does not describe. A null row
         of a variable-length list owns none.
         """
-        ref values = self._value[]
+        ref values = self._value
         var fixed = self._dtype.is_fixed_size_list()
         if fixed and len(values) != self._dtype.as_fixed_size_list().size:
             raise InvalidError(
@@ -684,14 +679,11 @@ struct ListScalar(ArrowScalar):
         )
 
     def __eq__(self, other: Self) -> Bool:
-        return (
-            self._is_valid == other._is_valid
-            and self._value[] == other._value[]
-        )
+        return self._is_valid == other._is_valid and self._value == other._value
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
-            self._value[].write_to(writer)
+            self._value.write_to(writer)
         else:
             writer.write("null")
 
@@ -793,7 +785,7 @@ struct DictionaryScalar(ArrowScalar):
 
     var _dtype: DynType
     var _index: Int  # integer index into the dictionary; -1 when null
-    var _decoded: OwnedPointer[
+    var _decoded: ArcPointer[
         DynScalar
     ]  # decoded (looked-up) value; NullScalar when invalid
 
@@ -806,12 +798,7 @@ struct DictionaryScalar(ArrowScalar):
     ):
         self._dtype = dtype.copy()
         self._index = index
-        self._decoded = OwnedPointer(decoded^)
-
-    def __init__(out self, *, copy: Self):
-        self._dtype = copy._dtype.copy()
-        self._index = copy._index
-        self._decoded = OwnedPointer(copy._decoded[].copy())
+        self._decoded = ArcPointer(decoded^)
 
     @staticmethod
     def null(dtype: DynType) -> Self:
@@ -905,9 +892,10 @@ def _validity(valid: Bool, times: Int) -> Optional[Bitmap[mut=False]]:
 
 
 struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
-    """Type-erased scalar container backed by a Variant.
+    """Type-erased scalar container: an `ArcMembers` storage over the typed
+    scalars. Copies share the scalar, so read it through `get`/`as_*` and
+    never change it there.
 
-    Wraps any typed scalar inline in a discriminated union.
     Runtime dispatch goes through the `visit` helper.
 
     **Does not conform to `ArrowScalar`.** It exposes the same surface as its
@@ -919,7 +907,7 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
     create the divergence this removal is undoing.
     """
 
-    comptime Storage = UniqueVariant[
+    comptime Storage = ArcMembers[
         ArrowScalar,
         NullScalar,
         BoolScalar,

@@ -19,7 +19,7 @@ phase did.
 
 from std.time import perf_counter_ns
 
-from ..arrays import StructArray
+from ..arrays import BinaryViewArray, StringViewArray, StructArray
 from ..execution import ExecContext
 from ..kernels.concat import concat
 from ..kernels.partition import RadixPartitioner
@@ -911,9 +911,9 @@ struct Driver(Movable):
         # closure form measured +13.8 KB of `__text` on each fused size gate.
         for i in range(len(result.children)):
             ref child = result.children[i]
-            if child.dtype().is_string_view():
+            if child.isa[StringViewArray]():
                 result.children[i] = child.as_string_view().compact().to_dyn()
-            elif child.dtype().is_binary_view():
+            elif child.isa[BinaryViewArray]():
                 result.children[i] = child.as_binary_view().compact().to_dyn()
         self.span("concatenate the result", since)
         return result^

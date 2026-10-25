@@ -319,9 +319,7 @@ struct ContentDefinedChunker(Movable):
         var num_levels = values.length() if (
             self.max_def == 0 and self.max_rep == 0
         ) else len(defs)
-        ref vt = values.dtype()
-
-        if vt.is_bool():
+        if values.dtype().isa[dt.BoolType]():
             var bools = values.as_bool().copy()
 
             def roll_bool(
@@ -332,7 +330,10 @@ struct ContentDefinedChunker(Movable):
                 )
 
             return self._calculate(table, defs, reps, num_levels, roll_bool)
-        elif vt.is_binary_like() or vt.is_string_view() or vt.is_binary_view():
+        elif (
+            values.dtype().is_binary_like()
+            or values.dtype().is_binary_view_like()
+        ):
             # Every byte-string leaf hashes its element bytes -- string,
             # binary, their large_ variants and both views share this path.
             def bytes_leaf[
@@ -352,7 +353,7 @@ struct ContentDefinedChunker(Movable):
             return values.try_visit[List[Chunk], BytesArray](
                 bytes_leaf, "expected a binary or string array"
             )
-        elif vt.is_fixed_size_binary():
+        elif values.dtype().isa[dt.FixedSizeBinaryType]():
             var fsb = values.as_fixed_size_binary().copy()
 
             # `FixedSizeBinaryArray.__getitem__` builds a fresh `List[UInt8]`
@@ -373,7 +374,7 @@ struct ContentDefinedChunker(Movable):
             return self._calculate(
                 table, defs, reps, num_levels, roll_fixed_size_binary
             )
-        elif vt.is_null():
+        elif values.dtype().isa[dt.NullType]():
             # No bytes to feed -- a null column chunks on `max_chunk_size`
             # alone (or on the levels, in the leveled paths).
             def roll_none(
@@ -402,7 +403,7 @@ struct ContentDefinedChunker(Movable):
                     table, values.as_primitive[T](), defs, reps, num_levels
                 )
 
-            return vt.try_visit[List[Chunk], dt.PrimitiveType](
+            return values.dtype().try_visit[List[Chunk], dt.PrimitiveType](
                 primitive_leaf, "dtype is not primitive"
             )
 

@@ -49,6 +49,7 @@ from ..dtypes import (
     Decimal256Type,
     DecimalType,
     DynType,
+    IntegerType,
     bool_,
     decimal128,
     decimal256,
@@ -83,14 +84,16 @@ struct DecimalPromotion(Copyable, Movable):
     var right_up: Int
 
     @staticmethod
-    def accepts(l: DynType, r: DynType) -> Bool:
+    def accepts(l: DynArray, r: DynArray) -> Bool:
         """Whether `l op r` is decimal arithmetic: a decimal on at least one
         side, and a decimal or an integer on the other — Arrow C++'s rule,
         where an integer is a decimal of scale 0."""
-        if not (l.is_decimal() or r.is_decimal()):
+        var l_decimal = l.dtype().is_decimal()
+        var r_decimal = r.dtype().is_decimal()
+        if not (l_decimal or r_decimal):
             return False
-        return (l.is_decimal() or l.is_integer()) and (
-            r.is_decimal() or r.is_integer()
+        return (l_decimal or l.dtype().is_integer()) and (
+            r_decimal or r.dtype().is_integer()
         )
 
     @staticmethod

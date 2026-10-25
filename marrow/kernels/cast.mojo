@@ -80,8 +80,18 @@ from ..dtypes import (
     FloatingType,
     WideDecimalType,
     StringLikeType,
+    TemporalType,
     TimestampType,
-    int32,
+    NullType,
+    BoolType,
+    Int32Type,
+    FixedSizeBinaryType,
+    StringViewType,
+    DictionaryType,
+    ListType,
+    LargeListType,
+    MapType,
+    StructType,
     string,
     binary,
 )
@@ -677,20 +687,20 @@ struct DecimalCastKernel(CastArm):
         safe: Bool = True,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        var src = array.dtype()
-        if src.is_decimal() and to.is_decimal():
+        var from_decimal = array.dtype().is_decimal()
+        if from_decimal and to.is_decimal():
             return DecimalRescaleKernel.dispatch(array, to, safe, ctx)
-        elif src.is_decimal() and to.is_floating_point():
+        elif from_decimal and to.is_floating_point():
             return DecimalToFloatKernel.dispatch(array, to, safe, ctx)
-        elif src.is_decimal() and to.is_integer():
+        elif from_decimal and to.is_integer():
             return DecimalToIntKernel.dispatch(array, to, safe, ctx)
-        elif src.is_floating_point() and to.is_decimal():
+        elif array.dtype().is_floating_point() and to.is_decimal():
             return FloatToDecimalKernel.dispatch(array, to, safe, ctx)
-        elif src.is_integer() and to.is_decimal():
+        elif array.dtype().is_integer() and to.is_decimal():
             return IntToDecimalKernel.dispatch(array, to, safe, ctx)
         else:
             raise Self.error[NotImplementedError](
-                t"unsupported decimal cast {src} -> {to}",
+                t"unsupported decimal cast {array.dtype()} -> {to}",
             )
 
 
@@ -817,8 +827,8 @@ struct TemporalCastKernel(CastArm):
         safe: Bool = True,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        var src = array.dtype()
         var data = array.to_data()
+        ref src = data.dtype
         var same_width = src.byte_width() == to.byte_width()
         # temporal ↔ integer, or same-resolution temporal ↔ temporal: reinterpret.
         if src.is_integer() or to.is_integer():
@@ -961,10 +971,10 @@ struct TemporalCastKernel(CastArm):
         Under ``safe`` a coarser time unit raises on a sub-tick remainder;
         dropping the time of day for a date is the conversion itself and never
         raises."""
-        var src = array.dtype()
         var local = LocalTimestampKernel.dispatch(array)
         var data = local.to_data()
-        var ns_from = Self.ns_per_tick(src)
+        # The local timestamp keeps the source's unit.
+        var ns_from = Self.ns_per_tick(data.dtype)
         var per_day = Int64(Epoch.NANOS_PER_DAY) // ns_from
         if to.is_date32():
             return Self._day_part[DType.int32](
@@ -993,7 +1003,8 @@ struct TemporalCastKernel(CastArm):
                 var x = ticks.load[1](i)
                 if x % div != 0:
                     raise Self.error[InvalidError](
-                        t"casting {src} to {to} would lose data: tick {x}"
+                        t"casting {array.dtype()} to {to} would lose data:"
+                        t" tick {x}"
                     )
         if to.is_time32():
             return Self._day_part[DType.int32](
@@ -1640,7 +1651,7 @@ struct FixedSizeBinaryCastKernel(CastArm):
         for a binary → fixed-size-binary width mismatch, so `from_binary`
         raises on a wrong width unconditionally. `ctx` is unused (builder).
         """
-        if array.dtype().is_fixed_size_binary():  # fsb → binary
+        if array.dtype().isa[FixedSizeBinaryType]():  # fsb → binary
             var fsb = array.as_fixed_size_binary().copy()
 
             def to_bin[To: BinaryLikeType](d: To) raises {imm} -> DynArray:
@@ -1827,8 +1838,7 @@ def normalized_indices(array: DictionaryArray) raises -> Int32Array:
     # links the whole cast kernel into every binary that hashes or sorts a
     # column, since those decode dictionaries.
     var indices = array.indices()
-    var dt = indices.dtype()
-    if dt == int32:
+    if indices.dtype().isa[Int32Type]():
         return indices.as_int32().copy()
 
     def widen[T: IntegerType](d: T) raises {imm} -> Int32Array:
@@ -1847,7 +1857,9 @@ def normalized_indices(array: DictionaryArray) raises -> Int32Array:
             buffer=buf^.to_immutable(),
         )
 
-    return dt.try_visit[Int32Array, IntegerType](widen, "dtype is not integer")
+    return indices.dtype().try_visit[Int32Array, IntegerType](
+        widen, "dtype is not integer"
+    )
 
 
 def decode_dictionary(
@@ -1915,8 +1927,7 @@ struct ViewCastKernel(CastArm):
         safe: Bool = True,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        var src = array.dtype()
-        if src.is_string_view() or src.is_binary_view():
+        if array.dtype().is_binary_view_like():
 
             def from_view[
                 From: BinaryViewLikeType
@@ -1942,7 +1953,7 @@ struct ViewCastKernel(CastArm):
                     to_offsets, "dtype is not binarylike"
                 )
 
-            return src.try_visit[DynArray, BinaryViewLikeType](
+            return array.dtype().try_visit[DynArray, BinaryViewLikeType](
                 from_view, "dtype is not a binary view"
             )
 
@@ -1958,7 +1969,7 @@ struct ViewCastKernel(CastArm):
                 to_view, "dtype is not a binary view"
             )
 
-        return src.try_visit[DynArray, BinaryLikeType](
+        return array.dtype().try_visit[DynArray, BinaryLikeType](
             from_offsets, "dtype is not binarylike"
         )
 
@@ -2085,33 +2096,35 @@ struct CastKernel(Kernel):
         safe: Bool = True,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        var src = array.dtype()
-        if src == to:
+        # Narrowed on the array's own tag: a cast never builds the source
+        # dtype unless it reports one.
+        if array.dtype() == to:
             return array.copy()  # identity → zero-copy
-        elif src.is_null():
+        elif array.dtype().isa[NullType]():
             return NullCastKernel.dispatch(array, to, safe, ctx)  # null → any
-        elif src.is_dictionary():
+        elif array.dtype().isa[DictionaryType]():
             return DictionaryCastKernel.dispatch(
                 array, to, safe, ctx
             )  # decode first
-        elif src.is_binary_like() and to.is_binary_like():
+        elif array.dtype().is_binary_like() and to.is_binary_like():
             return BinaryLikeCastKernel.dispatch(
                 array, to, safe, ctx
             )  # bytes ↔ bytes
         elif (
-            src.is_binary_like() or src.is_string_view() or src.is_binary_view()
+            array.dtype().is_binary_like()
+            or array.dtype().is_binary_view_like()
         ) and (
             to.is_binary_like() or to.is_string_view() or to.is_binary_view()
         ):
             return ViewCastKernel.dispatch(
                 array, to, safe, ctx
             )  # views ↔ bytes
-        elif src.is_string_view() or src.is_binary_view():
+        elif array.dtype().is_binary_view_like():
             # Anything else from a view goes through its offsets counterpart,
             # which every other cast kernel reads.
-            var via = (
-                string.to_dyn() if src.is_string_view() else binary.to_dyn()
-            )
+            var via = string.to_dyn() if array.dtype().isa[
+                StringViewType
+            ]() else binary.to_dyn()
             return Self.dispatch(
                 Self.dispatch(array, via, safe, ctx), to, safe, ctx
             )
@@ -2122,13 +2135,11 @@ struct CastKernel(Kernel):
             return Self.dispatch(
                 Self.dispatch(array, via, safe, ctx), to, safe, ctx
             )
-        elif (src.is_fixed_size_binary() and to.is_binary_like()) or (
-            src.is_binary_like() and to.is_fixed_size_binary()
-        ):
-            return FixedSizeBinaryCastKernel.dispatch(array, to, safe, ctx)
         elif (
-            src.is_string() or src.is_large_string()
-        ):  # string-like → numeric/bool
+            array.dtype().isa[FixedSizeBinaryType]() and to.is_binary_like()
+        ) or (array.dtype().is_binary_like() and to.is_fixed_size_binary()):
+            return FixedSizeBinaryCastKernel.dispatch(array, to, safe, ctx)
+        elif array.dtype().is_string_like():  # string-like → numeric/bool
             if to.is_bool():
                 return StringToBoolKernel.dispatch(array, to, safe, ctx)
             elif to.is_decimal():
@@ -2136,42 +2147,44 @@ struct CastKernel(Kernel):
             elif to.is_numeric():
                 return StringToNumKernel.dispatch(array, to, safe, ctx)
             raise Self.error[NotImplementedError](
-                t"unsupported cast {src} -> {to}"
+                t"unsupported cast {array.dtype()} -> {to}"
             )
         elif (
             to.is_string() or to.is_large_string()
         ):  # numeric/bool → string-like
-            if src.is_bool():
+            if array.dtype().isa[BoolType]():
                 return BoolToStringKernel.dispatch(array, to, safe, ctx)
-            elif src.is_decimal():
+            elif array.dtype().is_decimal():
                 return DecimalToStringKernel.dispatch(array, to, safe, ctx)
-            elif src.is_numeric():
+            elif array.dtype().is_numeric():
                 return NumToStringKernel.dispatch(array, to, safe, ctx)
-            elif src.is_timestamp():
+            elif array.dtype().isa[TimestampType]():
                 return TimestampToStringKernel.dispatch(array, to, safe, ctx)
             raise Self.error[NotImplementedError](
-                t"unsupported cast {src} -> {to}"
+                t"unsupported cast {array.dtype()} -> {to}"
             )
-        elif src.is_decimal() or to.is_decimal():
+        elif array.dtype().is_decimal() or to.is_decimal():
             return DecimalCastKernel.dispatch(array, to, safe, ctx)
-        elif src.is_numeric() and to.is_numeric():
+        elif array.dtype().is_numeric() and to.is_numeric():
             return NumericCastKernel.dispatch(array, to, safe, ctx)
         elif to.is_bool():
             return NumToBoolKernel.dispatch(
                 array, to, safe, ctx
             )  # numeric → bool
-        elif src.is_bool():
+        elif array.dtype().isa[BoolType]():
             return BoolToNumKernel.dispatch(
                 array, to, safe, ctx
             )  # bool → numeric
-        elif src.is_temporal() or to.is_temporal():
+        elif array.dtype().is_temporal() or to.is_temporal():
             return TemporalCastKernel.dispatch(array, to, safe, ctx)
         elif (
-            (src.is_list() and to.is_list())
-            or (src.is_large_list() and to.is_large_list())
-            or (src.is_map() and to.is_map())
+            (array.dtype().isa[ListType]() and to.is_list())
+            or (array.dtype().isa[LargeListType]() and to.is_large_list())
+            or (array.dtype().isa[MapType]() and to.is_map())
         ):
             return ListCastKernel.dispatch(array, to, safe, ctx)
-        elif src.is_struct() and to.is_struct():
+        elif array.dtype().isa[StructType]() and to.is_struct():
             return StructCastKernel.dispatch(array, to, safe, ctx)
-        raise Self.error[NotImplementedError](t"unsupported cast {src} -> {to}")
+        raise Self.error[NotImplementedError](
+            t"unsupported cast {array.dtype()} -> {to}"
+        )

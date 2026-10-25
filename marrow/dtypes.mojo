@@ -46,13 +46,12 @@ from std.builtin.rebind import downcast, rebind_var
 
 from std.sys import size_of, bit_width_of
 
-from std.memory import OwnedPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 
 
 from .errors import InternalError, InvalidError, TypeError
-from .utils.enum import Enum, UniqueVariant, widen
+from .utils.enum import ArcMembers, Enum, widen
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +261,9 @@ struct _DecimalType[T: DType](DecimalType):
         18 if Self.T == DType.int64 else (38 if Self.T == DType.int128 else 76)
     )
 
-    var _precision: Int
-    var _scale: Int
+    # Int32, as Arrow's schema stores them.
+    var _precision: Int32
+    var _scale: Int32
 
     def __init__(out self, precision: Int, scale: Int = 0) raises InvalidError:
         """A decimal of `precision` digits, `scale` of them after the point;
@@ -273,14 +273,14 @@ struct _DecimalType[T: DType](DecimalType):
                 t"decimal{bit_width_of[Self.T]()}: precision {precision} is"
                 t" outside 1..{Self.max_precision}"
             )
-        self._precision = precision
-        self._scale = scale
+        self._precision = Int32(precision)
+        self._scale = Int32(scale)
 
     def precision(self) -> Int:
-        return self._precision
+        return Int(self._precision)
 
     def scale(self) -> Int:
-        return self._scale
+        return Int(self._scale)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -687,74 +687,64 @@ def field_index(fields: List[Field], id: Int) raises InvalidError -> Int:
 struct ListType(DataType, ListLikeType):
     comptime offset: DType = DType.int32
 
-    var item: OwnedPointer[Field]
+    var item: Field
 
     def __init__(out self, var item: Field):
-        self.item = OwnedPointer(item^)
-
-    def __init__(out self, *, copy: Self):
-        self.item = OwnedPointer(copy.item[].copy())
+        self.item = item^
 
     def __eq__(self, other: Self) -> Bool:
-        return self.item[] == other.item[]
+        return self.item == other.item
 
-    def value_field(ref self) -> ref[self.item[]] Field:
-        return self.item[]
+    def value_field(ref self) -> ref[self.item] Field:
+        return self.item
 
-    def value_type(ref self) -> ref[self.item[].dtype] DynType:
-        return self.item[].dtype
+    def value_type(ref self) -> ref[self.item.dtype] DynType:
+        return self.item.dtype
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("list<", self.item[].dtype, ">")
+        writer.write("list<", self.item.dtype, ">")
 
 
 struct LargeListType(DataType, ListLikeType):
     comptime offset: DType = DType.int64
 
-    var item: OwnedPointer[Field]
+    var item: Field
 
     def __init__(out self, var item: Field):
-        self.item = OwnedPointer(item^)
-
-    def __init__(out self, *, copy: Self):
-        self.item = OwnedPointer(copy.item[].copy())
+        self.item = item^
 
     def __eq__(self, other: Self) -> Bool:
-        return self.item[] == other.item[]
+        return self.item == other.item
 
-    def value_field(ref self) -> ref[self.item[]] Field:
-        return self.item[]
+    def value_field(ref self) -> ref[self.item] Field:
+        return self.item
 
-    def value_type(ref self) -> ref[self.item[].dtype] DynType:
-        return self.item[].dtype
+    def value_type(ref self) -> ref[self.item.dtype] DynType:
+        return self.item.dtype
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("large_list<", self.item[].dtype, ">")
+        writer.write("large_list<", self.item.dtype, ">")
 
 
 struct FixedSizeListType(DataType):
-    var item: OwnedPointer[Field]
+    var item: Field
     var size: Int
 
     def __init__(out self, var item: Field, size: Int):
-        self.item = OwnedPointer(item^)
+        self.item = item^
         self.size = size
 
-    def __init__(out self, *, copy: Self):
-        self.item = OwnedPointer(copy.item[].copy())
-        self.size = copy.size
-
     def __eq__(self, other: Self) -> Bool:
-        return self.item[] == other.item[] and self.size == other.size
+        return self.item == other.item and self.size == other.size
 
-    def value_field(ref self) -> ref[self.item[]] Field:
-        return self.item[]
+    def value_field(ref self) -> ref[self.item] Field:
+        return self.item
 
     def value_type(self) -> DynType:
-        return self.item[].dtype.copy()
+        return self.item.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("fixed_size_list<", self.item[], ">")
+        writer.write("fixed_size_list<", self.item, ">")
 
 
 struct StructType(DataType):
@@ -794,13 +784,13 @@ struct MapType(DataType, ListLikeType):
 
     comptime offset: DType = DType.int32
 
-    var entries: OwnedPointer[Field]
+    var entries: Field
     var keys_sorted: Bool
 
     def __init__(out self, var entries: Field, keys_sorted: Bool = False):
         """From the entries struct field directly (preserves its field names).
         """
-        self.entries = OwnedPointer(entries^)
+        self.entries = entries^
         self.keys_sorted = keys_sorted
 
     def __init__(
@@ -820,16 +810,12 @@ struct MapType(DataType, ListLikeType):
             ),
             nullable=False,
         )
-        self.entries = OwnedPointer(entries^)
+        self.entries = entries^
         self.keys_sorted = keys_sorted
-
-    def __init__(out self, *, copy: Self):
-        self.entries = OwnedPointer(copy.entries[].copy())
-        self.keys_sorted = copy.keys_sorted
 
     def __eq__(self, other: Self) -> Bool:
         return (
-            self.entries[] == other.entries[]
+            self.entries == other.entries
             and self.keys_sorted == other.keys_sorted
         )
 
@@ -837,19 +823,19 @@ struct MapType(DataType, ListLikeType):
         """The list-element field — the non-nullable ``entries`` struct of
         (key, value). This is the single ``+m`` child in the C Data Interface and
         the parquet ``key_value`` group."""
-        return self.entries[].copy()
+        return self.entries.copy()
 
     def key_field(self) -> Field:
-        return self.entries[].dtype.as_struct().fields[0].copy()
+        return self.entries.dtype.as_struct().fields[0].copy()
 
     def item_field(self) -> Field:
-        return self.entries[].dtype.as_struct().fields[1].copy()
+        return self.entries.dtype.as_struct().fields[1].copy()
 
     def key_type(self) -> DynType:
-        return self.entries[].dtype.as_struct().fields[0].dtype.copy()
+        return self.entries.dtype.as_struct().fields[0].dtype.copy()
 
     def item_type(self) -> DynType:
-        return self.entries[].dtype.as_struct().fields[1].dtype.copy()
+        return self.entries.dtype.as_struct().fields[1].dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("map<", self.key_type(), ", ", self.item_type(), ">")
@@ -863,8 +849,8 @@ struct DictionaryType(DataType):
     The value type (the dictionary) can be any Arrow type.
     """
 
-    var _index_type: OwnedPointer[DynType]
-    var _value_type: OwnedPointer[DynType]
+    var _index_type: DynType
+    var _value_type: DynType
     var ordered: Bool
 
     def __init__(
@@ -878,40 +864,29 @@ struct DictionaryType(DataType):
                 t"DictionaryType: index_type must be an integer type, got: "
                 t"{index_type}"
             )
-        self._index_type = OwnedPointer(index_type^)
-        self._value_type = OwnedPointer(value_type^)
+        self._index_type = index_type^
+        self._value_type = value_type^
         self.ordered = ordered
 
-    def __init__(out self, *, copy: Self):
-        self._index_type = OwnedPointer(copy._index_type[].copy())
-        self._value_type = OwnedPointer(copy._value_type[].copy())
-        self.ordered = copy.ordered
+    def index_type(ref self) -> ref[self._index_type] DynType:
+        return self._index_type
 
-    # Explicit (empty) destructor: `OwnedPointer[DynType]` is not implicitly
-    # deletable, so the compiler cannot synthesize one. Fields are still
-    # destroyed automatically after the body runs.
-    def __deinit__(deinit self):
-        pass
-
-    def index_type(ref self) -> ref[self._index_type[]] DynType:
-        return self._index_type[]
-
-    def value_type(ref self) -> ref[self._value_type[]] DynType:
-        return self._value_type[]
+    def value_type(ref self) -> ref[self._value_type] DynType:
+        return self._value_type
 
     def __eq__(self, other: Self) -> Bool:
         return (
-            self._index_type[] == other._index_type[]
-            and self._value_type[] == other._value_type[]
+            self._index_type == other._index_type
+            and self._value_type == other._value_type
             and self.ordered == other.ordered
         )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "dictionary<values=",
-            self._value_type[],
+            self._value_type,
             ", indices=",
-            self._index_type[],
+            self._index_type,
             ", ordered=",
             Int(self.ordered),
             ">",
@@ -991,7 +966,7 @@ struct DynType(
     body was `DynType(self^)`, which for `Self = DynType` would ask the variant
     to hold a `DynType` — and it deliberately does not list itself."""
 
-    comptime Storage = UniqueVariant[
+    comptime Storage = ArcMembers[
         DataType,
         NullType,
         BoolType,
@@ -1249,7 +1224,7 @@ struct DynType(
         elif self.is_dictionary():
             return self.as_dictionary().value_type().copy()
         elif self.is_map():
-            return self.as_map().entries[].dtype.copy()
+            return self.as_map().entries.dtype.copy()
         elif self.is_list():
             return self.as_list().value_type().copy()
         elif self.is_large_list():
@@ -1286,6 +1261,9 @@ struct DynType(
 
     def is_binary_view(self) -> Bool:
         return self.isa[BinaryViewType]()
+
+    def is_binary_view_like(self) -> Bool:
+        return self.is_binary_view() or self.is_string_view()
 
     def is_list(self) -> Bool:
         return self.isa[ListType]()

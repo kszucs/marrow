@@ -565,7 +565,7 @@ struct ColumnShape(Copyable, Movable):
                 )
         elif dtype.is_list():
             shape.kind = JsonKind.ARRAY
-            ref item = dtype.as_list().item[]
+            ref item = dtype.as_list().item
             shape.item_name = item.name
             shape.children.append(
                 Self.of(item.dtype, shape.path + "/[]", item.nullable)
@@ -758,7 +758,7 @@ struct _Slot(Movable):
         self.visits = 0
         self.last = 0
         if self.json_type == JsonType.LIST:
-            ref item = dtype.as_list().item[]
+            ref item = dtype.as_list().item
             self.children.append(
                 _Slot(
                     item.dtype,

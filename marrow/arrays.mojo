@@ -37,8 +37,8 @@ paths.  It is NOT stored inside DynArray.
 
 
 from std.math import ceildiv
-from std.memory import OwnedPointer
 from std.bit import byte_swap
+from std.sys import size_of
 
 from max.gpu.host import DeviceContext
 from std.python import Python, PythonObject
@@ -55,12 +55,17 @@ from .errors import (
 )
 from .buffers import Buffer, Bitmap
 from .utils.byteorder import LittleEndian
-from .utils.enum import Enum, UniqueVariant, widen
+from .utils.enum import ArcMembers, Enum, widen
 from .views import BufferView, BitmapView
 from std.builtin.rebind import downcast
 from std.os import abort
 from .dtypes import (
     ArrayLayout,
+    BoolType,
+    DictionaryType,
+    FixedSizeListType,
+    NullType,
+    StructType,
     DynType,
     BinaryLikeType,
     StringLikeType,
@@ -1873,7 +1878,7 @@ struct ListLikeArray[T: ListLikeType](Array):
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var offsets: Buffer[mut=False]
-    var child: OwnedPointer[DynArray]
+    var child: DynArray
 
     def validity(
         ref self,
@@ -1900,16 +1905,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         self.offset = offset
         self.bitmap = bitmap
         self.offsets = offsets
-        self.child = OwnedPointer(values^)
-
-    def __init__(out self, *, copy: Self):
-        self.dtype = copy.dtype.copy()
-        self.length = copy.length
-        self.nulls = copy.nulls
-        self.offset = copy.offset
-        self.bitmap = copy.bitmap
-        self.offsets = copy.offsets
-        self.child = OwnedPointer(copy.child[].copy())
+        self.child = values^
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
@@ -1926,9 +1922,9 @@ struct ListLikeArray[T: ListLikeType](Array):
             values=DynArray.from_data(data.children[0]),
         )
 
-    def values(ref self) -> ref[self.child[]] DynArray:
+    def values(ref self) -> ref[self.child] DynArray:
         """The child array containing the list elements."""
-        return self.child[]
+        return self.child
 
     def child_slice(self) -> DynArray:
         """Just the child elements this array's own range covers --
@@ -1943,7 +1939,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         var end = Int(
             self.offsets.unsafe_get[Self.T.offset](self.offset + self.length)
         )
-        return self.child[].slice(start, end - start)
+        return self.child.slice(start, end - start)
 
     def __len__(self) -> Int:
         return self.length
@@ -2027,12 +2023,12 @@ struct ListLikeArray[T: ListLikeType](Array):
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
-            values=self.child[].copy(),
+            values=self.child.copy(),
         )
 
     def flatten(self) -> DynArray:
         """Unnest this ListArray, returning the flat child values."""
-        return self.child[].copy()
+        return self.child.copy()
 
     def to_map(self, keys_sorted: Bool = False) raises -> MapArray:
         """Retag this list of (key, value) entries structs as a `MapArray` — same
@@ -2223,7 +2219,7 @@ struct FixedSizeListArray(Array):
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
-    var child: OwnedPointer[DynArray]
+    var child: DynArray
 
     def validity(
         ref self,
@@ -2248,15 +2244,7 @@ struct FixedSizeListArray(Array):
         self.nulls = nulls
         self.offset = offset
         self.bitmap = bitmap
-        self.child = OwnedPointer(values^)
-
-    def __init__(out self, *, copy: Self):
-        self.dtype = copy.dtype.copy()
-        self.length = copy.length
-        self.nulls = copy.nulls
-        self.offset = copy.offset
-        self.bitmap = copy.bitmap
-        self.child = OwnedPointer(copy.child[].copy())
+        self.child = values^
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.children) != 1:
@@ -2272,10 +2260,10 @@ struct FixedSizeListArray(Array):
             values=DynArray.from_data(data.children[0]),
         )
 
-    def values(ref self) -> ref[self.child[]] DynArray:
+    def values(ref self) -> ref[self.child] DynArray:
         """The child array containing all list elements (length * list_size elements).
         """
-        return self.child[]
+        return self.child
 
     def __len__(self) -> Int:
         return self.length
@@ -2342,12 +2330,12 @@ struct FixedSizeListArray(Array):
             .unset_count(),
             offset=self.offset + offset,
             bitmap=self.bitmap,
-            values=self.child[].copy(),
+            values=self.child.copy(),
         )
 
     def flatten(self) -> DynArray:
         """Unnest this FixedSizeListArray, returning the flat child values."""
-        return self.child[].copy()
+        return self.child.copy()
 
     def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
@@ -2957,8 +2945,8 @@ struct DictionaryArray(Array):
     var _length: Int
     var _nulls: Int
     var _offset: Int  # extra logical offset into _indices (on top of _indices' own offset)
-    var _indices: OwnedPointer[DynArray]
-    var _values: OwnedPointer[DynArray]
+    var _indices: DynArray
+    var _values: DynArray
 
     def __init__(
         out self,
@@ -2974,16 +2962,8 @@ struct DictionaryArray(Array):
         self._length = length
         self._nulls = nulls
         self._offset = offset
-        self._indices = OwnedPointer(indices^)
-        self._values = OwnedPointer(values^)
-
-    def __init__(out self, *, copy: Self):
-        self._dtype = copy._dtype.copy()
-        self._length = copy._length
-        self._nulls = copy._nulls
-        self._offset = copy._offset
-        self._indices = OwnedPointer(copy._indices[].copy())
-        self._values = OwnedPointer(copy._values[].copy())
+        self._indices = indices^
+        self._values = values^
 
     def __init__(out self, data: ArrayData) raises:
         ref dt = data.dtype.as_dictionary()
@@ -3000,8 +2980,8 @@ struct DictionaryArray(Array):
         self._length = data.length
         self._nulls = data.nulls
         self._offset = 0  # offset is now embedded in the reconstructed _indices
-        self._indices = OwnedPointer(DynArray.from_data(indices_data))
-        self._values = OwnedPointer(DynArray.from_data(data.children[0]))
+        self._indices = DynArray.from_data(indices_data)
+        self._values = DynArray.from_data(data.children[0])
 
     @staticmethod
     def from_arrays(
@@ -3039,17 +3019,17 @@ struct DictionaryArray(Array):
         return self._nulls
 
     def is_valid(self, index: Int) -> Bool:
-        return self._indices[].is_valid(self._offset + index)
+        return self._indices.is_valid(self._offset + index)
 
     def indices(self) raises -> DynArray:
         """The logical index array (the dictionary's `_offset` applied). Matches
         PyArrow's DictionaryArray.indices."""
-        return self._indices[].slice(self._offset, self._length)
+        return self._indices.slice(self._offset, self._length)
 
     def dictionary(self) -> DynArray:
         """Return the dictionary (values) array. Matches PyArrow's DictionaryArray.dictionary.
         """
-        return self._values[].copy()
+        return self._values.copy()
 
     def _index_at(self, index: Int) raises -> Int:
         """Where logical row `index` points into `_values`.
@@ -3058,7 +3038,7 @@ struct DictionaryArray(Array):
         also materialising the value there -- see that method for why touching
         an erased element is the thing to avoid.
         """
-        var idx_scalar = self._indices[][self._offset + index]
+        var idx_scalar = self._indices[self._offset + index]
 
         def f[T: IntegerType](t: T) raises {imm} -> Int:
             return Int(idx_scalar.as_primitive[T]().value())
@@ -3074,10 +3054,10 @@ struct DictionaryArray(Array):
             raise IndexError(
                 t"index {index} out of bounds for length {self._length}"
             )
-        if not self._indices[].is_valid(self._offset + index):
+        if not self._indices.is_valid(self._offset + index):
             return DictionaryScalar.null(self._dtype.copy())
         var dict_idx = self._index_at(index)
-        var decoded = self._values[][dict_idx]
+        var decoded = self._values[dict_idx]
         return DictionaryScalar(
             dtype=self._dtype.copy(), index=dict_idx, decoded=decoded^
         )
@@ -3092,10 +3072,10 @@ struct DictionaryArray(Array):
         return Self(
             dtype=self._dtype.copy(),
             length=length,
-            nulls=self._indices[].slice(start, length).null_count(),
+            nulls=self._indices.slice(start, length).null_count(),
             offset=start,
-            indices=self._indices[].copy(),
-            values=self._values[].copy(),
+            indices=self._indices.copy(),
+            values=self._values.copy(),
         )
 
     def to_dyn(deinit self) -> DynArray:
@@ -3106,8 +3086,8 @@ struct DictionaryArray(Array):
 
         The dictionary values array is stored as ``children[0]``.
         """
-        var indices_data = self._indices[].to_data()
-        var values_data = self._values[].to_data()
+        var indices_data = self._indices.to_data()
+        var values_data = self._values.to_data()
         return ArrayData(
             dtype=self._dtype.copy(),
             length=self._length,
@@ -3162,12 +3142,12 @@ struct DictionaryArray(Array):
             return True
 
         def on_bytes[A: BytesArray](lhs: A) raises {imm} -> Bool:
-            return rows(lhs, other._values[].get[A]())
+            return rows(lhs, other._values.get[A]())
 
         def on_primitive[T: PrimitiveType](t: T) raises {imm} -> Bool:
             return rows(
-                self._values[].get[PrimitiveArray[T]](),
-                other._values[].get[PrimitiveArray[T]](),
+                self._values.get[PrimitiveArray[T]](),
+                other._values.get[PrimitiveArray[T]](),
             )
 
         # `is_bool` and `is_fixed_size_binary` are named on their own because
@@ -3176,18 +3156,18 @@ struct DictionaryArray(Array):
         # `FixedSizeBinaryArray` takes no type parameter. Both are flat, so both
         # can be compared row by row like the rest.
         if value_type.is_bool():
-            return rows(self._values[].as_bool(), other._values[].as_bool())
+            return rows(self._values.as_bool(), other._values.as_bool())
         elif value_type.is_fixed_size_binary():
             return rows(
-                self._values[].as_fixed_size_binary(),
-                other._values[].as_fixed_size_binary(),
+                self._values.as_fixed_size_binary(),
+                other._values.as_fixed_size_binary(),
             )
         elif (
             value_type.is_binary_like()
             or value_type.is_string_view()
             or value_type.is_binary_view()
         ):
-            return self._values[].try_visit[Bool, BytesArray](
+            return self._values.try_visit[Bool, BytesArray](
                 on_bytes, "expected a binary or string array"
             )
         elif value_type.is_primitive():
@@ -3201,17 +3181,17 @@ struct DictionaryArray(Array):
             # permuted one reads as unequal rather than as a hang. Arrow allows
             # it; nothing in marrow builds one.
             return (
-                self._values[] == other._values[]
-                and self._indices[] == other._indices[]
+                self._values == other._values
+                and self._indices == other._indices
                 and self._offset == other._offset
             )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "DictionaryArray(values=",
-            self._values[],
+            self._values,
             ", indices=",
-            self._indices[],
+            self._indices,
             ")",
         )
 
@@ -3301,7 +3281,8 @@ struct DynArray(
     Sized,
     Writable,
 ):
-    """Type-erased, immutable array handle backed by an inline Variant.
+    """Type-erased, immutable array handle: an `ArcMembers` storage over the typed
+    arrays, two words long.
 
     **Does not conform to `Array`.** The surface is the same, but it is this
     struct's own API rather than a trait implementation: every `[T: Array]`
@@ -3310,9 +3291,8 @@ struct DynArray(
     for all nine typed arrays. It was added in `8334bf0` for a lane
     unification that `7d57398` then abandoned.
 
-    Wraps any `Array`-conforming type.  Copies are O(1) — typed arrays
-    hold their data behind ref-counted `Buffer` / `Bitmap` handles, so
-    copying the variant bumps a few ref-counts and copies some small ints.
+    Wraps any `Array`-conforming type.  Copies are O(1): a copy shares the
+    typed array and bumps one reference count.
 
     Runtime dispatch goes through `visit`, which iterates the variant
     members at compile time and selects the active type via `isa[T]()`.
@@ -3323,7 +3303,7 @@ struct DynArray(
     Use `to_data()` to extract a generic `ArrayData` for interop.
     """
 
-    comptime Storage = UniqueVariant[
+    comptime Storage = ArcMembers[
         Array,
         NullArray,
         BoolArray,
@@ -3550,6 +3530,7 @@ struct DynArray(
         )
 
     # --- typed downcasts (zero-cost reference borrows) ---
+    # Copies share the typed array: read it through these, never change it.
 
     def as_primitive[T: PrimitiveType](ref self) -> ref[self] PrimitiveArray[T]:
         return self.get[PrimitiveArray[T]]()

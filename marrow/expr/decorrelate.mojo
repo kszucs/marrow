@@ -157,7 +157,7 @@ struct Decorrelate:
         for ref sq in subqueries:
             var inner = List[Binding]()
             var body = Self._planned(
-                sq.relation[], Self._bound_slots(sq.relation[]), inner
+                sq.relation, Self._bound_slots(sq.relation), inner
             )
             bodies.append(Self._bound(body^, inner))
         if rebuilt.isa[Filter]():
@@ -382,7 +382,7 @@ struct Decorrelate:
         var no_rows = not_(exists(rows.copy()))
         for ref test in [no_null.copy(), no_rows.copy()]:
             var sq = test.subquery().value().copy()
-            bindings.append(Binding(sq.slot(), sq.relation[].limit(1), sq.kind))
+            bindings.append(Binding(sq.slot(), sq.relation.limit(1), sq.kind))
         var keep = and_(no_null^, or_(is_valid(column(left_keys[0])), no_rows^))
         return left.join(
             rows.copy(),

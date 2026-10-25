@@ -60,8 +60,11 @@ from ..arrays import (
 )
 from ..buffers import Buffer
 from ..dtypes import (
+    BinaryLikeType,
+    BinaryViewLikeType,
+    BoolType,
+    DictionaryType,
     PrimitiveType,
-    bool_ as bool_dt,
     Int32Type,
 )
 from .cast import decode_dictionary
@@ -353,12 +356,14 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         Returns:
             Int32Array of sorted row indices (length = min(limit, len(array))).
         """
-        var dt = array.dtype()
         var result: Int32Array
 
-        if dt == bool_dt:
+        if array.dtype().isa[BoolType]():
             result = Self.apply(array.as_bool(), ascending, nulls_first, ctx)
-        elif dt.is_binary_like() or dt.is_string_view() or dt.is_binary_view():
+        elif (
+            array.dtype().is_binary_like()
+            or array.dtype().is_binary_view_like()
+        ):
 
             def bytes_leaf[A: BytesArray](arr: A) raises {imm} -> Int32Array:
                 return Self.apply(arr, ascending, nulls_first, ctx)
@@ -366,7 +371,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             result = array.try_visit[Int32Array, BytesArray](
                 bytes_leaf, "expected a binary or string array"
             )
-        elif dt.is_dictionary():
+        elif array.dtype().isa[DictionaryType]():
             # Order by the *decoded* values: dictionary index order is an
             # encoding artefact (`ordered=False` is the norm), not a value
             # order. `decode_dictionary`, not `cast`: naming the top-level
@@ -379,7 +384,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                 limit,
                 ctx,
             )
-        elif dt.is_primitive():
+        elif array.dtype().is_primitive():
             # One arm for every fixed-width type. `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and *all four*
             # decimal widths sort through the typed leaf directly — the sort
@@ -394,11 +399,11 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                     array.as_primitive[T](), ascending, nulls_first, ctx, limit
                 )
 
-            result = dt.try_visit[Int32Array, PrimitiveType](
+            result = array.dtype().try_visit[Int32Array, PrimitiveType](
                 primitive, "dtype is not primitive"
             )
         else:
-            raise Self.error[TypeError](t"unsupported dtype {dt}")
+            raise Self.error[TypeError](t"unsupported dtype {array.dtype()}")
 
         if limit:
             return result.slice(0, min(limit.value(), len(result)))

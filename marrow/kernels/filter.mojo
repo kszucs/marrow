@@ -96,10 +96,9 @@ struct FilterKernel(Kernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and filter it by `mask`."""
-        var dt = array.dtype()
-        if dt == bool_:
+        if array.isa[BoolArray]():
             return FilterKernel.apply(array.as_bool(), mask, ctx).to_dyn()
-        elif dt.is_primitive():
+        elif array.dtype().is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
             # columns all reach the same leaf and keep their dtype. The
@@ -112,55 +111,57 @@ struct FilterKernel(Kernel):
                     array.as_primitive[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, PrimitiveType](
+            return array.dtype().try_visit[DynArray, PrimitiveType](
                 primitive, "dtype is not primitive"
             )
-        elif dt.is_binary_like():
+        elif array.dtype().is_binary_like():
 
             def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
                 return FilterKernel.apply(
                     array.as_binary_like[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, BinaryLikeType](
+            return array.dtype().try_visit[DynArray, BinaryLikeType](
                 binarylike, "dtype is not binarylike"
             )
-        elif dt.is_string_view() or dt.is_binary_view():
+        elif array.dtype().is_binary_view_like():
 
             def viewlike[T: BinaryViewLikeType](d: T) raises {imm} -> DynArray:
                 return FilterKernel.apply(
                     array.as_binary_view_like[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, BinaryViewLikeType](
+            return array.dtype().try_visit[DynArray, BinaryViewLikeType](
                 viewlike, "dtype is not a binary view"
             )
-        elif dt.is_null():
+        elif array.isa[NullArray]():
             return FilterKernel.apply(array.as_null(), mask, ctx).to_dyn()
-        elif dt.is_fixed_size_binary():
+        elif array.isa[FixedSizeBinaryArray]():
             return FilterKernel.apply(
                 array.as_fixed_size_binary(), mask, ctx
             ).to_dyn()
-        elif dt.is_struct():
+        elif array.isa[StructArray]():
             return FilterKernel.apply(array.as_struct(), mask, ctx).to_dyn()
-        elif dt.is_list_like():
+        elif array.dtype().is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> DynArray:
                 return FilterKernel.apply(
                     array.as_list_like[T](), mask, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, ListLikeType](
+            return array.dtype().try_visit[DynArray, ListLikeType](
                 listlike, "dtype is not listlike"
             )
-        elif dt.is_fixed_size_list():
+        elif array.isa[FixedSizeListArray]():
             return FilterKernel.apply(
                 array.as_fixed_size_list(), mask, ctx
             ).to_dyn()
-        elif dt.is_dictionary():
+        elif array.isa[DictionaryArray]():
             return FilterKernel.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
-            raise Self.error[TypeError](String("unsupported dtype ", dt))
+            raise Self.error[TypeError](
+                String("unsupported dtype ", array.dtype())
+            )
 
     @staticmethod
     def drop_null[
@@ -179,7 +180,7 @@ struct FilterKernel(Kernel):
         array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> DynArray:
         """Remove null elements: the validity bitmap is itself the keep-mask."""
-        if array.dtype().is_null():
+        if array.isa[NullArray]():
             return NullArray(length=0).to_dyn()
         var data = array.to_data()
         if not data.bitmap:
@@ -691,10 +692,9 @@ struct TakeKernel(Kernel):
         Trusts its indices, as the typed `apply` leaves do: a caller holding
         indices it did not produce runs `check_bounds` first.
         """
-        var dt = array.dtype()
-        if dt == bool_:
+        if array.isa[BoolArray]():
             return TakeKernel.apply(array.as_bool(), indices, ctx).to_dyn()
-        elif dt.is_primitive():
+        elif array.dtype().is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
             # columns all reach the same leaf and keep their dtype. The
@@ -707,57 +707,59 @@ struct TakeKernel(Kernel):
                     array.as_primitive[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, PrimitiveType](
+            return array.dtype().try_visit[DynArray, PrimitiveType](
                 primitive, "dtype is not primitive"
             )
-        elif dt.is_binary_like():
+        elif array.dtype().is_binary_like():
 
             def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
                 return TakeKernel.apply(
                     array.as_binary_like[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, BinaryLikeType](
+            return array.dtype().try_visit[DynArray, BinaryLikeType](
                 binarylike, "dtype is not binarylike"
             )
-        elif dt.is_string_view() or dt.is_binary_view():
+        elif array.dtype().is_binary_view_like():
 
             def viewlike[T: BinaryViewLikeType](d: T) raises {imm} -> DynArray:
                 return TakeKernel.apply(
                     array.as_binary_view_like[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, BinaryViewLikeType](
+            return array.dtype().try_visit[DynArray, BinaryViewLikeType](
                 viewlike, "dtype is not a binary view"
             )
-        elif dt.is_null():
+        elif array.isa[NullArray]():
             return TakeKernel.apply(array.as_null(), indices, ctx).to_dyn()
-        elif dt.is_fixed_size_binary():
+        elif array.isa[FixedSizeBinaryArray]():
             return TakeKernel.apply(
                 array.as_fixed_size_binary(), indices, ctx
             ).to_dyn()
-        elif dt.is_struct():
+        elif array.isa[StructArray]():
             return TakeKernel.apply(array.as_struct(), indices, ctx).to_dyn()
-        elif dt.is_list_like():
+        elif array.dtype().is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> DynArray:
                 return TakeKernel.apply(
                     array.as_list_like[T](), indices, ctx
                 ).to_dyn()
 
-            return dt.try_visit[DynArray, ListLikeType](
+            return array.dtype().try_visit[DynArray, ListLikeType](
                 listlike, "dtype is not listlike"
             )
-        elif dt.is_fixed_size_list():
+        elif array.isa[FixedSizeListArray]():
             return TakeKernel.apply(
                 array.as_fixed_size_list(), indices, ctx
             ).to_dyn()
-        elif dt.is_dictionary():
+        elif array.isa[DictionaryArray]():
             return TakeKernel.apply(
                 array.as_dictionary(), indices, ctx
             ).to_dyn()
         else:
-            raise Self.error[TypeError](String("unsupported dtype ", dt))
+            raise Self.error[TypeError](
+                String("unsupported dtype ", array.dtype())
+            )
 
     @always_inline
     @staticmethod

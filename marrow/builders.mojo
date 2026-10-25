@@ -27,7 +27,6 @@ Example
     var list_b = ListBuilder(child^, capacity=10)
 """
 
-from std.memory import ArcPointer
 
 from .errors import (
     InternalError,
@@ -36,7 +35,7 @@ from .errors import (
     TypeError,
     debug_assert_lazy,
 )
-from .utils.enum import Enum, SharedVariant, widen
+from .utils.enum import ArcMembers, Enum, widen
 from .buffers import Buffer, Bitmap
 
 from std.builtin.rebind import downcast
@@ -210,7 +209,7 @@ struct DynBuilder(Enum, ImplicitlyCopyable):
     No unsafe `rebind` casts or function-pointer trampolines are used.
     """
 
-    comptime Storage = SharedVariant[
+    comptime Storage = ArcMembers[
         Builder,
         NullBuilder,
         BoolBuilder,
@@ -253,6 +252,8 @@ struct DynBuilder(Enum, ImplicitlyCopyable):
         StringViewBuilder,
     ]
 
+    # `ArcMembers`: copies share the member, and a change made through one copy is
+    # seen through every other.
     var _storage: Self.Storage
 
     @always_inline
@@ -871,18 +872,18 @@ struct BinaryLikeBuilder[T: BinaryLikeType](BytesBuilder):
         `mut self` in the dispatch closure miscompiles for the builders (see
         `ListLikeBuilder.extend`, where the same shape fails the pass manager
         outright). `BinaryLikeType` is closed over exactly these four."""
-        var dt = arr.dtype()
-        if dt.is_string():
+        if arr.dtype().isa[StringType]():
             self.extend(arr.as_string())
-        elif dt.is_large_string():
+        elif arr.dtype().isa[LargeStringType]():
             self.extend(arr.as_large_string())
-        elif dt.is_binary():
+        elif arr.dtype().isa[BinaryType]():
             self.extend(arr.as_binary())
-        elif dt.is_large_binary():
+        elif arr.dtype().isa[LargeBinaryType]():
             self.extend(arr.as_large_binary())
         else:
             raise TypeError(
-                t"BinaryLikeBuilder.extend: expected a binary-like, got {dt}"
+                t"BinaryLikeBuilder.extend: expected a binary-like, got"
+                t" {arr.dtype()}"
             )
 
     def extend(mut self, arr: BinaryLikeArray[Self.T]) raises:
@@ -1217,23 +1218,22 @@ struct BinaryViewLikeBuilder[T: BinaryViewLikeType](BytesBuilder):
         """Append an erased array of either binary layout.
 
         An explicit ladder, for the reason `BinaryLikeBuilder.extend` gives."""
-        var dt = arr.dtype()
-        if dt.is_string_view():
+        if arr.dtype().isa[StringViewType]():
             self.extend(arr.as_string_view())
-        elif dt.is_binary_view():
+        elif arr.dtype().isa[BinaryViewType]():
             self.extend(arr.as_binary_view())
-        elif dt.is_string():
+        elif arr.dtype().isa[StringType]():
             self.extend(arr.as_string())
-        elif dt.is_large_string():
+        elif arr.dtype().isa[LargeStringType]():
             self.extend(arr.as_large_string())
-        elif dt.is_binary():
+        elif arr.dtype().isa[BinaryType]():
             self.extend(arr.as_binary())
-        elif dt.is_large_binary():
+        elif arr.dtype().isa[LargeBinaryType]():
             self.extend(arr.as_large_binary())
         else:
             raise TypeError(
                 t"BinaryViewLikeBuilder.extend: expected a binary-like, got"
-                t" {dt}"
+                t" {arr.dtype()}"
             )
 
     def extend(mut self, arr: BinaryViewLikeArray[Self.T]) raises:
@@ -1434,16 +1434,16 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
         `mojo precompile` does not run codegen, so it reports this file clean;
         only building a test driver surfaces it. `ListLikeType` is closed over
         exactly these three, so the ladder is complete."""
-        var dt = arr.dtype()
-        if dt.is_list():
+        if arr.dtype().isa[ListType]():
             self.extend(arr.as_list())
-        elif dt.is_large_list():
+        elif arr.dtype().isa[LargeListType]():
             self.extend(arr.as_large_list())
-        elif dt.is_map():
+        elif arr.dtype().isa[MapType]():
             self.extend(arr.as_map())
         else:
             raise TypeError(
-                t"ListLikeBuilder.extend: expected a list-like, got {dt}"
+                t"ListLikeBuilder.extend: expected a list-like, got"
+                t" {arr.dtype()}"
             )
 
     def extend(mut self, arr: ListLikeArray[Self.T]) raises:
@@ -1973,7 +1973,7 @@ struct DictionaryBuilder(Builder):
         """
         # Deduplicating would compare the two dictionaries, which links array
         # equality for every type into every binary that extends a builder.
-        if not arr.dtype().is_dictionary():
+        if not arr.isa[DictionaryArray]():
             raise TypeError(
                 t"DictionaryBuilder.extend: expected DictionaryArray, got: "
                 t"{arr.dtype()}"
@@ -2091,7 +2091,7 @@ struct NullBuilder(Builder):
         self._length += 1
 
     def extend(mut self, arr: DynArray) raises:
-        if not arr.dtype().is_null():
+        if not arr.isa[NullArray]():
             raise TypeError("NullBuilder.extend: expected a null array")
         self._length += len(arr)
 
@@ -2175,7 +2175,7 @@ struct FixedSizeBinaryBuilder(Builder):
         self._length += 1
 
     def extend(mut self, arr: DynArray) raises:
-        if not arr.dtype().is_fixed_size_binary():
+        if not arr.isa[FixedSizeBinaryArray]():
             raise TypeError(
                 "FixedSizeBinaryBuilder.extend: expected fixed_size_binary "
                 "array"

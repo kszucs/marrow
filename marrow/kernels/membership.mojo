@@ -46,7 +46,7 @@ struct IsInKernel(Kernel):
 
         Returns an all-valid ``BoolArray`` of ``len(values)`` — ``true`` where
         the value has a code."""
-        Self.expect_same_dtype(values.dtype(), value_set.dtype())
+        Self.expect_same_dtype(values, value_set)
         var types = List[DynType]()
         types.append(value_set.dtype())
         var encoder = DictionaryEncoder(types^, ctx.copy())

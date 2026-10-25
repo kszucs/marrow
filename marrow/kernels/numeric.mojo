@@ -54,7 +54,7 @@ from ..dtypes import (
     NumericType,
     FloatingType,
     BinaryLikeType,
-    bool_ as bool_dt,
+    BoolType,
 )
 from .core import Kernel, family
 from .boolean import NotKernel, XorKernel
@@ -93,7 +93,7 @@ trait BinaryKernel(Kernel):
     ) raises -> DynArray:
         """The typed `apply` for the operands' dtype, which must be one
         `accepts` admits and the same on both sides."""
-        Self.expect_same_dtype(left.dtype(), right.dtype())
+        Self.expect_same_dtype(left, right)
 
         def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
             comptime if Self.accepts[T]:
@@ -628,7 +628,7 @@ trait NumericCompareKernel(Kernel):
     ) raises -> DynArray:
         """The typed `apply` for the operands' dtype, which must be the
         same on both sides."""
-        Self.expect_same_dtype(left.dtype(), right.dtype())
+        Self.expect_same_dtype(left, right)
 
         def leaf[T: PrimitiveType](d: T) raises {imm} -> DynArray:
             return Self.apply(
@@ -675,9 +675,9 @@ struct EqualKernel(Kernel):
         # function's binarylike arm was added to fix. `expect_same_dtype` rather
         # than a hand-rolled raise, so one condition has one message whichever
         # entry point reached it.
-        Self.expect_same_dtype(left.dtype(), right.dtype())
+        Self.expect_same_dtype(left, right)
 
-        if left.dtype() == bool_dt:
+        if left.dtype().isa[BoolType]():
             # Booleans are bit-packed, so `BoolArray` is not a `PrimitiveArray` and
             # `try_visit[PrimitiveType]` raised "dtype is not primitive" on them — a
             # `bool` join key was impossible for the same reason a `binary` one was.

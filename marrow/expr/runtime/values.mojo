@@ -349,12 +349,11 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # column the source never recorded would cost every *other* predicate
         # its pruning. Answering `keep_every` instead keeps the failure local,
         # which is the same trade the fused node makes against its `ArgType`.
-        var dt = lo.dtype()
         if (
-            not dt.is_primitive()
-            or hi.dtype() != dt
-            or rlo.dtype() != dt
-            or rhi.dtype() != dt
+            not lo.dtype().is_primitive()
+            or hi.dtype() != lo.dtype()
+            or rlo.dtype() != lo.dtype()
+            or rhi.dtype() != lo.dtype()
         ):
             return keep_every(index.chunks())
 
@@ -741,16 +740,14 @@ struct RuntimeValue(Evaluable, Movable, Value):
         `_common_type` deliberately has no rule there, and inventing one here
         would be a second promotion rule that could disagree with it.
         """
-        var l_dt = l.dtype()
-        var r_dt = r.dtype()
-        var l_number = l_dt.is_numeric() or l_dt.is_decimal()
-        var r_number = r_dt.is_numeric() or r_dt.is_decimal()
+        var l_number = l.dtype().is_numeric() or l.dtype().is_decimal()
+        var r_number = r.dtype().is_numeric() or r.dtype().is_decimal()
         if (
-            l_dt.is_primitive()
-            and r_dt.is_primitive()
+            l.dtype().is_primitive()
+            and r.dtype().is_primitive()
             and not (l_number and r_number)
         ):
-            return K.dispatch(l, CastKernel.dispatch(r, l_dt))
+            return K.dispatch(l, CastKernel.dispatch(r, l.dtype()))
         else:
             var pair = Self._unified([l^, r^])
             if pair[0].dtype().is_primitive():
@@ -764,7 +761,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
         """`+ - *`: decimal arithmetic when `DecimalPromotion.accepts`, `_arith`
         otherwise — which is also where a decimal against a float goes."""
-        if DecimalPromotion.accepts(l.dtype(), r.dtype()):
+        if DecimalPromotion.accepts(l, r):
             return D.dispatch(l, r)
         return Self._arith[K](l^, r^)
 
@@ -802,17 +799,16 @@ struct RuntimeValue(Evaluable, Movable, Value):
             var zero = PrimitiveScalar[T](Optional(Scalar[T.native](0)), d)
             return zero.repeat(n).to_dyn()
 
-        var dt = divisor.dtype()
-        if dt.is_decimal():
+        if divisor.dtype().is_decimal():
             return NullifKernel.dispatch(
                 divisor,
-                dt.try_visit[DynArray, DecimalType](
+                divisor.dtype().try_visit[DynArray, DecimalType](
                     decimal, "dtype is not decimal"
                 ),
             )
         return NullifKernel.dispatch(
             divisor,
-            dt.try_visit[DynArray, NumericType](
+            divisor.dtype().try_visit[DynArray, NumericType](
                 numeric, "dtype is not numeric"
             ),
         )
@@ -1023,13 +1019,11 @@ struct RuntimeValue(Evaluable, Movable, Value):
             # number or decimal on either side adds, and `_arith` names the
             # pair when the other side is not one; anything else concatenates,
             # which is the call `ConcatKernel.dispatch` exists for.
-            var l_dt = l.dtype()
-            var r_dt = r.dtype()
             if (
-                l_dt.is_numeric()
-                or l_dt.is_decimal()
-                or r_dt.is_numeric()
-                or r_dt.is_decimal()
+                l.dtype().is_numeric()
+                or l.dtype().is_decimal()
+                or r.dtype().is_numeric()
+                or r.dtype().is_decimal()
             ):
                 return Self._decimal_arith[AddKernel, DecimalAddKernel](l^, r^)
             else:
@@ -1051,7 +1045,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "truediv":
             # Decimal division stays decimal — exact to Arrow C++'s scale and
             # truncated — and a zero divisor is NULL, as for `//`.
-            if DecimalPromotion.accepts(l.dtype(), r.dtype()):
+            if DecimalPromotion.accepts(l, r):
                 return DecimalDivKernel.dispatch(l, Self._null_zeros(r^))
             return Self._float_binary[DivKernel](l^, r^)
         if self._tag == "pow":

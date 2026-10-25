@@ -46,7 +46,7 @@ is still supplied as the comptime `S` -- which is how
 from std.os import abort
 
 from ..errors import InternalError
-from ..utils.enum import Enum, UniqueVariant, widen
+from ..utils.enum import Enum, Members, widen
 from .opendal import OpenDalStore, OpenDalWriter, OpenDalSource
 from .core import ByteSink, ByteSource, Fetched
 from .local import BufferSource, FileSink, MemorySink
@@ -57,7 +57,7 @@ from .uri import StorageOptions, Uri
 struct DynSource(ByteSource, Enum):
     """A `ByteSource` chosen at run time."""
 
-    comptime Storage = UniqueVariant[ByteSource, BufferSource, OpenDalSource]
+    comptime Storage = Members[ByteSource, BufferSource, OpenDalSource]
     """Every member is pointer-, `Int`- or `String`-backed, so all are
     8-aligned. That matters: a `List` of a `Variant` whose largest member is not
     its most-aligned one silently loses every other element (see CLAUDE.md).
@@ -127,9 +127,7 @@ struct DynSource(ByteSource, Enum):
 struct DynSink(ByteSink, Enum):
     """A `ByteSink` chosen at run time. See `DynSource`."""
 
-    comptime Storage = UniqueVariant[
-        ByteSink, FileSink, MemorySink, OpenDalWriter
-    ]
+    comptime Storage = Members[ByteSink, FileSink, MemorySink, OpenDalWriter]
     var _storage: Self.Storage
 
     @always_inline

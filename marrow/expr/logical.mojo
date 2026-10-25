@@ -84,7 +84,7 @@ from ..iceberg.catalog import IcebergTable
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, StringType, bool_, field, int64, null
 from ..scalars import BoolScalar, DynScalar
-from ..utils.enum import Enum, UniqueVariant, widen
+from ..utils.enum import ArcMembers, Enum, widen
 from .estimates import (
     Approx,
     ColumnEstimate,
@@ -978,7 +978,7 @@ struct Subquery(Copyable, Movable, Writable):
 
     var id: Int
     var kind: SubqueryKind
-    var relation: ArcPointer[DynRelation]
+    var relation: DynRelation
     var operand: Optional[ArcPointer[DynValue]]
     """`IN`'s left operand, evaluated in the enclosing query; `None` for every
     other kind. Held here rather than only on the value node, so a planner
@@ -996,7 +996,7 @@ struct Subquery(Copyable, Movable, Writable):
         self.id = _next_plan_id()
         self.kind = kind
         self.outer = relation.outer_columns()
-        self.relation = ArcPointer(relation^)
+        self.relation = relation^
         if operand:
             self.operand = ArcPointer(operand.take())
         else:
@@ -1057,7 +1057,7 @@ struct Subquery(Copyable, Movable, Writable):
         """What the value produces: the relation's one column for a scalar,
         a boolean for every test."""
         if self.kind == SubqueryKind.scalar:
-            var schema = self.relation[].schema()
+            var schema = self.relation.schema()
             if len(schema) != 1:
                 raise InvalidError(
                     t"subquery: a scalar subquery must produce one column, "
@@ -1074,7 +1074,7 @@ struct Subquery(Copyable, Movable, Writable):
             self.operand.value()[].references(into)
         for ref c in self.outer:
             into.column(c)
-        for ref p in self.relation[].params():
+        for ref p in self.relation.params():
             into.param(p.copy())
         # A value read from a column is a read like any other, and saying so
         # is what keeps `ColumnPruning` from narrowing the column away
@@ -1635,7 +1635,7 @@ struct DynRelation(Copyable, Enum, Writable):
     inside a variant-backed `DynArray`, so copying a plan stays O(1).
     """
 
-    comptime Storage = UniqueVariant[
+    comptime Storage = ArcMembers[
         Relation,
         EmptyRelation,
         InMemoryTable,
@@ -2168,11 +2168,11 @@ struct DynRelation(Copyable, Enum, Writable):
     def with_chain(self, var chain: JoinChain) -> DynRelation:
         """This join chain node holding `chain` instead — how a rule rebuilds
         a chain. Undefined unless `isa[JoinChain]()`."""
-        # Assigned into a copy rather than boxed afresh: boxing a `JoinChain`
-        # wires its lowering, and the join kernels, into every binary that
-        # reaches the call, joining or not.
+        # A copy holding a new member rather than a node boxed afresh: boxing
+        # a `JoinChain` wires its lowering, and the join kernels, into every
+        # binary that reaches the call, joining or not.
         var out = self.copy()
-        out.get[JoinChain]() = chain^
+        out._storage = Self.Storage(chain^)
         return out^
 
     def shared(self) raises -> DynRelation:

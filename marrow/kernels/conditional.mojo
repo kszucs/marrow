@@ -78,17 +78,16 @@ struct Selection:
                 t"{name}: at least one candidate array is required"
             )
         var length = candidates[0].length()
-        var dtype = candidates[0].dtype()
         for k in range(1, len(candidates)):
             if candidates[k].length() != length:
                 raise InvalidError(
                     t"{name}: candidate length mismatch: "
                     t"{candidates[k].length()} != {length}"
                 )
-            if candidates[k].dtype() != dtype:
+            if candidates[k].dtype() != candidates[0].dtype():
                 raise TypeError(
                     t"{name}: candidate dtype mismatch: "
-                    t"{candidates[k].dtype()} != {dtype}"
+                    t"{candidates[k].dtype()} != {candidates[0].dtype()}"
                 )
         self._name = name
         self._candidates = candidates^
@@ -329,7 +328,7 @@ struct NullifKernel(BinaryConditionalKernel):
         """
         var a = left.copy()
         var b = right.copy()
-        Self.expect_same_dtype(a.dtype(), b.dtype())
+        Self.expect_same_dtype(a, b)
         Self.expect_same_length(a.length(), b.length())
 
         # `nullif` is defined for any dtype with an equality, so it needs the
@@ -368,7 +367,7 @@ struct FillNullKernel(BinaryConditionalKernel):
         ``right`` (PyArrow ``pc.fill_null`` with an array replacement)."""
         var a = left.copy()
         var fill = right.copy()
-        Self.expect_same_dtype(a.dtype(), fill.dtype())
+        Self.expect_same_dtype(a, fill)
         Self.expect_same_length(a.length(), fill.length())
 
         var candidates = List[DynArray](capacity=2)

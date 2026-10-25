@@ -33,7 +33,7 @@ from std.testing import TestSuite as _StdTestSuite
 from std.testing.suite import TestResult, TestSuiteReport
 from std.time import perf_counter_ns
 
-from ..arrays import DynArray, StructArray
+from ..arrays import BoolArray, DynArray, StructArray
 from ..kernels.aggregate import AllKernel
 from ..kernels.numeric import EqualKernel
 from ..kernels.sort import SortKernel
@@ -654,7 +654,7 @@ def assert_values_equal(
                 i,
                 ") " + msg,
             )
-    if a.dtype().is_bool():
+    if a.isa[BoolArray]():
         # `equal` dispatches over primitive and variable-width dtypes; bool is
         # neither — it is bit-packed, and `BoolArray.__eq__` is the comparison
         # that understands that layout.

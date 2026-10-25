@@ -13,7 +13,7 @@ is how one decoder reads both the v1 and the v2 layout.
 """
 
 from ..arrays import BinaryArray, DynArray, Int32Array, MapArray, StructArray
-from ..dtypes import DynType, field_index, int32
+from ..dtypes import field_index
 from ..formats.avro import AvroFile
 from ..errors import CorruptError
 from ..io import DynSource
@@ -160,7 +160,7 @@ def _int_value(column: DynArray, row: Int) raises -> Int:
     """A required `int` or `long` field's value."""
     if not column.is_valid(row):
         raise CorruptError(t"iceberg: a required field is null at row {row}")
-    if column.dtype() == DynType(int32):
+    if column.isa[Int32Array]():
         return Int(column.as_int32().unsafe_get(row))
     return Int(column.as_int64().unsafe_get(row))
 

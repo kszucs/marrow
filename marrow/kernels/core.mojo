@@ -15,6 +15,7 @@ inherits it by conforming rather than by copying the message.
 
 from std.builtin.variadics import TypeList
 
+from ..arrays import DynArray
 from ..dtypes import DynType
 from ..errors import ArrowError, InvalidError, TypeError
 
@@ -60,6 +61,12 @@ trait Kernel:
         """Raise unless both operands carry the same dtype."""
         if left != right:
             raise Self.error[TypeError](t"dtype mismatch: {left} vs {right}")
+
+    @staticmethod
+    def expect_same_dtype(left: DynArray, right: DynArray) raises:
+        """Raise unless both arrays carry the same dtype."""
+        if left.dtype() != right.dtype():
+            Self.expect_same_dtype(left.dtype(), right.dtype())
 
 
 # TODO: have vectorwise and elementwise kernels conform to a common trait

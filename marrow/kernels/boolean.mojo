@@ -23,7 +23,7 @@ from ..arrays import Array, ArrayData, BoolArray, DynArray, PrimitiveArray
 from ..buffers import Bitmap
 from ..dtypes import (
     FloatingType,
-    bool_ as bool_dt,
+    BoolType,
     PrimitiveType,
 )
 from ..views import apply
@@ -64,7 +64,10 @@ trait BoolBinaryKernel(Kernel):
         right: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        if left.dtype() != bool_dt or right.dtype() != bool_dt:
+        if (
+            not left.dtype().isa[BoolType]()
+            or not right.dtype().isa[BoolType]()
+        ):
             raise Self.error[TypeError]("inputs must be bool arrays")
         return Self.apply(
             left.as_bool().copy(), right.as_bool().copy(), ctx
@@ -207,7 +210,7 @@ struct NotKernel(Kernel):
         arr: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        if arr.dtype() != bool_dt:
+        if not arr.dtype().isa[BoolType]():
             raise Self.error[TypeError]("input must be a bool array")
         return Self.apply(arr.as_bool().copy(), ctx).to_dyn()
 

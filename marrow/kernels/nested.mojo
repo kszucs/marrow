@@ -77,14 +77,15 @@ struct ArrayLengthKernel(Kernel):
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        var dt = array.dtype()
-        if not dt.is_list_like():
-            raise Self.error[TypeError](t"expected a list array, got {dt}")
+        if not array.dtype().is_list_like():
+            raise Self.error[TypeError](
+                t"expected a list array, got {array.dtype()}"
+            )
 
         def leaf[T: ListLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_list_like[T]()).to_dyn()
 
-        return dt.try_visit[DynArray, ListLikeType](
+        return array.dtype().try_visit[DynArray, ListLikeType](
             leaf, "dtype is not listlike"
         )
 
@@ -112,8 +113,7 @@ struct ArrayContainsKernel(Kernel):
                 t"array_contains: list and element arrays must have equal "
                 t"length, got {n} and {len(elem)}"
             )
-        var child_dt = list.values().dtype()
-        if child_dt != V().to_dyn():
+        if not list.values().dtype().isa[V]():
             # `dispatch` picks `V` from the *element* array and `T` from the
             # list's offset width; neither reads the list's child type, so a
             # `list<int32>` column with an `int64` search value arrives here
@@ -122,8 +122,8 @@ struct ArrayContainsKernel(Kernel):
             # raising, so the check has to be here and not at the call site.
             raise Self.error[TypeError](
                 (
-                    t"list element type {child_dt} does not match the search"
-                    t" value type {V().to_dyn()}"
+                    t"list element type {list.values().dtype()} does not match"
+                    t" the search value type {V().to_dyn()}"
                 ),
             )
         ref child = list.values().as_primitive[V]()
@@ -147,9 +147,10 @@ struct ArrayContainsKernel(Kernel):
         elem: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        var list_dt = list.dtype()
-        if not list_dt.is_list_like():
-            raise Self.error[TypeError](t"expected a list array, got {list_dt}")
+        if not list.dtype().is_list_like():
+            raise Self.error[TypeError](
+                t"expected a list array, got {list.dtype()}"
+            )
 
         def leaf[V: NumericType](d: V) raises {imm} -> DynArray:
             # Two nested family walks: the element type picks `V`, the list
@@ -159,7 +160,7 @@ struct ArrayContainsKernel(Kernel):
                     list.as_list_like[T](), elem.as_primitive[V](), ctx
                 ).to_dyn()
 
-            return list_dt.try_visit[DynArray, ListLikeType](
+            return list.dtype().try_visit[DynArray, ListLikeType](
                 outer, "dtype is not listlike"
             )
 

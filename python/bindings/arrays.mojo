@@ -52,7 +52,7 @@ from marrow.builders import (
     StructBuilder,
 )
 from marrow.scalars import DynScalar
-from marrow.utils.enum import Enum, SharedVariant, widen
+from marrow.utils.enum import ArcMembers, Enum, widen
 import marrow.dtypes as dt
 
 
@@ -528,7 +528,7 @@ struct PyAnyConverter(Enum, ImplicitlyCopyable):
     """Type-erased converter. Copies share one converter, as `DynBuilder`'s
     copies share one builder."""
 
-    comptime Storage = SharedVariant[
+    comptime Storage = ArcMembers[
         PyConverter,
         PyBoolConverter,
         PyPrimitiveConverter[dt.Int8Type],
@@ -551,6 +551,8 @@ struct PyAnyConverter(Enum, ImplicitlyCopyable):
         PyStructConverter,
     ]
 
+    # `ArcMembers`: copies share the member, and a change made through one copy is
+    # seen through every other.
     var _storage: Self.Storage
 
     @always_inline
