@@ -50,7 +50,6 @@ from ...utils.stats import STATS_ENABLED
 from ...utils.testing import (
     ScratchDir,
     assert_values_equal,
-    canonical_rows,
 )
 from ..builders import (
     col,
@@ -63,7 +62,7 @@ from ..builders import (
     scan_json,
     table,
 )
-from ..logical import DynRelation
+from ..logical import DynRelation, DynValue
 from ..optimizer import AllRules
 
 
@@ -107,10 +106,20 @@ def _assert_same(got: StructArray, want: StructArray, at: String) raises:
         assert_values_equal(got.field(i), want.field(i), at)
 
 
-def _check(plan: DynRelation, ordered: Bool) raises:
+def _ordered(plan: DynRelation) raises -> DynRelation:
+    """`plan` sorted on every output column, for a plan whose row order is
+    unspecified and so differs between workers."""
+    var keys = List[DynValue]()
+    var ascending = List[Bool]()
+    for ref f in plan.schema().fields:
+        keys.append(col(f.name))
+        ascending.append(True)
+    return plan.sort_by(keys^, ascending^)
+
+
+def _check(written: DynRelation, ordered: Bool) raises:
+    var plan = written.copy() if ordered else _ordered(written)
     var want = _run(plan, Driver.serial(ExecContext.serial()))
-    if not ordered:
-        want = canonical_rows(want)
     var morsels: List[Int] = [1, 2, 3, 1000]
     var workers: List[Int] = [2, 4, 7]
     for m in morsels:
@@ -118,8 +127,6 @@ def _check(plan: DynRelation, ordered: Bool) raises:
             var got = _run(
                 plan, Driver.dynamic(ExecContext.parallel(w), morsel_rows=m)
             )
-            if not ordered:
-                got = canonical_rows(got)
             _assert_same(
                 got,
                 want,

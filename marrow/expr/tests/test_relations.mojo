@@ -17,7 +17,7 @@ corrupt whatever reads them by index.
 from std.testing import assert_equal, assert_raises, assert_true
 from std.os.path import join
 
-from ...utils.testing import ScratchDir, canonical_rows
+from ...utils.testing import ScratchDir
 from ...arrays import StructArray, DynArray, StringArray
 from ...builders import array
 from ...dtypes import (
@@ -879,11 +879,16 @@ def test_filter_above_limit_with_offset_reads_the_limited_rows() raises:
 # ---------------------------------------------------------------------------
 
 
-def _canonical_rows(batch: RecordBatch) raises -> StructArray:
-    """`batch`'s rows in a canonical order. Row order follows the probe side,
-    so it genuinely differs between the two build sides; the multiset of rows
-    is what must not."""
-    return canonical_rows(batch.to_struct_array())
+def _ordered(plan: DynRelation) raises -> DynRelation:
+    """`plan` sorted on every output column. A join's row order follows its
+    probe side, so it genuinely differs between two trees for one chain; the
+    multiset of rows is what must not."""
+    var keys = List[DynValue]()
+    var ascending = List[Bool]()
+    for ref f in plan.schema().fields:
+        keys.append(col(f.name))
+        ascending.append(True)
+    return plan.sort_by(keys^, ascending^)
 
 
 def _assert_plan_build_sides_agree(kind: JoinKind) raises:
@@ -908,7 +913,7 @@ def _assert_plan_build_sides_agree(kind: JoinKind) raises:
         a.num_rows(), b.num_rows(), String("kind ", kind, ": row count")
     )
     assert_true(
-        _canonical_rows(a) == _canonical_rows(b),
+        _ordered(built_left).execute() == _ordered(built_right).execute(),
         String("kind ", kind, ": the rows differ"),
     )
 
@@ -959,9 +964,9 @@ def test_a_right_semi_join_emits_only_the_right_side() raises:
     # right keys 2 and 3 match a left key; 4 does not
     assert_equal(out.num_rows(), 2)
     assert_equal(out.num_columns(), 2)
-    var canonical = _canonical_rows(out)
-    assert_true(canonical.children[0].as_int64() == array([2, 3], int64))
-    assert_true(canonical.children[1].as_int64() == array([200, 300], int64))
+    var canonical = _ordered(plan).execute()
+    assert_true(canonical.column(0).as_int64() == array([2, 3], int64))
+    assert_true(canonical.column(1).as_int64() == array([200, 300], int64))
 
 
 def test_a_right_anti_join_emits_the_unmatched_right_rows() raises:
@@ -974,9 +979,9 @@ def test_a_right_anti_join_emits_the_unmatched_right_rows() raises:
     var out = plan.execute()
     assert_true(plan.schema() == out.schema)
     assert_equal(out.num_rows(), 1)
-    var canonical = _canonical_rows(out)
-    assert_true(canonical.children[0].as_int64() == array([4], int64))
-    assert_true(canonical.children[1].as_int64() == array([400], int64))
+    var canonical = _ordered(plan).execute()
+    assert_true(canonical.column(0).as_int64() == array([4], int64))
+    assert_true(canonical.column(1).as_int64() == array([400], int64))
 
 
 def test_a_right_sided_existence_filter_survives_traverse() raises:
@@ -1030,8 +1035,7 @@ def test_a_right_sided_existence_filter_survives_the_optimizer() raises:
             String("kind ", k, ": the schema moved — ", optimized),
         )
         assert_true(
-            _canonical_rows(plan.execute())
-            == _canonical_rows(optimized.execute()),
+            _ordered(plan).execute() == _ordered(optimized).execute(),
             String("kind ", k, ": the rows moved — ", optimized),
         )
 
@@ -1242,9 +1246,9 @@ def test_a_chain_emits_a_key_every_join_equates_once() raises:
     assert_equal(_names(plan), ["k", "lv", "rv", "tv"])
     var out = plan.execute()
     assert_true(plan.schema() == out.schema)
-    var rows = _canonical_rows(out)
-    assert_true(rows.children[0].as_int64() == array([2, 3], int64))
-    assert_true(rows.children[3].as_int64() == array([7, 8], int64))
+    var rows = _ordered(plan).execute()
+    assert_true(rows.column(0).as_int64() == array([2, 3], int64))
+    assert_true(rows.column(3).as_int64() == array([7, 8], int64))
 
 
 def test_a_chain_on_the_right_is_spliced_into_one_chain() raises:
@@ -1263,9 +1267,7 @@ def test_a_chain_on_the_right_is_spliced_into_one_chain() raises:
     assert_equal(len(chain.links), 2)
     assert_true(spliced.schema() == plan.schema())
     assert_equal(_names(spliced), ["k", "lv", "rv", "tv"])
-    assert_true(
-        _canonical_rows(spliced.execute()) == _canonical_rows(plan.execute())
-    )
+    assert_true(_ordered(spliced).execute() == _ordered(plan).execute())
 
     # Under an outer join the nested chain stays one participant: its joins
     # may not run before the LEFT join's.
@@ -1276,10 +1278,7 @@ def test_a_chain_on_the_right_is_spliced_into_one_chain() raises:
     assert_equal(len(spliced_outer.get[JoinChain]().inputs), 2)
     assert_true(spliced_outer.schema() == outer.schema())
     assert_equal(spliced_outer.execute().num_rows(), 3)
-    assert_true(
-        _canonical_rows(spliced_outer.execute())
-        == _canonical_rows(outer.execute())
-    )
+    assert_true(_ordered(spliced_outer).execute() == _ordered(outer).execute())
 
 
 def test_a_join_renames_a_clash_it_cannot_merge() raises:
@@ -1354,10 +1353,7 @@ def test_select_rename_and_drop_fold_into_the_chain() raises:
         assert_true(folded.isa[JoinChain](), String(folded))
         assert_true(folded.schema() == written.schema(), String(folded))
         assert_true(folded.schema() == folded.execute().schema)
-        assert_true(
-            _canonical_rows(folded.execute())
-            == _canonical_rows(written.execute())
-        )
+        assert_true(_ordered(folded).execute() == _ordered(written).execute())
     assert_equal(_names(picked), ["rv", "k"])
     assert_equal(_names(renamed), ["k", "left_value", "rv"])
     assert_equal(_names(dropped), ["k", "rv"])
@@ -1400,9 +1396,9 @@ def test_a_filter_on_a_renamed_column_runs_on_its_participant() raises:
     ref chain = pushed.get[JoinChain]()
     assert_equal(len(chain.filters), 1)
     assert_equal(_landing(chain), 1)
-    var want = _canonical_rows(plan.execute())
-    assert_equal(len(want), 2)
-    assert_true(_canonical_rows(pushed.execute()) == want)
+    var want = _ordered(plan).execute()
+    assert_equal(want.num_rows(), 2)
+    assert_true(_ordered(pushed).execute() == want)
 
     # The same after a folded rename: the filter reads a name no input has.
     var renamed = (
@@ -1452,10 +1448,7 @@ def test_a_join_appended_later_leaves_a_filter_below_it() raises:
     assert_equal(len(appended.get[JoinChain]().inputs), 3)
     # k = 2 and 5 padded, k = 3 matched
     assert_equal(written.execute().num_rows(), 3)
-    assert_true(
-        _canonical_rows(appended.execute())
-        == _canonical_rows(written.execute())
-    )
+    assert_true(_ordered(appended).execute() == _ordered(written).execute())
 
 
 def test_an_any_join_keeps_its_side_and_its_filters_above() raises:
@@ -1512,13 +1505,9 @@ def _tree(chain: JoinChain, var joins: List[PlannedJoin]) -> JoinOrder:
     return out^
 
 
-def _run(chain: JoinChain, order: JoinOrder) raises -> StructArray:
-    """`chain` computed by `order`, its rows in canonical order."""
-    var driver = Driver.serial(ExecContext())
-    var phases = chain.with_order(order.copy()).lower(driver, Bindings())
-    return _canonical_rows(
-        RecordBatch.from_struct_array(driver.collect(phases^, chain.schema()))
-    )
+def _run(chain: JoinChain, order: JoinOrder) raises -> RecordBatch:
+    """`chain` computed by `order`, its rows sorted on every column."""
+    return _ordered(chain.with_order(order.copy())).execute()
 
 
 def test_a_join_order_is_verified_against_the_links() raises:
@@ -1541,7 +1530,7 @@ def test_a_join_order_is_verified_against_the_links() raises:
         [_join(0, 2, JOIN_INNER, k0, k2), _join(3, 1, JOIN_INNER, k2, k1)],
     )
     other.verify(chain)
-    assert_true(_canonical_rows(plan.execute()) == _run(chain, other))
+    assert_true(_ordered(plan).execute() == _run(chain, other))
     # Equating `lv` with `#2.k` instead of `k` is not.
     with assert_raises(contains="other equalities"):
         _tree(
@@ -1688,7 +1677,7 @@ def test_a_join_order_moves_an_inner_join_across_a_left_join() raises:
         ],
     )
     crossed.verify(chain)
-    assert_true(_canonical_rows(plan.execute()) == _run(chain, crossed))
+    assert_true(_ordered(plan).execute() == _run(chain, crossed))
 
     var reads_padded = (
         table(_left())
@@ -1721,9 +1710,7 @@ def test_a_filter_over_a_spine_lands_below_the_left_join() raises:
     assert_equal(len(chain.filters), 1, String(absorbed))
     assert_equal(_landing(chain), len(chain.inputs), String(absorbed))
     assert_equal(plan.execute().num_rows(), 1)
-    assert_true(
-        _canonical_rows(plan.execute()) == _canonical_rows(absorbed.execute())
-    )
+    assert_true(_ordered(plan).execute() == _ordered(absorbed).execute())
 
 
 def test_a_chain_answering_with_no_column_emits_none() raises:
@@ -1868,8 +1855,7 @@ def test_a_spliced_chain_keeps_its_filters_and_names() raises:
         assert_equal(len(chain.inputs), 3, String(spliced))
         assert_true(spliced.schema() == plan.schema(), String(spliced))
         assert_true(
-            _canonical_rows(spliced.execute())
-            == _canonical_rows(plan.execute()),
+            _ordered(spliced).execute() == _ordered(plan).execute(),
             String(spliced),
         )
     # The filter came along, reading the participants it was written over.

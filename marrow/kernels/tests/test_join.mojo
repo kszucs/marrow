@@ -65,7 +65,7 @@ from ...kernels.join import (
     BUILD_LEFT,
     BUILD_RIGHT,
 )
-from ...utils.testing import canonical_rows
+from ...kernels.sort import SortKernel
 from std.builtin.sort import sort as sort_list
 
 
@@ -1396,6 +1396,17 @@ def _swap_right() raises -> StructArray:
     ).to_struct_array()
 
 
+def _sorted(rows: StructArray) raises -> StructArray:
+    """`rows` sorted on every column. A join's row order follows its probe
+    side, so it differs between build sides; the multiset of rows must not."""
+    var keys = List[Int]()
+    var ascending = List[Bool]()
+    for i in range(len(rows.dtype.as_struct().fields)):
+        keys.append(i)
+        ascending.append(True)
+    return SortKernel.apply(rows, keys, ascending)
+
+
 def _assert_build_sides_agree(kind: JoinKind) raises:
     var left = _swap_left()
     var right = _swap_right()
@@ -1422,7 +1433,7 @@ def _assert_build_sides_agree(kind: JoinKind) raises:
         String("kind ", kind, ": row count changed with the build side"),
     )
     assert_true(
-        canonical_rows(built_left) == canonical_rows(built_right),
+        _sorted(built_left) == _sorted(built_right),
         String("kind ", kind, ": the rows differ"),
     )
 
@@ -1545,7 +1556,7 @@ def test_build_side_agrees_on_a_multi_column_key() raises:
             String("kind ", kind, ": row count changed with the build side"),
         )
         assert_true(
-            canonical_rows(built_left) == canonical_rows(built_right),
+            _sorted(built_left) == _sorted(built_right),
             String("kind ", kind, ": the rows differ"),
         )
 
@@ -1762,7 +1773,7 @@ def test_right_semi_is_a_mirrored_semi_over_swapped_inputs() raises:
         right, left, _right_on(), _left_on(), JOIN_RIGHT_SEMI
     )
     assert_true(semi.dtype == mirrored.dtype)
-    assert_true(canonical_rows(semi) == canonical_rows(mirrored))
+    assert_true(_sorted(semi) == _sorted(mirrored))
 
 
 # ---------------------------------------------------------------------------
