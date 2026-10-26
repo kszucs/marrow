@@ -333,6 +333,14 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
 
     var value: Int
 
+    comptime second = CalendarUnit(0)
+    comptime minute = CalendarUnit(1)
+    comptime hour = CalendarUnit(2)
+    comptime day = CalendarUnit(3)
+    comptime month = CalendarUnit(4)
+    comptime quarter = CalendarUnit(5)
+    comptime year = CalendarUnit(6)
+
     def __init__(out self, value: Int):
         self.value = value
 
@@ -340,19 +348,19 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
     def parse(unit: String) raises -> Self:
         """The unit named by `unit`; raises if it names none."""
         if unit == "second":
-            return Self(0)
+            return Self.second
         elif unit == "minute":
-            return Self(1)
+            return Self.minute
         elif unit == "hour":
-            return Self(2)
+            return Self.hour
         elif unit == "day":
-            return Self(3)
+            return Self.day
         elif unit == "month":
-            return Self(4)
+            return Self.month
         elif unit == "quarter":
-            return Self(5)
+            return Self.quarter
         elif unit == "year":
-            return Self(6)
+            return Self.year
         raise InvalidError(
             t"date_trunc: unsupported unit '{unit}' (expected "
             t"second/minute/hour/day/month/quarter/year)"
@@ -366,15 +374,15 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
         they go through the civil calendar instead. Everything up to `day` is
         fixed-length.
         """
-        return self.value >= 4
+        return self.value >= Self.month.value
 
     def seconds(self) -> Int:
         """How many seconds one of these spans."""
-        if self.value == 0:
+        if self == Self.second:
             return 1
-        elif self.value == 1:
+        elif self == Self.minute:
             return 60
-        elif self.value == 2:
+        elif self == Self.hour:
             return 3600
         else:
             return 86400
@@ -389,9 +397,9 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
         if self.is_calendar():
             var c = CivilDate.from_days(floor_div(ticks, ticks_per_day))
             var start: CivilDate
-            if self.value == 6:
+            if self == Self.year:
                 start = c.start_of_year()
-            elif self.value == 5:
+            elif self == Self.quarter:
                 start = c.start_of_quarter()
             else:
                 start = c.start_of_month()
@@ -403,17 +411,17 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
         """The unit's spelling. `StaticString`, not `String`: these are four
         literals, and returning an owned `String` would drag its construction
         into every binary that only ever renders a plan."""
-        if self.value == 0:
+        if self == Self.second:
             return "second"
-        elif self.value == 1:
+        elif self == Self.minute:
             return "minute"
-        elif self.value == 2:
+        elif self == Self.hour:
             return "hour"
-        elif self.value == 3:
+        elif self == Self.day:
             return "day"
-        elif self.value == 4:
+        elif self == Self.month:
             return "month"
-        elif self.value == 5:
+        elif self == Self.quarter:
             return "quarter"
         else:
             return "year"
@@ -426,15 +434,6 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self.to_string())
-
-
-comptime unit_second = CalendarUnit(0)
-comptime unit_minute = CalendarUnit(1)
-comptime unit_hour = CalendarUnit(2)
-comptime unit_day = CalendarUnit(3)
-comptime unit_month = CalendarUnit(4)
-comptime unit_quarter = CalendarUnit(5)
-comptime unit_year = CalendarUnit(6)
 
 
 struct _Iso8601Text[origin: ImmOrigin]:

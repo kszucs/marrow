@@ -28,12 +28,6 @@ from ..datetime import (
     iso_week_thursday,
     split_days,
     truncate_div,
-    unit_day,
-    unit_minute,
-    unit_month,
-    unit_quarter,
-    unit_second,
-    unit_year,
     weekday,
     weekday_name,
 )
@@ -157,30 +151,35 @@ def test_iso_week_thursday_names_the_iso_year() raises:
 def test_calendar_unit_floor_fixed_units() raises:
     """Seconds ticks, 86,400 a day; a pre-epoch tick floors into the unit
     that holds it."""
-    assert_equal(unit_minute.floor(125, 86_400), 120)
-    assert_equal(unit_minute.floor(-1, 86_400), -60)
-    assert_equal(unit_day.floor(86_401, 86_400), 86_400)
+    assert_equal(CalendarUnit.minute.floor(125, 86_400), 120)
+    assert_equal(CalendarUnit.minute.floor(-1, 86_400), -60)
+    assert_equal(CalendarUnit.day.floor(86_401, 86_400), 86_400)
     # Milliseconds: one second is 1,000 ticks.
-    assert_equal(unit_second.floor(1_500, 86_400_000), 1_000)
+    assert_equal(CalendarUnit.second.floor(1_500, 86_400_000), 1_000)
     # A day count cannot be floored finer than a day.
-    assert_equal(unit_second.floor(17, 1), 17)
+    assert_equal(CalendarUnit.second.floor(17, 1), 17)
 
 
 def test_calendar_unit_floor_calendar_units() raises:
     var d = CivilDate(2021, 8, 17).to_days()
-    assert_equal(unit_month.floor(d, 1), CivilDate(2021, 8, 1).to_days())
-    assert_equal(unit_quarter.floor(d, 1), CivilDate(2021, 7, 1).to_days())
-    assert_equal(unit_year.floor(d, 1), CivilDate(2021, 1, 1).to_days())
+    assert_equal(
+        CalendarUnit.month.floor(d, 1), CivilDate(2021, 8, 1).to_days()
+    )
+    assert_equal(
+        CalendarUnit.quarter.floor(d, 1), CivilDate(2021, 7, 1).to_days()
+    )
+    assert_equal(CalendarUnit.year.floor(d, 1), CivilDate(2021, 1, 1).to_days())
     # The middle of the day in seconds lands on the first of the month.
     var noon = d * 86_400 + 43_200
     assert_equal(
-        unit_month.floor(noon, 86_400), CivilDate(2021, 8, 1).to_days() * 86_400
+        CalendarUnit.month.floor(noon, 86_400),
+        CivilDate(2021, 8, 1).to_days() * 86_400,
     )
 
 
 def test_calendar_unit_parse() raises:
-    assert_true(CalendarUnit.parse("quarter") == unit_quarter)
-    assert_equal(String(unit_month), "month")
+    assert_true(CalendarUnit.parse("quarter") == CalendarUnit.quarter)
+    assert_equal(String(CalendarUnit.month), "month")
     with assert_raises(contains="unsupported unit"):
         _ = CalendarUnit.parse("fortnight")
 

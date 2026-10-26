@@ -3,40 +3,36 @@
 
 """Format-agnostic primitives shared across marrow.
 
-Each submodule is a self-contained block that depends on nothing in marrow
-but its errors, buffers and views -- no arrays, no dtypes, no execution
-context -- so it can be read, tested and lifted out on its own:
+Each submodule depends on nothing in marrow but its errors, buffers and views
+-- no arrays, no dtypes, no execution context -- so it can be read and tested
+on its own. `testing` is the exception: it compares arrays for the test
+harness.
 
 | module | what |
 |---|---|
 | `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
-| `decimal` | `float_to_decimal` — the exact unscaled decimal of a double; `parse_decimal`, `format_decimal` — decimal text; `decimal_bound` — the digit limit of a precision |
-| `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div`, `weekday`, `iso_week_thursday`, `weekday_name` — proleptic-Gregorian arithmetic; `CalendarUnit` — the boundaries a date is floored to; `WallClock`, `TimestampFormat` — time zones |
+| `bits` | `BitReader`, `BitWriter`, `BitCursor` — streams of bit fields |
 | `byteorder` | `LittleEndian`, `BigEndian`, `Leb128` — values as bytes and as varints |
-| `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
+| `checksum` | `Crc32`, `Crc32c` — the zlib CRC and CRC-32C |
+| `datetime` | `CivilDate`, `Epoch`, `floor_div`, `split_days`, `truncate_div`, `weekday`, `iso_week_thursday`, `weekday_name` — proleptic-Gregorian arithmetic; `CalendarUnit` — the boundaries a date is floored to; `WallClock`, `TimestampFormat`, `Iso8601` — time zones and timestamp text |
+| `decimal` | `float_to_decimal`, `parse_decimal`, `format_decimal`, `decimal_bound` — decimals as unscaled integers |
+| `dylib` | `LibSet`, `LibSpec`, `Dylib` — declaring and opening an optional C library |
+| `enum` | `Enum`, `EnumVariant`, `Members` / `ArcMembers` / `OwnedMembers` — the storage behind every erased handle |
+| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `XxHash32`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `SwissHashTable` — 64-bit hash to dense id |
 | `hex` | `hex_digit` — one hexadecimal digit's value |
-| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32`; `SwissHashTable` — 64-bit hash to dense id |
-| `dylib` | `Dylib`, `LibSpec` — declaring and opening an optional C library |
-| `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
-| `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
 | `hll` | `HyperLogLog` — approximate distinct counts over 64-bit hashes |
-| `text` | `Utf8`, `LikePattern`, `RegexPattern` — code points and patterns over UTF-8 |
-| `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
+| `integers` | `Unsigned`, `zigzag` / `unzigzag`, `ordered` / `unordered` — integer bit tricks |
+| `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
+| `stats` | `count`, `Counters` — kernel counters under `-D MARROW_STATS=true` |
+| `testing` | `TestSuite`, `BenchSuite`, `Benchmark` — the harness pytest drives |
+| `text` | `Utf8`, `LikePattern`, `RegexPattern` — column-wide UTF-8 scans and patterns |
+| `threads` | `ThreadPool`, `Thread`, `Mutex`, `Condition` — the CPU thread pool |
 
-The names are re-exported here, so `from ..utils import Crc32` is the
-import everywhere; the submodule split is about where the code *lives*, not
-about making callers spell out a path.
-
-**`testing` is the one exception and is deliberately not re-exported.** Every
-module in the tree imports `marrow.utils`, and none of them should pull
-`std.benchmark` in behind it — test and bench files import
-`..utils.testing` explicitly.
-
-This replaced a single 312-line `marrow/utils.mojo` that was four unrelated
-things. Device capability
-(`GPU_ENABLED`, `has_accelerator_support`) went the other way, to
-`marrow.execution`, where `ExecContext` already owns every question about
-whether there is a device.
+The names most callers want are re-exported here, so `from ..utils import
+Crc32` is the usual import. `bits`, `enum`, `integers`, `stats` and `threads`
+are imported from their module. `testing` is deliberately not re-exported:
+every module in the tree imports `marrow.utils`, and none of them should pull
+`std.benchmark` in behind it.
 """
 
 from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
@@ -58,13 +54,6 @@ from .datetime import (
     iso_week_thursday,
     split_days,
     truncate_div,
-    unit_day,
-    unit_hour,
-    unit_minute,
-    unit_month,
-    unit_quarter,
-    unit_second,
-    unit_year,
     weekday,
     weekday_name,
 )
