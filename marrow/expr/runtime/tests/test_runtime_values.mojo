@@ -1077,7 +1077,7 @@ def test_verb_vocabulary_is_constructible() raises:
         _ = rv.call(name.copy(), [a.copy(), a.copy(), a.copy()])
 
     assert_equal(len(rv.unary_verbs()), 50)
-    assert_equal(len(rv.binary_verbs()), 28)
+    assert_equal(len(rv.binary_verbs()), 30)
     assert_equal(len(rv.ternary_verbs()), 7)
 
 

@@ -9,12 +9,7 @@ def plan() raises -> DynRelation:
     SELECT strftime(ts, '%Y-%m-%dT%H:%M:%S') AS s FROM events
 
     Formatting a timestamp to text with an explicit pattern.
-    `cast_int_to_string` covers the numeric side of "value to text"; there is
-    no temporal one at all — `NumToString` binds `A: NumericValue`.
 
-    `marrow/kernels/temporal.mojo` has no such kernel.
-
-    -- skip mojo
     -- skip python
 
     -- expected
@@ -28,5 +23,5 @@ def plan() raises -> DynRelation:
     """
     var t = table("events")
     return t.project(
-        ["s"], [col("ts", timestamp(microsecond)).strftime("%Y-%m-%dT%H:%M:%S")]
+        ["s"], [strftime(col("ts"), lit(StringScalar("%Y-%m-%dT%H:%M:%S")))]
     )

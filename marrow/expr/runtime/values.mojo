@@ -177,6 +177,8 @@ from ...kernels.temporal import (
     DayKernel,
     DayNameKernel,
     DayOfWeekKernel,
+    StrftimeKernel,
+    StrptimeKernel,
     DayOfYearKernel,
     EpochKernel,
     HourKernel,
@@ -1078,6 +1080,10 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return TrimCharsKernel.dispatch(kids[0], Self._as_text(kids[1]))
         if self._tag == "position":
             return PositionKernel.dispatch(kids[0], Self._as_text(kids[1]))
+        if self._tag == "strftime":
+            return StrftimeKernel.dispatch(kids[0], Self._as_text(kids[1]))
+        if self._tag == "strptime":
+            return StrptimeKernel.dispatch(kids[0], Self._as_text(kids[1]))
         if len(kids) == 3:
             if self._tag == "substr":
                 return SubstrKernel.dispatch(
@@ -1941,6 +1947,18 @@ def trim_chars(
     return RuntimeValue("trim_chars", a, characters)
 
 
+def strftime(var a: RuntimeValue, var format: RuntimeValue) -> RuntimeValue:
+    """SQL `strftime(a, format)` — each date or timestamp as text, in Python
+    `strftime` directives; a zoned timestamp on its wall clock."""
+    return RuntimeValue("strftime", a, format)
+
+
+def strptime(var a: RuntimeValue, var format: RuntimeValue) -> RuntimeValue:
+    """SQL `strptime(a, format)` — each string parsed as a `timestamp[us]` in
+    Python `strptime` directives; raises on a row that does not match."""
+    return RuntimeValue("strptime", a, format)
+
+
 def position(var a: RuntimeValue, var needle: RuntimeValue) -> RuntimeValue:
     """SQL `position(needle IN a)` — the 1-based character index as `int64`,
     and **0** when absent. A *null* needle answers null, which is a different
@@ -2266,6 +2284,8 @@ comptime BINARY_VERBS = [
     StaticString("repeat"),
     StaticString("trim_chars"),
     StaticString("position"),
+    StaticString("strftime"),
+    StaticString("strptime"),
     StaticString("regexp_matches"),
     # conditional
     StaticString("nullif"),

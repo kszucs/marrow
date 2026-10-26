@@ -616,3 +616,102 @@ def test_zones_cover_fixed_offsets_and_the_footer_rule() raises:
         ].value(),
         "2100-07-01 02:00:00+02",
     )
+
+
+# ---------------------------------------------------------------------------
+# strftime / strptime
+# ---------------------------------------------------------------------------
+
+from ...builders import StringBuilder
+from ...dtypes import int32
+from ...kernels.cast import CastKernel
+from ...kernels.temporal import StrftimeKernel, StrptimeKernel
+
+
+def _formats(n: Int, format: String) raises -> StringArray:
+    """One format broadcast across `n` rows, as the expression layer passes a
+    literal."""
+    var b = StringBuilder(capacity=n)
+    for _ in range(n):
+        b.append(format)
+    return b.finish()
+
+
+def _strftime(a: DynArray, format: String) raises -> StringArray:
+    return (
+        StrftimeKernel.dispatch(a, _formats(len(a), format)).as_string().copy()
+    )
+
+
+def test_strftime_floors_nanoseconds_to_microseconds() raises:
+    """`%f` has six digits; a nanosecond timestamp's last three are floored
+    away, before the epoch too."""
+    var a = _tsd([1_500_999, -1], timestamp(nanosecond))
+    var out = _strftime(a, "%Y-%m-%d %H:%M:%S.%f")
+    assert_equal(out[0].value(), "1970-01-01 00:00:00.001500")
+    assert_equal(out[1].value(), "1969-12-31 23:59:59.999999")
+
+
+def test_strftime_writes_a_zoned_timestamp_on_its_wall_clock() raises:
+    """2021-06-15 12:30:45 UTC is 14:30:45 in Budapest, two hours east. UTC
+    writes a zero offset, and so does a naive timestamp, read as UTC."""
+    var budapest = _tsd([1_623_760_245], timestamp(second, "Europe/Budapest"))
+    assert_equal(
+        _strftime(budapest, "%H:%M:%S %z")[0].value(), "14:30:45 +0200"
+    )
+    var utc = _tsd([1_623_760_245], timestamp(second, "UTC"))
+    assert_equal(_strftime(utc, "%H:%M %z")[0].value(), "12:30 +0000")
+    var naive = _tsd([1_623_760_245], timestamp(second))
+    assert_equal(_strftime(naive, "%H:%M%z %Z")[0].value(), "12:30+0000 UTC")
+
+
+def test_strftime_reads_date64_and_keeps_nulls() raises:
+    var b = PrimitiveBuilder[Date64Type](Date64Type(), capacity=2)
+    b.append(Int64(1_582_934_400_000))  # 2020-02-29
+    b.append_null()
+    var out = _strftime(b.finish().to_dyn(), "%a %d %b %Y")
+    assert_equal(out[0].value(), "Sat 29 Feb 2020")
+    assert_false(out.is_valid(1))
+
+
+def test_strftime_takes_a_format_per_row() raises:
+    var a = _tsd([0, 0, 0], timestamp(second))
+    var f = StringBuilder(capacity=3)
+    f.append("%Y")
+    f.append_null()
+    f.append("%B")
+    var out = StrftimeKernel.dispatch(a, f.finish()).as_string().copy()
+    assert_equal(out[0].value(), "1970")
+    assert_false(out.is_valid(1))
+    assert_equal(out[2].value(), "January")
+
+
+def test_strftime_refuses_a_time_of_day() raises:
+    var a = DynArray(array([1, 2], int32))
+    with assert_raises(contains="expected a date or timestamp"):
+        _ = _strftime(CastKernel.dispatch(a, DynType(time32(second))), "%H")
+
+
+def test_strptime_parses_to_microseconds_and_applies_an_offset() raises:
+    var s = StringBuilder(capacity=3)
+    s.append("2021-06-15 14:30:45.000123+0200")
+    s.append_null()
+    s.append("1969-12-31 23:59:59.000000+0000")
+    var out = StrptimeKernel.dispatch(
+        s.finish().to_dyn(), _formats(3, "%Y-%m-%d %H:%M:%S.%f%z")
+    )
+    assert_true(out.dtype() == timestamp(microsecond))
+    ref ts = out.as_timestamp()
+    assert_equal(ts[0].value(), Int64(1_623_760_245_000_123))
+    assert_false(ts.is_valid(1))
+    assert_equal(ts[2].value(), Int64(-1_000_000))
+
+
+def test_strptime_names_the_row_it_cannot_parse() raises:
+    var s = StringBuilder(capacity=2)
+    s.append("2021-06-15")
+    s.append("15/06/2021")
+    with assert_raises(contains="row 1"):
+        _ = StrptimeKernel.dispatch(
+            s.finish().to_dyn(), _formats(2, "%Y-%m-%d")
+        )

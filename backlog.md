@@ -266,7 +266,7 @@ def main():
 
 ### 1.4 Engine capability the golden corpus measures as missing
 
-`golden/COVERAGE.md` is authoritative: 286 cases, of which **51 carry
+`golden/COVERAGE.md` is authoritative: 301 cases, of which **47 carry
 `-- skip mojo`** because marrow has no API for them. Their bodies
 are never compiled, so they are proposals rather than verified spellings.
 
@@ -275,7 +275,7 @@ Recounted 2026-09-27, by prefix:
 | skipped | area |
 |---|---|
 | 12 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness |
-| 9 | temporal — date_diff, age, strftime/strptime, make_date, interval arithmetic |
+| 7 | temporal — date_diff, age, make_date, interval arithmetic |
 | 8 | nested — struct field, map lookup, list element/slice, unnest |
 | 7 | math — atan2 and the rest of the trigonometric family |
 | 2 | string — concat_ws, null-skipping `concat` |
@@ -1259,7 +1259,7 @@ family: `regexp_full_match`, a global `regexp_replace` (DuckDB's `'g'` flag),
 `regexp_split_to_array`, and `regexp_extract` without a group argument.
 
 **Still absent — temporal:** `date_diff`, interval arithmetic,
-`strftime`/`strptime`, `make_date`, `age`, date to string casts, and the SQL
+`make_date`, `age`, date to string casts, and the SQL
 spellings of the zone verbs: `timezone(zone, ts)` and `AT TIME ZONE` have no
 translation, and `TIMESTAMPTZ` is not a SQL type name. `assume_timezone` and
 `convert_timezone` exist in both lanes and Python, and extraction and

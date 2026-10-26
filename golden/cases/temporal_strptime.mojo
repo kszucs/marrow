@@ -13,9 +13,6 @@ def plan() raises -> DynRelation:
     come back, which is why `2021-12-31 23:59:59.999999` does not return to
     itself.
 
-    `marrow/kernels/temporal.mojo` has no such kernel.
-
-    -- skip mojo
     -- skip python
 
     -- expected
@@ -28,9 +25,5 @@ def plan() raises -> DynRelation:
     '2021-12-31T23:59:59'
     """
     var t = table("events")
-    var formatted = t.project(
-        ["s"], [col("ts", timestamp(microsecond)).strftime("%Y-%m-%d %H:%M:%S")]
-    )
-    return formatted.project(
-        ["t"], [col("s", string).strptime("%Y-%m-%d %H:%M:%S")]
-    )
+    var fmt = lit(StringScalar("%Y-%m-%d %H:%M:%S"))
+    return t.project(["t"], [strptime(strftime(col("ts"), fmt.copy()), fmt^)])

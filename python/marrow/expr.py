@@ -409,6 +409,8 @@ _NOTES = {
     ),
     "maximum": "The larger of the two, per row — the mirror of ``minimum``.",
     "position": "1-based index of the first occurrence, ``0`` when absent.",
+    "strftime": "Dates and timestamps as text, in Python ``strftime`` directives.",
+    "strptime": "Text parsed as ``timestamp[us]``, in Python ``strptime`` directives.",
     "substr": "SQL ``substr(a, start, count)`` — 1-based, counting characters.",
     "lpad": "Pad on the left, **truncating** when already longer than width.",
     "rpad": "``lpad`` from the other end.",

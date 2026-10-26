@@ -222,7 +222,7 @@ bounds, and `EXCLUDE`. All seven cases run in both lanes.
 
 ## Recorded as unsupported
 
-49 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+47 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `distinct()` and
 `SELECT DISTINCT` are an `aggregate` with keys and no aggregates; `DISTINCT ON`
@@ -264,12 +264,12 @@ tell `-0.0` from `0.0`, which is why the `floats` fixture carries both.
 The left shift in `math_bitwise_operators` takes `abs(n)` because DuckDB
 refuses to shift a negative at all — that one operation is not comparable.
 
-**Temporal** (9) — `temporal_literal_comparison`, `temporal_date_diff`,
+**Temporal** (7) — `temporal_literal_comparison`, `temporal_date_diff`,
 `temporal_add_month_interval`, `temporal_interval_between_timestamps`,
-`temporal_epoch_seconds`, `temporal_strftime`, `temporal_strptime`,
-`temporal_make_date`, `temporal_age`. `last_day`,
+`temporal_epoch_seconds`, `temporal_make_date`, `temporal_age`. `last_day`,
 `iso_week`/`iso_year` and the weekday and month names came off this list with
-the temporal surface, and `temporal_timezone_attach` with the zone verbs.
+the temporal surface, `temporal_timezone_attach` with the zone verbs, and
+`temporal_strftime`/`temporal_strptime` with the formatting verbs.
 
 `temporal_timezone_attach` and `temporal_timezone_convert` render a zoned
 timestamp as text, and that text depends on DuckDB's session zone, so

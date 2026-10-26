@@ -19,6 +19,7 @@ the bottom of the file, each with its minimal input.
 """
 
 import base64
+import datetime
 import math
 
 import pyarrow as pa
@@ -1001,4 +1002,27 @@ def test_base64_matches_python_and_round_trips(values):
     want = [None if v is None else base64.b64encode(v).decode() for v in values]
     assert encoded.to_pylist() == want
     back = to_pa(col("e").from_base64().execute(batch(e=encoded)))
+    assert back.to_pylist() == values
+
+
+_STAMPS = st.lists(
+    st.one_of(
+        st.none(),
+        st.datetimes(
+            min_value=datetime.datetime(1900, 1, 1),
+            max_value=datetime.datetime(2100, 12, 31),
+        ),
+    ),
+    max_size=20,
+)
+
+
+@given(_STAMPS)
+def test_strftime_matches_python_and_strptime_inverts_it(values):
+    fmt = "%Y-%m-%d %H:%M:%S.%f %a %j"
+    arr = pa.array(values, pa.timestamp("us"))
+    text = to_pa(col("t").strftime(fmt).execute(batch(t=arr)))
+    assert text.to_pylist() == [None if v is None else v.strftime(fmt) for v in values]
+    back = to_pa(col("s").strptime(fmt).execute(batch(s=text)))
+    assert back.type == pa.timestamp("us")
     assert back.to_pylist() == values

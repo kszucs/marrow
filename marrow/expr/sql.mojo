@@ -2324,6 +2324,7 @@ struct Planner(Copyable, Movable):
                     " POSITION:position STRPOS:position INSTR:position"
                     " LEFT:left RIGHT:right REPEAT:repeat TRIM:trim_chars"
                     " BTRIM:trim_chars REGEXP_MATCHES:regexp_matches"
+                    " STRFTIME:strftime STRPTIME:strptime"
                 ),
                 name,
             )

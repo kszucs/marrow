@@ -52,15 +52,17 @@ fields — hour/minute/second — via ``views.apply``).
 
 
 from ..arrays import (
+    BinaryLikeArray,
     DynArray,
     Date32Array,
     Int32Array,
     Int64Array,
     PrimitiveArray,
     StringArray,
+    TimestampArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..builders import StringBuilder
+from ..builders import StringBuilder, TimestampBuilder
 from ..dtypes import (
     Date32Type,
     Date64Type,
@@ -71,9 +73,18 @@ from ..dtypes import (
     Time64Type,
     TimestampType,
     TimeUnit,
+    StringLikeType,
+    StringViewType,
+    microsecond,
+    string,
+    timestamp,
 )
 from ..errors import InternalError, InvalidError, TypeError
+from .cast import CastKernel
 from .core import Kernel, one_of
+
+from morrow import Morrow
+from morrow.formatter import format_strftime
 
 from ..utils import (
     CalendarUnit,
@@ -719,6 +730,147 @@ struct MonthNameKernel(TemporalNameKernel):
     @staticmethod
     def component(days: Int) -> String:
         return String(CivilDate.from_days(days).month_name())
+
+
+# ---------------------------------------------------------------------------
+# strftime / strptime — temporal <-> text, through morrow
+# ---------------------------------------------------------------------------
+
+
+struct StrftimeKernel(Kernel):
+    """Write each date or timestamp as text, in `format`'s Python `strftime`
+    directives — `%Y-%m-%d %H:%M:%S.%f`, `%A`, `%z` — as DuckDB's `strftime`
+    and pyarrow's `strftime` do.
+
+    A zoned timestamp is written on its wall clock, and `%z`/`%Z` give its
+    offset and zone. A naive timestamp or a date is read as UTC, so they
+    write `+0000` and `UTC`.
+    `%f` is microseconds: a nanosecond timestamp's last three digits are
+    floored away, since no directive spells them.
+    """
+
+    comptime name = "strftime"
+
+    @staticmethod
+    def apply[
+        T: TemporalType
+    ](array: PrimitiveArray[T], format: StringArray) raises -> StringArray:
+        var dt = array.type()
+        if not (dt.is_date32() or dt.is_date64() or dt.is_timestamp()):
+            raise Self.error[TypeError](
+                t"expected a date or timestamp array, got {dt}"
+            )
+        var clock = _clock(dt)
+        # `_clock` is None for UTC, which still has an offset to write.
+        var zone = String()
+        if dt.is_timestamp():
+            zone = String(dt.as_timestamp().timezone)
+        # A date32 counts days; everything else counts ticks of a second.
+        var per_second = 1 if dt.is_date32() else ticks_per_second(dt)
+        var seconds_per_tick = 86400 if dt.is_date32() else 1
+
+        var n = len(array)
+        var builder = StringBuilder(capacity=n)
+        var src = array.values()
+        for i in range(n):
+            if array.is_valid(i) and format.is_valid(i):
+                var raw = Int(src.unsafe_get(i)) * seconds_per_tick
+                var offset = 0
+                if clock:
+                    offset = clock.value().offset_at(floor_div(raw, per_second))
+                    raw = clock.value().to_local(raw)
+                var secs = floor_div(raw, per_second)
+                var micros = (raw - secs * per_second) * 1_000_000 // per_second
+                var days = floor_div(secs, 86400)
+                var tod = secs - days * 86400
+                var date = CivilDate.from_days(days)
+                builder.append(
+                    format_strftime(
+                        date.year,
+                        date.month,
+                        date.day,
+                        tod // 3600,
+                        tod // 60 % 60,
+                        tod % 60,
+                        micros,
+                        offset,
+                        zone,
+                        not zone,
+                        weekday(days) + 1,  # ISO: Monday = 1
+                        String(format.unsafe_get(UInt(i))),
+                    )
+                )
+            else:
+                builder.append_null()
+        return builder.finish()
+
+    @staticmethod
+    def dispatch(array: DynArray, format: StringArray) raises -> DynArray:
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T](), format).to_dyn()
+
+        return array.dtype().try_visit[DynArray, TemporalType](
+            leaf, "dtype is not temporal"
+        )
+
+
+struct StrptimeKernel(Kernel):
+    """Parse each string as a timestamp in `format`'s Python `strptime`
+    directives, answering `timestamp[us]` — DuckDB's `strptime`.
+
+    Text that does not match raises, naming the row. A parsed `%z` offset is
+    applied, so the answer is the UTC instant, still typed naive.
+    """
+
+    comptime name = "strptime"
+
+    @staticmethod
+    def apply[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T], format: StringArray) raises -> TimestampArray:
+        var n = len(array)
+        var builder = TimestampBuilder(timestamp(microsecond), n)
+        for i in range(n):
+            if array.is_valid(i) and format.is_valid(i):
+                var text = array.unsafe_get(UInt(i))
+                var parsed: Morrow
+                try:
+                    parsed = Morrow.strptime(
+                        String(text), String(format.unsafe_get(UInt(i)))
+                    )
+                except e:
+                    raise Self.error[InvalidError](t"row {i}, '{text}': {e}")
+                var secs = (
+                    CivilDate.days_from(parsed.year, parsed.month, parsed.day)
+                    * 86400
+                    + parsed.hour * 3600
+                    + parsed.minute * 60
+                    + parsed.second
+                )
+                if not parsed.tz.is_none():
+                    secs -= parsed.tz.offset
+                builder.append(Int64(secs * 1_000_000 + parsed.microsecond))
+            else:
+                builder.append_null()
+        return builder.finish()
+
+    @staticmethod
+    def dispatch(array: DynArray, format: StringArray) raises -> DynArray:
+        if array.dtype().isa[StringViewType]():
+            return Self.apply(
+                CastKernel.dispatch(array, string.to_dyn()).as_string(), format
+            ).to_dyn()
+        if not array.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {array.dtype()}"
+            )
+
+        def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_binary_like[T](), format).to_dyn()
+
+        return array.dtype().try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )
 
 
 # ---------------------------------------------------------------------------
