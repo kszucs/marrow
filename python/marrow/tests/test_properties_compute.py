@@ -18,6 +18,7 @@ Divergences found by these properties are pinned as strict ``xfail`` cases at
 the bottom of the file, each with its minimal input.
 """
 
+import base64
 import math
 
 import pyarrow as pa
@@ -976,3 +977,28 @@ def test_sort_by_signed_zero_ties():
     keys = [("b", "ascending"), ("a", "ascending")]
     got = pa.record_batch(ma.record_batch(rb).sort_by(keys, null_placement="at_end"))
     assert got.column("a").to_pylist() == [0, 1]
+
+
+_BLOBS = st.lists(st.one_of(st.none(), st.binary(max_size=40)), max_size=20)
+
+
+@given(_BLOBS)
+def test_hex_matches_python_and_round_trips(values):
+    arr = pa.array(values, pa.binary())
+    hexed = to_pa(col("b").to_hex().execute(batch(b=arr)))
+    assert hexed.type == pa.string()
+    assert hexed.to_pylist() == [None if v is None else v.hex().upper() for v in values]
+    lowered = pa.array([None if v is None else v.hex() for v in values], pa.string())
+    back = to_pa(col("h").from_hex().execute(batch(h=lowered)))
+    assert back.type == pa.binary()
+    assert back.to_pylist() == values
+
+
+@given(_BLOBS)
+def test_base64_matches_python_and_round_trips(values):
+    arr = pa.array(values, pa.binary())
+    encoded = to_pa(col("b").to_base64().execute(batch(b=arr)))
+    want = [None if v is None else base64.b64encode(v).decode() for v in values]
+    assert encoded.to_pylist() == want
+    back = to_pa(col("e").from_base64().execute(batch(e=encoded)))
+    assert back.to_pylist() == values

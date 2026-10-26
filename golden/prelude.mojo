@@ -57,6 +57,8 @@ from marrow.expr import dense_rank, rank, row_number
 from marrow.expr import AllRules, DynRelation, SubqueryRules
 from marrow.expr import exists, is_in, outer, scalar
 from marrow.expr.runtime.values import eq, ne, not_
+from marrow.expr.runtime.values import from_base64, from_hex, lower
+from marrow.expr.runtime.values import to_base64, to_hex
 from marrow.kernels.join import (
     JOIN_ALL,
     JOIN_ANTI,

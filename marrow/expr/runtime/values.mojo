@@ -151,6 +151,10 @@ from ...kernels.string import (
     ReplaceKernel,
     ReverseKernel,
     RightKernel,
+    ToHexKernel,
+    FromHexKernel,
+    ToBase64Kernel,
+    FromBase64Kernel,
     SplitPartKernel,
     StartsWithKernel,
     StringPredicateKernel,
@@ -939,6 +943,14 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return ReverseKernel.dispatch(a)
         if self._tag == "capitalize":
             return CapitalizeKernel.dispatch(a)
+        if self._tag == "to_hex":
+            return ToHexKernel.dispatch(a)
+        if self._tag == "from_hex":
+            return FromHexKernel.dispatch(a)
+        if self._tag == "to_base64":
+            return ToBase64Kernel.dispatch(a)
+        if self._tag == "from_base64":
+            return FromBase64Kernel.dispatch(a)
         if self._tag == "length":
             return LengthKernel.dispatch(a)
         if self._tag == "array_length":
@@ -1864,6 +1876,27 @@ def capitalize(var a: RuntimeValue) -> RuntimeValue:
     return RuntimeValue("capitalize", a)
 
 
+def to_hex(var a: RuntimeValue) -> RuntimeValue:
+    """Each byte of a binary or string element as two upper-case hex digits,
+    as a string."""
+    return RuntimeValue("to_hex", a)
+
+
+def from_hex(var a: RuntimeValue) -> RuntimeValue:
+    """The bytes a string of hex digits spells, in either case, as binary."""
+    return RuntimeValue("from_hex", a)
+
+
+def to_base64(var a: RuntimeValue) -> RuntimeValue:
+    """Each binary or string element as padded base64, as a string."""
+    return RuntimeValue("to_base64", a)
+
+
+def from_base64(var a: RuntimeValue) -> RuntimeValue:
+    """The bytes a base64 string spells, as binary."""
+    return RuntimeValue("from_base64", a)
+
+
 def length(var a: RuntimeValue) -> RuntimeValue:
     """Byte length per element, as `int32` — pyarrow's `utf8_length`."""
     return RuntimeValue("length", a)
@@ -2243,6 +2276,10 @@ comptime UNARY_VERBS = [
     StaticString("rstrip"),
     StaticString("reverse"),
     StaticString("capitalize"),
+    StaticString("to_hex"),
+    StaticString("from_hex"),
+    StaticString("to_base64"),
+    StaticString("from_base64"),
     StaticString("length"),
     StaticString("char_length"),
     StaticString("ascii"),

@@ -25,6 +25,7 @@ fixed W-wide lane), so the expression layer
 (`marrow/expr/comptime/strings.mojo`) materializes them. Only `LengthKernel` exposes a fusable, offset-based fast path there.
 """
 
+from std.base64 import b16decode, b16encode, b64decode, b64encode
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
@@ -43,20 +44,26 @@ from ..arrays import (
 from ..buffers import Buffer, Bitmap
 from ..builders import BinaryLikeBuilder, BinaryViewLikeBuilder, BytesBuilder
 from ..dtypes import (
+    BinaryLikeType,
+    BinaryType,
+    BinaryViewType,
     DType,
     Int64Type,
+    LargeBinaryType,
+    LargeStringType,
     PrimitiveType,
     StringLikeType,
     StringType,
     StringViewLikeType,
     StringViewType,
+    binary,
     string,
 )
 from .cast import CastKernel
 from .core import Kernel
 from ..views import apply
 from ..execution import ExecContext
-from ..errors import TypeError
+from ..errors import InvalidError, TypeError
 from ..utils import LikePattern
 
 
@@ -344,6 +351,156 @@ struct CapitalizeKernel(StringMapKernel):
             else:
                 out.append(LowerKernel.core(cp))
         return out^
+
+
+# ---------------------------------------------------------------------------
+# Hex and base64 — bytes spelled as text, and back
+# ---------------------------------------------------------------------------
+
+
+trait EncodeKernel(Kernel):
+    """Element-wise bytes → text: every element of a binary or string array
+    spelled in an ASCII alphabet. The result is a string of the input's
+    offset width, so `large_binary` encodes to `large_string`."""
+
+    @staticmethod
+    def encode(bytes: Span[Byte, _]) -> String:
+        ...
+
+    @staticmethod
+    def apply[
+        T: BinaryLikeType
+    ](array: BinaryLikeArray[T]) raises -> BinaryLikeArray[
+        StringType if T.offset == DType.int32 else LargeStringType
+    ]:
+        comptime Text = StringType if T.offset == DType.int32 else LargeStringType
+        var builder = BinaryLikeBuilder[Text](capacity=len(array))
+        for i in range(len(array)):
+            if array.is_valid(i):
+                builder.append(
+                    Self.encode(array.unsafe_get(UInt(i)).as_bytes())
+                )
+            else:
+                builder.append_null()
+        return builder.finish()
+
+    @staticmethod
+    def dispatch(array: DynArray) raises -> DynArray:
+        var flat = _flat_bytes(array)
+        if not flat.dtype().is_binary_like():
+            raise Self.error[TypeError](
+                t"expected a binary or string array, got {array.dtype()}"
+            )
+
+        def leaf[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
+            return Self.apply(flat.as_binary_like[T]()).to_dyn()
+
+        return flat.dtype().try_visit[DynArray, BinaryLikeType](
+            leaf, "dtype is not binarylike"
+        )
+
+
+trait DecodeKernel(Kernel):
+    """Element-wise text → bytes, the inverse of an `EncodeKernel`: a string
+    array to a binary one of the same offset width. Text outside the
+    alphabet raises, naming the row."""
+
+    @staticmethod
+    def decode(text: StringSlice) raises -> List[Byte]:
+        ...
+
+    @staticmethod
+    def apply[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T]) raises -> BinaryLikeArray[
+        BinaryType if T.offset == DType.int32 else LargeBinaryType
+    ]:
+        comptime Bytes = BinaryType if T.offset == DType.int32 else LargeBinaryType
+        var builder = BinaryLikeBuilder[Bytes](capacity=len(array))
+        for i in range(len(array)):
+            if array.is_valid(i):
+                var text = array.unsafe_get(UInt(i))
+                var raw: List[Byte]
+                try:
+                    raw = Self.decode(text)
+                except e:
+                    raise Self.error[InvalidError](t"row {i}, '{text}': {e}")
+                builder.append(StringSlice(unsafe_from_utf8=Span(raw)))
+            else:
+                builder.append_null()
+        return builder.finish()
+
+    @staticmethod
+    def dispatch(array: DynArray) raises -> DynArray:
+        var flat = _flat_bytes(array)
+        if not flat.dtype().is_string_like():
+            raise Self.error[TypeError](
+                t"expected a string array, got {array.dtype()}"
+            )
+
+        def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
+            return Self.apply(flat.as_binary_like[T]()).to_dyn()
+
+        return flat.dtype().try_visit[DynArray, StringLikeType](
+            leaf, "dtype is not stringlike"
+        )
+
+
+def _flat_bytes(array: DynArray) raises -> DynArray:
+    """A view array as its offsets twin, which the encoders read; any other
+    array as it is."""
+    if array.dtype().isa[StringViewType]():
+        return CastKernel.dispatch(array, string.to_dyn())
+    if array.dtype().isa[BinaryViewType]():
+        return CastKernel.dispatch(array, binary.to_dyn())
+    return array.copy()
+
+
+struct ToHexKernel(EncodeKernel):
+    """Each byte as two upper-case hex digits — ClickHouse's and DuckDB's
+    `hex`."""
+
+    comptime name = "to_hex"
+
+    @staticmethod
+    def encode(bytes: Span[Byte, _]) -> String:
+        return b16encode(StringSlice(unsafe_from_utf8=bytes))
+
+
+struct FromHexKernel(DecodeKernel):
+    """Two hex digits per byte, in either case — DuckDB's `unhex`. An odd
+    count reads as if led by a `0`, as DuckDB's does: `'abc'` is `0x0abc`."""
+
+    comptime name = "from_hex"
+
+    @staticmethod
+    def decode(text: StringSlice) raises -> List[Byte]:
+        # Upper-cased first: base16's alphabet is upper case only.
+        if text.byte_length() % 2 == 1:
+            return b16decode(String("0", text).upper())
+        return b16decode(text.upper())
+
+
+struct ToBase64Kernel(EncodeKernel):
+    """Standard base64 with `=` padding (RFC 4648 section 4) — DuckDB's
+    `to_base64`, ClickHouse's `base64Encode`."""
+
+    comptime name = "to_base64"
+
+    @staticmethod
+    def encode(bytes: Span[Byte, _]) -> String:
+        return b64encode(bytes)
+
+
+struct FromBase64Kernel(DecodeKernel):
+    """The inverse of `to_base64` — DuckDB's `from_base64`, ClickHouse's
+    `base64Decode`."""
+
+    comptime name = "from_base64"
+
+    @staticmethod
+    def decode(text: StringSlice) raises -> List[Byte]:
+        return b64decode(text)
 
 
 # ---------------------------------------------------------------------------

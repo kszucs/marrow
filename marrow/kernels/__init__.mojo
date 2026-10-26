@@ -24,7 +24,8 @@ Two things are reached through their own submodule rather than this namespace:
 Submodules — element-wise first, then the ones that reshape or combine rows:
   - `numeric.mojo` — binary arithmetic and comparison
   - `boolean.mojo` — logical ops and validity predicates, Kleene semantics
-  - `string.mojo` — string predicates and transforms, incl. LIKE / ILIKE
+  - `string.mojo` — string predicates and transforms, incl. LIKE / ILIKE,
+    and hex / base64 encoding
   - `temporal.mojo` — date/time field extraction and truncation
   - `cast.mojo` — type conversion
   - `conditional.mojo` — coalesce / nullif / case_when / fill_null
@@ -135,6 +136,10 @@ from .string import (
     RStripKernel,
     ReverseKernel,
     CapitalizeKernel,
+    ToHexKernel,
+    FromHexKernel,
+    ToBase64Kernel,
+    FromBase64Kernel,
     ConcatKernel,
     StartsWithKernel,
     EndsWithKernel,

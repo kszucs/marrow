@@ -457,3 +457,109 @@ def test_char_length_string_view() raises:
     var out = CharLengthKernel.dispatch(a^.to_dyn())
     assert_equal(out.as_int64()[0].value(), 5)
     assert_equal(out.as_int64()[1].value(), 26)
+
+
+# --- hex and base64: the edges the golden corpus cannot spell --------------
+
+from std.testing import assert_raises
+
+from ...arrays import BinaryArray
+from ...builders import BinaryBuilder, LargeBinaryBuilder
+from ...dtypes import binary, large_binary, large_string, string
+from ...kernels.string import (
+    FromBase64Kernel,
+    FromHexKernel,
+    ToBase64Kernel,
+    ToHexKernel,
+)
+
+
+def _blob(bytes: List[Byte]) -> StringSlice[origin_of(bytes)]:
+    return StringSlice(unsafe_from_utf8=Span(bytes))
+
+
+def test_to_hex_reads_binary_and_keeps_nulls() raises:
+    var b = BinaryBuilder(capacity=3)
+    var raw: List[Byte] = [0x00, 0xFF, 0x0A]
+    b.append(_blob(raw))
+    b.append_null()
+    b.append("")
+    var out = ToHexKernel.dispatch(b.finish().to_dyn())
+    assert_true(out.dtype() == string)
+    var want = StringBuilder(capacity=3)
+    want.append("00FF0A")
+    want.append_null()
+    want.append("")
+    assert_true(out.as_string() == want.finish())
+
+
+def test_to_hex_of_large_binary_is_large_string() raises:
+    var b = LargeBinaryBuilder(capacity=1)
+    b.append("ab")
+    var out = ToHexKernel.dispatch(b.finish().to_dyn())
+    assert_true(out.dtype() == large_string)
+    assert_equal(out.as_large_string()[0].value(), "6162")
+
+
+def test_from_hex_takes_either_case_and_pads_an_odd_count() raises:
+    """DuckDB reads `'abc'` as `0x0abc`: an odd count is led by a `0`."""
+    var a = StringBuilder(capacity=4)
+    for text in ["00ff", "C3a9", "abc"]:
+        a.append(text)
+    a.append_null()
+    var out = FromHexKernel.dispatch(a.finish().to_dyn())
+    assert_true(out.dtype() == binary)
+    var b = BinaryBuilder(capacity=4)
+    var r0: List[Byte] = [0x00, 0xFF]
+    var r1: List[Byte] = [0xC3, 0xA9]
+    var r2: List[Byte] = [0x0A, 0xBC]
+    b.append(_blob(r0))
+    b.append(_blob(r1))
+    b.append(_blob(r2))
+    b.append_null()
+    var want: BinaryArray = b.finish()
+    assert_true(out.as_binary() == want)
+
+
+def test_from_hex_names_the_row_it_cannot_decode() raises:
+    var a: StringArray = ["00", "0g"]
+    with assert_raises(contains="row 1"):
+        _ = FromHexKernel.dispatch(a^.to_dyn())
+
+
+def test_from_hex_wants_text_not_bytes() raises:
+    var b = BinaryBuilder(capacity=1)
+    b.append("00")
+    with assert_raises(contains="expected a string array"):
+        _ = FromHexKernel.dispatch(b.finish().to_dyn())
+
+
+def test_base64_pads_as_rfc_4648_does() raises:
+    """RFC 4648 section 10's test vectors, and back."""
+    var a: StringArray = ["", "f", "fo", "foo", "foob", "fooba", "foobar"]
+    var out = ToBase64Kernel.dispatch(a^.to_dyn())
+    var want: StringArray = [
+        "",
+        "Zg==",
+        "Zm8=",
+        "Zm9v",
+        "Zm9vYg==",
+        "Zm9vYmE=",
+        "Zm9vYmFy",
+    ]
+    assert_true(out.as_string() == want)
+    var back = FromBase64Kernel.dispatch(out)
+    assert_true(back.dtype() == binary)
+    assert_equal(String(back.as_binary()[6].value()), "foobar")
+
+
+def test_from_base64_rejects_a_truncated_quantum() raises:
+    var a: StringArray = ["Zm9v", "Zm9"]
+    with assert_raises(contains="row 1"):
+        _ = FromBase64Kernel.dispatch(a^.to_dyn())
+
+
+def test_to_hex_string_view() raises:
+    var a: StringViewArray = ["é", "a value longer than twelve"]
+    var out = ToHexKernel.dispatch(a^.to_dyn())
+    assert_equal(out.as_string()[0].value(), "C3A9")
