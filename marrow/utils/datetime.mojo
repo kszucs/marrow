@@ -27,6 +27,8 @@ non-inlined call or a heap allocation here would show up as a per-row cost.
 """
 
 
+from std.utils.fast_div import FastDiv
+
 from morrow import TimeZone
 
 from ..errors import InvalidError, IOError, KeyError
@@ -47,9 +49,34 @@ def floor_div(a: Int, b: Int) -> Int:
 
 
 @always_inline
+def _unsigned_div[
+    W: Int
+](u: SIMD[DType.uint64, W], d: FastDiv[DType.uint64]) -> SIMD[DType.uint64, W]:
+    """Each lane of `u` divided by `d`: a multiply-high and two shifts per
+    lane where `//` is a hardware divide."""
+    comptime U = Scalar[FastDiv[DType.uint64].uint_type]
+    var q = SIMD[DType.uint64, W]()
+    comptime for i in range(W):
+        q[i] = rebind[UInt64](d.__rtruediv__(rebind[U](u[i])))
+    return q
+
+
+@always_inline
+def _floor_div[
+    W: Int
+](x: SIMD[DType.int64, W], d: FastDiv[DType.uint64]) -> SIMD[DType.int64, W]:
+    """`x` floor-divided by `d`, through `d`'s unsigned division: a negative
+    `x` divides as `~x`, which is non-negative, and the quotient flips back.
+    """
+    var sign = x >> 63  # all ones when negative
+    var u = (x ^ sign).cast[DType.uint64]()
+    return _unsigned_div[W](u, d).cast[DType.int64]() ^ sign
+
+
+@always_inline
 def split_days[
     W: Int
-](ticks: SIMD[DType.int64, W], per_day: Int64) -> Tuple[
+](ticks: SIMD[DType.int64, W], per_day: FastDiv[DType.uint64]) -> Tuple[
     SIMD[DType.int64, W], SIMD[DType.int64, W]
 ]:
     """Ticks since the epoch, `per_day` of them to a day, as the day they fall
@@ -58,20 +85,23 @@ def split_days[
     The day is floored, so the time of day is never negative: one second
     before the epoch is 23:59:59 on 1969-12-31.
     """
-    var days = ticks // per_day
-    return (days, ticks - days * per_day)
+    var days = _floor_div[W](ticks, per_day)
+    return (days, ticks - days * per_day._div.cast[DType.int64]())
 
 
 @always_inline
 def truncate_div[
     W: Int
-](ticks: SIMD[DType.int64, W], divisor: Int64) -> SIMD[DType.int64, W]:
+](ticks: SIMD[DType.int64, W], divisor: FastDiv[DType.uint64]) -> SIMD[
+    DType.int64, W
+]:
     """Ticks divided by a positive `divisor`, truncated toward zero, which is
     how Arrow converts a tick to a coarser unit: -1500 ms is -1 s, not -2.
     """
-    var q = ticks // divisor
-    var r = ticks - q * divisor
-    return q + (r.ne(0) & ticks.lt(0)).cast[DType.int64]()
+    var sign = ticks >> 63
+    # The magnitude, unsigned: `Int64.MIN`'s is 2^63, which only fits there.
+    var u = ((ticks ^ sign) - sign).cast[DType.uint64]()
+    return (_unsigned_div[W](u, divisor).cast[DType.int64]() ^ sign) - sign
 
 
 struct Epoch:

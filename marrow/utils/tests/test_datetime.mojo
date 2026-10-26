@@ -17,6 +17,7 @@ against the proleptic Gregorian calendar Arrow C++ and arrow-rs assume.
 from std.testing import assert_equal, assert_false, assert_true
 
 from std.testing import assert_raises
+from std.utils.fast_div import FastDiv
 
 from ..datetime import (
     CalendarUnit,
@@ -370,14 +371,16 @@ def test_iso8601_write_pads_small_years() raises:
 
 def test_split_days_floors_to_the_day() raises:
     var ticks = SIMD[DType.int64, 4](0, 86_399, 86_400, -1)
-    var parts = split_days[4](ticks, 86_400)
+    var parts = split_days[4](ticks, FastDiv[DType.uint64](86_400))
     assert_equal(parts[0], SIMD[DType.int64, 4](0, 0, 1, -1))
     assert_equal(parts[1], SIMD[DType.int64, 4](0, 86_399, 0, 86_399))
 
 
 def test_split_days_in_milliseconds() raises:
     var ticks = SIMD[DType.int64, 2](-86_400_001, 86_400_000 * 3 + 7)
-    var parts = split_days[2](ticks, Epoch.MILLIS_PER_DAY)
+    var parts = split_days[2](
+        ticks, FastDiv[DType.uint64](Epoch.MILLIS_PER_DAY)
+    )
     assert_equal(parts[0], SIMD[DType.int64, 2](-2, 3))
     assert_equal(parts[1], SIMD[DType.int64, 2](86_399_999, 7))
 
@@ -385,7 +388,7 @@ def test_split_days_in_milliseconds() raises:
 def test_truncate_div_rounds_toward_zero() raises:
     var ticks = SIMD[DType.int64, 8](0, 999, 1000, 1500, -1, -999, -1000, -1500)
     assert_equal(
-        truncate_div[8](ticks, 1000),
+        truncate_div[8](ticks, FastDiv[DType.uint64](1000)),
         SIMD[DType.int64, 8](0, 0, 1, 1, 0, 0, -1, -1),
     )
 
@@ -393,6 +396,49 @@ def test_truncate_div_rounds_toward_zero() raises:
 def test_truncate_div_at_the_int64_bounds() raises:
     var ticks = SIMD[DType.int64, 2](Int64.MIN, Int64.MAX)
     assert_equal(
-        truncate_div[2](ticks, 1_000_000_000),
+        truncate_div[2](ticks, FastDiv[DType.uint64](1_000_000_000)),
         SIMD[DType.int64, 2](-9_223_372_036, 9_223_372_036),
     )
+
+
+def test_split_days_and_truncate_div_match_integer_division() raises:
+    """Both divide through `FastDiv`'s unsigned multiply; check them against
+    plain `//` across signs, divisors and the int64 bounds."""
+    var xs: List[Int64] = [
+        Int64.MIN,
+        Int64.MIN + 1,
+        -86_400_000_000_001,
+        -1_000_000_007,
+        -86_400,
+        -1,
+        0,
+        1,
+        86_399,
+        86_400,
+        1_000_000_007,
+        Int64.MAX - 1,
+        Int64.MAX,
+    ]
+    var ds: List[Int] = [
+        1,
+        2,
+        7,
+        60,
+        1000,
+        86_400,
+        3_600_000_000,
+        86_400_000_000_000,
+    ]
+    for d in ds:
+        var fast = FastDiv[DType.uint64](d)
+        for x in xs:
+            var v = SIMD[DType.int64, 1](x)
+            var parts = split_days[1](v, fast)
+            var floor = v // Int64(d)
+            assert_equal(parts[0], floor)
+            assert_equal(parts[1], v - floor * Int64(d))
+            var trunc = (
+                floor
+                + ((v - floor * Int64(d)).ne(0) & v.lt(0)).cast[DType.int64]()
+            )
+            assert_equal(truncate_div[1](v, fast), trunc)

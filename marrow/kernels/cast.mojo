@@ -44,6 +44,7 @@ from std.collections.string._utf8 import _is_valid_utf8
 from std.math import trunc
 from std.memory import bitcast
 from std.sys import bit_width_of
+from std.utils.fast_div import FastDiv
 
 from ..arrays import (
     DynArray,
@@ -1033,11 +1034,14 @@ struct TemporalCastKernel(CastArm):
         var buf = Buffer.alloc_uninit[DstN](length)
         var src = data.buffers[0].view[DType.int64](data.offset, length)
 
+        var day = FastDiv[DType.uint64](Int(per_day))
+        var unit = FastDiv[DType.uint64](Int(div))
+
         @always_inline
         def split[W: Int](x: SIMD[DType.int64, W]) {imm} -> SIMD[DstN, W]:
-            var parts = split_days[W](x, per_day)
+            var parts = split_days[W](x, day)
             var v = parts[1] if time_of_day else parts[0]
-            return truncate_div[W](v * mul, div).cast[DstN]()
+            return truncate_div[W](v * mul, unit).cast[DstN]()
 
         apply[DType.int64, DstN](src, buf.view[DstN](0, length), split, ctx)
         return DynArray.from_data(
@@ -1093,13 +1097,14 @@ struct TemporalCastKernel(CastArm):
                 data, src, buf.view[DstN](0, length), factor, up
             )
         else:
+            var unit = FastDiv[DType.uint64](Int(factor))
 
             @always_inline
             def scale[W: Int](v: SIMD[SrcN, W]) {imm} -> SIMD[DstN, W]:
                 var x = v.cast[DType.int64]()
                 if up:
                     return (x * factor).cast[DstN]()
-                return truncate_div[W](x, factor).cast[DstN]()
+                return truncate_div[W](x, unit).cast[DstN]()
 
             apply[SrcN, DstN](src, buf.view[DstN](0, length), scale, ctx)
         return DynArray.from_data(

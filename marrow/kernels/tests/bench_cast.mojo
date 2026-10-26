@@ -27,6 +27,8 @@ from ...dtypes import (
     timestamp,
     second,
     millisecond,
+    nanosecond,
+    date32,
 )
 from ...kernels.cast import CastKernel, BinaryLikeCastKernel, NumericCastKernel
 from ...utils.testing import Benchmark
@@ -144,6 +146,51 @@ def bench_timestamp_upscale_100k(mut b: Benchmark) raises:
 
 def bench_timestamp_upscale_1m(mut b: Benchmark) raises:
     _bench_timestamp_upscale(b, 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# Temporal — timestamp[ns] → date32 and → timestamp[s] (division by a unit)
+# ---------------------------------------------------------------------------
+
+
+def _nanos(n: Int) raises -> DynArray:
+    """`n` timestamps a second apart, half of them before the epoch."""
+    var secs = CastKernel.dispatch(
+        DynArray(arange[Int64Type](-n // 2, n - n // 2)), timestamp(second)
+    )
+    return CastKernel.dispatch(secs, timestamp(nanosecond))
+
+
+def _bench_timestamp_to_date(mut b: Benchmark, n: Int) raises:
+    var src = _nanos(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(CastKernel.dispatch(src, date32())))
+
+    b.iter(call)
+    keep(src)
+
+
+def bench_timestamp_to_date_1m(mut b: Benchmark) raises:
+    _bench_timestamp_to_date(b, 1_000_000)
+
+
+def _bench_timestamp_downscale(mut b: Benchmark, n: Int) raises:
+    var src = _nanos(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(CastKernel.dispatch(src, timestamp(second), safe=False)))
+
+    b.iter(call)
+    keep(src)
+
+
+def bench_timestamp_downscale_1m(mut b: Benchmark) raises:
+    _bench_timestamp_downscale(b, 1_000_000)
 
 
 # ---------------------------------------------------------------------------
