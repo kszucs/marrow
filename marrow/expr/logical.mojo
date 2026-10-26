@@ -859,9 +859,8 @@ without one, and `NumericParam` raises naming itself when it has neither.
 struct ParamSpec(Copyable, Movable):
     """A parameter a plan declares: what a caller must, or may, bind.
 
-    Holds no `DynScalar`: a `List` of a struct carrying one is the
-    List-of-Variant growth defect CLAUDE.md records, and the default is only
-    ever *shown* here — the node itself applies it.
+    Holds no `DynScalar`: the default is only ever *shown* here — the node
+    itself applies it.
     """
 
     var name: String

@@ -2766,9 +2766,6 @@ struct StructArray(Array):
             )
         if not self.is_valid(index):
             return StructScalar.null(self.dtype.copy())
-        # Pre-allocate to avoid reallocation: when List[DynScalar] grows it
-        # moves existing elements, and Mojo's Variant __moveinit__ resets the
-        # discriminant to 0 (the first type), corrupting already-stored scalars.
         var fields = List[DynScalar](capacity=len(self.children))
         for i in range(len(self.children)):
             fields.append(self.children[i][self.offset + index])

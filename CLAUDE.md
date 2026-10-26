@@ -1277,24 +1277,22 @@ looks obvious. Terse on purpose — the reproductions are in git history.
   path. Cases import from it, never from `golden/helpers.mojo`.
 
 - **A `List` whose element is a `Variant` where the largest member is not the
-  most-aligned member loses every other element when it grows.** Odd indices
-  come back holding the variant's first member, discriminant 0. `size_of`
-  reports 96 while `List` strides 112. Reserving capacity up front avoids it,
-  which places the fault in `List`'s reallocation path. Reproducers in
-  `docs/repros/`; still reproduces on `1.1.0.dev2026090305`.
+  most-aligned member loses every other element when it grows.** `size_of`
+  reports 96 while `List` strides 112, so the moves on reallocation put
+  elements in the wrong slots; reserving capacity up front hides it.
+  Reproducer in `docs/repros/variant_misaligned_list_growth.mojo`; still
+  reproduces on `1.3.0.dev2026102505`.
 
   Both properties are required: a 96/32 variant whose largest member *is* the
-  32-aligned one is fine, and an all-8-aligned variant is fine. In marrow this
-  is **`DynScalar`** (`StructScalar` 72/8, `Decimal256Scalar` 64/32);
-  `DynArray` and `ArrayData` are immune because every member is pointer-backed.
-  `RuntimeValue` is hit only through its `DynScalar` payload, which is why
-  `case_when` and `StructArray.__getitem__` pre-allocate.
+  32-aligned one is fine, and an all-8-aligned variant is fine. Every
+  `ArcMembers` handle is immune — each slot is an 8-byte pointer — which is
+  why `DynScalar` can hold the 16- and 32-aligned decimal scalars. An inline
+  `Members` variant is exposed: `DynSource`/`DynSink` keep every member
+  8-aligned for this reason.
 
   **Not a memory-safety bug**: under ASAN the values are equally wrong with *no*
   diagnostic, and ASAN perturbs it — one shape passes under ASAN and fails
-  without. Ruled out by experiment, do not re-derive: recursion, the explicit
-  `__deinit__`, `IsTriviallyDeinitable`, the `Writable` reflection defaults, and
-  variant member count.
+  without.
 
 - **No struct field's type may name a type whose fields name the struct
   back.** `Driver` held a `def(DynRelation) thin -> Int` while `DynRelation`'s

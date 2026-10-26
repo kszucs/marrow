@@ -959,12 +959,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
         # The SQL function surface's *nullary* half — the functions whose only
         # operand is the column.
         #
-        # Their argument-carrying siblings reach this lane too, and the way
-        # they do is load-bearing: **an argument is a child node, never a
-        # `Payload` member.** `Payload` already holds a `DynScalar`, which
-        # makes it the `Variant` shape that loses every other element of a
-        # `List` when it grows (CLAUDE.md, "Mojo Gotchas"), so an argument
-        # slot there would walk straight into it. A child costs nothing
+        # Their argument-carrying siblings reach this lane too: **an argument
+        # is a child node, never a `Payload` member.** A child costs nothing
         # extra — this lane has carried children since it was written. See
         # `_string_fn` below.
         if self._tag == "char_length":
@@ -1606,15 +1602,6 @@ def case_when(
     if len(conditions) == 0:
         raise InvalidError("case_when: needs at least one condition")
 
-    # Capacity reserved up front, and that is load-bearing rather than tidy:
-    # a `RuntimeValue` carries a `Payload`, and when a `List` holding one grows
-    # it moves its elements -- which resets `Variant`'s discriminant to 0, so
-    # already-stored payloads come back as the variant's *first* member. Five
-    # appends into an unreserved list read back as `int64,null,int64,null,
-    # int64`. Same reason `StructArray.__getitem__` pre-allocates
-    # (`arrays.mojo:1933`), and it is necessary but *not* sufficient here --
-    # a separate temporary-lifetime miscompile corrupts this function's
-    # arguments before it ever runs.
     var kids = List[RuntimeValue](
         capacity=len(conditions) + len(values) + (1 if else_ else 0)
     )

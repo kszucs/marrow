@@ -227,7 +227,7 @@ def test_query_cli_rejects_an_unknown_format_at_parse_time() raises:
 
 def test_query_cli_binds_many_parameters() raises:
     """Twelve bindings grow the `Dict[String, DynScalar]` past its first
-    allocation — the shape the List-of-Variant defect in CLAUDE.md corrupts."""
+    allocation."""
     var names = List[String]()
     var values = List[DynValue]()
     var tokens = List[String]()
