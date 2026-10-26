@@ -58,10 +58,11 @@ The trigger needs BOTH properties; neither alone reproduces:
 
 Rows 1 and 3 have identical size *and* alignment, so neither explains it alone.
 
-In marrow this is `DynScalar`: its largest member `StructScalar` is 72 bytes at
-align 8, while `Decimal128Scalar` (int128) is 48 bytes at align 16 and
-`Decimal256Scalar` (int256) is 64 bytes at align 32. Any decimal scalar with
-alignment above 8 puts `DynScalar` into the broken shape.
+In marrow this was `DynScalar`, whose decimal scalars are aligned 16
+(`Decimal128Scalar`) and 32 (`Decimal256Scalar`). `DynScalar` now holds every
+member behind an `ArcPointer`, so its variant is 8-aligned whatever its members
+are; `test_scalar_list_growth` in `marrow/tests/test_scalars.mojo` guards it.
+Still reproduces on mojo 1.3.0.dev2026102505.
 """
 
 from std.sys.info import align_of, size_of

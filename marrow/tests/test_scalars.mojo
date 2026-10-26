@@ -22,7 +22,11 @@ from ..builders import (
     Int32Builder,
 )
 from ..dtypes import (
+    Decimal128Type,
+    Decimal256Type,
     DynType,
+    decimal128,
+    decimal256,
     fixed_size_list_,
     large_list_,
     list_,
@@ -49,6 +53,8 @@ from ..dtypes import (
     nanosecond,
 )
 from ..scalars import (
+    Decimal128Scalar,
+    Decimal256Scalar,
     DynScalar,
     BoolScalar,
     Int32Scalar,
@@ -204,6 +210,40 @@ def test_scalar_null() raises:
     var typed = Int32Scalar(None)
     var erased: DynScalar = typed^
     assert_true(erased.is_null())
+
+
+def test_scalar_list_growth() raises:
+    # No reserved capacity, so appending reallocates and moves the elements;
+    # the decimals are the scalars aligned above 8 bytes.
+    var dec128 = decimal128(38, 2)
+    var dec256 = decimal256(76, 2)
+    var xs = List[DynScalar]()
+    for i in range(8):
+        xs.append(Int64Scalar(Int64(i)))
+        xs.append(
+            Decimal128Scalar(
+                Optional(Scalar[Decimal128Type.native](i)), dec128.copy()
+            )
+        )
+        xs.append(
+            Decimal256Scalar(
+                Optional(Scalar[Decimal256Type.native](i)), dec256.copy()
+            )
+        )
+    assert_equal(len(xs), 24)
+    for i in range(8):
+        assert_true(xs[3 * i].type() == int64.to_dyn())
+        assert_true(xs[3 * i + 1].type() == dec128.to_dyn())
+        assert_true(xs[3 * i + 2].type() == dec256.to_dyn())
+        assert_equal(xs[3 * i].as_int64().value(), Int64(i))
+        assert_true(
+            xs[3 * i + 1].as_decimal128().value()
+            == Scalar[Decimal128Type.native](i)
+        )
+        assert_true(
+            xs[3 * i + 2].as_decimal256().value()
+            == Scalar[Decimal256Type.native](i)
+        )
 
 
 # ---------------------------------------------------------------------------

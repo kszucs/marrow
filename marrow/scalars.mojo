@@ -16,7 +16,8 @@ Typed scalars:
 
 Type-erased container:
   DynScalar          — wraps any typed scalar via @implicit conversion;
-                       backed by an inline Variant, dispatched at runtime.
+                       backed by a Variant of ArcPointers, dispatched at
+                       runtime.
 
 ArrowScalar trait:
   Common interface implemented by all four typed scalars.
@@ -24,9 +25,6 @@ ArrowScalar trait:
   `Scalar[dtype]` alias — the bare name is ambiguous along the
   `arrays` <-> `dtypes` circular imports.)
 """
-
-from std.collections import Array
-from std.sys.info import Endian, size_of
 
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleToPython
@@ -108,7 +106,6 @@ from .dtypes import (
     null,
     string,
 )
-from .utils.byteorder import LittleEndian
 
 # ---------------------------------------------------------------------------
 # ArrowScalar trait
@@ -242,32 +239,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     comptime NativeScalar = Scalar[Self.T.native]
 
-    # TODO: remove `_Bytes` and store `Self.NativeScalar` directly once the
-    # `Variant` layout bug is fixed upstream. Checklist for whoever does it:
-    #   1. `var _value: Self.NativeScalar`, drop the `as_bytes()`/`LittleEndian`
-    #      round trips in the three constructors, `value()`, `write_to`, and the
-    #      hoisted decode in `repeat()`.
-    #   2. Assert `align_of[DynScalar]() == 8` -- if a scalar's alignment climbs
-    #      above 8 again the bug returns silently, with no compile error.
-    #   3. Run `docs/repros/dynscalar_list_growth.mojo`; it must print
-    #      `int64 int64 int64 int64 int64`.
-    comptime _Bytes = Array[Byte, size_of[Self.NativeScalar]()]
-
-    var _value: Self._Bytes
-    """The value as raw bytes, **deliberately not as `Self.NativeScalar`**.
-
-    A `Scalar[int128]` is 16-byte aligned and a `Scalar[int256]` 32-byte, which
-    would make `DynScalar` -- the `Variant` over every scalar -- more strictly
-    aligned than its largest member (`StructScalar`, 72 bytes, align 8). That
-    shape hits a compiler layout bug: `Variant`'s `size_of` disagrees with its
-    real allocation stride, and a `List` of it silently drops every other
-    element when it grows. Byte storage is align 1, so no scalar raises
-    `DynScalar`'s alignment above 8 and the two layouts agree.
-
-    See `docs/repros/variant_misaligned_list_growth.mojo` for the reproducer and
-    the faulty line in `VariantType::getTypeSize`. Revert this to a plain
-    `Self.NativeScalar` once that is fixed upstream -- and re-check
-    `align_of[DynScalar]()` when you do."""
+    var _value: Self.NativeScalar
     var _dtype: Self.T
     var _is_valid: Bool
 
@@ -276,7 +248,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
     ) where conforms_to(Self.T, Defaultable):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
-        self._value = value.as_bytes[endian=Endian.little]()
+        self._value = value
         self._is_valid = True
 
     def __init__(
@@ -285,18 +257,18 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
         if value:
-            self._value = value.value().as_bytes[endian=Endian.little]()
+            self._value = value.value()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0).as_bytes[endian=Endian.little]()
+            self._value = Self.NativeScalar(0)
             self._is_valid = False
 
     def __init__(out self, value: Optional[Self.NativeScalar], dtype: Self.T):
         if value:
-            self._value = value.value().as_bytes[endian=Endian.little]()
+            self._value = value.value()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0).as_bytes[endian=Endian.little]()
+            self._value = Self.NativeScalar(0)
             self._is_valid = False
         self._dtype = dtype.copy()
 
@@ -308,7 +280,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     def value(self) -> Self.NativeScalar:
         """Get the underlying native value. Undefined if null."""
-        return LittleEndian.fixed[Self.T.native](self._value, 0)
+        return self._value
 
     def to_array(self, length: Int) raises -> DynArray:
         return self.repeat(length).to_dyn()
@@ -317,11 +289,8 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
         """Broadcast this scalar into an array of length `times`."""
         var builder = PrimitiveBuilder[Self.T](self._dtype.copy(), times)
         if self._is_valid:
-            var v = (
-                self.value()
-            )  # hoisted: one byte decode, not `times` of them
             for _ in range(times):
-                builder.unsafe_append(v)
+                builder.unsafe_append(self._value)
         else:
             for _ in range(times):
                 builder.unsafe_append_null()
@@ -329,7 +298,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
-            writer.write(self.value())
+            writer.write(self._value)
         else:
             writer.write("null")
 
@@ -907,6 +876,10 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
     create the divergence this removal is undoing.
     """
 
+    # Boxed, not inline `Members`: the decimal scalars are 16- and 32-aligned,
+    # and a `List` of a variant whose largest member is less aligned than
+    # another drops elements as it grows
+    # (`docs/repros/variant_misaligned_list_growth.mojo`).
     comptime Storage = ArcMembers[
         ArrowScalar,
         NullScalar,
