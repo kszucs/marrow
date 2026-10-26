@@ -91,6 +91,12 @@ struct MappedField(Copyable, Movable):
         self.names = names^
         self.fields = _shared(fields^)
 
+    # Spelled out because `ArcPointer[MappedField]` is `Deinitable` only once
+    # `MappedField` is, which a synthesized destructor cannot establish for its
+    # own field; the fields are still destroyed automatically after the body.
+    def __deinit__(deinit self):
+        pass
+
 
 def _shared(var fields: List[MappedField]) -> List[ArcPointer[MappedField]]:
     var shared = List[ArcPointer[MappedField]](capacity=len(fields))

@@ -28,13 +28,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-MIN_VERSION = "1.2.0"
+MIN_VERSION = "1.3.0"
 MAX_VERSION = "2"
 REQUIRED_RANGE = f">={MIN_VERSION},<{MAX_VERSION}"
 
 # marrow pins this nightly build exactly (see `pixi.toml`); kept as a
 # constant purely so it shows up in one place if the pin moves.
-PINNED_NIGHTLY = "1.2.0.dev2026101905"
+PINNED_NIGHTLY = "1.3.0.dev2026102505"
 
 _NIGHTLY_HELP = (
     "marrow pins a Mojo *nightly* build (currently "
@@ -531,7 +531,7 @@ def resolve_marrow_path(explicit: str | None = None) -> Path:
 def check_mojo_version() -> str:
     """Verify `mojo` is on PATH and within marrow's required range.
 
-    Raises `RuntimeError` naming the required range (`>=1.2.0,<2`), plus —
+    Raises `RuntimeError` naming the required range (`>=1.3.0,<2`), plus —
     since the most likely reason mojo is missing or too old is that only
     PyPI's stable wheel was installed — the nightly-vs-stable limitation and
     where to get the nightly instead of letting an opaque compiler error

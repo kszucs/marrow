@@ -270,6 +270,12 @@ struct RuntimeValue(Evaluable, Movable, Value):
         self._kids = List[ArcPointer[Self]]()
         self._payload = payload^
 
+    # Spelled out because `ArcPointer[Self]` is `Deinitable` only once `Self`
+    # is, which a synthesized destructor cannot establish for its own field;
+    # the fields are still destroyed automatically after the body runs.
+    def __deinit__(deinit self):
+        pass
+
     def __init__(out self, var tag: String, a: Self):
         self._tag = tag^
         self._kids = [ArcPointer(a.copy())]

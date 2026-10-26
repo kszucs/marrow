@@ -30,7 +30,6 @@ from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
 from max.algorithm.functional import elementwise
 from max.algorithm.reduction import _reduce_generator
-from std.utils.index import IndexList
 from std.utils.coord import Coord
 from max.gpu.host import get_gpu_target
 
@@ -2457,11 +2456,13 @@ def apply[
 
 def _reduce_dispatch[
     T: DType,
-    input_fn: def[W: Int, rank: Int](IndexList[rank]) capturing[_] -> SIMD[
-        T, W
-    ],
+    Input: (def[W: Int](Int) -> SIMD[T, W])
+    & RegisterPassable
+    & ImplicitlyCopyable,
     combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
-](length: Int, identity: Scalar[T], ctx: ExecContext) raises -> Scalar[T]:
+](
+    length: Int, input_fn: Input, identity: Scalar[T], ctx: ExecContext
+) raises -> Scalar[T]:
     """Dispatch a scalar reduction to GPU or CPU (serial / parallel) based on
     ``ctx``.
 
@@ -2489,24 +2490,10 @@ def _reduce_dispatch[
             and T != DType.float16
             and T != DType.bool
         ):
-
-            @always_inline
-            @__parameter
-            def combine_capturing[
-                W: SIMDLength
-            ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-                return combine[Int(W)](a, b)
-
             var dev_buf = Buffer.alloc_device[T](ctx.device.value(), 1)
             var dev_view = dev_buf.device_view[T]()
-
-            @always_inline
-            @__copy_capture(dev_view)
-            @__parameter
-            def output_fn_gpu[
-                W: SIMDLength, rank: Int
-            ](idx: IndexList[rank], val: SIMD[T, W]):
-                dev_view.store[1](0, val[0])
+            # Captured by value, never `imm`: see `_gpu_launch`.
+            var device_input = input_fn
 
             # The three dtype-generic shims below are what
             # `_reduce_generator_wrapper` used to do for us: `_reduce_generator`
@@ -2516,39 +2503,33 @@ def _reduce_dispatch[
             # inside `modular`, and did not look outside it.
 
             @always_inline
-            @__parameter
             def input_refined[
                 _dtype: DType, W: Int
-            ](coord: Coord) -> SIMD[_dtype, W]:
-                return input_fn[W, 1](
-                    IndexList[1](Int(coord[0].value()))
-                )._refine[_dtype]()
+            ](coord: Coord) {var device_input} -> SIMD[_dtype, W]:
+                return device_input[W](Int(coord[0].value()))._refine[_dtype]()
 
             @always_inline
-            @__parameter
             def output_refined[
                 _dtype: DType, W: SIMDLength
-            ](coord: Coord, val: SIMD[_dtype, W]):
-                output_fn_gpu[W, 1](
-                    IndexList[1](Int(coord[0].value())), val._refine[T]()
-                )
+            ](coord: Coord, val: SIMD[_dtype, W]) {var dev_view}:
+                dev_view.store[1](0, val._refine[T]()[0])
 
             @always_inline
-            @__parameter
             def combine_refined[
                 ty: DType, W: SIMDLength
             ](a: SIMD[ty, W], b: SIMD[ty, W]) -> SIMD[ty, W]:
-                return combine_capturing[W](
-                    a._refine[T](), b._refine[T]()
-                )._refine[ty]()
+                return combine[Int(W)](a._refine[T](), b._refine[T]())._refine[
+                    ty
+                ]()
 
-            _reduce_generator[
+            _reduce_generator[target="gpu", reduce_dim=0](
+                Coord(length),
+                identity,
                 input_refined,
                 output_refined,
                 combine_refined,
-                target="gpu",
-                reduce_dim=0,
-            ](Coord(length), identity, ctx.device.value())
+                ctx.device.value(),
+            )
             return (
                 dev_buf.to_immutable()
                 .to_cpu(ctx.device.value())
@@ -2570,11 +2551,13 @@ def _reduce_dispatch[
     )
 
     @always_inline
-    def fold(start: Int, end: Int, identity: Scalar[T]) -> Scalar[T]:
+    def fold(
+        start: Int, end: Int, identity: Scalar[T]
+    ) {imm input_fn} -> Scalar[T]:
         var wide = SIMD[T, width](identity)
         var i = start
         while i + width <= end:
-            wide = combine[width](wide, input_fn[width, 1](IndexList[1](i)))
+            wide = combine[width](wide, input_fn[width](i))
             i += width
         var simd_acc = wide.slice[cpu_width]()
         comptime for r in range(1, width // cpu_width):
@@ -2582,15 +2565,13 @@ def _reduce_dispatch[
                 simd_acc, wide.slice[cpu_width, offset=r * cpu_width]()
             )
         while i + cpu_width <= end:
-            simd_acc = combine[cpu_width](
-                simd_acc, input_fn[cpu_width, 1](IndexList[1](i))
-            )
+            simd_acc = combine[cpu_width](simd_acc, input_fn[cpu_width](i))
             i += cpu_width
         var acc = identity
         comptime for k in range(cpu_width):
             acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
         while i < end:
-            acc = combine[1](acc, input_fn[1, 1](IndexList[1](i)))
+            acc = combine[1](acc, input_fn[1](i))
             i += 1
         return acc
 
@@ -2609,7 +2590,7 @@ def _reduce_dispatch[
         @always_inline
         def stripe(
             wid: Int, start: Int, end: Int
-        ) {imm identity, imm partials_view}:
+        ) {imm identity, imm partials_view, imm fold}:
             partials_view.store[1](wid, fold(start, end, identity))
 
         ctx.stripe(length, stripe, align=width)
@@ -2645,12 +2626,11 @@ def reduce[
     """
 
     @always_inline
-    @__parameter
-    def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[Acc, W]:
-        return src.load[W](idx[0]).cast[Acc]()
+    def input_fn[W: Int](i: Int) {var src} -> SIMD[Acc, W]:
+        return src.load[W](i).cast[Acc]()
 
-    return _reduce_dispatch[Acc, input_fn, combine[Acc, _]](
-        len(src), identity, ctx
+    return _reduce_dispatch[Acc, combine=combine[Acc, _]](
+        len(src), input_fn, identity, ctx
     )
 
 
@@ -2670,15 +2650,15 @@ def reduce[
     when ``Acc == In``, the default)."""
 
     @always_inline
-    @__parameter
-    def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[Acc, W]:
-        var i = idx[0]
+    def input_fn[
+        W: Int
+    ](i: Int) {var src, var bitmap, var identity} -> SIMD[Acc, W]:
         return bitmap.load[W](i).select(
             src.load[W](i).cast[Acc](), SIMD[Acc, W](identity)
         )
 
-    return _reduce_dispatch[Acc, input_fn, combine[Acc, _]](
-        len(src), identity, ctx
+    return _reduce_dispatch[Acc, combine=combine[Acc, _]](
+        len(src), input_fn, identity, ctx
     )
 
 

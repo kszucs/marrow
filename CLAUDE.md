@@ -22,7 +22,7 @@ upgrade, https://docs.modular.com/mojo/changelog/.
 
 Dependencies (pinned in `pixi.toml`):
 
-- `mojo >=1.2.0.dev2026101905,<2` and `max ==26.7.0.dev2026101905` — MAX is
+- `mojo >=1.3.0.dev2026102505,<2` and `max ==26.8.0.dev2026102505` — MAX is
   pinned to the matching version line and is **load-bearing**: GPU codegen
   resolves `max.package_root`, and `std.gpu` went private as `std._gpu` in the
   `dev2026090305` nightly, so `max.gpu` is the only public source.
@@ -245,7 +245,6 @@ capture list**, sitting after the effects and before the return arrow:
 `def call() raises {imm}:`, `def call() {mut builder, imm}:`. `{imm}` borrows
 every free outer name immutably, which is what a read-only benchmark body
 wants; a body that *mutates* outer state must name it (`{mut builder, imm}`).
-Never reach for `@__parameter` to avoid writing the list.
 
 **`keep(data)` after `b.iter(call)` is mandatory for non-trivial captures.**
 ASAP destruction can free a captured value after the closure is registered and
@@ -1416,8 +1415,8 @@ looks obvious. Terse on purpose — the reproductions are in git history.
 
 Use **unified** closures — a value with an explicit capture list
 (`def body(i: Int) raises {mut out, imm} -> None`), passed as an argument.
-`@__parameter` / `capturing[_]` is the legacy comptime-parameter form; the two
-do not convert, so an API and its call sites flip together.
+They are the only form: the legacy `@__parameter` / `capturing` closures are
+gone, and a function passed as a comptime parameter must be `thin`.
 
 Two project-specific traps, neither of which produces a diagnostic:
 
