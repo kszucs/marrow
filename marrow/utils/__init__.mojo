@@ -19,7 +19,6 @@ harness.
 | `dylib` | `LibSet`, `LibSpec`, `Dylib` — declaring and opening an optional C library |
 | `enum` | `Enum`, `EnumVariant`, `Members` / `ArcMembers` / `OwnedMembers` — the storage behind every erased handle |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `XxHash32`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `SwissHashTable` — 64-bit hash to dense id |
-| `hex` | `hex_digit` — one hexadecimal digit's value |
 | `hll` | `HyperLogLog` — approximate distinct counts over 64-bit hashes |
 | `integers` | `Unsigned`, `zigzag` / `unzigzag`, `ordered` / `unordered` — integer bit tricks |
 | `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
@@ -61,7 +60,6 @@ from .dylib import Dylib, LibSpec
 from .segment_tree import Monoid, SegmentTree
 from .hll import HyperLogLog
 from .text import LikePattern, RegexPattern, Utf8
-from .hex import hex_digit
 from .hashing import (
     Hasher,
     Fmix64,

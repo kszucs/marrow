@@ -239,6 +239,16 @@ def test_io_uri_percent_decode_is_bytes_not_codepoints() raises:
     assert_equal(len(got.as_bytes()), len("café.parquet".as_bytes()))
 
 
+def test_io_uri_percent_decode_takes_lower_case_and_keeps_bad_escapes() raises:
+    """A lower-case escape decodes like an upper-case one; an escape that is
+    not two hex digits, or is cut short at the end, stays as written."""
+    assert_equal(Uri.parse("s3://b/caf%c3%a9.parquet").path, "café.parquet")
+    assert_equal(Uri.parse("s3://b/100%zz.parquet").path, "100%zz.parquet")
+    assert_equal(Uri.parse("s3://b/%-1.parquet").path, "%-1.parquet")
+    assert_equal(Uri.parse("s3://b/x%é.parquet").path, "x%é.parquet")
+    assert_equal(Uri.parse("s3://b/x%4").path, "x%4")
+
+
 def test_io_uri_hf_at_in_a_filename_is_not_a_revision() raises:
     """Only the repo-name segment can carry `@`.
 

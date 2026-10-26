@@ -32,6 +32,7 @@ part in the cross-implementation integration suite with no other Arrow library
 in the path.
 """
 
+from std.base64 import b16decode
 from emberjson import Document, DocValue, from_json
 
 from .arrays import ArrayData, BoolArray, DictionaryArray, DynArray
@@ -86,7 +87,6 @@ from .dtypes import (
     year_month_interval,
 )
 from .errors import CorruptError, DynError, InvalidError, NotImplementedError
-from .utils.hex import hex_digit
 from .io import BufferSource
 from .schema import Schema
 from .tabular import RecordBatch
@@ -209,14 +209,14 @@ struct _Node[o: ImmOrigin](TrivialRegisterPassable):
         """Write this string, decoded, into `buf` from byte `at`."""
         var text = self.value.string_slice().as_bytes()
         if hex:
-            for i in range(len(text) // 2):
-                var hi = hex_digit(text[2 * i])
-                var lo = hex_digit(text[2 * i + 1])
-                if hi < 0 or lo < 0:
-                    raise CorruptError(
-                        t"integration json: byte {i} of a hex value is not hex"
-                    )
-                buf.unsafe_set[DType.uint8](at + i, UInt8(hi * 16 + lo))
+            # Upper-cased first: archery writes upper case, but a reader also
+            # takes lower, and base16 is upper only.
+            try:
+                var raw = b16decode(self.value.string_slice().upper())
+                for i in range(len(raw)):
+                    buf.unsafe_set[DType.uint8](at + i, raw[i])
+            except e:
+                raise CorruptError(t"integration json: {e}")
         else:
             for i in range(len(text)):
                 buf.unsafe_set[DType.uint8](at + i, text[i])

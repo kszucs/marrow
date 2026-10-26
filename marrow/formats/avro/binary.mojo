@@ -15,11 +15,11 @@ little-endian counts -- are read by `AvroCursor` and written by `AvroBytes`
 side by side, so the two directions cannot drift apart.
 """
 
+from std.base64 import b16decode
 from std.memory import bitcast
 from std.sys import size_of
 
 from ...errors import CorruptError, InvalidError
-from ...utils import hex_digit
 from ...utils.byteorder import BigEndian, Leb128, LittleEndian
 
 
@@ -134,26 +134,24 @@ struct AvroCursor[origin: ImmOrigin](Movable):
         """The 16 bytes an RFC 4122 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
         `string` spells."""
         var text = self.bytes()
-        var out = Array[UInt8, 16](fill=0)
         var ok = len(text) == 36
-        var j = 0
-        var i = 0
-        while ok and i < 36:
-            if i == 8 or i == 13 or i == 18 or i == 23:
-                ok = text[i] == UInt8(ord("-"))
-                i += 1
-                continue
-            var hi = hex_digit(text[i])
-            var lo = hex_digit(text[i + 1])
-            ok = hi >= 0 and lo >= 0
-            out[j] = UInt8(hi * 16 + lo)
-            j += 1
-            i += 2
-        if not ok:
-            raise CorruptError(
-                t"avro: invalid uuid '{StringSlice(unsafe_from_utf8=text)}'"
-            )
-        return out^
+        for i in range(len(text)):
+            var dash = i == 8 or i == 13 or i == 18 or i == 23
+            ok = ok and text[i] < 0x80 and (text[i] == UInt8(ord("-"))) == dash
+        if ok:
+            # Upper-cased first: RFC 4122 writes lower case, base16 upper.
+            var digits = StringSlice(unsafe_from_utf8=text).replace("-", "")
+            try:
+                var raw = b16decode(digits.upper())
+                var out = Array[UInt8, 16](fill=0)
+                for j in range(16):
+                    out[j] = raw[j]
+                return out^
+            except:
+                pass
+        raise CorruptError(
+            t"avro: invalid uuid '{StringSlice(unsafe_from_utf8=text)}'"
+        )
 
     def duration(mut self) raises CorruptError -> Scalar[DType.int128]:
         """A duration -- three little-endian `uint32`s: months, days,

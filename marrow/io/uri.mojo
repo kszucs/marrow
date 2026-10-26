@@ -12,10 +12,10 @@ resolve to the local, zero-copy `BufferSource` / `FileSink`; nothing about them
 touches OpenDAL, which is what lets marrow work with no `libopendal_c` present.
 """
 
+from std.base64 import b16decode
 from std.collections.string import Codepoint
 from std.os import getenv
 from ..errors import DynError, InvalidError, NotImplementedError
-from ..utils.hex import hex_digit
 
 
 struct Uri(Copyable, Movable, Writable):
@@ -219,10 +219,21 @@ def _percent_decode(s: StringSlice) raises DynError -> String:
         # encodes as two UTF-8 bytes, so decoding `%C3%A9` through it yields
         # four bytes of mojibake instead of the two that spell "é" -- and the
         # read goes to a different object, or nowhere.
-        var hi = hex_digit(b[i + 1]) if i + 2 < len(b) else -1
-        var lo = hex_digit(b[i + 2]) if i + 2 < len(b) else -1
-        if b[i] == UInt8(ord("%")) and hi >= 0 and lo >= 0:
-            out.append(UInt8(hi * 16 + lo))
+        var escaped = False
+        if (
+            b[i] == UInt8(ord("%"))
+            and i + 2 < len(b)
+            and b[i + 1] < 0x80
+            and b[i + 2] < 0x80
+        ):
+            # Upper-cased first: `%c3` is as valid as `%C3`, base16 is not.
+            var pair = String(StringSlice(unsafe_from_utf8=b[i + 1 : i + 3]))
+            try:
+                out.append(b16decode(pair.upper())[0])
+                escaped = True
+            except:
+                pass
+        if escaped:
             i += 3
         else:
             out.append(b[i])
