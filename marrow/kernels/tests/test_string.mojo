@@ -586,10 +586,3 @@ def test_utf8_window_scans() raises:
     assert_true(Utf8.is_valid(mixed.values.view[DType.uint8](0, 202)))
     # The window cut inside "é" leaves a truncated sequence.
     assert_false(Utf8.is_valid(mixed.values.view[DType.uint8](0, 101)))
-
-
-def test_utf8_is_valid_span() raises:
-    assert_true(Utf8.is_valid(String("héllo").as_bytes()))
-    var lone = List[Byte]()
-    lone.append(0xC3)
-    assert_false(Utf8.is_valid(Span(lone)))

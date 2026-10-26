@@ -377,6 +377,9 @@ trait Enum(Movable):
     constructor (`self._storage = copy._storage.copy()`).
     """
 
+    # Mojo 1.2 added `match` / `case .Name(x)` over types conforming to
+    # `std.builtin.EnumLike`. `Variant` does not conform yet; once it (or
+    # `EnumVariant`) can, the visits below could become pattern matches.
     comptime Storage: EnumStorage
 
     def storage(ref self) -> ref[self] Self.Storage:

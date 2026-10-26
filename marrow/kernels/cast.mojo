@@ -40,6 +40,7 @@ arm did not accept. ``CastArm``'s docstring has the detail.
 """
 
 from std.collections.string import atol, atof, StringSlice
+from std.collections.string._utf8 import _is_valid_utf8
 from std.math import trunc
 from std.memory import bitcast
 from std.sys import bit_width_of
@@ -1599,7 +1600,7 @@ struct BinaryLikeCastKernel(CastArm):
             return
 
         for i in range(len(array)):
-            if array.is_valid(i) and not Utf8.is_valid(
+            if array.is_valid(i) and not _is_valid_utf8(
                 array.unsafe_get(UInt(i)).as_bytes()
             ):
                 raise InvalidError(
@@ -1988,7 +1989,7 @@ struct ViewCastKernel(CastArm):
     def _check_utf8[A: BytesArray](array: A) raises:
         """Reject an array holding invalid UTF-8 in any non-null element."""
         for i in range(len(array)):
-            if array.is_valid(i) and not Utf8.is_valid(
+            if array.is_valid(i) and not _is_valid_utf8(
                 array.unsafe_get(UInt(i)).as_bytes()
             ):
                 raise InvalidError(

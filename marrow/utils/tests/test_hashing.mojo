@@ -17,13 +17,11 @@ from std.testing import assert_equal, assert_true, assert_false, assert_raises
 
 from std.bit import pop_count
 
-from std.hash._ahash import AHasher
 
 from ...compress import Codecs
 from ..hashing import (
     mul_fold,
     mul_wide,
-    AHash64,
     Hasher,
     RapidHash64,
     RapidSecret,
@@ -495,13 +493,6 @@ def test_rapidhash64_span_agrees_with_lane_path() raises:
 # ---------------------------------------------------------------------------
 
 
-def _std_ahash(data: Span[UInt8, _]) -> UInt64:
-    """`std.hash`'s aHash of `data`, as the oracle for `AHash64.hash`."""
-    var h = AHasher[SIMD[DType.uint64, 4](0)]()
-    h.update(data)
-    return h.finish()
-
-
 def _le_bytes(value: UInt64, width: Int) -> List[UInt8]:
     var out = List[UInt8]()
     for i in range(width):
@@ -619,36 +610,8 @@ def test_combine_lanes_default_is_shared() raises:
     assert_true(r[0] != a[0])
 
 
-def test_ahash64_matches_the_standard_library() raises:
-    """`AHash64.hash` delegates, so it must equal `std.hash.hash` of the same
-    bytes — there is no second aHash implementation here to drift."""
-    for n in [0, 1, 3, 8, 17, 64]:
-        var d = _iota_span(n)
-        assert_equal(AHash64.hash(Span(d)), _std_ahash(Span(d)))
-
-
-def test_ahash64_lanes_agree_with_hash() raises:
-    """The lane form reproduces aHash's short-input path, so it must agree with
-    the delegated span hash for the same bytes."""
-    for v in [UInt64(0), UInt64(1), UInt64(0x12345678), UInt64(0xFEEDFACE)]:
-        var b8 = _le_bytes(v, 8)
-        assert_equal(
-            AHash64.hash_lanes[8, 1](SIMD[DType.uint64, 1](v))[0],
-            AHash64.hash(Span(b8)),
-        )
-
-
-def test_ahash64_lanes_are_independent() raises:
-    var v = SIMD[DType.uint64, 4](0, 1, 0xDEAD, ~UInt64(0))
-    var wide = AHash64.hash_lanes[8, 4](v)
-    for i in range(4):
-        assert_equal(
-            wide[i], AHash64.hash_lanes[8, 1](SIMD[DType.uint64, 1](v[i]))[0]
-        )
-
-
-def test_three_hashers_are_distinct_and_reachable() raises:
-    """All three conform, and they are genuinely different functions."""
+def test_hashers_are_distinct_and_reachable() raises:
+    """Both conform, and they are genuinely different functions."""
 
     def digest[H: Hasher](data: Span[UInt8, _]) -> UInt64:
         return H.hash(data)
@@ -656,11 +619,7 @@ def test_three_hashers_are_distinct_and_reachable() raises:
     var abc = _bytes("abc")
     var r = digest[RapidHash64](Span(abc))
     var x = digest[XxHash64](Span(abc))
-    var a = digest[AHash64](Span(abc))
     assert_true(r != x)
-    assert_true(r != a)
-    assert_true(x != a)
-    assert_equal(AHash64.name, StaticString("ahash64"))
 
 
 # ---------------------------------------------------------------------------

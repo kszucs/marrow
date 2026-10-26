@@ -57,7 +57,7 @@ from .core import Kernel
 from ..views import apply
 from ..execution import ExecContext
 from ..errors import TypeError
-from ..utils import LikePattern, Utf8
+from ..utils import LikePattern
 
 
 # ---------------------------------------------------------------------------
@@ -851,7 +851,7 @@ struct SubstrKernel(Kernel):
     def transform[
         o: Origin[mut=False]
     ](s: StringSlice[o], start: Int, count: Int) -> String:
-        var bounds = Utf8.bounds(s)
+        var bounds = _char_bounds(s)
         var chars = len(bounds) - 1
         var first = start - 1  # 0-based, may be negative
         var last = first + count  # exclusive
@@ -863,7 +863,7 @@ struct SubstrKernel(Kernel):
             first = chars
         if last > chars:
             last = chars
-        return Utf8.slice(s, bounds[first], bounds[last])
+        return String(s[byte = bounds[first] : bounds[last]])
 
     @staticmethod
     def apply[
@@ -913,14 +913,14 @@ struct LeftKernel(StringIntKernel):
     def transform[
         o: Origin[mut=False]
     ](s: StringSlice[o], count: Int) -> String:
-        var bounds = Utf8.bounds(s)
+        var bounds = _char_bounds(s)
         var chars = len(bounds) - 1
         var take = count if count >= 0 else chars + count
         if take < 0:
             take = 0
         if take > chars:
             take = chars
-        return Utf8.slice(s, bounds[0], bounds[take])
+        return String(s[byte = : bounds[take]])
 
 
 struct RightKernel(StringIntKernel):
@@ -936,14 +936,14 @@ struct RightKernel(StringIntKernel):
     def transform[
         o: Origin[mut=False]
     ](s: StringSlice[o], count: Int) -> String:
-        var bounds = Utf8.bounds(s)
+        var bounds = _char_bounds(s)
         var chars = len(bounds) - 1
         var skip = chars - count if count >= 0 else -count
         if skip < 0:
             skip = 0
         if skip > chars:
             skip = chars
-        return Utf8.slice(s, bounds[skip], bounds[chars])
+        return String(s[byte = bounds[skip] :])
 
 
 struct RepeatKernel(StringIntKernel):
@@ -987,8 +987,7 @@ struct Pad[left: Bool](Kernel):
     def transform[
         o: Origin[mut=False]
     ](s: StringSlice[o], width: Int, fill: StringSlice) -> String:
-        var bounds = Utf8.bounds(s)
-        var chars = len(bounds) - 1
+        var chars = s.count_codepoints()
         var w = width
         if w < 0:
             w = 0
@@ -996,16 +995,17 @@ struct Pad[left: Bool](Kernel):
             # Truncation keeps the *first* `width` characters whichever end the
             # padding would have gone on — `rpad` does not truncate from the
             # left.
-            return Utf8.slice(s, bounds[0], bounds[w])
-        var fb = Utf8.bounds(fill)
-        var fchars = len(fb) - 1
-        if fchars == 0:
+            return String(s[byte = : _char_bounds(s)[w]])
+        if not fill:
             return String(s)  # nothing to pad with
         var pad = String()
         var k = 0
         while k < w - chars:
-            pad += Utf8.slice(fill, fb[k % fchars], fb[k % fchars + 1])
-            k += 1
+            for c in fill.codepoint_slices():
+                if k == w - chars:
+                    break
+                pad += c
+                k += 1
         comptime if Self.left:
             return pad + String(s)
         else:
@@ -1064,21 +1064,9 @@ struct ReplaceKernel(StringTextTextKernel):
     def transform[
         o: Origin[mut=False]
     ](s: StringSlice[o], needle: StringSlice, repl: StringSlice) -> String:
-        var m = len(needle.as_bytes())
-        if m == 0:
+        if not needle:
             return String(s)
-        var out = String()
-        var n = len(s.as_bytes())
-        var i = 0
-        while i <= n:
-            var j = Utf8.find(s, needle, i)
-            if j < 0:
-                break
-            out += Utf8.slice(s, i, j)
-            out += repl
-            i = j + m
-        out += Utf8.slice(s, i, n)
-        return out^
+        return s.replace(needle, repl)
 
     @staticmethod
     def apply[
@@ -1141,13 +1129,13 @@ struct SplitPartKernel(StringTextIntKernel):
         var start = 0
         var part = 1
         while part < index:
-            var j = Utf8.find(s, sep, start)
+            var j = s.find(sep, start)
             if j < 0:
                 return String()  # fewer fields than asked for
             start = j + m
             part += 1
-        var j = Utf8.find(s, sep, start)
-        return Utf8.slice(s, start, j if j >= 0 else n)
+        var j = s.find(sep, start)
+        return String(s[byte = start : j if j >= 0 else n])
 
     @staticmethod
     def apply[
@@ -1198,17 +1186,7 @@ struct TrimCharsKernel(Kernel):
     def transform[
         o: Origin[mut=False]
     ](s: StringSlice[o], text: StringSlice) -> String:
-        var bounds = Utf8.bounds(s)
-        var chars = len(bounds) - 1
-        var lo = 0
-        while lo < chars and Utf8.charset_has(
-            text, s, bounds[lo], bounds[lo + 1]
-        ):
-            lo += 1
-        var hi = chars
-        while hi > lo and Utf8.charset_has(text, s, bounds[hi - 1], bounds[hi]):
-            hi -= 1
-        return Utf8.slice(s, bounds[lo], bounds[hi])
+        return String(s.strip(text))
 
     @staticmethod
     def apply[
@@ -1245,6 +1223,18 @@ struct TrimCharsKernel(Kernel):
 # are the SQL spellings and SQL's `length` / `position` / `ascii` are `BIGINT`.
 # A null input measures null — never 0, which is the answer for the *empty*
 # string and a different fact. These read the view layout directly.
+
+
+def _char_bounds(s: StringSlice) -> List[Int]:
+    """Byte offset of each code point in `s`, terminated by its byte length:
+    `c + 1` entries for `c` characters, so a character index reads a byte
+    offset."""
+    var out: List[Int] = [0]
+    var at = 0
+    for c in s.codepoint_slices():
+        at += c.byte_length()
+        out.append(at)
+    return out^
 
 
 def _measured(
@@ -1322,7 +1312,7 @@ struct CharLengthKernel(StringToIntKernel):
 
     @staticmethod
     def measure[o: Origin[mut=False]](s: StringSlice[o]) -> Int64:
-        return Int64(Utf8.count(s))
+        return Int64(s.count_codepoints())
 
 
 struct AsciiKernel(StringToIntKernel):
@@ -1338,28 +1328,9 @@ struct AsciiKernel(StringToIntKernel):
 
     @staticmethod
     def measure[o: Origin[mut=False]](s: StringSlice[o]) -> Int64:
-        var bytes = s.as_bytes()
-        var n = len(bytes)
-        if n == 0:
-            return Int64(0)
-        var w = Utf8.width(bytes[0])
-        if w == 1 or n < w:
-            return Int64(Int(bytes[0]))
-        elif w == 2:
-            return Int64(((Int(bytes[0]) & 0x1F) << 6) | (Int(bytes[1]) & 0x3F))
-        elif w == 3:
-            return Int64(
-                ((Int(bytes[0]) & 0x0F) << 12)
-                | ((Int(bytes[1]) & 0x3F) << 6)
-                | (Int(bytes[2]) & 0x3F)
-            )
-        else:
-            return Int64(
-                ((Int(bytes[0]) & 0x07) << 18)
-                | ((Int(bytes[1]) & 0x3F) << 12)
-                | ((Int(bytes[2]) & 0x3F) << 6)
-                | (Int(bytes[3]) & 0x3F)
-            )
+        for c in s.codepoints():
+            return Int64(c.to_u32())
+        return Int64(0)
 
 
 struct PositionKernel(Kernel):
@@ -1368,8 +1339,8 @@ struct PositionKernel(Kernel):
 
     Zero rather than null is what makes the result an index into a 1-based
     world; a 0-based engine cannot reuse the convention. An empty needle is
-    found at position 1, which follows from `Utf8.find` matching it at the
-    cursor. A *null* needle is a different matter and answers null.
+    found at position 1, which follows from `find` matching it at the
+    start. A *null* needle is a different matter and answers null.
     """
 
     comptime name = "position"
@@ -1378,15 +1349,11 @@ struct PositionKernel(Kernel):
     def measure[
         o: Origin[mut=False]
     ](s: StringSlice[o], needle: StringSlice) -> Int64:
-        var at = Utf8.find(s, needle, 0)
+        var at = s.find(needle)
         if at < 0:
             return Int64(0)
         # Byte offset -> 1-based character index.
-        var bounds = Utf8.bounds(s)
-        for k in range(len(bounds) - 1):
-            if bounds[k] == at:
-                return Int64(k + 1)
-        return Int64(len(bounds))
+        return Int64(s[byte=:at].count_codepoints() + 1)
 
     @staticmethod
     def apply[

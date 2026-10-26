@@ -1,7 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Text over UTF-8 bytes: code points (`Utf8`), SQL `LIKE` patterns
+"""Text over UTF-8 bytes: column-wide scans (`Utf8`), SQL `LIKE` patterns
 (`LikePattern`) and regular expressions (`RegexPattern`, DuckDB's semantics).
 
 `RegexPattern` is the one place that talks to the engine, `mojo-regex` (the
@@ -13,7 +13,10 @@ overall match, and capture groups come from the NFA's
 group above 0 and a `\\N` replacement reach the second path.
 """
 
-from std.collections.string._utf8 import _is_valid_utf8
+from std.collections.string._utf8 import (
+    _is_valid_utf8,
+    _utf8_first_byte_sequence_length,
+)
 from std.sys import simd_width_of
 
 from regex.matcher import CompiledRegex, Match
@@ -45,92 +48,11 @@ comptime _BSL = UInt8(0x5C)  # '\'
 
 
 struct Utf8:
-    """Code points over UTF-8 bytes: what a SQL string function counts in,
-    where a byte length counts bytes.
-
-    `bounds` is the primitive the rest are built on: the byte offset of every
-    code point start plus the end offset, so a string of `c` characters yields
-    `c + 1` entries, and a character answer is an index into it.
+    """Whole-buffer UTF-8 scans over a column's value bytes: whether every
+    element of a string column is ASCII, and whether all of them are valid,
+    without visiting elements one at a time. A single string is a
+    `StringSlice`, and its code points come from the standard library.
     """
-
-    @staticmethod
-    @always_inline
-    def width(lead: UInt8) -> Int:
-        """Byte width of the UTF-8 sequence starting at this lead byte."""
-        if lead < 0x80:
-            return 1
-        elif lead < 0xE0:
-            return 2
-        elif lead < 0xF0:
-            return 3
-        else:
-            return 4
-
-    @staticmethod
-    def bounds(s: StringSlice) -> List[Int]:
-        """Byte offset of each code point in `s`, terminated by `len(s)`."""
-        var bytes = s.as_bytes()
-        var n = len(bytes)
-        var out = List[Int]()
-        var i = 0
-        while i < n:
-            out.append(i)
-            i += Self.width(bytes[i])
-        out.append(n)
-        return out^
-
-    @staticmethod
-    def count(s: StringSlice) -> Int:
-        """Number of UTF-8 code points in `s` — SQL's `length`."""
-        var bytes = s.as_bytes()
-        var n = 0
-        var i = 0
-        while i < len(bytes):
-            i += Self.width(bytes[i])
-            n += 1
-        return n
-
-    @staticmethod
-    def slice(s: StringSlice, start: Int, end: Int) -> String:
-        """Bytes `[start, end)` of `s`, copied into a fresh `String`.
-
-        Both ends are assumed to sit on code point boundaries; every caller
-        derives them from `bounds`, so a multi-byte character is never split.
-        """
-        if end <= start:
-            return String()
-        return String(from_utf8_lossy=s.as_bytes()[start:end])
-
-    @staticmethod
-    def find(s: StringSlice, needle: StringSlice, var from_byte: Int) -> Int:
-        """Byte index of the first `needle` at or after `from_byte`, or -1.
-
-        The naive O(n*m) scan. `LikePattern` has the optimised shapes for the
-        pattern case; the literal searches here run once per row over short
-        strings and a smarter algorithm would be unverified complexity for no
-        measured win.
-
-        An **empty needle matches at `from_byte`**, which is what makes
-        `position('' IN 'abc')` answer 1 rather than 0 — the SQL convention,
-        and the trap a "found at index -1" implementation falls into.
-        """
-        var hay = s.as_bytes()
-        var pat = needle.as_bytes()
-        var n = len(hay)
-        var m = len(pat)
-        if from_byte < 0:
-            from_byte = 0
-        if m == 0:
-            return from_byte if from_byte <= n else -1
-        var i = from_byte
-        while i + m <= n:
-            var j = 0
-            while j < m and hay[i + j] == pat[j]:
-                j += 1
-            if j == m:
-                return i
-            i += 1
-        return -1
 
     @staticmethod
     def is_ascii(window: BufferView[DType.uint8, _]) -> Bool:
@@ -222,42 +144,10 @@ struct Utf8:
                         i += W
                     else:
                         i = n
-                if not Self.is_valid(window[start:i].as_span()):
+                if not _is_valid_utf8(window[start:i].as_span()):
                     return False
 
         return True
-
-    @staticmethod
-    def is_valid(bytes: Span[Byte, _]) -> Bool:
-        """Whether `bytes` is well-formed UTF-8."""
-        return _is_valid_utf8(bytes)
-
-    @staticmethod
-    def charset_has(chars: StringSlice, s: StringSlice, a: Int, b: Int) -> Bool:
-        """Is the code point occupying bytes `[a, b)` of `s` a member of
-        `chars`?
-
-        A *set* of characters, not a substring — `trim('  Ab  ', ' Ab')` strips
-        each of the three independently and answers the empty string. Comparing
-        whole code points rather than bytes is what keeps a multi-byte member
-        from matching half of a multi-byte character.
-        """
-        var cb = chars.as_bytes()
-        var sb = s.as_bytes()
-        var w = b - a
-        var i = 0
-        while i < len(cb):
-            var cw = Self.width(cb[i])
-            if cw == w and i + cw <= len(cb):
-                var same = True
-                for k in range(w):
-                    if cb[i + k] != sb[a + k]:
-                        same = False
-                        break
-                if same:
-                    return True
-            i += cw
-        return False
 
 
 # How one ILIKE row must be case-folded, decided by a single byte scan. Unicode
@@ -322,7 +212,10 @@ struct LikePattern[ignore_case: Bool](Copyable, Movable):
                 # '\' escapes the next character; a trailing '\' is dropped.
                 if i + 1 < n:
                     # A truncated sequence keeps the bytes it has.
-                    var w = min(Utf8.width(bytes[i + 1]), n - i - 1)
+                    var w = min(
+                        _utf8_first_byte_sequence_length(bytes[i + 1]),
+                        n - i - 1,
+                    )
                     for k in range(i + 1, i + 1 + w):
                         self.tokens.append(Int(bytes[k]))
                         literal.append(bytes[k])
@@ -343,7 +236,7 @@ struct LikePattern[ignore_case: Bool](Copyable, Movable):
                 self.tokens.append(_LIKE_ONE)
                 i += 1
             else:
-                var w = min(Utf8.width(b), n - i)
+                var w = min(_utf8_first_byte_sequence_length(b), n - i)
                 for k in range(i, i + w):
                     self.tokens.append(Int(bytes[k]))
                     literal.append(bytes[k])
@@ -434,7 +327,7 @@ struct LikePattern[ignore_case: Bool](Copyable, Movable):
                 i += 1
                 j += 1
             elif j < m and self.tokens[j] == _LIKE_ONE:
-                i += Utf8.width(bytes[i])
+                i += _utf8_first_byte_sequence_length(bytes[i])
                 j += 1
             elif j < m and self.tokens[j] == _LIKE_ANY:
                 star_j = j
@@ -443,7 +336,7 @@ struct LikePattern[ignore_case: Bool](Copyable, Movable):
             elif star_j != -1:
                 # backtrack: let the last '%' absorb one more character
                 j = star_j + 1
-                star_i += Utf8.width(bytes[star_i])
+                star_i += _utf8_first_byte_sequence_length(bytes[star_i])
                 i = star_i
             else:
                 return False

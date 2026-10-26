@@ -35,7 +35,7 @@ from ...dtypes import (
     Int64Type,
 )
 from ...kernels.hashing import HashKernel, RapidHashKernel
-from ...utils import AHash64, Hasher, RapidHash64, XxHash64
+from ...utils import Hasher, RapidHash64, XxHash64
 from ...utils.testing import Benchmark
 
 
@@ -222,14 +222,14 @@ def bench_rapidhash_bool_1m(mut b: Benchmark) raises:
 
 
 # ---------------------------------------------------------------------------
-# The three hashes, same kernel, same data
+# The hashes, same kernel, same data
 #
 # `HashKernel[H]` resolves `H` at comptime, so each of these is the code a
 # hand-written kernel for that one algorithm would generate — the comparison is
 # between the *algorithms*, not between a specialised and a generic path.
 #
 # int64 is the numeric lane path (`H.hash_lanes`); string is the variable-length
-# path (`H.hash`), which is scalar per element for all three.
+# path (`H.hash`), which is scalar per element for each.
 # ---------------------------------------------------------------------------
 
 
@@ -279,10 +279,6 @@ def bench_cmp_lanes_xxhash_100k(mut b: Benchmark) raises:
     _bench_lanes[XxHash64](b, 100_000)
 
 
-def bench_cmp_lanes_ahash_100k(mut b: Benchmark) raises:
-    _bench_lanes[AHash64](b, 100_000)
-
-
 # --- variable-length strings, 100k x 16 bytes (rapidhash's <= 16 branch) ---
 
 
@@ -294,10 +290,6 @@ def bench_cmp_str16_xxhash_100k(mut b: Benchmark) raises:
     _bench_strings[XxHash64](b, 100_000, 16)
 
 
-def bench_cmp_str16_ahash_100k(mut b: Benchmark) raises:
-    _bench_strings[AHash64](b, 100_000, 16)
-
-
 # --- longer strings, 100k x 64 bytes (past every short-input fast path) ---
 
 
@@ -307,7 +299,3 @@ def bench_cmp_str64_rapidhash_100k(mut b: Benchmark) raises:
 
 def bench_cmp_str64_xxhash_100k(mut b: Benchmark) raises:
     _bench_strings[XxHash64](b, 100_000, 64)
-
-
-def bench_cmp_str64_ahash_100k(mut b: Benchmark) raises:
-    _bench_strings[AHash64](b, 100_000, 64)

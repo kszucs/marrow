@@ -15,7 +15,7 @@ context -- so it can be read, tested and lifted out on its own:
 | `byteorder` | `LittleEndian`, `BigEndian`, `Leb128` — values as bytes and as varints |
 | `checksum` | `Crc32` / `Crc32c` — the ISO-3309 / zlib / gzip CRC and CRC-32C, over one `Crc` |
 | `hex` | `hex_digit` — one hexadecimal digit's value |
-| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32`; `SwissHashTable` — 64-bit hash to dense id |
+| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `XxHash32`; `SwissHashTable` — 64-bit hash to dense id |
 | `dylib` | `Dylib`, `LibSpec` — declaring and opening an optional C library |
 | `uri` | `Uri`, `StorageOptions` — a location and the service config it implies |
 | `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
@@ -74,7 +74,6 @@ from .hll import HyperLogLog
 from .text import LikePattern, RegexPattern, Utf8
 from .hex import hex_digit
 from .hashing import (
-    AHash64,
     Hasher,
     Fmix64,
     KeyHash,

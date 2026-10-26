@@ -45,32 +45,24 @@ Two ABI contracts are easy to get wrong and neither shows up in a test:
   `opendal_bytes_free` on one is heap corruption. Nothing in the struct
   distinguishes the two.
 - **A Mojo value whose address crosses the boundary must be kept alive past the
-  call.** `CString.ptr()` hands back an untracked-origin pointer the compiler
-  cannot tie to its owner, so it destroys the buffer at the last *tracked* use
-  -- which is the `ptr()` call, not the FFI call. Every borrowing scope here
-  ends with `_ = name^`, and a caller that builds a `List[UInt8]` and passes
-  `Span(list)` to `write` in the same function needs one too.
+  call.** A string goes in as `as_c_string_span()`, whose origin ties it to the
+  owning `String`, so the string outlives the call. A raw pointer carries no
+  such tie: a caller that builds a `List[UInt8]` and passes `Span(list)` to
+  `write` in the same function must keep the list alive with `_ = name^`.
 
 A NULL or malformed `path` **panics inside Rust**, and a panic across
-`extern "C"` aborts the process -- no Mojo `Error`, nothing catchable. `CString`
-therefore has no null state and rejects an embedded NUL.
+`extern "C"` aborts the process -- no Mojo `Error`, nothing catchable. `_c_arg`
+therefore rejects an embedded NUL before a string reaches C.
 """
 
-from std.ffi import _DLHandle
+from std.ffi import CStringSpan, _DLHandle
 from std.memory import ArcPointer
 from std.sys import size_of
 
 from ..errors import IOError, InvalidError
 from ..buffers import Buffer, bulk_copy
 from ..execution import ExecContext
-from ..utils.dylib import (
-    CStr,
-    CString,
-    LibSet,
-    LibSpec,
-    c_bytes,
-    c_string,
-)
+from ..utils.dylib import CStr, LibSet, LibSpec, c_bytes
 from .core import ByteSink, ByteSource, Fetched, require_range
 
 
@@ -89,6 +81,21 @@ comptime BytePtr = Optional[Pointer[UInt8, MutUntrackedOrigin]]
 """`uint8_t *`, where `None` models NULL. A zero-length `opendal_bytes` must
 carry a NULL `data`; the C ABI rejects an empty buffer pointing anywhere else.
 """
+
+
+def _c_arg(s: StringSlice) raises InvalidError -> String:
+    """`s` as an owned string to pass as `as_c_string_span()`.
+
+    An embedded NUL is rejected rather than passed on: C would stop at it, so
+    the callee would silently act on a shorter string than the caller wrote --
+    a wrong path, a wrong key -- and succeed.
+    """
+    if s.find("\0") >= 0:
+        raise InvalidError(
+            t"ffi: string contains a NUL byte, which C would treat as its end:"
+            t" '{s}'"
+        )
+    return String(s)
 
 
 @fieldwise_init
@@ -147,7 +154,13 @@ struct CError(RegisterPassable):
         var msg = String()
         var data = e[].message.data
         if data is not None:
-            msg = c_string(data.value(), Int(e[].message.len))
+            msg = String(
+                StringSlice(
+                    unsafe_from_utf8=Span(
+                        unsafe_ptr=data.value(), length=Int(e[].message.len)
+                    )
+                )
+            )
         var name = Self._name(e[].code)
         lib.call["opendal_error_free"](e)
         raise IOError(t"opendal: {name}: {msg}")
@@ -313,28 +326,25 @@ struct OpenDalStore(Movable):
         # the one entry point every use of the binding passes through.
         Self._assert_abi_layout()
         var lib = OpenDal.handle()
-        # Every `CString` is built *before* `options_new`, because `CString`
+        # Every argument is checked *before* `options_new`, because `_c_arg`
         # raises on an embedded NUL and a raise between the new and the free
         # leaks the Rust-side options map. Same ordering rule as
         # `_read_range_raw`, for the same reason.
-        var cscheme = CString(scheme)
-        var keys = List[CString]()
-        var values = List[CString]()
+        var cscheme = _c_arg(scheme)
+        var keys = List[String]()
+        var values = List[String]()
         for entry in options.items():
-            keys.append(CString(entry.key))
-            values.append(CString(entry.value))
+            keys.append(_c_arg(entry.key))
+            values.append(_c_arg(entry.value))
 
         var opts = lib.call["opendal_operator_options_new", Opaque]()
         for i in range(len(keys)):
             lib.call["opendal_operator_options_set"](
-                opts, keys[i].ptr(), values[i].ptr()
+                opts, keys[i].as_c_string_span(), values[i].as_c_string_span()
             )
         var res = lib.call["opendal_operator_new", CResultHandle](
-            cscheme.ptr(), opts
+            cscheme.as_c_string_span(), opts
         )
-        _ = keys^
-        _ = values^
-        _ = cscheme^
         lib.call["opendal_operator_options_free"](opts)
         # Before the raise: the options are ours on both paths.
         CError.raise_if(lib, res.error)
@@ -343,19 +353,9 @@ struct OpenDalStore(Movable):
     def _call_path[
         name: StaticString, R: RegisterPassable
     ](self, lib: _DLHandle, path: StringSlice) raises -> R:
-        """Call an `(operator, path)` entry point with the path kept alive.
-
-        The `_ = cpath^` is the whole reason this exists. `CString.ptr()` hands
-        back an untracked-origin pointer the compiler cannot tie to its owner,
-        so without it the buffer is destroyed at the `ptr()` call rather than
-        after the FFI call -- and OpenDAL would read a freed path, or a
-        truncated one, and quietly address the wrong object. Written once so it
-        cannot be forgotten at one of five call sites.
-        """
-        var cpath = CString(path)
-        var res = lib.call[name, R](self._op, cpath.ptr())
-        _ = cpath^
-        return res^
+        """Call an `(operator, path)` entry point."""
+        var cpath = _c_arg(path)
+        return lib.call[name, R](self._op, cpath.as_c_string_span())
 
     def content_length(self, path: StringSlice) raises -> Int:
         """The object's size in bytes.
@@ -393,15 +393,14 @@ struct OpenDalStore(Movable):
         than one being written in terms of the other -- writing the buffer-
         filling form on top of the allocating form is what made it copy twice.
         """
-        var cpath = CString(path)
+        var cpath = _c_arg(path)
         var opts = lib.call["opendal_read_options_new", Opaque]()
         lib.call["opendal_read_options_set_range"](
             opts, UInt64(offset), UInt64(length)
         )
         var res = lib.call["opendal_operator_read_with", CResultRead](
-            self._op, cpath.ptr(), opts
+            self._op, cpath.as_c_string_span(), opts
         )
-        _ = cpath^
         # Before the raise: the options are ours on both paths.
         lib.call["opendal_read_options_free"](opts)
         CError.raise_if(lib, res.error)
@@ -476,7 +475,7 @@ struct OpenDalStore(Movable):
         must not free them, and the caller must keep them alive across it.
         """
         var lib = OpenDal.handle()
-        var cpath = CString(path)
+        var cpath = _c_arg(path)
         var n = len(data)
         # An empty write must carry a NULL pointer; the C ABI rejects a
         # zero-length buffer that points anywhere else.
@@ -488,9 +487,8 @@ struct OpenDalStore(Movable):
                 UInt(n),
             )
         var err = lib.call["opendal_operator_write", ErrorPtr](
-            self._op, cpath.ptr(), Pointer(to=cb)
+            self._op, cpath.as_c_string_span(), Pointer(to=cb)
         )
-        _ = cpath^
         CError.raise_if(lib, err)
 
     def list(
@@ -503,13 +501,12 @@ struct OpenDalStore(Movable):
         below `path` is listed rather than its immediate children.
         """
         var lib = OpenDal.handle()
-        var cpath = CString(path)
+        var cpath = _c_arg(path)
         var opts = lib.call["opendal_list_options_new", Opaque]()
         lib.call["opendal_list_options_set_recursive"](opts, recursive)
         var res = lib.call["opendal_operator_list_with", CResultHandle](
-            self._op, cpath.ptr(), opts
+            self._op, cpath.as_c_string_span(), opts
         )
-        _ = cpath^
         # Before the raise: the options are ours on both paths.
         lib.call["opendal_list_options_free"](opts)
         CError.raise_if(lib, res.error)
@@ -525,7 +522,15 @@ struct OpenDalStore(Movable):
                 break
             var entry = next.entry.value()
             var cpath_out = lib.call["opendal_entry_path", CStr](entry)
-            out.append(c_string(cpath_out))
+            out.append(
+                String(
+                    StringSlice(
+                        unsafe_from_utf8=CStringSpan(
+                            unsafe_from_ptr=cpath_out.as_imm()
+                        )
+                    )
+                )
+            )
             lib.call["opendal_string_free"](cpath_out)
             lib.call["opendal_entry_free"](entry)
         lib.call["opendal_lister_free"](res.handle)

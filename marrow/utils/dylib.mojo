@@ -32,7 +32,7 @@ from std.os import getenv
 from std.os.path import dirname
 from std.pathlib import Path
 from std.sys import argv
-from ..errors import IOError, InvalidError
+from ..errors import IOError
 
 
 def _exe_dir() -> String:
@@ -336,51 +336,12 @@ comptime CStr = Pointer[c_char, MutUntrackedOrigin]
 """A NUL-terminated `const char *` handed to a C ABI."""
 
 
-struct CString(Movable):
-    """Owns a NUL-terminated copy of a string for the duration of a C call.
-
-    For the common case: the callee reads the string and is done with it before
-    returning, so the buffer only has to outlive the call -- but it **must**.
-    `ptr()` hands back an untracked-origin pointer the compiler cannot tie to
-    this value, so it would otherwise be destroyed at the `ptr()` call itself
-    rather than after the FFI call. Every borrowing scope therefore ends with
-    `_ = name^`.
-
-    Use `alloc_c_string` instead when the callee *keeps* the pointer.
-
-    An embedded NUL is rejected rather than passed on: C would stop at it, so
-    the callee would silently act on a shorter string than the caller wrote --
-    a wrong path, a wrong key -- and succeed.
-    """
-
-    var _buf: List[UInt8]
-
-    def __init__(out self, s: StringSlice) raises:
-        var b = s.as_bytes()
-        for i in range(len(b)):
-            if b[i] == 0:
-                raise InvalidError(
-                    t"ffi: string contains a NUL byte, which C would treat as "
-                    t"its end: '{s}'"
-                )
-        self._buf = List[UInt8](b)
-        self._buf.append(0)
-
-    def ptr(mut self) -> CStr:
-        return (
-            self._buf.unsafe_ptr()
-            .unsafe_bitcast[c_char]()
-            .unsafe_origin_cast[MutUntrackedOrigin]()
-        )
-
-
 def alloc_c_string(s: String) -> CStr:
     """A heap-allocated NUL-terminated copy. **The caller owns it** and must
     free it.
 
-    The counterpart to `CString` for the case where the callee keeps the
-    pointer -- an Arrow `CArrowSchema.format`, say, which lives until its
-    release callback runs. `String.unsafe_ptr()` cannot be handed over
+    For the case where the callee keeps the pointer -- an Arrow
+    `CArrowSchema.format`, say, which lives until its release callback runs. `String.unsafe_ptr()` cannot be handed over
     directly: it is not guaranteed NUL-terminated, because small-string
     storage leaves the bytes past `len(s)` uninitialised.
     """
@@ -404,23 +365,3 @@ def c_bytes(ptr: Pointer[UInt8, MutUntrackedOrigin], n: Int) -> List[UInt8]:
     var out = List[UInt8](unsafe_uninit_length=n)
     unsafe_memcpy(dest=out.unsafe_ptr(), src=ptr, count=n)
     return out^
-
-
-def c_string(ptr: CStr) -> String:
-    """Copy a NUL-terminated C string into an owned `String`. Non-validating,
-    for the same reason as the counted overload below."""
-    var n = 0
-    while ptr[unsafe_offset=n] != 0:
-        n += 1
-    return c_string(ptr.unsafe_bitcast[UInt8](), n)
-
-
-def c_string(ptr: Pointer[UInt8, MutUntrackedOrigin], n: Int) -> String:
-    """Copy `n` bytes out of a C buffer into an owned `String`.
-
-    Non-validating: a C library's error message is not guaranteed UTF-8, and
-    translating an error must not itself raise.
-    """
-    if n <= 0:
-        return String()
-    return String(StringSlice(unsafe_from_utf8=Span(unsafe_ptr=ptr, length=n)))

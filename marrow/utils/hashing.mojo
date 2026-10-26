@@ -68,7 +68,6 @@ from std.bit import (
     pop_count,
     rotate_bits_left,
 )
-from std.hash._ahash import AHasher
 from std.memory import pack_bits
 from std.sys import get_defined_int, size_of
 from std.sys.info import is_gpu
@@ -746,90 +745,6 @@ struct XxHash32:
         h *= Self._P3
         h ^= h >> 16
         return h
-
-
-struct AHash64(Hasher):
-    """AHash — the third selectable algorithm, and the one marrow does not
-    implement itself.
-
-    `hash` delegates to `std.hash`'s `AHasher`, so the digest is the standard
-    library's, bit for bit; there is no second implementation of aHash here to
-    drift. `hash_lanes` is marrow's, because std cannot express it: its `Hasher`
-    folds a whole SIMD vector into one accumulator, and `finish` consumes the
-    hasher, so a per-row digest would need one hasher instance per lane.
-
-    The lane form reproduces aHash's own short-input path — `buffer` seeded from
-    the pi-derived key, one `_large_update`, then `finish`'s folded multiply and
-    rotate — which the tests pin against `std.hash.hash` of the same bytes.
-
-    aHash is **not** a drop-in for the other two where digests are persisted: it
-    is explicitly a hash-table hash, not a checksum, and the standard library
-    makes no stability guarantee across versions. Parquet bloom filters must
-    stay on `XxHash64`, which the spec mandates.
-    """
-
-    comptime name = StaticString("ahash64")
-
-    # aHash's pi-derived default key, and the two mixing constants.
-    comptime _BUFFER = UInt64(0x243F6A8885A308D3)
-    comptime _PAD = UInt64(0x13198A2E03707344)
-    comptime _XKEY0 = UInt64(0xA4093822299F31D0)
-    comptime _XKEY1 = UInt64(0x082EFA98EC4E6C89)
-    comptime _MULTIPLE = UInt64(6364136223846793005)
-    comptime _ROT = 23
-
-    @staticmethod
-    def hash(data: Span[UInt8, _], seed: UInt64 = 0) -> UInt64:
-        """Delegates to `std.hash`, so this is exactly the standard
-        library's aHash."""
-        var hasher = AHasher[SIMD[DType.uint64, 4](0)]()
-        hasher.update(data)
-        var h = hasher.finish()
-        return h if seed == 0 else h ^ seed
-
-    @staticmethod
-    @always_inline
-    def hash_lanes[
-        byte_width: Int, W: Int
-    ](values: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
-        """AHash of `byte_width` little-endian bytes per lane."""
-        comptime assert byte_width <= 8, "hash_lanes covers widths up to 8"
-        var buffer = SIMD[DType.uint64, W](
-            (Self._BUFFER + UInt64(byte_width)) * Self._MULTIPLE
-        )
-
-        # `_read_small`, specialised: for 4-8 bytes aHash reads the leading and
-        # trailing u32; both are the same value once the lane holds it whole.
-        var a: SIMD[DType.uint64, W]
-        var b: SIMD[DType.uint64, W]
-        comptime if byte_width >= 4:
-            a = values & SIMD[DType.uint64, W](0xFFFFFFFF)
-            b = values >> UInt64((byte_width - 4) * 8)
-            b &= SIMD[DType.uint64, W](0xFFFFFFFF)
-        elif byte_width >= 2:
-            a = values & SIMD[DType.uint64, W](0xFFFF)
-            b = (values >> UInt64((byte_width - 1) * 8)) & SIMD[
-                DType.uint64, W
-            ](0xFF)
-        elif byte_width == 1:
-            a = values & SIMD[DType.uint64, W](0xFF)
-            b = a
-        else:
-            a = SIMD[DType.uint64, W](0)
-            b = SIMD[DType.uint64, W](0)
-
-        var combined = mul_fold[W](
-            a ^ SIMD[DType.uint64, W](Self._XKEY0),
-            b ^ SIMD[DType.uint64, W](Self._XKEY1),
-        )
-        buffer = (buffer + SIMD[DType.uint64, W](Self._PAD)) ^ combined
-        buffer = rotate_bits_left[Self._ROT](buffer)
-
-        var rot = buffer & SIMD[DType.uint64, W](63)
-        var folded = mul_fold[W](buffer, SIMD[DType.uint64, W](Self._PAD))
-        return (folded << rot) | (
-            folded >> ((SIMD[DType.uint64, W](64) - rot) & 63)
-        )
 
 
 struct Fmix64(Hasher):
