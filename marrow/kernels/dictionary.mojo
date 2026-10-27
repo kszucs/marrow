@@ -315,12 +315,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             types.append(column.dtype())
         var n = len(columns[0]) if len(columns) > 0 else 0
         return StructArray(
-            dtype=Self._struct_of(types),
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            children=columns^,
+            dtype=Self._struct_of(types), length=n, children=columns^
         )
 
     @staticmethod
@@ -375,11 +370,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
             for j in range(len(created)):
                 all.unsafe_set[int32.native](len(firsts) + j, created[j])
             firsts = Int32Array(
-                length=len(firsts) + len(created),
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=all^.to_immutable(),
+                length=len(firsts) + len(created), buffer=all^.to_immutable()
             )
         return Placement(
             ids=Self._replaced(codes, wrong, right), firsts=firsts^
@@ -526,20 +517,8 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
                 local.unsafe_set[int32.native](p, Int32(code - starts[c]))
                 at.unsafe_set[int32.native](p, rows.unsafe_get(i))
                 position.unsafe_set[int32.native](p, Int32(i))
-        var local_codes = Int32Array(
-            length=total,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=local^.to_immutable(),
-        )
-        var at_rows = Int32Array(
-            length=total,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=at^.to_immutable(),
-        )
+        var local_codes = Int32Array(length=total, buffer=local^.to_immutable())
+        var at_rows = Int32Array(length=total, buffer=at^.to_immutable())
         for c in range(num_chunks):
             var first = run_start[c]
             var m = run_start[c + 1] - first
@@ -641,9 +620,7 @@ struct DictionaryEncoder[Hash: Hasher = KeyHash](Movable, Sized):
         buf.extend(codes.values(), 0, n)
         for j in range(len(rows)):
             buf.unsafe_set[int32.native](Int(rows.unsafe_get(j)), right[j])
-        return Int32Array(
-            length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
-        )
+        return Int32Array(length=n, buffer=buf^.to_immutable())
 
     def _code_of(self, keys: StructArray, row: Int, h: UInt64) raises -> Int:
         """The code whose key is the one at ``row``, among every code ``h``
@@ -711,9 +688,7 @@ struct _UsedEntries(Movable):
             buf.unsafe_set[int32.native](
                 j, self._first_row[Int(positions.unsafe_get(j))]
             )
-        return Int32Array(
-            length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
-        )
+        return Int32Array(length=n, buffer=buf^.to_immutable())
 
     def codes_of_rows(self, entry_codes: Int32Array) raises -> Int32Array:
         """Every row's code, from its entry's."""
@@ -725,6 +700,4 @@ struct _UsedEntries(Movable):
                 self._slot[Int(self._indices.unsafe_get(i))]
             ) if self._indices.is_valid(i) else self._null_slot
             out.store[1](i, entry_codes.unsafe_get(s))
-        return Int32Array(
-            length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
-        )
+        return Int32Array(length=n, buffer=buf^.to_immutable())

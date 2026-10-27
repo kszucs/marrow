@@ -204,9 +204,6 @@ def test_hash_struct_two_fields() raises:
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
         ),
         length=4,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=_children(a, b),
     )
     var h = RapidHashKernel.apply(sa)
@@ -228,9 +225,6 @@ def test_hash_struct_single_field() raises:
     var sa = StructArray(
         dtype=struct_(Field("a", arr.dtype().copy())),
         length=3,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=_children1(arr),
     )
     var h2 = RapidHashKernel.apply(sa)
@@ -248,9 +242,6 @@ def test_hash_dispatch_struct() raises:
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
         ),
         length=3,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=_children(a, b),
     )
     var h = RapidHashKernel.apply(sa)

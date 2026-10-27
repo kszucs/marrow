@@ -50,12 +50,7 @@ def concat(
         for ref f in schema.fields:
             columns.append(array(f.dtype))
         return StructArray(
-            dtype=struct_(schema.fields.copy()),
-            length=0,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            children=columns^,
+            dtype=struct_(schema.fields.copy()), length=0, children=columns^
         )
     var total = 0
     for ref b in batches:
@@ -221,12 +216,7 @@ def _concat_parallel(
                 children.append(DynBuilder.concat(parts))
         return Optional[DynArray](
             StructArray(
-                dtype=first.dtype.copy(),
-                length=total,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                children=children^,
+                dtype=first.dtype.copy(), length=total, children=children^
             ).to_dyn()
         )
     # Numeric only: every type covered is an arm of its own in every binary

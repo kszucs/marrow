@@ -59,13 +59,7 @@ struct IsInKernel(Kernel):
         var n = len(values)
         var found = Bitmap.alloc_uninit(n)
         apply[int32.native, has_code](codes.values(), found.view())
-        return BoolArray(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=found^.to_immutable(),
-        )
+        return BoolArray(length=n, buffer=found^.to_immutable())
 
     @staticmethod
     def apply[

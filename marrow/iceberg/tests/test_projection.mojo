@@ -198,9 +198,6 @@ def test_iceberg_projection_list_of_evolved_struct() raises:
     var l: DynArray = ListArray(
         dtype=ListType(file_element^).to_dyn(),
         length=3,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         offsets=offsets.buffer,
         values=values^,
     )
@@ -240,9 +237,6 @@ def test_iceberg_projection_map_of_evolved_struct() raises:
     var m: DynArray = MapArray(
         dtype=file_map.copy().to_dyn(),
         length=2,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         offsets=offsets.buffer,
         values=entries^,
     )

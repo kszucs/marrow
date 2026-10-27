@@ -1291,13 +1291,7 @@ struct ResidualJoinOperator(Operator):
         ref rows = probe.as_int32()
         for k in range(len(rows)):
             keep[Int(rows.unsafe_get(k))] = not self._anti
-        var mask = BoolArray(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=keep^.to_immutable(length=n),
-        )
+        var mask = BoolArray(length=n, buffer=keep^.to_immutable(length=n))
         var out = (
             FilterKernel.dispatch(batch.copy().to_dyn(), mask, self._ctx)
             .as_struct()
@@ -1407,12 +1401,7 @@ def _struct_of(
     boundary (`Driver.collect` out).
     """
     return StructArray(
-        dtype=struct_(schema.fields.copy()),
-        length=length,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        children=columns^,
+        dtype=struct_(schema.fields.copy()), length=length, children=columns^
     )
 
 
@@ -1455,9 +1444,6 @@ def compact_to_admitted(
     var rows = len(column)
     var keep = BoolArray(
         length=rows,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         buffer=admitted_bits(predicate.push(morsel).value().to_array(rows)),
     )
     if not groups.is_single():

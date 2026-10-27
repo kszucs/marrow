@@ -386,9 +386,6 @@ struct RecordBatch(
         return StructArray(
             dtype=struct_(self.schema.fields.copy()),
             length=self.num_rows(),
-            nulls=0,
-            offset=0,
-            bitmap=None,
             children=cols^,
         )
 

@@ -37,14 +37,7 @@ def _batch(var children: List[DynArray]) raises -> StructArray:
     var fields = List[Field]()
     for i in range(len(children)):
         fields.append(field(String("c", i), children[i].dtype()))
-    return StructArray(
-        dtype=struct_(fields^),
-        length=_ROWS,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        children=children^,
-    )
+    return StructArray(dtype=struct_(fields^), length=_ROWS, children=children^)
 
 
 def _assert_parallel_matches_serial(whole: StructArray) raises:

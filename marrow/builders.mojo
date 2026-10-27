@@ -2508,14 +2508,7 @@ def arange[T: NumericType](start: Int, end: Int) raises -> PrimitiveArray[T]:
     var out = buf.view[T.native](0, n)
     for i in range(n):
         out.store[1](i, Scalar[T.native](start + i))
-    return PrimitiveArray[T](
-        dtype=T(),
-        length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=buf^.to_immutable(),
-    )
+    return PrimitiveArray[T](dtype=T(), length=n, buffer=buf^.to_immutable())
 
 
 def array(dtype: DynType) raises -> DynArray:

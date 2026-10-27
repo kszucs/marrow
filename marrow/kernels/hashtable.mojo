@@ -74,20 +74,8 @@ def insert_hashes(
         firsts.view[int32.native](0, n),
     )
     return Placement(
-        ids=Int32Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=ids^.to_immutable(),
-        ),
-        firsts=Int32Array(
-            length=created,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=firsts^.to_immutable(),
-        ),
+        ids=Int32Array(length=n, buffer=ids^.to_immutable()),
+        firsts=Int32Array(length=created, buffer=firsts^.to_immutable()),
     )
 
 
@@ -98,9 +86,7 @@ def find_hashes(
     var n = len(hashes)
     var ids = Buffer.alloc_uninit[int32.native](max(n, 1))
     table.find_all(hashes.values(), ids.view[int32.native](0, n))
-    return Int32Array(
-        length=n, nulls=0, offset=0, bitmap=None, buffer=ids^.to_immutable()
-    )
+    return Int32Array(length=n, buffer=ids^.to_immutable())
 
 
 def hashes_of(table: SwissHashTable) raises -> UInt64Array:
@@ -108,9 +94,7 @@ def hashes_of(table: SwissHashTable) raises -> UInt64Array:
     var n = len(table)
     var buf = Buffer.alloc_uninit[DType.uint64](max(n, 1))
     buf.extend(table.hash_view(), 0, n)
-    return UInt64Array(
-        length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
-    )
+    return UInt64Array(length=n, buffer=buf^.to_immutable())
 
 
 # ---------------------------------------------------------------------------
@@ -325,13 +309,7 @@ struct HashIndex(Movable, Sized):
         var table = SwissHashTable(capacity=_SAMPLE_ROWS)
         _ = insert_hashes(
             table,
-            UInt64Array(
-                length=_SAMPLE_ROWS,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=sample^.to_immutable(),
-            ),
+            UInt64Array(length=_SAMPLE_ROWS, buffer=sample^.to_immutable()),
         )
         return len(table)
 
@@ -415,9 +393,7 @@ struct HashIndex(Movable, Sized):
                 )
 
         ctx.run(len(routed), scatter)
-        return Int32Array(
-            length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
-        )
+        return Int32Array(length=n, buffer=buf^.to_immutable())
 
     def _find_in_place(self, hashes: UInt64Array) raises -> Int32Array:
         """``find`` on the calling thread, each hash looked up in its own
@@ -444,9 +420,7 @@ struct HashIndex(Movable, Sized):
             ids.unsafe_set[int32.native](
                 i, Int32(-1) if local < 0 else self._local_to_global[p][local]
             )
-        return Int32Array(
-            length=n, nulls=0, offset=0, bitmap=None, buffer=ids^.to_immutable()
-        )
+        return Int32Array(length=n, buffer=ids^.to_immutable())
 
     # --- one hash, the caller's equality ------------------------------------
 
@@ -599,11 +573,7 @@ struct HashIndex(Movable, Sized):
             return Placement(
                 ids=placed.ids.copy(),
                 firsts=Int32Array(
-                    length=len(local_firsts),
-                    nulls=0,
-                    offset=0,
-                    bitmap=None,
-                    buffer=firsts^.to_immutable(),
+                    length=len(local_firsts), buffer=firsts^.to_immutable()
                 ),
             )
 
@@ -656,18 +626,8 @@ struct HashIndex(Movable, Sized):
 
         ctx.run(p, finish_partition)
         return Placement(
-            ids=Int32Array(
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=id_buf^.to_immutable(),
-            ),
+            ids=Int32Array(length=n, buffer=id_buf^.to_immutable()),
             firsts=Int32Array(
-                length=new_total,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=first_buf^.to_immutable(),
+                length=new_total, buffer=first_buf^.to_immutable()
             ),
         )

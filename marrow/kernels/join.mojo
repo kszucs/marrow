@@ -586,20 +586,8 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
 
         ctx.stripe(num_rows, write)
         return JoinIndex(
-            build=Int32Array(
-                length=total,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=left^.to_immutable(),
-            ),
-            probe=Int32Array(
-                length=total,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=right^.to_immutable(),
-            ),
+            build=Int32Array(length=total, buffer=left^.to_immutable()),
+            probe=Int32Array(length=total, buffer=right^.to_immutable()),
         )
 
     @staticmethod
@@ -616,9 +604,7 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
         var out = buf.view[int32.native](0, n)
         for i in range(n):
             out.store[1](i, src.load[1](i) if bits.test(i) else Int32(-1))
-        return Int32Array(
-            length=n, nulls=0, offset=0, bitmap=None, buffer=buf^.to_immutable()
-        )
+        return Int32Array(length=n, buffer=buf^.to_immutable())
 
     @always_inline
     def _span(
@@ -1025,9 +1011,6 @@ struct HashJoin[Hash: Hasher = KeyHash]:
         return StructArray(
             dtype=self._output_dtype(probe, kind, build_side),
             length=len(pairs),
-            nulls=0,
-            offset=0,
-            bitmap=None,
             children=out_cols^,
         )
 

@@ -1027,9 +1027,6 @@ struct TakeKernel(Kernel):
             )
         return BinaryLikeArray[T](
             length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
             offsets=offsets^.to_immutable(),
             values=bytes^.to_immutable(),
         )
@@ -1154,12 +1151,7 @@ struct TakeKernel(Kernel):
             total,
         )
         var child_indices = Int32Array(
-            dtype=int32,
-            length=total,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=child_idx_buf.to_immutable(),
+            dtype=int32, length=total, buffer=child_idx_buf.to_immutable()
         )
 
         var bm: Optional[Bitmap[]] = None

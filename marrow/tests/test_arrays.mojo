@@ -2490,6 +2490,50 @@ def test_empty_factory() raises:
     assert_equal(prim.null_count(), 0)
 
 
+def test_all_valid_constructors() raises:
+    # length + payload builds an offset-0 array without a validity bitmap.
+    var ints = array([1, 2, 3], int32)
+    var prim = Int32Array(length=3, buffer=ints.buffer)
+    assert_true(prim == ints)
+    var dated = PrimitiveArray[Date32Type](
+        date32(), length=3, buffer=ints.buffer
+    )
+    assert_equal(dated.null_count(), 0)
+    assert_true(dated.type() == date32())
+
+    var bools = BoolArray(
+        length=3, buffer=Bitmap.alloc_zeroed(3).to_immutable()
+    )
+    assert_equal(bools.null_count(), 0)
+    assert_true(bools.is_valid(2))
+    assert_false(bools[2].value())
+
+    var strs = array(["a", "bc"])
+    var copied = StringArray(length=2, offsets=strs.offsets, values=strs.values)
+    assert_true(copied == strs)
+
+    var offsets = array([0, 1, 3], int32)
+    var items = array([1, 2, 3], int64)
+    var lists = ListArray(
+        dtype=list_(int64),
+        length=2,
+        offsets=offsets.buffer,
+        values=items.copy(),
+    )
+    assert_equal(len(lists), 2)
+    assert_equal(lists.null_count(), 0)
+    assert_true(lists.is_valid(1))
+
+    var children = List[DynArray]()
+    children.append(items.copy())
+    var rows = StructArray(
+        dtype=struct_(field("a", int64)), length=3, children=children^
+    )
+    assert_equal(len(rows), 3)
+    assert_equal(rows.null_count(), 0)
+    assert_true(rows.is_valid(0))
+
+
 def test_dictionary_array_data_roundtrip() raises:
     var vb = StringBuilder()
     vb.append("x")

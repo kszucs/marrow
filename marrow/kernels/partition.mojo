@@ -239,11 +239,7 @@ struct RadixPartitioner(Movable):
             # partition: one gather in that order gives every partition as a
             # slice of one copy.
             var order = Int32Array(
-                length=len(batch),
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=routed[0].row_indices.buffer.copy(),
+                length=len(batch), buffer=routed[0].row_indices.buffer.copy()
             )
             var gathered = TakeKernel.apply(batch, order, serial)
             var out = List[StructArray](capacity=self.num_partitions())

@@ -476,9 +476,6 @@ def test_chunker_rejects_an_unsupported_type() raises:
     var st = StructArray(
         dtype=dt.struct_(dt.Field("a", nested.dtype().copy())),
         length=0,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=[nested^],
     )
     var table = gearhash_table()

@@ -107,14 +107,7 @@ struct Encoded(Copyable, Movable):
         var n = self.count
         if self.size != n * size_of[Scalar[T]]():
             raise CorruptError(t"codecs: {self.size} bytes for {n} {T} values")
-        return PrimitiveArray[A](
-            dtype,
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=self.buffer,
-        )
+        return PrimitiveArray[A](dtype, length=n, buffer=self.buffer)
 
 
 struct Frames(Copyable, Movable):

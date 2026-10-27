@@ -690,13 +690,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             ov.unsafe_set(nan_off + i, nan_list[i])
         for i in range(n_valid):
             ov.unsafe_set(valid_off + i, sv.unsafe_get(i))
-        return Int32Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=out^.to_immutable(),
-        )
+        return Int32Array(length=n, buffer=out^.to_immutable())
 
     @staticmethod
     def apply(
@@ -752,13 +746,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                 ov.unsafe_set(pos, null_list[i])
                 pos += 1
 
-        return Int32Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=out^.to_immutable(),
-        )
+        return Int32Array(length=n, buffer=out^.to_immutable())
 
     @staticmethod
     def _sort_bytes[
@@ -852,13 +840,7 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         for i in range(n_valid):
             ov.unsafe_set(valid_off + i, valid_list[i])
 
-        return Int32Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=out^.to_immutable(),
-        )
+        return Int32Array(length=n, buffer=out^.to_immutable())
 
 
 struct SortKernel[stable: Bool = True, nan_largest: Bool = False](Kernel):

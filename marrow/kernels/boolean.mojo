@@ -116,7 +116,7 @@ def _kleene[
 
     # Both operands fully valid → result fully valid (keeps the None convention).
     if not left.bitmap and not right.bitmap:
-        return BoolArray(length=n, nulls=0, offset=0, bitmap=None, buffer=data^)
+        return BoolArray(length=n, buffer=data^)
 
     var a_valid = _validity_ones(left)
     var b_valid = _validity_ones(right)
@@ -237,9 +237,7 @@ struct XorKernel(BoolBinaryKernel):
         var data = (left.values() ^ right.values()).to_immutable()
         # XOR is fully determined only when both operands are valid.
         if not left.bitmap and not right.bitmap:
-            return BoolArray(
-                length=n, nulls=0, offset=0, bitmap=None, buffer=data^
-            )
+            return BoolArray(length=n, buffer=data^)
         var a_valid = _validity_ones(left)
         var b_valid = _validity_ones(right)
         var valid = a_valid.view() & b_valid.view()
@@ -305,7 +303,7 @@ trait NullPredicateKernel(Kernel):
                 buf = (~zeroed.view()).to_immutable()
             else:
                 buf = zeroed.to_immutable()
-        return BoolArray(length=n, nulls=0, offset=0, bitmap=None, buffer=buf)
+        return BoolArray(length=n, buffer=buf)
 
 
 trait ValuePredicateKernel(Kernel):

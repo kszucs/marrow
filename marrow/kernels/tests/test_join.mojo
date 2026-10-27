@@ -1596,9 +1596,6 @@ def test_join_multi_member_keys_may_differ_in_nullability() raises:
     var left = StructArray(
         dtype=struct_(annotated^),
         length=3,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=[
             array([1, 2, 3], int32).to_dyn(),
             array([7, 7, 7], int32).to_dyn(),
@@ -1807,14 +1804,7 @@ def _annotated_side(
     var cols = List[DynArray]()
     cols.append(array([1, 2, 3], int32).to_dyn())
     cols.append(array([10, 20, 30], int32).to_dyn())
-    return StructArray(
-        dtype=struct_(fields^),
-        length=3,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        children=cols^,
-    )
+    return StructArray(dtype=struct_(fields^), length=3, children=cols^)
 
 
 def _assert_annotations_survive(side: JoinBuildSide) raises:

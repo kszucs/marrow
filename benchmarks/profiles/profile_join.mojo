@@ -39,9 +39,6 @@ def _make_struct(n: Int) raises -> StructArray:
     return StructArray(
         dtype=struct_(Field("k", int64), Field("v", int64)),
         length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=cols^,
     )
 

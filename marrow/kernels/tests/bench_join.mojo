@@ -55,9 +55,6 @@ def _make_struct(n: Int, key_stride: Int = 1) raises -> StructArray:
     return StructArray(
         dtype=struct_(Field("k", int64), Field("v", int64)),
         length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=cols^,
     )
 
@@ -172,9 +169,6 @@ def _bench_build_repeated(
     var left = StructArray(
         dtype=struct_(Field("k", int64), Field("v", int64)),
         length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
         children=cols^,
     )
     var keys = List[Int]()

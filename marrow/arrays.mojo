@@ -654,12 +654,12 @@ struct BoolArray(Array):
     @staticmethod
     def empty() raises -> BoolArray:
         """A zero-length bool array."""
-        return BoolArray(
-            length=0,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=Bitmap.alloc_zeroed(0).to_immutable(),
+        return BoolArray(length=0, buffer=Bitmap.alloc_zeroed(0).to_immutable())
+
+    def __init__(out self, *, length: Int, var buffer: Bitmap[mut=False]):
+        """`length` values from `buffer`, every one valid."""
+        self = Self(
+            length=length, nulls=0, offset=0, bitmap=None, buffer=buffer^
         )
 
     def __init__[
@@ -858,11 +858,8 @@ struct PrimitiveArray[T: PrimitiveType](Array):
     def empty(dtype: Self.T) raises -> Self:
         """A zero-length array of `dtype`."""
         return Self(
-            dtype=dtype,
+            dtype,
             length=0,
-            nulls=0,
-            offset=0,
-            bitmap=None,
             buffer=Buffer.alloc_zeroed[Self.T.native](0).to_immutable(),
         )
 
@@ -902,6 +899,20 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             bitmap=bitmap,
             buffer=buffer,
         )
+
+    def __init__(
+        out self, dtype: Self.T, *, length: Int, buffer: Buffer[mut=False]
+    ):
+        """`length` values of `dtype` from `buffer`, every one valid."""
+        self = Self(
+            dtype, length=length, nulls=0, offset=0, bitmap=None, buffer=buffer
+        )
+
+    def __init__[
+        DT: NumericType
+    ](out self: PrimitiveArray[DT], *, length: Int, buffer: Buffer[mut=False]):
+        """`length` values from `buffer`, every one valid."""
+        self = PrimitiveArray[DT](DT(), length=length, buffer=buffer)
 
     def __init__[
         A: Array
@@ -1207,11 +1218,26 @@ struct BinaryLikeArray[T: BinaryLikeType](BytesArray):
         """A zero-length binary-like array."""
         return Self(
             length=0,
+            offsets=Buffer.alloc_zeroed[Self.T.offset](1).to_immutable(),
+            values=Buffer.alloc_zeroed[DType.uint8](0).to_immutable(),
+        )
+
+    def __init__(
+        out self,
+        *,
+        length: Int,
+        offsets: Buffer[mut=False],
+        values: Buffer[mut=False],
+    ):
+        """`length` values delimited by `offsets` into `values`, every one
+        valid."""
+        self = Self(
+            length=length,
             nulls=0,
             offset=0,
             bitmap=None,
-            offsets=Buffer.alloc_zeroed[Self.T.offset](1).to_immutable(),
-            values=Buffer.alloc_zeroed[DType.uint8](0).to_immutable(),
+            offsets=offsets,
+            values=values,
         )
 
     def __init__(
@@ -1907,6 +1933,26 @@ struct ListLikeArray[T: ListLikeType](Array):
         self.offsets = offsets
         self.child = values^
 
+    def __init__(
+        out self,
+        *,
+        dtype: DynType,
+        length: Int,
+        offsets: Buffer[mut=False],
+        var values: DynArray,
+    ):
+        """`length` lists delimited by `offsets` into `values`, every one
+        valid."""
+        self = Self(
+            dtype=dtype,
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            offsets=offsets,
+            values=values^,
+        )
+
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
             raise InvalidError("ListArray requires exactly one buffer")
@@ -2074,12 +2120,7 @@ struct ListLikeArray[T: ListLikeType](Array):
             )
             buf.unsafe_set[DType.int32](i, Int32(end - start))
         return Int32Array(
-            dtype=Int32Type(),
-            length=self.length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=buf^.to_immutable(),
+            dtype=Int32Type(), length=self.length, buffer=buf^.to_immutable()
         )
 
     def __eq__(self, other: Self) -> Bool:
@@ -2654,6 +2695,23 @@ struct StructArray(Array):
         if not self.bitmap:
             return None
         return self.bitmap.value().view(self.offset, self.length)
+
+    def __init__(
+        out self,
+        *,
+        var dtype: DynType,
+        length: Int,
+        var children: List[DynArray],
+    ):
+        """`length` structs over `children`, every one valid."""
+        self = Self(
+            dtype=dtype^,
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            children=children^,
+        )
 
     def __init__(out self, data: ArrayData) raises:
         var children = List[DynArray]()

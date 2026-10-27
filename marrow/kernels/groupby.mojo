@@ -176,13 +176,7 @@ struct Groups(Copyable, Movable):
                 var g = Int(self.ids.unsafe_get(i))
                 rv.unsafe_set(at[g], Int32(i))
                 at[g] += 1
-            return Int32Array(
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=rows^.to_immutable(),
-            )
+            return Int32Array(length=n, buffer=rows^.to_immutable())
         ref ids = self.ids
         var ranges = min(_GROUP_RANGES, groups)
         var threads = max(1, min(ctx.resolved_num_threads(), n // 4096))
@@ -247,10 +241,4 @@ struct Groups(Copyable, Movable):
         _ = starts^
         _ = dealt^
         _ = phase^
-        return Int32Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=rows^.to_immutable(),
-        )
+        return Int32Array(length=n, buffer=rows^.to_immutable())

@@ -336,13 +336,7 @@ struct HashKernel[H: Hasher](Kernel):
         else:
             apply[uint64.native, Self._bool_lanes[...]](keys.values(), dst, ctx)
 
-        return UInt64Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=buf.to_immutable(),
-        )
+        return UInt64Array(length=n, buffer=buf.to_immutable())
 
     # FIXME: use the seeding from the Rust implementation
     @staticmethod
@@ -376,13 +370,7 @@ struct HashKernel[H: Hasher](Kernel):
                     )
                 else:
                     buf.unsafe_set[uint64.native](i, NULL_HASH_SENTINEL)
-            return UInt64Array(
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=buf^.to_immutable(),
-            )
+            return UInt64Array(length=n, buffer=buf^.to_immutable())
         else:
             var buf = ctx.alloc_buffer[uint64.native](n)
 
@@ -406,13 +394,7 @@ struct HashKernel[H: Hasher](Kernel):
                     ctx,
                 )
 
-            return UInt64Array(
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=buf.to_immutable(),
-            )
+            return UInt64Array(length=n, buffer=buf.to_immutable())
 
     @staticmethod
     def apply[
@@ -446,13 +428,7 @@ struct HashKernel[H: Hasher](Kernel):
                     i, Self.H.hash(keys.unsafe_get(UInt(i)).as_bytes())
                 )
 
-        return UInt64Array(
-            length=n,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=buf^.to_immutable(),
-        )
+        return UInt64Array(length=n, buffer=buf^.to_immutable())
 
     @staticmethod
     def apply(
@@ -480,13 +456,7 @@ struct HashKernel[H: Hasher](Kernel):
                 buf.view[uint64.native](0, n),
                 ctx,
             )
-            result = UInt64Array(
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=buf.to_immutable(),
-            )
+            result = UInt64Array(length=n, buffer=buf.to_immutable())
         if keys.null_count() != 0:
             var buf = Buffer.alloc_uninit[uint64.native](n)
             var out = buf.view[uint64.native](0, n)
@@ -497,13 +467,7 @@ struct HashKernel[H: Hasher](Kernel):
                         i
                     ) else NULL_HASH_SENTINEL,
                 )
-            result = UInt64Array(
-                length=n,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=buf^.to_immutable(),
-            )
+            result = UInt64Array(length=n, buffer=buf^.to_immutable())
         return result^
 
     @staticmethod
