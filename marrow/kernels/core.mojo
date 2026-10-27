@@ -6,8 +6,9 @@
 Every kernel family in `marrow.kernels` — element-wise arithmetic, comparison,
 boolean, string, temporal, aggregate — descends from `Kernel`, so a kernel is
 nameable without knowing which family it belongs to. `UnaryKernel` and
-`BinaryKernel` add the register function `core` that fused loops and folds call;
-family traits add the call shape over arrays (`apply`/`dispatch`,
+`BinaryKernel` add the register function `core` that fused loops and folds call,
+and `BinaryKernel` the `fold_lanes` a fold reduces one register with; family
+traits add the call shape over arrays (`apply`/`dispatch`,
 `combine`/`finalize`, ...).
 
 `Kernel` also owns the argument checks every family repeats, so the diagnostic
@@ -324,6 +325,21 @@ trait BinaryKernel(Kernel):
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         """Per lane, the kernel's result for `a` and `b`."""
         ...
+
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        """One register folded across its lanes: the left fold
+        `core(... core(core(v[0], v[1]), v[2]) ..., v[W - 1])`.
+
+        A kernel that claims `Associative` and `Commutative` may answer it in
+        any order, and only a fold, which needs both, calls it. The default
+        is the left fold itself.
+        """
+        var acc = v[0]
+        comptime for k in range(1, W):
+            acc = Self.core[T, 1](acc, v[k])
+        return acc
 
 
 trait Identity:

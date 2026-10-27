@@ -11,6 +11,7 @@ Covers:
 
 import math
 
+import pyarrow as pa
 import pytest
 import marrow as ma
 
@@ -490,3 +491,31 @@ def test_filter_null_mask_entry_is_not_selected():
 
     above = ma.compute.greater(values, ma.array([3] * 7, ma.int64()))
     assert ma.compute.filter(values, above).to_pylist() == [4, 6, 7]
+
+
+# ── list aggregates ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("list_sum", [6, None, None, None, 4]),
+        ("list_min", [1, None, None, None, 1]),
+        ("list_max", [3, None, None, None, 3]),
+        ("list_mean", [2.0, None, None, None, 2.0]),
+        ("list_count", [3, 0, 0, None, 2]),
+    ],
+)
+def test_list_aggregates_follow_duckdb(name, expected):
+    """DuckDB's answers: an empty list, a list of nulls and a null list are
+    null, except that ``list_count`` counts the first two as 0."""
+    lists = pa.array([[1, 2, 3], [], [None], None, [1, None, 3]], pa.list_(pa.int64()))
+    result = getattr(ma.compute, name)(ma.array(lists))
+    assert pa.array(result).to_pylist() == expected
+
+
+def test_list_aggregates_on_a_sliced_large_list():
+    lists = pa.array([[9], [1, 2], None, [3, None]], pa.large_list(pa.int32()))
+    result = pa.array(ma.compute.list_sum(ma.array(lists.slice(1))))
+    assert result.type == pa.int64()
+    assert result.to_pylist() == [3, None, 3]

@@ -189,6 +189,21 @@ trait FoldKernel(Kernel):
 
     @always_inline
     @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        """One register of accumulators folded across its lanes: the left fold
+        of `combine`, `combine(... combine(v[0], v[1]) ..., v[W - 1])`.
+
+        A fold built from a kernel claiming `Associative` and `Commutative`
+        answers it in any order, through that kernel's `fold_lanes`. The
+        default is the left fold itself.
+        """
+        var acc = v[0]
+        comptime for k in range(1, W):
+            acc = Self.combine[T, 1](acc, v[k])
+        return acc
+
+    @always_inline
+    @staticmethod
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         """Finalize a non-empty group's accumulator into its output value."""
         ...
@@ -314,6 +329,11 @@ struct Widening[
 
     @always_inline
     @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return Self.K.fold_lanes[T, W](v)
+
+    @always_inline
+    @staticmethod
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         return acc
 
@@ -348,6 +368,11 @@ struct MinMax[
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return Self.K.core[T, W](a, b)
+
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return Self.K.fold_lanes[T, W](v)
 
     @always_inline
     @staticmethod
@@ -414,6 +439,11 @@ struct MeanFold(ArithmeticAgg):
 
     @always_inline
     @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return AddKernel.fold_lanes[T, W](v)
+
+    @always_inline
+    @staticmethod
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         return acc / Scalar[A](count)
 
@@ -460,6 +490,11 @@ struct DecimalFold[mean: Bool](DecimalAgg):
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return AddKernel.core[T, W](a, b)
+
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return AddKernel.fold_lanes[T, W](v)
 
     @always_inline
     @staticmethod

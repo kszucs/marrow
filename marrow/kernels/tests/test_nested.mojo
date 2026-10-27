@@ -6,13 +6,47 @@
 Expected patterns match PyArrow's `pc.list_value_length`.
 """
 
-from std.testing import assert_equal, assert_true, assert_false
+from std.testing import assert_equal, assert_raises, assert_true, assert_false
 
-from ...arrays import ListArray, Int32Array, MapArray
-from ...builders import ListBuilder, Int64Builder, MapBuilder, array
-from ...dtypes import int32, int64, string, map_, DynType
+from ...arrays import DynArray, ListArray, ListLikeArray, Int32Array, MapArray
+from ...builders import (
+    Int32Builder,
+    ListBuilder,
+    ListLikeBuilder,
+    Int64Builder,
+    MapBuilder,
+    PrimitiveBuilder,
+    StringBuilder,
+    array,
+)
+from ...dtypes import (
+    Float64Type,
+    Int32Type,
+    Int64Type,
+    LargeListType,
+    ListLikeType,
+    ListType,
+    NumericType,
+    int32,
+    int64,
+    string,
+    map_,
+    DynType,
+)
 
-from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
+from ...kernels.aggregate import (
+    CountFold,
+    FoldKernel,
+    MaxFold,
+    MeanFold,
+    MinFold,
+    SumFold,
+)
+from ...kernels.nested import (
+    ArrayContainsKernel,
+    ArrayLengthKernel,
+    ListReduceKernel,
+)
 
 
 def _lists_with_null() raises -> ListArray:
@@ -146,3 +180,121 @@ def test_array_contains_rejects_a_mismatched_element_type() raises:
         raised = True
         assert_true("does not match" in String(e), String(e))
     assert_true(raised, "a mismatched element type must raise")
+
+
+# ---------------------------------------------------------------------------
+# ListReduceKernel
+# ---------------------------------------------------------------------------
+
+
+def _step(state: UInt64) -> UInt64:
+    return state * 6364136223846793005 + 1442695040888963407
+
+
+def _random_lists[
+    T: ListLikeType, V: NumericType
+](n: Int) raises -> ListLikeArray[T]:
+    """`n` lists of 0 to 64 elements, about one element in five null and one
+    list in ten null; a null list still spans its elements."""
+    comptime N = V.native
+    var b = ListLikeBuilder[T](PrimitiveBuilder[V]())
+    var child_any = b.values()
+    ref child = child_any.as_primitive[V]()
+    var state = UInt64(42)
+    for _ in range(n):
+        state = _step(state)
+        var size = Int(state >> 33) % 65
+        for _ in range(size):
+            state = _step(state)
+            var r = Int(state >> 33)
+            if r % 5 == 0:
+                child.append_null()
+            else:
+                child.append(Scalar[N](r % 201 - 100))
+        state = _step(state)
+        if Int(state >> 33) % 10 == 0:
+            b.append_null()
+        else:
+            b.append_valid()
+    return b.finish()
+
+
+def _check_list_reduce[F: FoldKernel, V: NumericType](lists: ListArray) raises:
+    """Each row against a scalar fold of its list's valid elements."""
+    comptime A = F.AccType[V].native
+    var got = ListReduceKernel[F].apply[V](lists)
+    assert_equal(len(got), len(lists))
+    ref child = lists.values().as_primitive[V]()
+    var offsets = lists.offsets.view[DType.int32](lists.offset)
+    for i in range(len(lists)):
+        var at = String(F.name, " ", V(), " row ", i)
+        var acc = F.identity[A]()
+        var count = 0
+        for j in range(Int(offsets[i]), Int(offsets[i + 1])):
+            if child.is_valid(j):
+                acc = F.combine[A, 1](acc, child.unsafe_get(j).cast[A]())
+                count += 1
+        if not lists.is_valid(i) or (count == 0 and F.empty_is_null):
+            assert_false(got.is_valid(i), at)
+            assert_equal(got.unsafe_get(i), Scalar[A](0), at + " payload")
+        else:
+            assert_true(got.is_valid(i), at)
+            assert_equal(got.unsafe_get(i), F.finalize[A](acc, count), at)
+
+
+def _check_list_folds[V: NumericType]() raises:
+    var lists = _random_lists[ListType, V](400)
+    _check_list_reduce[SumFold, V](lists)
+    _check_list_reduce[MinFold, V](lists)
+    _check_list_reduce[MaxFold, V](lists)
+    _check_list_reduce[MeanFold, V](lists)
+    _check_list_reduce[CountFold, V](lists)
+
+
+def test_list_reduce_matches_reference() raises:
+    _check_list_folds[Int32Type]()
+    _check_list_folds[Int64Type]()
+    _check_list_folds[Float64Type]()
+
+
+def test_list_reduce_sliced_list() raises:
+    var sliced = _lists_with_null().slice(1, 3)  # [[3], null, [4, 5, 6]]
+    assert_equal(sliced.offsets.view[DType.int32](sliced.offset)[0], 2)
+    var sums = ListReduceKernel[SumFold].apply[Int64Type](sliced)
+    assert_true(sums == array([3, None, 15], int64))
+
+
+def test_list_reduce_large_list() raises:
+    var lists = _random_lists[ListType, Int64Type](100)
+    var large = _random_lists[LargeListType, Int64Type](100)
+    assert_true(
+        ListReduceKernel[SumFold].apply[Int64Type](large)
+        == ListReduceKernel[SumFold].apply[Int64Type](lists)
+    )
+    assert_true(
+        ListReduceKernel[MeanFold].apply[Int64Type](large)
+        == ListReduceKernel[MeanFold].apply[Int64Type](lists)
+    )
+
+
+def test_list_reduce_dispatch() raises:
+    var b = ListBuilder(Int32Builder())
+    var child_any = b.values()
+    ref child = child_any.as_int32()
+    child.append(1)
+    child.append(2)
+    b.append_valid()
+    var lists: DynArray = b.finish()
+    var sums = ListReduceKernel[SumFold].dispatch(lists)
+    assert_true(sums.as_int64() == array([3], int64))
+
+    var s = ListBuilder(StringBuilder())
+    var strings_any = s.values()
+    ref strings = strings_any.as_string()
+    strings.append("a")
+    s.append_valid()
+    with assert_raises(contains="not numeric"):
+        _ = ListReduceKernel[SumFold].dispatch(s.finish())
+
+    with assert_raises(contains="expected a list array"):
+        _ = ListReduceKernel[SumFold].dispatch(array([1, 2], int64))

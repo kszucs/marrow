@@ -11,6 +11,10 @@ over the (fixed-width) offsets buffer, so `apply` runs a single vectorized pass.
 The list is variable-width so it can't lane-fuse; each row scans its sublist for a
 value equal to that row's search element (a constant broadcasts through the
 expression layer). Null list rows propagate to null results.
+
+`ListReduceKernel[F]` — a fold kernel over each list's elements, one value per
+list (`list_sum`, `list_min`, …): the list's offsets are segments of its child,
+and `Segmented[F].reduce` folds them.
 """
 
 from std.sys import size_of
@@ -26,8 +30,11 @@ from ..arrays import (
     PrimitiveArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..dtypes import ListLikeType, NumericType, DType
+from ..dtypes import ListLikeType, NumericType, PrimitiveType, DType
+from ..views import apply, valid_or_zero
+from .aggregate import FoldKernel
 from .core import Kernel
+from .segments import ByEnds, Segmented
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 
@@ -166,4 +173,97 @@ struct ArrayContainsKernel(Kernel):
 
         return elem.dtype().try_visit[DynArray, NumericType](
             leaf, "dtype is not numeric"
+        )
+
+
+struct ListReduceKernel[F: FoldKernel](Kernel):
+    """A fold over each list's elements, one value per list: `list_sum`,
+    `list_min`, `list_max`, `list_mean` and `list_count`, with
+    `F = SumFold`, `MinFold`, `MaxFold`, `MeanFold` and `CountFold`.
+
+    The answer is `F`'s accumulator type (a sum is int64, uint64 or float64, a
+    mean float64). Null elements are skipped; a list with no valid element
+    answers NULL (`count` answers 0), and so does a null list. Numeric
+    elements only.
+    """
+
+    comptime name = "list_reduce"
+
+    @staticmethod
+    def apply[
+        T: ListLikeType, //, V: PrimitiveType
+    ](
+        list: ListLikeArray[T], ctx: ExecContext = ExecContext.serial()
+    ) raises -> PrimitiveArray[Self.F.AccType[V]]:
+        if not list.values().dtype().isa[V]():
+            # `as_primitive[V]` on a mismatched child is a bad variant access,
+            # which aborts rather than raises.
+            raise Self.error[TypeError](
+                t"list element type {list.values().dtype()} is not the type"
+                t" this kernel was resolved for"
+            )
+        ref child = list.values().as_primitive[V]()
+        var n = len(list)
+        var result: PrimitiveArray[Self.F.AccType[V]]
+        if n == 0:
+            # An empty list array may carry no offsets at all.
+            result = PrimitiveArray[Self.F.AccType[V]].empty(
+                Self.F.acc_dtype[V](child.dtype)
+            )
+        else:
+            var ends = list.offsets.view[T.offset](list.offset, n + 1)
+            var reduced = Segmented[Self.F].reduce(child, ByEnds(ends))
+            if list.null_count() == 0:
+                result = reduced^
+            else:
+                result = Self._null_lists(reduced, list)
+        return result^
+
+    @staticmethod
+    def _null_lists[
+        A: PrimitiveType, T: ListLikeType
+    ](
+        reduced: PrimitiveArray[A], list: ListLikeArray[T]
+    ) raises -> PrimitiveArray[A]:
+        """`reduced`, null where `list` is: a null list's offsets may still
+        span elements. A null row's payload is zero."""
+        comptime N = A.native
+        var n = len(reduced)
+        var bm = Bitmap.intersect_views(reduced.validity(), list.validity())
+        var out = Buffer.alloc_uninit[N](n)
+        apply[N, N, valid_or_zero[N, _]](
+            reduced.values(), bm.value().view(), out.view[N](0, n)
+        )
+        return PrimitiveArray[A](
+            reduced.dtype.copy(),
+            length=n,
+            nulls=bm.value().unset_count(),
+            offset=0,
+            bitmap=bm,
+            buffer=out^.to_immutable(),
+        )
+
+    @staticmethod
+    def dispatch(
+        list: DynArray, ctx: ExecContext = ExecContext.serial()
+    ) raises -> DynArray:
+        if not list.dtype().is_list_like():
+            raise Self.error[TypeError](
+                t"expected a list array, got {list.dtype()}"
+            )
+
+        def outer[T: ListLikeType](o: T) raises {imm} -> DynArray:
+            # The offset width picks `T`, the child's dtype `V`.
+            def leaf[V: NumericType](d: V) raises {imm} -> DynArray:
+                return Self.apply[V](list.as_list_like[T](), ctx).to_dyn()
+
+            return (
+                list.as_list_like[T]()
+                .values()
+                .dtype()
+                .try_visit[DynArray, NumericType](leaf, "dtype is not numeric")
+            )
+
+        return list.dtype().try_visit[DynArray, ListLikeType](
+            outer, "dtype is not listlike"
         )

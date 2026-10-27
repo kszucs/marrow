@@ -1884,6 +1884,15 @@ comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
 
 
 @always_inline
+def valid_or_zero[
+    T: DType, W: Int
+](values: SIMD[T, W], valid: SIMD[DType.bool, W]) -> SIMD[T, W]:
+    """`values` where `valid` is set and zero elsewhere: the `MaskedFn` that
+    gives a null a zero payload."""
+    return valid.select(values, SIMD[T, W](0))
+
+
+@always_inline
 def _cpu_striped[
     Out: DType, Lane: def[W: Int](Int) -> None
 ](length: Int, lane: Lane, ctx: ExecContext):

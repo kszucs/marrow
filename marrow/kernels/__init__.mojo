@@ -31,7 +31,7 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `cast.mojo` — type conversion
   - `conditional.mojo` — coalesce / nullif / case_when / fill_null
   - `membership.mojo` — `is_in`
-  - `nested.mojo` — list-valued predicates
+  - `nested.mojo` — list-valued predicates, and folds over each list
   - `aggregate.mojo` — reductions (sum, min, max, mean, any, all)
   - `distinct.mojo` — exact and approximate distinct counts
   - `filter.mojo` — selection, take, drop_null
@@ -41,7 +41,9 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
   - *not re-exported* — `dictionary.mojo` / `join.mojo` / `hashtable.mojo` /
     `hashing.mojo` / `partition.mojo` (the hash machinery group-by, join and
-    `is_in` share), and `concat.mojo` (batches joined in parallel)
+    `is_in` share), `concat.mojo` (batches joined in parallel) and
+    `segments.mojo` (a column cut into consecutive runs of rows, and folds
+    over each run)
 """
 
 from marrow.dtypes import (
@@ -175,7 +177,7 @@ from .conditional import (
     NullifKernel,
     FillNullKernel,
 )
-from .nested import ArrayLengthKernel, ArrayContainsKernel
+from .nested import ArrayLengthKernel, ArrayContainsKernel, ListReduceKernel
 from .cast import CastArm, CastKernel
 from .core import Kernel, Partial, Prunable
 from .groupby import Groups

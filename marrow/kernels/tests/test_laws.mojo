@@ -37,6 +37,16 @@ from ...dtypes import (
     int32,
     int64,
 )
+from ...kernels.aggregate import (
+    CountFold,
+    DecimalSumFold,
+    FoldKernel,
+    MaxFold,
+    MeanFold,
+    MinFold,
+    ProductFold,
+    SumFold,
+)
 from ...kernels.boolean import AndKernel
 from ...kernels.cast import CastKernel
 from ...kernels.core import (
@@ -987,4 +997,184 @@ def test_identity_law_rejects_inf_for_min() raises:
     with assert_raises(contains="identity:"):
         check_identity[MinKernel, DType.float64](
             inf[DType.float64](), _float64_exact_domain()
+        )
+
+
+# ---------------------------------------------------------------------------
+# fold_lanes: one register folded across its lanes is the left fold of `core`
+# ---------------------------------------------------------------------------
+
+
+def _registers[T: DType, W: Int](domain: List[Scalar[T]]) -> List[SIMD[T, W]]:
+    """64 registers whose lanes are drawn from `domain`, deterministically."""
+    var out = List[SIMD[T, W]]()
+    var state = UInt64(0x9E3779B97F4A7C15)
+    for _ in range(64):
+        var v = SIMD[T, W]()
+        for j in range(W):
+            state = state * 6364136223846793005 + 1442695040888963407
+            v[j] = domain[Int(state >> 33) % len(domain)]
+        out.append(v)
+    return out^
+
+
+def check_fold_lanes[
+    K: BinaryKernel, T: DType, W: Int
+](vectors: List[SIMD[T, W]]) raises:
+    """The `fold_lanes` law: `K.fold_lanes(v)` is the left fold of `K.core`
+    over `v`'s lanes, as a value."""
+    for v in vectors:
+        var expected = v[0]
+        for k in range(1, W):
+            expected = K.core[T, 1](expected, v[k])
+        var got = K.fold_lanes[T, W](v)
+        assert_true(
+            _same_value(got, expected),
+            String(t"fold_lanes: {v} gives {got}, the left fold {expected}"),
+        )
+
+
+def _fold_lanes_at_every_width[
+    K: BinaryKernel, T: DType
+](domain: List[Scalar[T]]) raises:
+    check_fold_lanes[K, T, 1](_registers[T, 1](domain))
+    check_fold_lanes[K, T, 2](_registers[T, 2](domain))
+    check_fold_lanes[K, T, 4](_registers[T, 4](domain))
+    check_fold_lanes[K, T, 8](_registers[T, 8](domain))
+    check_fold_lanes[K, T, 16](_registers[T, 16](domain))
+
+
+def test_fold_lanes_law_add_int8() raises:
+    _fold_lanes_at_every_width[AddKernel](_int8_every_value())
+
+
+def test_fold_lanes_law_add_uint8() raises:
+    _fold_lanes_at_every_width[AddKernel](_uint8_domain())
+
+
+def test_fold_lanes_law_add_int64() raises:
+    _fold_lanes_at_every_width[AddKernel](_int64_domain())
+
+
+def test_fold_lanes_law_add_float64() raises:
+    _fold_lanes_at_every_width[AddKernel](_float64_exact_domain())
+
+
+def test_fold_lanes_law_mul_int8() raises:
+    _fold_lanes_at_every_width[MulKernel](_int8_every_value())
+
+
+def test_fold_lanes_law_mul_uint8() raises:
+    _fold_lanes_at_every_width[MulKernel](_uint8_domain())
+
+
+def test_fold_lanes_law_mul_int64() raises:
+    _fold_lanes_at_every_width[MulKernel](_int64_domain())
+
+
+def test_fold_lanes_law_mul_float64() raises:
+    _fold_lanes_at_every_width[MulKernel](_float64_exact_domain())
+
+
+def test_fold_lanes_law_min_int8() raises:
+    _fold_lanes_at_every_width[MinKernel](_int8_every_value())
+
+
+def test_fold_lanes_law_min_uint8() raises:
+    _fold_lanes_at_every_width[MinKernel](_uint8_domain())
+
+
+def test_fold_lanes_law_min_int64() raises:
+    _fold_lanes_at_every_width[MinKernel](_int64_domain())
+
+
+def test_fold_lanes_law_min_float64() raises:
+    _fold_lanes_at_every_width[MinKernel](_float64_exact_domain())
+
+
+def test_fold_lanes_law_max_int8() raises:
+    _fold_lanes_at_every_width[MaxKernel](_int8_every_value())
+
+
+def test_fold_lanes_law_max_uint8() raises:
+    _fold_lanes_at_every_width[MaxKernel](_uint8_domain())
+
+
+def test_fold_lanes_law_max_int64() raises:
+    _fold_lanes_at_every_width[MaxKernel](_int64_domain())
+
+
+def test_fold_lanes_law_max_float64() raises:
+    _fold_lanes_at_every_width[MaxKernel](_float64_exact_domain())
+
+
+def check_fold_lanes_of[
+    F: FoldKernel, T: DType, W: Int
+](vectors: List[SIMD[T, W]]) raises:
+    """The same law for a fold: `F.fold_lanes(v)` is the left fold of
+    `F.combine` over `v`'s lanes."""
+    for v in vectors:
+        var expected = v[0]
+        for k in range(1, W):
+            expected = F.combine[T, 1](expected, v[k])
+        var got = F.fold_lanes[T, W](v)
+        assert_true(
+            _same_value(got, expected),
+            String(
+                t"{F.name} fold_lanes: {v} gives {got}, the left fold"
+                t" {expected}"
+            ),
+        )
+
+
+def _fold_lanes_of_at_every_width[
+    F: FoldKernel, T: DType
+](domain: List[Scalar[T]]) raises:
+    check_fold_lanes_of[F, T, 1](_registers[T, 1](domain))
+    check_fold_lanes_of[F, T, 2](_registers[T, 2](domain))
+    check_fold_lanes_of[F, T, 4](_registers[T, 4](domain))
+    check_fold_lanes_of[F, T, 8](_registers[T, 8](domain))
+
+
+def _int128_domain() -> List[Scalar[DType.int128]]:
+    var domain = List[Scalar[DType.int128]]()
+    for v in _int64_domain():
+        domain.append(v.cast[DType.int128]())
+    return domain^
+
+
+def test_fold_lanes_law_folds() raises:
+    _fold_lanes_of_at_every_width[SumFold](_int64_domain())
+    _fold_lanes_of_at_every_width[SumFold](_float64_exact_domain())
+    _fold_lanes_of_at_every_width[ProductFold](_int64_domain())
+    _fold_lanes_of_at_every_width[ProductFold](_float64_exact_domain())
+    _fold_lanes_of_at_every_width[MinFold](_int64_domain())
+    _fold_lanes_of_at_every_width[MinFold](_float64_exact_domain())
+    _fold_lanes_of_at_every_width[MaxFold](_int64_domain())
+    _fold_lanes_of_at_every_width[MaxFold](_float64_exact_domain())
+    _fold_lanes_of_at_every_width[MeanFold](_float64_exact_domain())
+    _fold_lanes_of_at_every_width[CountFold](_int64_domain())
+    _fold_lanes_of_at_every_width[DecimalSumFold](_int128_domain())
+
+
+struct _FirstLane(BinaryKernel):
+    """Addition with a wrong `fold_lanes`: it answers lane 0."""
+
+    comptime name = "first_lane"
+
+    @always_inline
+    @staticmethod
+    def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return a + b
+
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return v[0]
+
+
+def test_fold_lanes_law_rejects_a_wrong_override() raises:
+    with assert_raises(contains="fold_lanes:"):
+        check_fold_lanes[_FirstLane, DType.int64, 4](
+            _registers[DType.int64, 4](_int64_domain())
         )

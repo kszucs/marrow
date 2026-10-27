@@ -287,3 +287,18 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_take]("take")
     mb.def_function[_cast]("cast")
     mb.def_function[_concat]("concat")
+    mb.def_function[_unary[mk.ListReduceKernel[mk.SumFold].dispatch]()](
+        "list_sum"
+    )
+    mb.def_function[_unary[mk.ListReduceKernel[mk.MinFold].dispatch]()](
+        "list_min"
+    )
+    mb.def_function[_unary[mk.ListReduceKernel[mk.MaxFold].dispatch]()](
+        "list_max"
+    )
+    mb.def_function[_unary[mk.ListReduceKernel[mk.MeanFold].dispatch]()](
+        "list_mean"
+    )
+    mb.def_function[_unary[mk.ListReduceKernel[mk.CountFold].dispatch]()](
+        "list_count"
+    )

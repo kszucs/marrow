@@ -81,6 +81,58 @@ def all(array, *, skip_nulls=True, min_count=1, memory_pool=None, ctx=None):
     return _ma.all(array.unwrap(), skip_nulls, min_count, (ctx or _serial()))
 
 
+# ── List aggregates ─────────────────────────────────────────────────────────
+
+
+def list_sum(lists, *, memory_pool=None, ctx=None):
+    """The sum of each list's elements, skipping nulls.
+
+    Equivalent to DuckDB's ``list_sum``: an empty list, a list of nulls and a
+    null list each answer null. Signed integers sum to ``int64``, unsigned
+    ones to ``uint64`` and floats to ``float64``.
+    """
+    return Array.wrap(_ma.list_sum(lists.unwrap(), (ctx or _serial())))
+
+
+def list_min(lists, *, memory_pool=None, ctx=None):
+    """The least of each list's elements, skipping nulls.
+
+    Equivalent to DuckDB's ``list_min``: an empty list, a list of nulls and a
+    null list each answer null. The answer keeps the element type, and is NaN
+    only when every value is NaN, as DuckDB, which orders NaN above every
+    value, answers.
+    """
+    return Array.wrap(_ma.list_min(lists.unwrap(), (ctx or _serial())))
+
+
+def list_max(lists, *, memory_pool=None, ctx=None):
+    """The greatest of each list's elements, skipping nulls and NaN.
+
+    Equivalent to DuckDB's ``list_max``: an empty list, a list of nulls and a
+    null list each answer null. The answer keeps the element type. DuckDB
+    orders NaN above every value, so it answers NaN where this skips it.
+    """
+    return Array.wrap(_ma.list_max(lists.unwrap(), (ctx or _serial())))
+
+
+def list_mean(lists, *, memory_pool=None, ctx=None):
+    """The mean of each list's elements, skipping nulls, as ``float64``.
+
+    Equivalent to DuckDB's ``list_avg``: an empty list, a list of nulls and a
+    null list each answer null.
+    """
+    return Array.wrap(_ma.list_mean(lists.unwrap(), (ctx or _serial())))
+
+
+def list_count(lists, *, memory_pool=None, ctx=None):
+    """The number of non-null elements in each list, as ``int64``.
+
+    Equivalent to DuckDB's ``list_count``: an empty list and a list of nulls
+    answer 0, and a null list answers null.
+    """
+    return Array.wrap(_ma.list_count(lists.unwrap(), (ctx or _serial())))
+
+
 # ── Comparisons ───────────────────────────────────────────────────────────────
 
 

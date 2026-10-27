@@ -210,6 +210,11 @@ struct AddKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a + b
 
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return v.reduce_add()
+
 
 struct SubKernel(NumericBinaryKernel):
     comptime name = "subtract"
@@ -392,6 +397,11 @@ struct MinKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.min(a, b)
 
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return v.reduce_min()
+
 
 struct MaxKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     comptime name = "maximum"
@@ -411,6 +421,11 @@ struct MaxKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.max(a, b)
+
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return v.reduce_max()
 
 
 # ---------------------------------------------------------------------------
