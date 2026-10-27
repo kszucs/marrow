@@ -371,6 +371,15 @@ def test_array_import_dictionary_ignores_the_index_under_a_null():
     assert decoded.to_pylist() == ["x", None, "y"]
 
 
+def test_dictionary_of_nested_values_roundtrip():
+    # The values' children belong to the dictionary schema, not the index's.
+    values = pa.array([[1, 2], [3]], pa.list_(pa.int64()))
+    pa_arr = pa.DictionaryArray.from_arrays(pa.array([1, 0, 1], pa.int32()), values)
+    result = pa.array(ma.array(pa_arr))
+    assert result.type == pa_arr.type
+    assert result.equals(pa_arr)
+
+
 # ===========================================================================
 # RecordBatch roundtrips
 # ===========================================================================

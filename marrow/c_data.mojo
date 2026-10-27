@@ -384,6 +384,26 @@ def _release_exported_schema(
     ptr[].mark_released()
 
 
+def _export_children(
+    fields: List[Field],
+) raises -> Pointer[
+    Pointer[CArrowSchema, MutUntrackedOrigin], MutUntrackedOrigin
+]:
+    """Export `fields` as a heap array of heap-allocated child schemas, so the
+    pointers stay valid after the exporting frame is gone; NULL when there are
+    none. `_release_exported_schema` frees both levels."""
+    var children = _null_ptr[Pointer[CArrowSchema, MutUntrackedOrigin]]()
+    if len(fields) > 0:
+        children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](
+            len(fields)
+        )
+        for i in range(len(fields)):
+            var child = _alloc[CArrowSchema](1)
+            child.unsafe_write(CArrowSchema.from_field(fields[i]))
+            children[unsafe_offset=i] = child
+    return children
+
+
 @fieldwise_init
 struct CArrowSchema(Copyable, Movable):
     """Arrow C Data Interface schema struct (ArrowSchema).
@@ -460,10 +480,6 @@ struct CArrowSchema(Copyable, Movable):
         Call `.to_pycapsule()` to wrap the result in a Python capsule.
         """
         var fmt: String
-        var n_children: Int64 = 0
-        var children: Pointer[
-            Pointer[CArrowSchema, MutUntrackedOrigin], MutUntrackedOrigin
-        ] = _null_ptr[Pointer[CArrowSchema, MutUntrackedOrigin]]()
         var flags: Int64 = 0
         var dictionary_ptr = _null_ptr[CArrowSchema]()
 
@@ -507,35 +523,10 @@ struct CArrowSchema(Copyable, Movable):
             fmt = "vu"
         elif dtype.is_list():
             fmt = "+l"
-            n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
-            # Move child value onto the heap so the pointer stays valid after
-            # this stack frame is gone.
-            var child0 = CArrowSchema.from_field(
-                dtype.as_list().value_field().copy()
-            )
-            var child0_ptr = _alloc[CArrowSchema](1)
-            child0_ptr.unsafe_write(child0^)
-            children[unsafe_offset=0] = child0_ptr
         elif dtype.is_large_list():
             fmt = "+L"
-            n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
-            var child0 = CArrowSchema.from_field(
-                dtype.as_large_list().value_field().copy()
-            )
-            var child0_ptr = _alloc[CArrowSchema](1)
-            child0_ptr.unsafe_write(child0^)
-            children[unsafe_offset=0] = child0_ptr
         elif dtype.is_fixed_size_list():
-            ref fsl = dtype.as_fixed_size_list()
-            fmt = {"+w:", fsl.size}
-            n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
-            var child0 = CArrowSchema.from_field(fsl.value_field().copy())
-            var child0_ptr = _alloc[CArrowSchema](1)
-            child0_ptr.unsafe_write(child0^)
-            children[unsafe_offset=0] = child0_ptr
+            fmt = {"+w:", dtype.as_fixed_size_list().size}
         elif dtype.is_fixed_size_binary():
             ref fsb = dtype.as_fixed_size_binary()
             fmt = {"w:", fsb.byte_width}
@@ -572,28 +563,11 @@ struct CArrowSchema(Copyable, Movable):
             )
         elif dtype.is_struct():
             fmt = "+s"
-            ref st = dtype.as_struct()
-            n_children = Int64(len(st.fields))
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](
-                Int(n_children)
-            )
-            for i in range(Int(n_children)):
-                var child = CArrowSchema.from_field(st.fields[i])
-                var child_ptr = _alloc[CArrowSchema](1)
-                child_ptr.unsafe_write(child^)
-                children[unsafe_offset=i] = child_ptr
         elif dtype.is_map():
             # "+m" with a single child = the non-nullable "entries" struct of
             # (key, value). keys_sorted rides in the schema flags.
-            ref mt = dtype.as_map()
             fmt = "+m"
-            n_children = 1
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](1)
-            var entries = CArrowSchema.from_field(mt.entries_field())
-            var entries_ptr = _alloc[CArrowSchema](1)
-            entries_ptr.unsafe_write(entries^)
-            children[unsafe_offset=0] = entries_ptr
-            if mt.keys_sorted:
+            if dtype.as_map().keys_sorted:
                 flags = ARROW_FLAG_MAP_KEYS_SORTED
         elif dtype.is_dictionary():
             ref dt = dtype.as_dictionary()
@@ -630,13 +604,18 @@ struct CArrowSchema(Copyable, Movable):
                 t"CArrowSchema.from_dtype: unsupported dtype: {dtype}"
             )
 
+        # A dictionary's children are its value type's, and they belong to
+        # the dictionary schema exported above, not to the index.
+        var fields = List[Field]()
+        if not dtype.is_dictionary():
+            fields = dtype.children()
         return CArrowSchema(
             format=_c_string(fmt),
             name=_null_ptr[c_char](),
             metadata=_null_ptr[c_char](),
             flags=flags,
-            n_children=n_children,
-            children=children,
+            n_children=Int64(len(fields)),
+            children=_export_children(fields),
             dictionary=dictionary_ptr,
             release=_release_exported_schema,
             private_data=_null_ptr[NoneType](),
@@ -674,28 +653,13 @@ struct CArrowSchema(Copyable, Movable):
         the format is always "+s" and children correspond to the schema fields.
         Schema-level `custom_metadata` is encoded into the metadata blob.
         """
-        var n_fields = len(schema.fields)
-        var children: Pointer[
-            Pointer[CArrowSchema, MutUntrackedOrigin], MutUntrackedOrigin
-        ] = _null_ptr[Pointer[CArrowSchema, MutUntrackedOrigin]]()
-        if n_fields > 0:
-            children = _alloc[Pointer[CArrowSchema, MutUntrackedOrigin]](
-                n_fields
-            )
-            for i in range(n_fields):
-                # Move each child value onto the heap so the pointer is stable.
-                var child = CArrowSchema.from_field(schema.fields[i])
-                var child_ptr = _alloc[CArrowSchema](1)
-                child_ptr.unsafe_write(child^)
-                children[unsafe_offset=i] = child_ptr
-
         return CArrowSchema(
             format=_c_string("+s"),
             name=_null_ptr[c_char](),
             metadata=_encode_c_metadata(schema.metadata),
             flags=0,
-            n_children=Int64(n_fields),
-            children=children,
+            n_children=Int64(len(schema.fields)),
+            children=_export_children(schema.fields),
             dictionary=_null_ptr[CArrowSchema](),
             release=_release_exported_schema,
             private_data=_null_ptr[NoneType](),
