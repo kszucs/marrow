@@ -1575,9 +1575,7 @@ def dictionary(
 
 def struct_(var *fields: Field) -> StructType:
     """Construct a struct type from variadic fields."""
-    var list = List[Field]()
-    for field in fields:
-        list.append(field.copy())
+    var list = [field.copy() for field in fields]
     return StructType(list^)
 
 

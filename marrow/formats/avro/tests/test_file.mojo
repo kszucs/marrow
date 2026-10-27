@@ -434,9 +434,7 @@ def test_avro_write_and_read_through_the_libraries() raises:
 def test_avro_codec_native_and_library() raises:
     """Each codec's blocks decode whichever of marrow's codec or the system
     library wrote them."""
-    var data = List[UInt8]()
-    for i in range(5000):
-        data.append(UInt8((i * 7 + (i // 13)) & 0xFF))
+    var data = [UInt8((i * 7 + (i // 13)) & 0xFF) for i in range(5000)]
     for codec in [
         AvroCodec.NULL,
         AvroCodec.DEFLATE,

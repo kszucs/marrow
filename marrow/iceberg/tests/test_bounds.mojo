@@ -77,9 +77,7 @@ def test_iceberg_bound_temporal() raises:
         [0x00, 0x83, 0x07, 0xE0, 0x12, 0, 0, 0],
     )
     var micros = Int64(1_510_871_468_000_000)
-    var expected = List[UInt8]()
-    for i in range(8):
-        expected.append(UInt8((micros >> Int64(8 * i)) & 0xFF))
+    var expected = [UInt8((micros >> Int64(8 * i)) & 0xFF) for i in range(8)]
     _round_trip(
         PrimitiveScalar[TimestampType](micros, timestamp(microsecond)),
         expected,

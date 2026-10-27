@@ -117,24 +117,15 @@ def _agg(obj: PythonObject) raises -> DynValue:
 
 
 def _agg_list(obj: PythonObject) raises -> List[DynValue]:
-    var out = List[DynValue]()
-    for i in range(Int(py=obj.__len__())):
-        out.append(_agg(obj[i]))
-    return out^
+    return [_agg(v) for v in obj]
 
 
 def _string_list(obj: PythonObject) raises -> List[String]:
-    var out = List[String]()
-    for i in range(Int(py=obj.__len__())):
-        out.append(String(py=obj[i]))
-    return out^
+    return [String(py=v) for v in obj]
 
 
 def _int_list(obj: PythonObject) raises -> List[Int]:
-    var out = List[Int]()
-    for i in range(Int(py=obj.__len__())):
-        out.append(Int(py=obj[i]))
-    return out^
+    return [Int(py=v) for v in obj]
 
 
 def _scan_schema(schema: PythonObject, path: String) raises -> Schema:
@@ -584,9 +575,7 @@ def load_dataset(
         return _wrap(_load_dataset(p, String(py=name), s, r))
     var files = DataFiles()
     for key in data_files:
-        var patterns = List[String]()
-        for pattern in data_files[key]:
-            patterns.append(String(py=pattern))
+        var patterns = [String(py=pattern) for pattern in data_files[key]]
         files.add(String(py=key), patterns^)
     return _wrap(_load_dataset(p, files, s, r))
 

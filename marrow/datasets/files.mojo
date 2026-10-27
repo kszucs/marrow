@@ -33,10 +33,7 @@ struct DataFiles(Copyable, Movable, Writable):
 
     def splits(self) -> List[String]:
         """The split names."""
-        var out = List[String]()
-        for split in self._splits.keys():
-            out.append(split.copy())
-        return out^
+        return List(self._splits.keys())
 
     def patterns(self, split: String) raises -> List[Glob]:
         """The patterns of `split`; a `KeyError` naming the splits there are

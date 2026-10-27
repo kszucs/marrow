@@ -463,9 +463,7 @@ struct _Reader[o: ImmOrigin]:
 
     def read(mut self, root: _Node[Self.o]) raises -> IntegrationJson:
         var nodes = root["schema"].items("fields")
-        var fields = List[Field]()
-        for node in nodes:
-            fields.append(Self.field(node))
+        var fields = [Self.field(node) for node in nodes]
         var schema = Schema(fields=fields^, metadata=root["schema"].metadata())
 
         var batches = List[RecordBatch]()
@@ -650,9 +648,7 @@ struct _Reader[o: ImmOrigin]:
                 Self.only_child(node), spec.flag("keysSorted", False)
             )
         elif name == "struct":
-            var fields = List[Field]()
-            for child in node.items("children"):
-                fields.append(Self.field(child))
+            var fields = [Self.field(child) for child in node.items("children")]
             return struct_(fields^)
         raise NotImplementedError(
             t"integration json: unsupported type '{name}'"
@@ -735,9 +731,7 @@ struct _Reader[o: ImmOrigin]:
             )
         elif dtype.is_fixed_size_binary():
             var width = dtype.as_fixed_size_binary().byte_width
-            var offsets = List[Int]()
-            for i in range(count + 1):
-                offsets.append(i * width)
+            var offsets = [i * width for i in range(count + 1)]
             buffers.append(column.binary(offsets, hex=True))
         elif dtype.is_string_view() or dtype.is_binary_view():
             buffers = column.views(hex=dtype.is_binary_view())

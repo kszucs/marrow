@@ -1494,9 +1494,7 @@ struct SchemaMapping(Movable):
 
     def full(self) -> Projection:
         """Read plan for every column, in column-chunk order."""
-        var decode_order = List[Int]()
-        for i in range(len(self.leaves)):
-            decode_order.append(i)
+        var decode_order = List(range(len(self.leaves)))
         return Projection(
             Schema(copy=self.schema), self.nodes.copy(), decode_order^
         )

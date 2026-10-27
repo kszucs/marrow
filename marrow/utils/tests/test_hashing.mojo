@@ -36,10 +36,7 @@ def _bytes(s: String) -> List[UInt8]:
 
 
 def _iota_bytes(n: Int) -> List[UInt8]:
-    var out = List[UInt8]()
-    for i in range(n):
-        out.append(UInt8(i))
-    return out^
+    return [UInt8(i) for i in range(n)]
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +213,7 @@ def test_xxhash32_matches_libzstd() raises:
             assert_equal(
                 XxHash32.hash(Span(data), seed=seed), _lib_xxh32(data, seed)
             )
-    var long = List[UInt8]()
-    for i in range(100_003):
-        long.append(UInt8((i * 7919) & 0xFF))
+    var long = [UInt8((i * 7919) & 0xFF) for i in range(100_003)]
     assert_equal(XxHash32.hash(Span(long)), _lib_xxh32(long, 0))
 
 
@@ -350,10 +345,7 @@ def test_rapid_secret_is_prime_decides() raises:
 
 
 def _iota_span(n: Int) -> List[UInt8]:
-    var out = List[UInt8]()
-    for i in range(n):
-        out.append(UInt8(i & 0xFF))
-    return out^
+    return [UInt8(i & 0xFF) for i in range(n)]
 
 
 def _assert_rapid(n: Int, expected: UInt64) raises:
@@ -461,17 +453,13 @@ def test_rapidhash64_span_agrees_with_lane_path() raises:
     """The 4- and 8-byte span path and `hash_fixed` are the same branch of
     `rapidhash_internal`, so they must agree — this is what ties the new
     variable-length code to the lane hash the kernels already use."""
-    var eight = List[UInt8]()
-    for _ in range(8):
-        eight.append(0)
+    var eight = List(length=8, fill=UInt8(0))
     assert_equal(
         RapidHash64.hash(Span(eight)),
         RapidHash64.hash_lanes[8, 1](SIMD[DType.uint64, 1](0))[0],
     )
 
-    var four = List[UInt8]()
-    for _ in range(4):
-        four.append(0)
+    var four = List(length=4, fill=UInt8(0))
     assert_equal(
         RapidHash64.hash(Span(four)),
         RapidHash64.hash_lanes[4, 1](SIMD[DType.uint64, 1](0))[0],
@@ -494,10 +482,7 @@ def test_rapidhash64_span_agrees_with_lane_path() raises:
 
 
 def _le_bytes(value: UInt64, width: Int) -> List[UInt8]:
-    var out = List[UInt8]()
-    for i in range(width):
-        out.append(UInt8((value >> UInt64(i * 8)) & 0xFF))
-    return out^
+    return [UInt8((value >> UInt64(i * 8)) & 0xFF) for i in range(width)]
 
 
 def test_hash_lanes_agrees_with_hash_rapidhash() raises:

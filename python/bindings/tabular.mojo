@@ -39,9 +39,7 @@ def _export_c_array(
 ) raises -> PythonObject:
     """Export schema + columns as Arrow C Data Interface capsule pair."""
     var schema_cap = CArrowSchema.from_schema(schema).to_pycapsule()
-    var cols = List[DynArray]()
-    for col in columns:
-        cols.append(col.copy())
+    var cols = columns.copy()
     var struct_arr: DynArray = RecordBatch(
         schema=schema, columns=cols^
     ).to_struct_array()
@@ -82,9 +80,7 @@ def _build_from_arrays_with_schema(
 ) raises -> RecordBatch:
     """Build a RecordBatch from a list of arrays + explicit schema."""
     var schema = Schema(py=schema_obj)
-    var columns = List[DynArray]()
-    for arr_obj in data:
-        columns.append(DynArray(py=arr_obj))
+    var columns = [DynArray(py=arr_obj) for arr_obj in data]
     return RecordBatch(schema=schema^, columns=columns^)
 
 
@@ -159,14 +155,10 @@ def _record_batch_select(
     var n = Int(columns.__len__())
     var builtins = Python.import_module("builtins")
     if n > 0 and builtins.isinstance(columns[0], builtins.int):
-        var indices = List[Int]()
-        for i in range(n):
-            indices.append(Int(py=columns[i]))
+        var indices = [Int(py=v) for v in columns]
         return ptr[].select(indices).to_python_object()
     else:
-        var names = List[String]()
-        for i in range(n):
-            names.append(String(py=columns[i]))
+        var names = [String(py=v) for v in columns]
         return ptr[].select(names).to_python_object()
 
 
@@ -434,9 +426,7 @@ def _record_batch_join(
     ref left = py_self.downcast_value_ptr[RecordBatch]()[]
     ref right_rb = right.downcast_value_ptr[RecordBatch]()[]
 
-    var left_keys = List[String]()
-    for i in range(Int(keys.__len__())):
-        left_keys.append(String(py=keys[i]))
+    var left_keys = [String(py=v) for v in keys]
 
     var rkeys = List[String]()
     if right_keys is not PythonObject(None):
@@ -518,9 +508,7 @@ def _record_batch_rename_columns(
     py_self: PythonObject, names: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    var out = List[String]()
-    for i in range(Int(py=names.__len__())):
-        out.append(String(py=names[i]))
+    var out = [String(py=v) for v in names]
     return ptr[].rename_columns(out).to_python_object()
 
 

@@ -187,9 +187,7 @@ def _identity_on_x() -> PartitionSpec:
 
 def test_iceberg_index_identity_partition_without_bounds() raises:
     """With no bounds, an identity partition value is both min and max."""
-    var files = List[DataFile]()
-    for v in [3, 7, 11]:
-        files.append(_File(4, [_i64(v)]).build())
+    var files = [_File(4, [_i64(v)]).build() for v in [3, 7, 11]]
     var idx = Index.from_manifest(files, _schema(), _identity_on_x())
     var eq7: List[DynValue] = [DynValue(col("x", int64) == lit(7, int64))]
     assert_equal(idx.read_plan(eq7), [1])
@@ -220,9 +218,7 @@ def test_iceberg_index_non_identity_partition_prunes_nothing() raises:
             )
         ],
     )
-    var files = List[DataFile]()
-    for v in [0, 1]:
-        files.append(_File(4, [_i64(v)]).build())
+    var files = [_File(4, [_i64(v)]).build() for v in [0, 1]]
     var idx = Index.from_manifest(files, _schema(), spec)
     var eq0: List[DynValue] = [DynValue(col("x", int64) == lit(0, int64))]
     assert_equal(idx.read_plan(eq0), [0, 1])

@@ -2755,9 +2755,7 @@ struct StructArray(Array):
         )
 
     def __init__(out self, data: ArrayData) raises:
-        var children = List[DynArray]()
-        for c in data.children:
-            children.append(DynArray.from_data(c))
+        var children = [DynArray.from_data(c) for c in data.children]
         self = Self(
             dtype=data.dtype.copy(),
             length=data.length,
@@ -3005,9 +3003,7 @@ struct StructArray(Array):
 
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
-        var children = List[ArrayData]()
-        for c in self.children:
-            children.append(c.to_data())
+        var children = [c.to_data() for c in self.children]
         return ArrayData(
             dtype=self.dtype.copy(),
             length=self.length,

@@ -253,10 +253,7 @@ def test_delta_length_byte_array() raises:
 
 
 def _sample() -> List[UInt8]:
-    var data = List[UInt8]()
-    for i in range(4096):
-        data.append(UInt8((i * 7 + (i // 13)) & 0xFF))
-    return data^
+    return [UInt8((i * 7 + (i // 13)) & 0xFF) for i in range(4096)]
 
 
 def _roundtrip(codec: Compression) raises:

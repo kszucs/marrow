@@ -439,9 +439,7 @@ struct BenchSuite(Movable):
         var flags = CLIFlags()
 
         if flags.list_cases:
-            var names = List[String]()
-            for b in self.benches:
-                names.append(String(b.name))
+            var names = [String(b.name) for b in self.benches]
             _print_json_array(names)
             return
 

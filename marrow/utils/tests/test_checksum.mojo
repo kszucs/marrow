@@ -31,9 +31,7 @@ def test_crc32_reference_vectors() raises:
 def test_crc32_covers_every_byte_value() raises:
     """0x00-0xFF exercises all 256 table entries, so a wrong polynomial or a
     reflection mistake cannot slip through on ASCII alone."""
-    var all_bytes = List[UInt8]()
-    for i in range(256):
-        all_bytes.append(UInt8(i))
+    var all_bytes = [UInt8(i) for i in range(256)]
     assert_equal(Crc32.compute(Span(all_bytes)), UInt32(0x29058C73))
 
 
@@ -72,9 +70,7 @@ def test_crc32_value_is_repeatable() raises:
 
 def test_crc32_detects_a_single_bit_flip() raises:
     var a = _bytes("marrow")
-    var b = List[UInt8]()
-    for i in range(len(a)):
-        b.append(a[i])
+    var b = a.copy()
     b[0] = b[0] ^ 1
     assert_true(Crc32.compute(Span(a)) != Crc32.compute(Span(b)))
 
@@ -111,9 +107,7 @@ def test_crc32c_step_is_the_byte_update() raises:
         x ^= x << 13
         x ^= x >> 17
         x ^= x << 5
-        var word = List[UInt8]()
-        for b in range(4):
-            word.append(UInt8((x >> UInt32(8 * b)) & 0xFF))
+        var word = [UInt8((x >> UInt32(8 * b)) & 0xFF) for b in range(4)]
         var c = Crc32c()
         c.update(Span(word))
         assert_equal(~Crc32c.step(0xFFFFFFFF, x), c.value())

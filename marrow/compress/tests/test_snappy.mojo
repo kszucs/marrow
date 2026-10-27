@@ -462,9 +462,7 @@ def test_utils_snappy_pair_decodes_every_shape_pairing() raises:
     var all = shapes()
     all.append(words(5000))
     all.append(random_bytes(300))
-    var comps = List[List[UInt8]]()
-    for i in range(len(all)):
-        comps.append(_compress(all[i]))
+    var comps = [_compress(all[i]) for i in range(len(all))]
     for i in range(len(all)):
         for j in range(len(all)):
             var na = len(all[i])

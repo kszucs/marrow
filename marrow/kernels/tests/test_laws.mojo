@@ -499,10 +499,7 @@ def check_prunable[
 
 def _int8_domain() -> List[Scalar[DType.int8]]:
     """Every value from -3 to 3: each interval holds all its integers."""
-    var domain = List[Scalar[DType.int8]]()
-    for v in range(-3, 4):
-        domain.append(Scalar[DType.int8](v))
-    return domain^
+    return [Scalar[DType.int8](v) for v in range(-3, 4)]
 
 
 def _float64_domain() -> List[Scalar[DType.float64]]:

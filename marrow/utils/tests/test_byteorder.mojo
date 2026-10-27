@@ -18,10 +18,7 @@ from ..integers import ordered, unordered, unzigzag, zigzag
 
 
 def _bytes(*vals: Int) -> List[UInt8]:
-    var out = List[UInt8]()
-    for v in vals:
-        out.append(UInt8(v))
-    return out^
+    return [UInt8(v) for v in vals]
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +220,7 @@ def test_leb128_raises_when_truncated() raises:
 
 
 def test_leb128_raises_when_too_long() raises:
-    var b = List[UInt8]()
-    for _ in range(12):
-        b.append(UInt8(0x80))
+    var b = List(length=12, fill=UInt8(0x80))
     b.append(UInt8(0x01))
     with assert_raises():
         var _ = Leb128.read(Span(b), 0)

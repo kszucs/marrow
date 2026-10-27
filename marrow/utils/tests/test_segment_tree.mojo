@@ -46,9 +46,7 @@ comptime _SIZES: List[Int] = [0, 1, 2, 3, 5, 7, 8, 9, 13, 16, 17]
 
 def test_segment_tree_sums_every_range() raises:
     for n in materialize[_SIZES]():
-        var leaves = List[_Sum]()
-        for i in range(n):
-            leaves.append(_Sum((i * 7919) % 101 - 50))
+        var leaves = [_Sum((i * 7919) % 101 - 50) for i in range(n)]
         var tree = SegmentTree(leaves)
         assert_equal(len(tree), n)
         for lo in range(n + 1):
@@ -61,9 +59,7 @@ def test_segment_tree_sums_every_range() raises:
 
 def test_segment_tree_preserves_order() raises:
     for n in materialize[_SIZES]():
-        var leaves = List[_Concat]()
-        for i in range(n):
-            leaves.append(_Concat(String(chr(ord("a") + i))))
+        var leaves = [_Concat(String(chr(ord("a") + i))) for i in range(n)]
         var tree = SegmentTree(leaves)
         for lo in range(n + 1):
             for hi in range(lo, n + 1):

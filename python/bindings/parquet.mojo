@@ -44,9 +44,7 @@ def parquet_read_table(
     var builtins = Python.import_module("builtins")
     var cols: Optional[List[String]] = None
     if not columns.__is__(builtins.None):
-        var names = List[String]()
-        for i in range(Int(py=columns.__len__())):
-            names.append(String(py=columns[i]))
+        var names = [String(py=v) for v in columns]
         cols = names^
     return _read_table(
         String(py=path),

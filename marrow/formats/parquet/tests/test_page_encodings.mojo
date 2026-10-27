@@ -15,10 +15,7 @@ from ..encodings import (
 
 
 def _bytes(*values: Int) -> List[UInt8]:
-    var out = List[UInt8]()
-    for v in values:
-        out.append(UInt8(v))
-    return out^
+    return [UInt8(v) for v in values]
 
 
 def _dbp_header(block: Int, miniblocks: Int, total: Int) -> List[UInt8]:

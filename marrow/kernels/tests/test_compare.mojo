@@ -648,10 +648,7 @@ def _same_keys(
     var same = Bitmap.alloc_zeroed(n)
     same.set_range(0, n, True)
     KeyCompare.dispatch(left, _idx(li), right, _idx(ri), same, ctx)
-    var out = List[Bool]()
-    for i in range(n):
-        out.append(same.test(i))
-    return out^
+    return [same.test(i) for i in range(n)]
 
 
 def test_key_compare_nulls_are_one_value() raises:

@@ -243,9 +243,7 @@ def fixed_size_list_(
 
 def struct_(fields_obj: PythonObject) raises -> PythonObject:
     """Create a struct DataType from a list of Fields."""
-    var fields = List[dt.Field]()
-    for f in fields_obj:
-        fields.append(dt.Field(py=f))
+    var fields = [dt.Field(py=f) for f in fields_obj]
     return dt.struct_(fields^).to_dyn().to_python_object()
 
 

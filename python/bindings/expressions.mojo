@@ -217,17 +217,11 @@ def boxed(obj: PythonObject) raises -> DynValue:
 
 def boxed_list(obj: PythonObject) raises -> List[DynValue]:
     """A Python sequence of expressions / column names."""
-    var out = List[DynValue]()
-    for i in range(Int(py=obj.__len__())):
-        out.append(boxed(obj[i]))
-    return out^
+    return [boxed(v) for v in obj]
 
 
 def bool_list(obj: PythonObject) raises -> List[Bool]:
-    var out = List[Bool]()
-    for i in range(Int(py=obj.__len__())):
-        out.append(Bool(py=obj[i]))
-    return out^
+    return [Bool(py=v) for v in obj]
 
 
 def py_str_list(names: List[String]) raises -> PythonObject:

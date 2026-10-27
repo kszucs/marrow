@@ -446,9 +446,7 @@ def _read_chunks[
 ](reader: C, schema: Schema) raises -> RecordBatch:
     """Every chunk's rows, read last chunk first and put back in chunk order:
     a chunk must not depend on the one before it."""
-    var parts = List[List[RecordBatch]]()
-    for _ in range(reader.num_chunks()):
-        parts.append(List[RecordBatch]())
+    var parts = List(length=reader.num_chunks(), fill=List[RecordBatch]())
     for i in range(reader.num_chunks() - 1, -1, -1):
         parts[i] = reader.read_chunk(i, ExecContext.serial())
     var batches = List[RecordBatch]()

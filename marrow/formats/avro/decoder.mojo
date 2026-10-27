@@ -313,9 +313,7 @@ struct RecordDecoder(Movable):
         else:
             for i in range(len(full.fields)):
                 selected.append(i)
-        var fields = List[Field]()
-        for i in selected:
-            fields.append(full.fields[i].copy())
+        var fields = [full.fields[i].copy() for i in selected]
         self._avro = avro.copy()
         self._fields = full.fields.copy()
         self._selected = selected^

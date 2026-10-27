@@ -377,9 +377,7 @@ def test_json_trailing_garbage() raises:
 
 
 def test_json_invalid_utf8() raises:
-    var bytes = List[Byte]()
-    for b in '{"a": "'.as_bytes():
-        bytes.append(b)
+    var bytes = List('{"a": "'.as_bytes())
     bytes.append(0xFF)
     for b in '"}\n'.as_bytes():
         bytes.append(b)

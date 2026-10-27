@@ -20,9 +20,7 @@ def avro_read_table(
     var builtins = Python.import_module("builtins")
     if columns.__is__(builtins.None):
         return read_avro(String(py=path)).to_python_object()
-    var cols = List[String]()
-    for i in range(Int(py=columns.__len__())):
-        cols.append(String(py=columns[i]))
+    var cols = [String(py=v) for v in columns]
     return read_avro(String(py=path), cols^).to_python_object()
 
 

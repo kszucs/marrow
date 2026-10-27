@@ -87,9 +87,7 @@ struct Schema(
         elif Bool(py=builtins.isinstance(py, builtins.list)) or Bool(
             py=builtins.isinstance(py, builtins.tuple)
         ):
-            var fields = List[Field]()
-            for f in py:
-                fields.append(f.downcast_value_ptr[Field]()[].copy())
+            var fields = [f.downcast_value_ptr[Field]()[].copy() for f in py]
             self = Schema(fields=fields^)
         else:
             raise TypeError(

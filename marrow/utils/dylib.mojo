@@ -277,10 +277,7 @@ struct LibSet[key: StaticString, specs: List[LibSpec]](Movable):
 
     @staticmethod
     def _open() -> List[Dylib]:
-        var out = List[Dylib]()
-        for s in materialize[Self.specs]():
-            out.append(Dylib.open_spec(s))
-        return out^
+        return [Dylib.open_spec(s) for s in materialize[Self.specs]()]
 
     comptime _GLOBAL = _Global[Self.key, _LibCell.empty]
 

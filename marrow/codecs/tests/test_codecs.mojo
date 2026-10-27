@@ -48,13 +48,9 @@ def _columns[T: DType]() -> List[List[Scalar[T]]]:
     cols.append(
         [Scalar[T](0), Scalar[T].MAX_FINITE, Scalar[T].MIN_FINITE, Scalar[T](1)]
     )
-    var runs = List[Scalar[T]]()
-    for i in range(1000):
-        runs.append(Scalar[T]((i // 37) % 3))
+    var runs = [Scalar[T]((i // 37) % 3) for i in range(1000)]
     cols.append(runs^)
-    var sorted = List[Scalar[T]]()
-    for i in range(301):
-        sorted.append(Scalar[T](i * 3))
+    var sorted = [Scalar[T](i * 3) for i in range(301)]
     cols.append(sorted^)
     comptime if T.is_floating_point():
         cols.append(
@@ -275,9 +271,7 @@ def test_codecs_cast() raises:
 def test_codecs_byte_swap() raises:
     check[DType.int64](Cascade[ByteSwap, Plain]())
     # Values wider than a block of scratch holds as `uint64`s.
-    var values = List[Int128]()
-    for i in range(3000):
-        values.append(Int128(i) << 100 | Int128(i))
+    var values = [Int128(i) << 100 | Int128(i) for i in range(3000)]
     var cascade = Cascade[ByteSwap, Plain]()
     var e = cascade.encode_view(BufferView(Span(values)))
     # The second value, big-endian: bit 100 in its fourth byte, 1 in its
@@ -433,10 +427,7 @@ def test_cascade_delta_byte_array() raises:
 
 
 def _bytes(node: Encoded) -> List[UInt8]:
-    var out = List[UInt8]()
-    for v in node.bytes():
-        out.append(v)
-    return out^
+    return List(node.bytes())
 
 
 def _encode[
@@ -503,9 +494,7 @@ def test_codecs_parquet_delta_binary_packed() raises:
 def test_codecs_arrays() raises:
     """A column goes in and comes out as an array; `decode_into` writes
     into any view, an array's buffer at an offset among them."""
-    var values = List[Int64]()
-    for i in range(3000):
-        values.append(Int64(i * 7 - (i % 13) * 1000))
+    var values = [Int64(i * 7 - (i % 13) * 1000) for i in range(3000)]
     var arr = array[Int64Type](values.copy(), int64)
     var cascade = Cascade[Delta, Zigzag, BitPack[]]()
     var node = cascade.encode_view(arr.values())

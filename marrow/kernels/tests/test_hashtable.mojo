@@ -37,10 +37,7 @@ def _spread(n: Int, distinct: Int, salt: Int = 0) raises -> UInt64Array:
 
 
 def _ids(ids: Int32Array) -> List[Int]:
-    var out = List[Int]()
-    for i in range(len(ids)):
-        out.append(Int(ids.unsafe_get(i)))
-    return out^
+    return [Int(ids.unsafe_get(i)) for i in range(len(ids))]
 
 
 # ---------------------------------------------------------------------------

@@ -44,10 +44,7 @@ struct RecordBatch(
 
     def __init__(out self, *, copy: Self):
         self.schema = Schema(copy=copy.schema)
-        var cols = List[DynArray]()
-        for col in copy.columns:
-            cols.append(col.copy())
-        self.columns = cols^
+        self.columns = copy.columns.copy()
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema
@@ -84,9 +81,7 @@ struct RecordBatch(
         """Import a C Data struct array whose children are `schema`'s columns.
         """
         var struct_arr = array^.to_array(struct_(schema.fields.copy()))
-        var columns = List[DynArray]()
-        for child in struct_arr.as_struct().children:
-            columns.append(child.copy())
+        var columns = struct_arr.as_struct().children.copy()
         return RecordBatch(schema=schema, columns=columns^)
 
     def to_python_object(var self) raises -> PythonObject:
@@ -105,9 +100,7 @@ struct RecordBatch(
     @staticmethod
     def empty(schema: Schema) raises -> RecordBatch:
         """Create a 0-row RecordBatch for the given schema."""
-        var cols = List[DynArray]()
-        for f in schema.fields:
-            cols.append(array(f.dtype))
+        var cols = [array(f.dtype) for f in schema.fields]
         return RecordBatch(schema=schema, columns=cols^)
 
     @staticmethod
@@ -177,9 +170,7 @@ struct RecordBatch(
 
     def slice(self, offset: Int, length: Int) raises -> RecordBatch:
         """Returns a zero-copy slice of this RecordBatch."""
-        var sliced = List[DynArray]()
-        for col in self.columns:
-            sliced.append(col.slice(offset, length))
+        var sliced = [col.slice(offset, length) for col in self.columns]
         return RecordBatch(schema=self.schema, columns=sliced^)
 
     def slice(self, offset: Int) raises -> RecordBatch:
@@ -221,9 +212,7 @@ struct RecordBatch(
             new_fields.append(
                 Field(name=names[i], dtype=f.dtype.copy(), nullable=f.nullable)
             )
-        var cols = List[DynArray]()
-        for col in self.columns:
-            cols.append(col.copy())
+        var cols = self.columns.copy()
         return RecordBatch(schema=Schema(fields=new_fields^), columns=cols^)
 
     def add_column(self, i: Int, field: Field, column: DynArray) -> RecordBatch:
@@ -380,9 +369,7 @@ struct RecordBatch(
     def to_struct_array(self) -> StructArray:
         """Converts this RecordBatch to a StructArray (columns become fields).
         """
-        var cols = List[DynArray]()
-        for col in self.columns:
-            cols.append(col.copy())
+        var cols = self.columns.copy()
         return StructArray(
             dtype=struct_(self.schema.fields.copy()),
             length=self.num_rows(),
@@ -513,9 +500,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         var n_cols = schema.num_fields()
         var columns = List[ChunkedArray]()
         for col_idx in range(n_cols):
-            var chunks = List[DynArray]()
-            for batch in batches:
-                chunks.append(batch.columns[col_idx].copy())
+            var chunks = [batch.columns[col_idx].copy() for batch in batches]
             columns.append(
                 ChunkedArray(
                     dtype=schema.fields[col_idx].dtype,

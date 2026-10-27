@@ -2357,9 +2357,7 @@ def test_join_concurrent_probes() raises:
     comptime PARTS = 4
     var step = len(probe) // PARTS
     var outputs = List[List[String]](length=PARTS, fill=List[String]())
-    var matches = List[BuildMatches]()
-    for _ in range(PARTS):
-        matches.append(join.matches(JOIN_LEFT, BUILD_LEFT))
+    var matches = [join.matches(JOIN_LEFT, BUILD_LEFT) for _ in range(PARTS)]
 
     def part(wid: Int, p: Int) raises {mut outputs, mut matches, imm}:
         outputs[p] = _row_strings(

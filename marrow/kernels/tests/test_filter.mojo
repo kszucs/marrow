@@ -146,9 +146,7 @@ def test_filtersparse_zero_byte() raises:
     """
     var a = arange[Int32Type](0, 20)
     # Only keep element 16 (first element of the third selection byte)
-    var sel = List[Optional[Bool]]()
-    for i in range(20):
-        sel.append(i == 16)
+    var sel: List[Optional[Bool]] = [i == 16 for i in range(20)]
     var result = FilterKernel.apply(a, (array(sel)).values())
     assert_equal(len(result), 1)
     assert_equal(result[0].value(), 16)

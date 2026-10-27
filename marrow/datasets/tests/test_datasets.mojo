@@ -28,9 +28,7 @@ from ..load import load_dataset
 
 
 def _ids(start: Int, stop: Int) raises -> DynArray:
-    var ids = List[Optional[Int]]()
-    for i in range(start, stop):
-        ids.append(i)
+    var ids: List[Optional[Int]] = [i for i in range(start, stop)]
     return array(ids, int64).to_dyn()
 
 
@@ -58,9 +56,7 @@ def _bytes(text: String) -> List[UInt8]:
 
 
 def _files(*patterns: String) -> DataFiles:
-    var out = List[String]()
-    for p in patterns:
-        out.append(p)
+    var out = [p for p in patterns]
     return DataFiles(out^)
 
 

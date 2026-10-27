@@ -1902,9 +1902,7 @@ struct CArrowArrayStream(Movable):
             var taken_array = c_array.unsafe_take_pointee()
             _free(c_array)
             var arr = taken_array^.to_array(struct_dtype^)
-            var columns = List[DynArray]()
-            for child in arr.as_struct().children:
-                columns.append(child.copy())
+            var columns = arr.as_struct().children.copy()
             batches.append(RecordBatch(schema=schema, columns=columns^))
 
         # Release the stream.

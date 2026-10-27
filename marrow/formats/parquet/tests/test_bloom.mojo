@@ -196,10 +196,7 @@ def test_write_bloom_filter_int() raises:
 
 def _le(v: Int, width: Int) -> List[UInt8]:
     """Little-endian `width`-byte encoding of a non-negative integer."""
-    var b = List[UInt8]()
-    for k in range(width):
-        b.append(UInt8((v >> (k * 8)) & 0xFF))
-    return b^
+    return [UInt8((v >> (k * 8)) & 0xFF) for k in range(width)]
 
 
 def _be16(v: Int) -> List[UInt8]:
