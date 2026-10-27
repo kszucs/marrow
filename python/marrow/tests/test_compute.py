@@ -600,3 +600,67 @@ def test_shift_strings_match_polars():
 def test_shift_fill_value_is_not_implemented():
     with pytest.raises(NotImplementedError):
         ma.compute.shift(ma.array([1, 2, 3]), 1, fill_value=0)
+
+
+# ── rolling windows ──────────────────────────────────────────────────────────
+
+
+_GAPPED = [1.0, 2.0, None, 4.0, 5.0, 6.0]
+
+
+@pytest.mark.parametrize(
+    "name, values, kwargs, expected",
+    [
+        (
+            "rolling_sum",
+            _GAPPED,
+            {"window_size": 2},
+            [None, 3.0, None, None, 9.0, 11.0],
+        ),
+        (
+            "rolling_sum",
+            _GAPPED,
+            {"window_size": 2, "min_samples": 1},
+            [1.0, 3.0, 2.0, 4.0, 9.0, 11.0],
+        ),
+        (
+            "rolling_sum",
+            _GAPPED,
+            {"window_size": 3, "center": True},
+            [None, None, None, None, 15.0, None],
+        ),
+        (
+            "rolling_sum",
+            [1, 2, 3, 4, 5, 6],
+            {"window_size": 4, "center": True, "min_samples": 1},
+            [3, 6, 10, 14, 18, 15],
+        ),
+        (
+            "rolling_sum",
+            [1, 2, 3, 4, 5, 6],
+            {"window_size": 3, "center": True, "min_samples": 1},
+            [3, 6, 9, 12, 15, 11],
+        ),
+        ("rolling_mean", [1, 2, 3, 4], {"window_size": 2}, [None, 1.5, 2.5, 3.5]),
+        (
+            "rolling_sum",
+            [1.0, math.nan, 3.0, 4.0],
+            {"window_size": 2},
+            [None, math.nan, math.nan, 7.0],
+        ),
+    ],
+)
+def test_rolling_matches_polars(name, values, kwargs, expected):
+    """Polars 1.43.2's answers."""
+    result = getattr(ma.compute, name)(ma.array(values), **kwargs)
+    _same_values(pa.array(result).to_pylist(), expected)
+
+
+def test_rolling_rejects_bad_window():
+    values = ma.array([1, 2, 3])
+    with pytest.raises(ma.ArrowInvalid):
+        ma.compute.rolling_sum(values, 0)
+    with pytest.raises(ma.ArrowInvalid):
+        ma.compute.rolling_sum(values, 2, min_samples=3)
+    with pytest.raises(NotImplementedError):
+        ma.compute.rolling_sum(values, 2, weights=[1, 2])

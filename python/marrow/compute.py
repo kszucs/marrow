@@ -171,6 +171,80 @@ def shift(values, n=1, *, fill_value=None, ctx=None):
     return Array.wrap(_ma.shift(values.unwrap(), n, (ctx or _serial())))
 
 
+# ── Rolling windows ──────────────────────────────────────────────────────────
+
+
+def _rolling(kernel, values, window_size, weights, min_samples, center, ctx):
+    """*kernel* over Polars' window, as the frame ``ROWS BETWEEN lo AND hi``:
+    the *window_size* rows ending at each row, or centred on it."""
+    if weights is not None:
+        raise NotImplementedError("weights is not implemented")
+    if center:
+        lo, hi = -(window_size // 2), (window_size - 1) // 2
+    else:
+        lo, hi = -(window_size - 1), 0
+    if min_samples is None:
+        min_samples = window_size
+    return Array.wrap(kernel(values.unwrap(), lo, hi, min_samples, (ctx or _serial())))
+
+
+def rolling_sum(
+    values, window_size, weights=None, *, min_samples=None, center=False, ctx=None
+):
+    """The sum of each row's window of *window_size* rows, nulls skipped.
+
+    Equivalent to Polars' ``Series.rolling_sum``: the window ends at the row,
+    or is centred on it with *center*, and a row is null when its window holds
+    fewer than *min_samples* valid values (*window_size* by default). Numeric
+    input only, summed in its own type, where Polars widens 8- and 16-bit
+    integers to ``int64``.
+    """
+    return _rolling(
+        _ma.rolling_sum, values, window_size, weights, min_samples, center, ctx
+    )
+
+
+def rolling_min(
+    values, window_size, weights=None, *, min_samples=None, center=False, ctx=None
+):
+    """The least value of each row's window of *window_size* rows.
+
+    Equivalent to Polars' ``Series.rolling_min``, with its window and
+    *min_samples* rules. NaN is skipped unless the whole window is NaN, as
+    ``min`` skips it; Polars propagates it.
+    """
+    return _rolling(
+        _ma.rolling_min, values, window_size, weights, min_samples, center, ctx
+    )
+
+
+def rolling_max(
+    values, window_size, weights=None, *, min_samples=None, center=False, ctx=None
+):
+    """The greatest value of each row's window of *window_size* rows.
+
+    Equivalent to Polars' ``Series.rolling_max``, with its window and
+    *min_samples* rules. NaN is skipped unless the whole window is NaN, as
+    ``max`` skips it; Polars propagates it.
+    """
+    return _rolling(
+        _ma.rolling_max, values, window_size, weights, min_samples, center, ctx
+    )
+
+
+def rolling_mean(
+    values, window_size, weights=None, *, min_samples=None, center=False, ctx=None
+):
+    """The mean of each row's window of *window_size* rows, as ``float64``.
+
+    Equivalent to Polars' ``Series.rolling_mean``, with its window and
+    *min_samples* rules; Polars keeps ``float32`` for a ``float32`` input.
+    """
+    return _rolling(
+        _ma.rolling_mean, values, window_size, weights, min_samples, center, ctx
+    )
+
+
 # ── List aggregates ─────────────────────────────────────────────────────────
 
 

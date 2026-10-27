@@ -27,13 +27,15 @@ from ...dtypes import (
 )
 from ...views import BufferView, cpu_lanes
 from ...kernels.aggregate import SumFold
-from ...kernels.core import BinaryKernel, Identity
+from ...kernels.core import Associative, BinaryKernel, Identity
 from ...kernels.filter import TakeKernel
 from ...kernels.nested import ArrayLengthKernel, ListReduceKernel
 from ...kernels.numeric import AddKernel, MaxKernel, MinKernel, MulKernel
 from ...kernels.scan import (
     CumulativeKernel,
     PairwiseDiffKernel,
+    RollingKernel,
+    RollingMeanKernel,
     Scan,
     ShiftKernel,
     SumScan,
@@ -422,3 +424,213 @@ def test_pairwise_diff_rejects_temporal() raises:
     var stamps: DynArray = t.finish()
     with assert_raises(contains="not numeric"):
         _ = PairwiseDiffKernel.dispatch(stamps, 1)
+
+
+# ---------------------------------------------------------------------------
+# RollingKernel, RollingMeanKernel
+# ---------------------------------------------------------------------------
+
+
+def _check_frames[
+    K: BinaryKernel & Associative & Identity, T: DType, S: Segments
+](src: BufferView[T, _], segments: S, lo: Int, hi: Int) raises:
+    """`frames` against a left fold of each row's clipped frame, the identity
+    where the frame is empty."""
+    var n = len(src)
+    var buf = Buffer.alloc_zeroed[T](n)
+    var dst = buf.view[T](0, n)
+    RollingKernel[K].frames(src, dst, segments, lo, hi)
+    for s in range(segments.count()):
+        var s0 = segments.start(s)
+        var s1 = segments.end(s)
+        for i in range(s0, s1):
+            var acc = K.identity[T]()
+            for j in range(max(i + lo, s0), min(i + hi, s1 - 1) + 1):
+                acc = K.core[T, 1](acc, src[j])
+            assert_true(
+                _same_value(dst[i], acc),
+                String(
+                    K.name,
+                    " [",
+                    lo,
+                    ", ",
+                    hi,
+                    "] segment ",
+                    s,
+                    " row ",
+                    i,
+                    ": ",
+                    dst[i],
+                    " is not ",
+                    acc,
+                ),
+            )
+
+
+def _rolling_layouts[
+    K: BinaryKernel & Associative & Identity, T: DType
+](src: BufferView[T, _], lo: Int, hi: Int) raises:
+    var n = len(src)
+    _check_frames[K](src, BySize(n, 1), lo, hi)
+    _check_frames[K](src, BySize(n, 13), lo, hi)
+    _check_frames[K](src, BySize.whole(n), lo, hi)
+    # Empty, single-row and irregular segments.
+    var ends = array([0, 0, 1, 2, 2, 9, 30, 31, 100, n], int32)
+    _check_frames[K](src, ByEnds(ends.values()), lo, hi)
+
+
+def _rolling_widths[
+    K: BinaryKernel & Associative & Identity, T: DType
+](src: BufferView[T, _], widths: List[Int]) raises:
+    """Trailing, centred and following frames of every width."""
+    for w in widths:
+        _rolling_layouts[K](src, -(w - 1), 0)
+        _rolling_layouts[K](src, -(w // 2), (w - 1) // 2)
+        _rolling_layouts[K](src, 1, w)
+
+
+def _random_int64(n: Int) raises -> Buffer[mut=True]:
+    var buf = Buffer.alloc_zeroed[DType.int64](n)
+    var state = UInt64(11)
+    for i in range(n):
+        state = state * 6364136223846793005 + 1442695040888963407
+        buf.unsafe_set[DType.int64](i, Int64(state))
+    return buf^
+
+
+def test_rolling_matches_brute_force() raises:
+    """Widths 1 to 8 take the direct fold and 9 to 70 van Herk-Gil-Werman."""
+    var buf = _random_int64(157)
+    var src = buf.view[DType.int64](0, 157)
+    var widths = List[Int]()
+    for w in range(1, 71):
+        widths.append(w)
+    _rolling_widths[AddKernel](src, widths)
+    _rolling_widths[MinKernel](src, widths)
+    _rolling_widths[MaxKernel](src, widths)
+
+
+def test_rolling_preceding_only_frames() raises:
+    var buf = _random_int64(157)
+    var src = buf.view[DType.int64](0, 157)
+    for frame in [(-7, -3), (-20, -12)]:
+        _rolling_layouts[AddKernel](src, frame[0], frame[1])
+        _rolling_layouts[MinKernel](src, frame[0], frame[1])
+        _rolling_layouts[MaxKernel](src, frame[0], frame[1])
+
+
+def test_rolling_min_max_nan() raises:
+    """NaN is skipped unless the whole frame is NaN."""
+    comptime n = 157
+    var buf = Buffer.alloc_zeroed[DType.float64](n)
+    for i in range(n):
+        var v = Float64((i * 37) % 101 - 50) + 0.5
+        if i % 5 == 0 or (i >= 60 and i < 72):
+            v = nan[DType.float64]()
+        buf.unsafe_set[DType.float64](i, v)
+    var src = buf.view[DType.float64](0, n)
+    var widths: List[Int] = [1, 2, 3, 8, 9, 16, 70]
+    _rolling_widths[MinKernel](src, widths)
+    _rolling_widths[MaxKernel](src, widths)
+
+
+def test_rolling_float_sum_relative_error() raises:
+    """A regrouped float sum is within `1e-12 * sum(|x|)` of the left fold."""
+    comptime n = 500
+    var buf = Buffer.alloc_zeroed[DType.float64](n)
+    var state = UInt64(5)
+    for i in range(n):
+        state = state * 6364136223846793005 + 1442695040888963407
+        buf.unsafe_set[DType.float64](
+            i, Float64(state >> 11) / Float64(1 << 53) * 2.0 - 1.0
+        )
+    var src = buf.view[DType.float64](0, n)
+    for w in [4, 64]:
+        var out = Buffer.alloc_zeroed[DType.float64](n)
+        var dst = out.view[DType.float64](0, n)
+        RollingKernel[AddKernel].frames(src, dst, BySize.whole(n), -(w - 1), 0)
+        for i in range(n):
+            var exact = Float64(0)
+            var magnitude = Float64(0)
+            for j in range(max(i - w + 1, 0), i + 1):
+                exact += src[j]
+                magnitude += abs(src[j])
+            assert_true(
+                abs(dst[i] - exact) <= 1e-12 * magnitude,
+                String("width ", w, " row ", i),
+            )
+
+
+def test_rolling_nulls_and_min_samples() raises:
+    """Polars' answers."""
+    var values = array([1, None, 3, None, None, 6], int64)
+    var whole = BySize.whole(6)
+    var sums = RollingKernel[AddKernel].apply(values, -2, 0, 2, whole)
+    assert_true(sums == array([None, None, 4, None, None, None], int64))
+    _payloads_zero_at_nulls(sums)
+    assert_true(
+        RollingKernel[MaxKernel].apply(values, -2, 0, 1, whole)
+        == array([1, 1, 3, 3, 3, 6], int64)
+    )
+    _assert_floats(
+        RollingMeanKernel.apply(values, -2, 0, 1, whole),
+        [1.0, 1.0, 2.0, 3.0, 3.0, 6.0],
+    )
+
+
+def test_rolling_nulls_wider_than_a_block() raises:
+    """Width 12, van Herk-Gil-Werman, over a slice whose validity starts
+    mid-byte and holds a run of nulls longer than the window: a frame of
+    nulls only is null even at `min_samples=1`."""
+    var b = Int64Builder(43)
+    for i in range(43):
+        if i >= 13 and i < 33:
+            b.append_null()
+        else:
+            b.append(Int64(i * 3 - 20))
+    var values = b.finish().slice(3)
+    var n = len(values)
+    var sums = RollingKernel[AddKernel].apply(
+        values, -11, 0, 1, BySize.whole(n)
+    )
+    var means = RollingMeanKernel.apply(values, -11, 0, 1, BySize.whole(n))
+    for i in range(n):
+        var total = Int64(0)
+        var count = 0
+        for j in range(max(i - 11, 0), i + 1):
+            if values.is_valid(j):
+                total += values.unsafe_get(j)
+                count += 1
+        var at = String("row ", i)
+        if count == 0:
+            assert_false(sums.is_valid(i), at)
+            assert_equal(sums.unsafe_get(i), 0, at)
+            assert_false(means.is_valid(i), at)
+        else:
+            assert_equal(sums.unsafe_get(i), total, at)
+            assert_equal(
+                means.unsafe_get(i), Float64(total) / Float64(count), at
+            )
+
+
+def test_rolling_rejects_bad_frames() raises:
+    var values = array([1, 2, 3], int64)
+    var whole = BySize.whole(3)
+    with assert_raises(contains="InvalidError"):
+        _ = RollingKernel[AddKernel].apply(values, 1, 0, 1, whole)
+    with assert_raises(contains="InvalidError"):
+        _ = RollingKernel[AddKernel].apply(values, -1, 0, 0, whole)
+    with assert_raises(contains="InvalidError"):
+        _ = RollingKernel[AddKernel].apply(values, -1, 0, 3, whole)
+    with assert_raises(contains="InvalidError"):
+        _ = RollingMeanKernel.apply(values, -1, 0, 3, whole)
+    var buf = Buffer.alloc_zeroed[DType.int64](3)
+    var out = Buffer.alloc_zeroed[DType.int64](3)
+    with assert_raises(contains="InvalidError"):
+        RollingKernel[AddKernel].frames(
+            buf.view[DType.int64](0, 3),
+            out.view[DType.int64](0, 3),
+            whole,
+            2,
+            1,
+        )

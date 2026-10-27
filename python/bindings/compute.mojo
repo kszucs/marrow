@@ -98,6 +98,32 @@ def _offset[
     return wrapper
 
 
+def _rolling[
+    f: def(DynArray, Int, Int, Int, ExecContext) raises thin -> DynArray,
+]() -> def(
+    PythonObject, PythonObject, PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    """``(array, lo, hi, min_samples, ctx) -> array``: the frame
+    ``ROWS BETWEEN lo AND hi``."""
+
+    def wrapper(
+        array: PythonObject,
+        lo: PythonObject,
+        hi: PythonObject,
+        min_samples: PythonObject,
+        ctx: PythonObject,
+    ) raises -> PythonObject:
+        return f(
+            DynArray(py=array),
+            Int(py=lo),
+            Int(py=hi),
+            Int(py=min_samples),
+            ExecContext(py=ctx),
+        ).to_python_object()
+
+    return wrapper
+
+
 def _reduce[
     f: def(BoolArray, Bool, Int, ExecContext) raises thin -> BoolScalar,
 ]() -> def(
@@ -350,3 +376,13 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     )
     mb.def_function[_offset[mk.ShiftKernel.dispatch]()]("shift")
     mb.def_function[_offset[mk.PairwiseDiffKernel.dispatch]()]("pairwise_diff")
+    mb.def_function[_rolling[mk.RollingKernel[mk.AddKernel].dispatch]()](
+        "rolling_sum"
+    )
+    mb.def_function[_rolling[mk.RollingKernel[mk.MinKernel].dispatch]()](
+        "rolling_min"
+    )
+    mb.def_function[_rolling[mk.RollingKernel[mk.MaxKernel].dispatch]()](
+        "rolling_max"
+    )
+    mb.def_function[_rolling[mk.RollingMeanKernel.dispatch]()]("rolling_mean")

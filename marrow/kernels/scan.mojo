@@ -9,22 +9,25 @@ restarts at every segment; `SumScan` is `Scan[AddKernel]`.
 `CumulativeKernel[K]` is `cumulative_sum`, `cumulative_prod`,
 `cumulative_min` and `cumulative_max` over it. `ShiftKernel` reads each row
 some rows back (`shift`), and `PairwiseDiffKernel` subtracts that row
-(`pairwise_diff`).
+(`pairwise_diff`). `RollingKernel[K]` folds each row's frame
+`ROWS BETWEEN lo AND hi` (`rolling_sum`, `rolling_min`, `rolling_max`), and
+`RollingMeanKernel` averages it (`rolling_mean`).
 
 Every kernel here takes `Segments` and computes within each segment, so a
 column cut into partitions is one call. Over a whole column the segments are
 `BySize.whole(n)`.
 """
 
-from std.math import align_up
+from std.math import align_up, iota
 
-from ..arrays import DynArray, PrimitiveArray
+from ..arrays import DynArray, Float64Array, PrimitiveArray
 from ..buffers import Bitmap, Buffer
 from ..builders import Int32Builder
-from ..dtypes import NumericType, PrimitiveType
+from ..dtypes import Float64Type, NumericType, PrimitiveType
+from ..errors import InvalidError
 from ..execution import ExecContext
 from ..views import BufferView, apply, cpu_lanes, valid_or_zero
-from .core import BinaryKernel, Identity, Kernel
+from .core import Associative, BinaryKernel, Identity, Kernel
 from .filter import TakeKernel
 from .numeric import AddKernel, SubKernel
 from .segments import BySize, Segments
@@ -394,6 +397,399 @@ struct PairwiseDiffKernel(Kernel):
             return Self.apply(
                 values.as_primitive[T](),
                 period,
+                BySize.whole(len(values)),
+                ctx,
+            ).to_dyn()
+
+        return values.dtype().try_visit[DynArray, NumericType](
+            leaf, "dtype is not numeric"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RollingKernel, RollingMeanKernel
+# ---------------------------------------------------------------------------
+
+
+def _check_frame[K: Kernel](lo: Int, hi: Int, min_samples: Int) raises:
+    """The frame `ROWS BETWEEN lo AND hi` holds a row, and `min_samples` is
+    one of its sizes."""
+    if lo > hi:
+        raise K.error[InvalidError](
+            t"the frame [{lo}, {hi}] ends before it starts"
+        )
+    if min_samples < 1 or min_samples > hi - lo + 1:
+        raise K.error[InvalidError](
+            t"min_samples must be between 1 and the frame's {hi - lo + 1}"
+            t" rows, got {min_samples}"
+        )
+
+
+def _valid_counts[
+    T: PrimitiveType, S: Segments
+](values: PrimitiveArray[T], segments: S, lo: Int, hi: Int) raises -> Buffer[
+    mut=False
+]:
+    """How many valid rows each row's frame holds, clipped to its segment."""
+    comptime C = DType.int32
+    var n = len(values)
+    var counts = Buffer.alloc_zeroed[C](n)
+    var dst = counts.view[C](0, n)
+    if values.null_count() == 0:
+        for s in range(segments.count()):
+            var s0 = segments.start(s)
+            var s1 = segments.end(s)
+            for i in range(s0, s1):
+                var width = min(i + hi, s1 - 1) - max(i + lo, s0) + 1
+                dst.store[1](i, Int32(max(width, 0)))
+    else:
+        var valid = values.validity().value()
+        var ones = Buffer.alloc_uninit[C](n)
+        var src = ones.view[C](0, n)
+
+        @always_inline
+        def one[W: Int](i: Int) {var valid} -> SIMD[C, W]:
+            return valid.load[W](i).cast[C]()
+
+        apply(src, one)
+        RollingKernel[AddKernel].frames(src, dst, segments, lo, hi)
+    return counts^.to_immutable()
+
+
+def _at_least(
+    counts: Buffer[mut=False], n: Int, min_samples: Int
+) raises -> Tuple[Optional[Bitmap[mut=False]], Int]:
+    """The rows of `n` whose count is at least `min_samples`, and how many are
+    not: a validity bitmap, `None` when every row is."""
+    comptime C = DType.int32
+    var c = counts.view[C](0, n)
+    var bits = Bitmap.alloc_zeroed(n)
+
+    @always_inline
+    def enough[W: Int](i: Int) {var c, var min_samples} -> SIMD[DType.bool, W]:
+        return c.load[W](i).ge(SIMD[C, W](min_samples))
+
+    apply[C](bits.view(0, n), enough)
+    var nulls = bits.view(0, n).unset_count()
+    var bitmap: Optional[Bitmap[mut=False]] = None
+    if nulls > 0:
+        bitmap = bits^.to_immutable(length=n)
+    return (bitmap, nulls)
+
+
+struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
+    """`K` over each row's frame `ROWS BETWEEN lo AND hi`, clipped to its
+    segment: `rolling_sum`, `rolling_min` and `rolling_max` with
+    `K = AddKernel`, `MinKernel` and `MaxKernel`, in the input's dtype.
+
+    A frame of at most eight rows is folded directly, several rows at a time;
+    a wider one by van Herk and Gil-Werman, which folds each row from a prefix
+    and a suffix of fixed blocks and so costs the same at every width. That
+    regroups the fold, which `Associative` allows: a floating-point sum may
+    round differently from a left fold.
+    """
+
+    comptime name = "rolling"
+
+    @staticmethod
+    def frames[
+        T: DType, S: Segments
+    ](
+        src: BufferView[T, _],
+        dst: BufferView[mut=True, T, _],
+        segments: S,
+        lo: Int,
+        hi: Int,
+    ) raises InvalidError:
+        """`dst[i]` is `K` over `src[l .. r]` for every row `i` of segment
+        `s`, with `l = max(i + lo, start(s))` and `r = min(i + hi, end(s) - 1)`,
+        and `K`'s identity where `l > r`. Rows in no segment are left as they
+        are."""
+        if lo > hi:
+            raise Self.error[InvalidError](
+                t"the frame [{lo}, {hi}] ends before it starts"
+            )
+        comptime W = cpu_lanes[T]
+        var w = hi - lo + 1
+        var direct = w <= 8
+        var n = len(src)
+        var identity = Self.K.identity[T]()
+        # van Herk-Gil-Werman: the fold of each block up to each row, and
+        # from each row to the block's end.
+        var scratch = 0 if direct else n
+        var prefix_buffer = Buffer.alloc_uninit[T](scratch)
+        var suffix_buffer = Buffer.alloc_uninit[T](scratch)
+        var prefix = prefix_buffer.view[T](0, scratch)
+        var suffix = suffix_buffer.view[T](0, scratch)
+        for s in range(segments.count()):
+            var s0 = segments.start(s)
+            var s1 = segments.end(s)
+            if not direct and s1 > s0:
+                var m = s1 - s0
+                Scan[Self.K]().run(
+                    src.slice(s0, m), prefix.slice(s0, m), BySize(m, w)
+                )
+                var block_end = s1
+                var block = s0 + ((m - 1) // w) * w
+                while block >= s0:
+                    var j = block_end - 1
+                    suffix.store[1](j, src.load[1](j))
+                    while j > block:
+                        j -= 1
+                        suffix.store[1](
+                            j,
+                            Self.K.core[T, 1](
+                                src.load[1](j), suffix.load[1](j + 1)
+                            ),
+                        )
+                    block_end = block
+                    block -= w
+            # Interior rows, whose frame lies inside the segment.
+            var first = min(max(s0, s0 - lo), s1)
+            var last = max(min(s1, s1 - hi), first)
+            var i = s0
+            while i < s1:
+                if i == first and first < last:
+                    i = last
+                else:
+                    var l = max(i + lo, s0)
+                    var r = min(i + hi, s1 - 1)
+                    # An empty frame answers the identity.
+                    var acc = identity
+                    if l <= r:
+                        if direct:
+                            for j in range(l, r + 1):
+                                acc = Self.K.core[T, 1](acc, src.load[1](j))
+                        elif (l - s0) // w == (r - s0) // w:
+                            # One block: the frame starts it, or is clipped
+                            # at the segment's end, which ends it.
+                            if (l - s0) % w == 0:
+                                acc = prefix.load[1](r)
+                            else:
+                                acc = suffix.load[1](l)
+                        else:
+                            acc = Self.K.core[T, 1](
+                                suffix.load[1](l), prefix.load[1](r)
+                            )
+                    dst.store[1](i, acc)
+                    i += 1
+            i = first
+            if direct:
+                while i < last:
+                    var stop = i + W if i + W <= last else i + 1
+                    if stop == i + W:
+                        var acc = src.load[W](i + lo)
+                        for d in range(1, w):
+                            acc = Self.K.core[T, W](
+                                acc, src.load[W](i + lo + d)
+                            )
+                        dst.store[W](i, acc)
+                    else:
+                        var acc = src.load[1](i + lo)
+                        for d in range(1, w):
+                            acc = Self.K.core[T, 1](
+                                acc, src.load[1](i + lo + d)
+                            )
+                        dst.store[1](i, acc)
+                    i = stop
+            else:
+                # Each frame is the suffix of one block and the prefix of the
+                # next, or the whole block when it starts one.
+                comptime Phase = DType.int64
+                var lanes = iota[Phase, W]()
+                while i < last:
+                    var stop = i + W if i + W <= last else i + 1
+                    if stop == i + W:
+                        var starts = (
+                            (lanes + Scalar[Phase](i + lo - s0))
+                            % Scalar[Phase](w)
+                        ).eq(0)
+                        var p = prefix.load[W](i + hi)
+                        dst.store[W](
+                            i,
+                            starts.select(
+                                p, Self.K.core[T, W](suffix.load[W](i + lo), p)
+                            ),
+                        )
+                    else:
+                        var p = prefix.load[1](i + hi)
+                        if (i + lo - s0) % w == 0:
+                            dst.store[1](i, p)
+                        else:
+                            dst.store[1](
+                                i, Self.K.core[T, 1](suffix.load[1](i + lo), p)
+                            )
+                    i = stop
+
+    @staticmethod
+    def apply[
+        T: NumericType, S: Segments
+    ](
+        values: PrimitiveArray[T],
+        lo: Int,
+        hi: Int,
+        min_samples: Int,
+        segments: S,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> PrimitiveArray[T]:
+        """`frames` over `values`, a null folding as `K`'s identity; a row is
+        null when its clipped frame holds fewer than `min_samples` valid
+        rows."""
+        _check_frame[Self](lo, hi, min_samples)
+        comptime N = T.native
+        var n = len(values)
+        var folded = Buffer.alloc_uninit[N](n)
+        var acc = folded.view[N](0, n)
+        if values.null_count() == 0:
+            Self.frames(values.values(), acc, segments, lo, hi)
+        else:
+            var data = values.values()
+            var valid = values.validity().value()
+            var identity = Self.K.identity[N]()
+            var filled = Buffer.alloc_uninit[N](n)
+            var src = filled.view[N](0, n)
+
+            @always_inline
+            def lane[
+                W: Int
+            ](i: Int) {var data, var valid, var identity} -> SIMD[N, W]:
+                return valid.load[W](i).select(
+                    data.load[W](i), SIMD[N, W](identity)
+                )
+
+            apply(src, lane)
+            Self.frames(src, acc, segments, lo, hi)
+        var validity = _at_least(
+            _valid_counts(values, segments, lo, hi), n, min_samples
+        )
+        var buffer: Buffer[mut=False]
+        if validity[0]:
+            var out = Buffer.alloc_uninit[N](n)
+            apply[N, N, valid_or_zero[N, _]](
+                acc, validity[0].value().view(0, n), out.view[N](0, n)
+            )
+            buffer = out^.to_immutable()
+        else:
+            buffer = folded^.to_immutable()
+        return PrimitiveArray[T](
+            values.dtype.copy(),
+            length=n,
+            nulls=validity[1],
+            offset=0,
+            bitmap=validity[0],
+            buffer=buffer,
+        )
+
+    @staticmethod
+    def dispatch(
+        values: DynArray,
+        lo: Int,
+        hi: Int,
+        min_samples: Int,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """`apply` over the whole column, for a numeric dtype."""
+
+        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
+            return Self.apply(
+                values.as_primitive[T](),
+                lo,
+                hi,
+                min_samples,
+                BySize.whole(len(values)),
+                ctx,
+            ).to_dyn()
+
+        return values.dtype().try_visit[DynArray, NumericType](
+            leaf, "dtype is not numeric"
+        )
+
+
+struct RollingMeanKernel(Kernel):
+    """The mean of each row's frame `ROWS BETWEEN lo AND hi`, clipped to its
+    segment, as float64: `rolling_mean`. Nulls are skipped, and a row is null
+    when its frame holds fewer than `min_samples` valid rows."""
+
+    comptime name = "rolling_mean"
+
+    @staticmethod
+    def apply[
+        T: NumericType, S: Segments
+    ](
+        values: PrimitiveArray[T],
+        lo: Int,
+        hi: Int,
+        min_samples: Int,
+        segments: S,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> Float64Array:
+        """The sum of each frame's valid values over their count."""
+        _check_frame[Self](lo, hi, min_samples)
+        comptime F = DType.float64
+        var n = len(values)
+        var data = values.values()
+        var cast = Buffer.alloc_uninit[F](n)
+        var x = cast.view[F](0, n)
+        if values.null_count() == 0:
+
+            @always_inline
+            def lane[W: Int](i: Int) {var data} -> SIMD[F, W]:
+                return data.load[W](i).cast[F]()
+
+            apply(x, lane)
+        else:
+            var valid = values.validity().value()
+
+            @always_inline
+            def masked[W: Int](i: Int) {var data, var valid} -> SIMD[F, W]:
+                return valid.load[W](i).select(
+                    data.load[W](i).cast[F](), SIMD[F, W](0)
+                )
+
+            apply(x, masked)
+        var summed = Buffer.alloc_uninit[F](n)
+        var sums = summed.view[F](0, n)
+        RollingKernel[AddKernel].frames(x, sums, segments, lo, hi)
+        var counted = _valid_counts(values, segments, lo, hi)
+        var counts = counted.view[DType.int32](0, n)
+        var out = Buffer.alloc_uninit[F](n)
+
+        @always_inline
+        def mean[
+            W: Int
+        ](i: Int) {var sums, var counts, var min_samples} -> SIMD[F, W]:
+            var c = counts.load[W](i)
+            return c.ge(SIMD[DType.int32, W](min_samples)).select(
+                sums.load[W](i) / c.cast[F](), SIMD[F, W](0)
+            )
+
+        apply(out.view[F](0, n), mean)
+        var validity = _at_least(counted, n, min_samples)
+        return Float64Array(
+            Float64Type(),
+            length=n,
+            nulls=validity[1],
+            offset=0,
+            bitmap=validity[0],
+            buffer=out^.to_immutable(),
+        )
+
+    @staticmethod
+    def dispatch(
+        values: DynArray,
+        lo: Int,
+        hi: Int,
+        min_samples: Int,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """`apply` over the whole column, for a numeric dtype."""
+
+        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
+            return Self.apply(
+                values.as_primitive[T](),
+                lo,
+                hi,
+                min_samples,
                 BySize.whole(len(values)),
                 ctx,
             ).to_dyn()
