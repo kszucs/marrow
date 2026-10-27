@@ -15,9 +15,8 @@ a **miss** scans the whole view and is what a column with no zero costs, which
 is the common case; a **hit at the front** returns from the first chunk and is
 what the loop saves when there is one.
 
-`scan` and `expand` are the running sum and the inverse of `filter` that
-decoding builds on: a column of ones, and selections that keep every value,
-every other one and one in sixteen.
+`expand` is the inverse of `filter` that decoding builds on: selections that
+keep every value, every other one and one in sixteen.
 
 Run with: pixi run -e dev pytest marrow/tests/bench_views.mojo --benchmark
 """
@@ -77,7 +76,7 @@ def bench_contains_hit_first_chunk_1m(mut b: Benchmark) raises:
     keep(buf)
 
 
-# --- scan and expand --------------------------------------------------------
+# --- expand -----------------------------------------------------------------
 
 
 def _ones_int64(n: Int) raises -> Buffer[mut=True]:
@@ -85,19 +84,6 @@ def _ones_int64(n: Int) raises -> Buffer[mut=True]:
     for i in range(n):
         buf.unsafe_set[DType.int64](i, 1)
     return buf^
-
-
-def bench_scan_int64_1m(mut b: Benchmark) raises:
-    comptime n = 1_000_000
-    var buf = _ones_int64(n)
-    b.throughput(BenchMetric.elements, n)
-
-    @always_inline
-    def call() {mut buf}:
-        keep(buf.view[DType.int64](0, n).scan(0))
-
-    b.iter(call)
-    keep(buf)
 
 
 def _bench_expand(mut b: Benchmark, every: Int) raises:

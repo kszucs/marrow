@@ -81,6 +81,71 @@ def all(array, *, skip_nulls=True, min_count=1, memory_pool=None, ctx=None):
     return _ma.all(array.unwrap(), skip_nulls, min_count, (ctx or _serial()))
 
 
+# ── Cumulative ───────────────────────────────────────────────────────────────
+
+
+def cumulative_sum(values, start=None, *, skip_nulls=False, memory_pool=None, ctx=None):
+    """The running sum of *values*.
+
+    Equivalent to ``pyarrow.compute.cumulative_sum``: the input's numeric type,
+    integers wrapping. A null stays null; with ``skip_nulls=False`` every value
+    after the first null is null too.
+    """
+    if start is not None:
+        raise NotImplementedError("start is not implemented")
+    return Array.wrap(
+        _ma.cumulative_sum(values.unwrap(), skip_nulls, (ctx or _serial()))
+    )
+
+
+def cumulative_prod(
+    values, start=None, *, skip_nulls=False, memory_pool=None, ctx=None
+):
+    """The running product of *values*.
+
+    Equivalent to ``pyarrow.compute.cumulative_prod``: the input's numeric
+    type, integers wrapping. A null stays null; with ``skip_nulls=False`` every
+    value after the first null is null too.
+    """
+    if start is not None:
+        raise NotImplementedError("start is not implemented")
+    return Array.wrap(
+        _ma.cumulative_prod(values.unwrap(), skip_nulls, (ctx or _serial()))
+    )
+
+
+def cumulative_min(values, start=None, *, skip_nulls=False, memory_pool=None, ctx=None):
+    """The running minimum of *values*.
+
+    Equivalent to ``pyarrow.compute.cumulative_min``: the input's numeric type.
+    A null stays null; with ``skip_nulls=False`` every value after the first
+    null is null too. NaN is skipped, as ``min`` skips it, so the answer is NaN
+    only while every value so far is NaN, where PyArrow answers the type's
+    greatest value.
+    """
+    if start is not None:
+        raise NotImplementedError("start is not implemented")
+    return Array.wrap(
+        _ma.cumulative_min(values.unwrap(), skip_nulls, (ctx or _serial()))
+    )
+
+
+def cumulative_max(values, start=None, *, skip_nulls=False, memory_pool=None, ctx=None):
+    """The running maximum of *values*.
+
+    Equivalent to ``pyarrow.compute.cumulative_max``: the input's numeric type.
+    A null stays null; with ``skip_nulls=False`` every value after the first
+    null is null too. NaN is skipped, as ``max`` skips it, so the answer is NaN
+    only while every value so far is NaN, where PyArrow answers the type's
+    least value.
+    """
+    if start is not None:
+        raise NotImplementedError("start is not implemented")
+    return Array.wrap(
+        _ma.cumulative_max(values.unwrap(), skip_nulls, (ctx or _serial()))
+    )
+
+
 # ── List aggregates ─────────────────────────────────────────────────────────
 
 

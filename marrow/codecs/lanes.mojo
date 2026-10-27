@@ -16,7 +16,8 @@ from ..buffers import Buffer
 from ..errors import CorruptError
 from ..utils.hashing import Fmix64, RapidHash64, SwissHashTable
 from ..utils.integers import Unsigned, ordered, unordered, unzigzag, zigzag
-from ..views import BufferView, prefix_sum
+from ..kernels.scan import SumScan
+from ..views import BufferView
 from .core import (
     BLOCK,
     Cascade,
@@ -69,8 +70,9 @@ struct Delta(Codec):
         T: DType, W: Int
     ](mut self, i: Int, v: SIMD[T, W]) -> SIMD[T, W]:
         comptime U = Unsigned[T]
-        var out = prefix_sum(bitcast[U, W](v), self.last.cast[U]())
-        self.last = out[W - 1].cast[DType.uint64]()
+        var carry = self.last.cast[U]()
+        var out = SumScan().core[U, W](bitcast[U, W](v), carry)
+        self.last = carry.cast[DType.uint64]()
         return bitcast[T, W](out)
 
 

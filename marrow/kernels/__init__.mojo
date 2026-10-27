@@ -33,6 +33,8 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `membership.mojo` — `is_in`
   - `nested.mojo` — list-valued predicates, and folds over each list
   - `aggregate.mojo` — reductions (sum, min, max, mean, any, all)
+  - `scan.mojo` — order-dependent kernels: running folds (cumulative
+    sums, products, minimums and maximums)
   - `distinct.mojo` — exact and approximate distinct counts
   - `filter.mojo` — selection, take, drop_null
   - `sort.mojo` — sort and sort_indices
@@ -178,6 +180,7 @@ from .conditional import (
     FillNullKernel,
 )
 from .nested import ArrayLengthKernel, ArrayContainsKernel, ListReduceKernel
+from .scan import CumulativeKernel, Scan, SumScan
 from .cast import CastArm, CastKernel
 from .core import Kernel, Partial, Prunable
 from .groupby import Groups

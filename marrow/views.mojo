@@ -175,23 +175,6 @@ struct PackedGroup(TrivialRegisterPassable):
         return BitmapView(bytes.as_span()).load_packed[8](8 * byte, self.width)
 
 
-@always_inline
-def prefix_sum[
-    T: DType
-](v: SIMD[T, _], carry: Scalar[T]) -> SIMD[T, type_of(v).length]:
-    """The running sums of `v`'s lanes after `carry`: lane `j` is
-    `carry + v[0] + ... + v[j]`. Integers wrap."""
-    # Lane by lane: a log-step of shifted adds lowers each zero-filling
-    # shift to a shuffle and measured slower.
-    comptime W = type_of(v).length
-    var out = SIMD[T, W]()
-    var p = carry
-    comptime for j in range(W):
-        p += v[j]
-        out[j] = p
-    return out
-
-
 struct BufferView[
     mut: Bool,
     //,
@@ -645,24 +628,6 @@ struct BufferView[
             out_len,
         )
         return buf.to_immutable()
-
-    def scan(self, carry: Scalar[Self.T]) -> Scalar[Self.T] where Self.mut:
-        """Replace each element with the running sum through it, starting
-        from `carry`, and return the last sum: the carry for the view that
-        follows. Integers wrap."""
-        comptime W = cpu_lanes[Self.T]
-        var p = carry
-        var i = 0
-        while i + W <= len(self):
-            var sums = prefix_sum(self.load[W](i), p)
-            self.store[W](i, sums)
-            p = sums[W - 1]
-            i += W
-        while i < len(self):
-            p += self.unsafe_get(i)
-            self.unsafe_set(i, p)
-            i += 1
-        return p
 
     def expand(
         self, sel: BitmapView[_], dense: BufferView[Self.T, _]

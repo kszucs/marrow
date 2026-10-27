@@ -7,7 +7,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.testing import assert_equal, assert_true, assert_false
 
 from ..buffers import Buffer, Bitmap
-from ..views import BufferView, BitmapView, PackedGroup, prefix_sum, reduce
+from ..views import BufferView, BitmapView, PackedGroup, reduce
 
 
 @always_inline
@@ -1361,61 +1361,6 @@ def test_bounds_bufferview_filter_with_bit_offset() raises:
             )
             k += 1
     assert_true(k == out_len, String("kept ", k, ", want ", out_len))
-
-
-# ---------------------------------------------------------------------------
-# prefix_sum / BufferView.scan
-# ---------------------------------------------------------------------------
-
-
-def test_prefix_sum_register() raises:
-    var v = SIMD[DType.int32, 4](1, 2, 3, 4)
-    assert_true(
-        prefix_sum(v, Int32(10)) == SIMD[DType.int32, 4](11, 13, 16, 20)
-    )
-
-
-def test_prefix_sum_wraps() raises:
-    var v = SIMD[DType.int8, 2](1, 1)
-    assert_true(prefix_sum(v, Int8(127)) == SIMD[DType.int8, 2](-128, -127))
-
-
-def _check_scan[T: DType](n: Int, carry: Scalar[T]) raises:
-    var buf = Buffer.alloc_zeroed[T](n)
-    var expected = List[Scalar[T]]()
-    var p = carry
-    for i in range(n):
-        var x = Scalar[T]((i * 7 + 3) % 11) - Scalar[T](5)
-        buf.unsafe_set[T](i, x)
-        p += x
-        expected.append(p)
-    var view = buf.view[T](0, n)
-    var last = view.scan(carry)
-    assert_equal(last, p)
-    for i in range(n):
-        assert_equal(view[i], expected[i])
-
-
-def test_scan_lengths() raises:
-    for n in [0, 1, 7, 8, 63, 64, 65, 130, 1000]:
-        _check_scan[DType.int64](n, 0)
-        _check_scan[DType.int32](n, 100)
-        _check_scan[DType.float64](n, 0.5)
-
-
-def test_scan_chains_carry() raises:
-    var buf = Buffer.alloc_zeroed[DType.int64](100)
-    for i in range(100):
-        buf.unsafe_set[DType.int64](i, 1)
-    var c = buf.view[DType.int64](0, 37).scan(0)
-    c = buf.view[DType.int64](37, 63).scan(c)
-    assert_equal(c, 100)
-    assert_equal(buf.view[DType.int64]()[99], 100)
-
-
-def test_scan_empty_returns_carry() raises:
-    var buf = Buffer.alloc_zeroed[DType.int32](0)
-    assert_equal(buf.view[DType.int32](0, 0).scan(42), 42)
 
 
 # ---------------------------------------------------------------------------

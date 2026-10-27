@@ -12,6 +12,7 @@ Covers:
 import math
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 import marrow as ma
 
@@ -519,3 +520,43 @@ def test_list_aggregates_on_a_sliced_large_list():
     result = pa.array(ma.compute.list_sum(ma.array(lists.slice(1))))
     assert result.type == pa.int64()
     assert result.to_pylist() == [3, None, 3]
+
+
+# ── cumulative ───────────────────────────────────────────────────────────────
+
+
+def _same_values(got, expected):
+    """Equal lists, NaN equal to NaN."""
+    assert len(got) == len(expected)
+    for g, e in zip(got, expected):
+        if isinstance(e, float) and math.isnan(e):
+            assert isinstance(g, float) and math.isnan(g)
+        else:
+            assert g == e
+
+
+@pytest.mark.parametrize("name", ["sum", "prod", "min", "max"])
+@pytest.mark.parametrize(
+    "type_",
+    [pa.int8(), pa.int32(), pa.int64(), pa.uint8(), pa.float32(), pa.float64()],
+    ids=str,
+)
+@pytest.mark.parametrize("skip_nulls", [False, True])
+def test_cumulative_matches_pyarrow(name, type_, skip_nulls):
+    data = [3, 1, None, 4, 1, 5, None, 2]
+    if pa.types.is_floating(type_):
+        data = [3.0, 1.0, None, 4.0, math.nan, 1.0, 5.0, None, 2.0]
+    values = pa.array(data, type_)
+    expected = getattr(pc, f"cumulative_{name}")(values, skip_nulls=skip_nulls)
+    result = pa.array(
+        getattr(ma.compute, f"cumulative_{name}")(
+            ma.array(values), skip_nulls=skip_nulls
+        )
+    )
+    assert result.type == expected.type
+    _same_values(result.to_pylist(), expected.to_pylist())
+
+
+def test_cumulative_start_is_not_implemented():
+    with pytest.raises(NotImplementedError):
+        ma.compute.cumulative_sum(ma.array([1, 2, 3]), start=1)

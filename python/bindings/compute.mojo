@@ -6,7 +6,7 @@
 All GPU-capable functions accept an ``ExecContext`` as their last positional
 argument.
 
-**Three shapes cover every kernel here**, so the wrappers below are written out
+**A few shapes cover every kernel here**, so the wrappers below are written out
 once each rather than reached for from a general-purpose helper module. This is
 the same arrangement `expressions.mojo` uses for `Expr`, and for the same
 reason: a binding is easier to read when the conversion it performs is visible
@@ -28,7 +28,7 @@ from marrow.utils.threads import ThreadPool
 
 
 # ---------------------------------------------------------------------------
-# The three kernel shapes
+# The kernel shapes
 # ---------------------------------------------------------------------------
 #
 # Each pins the full signature, which is also what lets Mojo resolve the
@@ -59,6 +59,23 @@ def _binary[
     ) raises -> PythonObject:
         return f(
             DynArray(py=left), DynArray(py=right), ExecContext(py=ctx)
+        ).to_python_object()
+
+    return wrapper
+
+
+def _cumulative[
+    f: def(DynArray, Bool, ExecContext) raises thin -> DynArray,
+]() -> def(
+    PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    """``(array, skip_nulls, ctx) -> array``."""
+
+    def wrapper(
+        array: PythonObject, skip_nulls: PythonObject, ctx: PythonObject
+    ) raises -> PythonObject:
+        return f(
+            DynArray(py=array), Bool(py=skip_nulls), ExecContext(py=ctx)
         ).to_python_object()
 
     return wrapper
@@ -301,4 +318,16 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     )
     mb.def_function[_unary[mk.ListReduceKernel[mk.CountFold].dispatch]()](
         "list_count"
+    )
+    mb.def_function[_cumulative[mk.CumulativeKernel[mk.AddKernel].dispatch]()](
+        "cumulative_sum"
+    )
+    mb.def_function[_cumulative[mk.CumulativeKernel[mk.MulKernel].dispatch]()](
+        "cumulative_prod"
+    )
+    mb.def_function[_cumulative[mk.CumulativeKernel[mk.MinKernel].dispatch]()](
+        "cumulative_min"
+    )
+    mb.def_function[_cumulative[mk.CumulativeKernel[mk.MaxKernel].dispatch]()](
+        "cumulative_max"
     )
