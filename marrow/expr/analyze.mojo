@@ -21,8 +21,9 @@ from ..dtypes import BinaryLikeType, PrimitiveType
 from ..execution import ExecContext
 from ..io import DynSource
 from ..kernels.distinct import ApproxCountDistinctKernel
+from ..kernels.statistics import BoundsKernel
 from ..formats.parquet.reader import LeafSet, ParquetFile
-from ..scalars import DynScalar, NullScalar
+from ..scalars import DynScalar, NullScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .logical import Bindings
@@ -163,9 +164,10 @@ def _bounds(column: DynArray) raises -> Tuple[DynScalar, DynScalar]:
     def arm[
         T: PrimitiveType
     ](witness: T) raises {imm} -> Tuple[DynScalar, DynScalar]:
-        ref values = column.as_primitive[T]()
-        return ColumnEstimate.bounds_of[skip_nan=T.native.is_floating_point()](
-            values, values, witness
+        var bounds = BoundsKernel.apply(column.as_primitive[T]())
+        return (
+            PrimitiveScalar[T](bounds[0], witness).to_dyn(),
+            PrimitiveScalar[T](bounds[1], witness).to_dyn(),
         )
 
     return dtype.try_visit[Tuple[DynScalar, DynScalar], PrimitiveType](

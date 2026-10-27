@@ -41,9 +41,9 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
   - *not re-exported* — `dictionary.mojo` / `join.mojo` / `hashtable.mojo` /
     `hashing.mojo` / `partition.mojo` (the hash machinery group-by, join and
-    `is_in` share), `concat.mojo` (batches joined in parallel) and
+    `is_in` share), `concat.mojo` (batches joined in parallel),
     `segments.mojo` (a column cut into consecutive runs of rows, and folds
-    over each run)
+    over each run) and `statistics.mojo` (column bounds)
 """
 
 from marrow.dtypes import (

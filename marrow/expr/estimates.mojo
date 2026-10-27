@@ -34,7 +34,7 @@ from ..kernels.join import (
 )
 from ..scalars import DynScalar, NullScalar, PrimitiveScalar
 from ..schema import Schema
-from ..formats.parquet.statistics import valid_min_max
+from ..kernels.statistics import BoundsKernel
 from .index import ColumnZones, Index
 
 
@@ -416,16 +416,14 @@ struct ColumnEstimate(Copyable, Movable, Writable):
 
     @staticmethod
     def bounds_of[
-        T: PrimitiveType, //, skip_nan: Bool = False
+        T: PrimitiveType, //
     ](
         lows: PrimitiveArray[T], highs: PrimitiveArray[T], witness: T
     ) raises -> Tuple[DynScalar, DynScalar]:
-        """The smallest valid value of `lows` and the largest of `highs`, null
-        scalars where there is none; `skip_nan` passes over NaN."""
-        var lo = valid_min_max[skip_nan=skip_nan](lows)
-        var hi = valid_min_max[skip_nan=skip_nan](highs)
-        var low = Optional[Scalar[T.native]](lo[0]) if lo[2] else None
-        var high = Optional[Scalar[T.native]](hi[1]) if hi[2] else None
+        """The smallest valid value of `lows` and the largest of `highs`, NaN
+        passed over, null scalars where there is none."""
+        var low = BoundsKernel.apply(lows)[0]
+        var high = BoundsKernel.apply(highs)[1]
         return (
             PrimitiveScalar[T](low, witness).to_dyn(),
             PrimitiveScalar[T](high, witness).to_dyn(),

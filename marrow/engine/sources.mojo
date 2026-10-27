@@ -14,6 +14,7 @@ from std.memory import ArcPointer
 
 from ..arrays import StructArray
 from ..execution import ExecContext
+from ..kernels.segments import BySize
 
 
 trait Source(Deinitable, Movable):
@@ -134,16 +135,14 @@ struct TableSource(Source):
         """`batch` in morsels of `morsel_rows` rows, the last one shorter.
         A slice shares the batch's buffers. An empty batch is one empty
         morsel, so its schema still reaches the stages that read it."""
-        var n = len(batch)
+        var segments = BySize(len(batch), morsel_rows)
         var morsels = List[List[StructArray]]()
-        if n <= morsel_rows:
+        if segments.count() <= 1:
             morsels.append([batch.copy()])
         else:
-            var start = 0
-            while start < n:
-                var length = min(morsel_rows, n - start)
-                morsels.append([batch.slice(start, length)])
-                start += length
+            for s in range(segments.count()):
+                var start = segments.start(s)
+                morsels.append([batch.slice(start, segments.end(s) - start)])
         return Self(morsels^)
 
     def count(self) -> Int:
