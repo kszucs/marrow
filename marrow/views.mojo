@@ -2428,17 +2428,15 @@ def apply[
 # ---------------------------------------------------------------------------
 
 
-# An integer combine is exact under any association, so it folds four
-# registers per step: independent chains, so the loop is not bound by the
-# latency of one accumulator. A float `+` rounds by association, so floats
-# keep one register and the order they always had (which zero a min/max of
-# `-0.0` and `0.0` answers is unspecified either way). 64 lanes at most: a
-# masked `input_fn` expands them from one `BitmapView.load`.
+# How many `T` lanes `_reduce_serial` folds per step. An integer combine is
+# exact under any association, so it folds four registers per step:
+# independent chains, so the loop is not bound by the latency of one
+# accumulator. A float `+` rounds by association, so floats keep one register
+# and the order they always had. 64 lanes at most: a masked `input_fn`
+# expands them from one `BitmapView.load`.
 comptime _reduce_width[T: DType] = cpu_lanes[T] if T.is_floating_point() else (
     max(cpu_lanes[T], min(4 * cpu_lanes[T], 64))
 )
-"""How many `T` lanes `_reduce_serial` folds per step; the stripes of
-`_reduce_dispatch` align to it."""
 
 
 @always_inline
@@ -2447,11 +2445,7 @@ def _reduce_serial[
     Input: def[W: Int](Int) -> SIMD[T, W],
     combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
 ](start: Int, end: Int, input_fn: Input, identity: Scalar[T]) -> Scalar[T]:
-    """Reduce ``input_fn`` over ``[start, end)`` on the calling thread.
-
-    SIMD accumulators vectorized over the range, then horizontally reduced via
-    ``combine`` lane by lane, then the tail one element at a time.
-    """
+    """Reduce ``input_fn`` over ``[start, end)`` on the calling thread."""
     comptime cpu_width = cpu_lanes[T]
     comptime width = _reduce_width[T]
     var wide = SIMD[T, width](identity)
@@ -2464,19 +2458,15 @@ def _reduce_serial[
         simd_acc = combine[cpu_width](
             simd_acc, wide.slice[cpu_width, offset=r * cpu_width]()
         )
-    # A loop as wide as the one before it would find nothing left to fold, so
-    # it is not compiled at all.
-    comptime if width > cpu_width:
-        while i + cpu_width <= end:
-            simd_acc = combine[cpu_width](simd_acc, input_fn[cpu_width](i))
-            i += cpu_width
+    while i + cpu_width <= end:
+        simd_acc = combine[cpu_width](simd_acc, input_fn[cpu_width](i))
+        i += cpu_width
     var acc = identity
     comptime for k in range(cpu_width):
         acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
-    comptime if cpu_width > 1:
-        while i < end:
-            acc = combine[1](acc, input_fn[1](i))
-            i += 1
+    while i < end:
+        acc = combine[1](acc, input_fn[1](i))
+        i += 1
     return acc
 
 
