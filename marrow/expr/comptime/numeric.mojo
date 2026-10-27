@@ -18,11 +18,10 @@ from std.builtin.rebind import downcast
 from ...errors import NotImplementedError
 from ...dtypes import DataType, DynType, Float64Type, Int64Type, NumericType
 from ...kernels.boolean import AndKernel
-from ...kernels.core import Partial, Prunable
+from ...kernels.core import BinaryKernel, Partial, Prunable
 from ...kernels.numeric import (
     AbsKernel,
     AddKernel,
-    BinaryKernel,
     CeilKernel,
     DivKernel,
     EqKernel,
@@ -38,6 +37,7 @@ from ...kernels.numeric import (
     NeKernel,
     NegKernel,
     NumericCompareKernel,
+    NumericUnaryKernel,
     CosKernel,
     Exp2Kernel,
     Log2Kernel,
@@ -53,7 +53,6 @@ from ...kernels.numeric import (
     SqrtKernel,
     SubKernel,
     TruncKernel,
-    UnaryKernel,
 )
 from ...arrays import StructArray, BoolArray, DynArray, PrimitiveArray
 from ...kernels.conditional import (
@@ -146,7 +145,7 @@ element-wise, `np.min(a)` reduces — and `min` is taken here by the aggregate
 
 Not `least`/`greatest`, because SQL's skip nulls (`LEAST(NULL, 3)` is 3) and
 so does PyArrow's `pc.min_element_wise`. These propagate, like every other
-numeric `BinaryKernel`, so the SQL names stay free for the skipping verbs that
+`NumericBinaryKernel`, so the SQL names stay free for the skipping verbs that
 `golden/cases/math_greatest_and_least.mojo` pins.
 """
 
@@ -271,7 +270,9 @@ supplies, from their `defined`, the validity a SIMD lane cannot.
 # ---------------------------------------------------------------------------
 # NumericUnary — one operand, the operand's type
 # ---------------------------------------------------------------------------
-struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
+struct NumericUnary[K: NumericUnaryKernel, A: NumericValue](
+    NumericValue, Unnamed
+):
     """A unary arithmetic node: `neg`, `abs`, `sign`, `floor`, `ceil`,
     `round`, `trunc`, and `sqrt`, `exp`, `ln` and the rest of the
     floating-point functions.
@@ -400,7 +401,8 @@ comptime Log10 = NumericUnary[Log10Kernel, _]
 comptime Log1p = NumericUnary[Log1pKernel, _]
 comptime Sin = NumericUnary[SinKernel, _]
 comptime Cos = NumericUnary[CosKernel, _]
-"""The rest of the floating-point `UnaryKernel`s, which the lane named three of.
+"""The rest of the floating-point `NumericUnaryKernel`s, which the lane named
+three of.
 
 Nothing here is new machinery: each is the same partial specialisation as
 `Sqrt`, over a kernel that has been in `kernels/numeric.mojo` and tested since

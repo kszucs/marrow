@@ -10,16 +10,17 @@ Concatenation is a builder's: ``DynBuilder.concat`` and each typed builder's
 batches on several threads.
 
 A name ending ``Kernel`` is something you *apply* to arrays. A ``*Fold`` (such
-as ``SumFold``, ``Widening[SumOp]``) is an algebra you *drive*: ``Fold[K, V]``,
-an ``AggKernel``, applies one to a column through ``reserve`` / ``update`` /
-``finish``, or in one call through ``AggKernel.grouped``.
+as ``SumFold``, ``Widening[AddKernel, SUM]``) is an algebra you *drive*:
+``Fold[K, V]``, an ``AggKernel``, applies one to a column through ``reserve`` /
+``update`` / ``finish``, or in one call through ``AggKernel.grouped``. The
+``sum``, ``product``, ``min`` and ``max`` folds are built from the kernels that
+claim ``Associative``, ``Commutative`` and ``Identity``: ``SumFold`` from
+``AddKernel``, ``ProductFold`` from ``MulKernel``, ``MinFold`` and ``MaxFold``
+from ``MinKernel`` and ``MaxKernel``.
 
-Two things are reached through their own submodule rather than this namespace:
-
-  - **The `*Op` building blocks** — `MinOp`, `MaxOp`, `SumOp`, `ProductOp`,
-    the algebras the folds are assembled from.
-  - **The hash and partition machinery** — `dictionary`, `join`,
-    `hashtable`, `hashing`, `partition`, which `expr` composes.
+The hash and partition machinery -- `dictionary`, `join`, `hashtable`,
+`hashing`, `partition`, which `expr` composes -- is reached through its own
+submodule rather than this namespace.
 
 Submodules — element-wise first, then the ones that reshape or combine rows:
   - `numeric.mojo` — binary arithmetic and comparison

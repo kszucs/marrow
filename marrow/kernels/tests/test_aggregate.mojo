@@ -1,11 +1,22 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-from std.math import nan
+from std.math import iota, isnan, nan
+from std.sys.info import simd_width_of
 from std.testing import assert_equal, assert_true, assert_false
 
-from ...arrays import DynArray, Int32Array, PrimitiveArray, StringArray
+from ...arrays import (
+    DynArray,
+    Float64Array,
+    Int32Array,
+    Int64Array,
+    PrimitiveArray,
+    StringArray,
+)
+from ...buffers import Bitmap, Buffer
+from ...errors import InvalidError
 from ...scalars import BoolScalar, DynScalar
+from ...views import BitmapView, BufferView
 from ...builders import (
     array,
     nulls,
@@ -27,22 +38,30 @@ from ...dtypes import (
     second,
     Date32Type,
     Float64Type,
+    Int8Type,
+    Int16Type,
     Int32Type,
     Int64Type,
+    NumericType,
+    PrimitiveType,
     TimestampType,
 )
 from ...kernels.groupby import Groups
+from ...kernels.numeric import AddKernel, MinKernel
 from ...kernels.window import WindowExtents, WindowFrame
 from ...kernels.aggregate import (
     AggKernel,
     Fold,
+    FoldKernel,
     MaxFold,
-    MaxOp,
     MeanFold,
     MinFold,
-    MinOp,
+    MinMax,
     LexicalExtremum,
     SumFold,
+    Widening,
+    MIN,
+    SUM,
     CountFold,
     Windowable,
     ValidCount,
@@ -150,14 +169,14 @@ def _strings(var items: List[String]) raises -> DynArray:
 
 def test_min_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[LexicalExtremum[MinOp, StringArray]](a)
+    var r = whole[LexicalExtremum[True, StringArray]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "apple")
 
 
 def test_max_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[LexicalExtremum[MaxOp, StringArray]](a)
+    var r = whole[LexicalExtremum[False, StringArray]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "cherry")
 
@@ -170,11 +189,11 @@ def test_min_string_skips_nulls() raises:
     b.append_null()
     var a: DynArray = b.finish()
     assert_equal(
-        whole[LexicalExtremum[MinOp, StringArray]](a).as_string().to_string(),
+        whole[LexicalExtremum[True, StringArray]](a).as_string().to_string(),
         "a",
     )
     assert_equal(
-        whole[LexicalExtremum[MaxOp, StringArray]](a).as_string().to_string(),
+        whole[LexicalExtremum[False, StringArray]](a).as_string().to_string(),
         "m",
     )
 
@@ -184,14 +203,14 @@ def test_min_string_all_null_is_null() raises:
     b.append_null()
     b.append_null()
     var a: DynArray = b.finish()
-    assert_false(whole[LexicalExtremum[MinOp, StringArray]](a).is_valid())
-    assert_false(whole[LexicalExtremum[MaxOp, StringArray]](a).is_valid())
+    assert_false(whole[LexicalExtremum[True, StringArray]](a).is_valid())
+    assert_false(whole[LexicalExtremum[False, StringArray]](a).is_valid())
 
 
 def test_min_string_empty_is_null() raises:
     var b = StringBuilder(0)
     var a: DynArray = b.finish()
-    assert_false(whole[LexicalExtremum[MinOp, StringArray]](a).is_valid())
+    assert_false(whole[LexicalExtremum[True, StringArray]](a).is_valid())
 
 
 # ---------------------------------------------------------------------------
@@ -364,3 +383,494 @@ def test_any_all_min_count_counts_valid_elements() raises:
     _is(AnyKernel.aggregate(values, min_count=2), True)
     _is(AnyKernel.aggregate(values, min_count=3), None)
     _is(AllKernel.aggregate(values, skip_nulls=False, min_count=3), None)
+
+
+# -- min / max over floats: NaN, zeros, empty --
+
+
+def _check_zero_extremes(zeros: DynArray) raises:
+    """`min` and `max` of `0.0` and `-0.0` are a zero. Which one is not
+    specified, so only the value is checked."""
+    var lo = whole[Fold[MinFold, Float64Type]](zeros).as_float64().value()
+    var hi = whole[Fold[MaxFold, Float64Type]](zeros).as_float64().value()
+    assert_equal(lo, 0.0)
+    assert_equal(hi, 0.0)
+
+
+def _by_group[
+    A: AggKernel
+](value: DynArray, ids: List[Optional[Int]]) raises -> DynArray:
+    """`A` over `value`, one answer per group id in `ids`."""
+    var groups = Groups(array(ids, int32), 2)
+    return A.grouped(groups, A.InArray(value.to_data())).to_dyn()
+
+
+def test_min_max_float_nan_zeros_and_empty() raises:
+    """NaN is skipped unless nothing else is there, the extremes of `0.0` and
+    `-0.0` are a zero in either order, and an empty column has no extremum."""
+    var q = nan[DType.float64]()
+    var neg_zero = -Float64(0.0)
+    var mixed: DynArray = array([q, 3.0, -1.0, q], float64)
+    var all_nan: DynArray = array([q, q], float64)
+    var zeros: DynArray = array([Float64(0.0), neg_zero], float64)
+    var zeros_reversed: DynArray = array([neg_zero, Float64(0.0)], float64)
+    var empty: DynArray = array(float64)
+
+    assert_equal(
+        whole[Fold[MinFold, Float64Type]](mixed).as_float64().value(), -1.0
+    )
+    assert_equal(
+        whole[Fold[MaxFold, Float64Type]](mixed).as_float64().value(), 3.0
+    )
+    assert_true(
+        isnan(whole[Fold[MinFold, Float64Type]](all_nan).as_float64().value())
+    )
+    assert_true(
+        isnan(whole[Fold[MaxFold, Float64Type]](all_nan).as_float64().value())
+    )
+    _check_zero_extremes(zeros)
+    _check_zero_extremes(zeros_reversed)
+    assert_false(whole[Fold[MinFold, Float64Type]](empty).is_valid())
+    assert_false(whole[Fold[MaxFold, Float64Type]](empty).is_valid())
+
+    # Group 0 holds `NaN, 3.0`, group 1 holds `-1.0, NaN`.
+    var ids: List[Optional[Int]] = [0, 0, 1, 1]
+    var lo = _by_group[Fold[MinFold, Float64Type]](mixed, ids)
+    var hi = _by_group[Fold[MaxFold, Float64Type]](mixed, ids)
+    assert_equal(lo[0].as_float64().value(), 3.0)
+    assert_equal(lo[1].as_float64().value(), -1.0)
+    assert_equal(hi[0].as_float64().value(), 3.0)
+    assert_equal(hi[1].as_float64().value(), -1.0)
+
+    # A fold names itself by the label it is given.
+    assert_equal(MinMax[MinKernel, MIN].name, "min")
+    assert_equal(Widening[AddKernel, SUM].name, "sum")
+
+
+# ---------------------------------------------------------------------------
+# Fold.reduce / Fold.scatter — the lane loops a fold owns
+# ---------------------------------------------------------------------------
+
+
+def _check_slot(
+    got: DynScalar, expected: Optional[Int64], label: String
+) raises:
+    """`got` is `expected`, or NULL when there is none."""
+    if expected:
+        assert_true(got.is_valid(), label)
+        assert_equal(got.as_int64().value(), expected.value(), label)
+    else:
+        assert_false(got.is_valid(), label)
+
+
+def _bits(bits: List[Bool]) raises -> Bitmap[mut=False]:
+    """A validity bitmap holding `bits`."""
+    var bitmap = Bitmap.alloc_zeroed(len(bits))
+    for i in range(len(bits)):
+        if bits[i]:
+            bitmap.set(i)
+    return bitmap^.to_immutable()
+
+
+def _every_third_clear(n: Int) raises -> Bitmap[mut=False]:
+    """`n` validity bits with every third one, `i % 3 == 2`, clear."""
+    var bits = List[Bool](capacity=n)
+    for i in range(n):
+        bits.append(i % 3 != 2)
+    return _bits(bits)
+
+
+def _fold_rows[
+    K: FoldKernel
+](n: Int, valid: Optional[Bitmap[mut=False]]) raises -> DynScalar:
+    """`Fold[K, Int64Type]` over rows `1..n` from a lane closure, through the
+    masked `reduce` when `valid` is given."""
+    comptime Acc = Fold[K, Int64Type].Acc
+
+    @always_inline
+    def lanes[W: Int](i: Int) -> SIMD[Acc, W]:
+        return (iota[DType.int64, W]() + Int64(i + 1)).cast[Acc]()
+
+    var fold = Fold[K, Int64Type](int64, False)
+    if valid:
+        fold.reduce(n, lanes, valid.value().view())
+    else:
+        fold.reduce(n, lanes)
+    return fold.finish().to_dyn()[0]
+
+
+def _reference_rows(n: Int, skip_third: Bool, minimum: Bool) -> Optional[Int64]:
+    """The left fold, `min` or `sum`, of rows `1..n`, skipping `i % 3 == 2`
+    when asked; `None` when no row is left."""
+    var acc: Optional[Int64] = None
+    for i in range(n):
+        if not (skip_third and i % 3 == 2):
+            var x = Int64(i + 1)
+            if not acc:
+                acc = x
+            elif minimum:
+                acc = min(acc.value(), x)
+            else:
+                acc = acc.value() + x
+    return acc
+
+
+def test_fold_lanes_every_tail_length() raises:
+    """`Fold.reduce` over a lane closure at every row count around the SIMD
+    width — none, part of a register, whole registers and a tail — masked and
+    not; a fold with no valid row is NULL."""
+    comptime width = simd_width_of[Scalar[DType.int64]]()
+    for n in [0, 1, width - 1, width, width + 1, 3 * width + 5]:
+        var valid = _every_third_clear(n)
+        var label = String("n=", n)
+        _check_slot(
+            _fold_rows[SumFold](n, None),
+            _reference_rows(n, False, False),
+            label,
+        )
+        _check_slot(
+            _fold_rows[MinFold](n, None), _reference_rows(n, False, True), label
+        )
+        _check_slot(
+            _fold_rows[SumFold](n, valid.copy()),
+            _reference_rows(n, True, False),
+            label + " masked",
+        )
+        _check_slot(
+            _fold_rows[MinFold](n, valid.copy()),
+            _reference_rows(n, True, True),
+            label + " masked",
+        )
+    var none_valid = Bitmap.alloc_zeroed(3 * width + 5).to_immutable()
+    _check_slot(
+        _fold_rows[SumFold](3 * width + 5, none_valid.copy()), None, "all clear"
+    )
+    _check_slot(
+        _fold_rows[MinFold](3 * width + 5, none_valid.copy()), None, "all clear"
+    )
+
+
+def test_fold_lanes_sliced_with_nulls() raises:
+    """An offset array with nulls through `Fold.update`, whole and grouped:
+    the lanes read `values()` and the mask reads `validity()`, both with the
+    offset applied. A null's payload is 0, below every valid value, so `min`
+    answers 0 if one leaks."""
+    var ints = List[Optional[Int]]()
+    for i in range(100):
+        if i % 3 == 0:
+            ints.append(None)
+        else:
+            ints.append(i)
+    var sliced = array(ints, int64).slice(1)
+    var total = Int64(0)
+    var per_group = List[Int64](length=4, fill=0)
+    var least = List[Int64](length=4, fill=Int64.MAX)
+    for j in range(99):
+        if (j + 1) % 3 != 0:
+            total += Int64(j + 1)
+            per_group[j % 4] += Int64(j + 1)
+            least[j % 4] = min(least[j % 4], Int64(j + 1))
+
+    var single = Groups.single(99)
+    var one = Fold[SumFold, Int64Type].grouped(single, sliced)
+    assert_equal(one[0].value(), total)
+    var lowest = Fold[MinFold, Int64Type].grouped(single, sliced)
+    assert_equal(lowest[0].value(), 1)
+
+    var ids = List[Optional[Int]]()
+    for j in range(99):
+        ids.append(j % 4)
+    var by_four = Groups(array(ids, int32), 4)
+    var sums = Fold[SumFold, Int64Type].grouped(by_four, sliced)
+    var mins = Fold[MinFold, Int64Type].grouped(by_four, sliced)
+    for g in range(4):
+        assert_equal(sums[g].value(), per_group[g], String("sum ", g))
+        assert_equal(mins[g].value(), least[g], String("min ", g))
+
+
+def _scatter_lanes[
+    K: FoldKernel
+](groups: Groups, column: Int64Array) raises -> DynArray:
+    """`Fold.scatter` over a lane closure reading `column`, nulls skipped."""
+    comptime Acc = Fold[K, Int64Type].Acc
+    var values = column.values()
+
+    @always_inline
+    def lanes[W: Int](i: Int) {var values} -> SIMD[Acc, W]:
+        return values.load[W](i).cast[Acc]()
+
+    var fold = Fold[K, Int64Type](int64, True)
+    fold.scatter(groups, lanes, column.validity().value())
+    return fold.finish().to_dyn()
+
+
+def test_fold_lanes_scatter_matches_the_scalar_fold() raises:
+    """`Fold.scatter` folds row `i` into slot `ids[i]`, skipping nulls: each
+    slot's `sum`, `min` and `mean` equal a scalar fold of its rows, and a
+    slot no row names is NULL."""
+    comptime width = simd_width_of[Scalar[DType.int64]]()
+    var n = 3 * width + 5
+    var pattern = [0, 2, 1, 2, 0]
+    var ids = List[Optional[Int]]()
+    var values = List[Optional[Int]]()
+    var sums = List[Int64](length=4, fill=0)
+    var mins = List[Int64](length=4, fill=Int64.MAX)
+    var counts = List[Int](length=4, fill=0)
+    for i in range(n):
+        var g = pattern[i % 5]
+        ids.append(g)
+        if i % 4 == 3:
+            values.append(None)
+        else:
+            var x = i * 7 - 20
+            values.append(x)
+            sums[g] += Int64(x)
+            mins[g] = min(mins[g], Int64(x))
+            counts[g] += 1
+    # Four slots, and no row names slot 3.
+    var groups = Groups(array(ids, int32), 4)
+    var column = array(values, int64)
+    var got_sum = _scatter_lanes[SumFold](groups, column)
+    var got_min = _scatter_lanes[MinFold](groups, column)
+    var got_mean = _scatter_lanes[MeanFold](groups, column)
+    for g in range(3):
+        var label = String("slot ", g)
+        assert_equal(got_sum[g].as_int64().value(), sums[g], label)
+        assert_equal(got_min[g].as_int64().value(), mins[g], label)
+        assert_equal(
+            got_mean[g].as_float64().value(),
+            Float64(sums[g]) / Float64(counts[g]),
+            label,
+        )
+    assert_false(got_sum[3].is_valid())
+    assert_false(got_min[3].is_valid())
+    assert_false(got_mean[3].is_valid())
+
+
+def test_fold_lanes_integer_wrap_is_grouping_free() raises:
+    """`sum` over int64 values near `Int64.MAX` wraps, and folding several
+    registers at once answers exactly the left fold: integer `+` is exact
+    under any grouping."""
+    comptime width = simd_width_of[Scalar[DType.int64]]()
+    var n = 4 * width + 3
+    var expected = Int64(0)
+    for k in range(n):
+        expected += Int64.MAX - Int64(k)
+
+    @always_inline
+    def lanes[W: Int](i: Int) -> SIMD[DType.int64, W]:
+        return SIMD[DType.int64, W](Int64.MAX) - (
+            iota[DType.int64, W]() + Int64(i)
+        )
+
+    var fold = Fold[SumFold, Int64Type](int64, False)
+    fold.reduce(n, lanes)
+    assert_equal(fold.finish()[0].value(), expected)
+
+
+def _masked_fold[
+    K: FoldKernel, V: NumericType
+](values: BufferView[V.native, _], valid: BitmapView[_]) raises -> DynScalar:
+    """`Fold[K, V]` over a lane closure reading `values`, through the masked
+    `reduce`."""
+    comptime Acc = Fold[K, V].Acc
+
+    @always_inline
+    def lanes[W: Int](i: Int) {var values} -> SIMD[Acc, W]:
+        return values.load[W](i).cast[Acc]()
+
+    var fold = Fold[K, V](V(), False)
+    fold.reduce(len(values), lanes, valid)
+    return fold.finish().to_dyn()[0]
+
+
+def test_fold_lanes_sum_with_bitmap() raises:
+    """The masked `reduce` folds only the rows whose bit is set."""
+    var buf = Buffer.alloc_zeroed[DType.int32](4)
+    buf.unsafe_set[DType.int32](0, Int32(10))
+    buf.unsafe_set[DType.int32](1, Int32(20))  # null
+    buf.unsafe_set[DType.int32](2, Int32(30))
+    buf.unsafe_set[DType.int32](3, Int32(40))  # null
+    var bm = Bitmap.alloc_zeroed(4)
+    bm.set(0)
+    bm.set(2)
+    var got = _masked_fold[SumFold, Int32Type](
+        buf.view[DType.int32](0, 4), bm.view()
+    )
+    assert_equal(got.as_int64().value(), 40)
+
+
+def test_fold_lanes_all_null_is_null() raises:
+    """With every bit clear no row is folded, and the answer is NULL."""
+    var buf = Buffer.alloc_zeroed[DType.int32](3)
+    for i in range(3):
+        buf.unsafe_set[DType.int32](i, Int32(99))
+    var bm = Bitmap.alloc_zeroed(3)  # all bits clear = all null
+    var got = _masked_fold[SumFold, Int32Type](
+        buf.view[DType.int32](0, 3), bm.view()
+    )
+    assert_false(got.is_valid())
+
+
+struct _NarrowSum(FoldKernel):
+    """`sum` accumulating, wrapping, in its input's own type, so a fold over
+    a narrow integer reads as many lanes per step as its registers hold."""
+
+    comptime name = "narrow_sum"
+    comptime AccType[V: PrimitiveType] = V
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Scalar[T](0)
+
+    @staticmethod
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
+        return dtype.copy()
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return a + b
+
+    @always_inline
+    @staticmethod
+    def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
+        return acc
+
+
+def _check_masked_narrow_sum[V: NumericType]() raises:
+    comptime T = V.native
+    comptime N = 300
+    var buf = Buffer.alloc_zeroed[T](N)
+    var bm = Bitmap.alloc_zeroed(N)
+    for i in range(N):
+        buf.unsafe_set[T](i, Scalar[T](i % 5 + 1))
+        if i % 3 != 0:
+            bm.set(i)
+    for offset in [0, 1, 5, 7, 13]:
+        var n = N - offset
+        var expected = Scalar[T](0)
+        var widened = Int64(0)
+        for i in range(offset, N):
+            if i % 3 != 0:
+                expected += Scalar[T](i % 5 + 1)
+                widened += Int64(i % 5 + 1)
+        var label = String(T, " offset=", offset)
+        var narrow = _masked_fold[_NarrowSum, V](
+            buf.view[T](offset, n), bm.view(offset, n)
+        )
+        assert_equal(narrow.as_primitive[V]().value(), expected, label)
+        var wide = _masked_fold[SumFold, V](
+            buf.view[T](offset, n), bm.view(offset, n)
+        )
+        assert_equal(wide.as_int64().value(), widened, label)
+
+
+def test_fold_lanes_masked_narrow_ints_at_bit_offsets() raises:
+    """A masked fold reads many lanes per step from one bitmap load, so the
+    lanes must stay inside its window at every bit offset, narrow types
+    included, where a step covers the most lanes."""
+    _check_masked_narrow_sum[Int8Type]()
+    _check_masked_narrow_sum[Int16Type]()
+    _check_masked_narrow_sum[Int32Type]()
+    _check_masked_narrow_sum[Int64Type]()
+
+
+def _check_float_zeros(zeros: Float64Array, valid: Bitmap[mut=False]) raises:
+    """`min` and `max` of `0.0` and `-0.0` are a zero (which one is not
+    specified); the masked-out row holds a value either would answer if it
+    leaked."""
+    var lo = _masked_fold[MinFold, Float64Type](zeros.values(), valid.view())
+    var hi = _masked_fold[MaxFold, Float64Type](zeros.values(), valid.view())
+    assert_equal(lo.as_float64().value(), 0.0)
+    assert_equal(hi.as_float64().value(), 0.0)
+
+
+def _float_scatter[
+    K: FoldKernel
+](
+    column: Float64Array, valid: Bitmap[mut=False], groups: Groups
+) raises -> DynArray:
+    """`Fold[K, Float64Type]` over a lane closure reading `column`, through
+    the masked `scatter`."""
+    comptime Acc = Fold[K, Float64Type].Acc
+    var values = column.values()
+
+    @always_inline
+    def lanes[W: Int](i: Int) {var values} -> SIMD[Acc, W]:
+        return values.load[W](i).cast[Acc]()
+
+    var fold = Fold[K, Float64Type](float64, True)
+    fold.scatter(groups, lanes, valid.view())
+    return fold.finish().to_dyn()
+
+
+def test_fold_lanes_float_min_max_nan() raises:
+    """Through the masked lane entries: NaN is skipped unless nothing else is
+    there, the extremes of two zeros are a zero, a masked-out row is never
+    read, and a fold with no valid row is NULL."""
+    var q = nan[DType.float64]()
+    var neg_zero = -Float64(0.0)
+
+    # The masked-out rows hold the extremes a leaked row would answer.
+    var mixed = array([q, 3.0, -100.0, -1.0, 100.0, q], float64)
+    var mixed_valid = _bits([True, True, False, True, False, True])
+    var lo = _masked_fold[MinFold, Float64Type](
+        mixed.values(), mixed_valid.view()
+    )
+    var hi = _masked_fold[MaxFold, Float64Type](
+        mixed.values(), mixed_valid.view()
+    )
+    assert_equal(lo.as_float64().value(), -1.0)
+    assert_equal(hi.as_float64().value(), 3.0)
+
+    var all_nan = array([q, 7.0, q], float64)
+    var all_nan_valid = _bits([True, False, True])
+    lo = _masked_fold[MinFold, Float64Type](
+        all_nan.values(), all_nan_valid.view()
+    )
+    hi = _masked_fold[MaxFold, Float64Type](
+        all_nan.values(), all_nan_valid.view()
+    )
+    assert_true(isnan(lo.as_float64().value()))
+    assert_true(isnan(hi.as_float64().value()))
+
+    _check_float_zeros(
+        array([Float64(0.0), neg_zero, -5.0], float64),
+        _bits([True, True, False]),
+    )
+    _check_float_zeros(
+        array([neg_zero, Float64(0.0), 5.0], float64),
+        _bits([True, True, False]),
+    )
+
+    var empty = array(float64)
+    var no_bits = _bits(List[Bool]())
+    var none_valid = _bits([False, False, False, False, False, False])
+    assert_false(
+        _masked_fold[MinFold, Float64Type](
+            empty.values(), no_bits.view()
+        ).is_valid()
+    )
+    assert_false(
+        _masked_fold[MaxFold, Float64Type](
+            mixed.values(), none_valid.view()
+        ).is_valid()
+    )
+
+    # Group 0 is all NaN, group 1 mixes NaN with `3.0` and a masked-out `9.0`,
+    # group 2 holds `-1.0` and `2.0`.
+    var grouped = array([q, q, 3.0, q, -1.0, 9.0, 2.0], float64)
+    var grouped_valid = _bits([True, True, True, True, True, False, True])
+    var ids: List[Optional[Int]] = [0, 0, 1, 1, 2, 1, 2]
+    var groups = Groups(array(ids, int32), 3)
+    var lows = _float_scatter[MinFold](grouped, grouped_valid, groups)
+    var highs = _float_scatter[MaxFold](grouped, grouped_valid, groups)
+    assert_true(isnan(lows[0].as_float64().value()))
+    assert_true(isnan(highs[0].as_float64().value()))
+    assert_equal(lows[1].as_float64().value(), 3.0)
+    assert_equal(highs[1].as_float64().value(), 3.0)
+    assert_equal(lows[2].as_float64().value(), -1.0)
+    assert_equal(highs[2].as_float64().value(), 2.0)

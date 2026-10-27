@@ -5,17 +5,19 @@
 
 Every kernel family in `marrow.kernels` — element-wise arithmetic, comparison,
 boolean, string, temporal, aggregate — descends from `Kernel`, so a kernel is
-nameable without knowing which family it belongs to. Family traits add the
-call shape (`core`/`apply`/`dispatch`, `combine`/`finalize`, ...).
+nameable without knowing which family it belongs to. `UnaryKernel` and
+`BinaryKernel` add the register function `core` that fused loops and folds call;
+family traits add the call shape over arrays (`apply`/`dispatch`,
+`combine`/`finalize`, ...).
 
 `Kernel` also owns the argument checks every family repeats, so the diagnostic
 a caller sees is the same sentence whichever kernel raised it, and a new family
 inherits it by conforming rather than by copying the message.
 
-A property trait (`Partial`, `Prunable`) states one law about a kernel's
-values. A kernel lists every property it has, a caller's bound lists every
-property it needs, and `kernels/tests/test_laws.mojo` proves each law for
-every kernel that claims it.
+A property trait (`Partial`, `Prunable`, `Identity`, `Associative`,
+`Commutative`) states one law about a kernel's values. A kernel lists every
+property it has, a caller's bound lists every property it needs, and
+`kernels/tests/test_laws.mojo` proves each law for every kernel that claims it.
 """
 
 from std.builtin.variadics import TypeList
@@ -298,6 +300,75 @@ trait Prunable:
         return dtype.try_visit[BoolArray, PrimitiveType](
             leaf, "dtype is not primitive"
         )
+
+
+trait UnaryKernel(Kernel):
+    """A kernel that maps a register of lanes to a register of lanes, one
+    operand in: `core`, the function a fused loop calls directly and every
+    array entry point applies lane by lane."""
+
+    @always_inline
+    @staticmethod
+    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+        """Per lane, the kernel's result for `a`."""
+        ...
+
+
+trait BinaryKernel(Kernel):
+    """A kernel that maps two registers of lanes to a register of lanes, two
+    operands in: `core`, the function a fused loop or a fold calls directly and
+    every array entry point applies lane by lane."""
+
+    @always_inline
+    @staticmethod
+    def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        """Per lane, the kernel's result for `a` and `b`."""
+        ...
+
+
+trait Identity:
+    """A binary kernel with a neutral value: `identity[T]()` is an `e` for which
+    `core(e, x)` and `core(x, e)` are both `x`, for every `x` of dtype `T`.
+    Equal as values: a NaN equals a NaN, and `-0.0` equals `0.0`.
+
+    A fold seeds its accumulators with `e` (every lane, every partial result,
+    every group), so a segment or group no value reached holds `e`; what an
+    aggregate answers for an empty group is its own rule (`empty_is_null`).
+    That is why `e` must leave every value unchanged, a NaN included.
+    """
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        """The neutral value of dtype `T`."""
+        ...
+
+
+trait Associative:
+    """A binary kernel whose grouping does not matter:
+    `core(core(a, b), c) == core(a, core(b, c))` for every `a`, `b` and `c`. A
+    fold may regroup its operands, lanes and partial results alike.
+
+    Equal as values: a NaN equals a NaN, and `-0.0` equals `0.0`.
+
+    **Float `+` and `*` are declared, not proved.** They are associative over
+    the real numbers and only approximately so in floating point, where a
+    regrouped sum can round differently. SQL engines treat them as
+    associative, and so do marrow's SIMD folds. `kernels/tests/test_laws.mojo`
+    checks them where the operation is exact.
+    """
+
+    pass
+
+
+trait Commutative:
+    """A binary kernel whose operand order does not matter:
+    `core(a, b) == core(b, a)` for every `a` and `b`. A fold may reorder its
+    operands.
+
+    Equal as values: a NaN equals a NaN, and `-0.0` equals `0.0`.
+    """
+
+    pass
 
 
 # TODO: have vectorwise and elementwise kernels conform to a common trait

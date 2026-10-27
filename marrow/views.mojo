@@ -2450,8 +2450,60 @@ def apply[
 
 
 # ---------------------------------------------------------------------------
-# reduce — vectorized scalar reduction over a BufferView
+# reduce — vectorized scalar reduction over a BufferView or a lane producer
 # ---------------------------------------------------------------------------
+
+
+# An integer combine is exact under any association, so it folds four
+# registers per step: independent chains, so the loop is not bound by the
+# latency of one accumulator. A float `+` rounds by association, so floats
+# keep one register and the order they always had (which zero a min/max of
+# `-0.0` and `0.0` answers is unspecified either way). 64 lanes at most: a
+# masked `input_fn` expands them from one `BitmapView.load`.
+comptime _reduce_width[T: DType] = cpu_lanes[T] if T.is_floating_point() else (
+    max(cpu_lanes[T], min(4 * cpu_lanes[T], 64))
+)
+"""How many `T` lanes `_reduce_serial` folds per step; the stripes of
+`_reduce_dispatch` align to it."""
+
+
+@always_inline
+def _reduce_serial[
+    T: DType,
+    Input: def[W: Int](Int) -> SIMD[T, W],
+    combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
+](start: Int, end: Int, input_fn: Input, identity: Scalar[T]) -> Scalar[T]:
+    """Reduce ``input_fn`` over ``[start, end)`` on the calling thread.
+
+    SIMD accumulators vectorized over the range, then horizontally reduced via
+    ``combine`` lane by lane, then the tail one element at a time.
+    """
+    comptime cpu_width = cpu_lanes[T]
+    comptime width = _reduce_width[T]
+    var wide = SIMD[T, width](identity)
+    var i = start
+    while i + width <= end:
+        wide = combine[width](wide, input_fn[width](i))
+        i += width
+    var simd_acc = wide.slice[cpu_width]()
+    comptime for r in range(1, width // cpu_width):
+        simd_acc = combine[cpu_width](
+            simd_acc, wide.slice[cpu_width, offset=r * cpu_width]()
+        )
+    # A loop as wide as the one before it would find nothing left to fold, so
+    # it is not compiled at all.
+    comptime if width > cpu_width:
+        while i + cpu_width <= end:
+            simd_acc = combine[cpu_width](simd_acc, input_fn[cpu_width](i))
+            i += cpu_width
+    var acc = identity
+    comptime for k in range(cpu_width):
+        acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
+    comptime if cpu_width > 1:
+        while i < end:
+            acc = combine[1](acc, input_fn[1](i))
+            i += 1
+    return acc
 
 
 def _reduce_dispatch[
@@ -2468,11 +2520,10 @@ def _reduce_dispatch[
 
     - **GPU** — Mojo's ``_reduce_generator[target="gpu"]``, allocating
       a 1-element device buffer and reading back via ``Buffer.to_cpu``.
-    - **CPU multi-thread** — each worker computes a partial reduction over its
-      slice using ``vectorize`` with a SIMD accumulator; the host thread folds
-      the partials with ``combine``.
-    - **CPU serial** — a single SIMD accumulator vectorized over the full
-      range, then horizontally reduced via ``combine`` lane-by-lane.
+    - **CPU multi-thread** — each worker reduces its slice with
+      ``_reduce_serial``; the host thread folds the partials with
+      ``combine``.
+    - **CPU serial** — ``_reduce_serial`` over the whole range.
     """
 
     if length == 0:
@@ -2539,42 +2590,6 @@ def _reduce_dispatch[
         else:
             raise NotImplementedError("reduce: no GPU accelerator available")
 
-    comptime cpu_width = cpu_lanes[T]
-    # An integer combine is exact under any association, so it folds four
-    # registers per step: independent chains, so the loop is not bound by the
-    # latency of one accumulator. A float `+` rounds by association and a float
-    # min/max picks between `-0.0` and `0.0` by order, so floats keep one
-    # register and the order they always had. 64 lanes at most: a masked
-    # `input_fn` expands them from one `BitmapView.load`.
-    comptime width = cpu_width if T.is_floating_point() else max(
-        cpu_width, min(4 * cpu_width, 64)
-    )
-
-    @always_inline
-    def fold(
-        start: Int, end: Int, identity: Scalar[T]
-    ) {imm input_fn} -> Scalar[T]:
-        var wide = SIMD[T, width](identity)
-        var i = start
-        while i + width <= end:
-            wide = combine[width](wide, input_fn[width](i))
-            i += width
-        var simd_acc = wide.slice[cpu_width]()
-        comptime for r in range(1, width // cpu_width):
-            simd_acc = combine[cpu_width](
-                simd_acc, wide.slice[cpu_width, offset=r * cpu_width]()
-            )
-        while i + cpu_width <= end:
-            simd_acc = combine[cpu_width](simd_acc, input_fn[cpu_width](i))
-            i += cpu_width
-        var acc = identity
-        comptime for k in range(cpu_width):
-            acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
-        while i < end:
-            acc = combine[1](acc, input_fn[1](i))
-            i += 1
-        return acc
-
     # The serial arm below folds without scratch; only a parallel reduce needs
     # a partials slot per stripe, so the buffer is allocated inside this branch
     # rather than by a body `ctx.stripe` would also run serially. Routing the
@@ -2590,17 +2605,22 @@ def _reduce_dispatch[
         @always_inline
         def stripe(
             wid: Int, start: Int, end: Int
-        ) {imm identity, imm partials_view, imm fold}:
-            partials_view.store[1](wid, fold(start, end, identity))
+        ) {imm identity, imm partials_view, imm input_fn}:
+            partials_view.store[1](
+                wid,
+                _reduce_serial[T, combine=combine](
+                    start, end, input_fn, identity
+                ),
+            )
 
-        ctx.stripe(length, stripe, align=width)
+        ctx.stripe(length, stripe, align=_reduce_width[T])
 
         var acc = identity
         for w in range(workers):
             acc = combine[1](acc, SIMD[T, 1](partials_view.load[1](w)))
         return acc
 
-    return fold(0, length, identity)
+    return _reduce_serial[T, combine=combine](0, length, input_fn, identity)
 
 
 def reduce[
@@ -2634,31 +2654,23 @@ def reduce[
     )
 
 
-def reduce[
-    In: DType,
+@always_inline
+def reduce_lanes[
+    Acc: DType,
     combine: def[T: DType, W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
-    Acc: DType = In,
-](
-    src: BufferView[In, _],
-    bitmap: BitmapView[_],
-    identity: Scalar[Acc],
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> Scalar[Acc]:
-    """``reduce`` that skips nulls: lanes whose ``bitmap`` bit is False contribute
-    ``identity`` (a no-op under ``combine``) rather than their value. Same
-    ``In``→``Acc`` per-lane widening as the dense overload (a compile-time no-op
-    when ``Acc == In``, the default)."""
+    L: def[W: Int](Int) -> SIMD[Acc, W],
+](length: Int, lanes: L, identity: Scalar[Acc]) -> Scalar[Acc]:
+    """Reduce the values ``lanes`` produces for ``[0, length)`` to a scalar
+    with a SIMD ``combine``, seeded with ``identity``.
 
-    @always_inline
-    def input_fn[
-        W: Int
-    ](i: Int) {var src, var bitmap, var identity} -> SIMD[Acc, W]:
-        return bitmap.load[W](i).select(
-            src.load[W](i).cast[Acc](), SIMD[Acc, W](identity)
-        )
-
-    return _reduce_dispatch[Acc, combine=combine[Acc, _]](
-        len(src), input_fn, identity, ctx
+    The producer counterpart of ``reduce``: ``lanes[W](i)`` answers elements
+    ``i .. i + W`` however it likes — a buffer load, a whole fused expression,
+    a masked read — so nothing is materialised first. CPU only and serial, on
+    the calling thread: ``lanes`` may close over host state, which a device
+    cannot read.
+    """
+    return _reduce_serial[Acc, combine=combine[Acc, _]](
+        0, length, lanes, identity
     )
 
 

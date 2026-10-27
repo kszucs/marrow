@@ -15,6 +15,12 @@ variable-width data and cannot vectorize. Whoever interprets `a < b` picks the
 family from the operand dtype — see the runtime lane in
 `marrow/expr/runtime/values.mojo`.
 
+`NumericBinaryKernel` and `NumericUnaryKernel` refine the register bases
+`BinaryKernel` and `UnaryKernel` (`kernels/core.mojo`), which declare `core`;
+they add the dtypes a kernel `accepts` and the two array tiers below.
+`AddKernel`, `MulKernel`, `MinKernel` and `MaxKernel` also claim the algebraic
+properties `Identity`, `Associative` and `Commutative`.
+
 Three tiers per operation:
 
 - **Tier 0 (core)** — `KernelStruct.core[T: DType, W: Int]`: raw SIMD functor,
@@ -56,7 +62,17 @@ from ..dtypes import (
     BinaryLikeType,
     BoolType,
 )
-from .core import Kernel, Partial, Prunable, family
+from .core import (
+    Associative,
+    BinaryKernel,
+    Commutative,
+    Identity,
+    Kernel,
+    Partial,
+    Prunable,
+    UnaryKernel,
+    family,
+)
 from .boolean import NotKernel, XorKernel
 from .string import StringEqKernel
 from ..execution import ExecContext
@@ -68,10 +84,10 @@ from ..errors import TypeError
 # ---------------------------------------------------------------------------
 
 
-trait BinaryKernel(Kernel):
-    """Element-wise binary kernels: a register ``core`` over the dtypes
-    ``accepts`` admits, with the typed ``apply`` and erased ``dispatch``
-    defaulted.
+trait NumericBinaryKernel(BinaryKernel):
+    """Element-wise binary kernels over numeric arrays: the register ``core``
+    of ``BinaryKernel`` over the dtypes ``accepts`` admits, with the typed
+    ``apply`` and erased ``dispatch`` defaulted.
 
     Concrete structs define ``name`` and ``core``, and ``accepts`` when they
     admit less than every numeric dtype.
@@ -79,11 +95,6 @@ trait BinaryKernel(Kernel):
 
     comptime accepts[T: AnyType]: Bool = family[NumericType][T]
     """Whether ``dispatch`` admits dtype ``T``; numeric unless overridden."""
-
-    @always_inline
-    @staticmethod
-    def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        ...
 
     @staticmethod
     def dispatch(
@@ -131,10 +142,10 @@ trait BinaryKernel(Kernel):
         )
 
 
-trait UnaryKernel(Kernel):
-    """Element-wise unary kernels: a register ``core`` over the dtypes
-    ``accepts`` admits, with the typed ``apply`` and erased ``dispatch``
-    defaulted.
+trait NumericUnaryKernel(UnaryKernel):
+    """Element-wise unary kernels over numeric arrays: the register ``core`` of
+    ``UnaryKernel`` over the dtypes ``accepts`` admits, with the typed
+    ``apply`` and erased ``dispatch`` defaulted.
 
     Concrete structs define ``name`` and ``core``, and ``accepts`` when they
     admit less than every numeric dtype.
@@ -142,11 +153,6 @@ trait UnaryKernel(Kernel):
 
     comptime accepts[T: AnyType]: Bool = family[NumericType][T]
     """Whether ``dispatch`` admits dtype ``T``; numeric unless overridden."""
-
-    @always_inline
-    @staticmethod
-    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
-        ...
 
     @staticmethod
     def apply[
@@ -187,12 +193,17 @@ trait UnaryKernel(Kernel):
 
 
 # ---------------------------------------------------------------------------
-# Kernel structs — BinaryKernel
+# Kernel structs — NumericBinaryKernel
 # ---------------------------------------------------------------------------
 
 
-struct AddKernel(BinaryKernel):
+struct AddKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     comptime name = "add"
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        """Zero: `0 + x` is `x`."""
+        return Scalar[T](0)
 
     @always_inline
     @staticmethod
@@ -200,7 +211,7 @@ struct AddKernel(BinaryKernel):
         return a + b
 
 
-struct SubKernel(BinaryKernel):
+struct SubKernel(NumericBinaryKernel):
     comptime name = "subtract"
 
     @always_inline
@@ -209,8 +220,13 @@ struct SubKernel(BinaryKernel):
         return a - b
 
 
-struct MulKernel(BinaryKernel):
+struct MulKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     comptime name = "multiply"
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        """One: `1 * x` is `x`."""
+        return Scalar[T](1)
 
     @always_inline
     @staticmethod
@@ -218,7 +234,7 @@ struct MulKernel(BinaryKernel):
         return a * b
 
 
-struct DivKernel(BinaryKernel):
+struct DivKernel(NumericBinaryKernel):
     comptime name = "divide"
 
     @always_inline
@@ -284,7 +300,7 @@ struct DivKernel(BinaryKernel):
             return a / b
 
 
-struct FloordivKernel(BinaryKernel, Partial):
+struct FloordivKernel(NumericBinaryKernel, Partial):
     comptime name = "floordiv"
 
     @always_inline
@@ -328,7 +344,7 @@ struct FloordivKernel(BinaryKernel, Partial):
             return q
 
 
-struct ModKernel(BinaryKernel, Partial):
+struct ModKernel(NumericBinaryKernel, Partial):
     comptime name = "modulo"
 
     @always_inline
@@ -357,8 +373,19 @@ struct ModKernel(BinaryKernel, Partial):
             return r
 
 
-struct MinKernel(BinaryKernel):
+struct MinKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     comptime name = "minimum"
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        """The greatest integer, and NaN for a float: `core` is IEEE `minNum`,
+        which answers the other operand when one is NaN, so a NaN leaves every
+        operand unchanged, a NaN included. `inf` does not: `min(inf, NaN)` is
+        `inf`."""
+        comptime if T.is_floating_point():
+            return math.nan[T]()
+        else:
+            return Scalar[T].MAX
 
     @always_inline
     @staticmethod
@@ -366,8 +393,19 @@ struct MinKernel(BinaryKernel):
         return math.min(a, b)
 
 
-struct MaxKernel(BinaryKernel):
+struct MaxKernel(Associative, Commutative, Identity, NumericBinaryKernel):
     comptime name = "maximum"
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        """The least integer, and NaN for a float: `core` is IEEE `maxNum`,
+        which answers the other operand when one is NaN, so a NaN leaves every
+        operand unchanged, a NaN included. `-inf` does not: `max(-inf, NaN)` is
+        `-inf`."""
+        comptime if T.is_floating_point():
+            return math.nan[T]()
+        else:
+            return Scalar[T].MIN
 
     @always_inline
     @staticmethod
@@ -376,11 +414,11 @@ struct MaxKernel(BinaryKernel):
 
 
 # ---------------------------------------------------------------------------
-# Kernel structs — UnaryKernel
+# Kernel structs — NumericUnaryKernel
 # ---------------------------------------------------------------------------
 
 
-struct NegKernel(UnaryKernel):
+struct NegKernel(NumericUnaryKernel):
     comptime name = "negate"
 
     @always_inline
@@ -389,7 +427,7 @@ struct NegKernel(UnaryKernel):
         return a.__neg__()
 
 
-struct AbsKernel(UnaryKernel):
+struct AbsKernel(NumericUnaryKernel):
     comptime name = "abs"
 
     @always_inline
@@ -398,7 +436,7 @@ struct AbsKernel(UnaryKernel):
         return a.__abs__()
 
 
-struct SignKernel(UnaryKernel):
+struct SignKernel(NumericUnaryKernel):
     comptime name = "sign"
 
     @always_inline
@@ -407,7 +445,7 @@ struct SignKernel(UnaryKernel):
         return a.gt(SIMD[T, W](0)).cast[T]() - a.lt(SIMD[T, W](0)).cast[T]()
 
 
-struct FloorKernel(UnaryKernel):
+struct FloorKernel(NumericUnaryKernel):
     comptime name = "floor"
 
     @always_inline
@@ -416,7 +454,7 @@ struct FloorKernel(UnaryKernel):
         return a.__floor__()
 
 
-struct CeilKernel(UnaryKernel):
+struct CeilKernel(NumericUnaryKernel):
     comptime name = "ceil"
 
     @always_inline
@@ -425,7 +463,7 @@ struct CeilKernel(UnaryKernel):
         return a.__ceil__()
 
 
-struct TruncKernel(UnaryKernel):
+struct TruncKernel(NumericUnaryKernel):
     comptime name = "trunc"
 
     @always_inline
@@ -434,7 +472,7 @@ struct TruncKernel(UnaryKernel):
         return a.__trunc__()
 
 
-struct RoundKernel(UnaryKernel):
+struct RoundKernel(NumericUnaryKernel):
     comptime name = "round"
 
     @always_inline
@@ -448,7 +486,7 @@ struct RoundKernel(UnaryKernel):
 # ---------------------------------------------------------------------------
 
 
-struct PowKernel(BinaryKernel):
+struct PowKernel(NumericBinaryKernel):
     comptime name = "power"
     comptime accepts = family[FloatingType]
 
@@ -464,7 +502,7 @@ struct PowKernel(BinaryKernel):
 # ---------------------------------------------------------------------------
 
 
-struct SqrtKernel(UnaryKernel):
+struct SqrtKernel(NumericUnaryKernel):
     comptime name = "sqrt"
     comptime accepts = family[FloatingType]
 
@@ -474,7 +512,7 @@ struct SqrtKernel(UnaryKernel):
         return math.sqrt(a)
 
 
-struct ExpKernel(UnaryKernel):
+struct ExpKernel(NumericUnaryKernel):
     comptime name = "exp"
     comptime accepts = family[FloatingType]
 
@@ -485,7 +523,7 @@ struct ExpKernel(UnaryKernel):
         return math.exp(a)
 
 
-struct Exp2Kernel(UnaryKernel):
+struct Exp2Kernel(NumericUnaryKernel):
     comptime name = "exp2"
     comptime accepts = family[FloatingType]
 
@@ -496,7 +534,7 @@ struct Exp2Kernel(UnaryKernel):
         return math.exp2(a)
 
 
-struct LogKernel(UnaryKernel):
+struct LogKernel(NumericUnaryKernel):
     comptime name = "ln"
     comptime accepts = family[FloatingType]
 
@@ -507,7 +545,7 @@ struct LogKernel(UnaryKernel):
         return math.log(a)
 
 
-struct Log2Kernel(UnaryKernel):
+struct Log2Kernel(NumericUnaryKernel):
     comptime name = "log2"
     comptime accepts = family[FloatingType]
 
@@ -518,7 +556,7 @@ struct Log2Kernel(UnaryKernel):
         return math.log2(a)
 
 
-struct Log10Kernel(UnaryKernel):
+struct Log10Kernel(NumericUnaryKernel):
     comptime name = "log10"
     comptime accepts = family[FloatingType]
 
@@ -529,7 +567,7 @@ struct Log10Kernel(UnaryKernel):
         return math.log10(a)
 
 
-struct Log1pKernel(UnaryKernel):
+struct Log1pKernel(NumericUnaryKernel):
     comptime name = "log1p"
     comptime accepts = family[FloatingType]
 
@@ -541,7 +579,7 @@ struct Log1pKernel(UnaryKernel):
         return math.log(a + 1)
 
 
-struct SinKernel(UnaryKernel):
+struct SinKernel(NumericUnaryKernel):
     comptime name = "sin"
     comptime accepts = family[FloatingType]
 
@@ -552,7 +590,7 @@ struct SinKernel(UnaryKernel):
         return math.sin(a)
 
 
-struct CosKernel(UnaryKernel):
+struct CosKernel(NumericUnaryKernel):
     comptime name = "cos"
     comptime accepts = family[FloatingType]
 

@@ -8,6 +8,7 @@ kernel has the members, and the checker here proves that the members keep the
 law. Every kernel that claims a property is instantiated against its law.
 """
 
+from std.math import isnan
 from std.memory import bitcast
 from std.sys import size_of
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
@@ -38,17 +39,29 @@ from ...dtypes import (
 )
 from ...kernels.boolean import AndKernel
 from ...kernels.cast import CastKernel
-from ...kernels.core import Partial, Prunable
+from ...kernels.core import (
+    Associative,
+    BinaryKernel,
+    Commutative,
+    Identity,
+    Partial,
+    Prunable,
+)
 from ...kernels.decimal import DecimalDivKernel
 from ...kernels.numeric import (
+    AddKernel,
     EqKernel,
     FloordivKernel,
     GeKernel,
     GtKernel,
     LeKernel,
     LtKernel,
+    MaxKernel,
+    MinKernel,
     ModKernel,
+    MulKernel,
     NumericCompareKernel,
+    SubKernel,
 )
 
 
@@ -634,3 +647,344 @@ def test_possible_segments_erased() raises:
     var strings = array(["a", "b"]).to_dyn()
     with assert_raises(contains="not primitive"):
         _ = GtKernel.possible_segments(strings, strings, strings, strings)
+
+
+def _same_value[T: DType](a: Scalar[T], b: Scalar[T]) -> Bool:
+    """Equal as values: `==`, or both NaN. `-0.0` equals `0.0`."""
+    comptime if T.is_floating_point():
+        return a == b or (isnan(a) and isnan(b))
+    else:
+        return a == b
+
+
+def check_identity[
+    K: BinaryKernel, T: DType
+](e: Scalar[T], domain: List[Scalar[T]]) raises:
+    """The `Identity` law: `core(e, x)` and `core(x, e)` are both `x`, for
+    every `x` in `domain`."""
+    for x in domain:
+        var left = K.core[T, 1](e, x)[0]
+        assert_true(
+            _same_value(left, x),
+            String(t"identity: core({e}, {x}) is {left}, not {x}"),
+        )
+        var right = K.core[T, 1](x, e)[0]
+        assert_true(
+            _same_value(right, x),
+            String(t"identity: core({x}, {e}) is {right}, not {x}"),
+        )
+
+
+def check_associative[
+    K: BinaryKernel, T: DType
+](domain: List[Scalar[T]]) raises:
+    """The `Associative` law: `core(core(a, b), c) == core(a, core(b, c))` for
+    every triple drawn from `domain`."""
+    for a in domain:
+        for b in domain:
+            for c in domain:
+                var left = K.core[T, 1](K.core[T, 1](a, b), c)[0]
+                var right = K.core[T, 1](a, K.core[T, 1](b, c))[0]
+                assert_true(
+                    _same_value(left, right),
+                    String(
+                        t"associative: ({a}, {b}), {c} gives {left} but {a},"
+                        t" ({b}, {c}) gives {right}"
+                    ),
+                )
+
+
+def check_commutative[
+    K: BinaryKernel, T: DType
+](domain: List[Scalar[T]]) raises:
+    """The `Commutative` law: `core(a, b) == core(b, a)` for every pair drawn
+    from `domain`."""
+    for a in domain:
+        for b in domain:
+            var left = K.core[T, 1](a, b)[0]
+            var right = K.core[T, 1](b, a)[0]
+            assert_true(
+                _same_value(left, right),
+                String(
+                    t"commutative: core({a}, {b}) is {left} but core({b}, {a})"
+                    t" is {right}"
+                ),
+            )
+
+
+def _claims_identity[
+    K: BinaryKernel & Identity, T: DType
+](domain: List[Scalar[T]]) raises:
+    """Check the law against the identity the kernel itself declares."""
+    check_identity[K, T](K.identity[T](), domain)
+
+
+def _claims_associative[
+    K: BinaryKernel & Associative, T: DType
+](domain: List[Scalar[T]]) raises:
+    check_associative[K, T](domain)
+
+
+def _claims_commutative[
+    K: BinaryKernel & Commutative, T: DType
+](domain: List[Scalar[T]]) raises:
+    check_commutative[K, T](domain)
+
+
+def _int8_every_value() -> List[Scalar[DType.int8]]:
+    """Every `int8`."""
+    var domain = List[Scalar[DType.int8]]()
+    for v in range(-128, 128):
+        domain.append(Scalar[DType.int8](v))
+    return domain^
+
+
+def _int8_triples() -> List[Scalar[DType.int8]]:
+    """Both ends of the range, either side of zero and a few between: the
+    full cube of `int8` is too slow."""
+    return [-128, -127, -2, -1, 0, 1, 2, 3, 64, 126, 127]
+
+
+def _uint8_domain() -> List[Scalar[DType.uint8]]:
+    return [0, 1, 2, 127, 128, 254, 255]
+
+
+def _int64_domain() -> List[Scalar[DType.int64]]:
+    return [Int64.MIN, Int64.MIN + 1, -2, -1, 0, 1, 2, Int64.MAX - 1, Int64.MAX]
+
+
+def _float64_exact_domain() -> List[Scalar[DType.float64]]:
+    """Both infinities, both zeros, NaN and values every sum and product of
+    which is exact, so `+` and `*` are checked where they are exact."""
+    return [
+        neg_inf[DType.float64](),
+        -2.0,
+        -1.0,
+        -0.5,
+        -0.0,
+        0.0,
+        0.5,
+        1.0,
+        2.0,
+        inf[DType.float64](),
+        nan[DType.float64](),
+    ]
+
+
+def test_identity_law_add_int8() raises:
+    _claims_identity[AddKernel](_int8_every_value())
+
+
+def test_identity_law_add_uint8() raises:
+    _claims_identity[AddKernel](_uint8_domain())
+
+
+def test_identity_law_add_int64() raises:
+    _claims_identity[AddKernel](_int64_domain())
+
+
+def test_identity_law_add_float64() raises:
+    _claims_identity[AddKernel](_float64_exact_domain())
+
+
+def test_identity_law_mul_int8() raises:
+    _claims_identity[MulKernel](_int8_every_value())
+
+
+def test_identity_law_mul_uint8() raises:
+    _claims_identity[MulKernel](_uint8_domain())
+
+
+def test_identity_law_mul_int64() raises:
+    _claims_identity[MulKernel](_int64_domain())
+
+
+def test_identity_law_mul_float64() raises:
+    _claims_identity[MulKernel](_float64_exact_domain())
+
+
+def test_identity_law_min_int8() raises:
+    _claims_identity[MinKernel](_int8_every_value())
+
+
+def test_identity_law_min_uint8() raises:
+    _claims_identity[MinKernel](_uint8_domain())
+
+
+def test_identity_law_min_int64() raises:
+    _claims_identity[MinKernel](_int64_domain())
+
+
+def test_identity_law_min_float64() raises:
+    _claims_identity[MinKernel](_float64_exact_domain())
+
+
+def test_identity_law_max_int8() raises:
+    _claims_identity[MaxKernel](_int8_every_value())
+
+
+def test_identity_law_max_uint8() raises:
+    _claims_identity[MaxKernel](_uint8_domain())
+
+
+def test_identity_law_max_int64() raises:
+    _claims_identity[MaxKernel](_int64_domain())
+
+
+def test_identity_law_max_float64() raises:
+    _claims_identity[MaxKernel](_float64_exact_domain())
+
+
+def test_associative_law_add_int8() raises:
+    _claims_associative[AddKernel](_int8_triples())
+
+
+def test_associative_law_add_uint8() raises:
+    _claims_associative[AddKernel](_uint8_domain())
+
+
+def test_associative_law_add_int64() raises:
+    _claims_associative[AddKernel](_int64_domain())
+
+
+def test_associative_law_add_float64() raises:
+    _claims_associative[AddKernel](_float64_exact_domain())
+
+
+def test_associative_law_mul_int8() raises:
+    _claims_associative[MulKernel](_int8_triples())
+
+
+def test_associative_law_mul_uint8() raises:
+    _claims_associative[MulKernel](_uint8_domain())
+
+
+def test_associative_law_mul_int64() raises:
+    _claims_associative[MulKernel](_int64_domain())
+
+
+def test_associative_law_mul_float64() raises:
+    _claims_associative[MulKernel](_float64_exact_domain())
+
+
+def test_associative_law_min_int8() raises:
+    _claims_associative[MinKernel](_int8_triples())
+
+
+def test_associative_law_min_uint8() raises:
+    _claims_associative[MinKernel](_uint8_domain())
+
+
+def test_associative_law_min_int64() raises:
+    _claims_associative[MinKernel](_int64_domain())
+
+
+def test_associative_law_min_float64() raises:
+    _claims_associative[MinKernel](_float64_exact_domain())
+
+
+def test_associative_law_max_int8() raises:
+    _claims_associative[MaxKernel](_int8_triples())
+
+
+def test_associative_law_max_uint8() raises:
+    _claims_associative[MaxKernel](_uint8_domain())
+
+
+def test_associative_law_max_int64() raises:
+    _claims_associative[MaxKernel](_int64_domain())
+
+
+def test_associative_law_max_float64() raises:
+    _claims_associative[MaxKernel](_float64_exact_domain())
+
+
+def test_commutative_law_add_int8() raises:
+    _claims_commutative[AddKernel](_int8_every_value())
+
+
+def test_commutative_law_add_uint8() raises:
+    _claims_commutative[AddKernel](_uint8_domain())
+
+
+def test_commutative_law_add_int64() raises:
+    _claims_commutative[AddKernel](_int64_domain())
+
+
+def test_commutative_law_add_float64() raises:
+    _claims_commutative[AddKernel](_float64_exact_domain())
+
+
+def test_commutative_law_mul_int8() raises:
+    _claims_commutative[MulKernel](_int8_every_value())
+
+
+def test_commutative_law_mul_uint8() raises:
+    _claims_commutative[MulKernel](_uint8_domain())
+
+
+def test_commutative_law_mul_int64() raises:
+    _claims_commutative[MulKernel](_int64_domain())
+
+
+def test_commutative_law_mul_float64() raises:
+    _claims_commutative[MulKernel](_float64_exact_domain())
+
+
+def test_commutative_law_min_int8() raises:
+    _claims_commutative[MinKernel](_int8_every_value())
+
+
+def test_commutative_law_min_uint8() raises:
+    _claims_commutative[MinKernel](_uint8_domain())
+
+
+def test_commutative_law_min_int64() raises:
+    _claims_commutative[MinKernel](_int64_domain())
+
+
+def test_commutative_law_min_float64() raises:
+    _claims_commutative[MinKernel](_float64_exact_domain())
+
+
+def test_commutative_law_max_int8() raises:
+    _claims_commutative[MaxKernel](_int8_every_value())
+
+
+def test_commutative_law_max_uint8() raises:
+    _claims_commutative[MaxKernel](_uint8_domain())
+
+
+def test_commutative_law_max_int64() raises:
+    _claims_commutative[MaxKernel](_int64_domain())
+
+
+def test_commutative_law_max_float64() raises:
+    _claims_commutative[MaxKernel](_float64_exact_domain())
+
+
+def test_identity_law_rejects_a_non_identity() raises:
+    """`0` is not subtraction's identity: `0 - x` is `-x`."""
+    with assert_raises(contains="identity:"):
+        check_identity[SubKernel, DType.int64](
+            Scalar[DType.int64](0), _int64_domain()
+        )
+
+
+def test_associative_law_rejects_sub() raises:
+    with assert_raises(contains="associative:"):
+        check_associative[SubKernel, DType.int64](_int64_domain())
+
+
+def test_commutative_law_rejects_sub() raises:
+    with assert_raises(contains="commutative:"):
+        check_commutative[SubKernel, DType.int64](_int64_domain())
+
+
+def test_identity_law_rejects_inf_for_min() raises:
+    """`+inf` looks like `min`'s identity but is not: `min(inf, NaN)` is
+    `inf`, which is why the identity of a float `min` is NaN."""
+    with assert_raises(contains="identity:"):
+        check_identity[MinKernel, DType.float64](
+            inf[DType.float64](), _float64_exact_domain()
+        )

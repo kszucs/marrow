@@ -403,7 +403,7 @@ __contains__ marrow/` finds no production caller at all, so the benchmark
 guards a helper nothing uses. An early-exit scan would have to ask for any
 lane where `defined` is false, not for a zero, so `__contains__` does not fit
 as it stands. A kernel bench cannot see this cost either, since no kernel's
-`apply` passes over the divisor: `BinaryKernel.apply` intersects the
+`apply` passes over the divisor: `NumericBinaryKernel.apply` intersects the
 operands' validity and nothing else.
 
 ### 1.8b The dylib layer: what was measured and dropped
@@ -788,7 +788,7 @@ statistics skip it; **(G)** dictionary logical nulls (§1.2).
 
 | Fix | Where | What goes wrong |
 |---|---|---|
-| Rebase the bitmap in `UnaryKernel.apply` (`to_data().owned_validity()`) (A) | `kernels/numeric.mojo:197` | all 18 unary kernels put nulls on the wrong rows of a sliced input -- the twin of the fixed binary bug |
+| Rebase the bitmap in `NumericUnaryKernel.apply` (`to_data().owned_validity()`) (A) | `kernels/numeric.mojo:197` | all 18 unary kernels put nulls on the wrong rows of a sliced input -- the twin of the fixed binary bug |
 | Reject a negative length or offset in `Limit.__init__`, drop the `< 0` branches | `expr/logical.mojo:2528`, `expr/optimizer.mojo:269, 1094` | `limit(-1).limit(10)` gives 0 rows unoptimized and 10 optimized |
 | Gather the join output through `TakeKernel.apply(StructArray)` or `.field(i)` (A) | `kernels/join.mojo:858` | a sliced side -- `LimitOperator` emits slices -- joins the parent's rows |
 | Split an imported struct with `.field(i)`; `to_table` reuses `RecordBatch.from_c` (A) | `c_data.mojo:1960`, `tabular.mojo:88` | a sliced struct imports at the parent's length |
@@ -1020,10 +1020,9 @@ Open, each needing a design before code:
 - **Duplicated machinery**, next: the eight word-wise CTZ loops in
   `kernels/filter.mojo` behind one set-bit walk; the allocation and validity
   ladder repeated in every typed `apply` (the `Buffer.alloc_for` and rebased
-  validity rows of §1.15); `SumOp`/`MinOp`/`MaxOp` restating
-  `AddKernel`/`MinKernel`/`MaxKernel`'s `core`; a builder range-extend
-  (arrow-rs `MutableArrayData.extend(source, start, end)`) as the one output
-  path for take, filter and the conditionals.
+  validity rows of §1.15); a builder range-extend (arrow-rs
+  `MutableArrayData.extend(source, start, end)`) as the one output path for
+  take, filter and the conditionals.
 - **Prefix sums written by hand**, which the kernel foundations leave alone
   and `Scan` can take up once it exists -- the design's running fold of a
   binary kernel over a segment, the prefix sum being `Scan[AddKernel]`. Most

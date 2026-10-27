@@ -92,7 +92,6 @@ from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 from ...kernels.numeric import (
     AbsKernel,
     AddKernel,
-    BinaryKernel,
     CeilKernel,
     CosKernel,
     DivKernel,
@@ -109,7 +108,9 @@ from ...kernels.numeric import (
     ModKernel,
     MulKernel,
     NegKernel,
+    NumericBinaryKernel,
     NumericCompareKernel,
+    NumericUnaryKernel,
     PowKernel,
     RoundKernel,
     SignKernel,
@@ -117,7 +118,6 @@ from ...kernels.numeric import (
     SqrtKernel,
     SubKernel,
     TruncKernel,
-    UnaryKernel,
     EqKernel,
     GeKernel,
     GtKernel,
@@ -757,7 +757,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
     @staticmethod
     def _decimal_arith[
-        K: BinaryKernel, D: DecimalBinaryKernel
+        K: NumericBinaryKernel, D: DecimalBinaryKernel
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
         """`+ - *`: decimal arithmetic when `DecimalPromotion.accepts`, `_arith`
         otherwise — which is also where a decimal against a float goes."""
@@ -767,7 +767,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
     @staticmethod
     def _arith[
-        K: BinaryKernel
+        K: NumericBinaryKernel
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
         """`+ - * // %` — both operands promoted to their common domain first.
 
@@ -793,7 +793,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
     @staticmethod
     def _float_binary[
-        K: BinaryKernel
+        K: NumericBinaryKernel
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
         """`/` and `**` — always `float64`, whatever went in.
 
@@ -808,7 +808,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         )
 
     @staticmethod
-    def _float_unary[K: UnaryKernel](var a: DynArray) raises -> DynArray:
+    def _float_unary[K: NumericUnaryKernel](var a: DynArray) raises -> DynArray:
         """`sqrt` / `exp` / `ln` — the runtime half of `FloatUnary`."""
         return K.dispatch(CastKernel.dispatch(a, DynType(float64)))
 

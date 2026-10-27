@@ -81,19 +81,16 @@ from ...kernels.aggregate import (
     VAR_SAMP,
     ArithmeticAgg,
     DecimalAgg,
-    MinMaxOp,
     FoldKernel,
     AggKernel,
     Dispersion,
     ApproxDistinctCount,
     DistinctCount,
     MaxFold,
-    MaxOp,
     DecimalMeanFold,
     DecimalSumFold,
     MeanFold,
     MinFold,
-    MinOp,
     Fold,
     ProductFold,
     LexicalExtremum,
@@ -281,17 +278,17 @@ def resolve_aggregate[
         # other's body.
         def extremum[T: StringLikeType](d: T) raises {imm func, imm name} -> R:
             if name == MIN:
-                return func[LexicalExtremum[MinOp, BinaryLikeArray[T]]]()
+                return func[LexicalExtremum[True, BinaryLikeArray[T]]]()
             else:
-                return func[LexicalExtremum[MaxOp, BinaryLikeArray[T]]]()
+                return func[LexicalExtremum[False, BinaryLikeArray[T]]]()
 
         def view_extremum[
             T: BinaryViewLikeType
         ](d: T) raises {imm func, imm name} -> R:
             if name == MIN:
-                return func[LexicalExtremum[MinOp, BinaryViewLikeArray[T]]]()
+                return func[LexicalExtremum[True, BinaryViewLikeArray[T]]]()
             else:
-                return func[LexicalExtremum[MaxOp, BinaryViewLikeArray[T]]]()
+                return func[LexicalExtremum[False, BinaryViewLikeArray[T]]]()
 
         if in_dtype.is_string_like():
             return in_dtype.try_visit[R, StringLikeType](

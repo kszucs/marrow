@@ -561,33 +561,3 @@ def test_reduce_sum_float32_gpu() raises:
         ExecContext.gpu(ctx),
     )
     assert_equal(result, Float32(10.0))
-
-
-# ---------------------------------------------------------------------------
-# reduce — GPU dispatch (bitmap-masked BufferView)
-# ---------------------------------------------------------------------------
-
-
-def test_reduce_sum_with_bitmap_gpu() raises:
-    """`reduce` with bitmap skips null positions via GPU dispatch."""
-    var ctx = DeviceContext()
-    # values [10, 20, 30, 40] with bits 0,2 set → valid = [10, 30] → sum = 40
-    var cpu_buf = Buffer.alloc_zeroed[DType.int32](4)
-    cpu_buf.unsafe_set[DType.int32](0, Int32(10))
-    cpu_buf.unsafe_set[DType.int32](1, Int32(20))
-    cpu_buf.unsafe_set[DType.int32](2, Int32(30))
-    cpu_buf.unsafe_set[DType.int32](3, Int32(40))
-    var dev_buf = cpu_buf^.to_immutable().to_device(ctx)
-
-    var bm = Bitmap.alloc_zeroed(4)
-    bm.set(0)
-    bm.set(2)
-    var dev_bm = bm^.to_immutable().to_device(ctx)
-
-    var result = reduce[DType.int32, _add_i32_gpu](
-        dev_buf.device_view[DType.int32](),
-        dev_bm.view(),
-        Int32(0),
-        ExecContext.gpu(ctx),
-    )
-    assert_equal(result, Int32(40))

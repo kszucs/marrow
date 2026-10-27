@@ -42,9 +42,7 @@ from ..aggregate import (
     ApproxDistinctCount,
     DistinctCount,
     MaxFold,
-    MaxOp,
     MinFold,
-    MinOp,
     Fold,
     LexicalExtremum,
     ValidCount,
@@ -189,12 +187,12 @@ def test_agg_string_min_max_one_slot() raises:
     """`StringMinMax` has no `whole` of its own — this branch is the only
     thing standing between the whole-input answer and an empty loop."""
     var values = _strings(["b", "a", "c"])
-    var lo = LexicalExtremum[MinOp, StringArray].grouped(
+    var lo = LexicalExtremum[True, StringArray].grouped(
         Groups.single(3),
-        _in[LexicalExtremum[MinOp, StringArray]](values.copy()),
+        _in[LexicalExtremum[True, StringArray]](values.copy()),
     )
-    var hi = LexicalExtremum[MaxOp, StringArray].grouped(
-        Groups.single(3), _in[LexicalExtremum[MaxOp, StringArray]](values)
+    var hi = LexicalExtremum[False, StringArray].grouped(
+        Groups.single(3), _in[LexicalExtremum[False, StringArray]](values)
     )
     assert_true(lo == array(["a"]))
     assert_true(hi == array(["c"]))
@@ -202,30 +200,30 @@ def test_agg_string_min_max_one_slot() raises:
 
 def test_agg_string_min_max_grouped() raises:
     var values = _strings(["b", "d", "a", "c"])
-    var lo = LexicalExtremum[MinOp, StringArray].grouped(
+    var lo = LexicalExtremum[True, StringArray].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
-        _in[LexicalExtremum[MinOp, StringArray]](values.copy()),
+        _in[LexicalExtremum[True, StringArray]](values.copy()),
     )
-    var hi = LexicalExtremum[MaxOp, StringArray].grouped(
+    var hi = LexicalExtremum[False, StringArray].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
-        _in[LexicalExtremum[MaxOp, StringArray]](values),
+        _in[LexicalExtremum[False, StringArray]](values),
     )
     assert_true(lo == array(["b", "a"]))
     assert_true(hi == array(["d", "c"]))
 
 
 def test_agg_string_min_skips_nulls_at_one_slot() raises:
-    var out = LexicalExtremum[MinOp, StringArray].grouped(
+    var out = LexicalExtremum[True, StringArray].grouped(
         Groups.single(3),
-        _in[LexicalExtremum[MinOp, StringArray]](_strings([None, "b", "a"])),
+        _in[LexicalExtremum[True, StringArray]](_strings([None, "b", "a"])),
     )
     assert_true(out == array(["a"]))
 
 
 def test_agg_string_min_of_all_nulls_is_null() raises:
-    var out = LexicalExtremum[MinOp, StringArray].grouped(
+    var out = LexicalExtremum[True, StringArray].grouped(
         Groups.single(2),
-        _in[LexicalExtremum[MinOp, StringArray]](_strings([None, None])),
+        _in[LexicalExtremum[True, StringArray]](_strings([None, None])),
     )
     assert_equal(len(out), 1)
     assert_true(out.is_null(0))
@@ -359,7 +357,7 @@ def test_agg_out_dtype_agrees_with_the_column_produced() raises:
     var stamp_dtype = stamps.dtype()
     var number_dtype = numbers.dtype()
 
-    comptime StringMin = LexicalExtremum[MinOp, StringArray]
+    comptime StringMin = LexicalExtremum[True, StringArray]
     assert_true(
         DistinctCount[StringArray].dtype(string_dtype)
         == DistinctCount.grouped(
@@ -525,10 +523,10 @@ def test_lexical_extremum_string_view() raises:
         "apple, a long value",
         "zucchini, long too",
     ]
-    var lo = LexicalExtremum[MinOp, StringViewArray].grouped(
+    var lo = LexicalExtremum[True, StringViewArray].grouped(
         Groups.single(3), v.copy()
     )
-    var hi = LexicalExtremum[MaxOp, StringViewArray].grouped(
+    var hi = LexicalExtremum[False, StringViewArray].grouped(
         Groups.single(3), v
     )
     assert_equal(lo[0].value(), "apple, a long value")

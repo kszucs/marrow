@@ -15,6 +15,7 @@ from ...arrays import DynArray, Int32Array
 from ...builders import array
 from ...dtypes import (
     Decimal128Type,
+    Decimal256Type,
     DynType,
     decimal32,
     decimal128,
@@ -269,3 +270,18 @@ def test_decimal_sum_grouped() raises:
     comptime A = Fold[DecimalSumFold, Decimal128Type]
     var r = A.grouped(Groups(ids^, 2), A.InArray(_column().to_data())).to_dyn()
     _assert_text(r, ["1.50", "-1.24"])
+
+
+def test_decimal256_sum_and_max_grouped() raises:
+    """A decimal256 accumulator is wider than a SIMD register, so a grouped
+    fold over it reads one lane per step."""
+    var column = _dec(["1.5", None, "-1.2", "10.0", "0.3"], decimal256(40, 1))
+    var ids: Int32Array = array([0, 0, 1, 1, 0], int32)
+    comptime S = Fold[DecimalSumFold, Decimal256Type]
+    var sums = S.grouped(
+        Groups(ids.copy(), 2), S.InArray(column.to_data())
+    ).to_dyn()
+    _assert_text(sums, ["1.8", "8.8"])
+    comptime M = Fold[MaxFold, Decimal256Type]
+    var maxes = M.grouped(Groups(ids^, 2), M.InArray(column.to_data())).to_dyn()
+    _assert_text(maxes, ["1.5", "10.0"])

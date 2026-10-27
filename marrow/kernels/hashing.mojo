@@ -118,9 +118,10 @@ struct HashKernel[H: Hasher](Kernel):
     #
     # Static methods rather than free functions: they are meaningless without
     # `H`, and `apply` accepts `Self._x[...]` as its comptime function exactly
-    # as `BinaryKernel.apply` passes `Self.core[native, _]`. The two that merely
-    # forwarded to the trait (`_hash_bits`, `_combine_hashes`) are gone — the
-    # call sites say `Self.H.hash_lanes` / `Self.H.combine_lanes` directly.
+    # as `NumericBinaryKernel.apply` passes `Self.core[native, _]`. The two
+    # that merely forwarded to the trait (`_hash_bits`, `_combine_hashes`) are
+    # gone — the call sites say `Self.H.hash_lanes` / `Self.H.combine_lanes`
+    # directly.
 
     @staticmethod
     @always_inline

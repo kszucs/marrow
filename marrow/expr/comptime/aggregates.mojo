@@ -4,9 +4,9 @@
 """Fused aggregates — `sum`, `min`, `max`, `mean`, `product`.
 
 `sum(a * 2 + b)` folds **without materialising `a * 2 + b`**. The input is a
-`NumericValue`, so the state binds the subtree itself and reads `lane[W]`
-straight into a register. Ungrouped that measured 14.6x over
-materialise-then-scatter; grouped it is at parity (2026-09-25).
+`NumericValue`, so the operator binds the subtree itself and hands `lane[W]` to
+the fold, which reads it straight into a register. Ungrouped that measured
+14.6x over materialise-then-scatter; grouped it is at parity (2026-09-25).
 
 That is the one thing no other engine can do. DataFusion's `GroupsAccumulator`
 takes `&[ArrayRef]`, ClickHouse's `IAggregateFunction::add` takes `IColumn**`,
@@ -24,12 +24,15 @@ belongs in `physical.mojo`; the two fused operators are parameterised on
 `A: PrimitiveValue` and cannot go there without making the lane-agnostic layer
 name a lane.
 
-`AggState[K, V]` is the accumulator, it lives
-in `kernels`, and it is the only thing here that crosses a batch boundary. The
-ungrouped path folds into registers, but those are *per-batch scratch* — the
-same status `Bound` has — and hand off through `combine_at` once per morsel. So
-`K.finalize`, `K.empty_is_null` and the count-is-zero rule stay defined in
-exactly one place.
+The fold owns its loops — `Foldable.reduce` and `Foldable.scatter`, in
+`kernels` — and the fused operators here only bind the operand and hand those
+loops its lanes, so the column path and the fused path fold alike.
+`AggState[K, V]` is the accumulator, also in `kernels`, and it is the only thing
+here that crosses a batch boundary. The ungrouped path folds into registers,
+but those are *per-batch scratch* — the same status `Bound` has — and
+`Fold.reduce` hands them to slot 0 once per morsel, through
+`AggState.combine_reserved`. So `K.finalize`, `K.empty_is_null` and the
+count-is-zero rule stay defined in exactly one place.
 
 `FILTER (WHERE ...)` is a third type parameter defaulting to `Nothing`, so
 an unfiltered aggregate compiles exactly as it did without one. A fused
@@ -37,7 +40,6 @@ fold applies the predicate to its operand's validity before the lane loop.
 """
 
 from ...dtypes import DynType, NumericType
-from std.sys.info import simd_width_of
 
 from ...arrays import BinaryLikeArray, PrimitiveArray, Int32Array, StructArray
 from ...kernels.aggregate import (
@@ -54,10 +56,8 @@ from ...kernels.aggregate import (
     DecimalMeanFold,
     DecimalSumFold,
     MaxFold,
-    MaxOp,
     MeanFold,
     MinFold,
-    MinOp,
     ProductFold,
     LexicalExtremum,
     SumFold,
@@ -256,11 +256,12 @@ struct Aggregate[
         of the inner loop.
 
         All three operators keep the operand as a parameter, so nothing this
-        lane folds over is erased: the fused pair because their bodies are the
-        per-row loop, and `BufferedAggregateOperator` so its operand is
-        evaluated by a direct call. The predicate is a parameter on the fused
-        pair and a lowered `DynOperator` on the buffered one. All three are
-        boxed once, here, so the return type does not depend on the branch.
+        lane folds over is erased: the fused pair because the lanes they hand
+        the fold read it directly, and `BufferedAggregateOperator` so its
+        operand is evaluated by a direct call. The predicate is a parameter on
+        the fused pair and a lowered `DynOperator` on the buffered one. All
+        three are boxed once, here, so the return type does not depend on the
+        branch.
 
         **Placement is a comptime choice for a fused fold and a runtime one
         for a buffered fold**, and that asymmetry is the measurement rather
@@ -404,10 +405,10 @@ comptime StdDev[ddof: Int, A: NumericValue] = Aggregate[
     Dispersion[ddof, True, A.Type], A
 ]
 comptime StringMin[A: StringValue] = Aggregate[
-    LexicalExtremum[MinOp, BinaryLikeArray[A.Type]], A
+    LexicalExtremum[True, BinaryLikeArray[A.Type]], A
 ]
 comptime StringMax[A: StringValue] = Aggregate[
-    LexicalExtremum[MaxOp, BinaryLikeArray[A.Type]], A
+    LexicalExtremum[False, BinaryLikeArray[A.Type]], A
 ]
 # The three cardinalities are dtype-generic in what they *compute* — an int64
 # whatever was counted — but each still names the array it reads, because a
@@ -441,11 +442,7 @@ comptime StringApproxCountDistinct[A: StringValue] = Aggregate[
 #
 # **The three stay separate, and the constraint is a language one.** A struct
 # body admits no `comptime if`, so a merged operator would carry every arm's
-# state in every instantiation and would need the `fuses` predicate written
-# twice -- once on the node to pick the operator, once on the operator to pick
-# the arm -- with nothing enforcing that the two agreed. Splitting on placement
-# costs no instantiations: `scatters` was already a comptime parameter, so the
-# same two fused programs are emitted either way.
+# state in every instantiation.
 # ---------------------------------------------------------------------------
 
 
@@ -475,36 +472,77 @@ def _admitted_validity[
     return Bitmap.intersect(input.validity(bound), Optional(admitted^))
 
 
+# A function rather than an operator method so `state` and `input` arrive as
+# two arguments: a closure borrowing `self._input` cannot be passed while
+# `self._state` is borrowed mutably.
+@always_inline
+def _bind_and_fold[
+    Agg: Foldable, A: PrimitiveValue, P: Evaluable, //, scatters: Bool
+](
+    mut state: Agg, input: A, predicate: P, morsel: Morsel, bindings: Bindings
+) raises:
+    """Bind `input` to the morsel and hand its lanes to `state`: to `scatter`,
+    into the morsel's groups, when `scatters`, else to `reduce`, into the one
+    slot — masked by the operand's validity and the `FILTER`."""
+    ref batch = morsel.batch
+    var bound = input.bind(batch, bindings)
+    var v: Optional[Bitmap[mut=False]]
+    comptime if is_filled[P]:
+        v = _admitted_validity(input, bound, predicate, batch, bindings)
+    else:
+        v = input.validity(bound)
+
+    @always_inline
+    def lanes[W: Int](i: Int) {imm input, imm bound} -> SIMD[Agg.Acc, W]:
+        return input.lane[W](bound, i).cast[Agg.Acc]()
+
+    comptime if scatters:
+        debug_assert(
+            len(morsel.groups.ids) == len(batch), "scatter: one id per row"
+        )
+    if v:
+        ref vb = v.value()
+        comptime if scatters:
+            state.scatter(morsel.groups, lanes, vb.view())
+        else:
+            state.reduce(len(batch), lanes, vb.view())
+    else:
+        comptime if scatters:
+            state.scatter(morsel.groups, lanes)
+        else:
+            state.reduce(len(batch), lanes)
+
+
 struct ScatteredAggregateOperator[
     Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing
 ](Operator):
     """A fused fold that scatters into the slot each row's group id names —
     `GROUP BY` with a lane-readable operand and a lane algebra.
 
-    `sum(a * 2 + b)` never builds `a * 2 + b`: the state binds the subtree and
-    reads `lane[W]` straight into a register before scattering. That is at
-    parity with materialise-then-scatter, and only because `agg.scatter`
-    inlines — see `Foldable.scatter`.
+    `sum(a * 2 + b)` never builds `a * 2 + b`: this binds the subtree and hands
+    `lane[W]` to `Foldable.scatter`, whose loop reads it straight into a
+    register before scattering. The loop is the kernel's — `Fold.update` runs
+    the same one over a column's values — so this operator only binds.
 
     The scatter stays scalar per lane even at `W > 1`, and that is not an
     oversight — two lanes may carry the same group, and a vector
     read-modify-write would lose one of them without conflict detection. `W`
     still pays because the loads and the arithmetic feeding it vectorise.
 
-    **Separate from `RegisterAggregateOperator` rather than one struct with a
-    `scatters` parameter.** The two bodies share no statement: this one issues
-    a random write per row through `agg.scatter[W]`, the other accumulates in
-    registers and calls `combine_at` once per morsel — and that register path
-    is where the **14.6x** came from.
+    **Two operator structs over one helper, `_bind_and_fold`.** Both bind the
+    operand alike and differ in where its lanes go: this one to
+    `Foldable.scatter`, a random write per row, `RegisterAggregateOperator` to
+    `Foldable.reduce`, which accumulates in registers and hands the morsel to
+    slot 0 once. They stay two structs because a struct body admits no
+    `comptime if`: one operator would carry both arms' state, the slots this
+    one grows to every morsel's groups and the slot 0 the register one holds
+    from the start.
 
     **The bounds are the honest ones.** `Agg: Foldable` because this calls
     `scatter`; `A: PrimitiveValue` because it calls `bind`, `validity` and
     `lane[W]`. `Aggregate.to_operator` recovers both inside
     `comptime if Self.fuses`, where `conforms_to` has already established them.
     """
-
-    comptime filters = is_filled[Self.P]
-    """Whether `P` holds a `FILTER` predicate."""
 
     var _input: Self.A
     var _where: Self.P
@@ -541,69 +579,12 @@ struct ScatteredAggregateOperator[
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Scatter this morsel's lanes into their groups.
-
-        Inline rather than delegating to a method per validity case, and that
-        is forced: a separate method's body is elaborated unconditionally, and
-        moving the loop out gave `'A' value has no attribute 'bind'` because
-        `A` is bound only on `PrimitiveValue` at the point of the call.
-        """
-        ref batch = morsel.batch
-        var n = len(batch)
-        ref agg = self._state
-        # Once per morsel, because `scatter` does not grow.
-        agg.reserve(morsel.groups.num_groups)
-        if n == 0:
-            return None
-        comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
-        var bound = self._input.bind(batch, self._bindings)
-        var v: Optional[Bitmap[mut=False]]
-        comptime if Self.filters:
-            v = _admitted_validity(
-                self._input, bound, self._where, batch, self._bindings
-            )
-        else:
-            v = self._input.validity(bound)
-
-        # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
-        # reads past the view on the final chunk and **aborts the process**:
-        # buffer *size* is rounded up to 64 bytes, and that is not slack.
-        var simd_end = (n // W) * W
-
-        var gids = morsel.groups.ids.values()
-        var i = 0
-        if v:
-            var vb = v.value()
-            var bits = vb.view()
-            while i < simd_end:
-                agg.scatter[W](
-                    gids.load[W](i),
-                    self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
-                    bits.load[W](i),
-                )
-                i += W
-            while i < n:
-                agg.scatter[1](
-                    gids.load[1](i),
-                    self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
-                    bits.load[1](i),
-                )
-                i += 1
-        else:
-            while i < simd_end:
-                agg.scatter[W](
-                    gids.load[W](i),
-                    self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
-                    SIMD[DType.bool, W](fill=True),
-                )
-                i += W
-            while i < n:
-                agg.scatter[1](
-                    gids.load[1](i),
-                    self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
-                    SIMD[DType.bool, 1](True),
-                )
-                i += 1
+        """Bind the operand and hand its lanes to `Foldable.scatter`, masked
+        by its validity and the `FILTER`. A morsel with no rows still grows the
+        state to its groups: `scatter` reserves before it loops."""
+        _bind_and_fold[scatters=True](
+            self._state, self._input, self._where, morsel, self._bindings
+        )
         return None
 
     def drain(mut self) raises -> Optional[Datum]:
@@ -753,10 +734,12 @@ struct RegisterAggregateOperator[
     """A fused fold with **one** slot, accumulated in registers — no `GROUP
     BY`, a lane-readable operand and a lane algebra.
 
-    The fastest shape in the tree, and the one the **14.6x** was measured on: a
-    scatter at one group is a million serially dependent read-modify-writes
-    through a builder slot, where this keeps the accumulator in a SIMD register
-    for the whole morsel and hands it over once through `combine_at`.
+    The fastest shape in the tree: a scatter at one group is a million
+    serially dependent read-modify-writes through a builder slot, where
+    `Foldable.reduce` keeps the accumulator in SIMD registers for the whole
+    morsel and hands it to slot 0 once, through `AggState.combine_reserved`.
+    The loop is the kernel's; this operator binds the operand and hands over
+    its lanes.
 
     It never touches `morsel.groups` — every row is group 0 by construction, so
     there are no ids to load and none to materialise. That is the same saving
@@ -769,9 +752,6 @@ struct RegisterAggregateOperator[
     `K.finalize`, `K.empty_is_null` and the count-is-zero rule stay defined in
     exactly one place.
     """
-
-    comptime filters = is_filled[Self.P]
-    """Whether `P` holds a `FILTER` predicate."""
 
     var _input: Self.A
     var _where: Self.P
@@ -805,90 +785,12 @@ struct RegisterAggregateOperator[
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Fold the whole morsel in registers, then hand it to slot 0 once."""
-        ref batch = morsel.batch
-        var n = len(batch)
-        ref agg = self._state
-        if n == 0:
-            return None
-        comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
-        var bound = self._input.bind(batch, self._bindings)
-        var v: Optional[Bitmap[mut=False]]
-        comptime if Self.filters:
-            v = _admitted_validity(
-                self._input, bound, self._where, batch, self._bindings
-            )
-        else:
-            v = self._input.validity(bound)
-
-        # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
-        # reads past the view on the final chunk and **aborts the process**:
-        # buffer *size* is rounded up to 64 bytes, and that is not slack.
-        var simd_end = (n // W) * W
-
-        var ident = Self.Agg.Lane.identity[Self.Agg.Acc]()
-        var vec = SIMD[Self.Agg.Acc, W](ident)
-        var acc = ident
-        var count = 0
-        var i = 0
-        if v:
-            var vb = v.value()
-            var bits = vb.view()
-            # A second accumulator, not a horizontal reduce per chunk: the
-            # count is `K.finalize`'s divisor for `mean`, and the only thing
-            # distinguishing "sum of nothing" from "sum of zeros" — both 0.
-            # int64, not the accumulator type: `mean` accumulates in float64,
-            # and a count is a count.
-            var cnt = SIMD[DType.int64, W](0)
-            while i < simd_end:
-                # `lane[W]` is null-blind: it returns data bits regardless of
-                # validity, so a null must become the identity here. Without
-                # the mask an unmasked `sum` is *silently correct* whenever the
-                # null slot's payload happens to be zero — only min/max expose
-                # it.
-                var mask = bits.load[W](i)
-                vec = Self.Agg.Lane.combine[Self.Agg.Acc, W](
-                    vec,
-                    mask.select(
-                        self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
-                        SIMD[Self.Agg.Acc, W](ident),
-                    ),
-                )
-                cnt += mask.select(
-                    SIMD[DType.int64, W](1), SIMD[DType.int64, W](0)
-                )
-                i += W
-            while i < n:
-                if bits.load[1](i)[0]:
-                    acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](
-                        acc,
-                        self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
-                    )
-                    count += 1
-                i += 1
-            for j in range(W):
-                count += Int(cnt[j])
-        else:
-            while i < simd_end:
-                vec = Self.Agg.Lane.combine[Self.Agg.Acc, W](
-                    vec,
-                    self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
-                )
-                i += W
-            while i < n:
-                acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](
-                    acc,
-                    self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
-                )
-                i += 1
-            count += n
-        for j in range(W):
-            acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](acc, vec[j])
-
-        # The registers were per-batch scratch; this is the hand-off, once per
-        # morsel rather than once per row.
-        if count > 0:
-            agg.combine_at(0, acc, count)
+        """Bind the operand and hand its lanes to `Foldable.reduce`, masked by
+        its validity and the `FILTER`: the morsel is folded in registers and
+        handed to slot 0 once."""
+        _bind_and_fold[scatters=False](
+            self._state, self._input, self._where, morsel, self._bindings
+        )
         return None
 
     def drain(mut self) raises -> Optional[Datum]:

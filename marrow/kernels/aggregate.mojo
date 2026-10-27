@@ -33,7 +33,6 @@ one onto ``Fold[SumFold, V]`` need the expression layer, not this one.
 """
 
 import std.math as math
-from std.math import nan
 from std.builtin.rebind import downcast
 
 from ..arrays import (
@@ -45,7 +44,6 @@ from ..arrays import (
     PrimitiveArray,
     DynArray,
     FixedSizeBinaryArray,
-    Int32Array,
     Int64Array,
     ListArray,
 )
@@ -77,10 +75,10 @@ from ..dtypes import (
     int64,
 )
 from ..scalars import BoolScalar, PrimitiveScalar, DynScalar
-from ..views import reduce
-from .core import Kernel
+from ..views import BitmapView, cpu_lanes, reduce_lanes
+from .core import Associative, BinaryKernel, Commutative, Identity, Kernel
 from .groupby import Groups
-from .numeric import FloordivKernel, MaxKernel, MinKernel
+from .numeric import AddKernel, FloordivKernel, MaxKernel, MinKernel, MulKernel
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 from .distinct import HLL_P
@@ -110,10 +108,10 @@ trait FoldKernel(Kernel):
     aggregate may be *built from*, and only six are. `Fold[K, V]` is the one
     that turns it into one, and the comptime expression lane fuses it directly.
 
-    **No array-shaped member at all.** Whole-column reduction is the
-    `is_single()` arm of `AggState.update`, reached through `Fold`, so a
-    `FoldKernel` never sees a `PrimitiveArray` — only `SIMD` — and binding one
-    to a *runtime* dtype happens on the other side of that boundary.
+    **No array-shaped member at all.** Whole-column reduction is
+    `Fold.reduce`, the `is_single()` arm of `Fold.update`, so a `FoldKernel`
+    never sees a `PrimitiveArray` — only `SIMD` — and binding one to a
+    *runtime* dtype happens on the other side of that boundary.
 
     Grouped state + driver live in the fully typed `AggState[K, V]`. The default
     per-group state is an accumulator column plus a valid-count column (the count
@@ -234,54 +232,6 @@ comptime MAX = "max"
 
 
 # ---------------------------------------------------------------------------
-# Kernel structs — one SIMD `combine` each, and nothing else. There is no
-# per-kernel array fast path to override: `Fold.update` takes the whole-column
-# route through `views.reduce` for every one of them.
-# ---------------------------------------------------------------------------
-
-
-trait WideningOp(Kernel):
-    """The two things that distinguish `sum` from `product`: the fold's identity
-    element and its lane-wise operator. Both widen integers to 64 bits of the
-    same signedness and floats to float64, which is why they share one shell."""
-
-    @staticmethod
-    def identity[T: DType]() -> Scalar[T]:
-        ...
-
-    @always_inline
-    @staticmethod
-    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        ...
-
-
-struct SumOp(WideningOp):
-    comptime name = SUM
-
-    @staticmethod
-    def identity[T: DType]() -> Scalar[T]:
-        return Scalar[T](0)
-
-    @always_inline
-    @staticmethod
-    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return a + b
-
-
-struct ProductOp(WideningOp):
-    comptime name = PRODUCT
-
-    @staticmethod
-    def identity[T: DType]() -> Scalar[T]:
-        return Scalar[T](1)
-
-    @always_inline
-    @staticmethod
-    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return a * b
-
-
-# ---------------------------------------------------------------------------
 # Input domains — what a kernel requires of the column it folds
 # ---------------------------------------------------------------------------
 # `AccType` is bound on `PrimitiveType`, and these markers say the rest: `count`
@@ -320,12 +270,25 @@ trait ArithmeticAgg(FoldKernel):
     pass
 
 
-struct Widening[Op: WideningOp](ArithmeticAgg):
+# ---------------------------------------------------------------------------
+# Fold structs — one SIMD `combine` each, and nothing else. There is no
+# per-kernel array fast path to override: `Fold.update` takes the whole-column
+# route through `Fold.reduce` for every one of them. `sum`, `product`, `min`
+# and `max` are built from the binary kernels that claim `Associative`,
+# `Commutative` and `Identity`: `combine` is the kernel's `core`, and the
+# identity is the kernel's.
+# ---------------------------------------------------------------------------
+
+
+struct Widening[
+    K: BinaryKernel & Associative & Commutative & Identity, label: StaticString
+](ArithmeticAgg):
     """`sum`/`product` as one kernel: signed integers accumulate in int64,
     unsigned ones in uint64 and floats in float64 so narrow inputs cannot
-    overflow, the fold is `Op.combine`, and finalize is the identity."""
+    overflow, the fold is `K.core` seeded with `K.identity`, and finalize is
+    the identity. `label` is the aggregate's name."""
 
-    comptime name = Self.Op.name
+    comptime name = String(Self.label)
     comptime AccType[
         V: PrimitiveType
     ] = UInt64Type if V.native.is_unsigned() else (
@@ -334,7 +297,7 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
-        return Self.Op.identity[T]()
+        return Self.K.identity[T]()
 
     @staticmethod
     def acc_dtype[
@@ -347,7 +310,7 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return Self.Op.combine[T, W](a, b)
+        return Self.K.core[T, W](a, b)
 
     @always_inline
     @staticmethod
@@ -355,72 +318,23 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
         return acc
 
 
-comptime SumFold = Widening[SumOp]
-comptime ProductFold = Widening[ProductOp]
+comptime SumFold = Widening[AddKernel, SUM]
+comptime ProductFold = Widening[MulKernel, PRODUCT]
 
 
-trait MinMaxOp(Kernel):
-    """The two things that distinguish `min` from `max`: which SIMD lane-wise
-    extremum to take, and which sentinel is the fold's identity."""
-
-    comptime is_min: Bool
-
-    @staticmethod
-    def identity[T: DType]() -> Scalar[T]:
-        ...
-
-    @always_inline
-    @staticmethod
-    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        ...
-
-
-struct MinOp(MinMaxOp):
-    comptime name = MIN
-    comptime is_min = True
-
-    @staticmethod
-    def identity[T: DType]() -> Scalar[T]:
-        return Scalar[T].MAX_FINITE
-
-    @always_inline
-    @staticmethod
-    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return MinKernel.core[T, W](a, b)
-
-
-struct MaxOp(MinMaxOp):
-    comptime name = MAX
-    comptime is_min = False
-
-    @staticmethod
-    def identity[T: DType]() -> Scalar[T]:
-        return Scalar[T].MIN_FINITE
-
-    @always_inline
-    @staticmethod
-    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return MaxKernel.core[T, W](a, b)
-
-
-struct MinMax[Op: MinMaxOp](FoldKernel):
+struct MinMax[
+    K: BinaryKernel & Associative & Commutative & Identity, label: StaticString
+](FoldKernel):
     """`min`/`max` as one kernel: the accumulator keeps the input type, the fold
-    is `Op.combine`, and finalize is the identity. Previously two structs that
-    differed only in `name`, `identity`, `combine`, and the `is_min` flag passed
-    to the string path."""
+    is `K.core` seeded with `K.identity`, and finalize is the identity. `label`
+    is the aggregate's name."""
 
-    comptime name = Self.Op.name
+    comptime name = String(Self.label)
     comptime AccType[V: PrimitiveType] = V
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
-        # NaN for floats, as in Arrow: `combine` is IEEE `minNum`/`maxNum`,
-        # which skips a NaN operand, so the first value replaces it and only an
-        # all-NaN group answers NaN.
-        comptime if T.is_floating_point():
-            return nan[T]()
-        else:
-            return Self.Op.identity[T]()
+        return Self.K.identity[T]()
 
     @staticmethod
     def acc_dtype[
@@ -433,7 +347,7 @@ struct MinMax[Op: MinMaxOp](FoldKernel):
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return Self.Op.combine[T, W](a, b)
+        return Self.K.core[T, W](a, b)
 
     @always_inline
     @staticmethod
@@ -441,8 +355,8 @@ struct MinMax[Op: MinMaxOp](FoldKernel):
         return acc
 
 
-comptime MinFold = MinMax[MinOp]
-comptime MaxFold = MinMax[MaxOp]
+comptime MinFold = MinMax[MinKernel, MIN]
+comptime MaxFold = MinMax[MaxKernel, MAX]
 
 
 struct CountFold(FoldKernel):
@@ -496,7 +410,7 @@ struct MeanFold(ArithmeticAgg):
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return a + b
+        return AddKernel.core[T, W](a, b)
 
     @always_inline
     @staticmethod
@@ -545,7 +459,7 @@ struct DecimalFold[mean: Bool](DecimalAgg):
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return a + b
+        return AddKernel.core[T, W](a, b)
 
     @always_inline
     @staticmethod
@@ -691,7 +605,7 @@ struct AllKernel(BoolReduceKernel):
 # AggState — per-group state for a *fully typed* (kernel, input dtype) pair.
 #
 # The default aggregate state: an accumulator column plus a valid-count column.
-# `acc` is a real `PrimitiveBuilder[K.AccType[V]]` (not erased), so `update` /
+# `acc` is a real `PrimitiveBuilder[K.AccType[V]]` (not erased), so `scatter` /
 # `finish` carry no dtype dispatch at all — the runtime dtype was resolved once
 # at the boundary, by `resolve_aggregate` in the expression layer, before this type
 # existed. The count column drives NULL output for empty/all-null groups and
@@ -699,21 +613,20 @@ struct AllKernel(BoolReduceKernel):
 #
 # `K` and `V` are struct parameters rather than per-call ones, so the state
 # holds no kernel identity and the kernel layer needs no enum or vtable. A
-# richer aggregate (variance = count+mean+M2, distinct = hash set, ...) is
-# added by pairing its `FoldKernel` with a different state struct exposing the
-# same `update`/`finish` shape — `Dispersion` and `DistinctCount` below are two
-# worked examples, and neither goes through this struct.
+# richer aggregate (variance = count+mean+M2, distinct = hash set, ...) keeps
+# its own state in its own `AggKernel` — `Dispersion` and `DistinctCount` below
+# are two worked examples, and neither goes through this struct.
 # ---------------------------------------------------------------------------
 struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
     """Per-group state for a fully typed (kernel, input dtype) pair.
 
     Everything is typed: the accumulator is a `PrimitiveBuilder[Acc]`
-    (`Acc = K.AccType[V]`), `update` takes a `PrimitiveArray[V]`, and `finish`
+    (`Acc = K.AccType[V]`), `scatter` folds lanes of `Acc`, and `finish`
     returns a `PrimitiveArray[Acc]` — no `DynBuilder`/`DynArray`/`DynScalar`
     anywhere, so the hot loops are fully monomorphized. The runtime dtype was
     resolved once at the boundary (`DynType.try_visit[NumericType]`) before this type existed.
-    A richer aggregate (variance, distinct, ...) pairs its kernel with a
-    different state struct of this shape."""
+    A richer aggregate (variance, distinct, ...) is an `AggKernel` with state
+    of its own."""
 
     comptime Acc = Self.K.AccType[Self.V]
 
@@ -746,46 +659,61 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         self.acc = PrimitiveBuilder[Self.Acc](dtype)
         self.cnt = PrimitiveBuilder[Self.Seen]()
 
-    def update(
-        mut self,
-        group_ids: Int32Array,
-        input: PrimitiveArray[Self.V],
-        num_groups: Int,
-    ) raises:
-        """Grow to `num_groups` (new slots filled with `K.identity`), then
-        scatter-fold this batch. No dtype dispatch — `Acc`/`V` are comptime."""
-        self.reserve(num_groups)
+    @always_inline
+    def scatter[
+        L: def[W: Int](Int) -> SIMD[Self.Acc.native, W]
+    ](mut self, groups: Groups, lanes: L) raises:
+        """Grow to `groups.num_groups` (new slots filled with `K.identity`),
+        then fold row `i`'s lane into slot `groups.ids[i]`, for every row of
+        `groups.ids`. No dtype dispatch — `Acc`/`V` are comptime."""
+        debug_assert(not groups.is_single(), "scatter: the one slot has no ids")
+        self.reserve(groups.num_groups)
         comptime A = Self.Acc.native
+        comptime W = cpu_lanes[A]
+        var gids = groups.ids.values()
+        var n = len(groups.ids)
+        # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
+        # reads past the view on the final chunk and **aborts the process**:
+        # buffer *size* is rounded up to 64 bytes, and that is not slack.
+        var simd_end = (n // W) * W
+        var i = 0
+        while i < simd_end:
+            self.accumulate[W](
+                gids.load[W](i), lanes[W](i), SIMD[DType.bool, W](fill=True)
+            )
+            i += W
+        # At `W == 1` the body has already reached `n`: no tail to compile.
+        comptime if W > 1:
+            while i < n:
+                self.accumulate[1](
+                    gids.load[1](i), lanes[1](i), SIMD[DType.bool, 1](True)
+                )
+                i += 1
 
-        # Reads go through `BufferView`s; accumulator/count writes use the builder
-        # element accessor (a builder has no mutable value view — this is
-        # random-access scatter, not a sequential `views.apply`).
-        var gids = group_ids.values()
-        var vals = input.values()
-        var n = len(group_ids)
-        if input.null_count() > 0:
-            var valid = input.validity().value()
-            for i in range(n):
-                if not valid[i]:
-                    continue
-                var g = Int(gids[i])
-                self.acc.unsafe_set(
-                    g,
-                    Self.K.combine[A, 1](
-                        self.acc.unsafe_get(g), vals[i].cast[A]()
-                    ),
+    @always_inline
+    def scatter[
+        L: def[W: Int](Int) -> SIMD[Self.Acc.native, W]
+    ](mut self, groups: Groups, lanes: L, valid: BitmapView[_]) raises:
+        """`scatter`, skipping every row whose `valid` bit is clear: it adds
+        nothing to its slot and is not counted."""
+        debug_assert(not groups.is_single(), "scatter: the one slot has no ids")
+        debug_assert(len(valid) == len(groups.ids), "scatter: one bit per row")
+        self.reserve(groups.num_groups)
+        comptime A = Self.Acc.native
+        comptime W = cpu_lanes[A]
+        var gids = groups.ids.values()
+        var n = len(groups.ids)
+        var simd_end = (n // W) * W
+        var i = 0
+        while i < simd_end:
+            self.accumulate[W](gids.load[W](i), lanes[W](i), valid.load[W](i))
+            i += W
+        comptime if W > 1:
+            while i < n:
+                self.accumulate[1](
+                    gids.load[1](i), lanes[1](i), valid.load[1](i)
                 )
-                self._mark(g)
-        else:
-            for i in range(n):
-                var g = Int(gids[i])
-                self.acc.unsafe_set(
-                    g,
-                    Self.K.combine[A, 1](
-                        self.acc.unsafe_get(g), vals[i].cast[A]()
-                    ),
-                )
-                self._mark(g)
+                i += 1
 
     @always_inline
     def reserve(mut self, num_groups: Int) raises:
@@ -799,26 +727,49 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         Public rather than private because `Fold` forwards `AggKernel.reserve`
         onto it: an aggregate over **zero** morsels never calls `update` at
         all, and the plan still owes one row per slot — `sum` of nothing is one
-        NULL, not no rows. A fused caller also reserves through it once per
-        morsel, because `accumulate` does not grow.
+        NULL, not no rows. `scatter` reserves through it once per morsel,
+        because `accumulate` does not grow.
         """
+        if num_groups > self.acc.length():
+            self._grow(num_groups)
+
+    # Out of line: every caller inlines `reserve`, and almost every call finds
+    # its slots already there.
+    @no_inline
+    def _grow(mut self, num_groups: Int) raises:
+        """Extend both columns to `num_groups` slots."""
+        debug_assert(num_groups > self.acc.length(), "_grow: nothing to grow")
         comptime A = Self.Acc.native
         comptime S = Self.Seen.native
         var grow = num_groups - self.acc.length()
-        if grow > 0:
-            self.acc.extend_value(Self.K.identity[A](), grow)
-            self.cnt.extend_value(Scalar[S](0), grow)
+        self.acc.extend_value(Self.K.identity[A](), grow)
+        self.cnt.extend_value(Scalar[S](0), grow)
 
     def combine_at(
         mut self, g: Int, value: Scalar[Self.Acc.native], count: Int
     ) raises:
-        """Fold an already-reduced value into group `g`, crediting `count` rows.
+        """Fold an already-reduced value into group `g`, crediting `count` rows,
+        after growing to `g + 1` slots.
 
-        The entry point for a caller that folded in **registers** rather than
-        scattering. An ungrouped aggregate reduces a whole morsel to one value
-        and one count, then calls this once per morsel instead of scattering
-        once per row — measured at 14.6x on 1M rows, where the scatter is a
-        million serially dependent read-modify-writes through a builder slot.
+        How a partial fold that may land in a new slot is handed over: `merge`
+        folds another state's partials, `fold_frames` each window frame. The
+        ungrouped per-morsel hand-off, whose slot always exists, is
+        `combine_reserved`.
+        """
+        self.reserve(g + 1)
+        self.combine_reserved(g, value, count)
+
+    @always_inline
+    def combine_reserved(
+        mut self, g: Int, value: Scalar[Self.Acc.native], count: Int
+    ):
+        """`combine_at` into a slot that already exists, so it never grows.
+
+        The ungrouped hand-off: `Fold.reduce` folds a whole morsel in
+        **registers** to one value and one count, then calls this once per
+        morsel for slot 0, which an ungrouped aggregate holds from construction,
+        instead of scattering once per row, where the scatter is a million
+        serially dependent read-modify-writes through a builder slot.
 
         Additive, not a store, so the register accumulator stays *per-batch
         scratch* and this state remains the only thing crossing a batch
@@ -826,7 +777,7 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         therefore stay defined in exactly one place — `finish` — rather than
         being re-derived by every caller that folds its own way.
         """
-        self.reserve(g + 1)
+        debug_assert(g < self.acc.length(), "combine_reserved: not reserved")
         comptime A = Self.Acc.native
         comptime S = Self.Seen.native
         self.acc.unsafe_set(
@@ -847,17 +798,12 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         values: SIMD[Self.Acc.native, W],
         mask: SIMD[DType.bool, W],
     ):
-        """Scatter-fold one SIMD lane of already-computed values.
+        """Scatter-fold one SIMD lane of already-computed values — `scatter`'s
+        step, once per register.
 
-        The entry point a **fused** caller needs: it takes values in registers
-        rather than a materialised `PrimitiveArray`, so an expression like
-        `sum(a * 2 + b)` folds without ever writing the intermediate column.
-
-        It cannot be generic over the expression that produced the lane —
-        `NumericValue` lives in `marrow.expr`, and kernels must not depend on
-        it. Passing the lane by value is what keeps the dependency pointing one
-        way, and this method is public because the alternative is the caller
-        reaching `_mark`.
+        It takes values in registers rather than a materialised
+        `PrimitiveArray`, so an expression like `sum(a * 2 + b)` folds without
+        ever writing the intermediate column.
 
         The scatter stays scalar per lane and that is not an oversight: two
         lanes may carry the same group, and a vector read-modify-write would
@@ -869,7 +815,7 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         which is what keeps a null out of both the accumulator and `K.finalize`'s
         divisor.
 
-        **Does not grow**: the caller reserves every group id first, once per
+        **Does not grow**: `scatter` reserves every group id first, once per
         morsel. Growing here put the `append` path in the per-chunk loop.
         """
         comptime A = Self.Acc.native
@@ -974,7 +920,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
     """One aggregate, **typed on what it consumes and produces**.
 
     Six implementations, named for what they compute rather than for what they
-    consume: `Fold[K, V]`, `LexicalExtremum[Op, T]`, `Dispersion[ddof, root, V]`,
+    consume: `Fold[K, V]`, `LexicalExtremum[min, T]`, `Dispersion[ddof, root, V]`,
     `ValidCount`, `DistinctCount` and `ApproxDistinctCount`.
 
     **Typed first, narrowed once at the boundary — the same shape as every
@@ -997,7 +943,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
 
     Every conformer answers with a concrete array, including the two whose
     *algebra* is dtype-generic. `Fold[K, V]` eats a `PrimitiveArray[V]`,
-    `LexicalExtremum[Op, T]` a `BinaryLikeArray[T]`, `Dispersion[…, V]` a
+    `LexicalExtremum[min, T]` a `BinaryLikeArray[T]`, `Dispersion[…, V]` a
     `PrimitiveArray[V]` — and `ValidCount[A]` / `DistinctCount[A]` eat
     an `A`, because a cardinality is dtype-generic in what it *computes* and
     not in how it *reads*: a valid count wants a validity bitmap and a distinct
@@ -1067,9 +1013,9 @@ trait AggKernel(Deinitable, Kernel, Movable):
         """Ensure `slots` slots exist, seeded with this aggregate's empty
         answer.
 
-        `update` and `merge` grow the state on their own; a caller of
-        `Foldable.scatter` calls this once per morsel, since `scatter` does
-        not grow, and a window seeds one slot per row with it."""
+        `update`, `merge` and `Foldable.scatter` grow the state on their own,
+        over a morsel with no rows too; a window seeds one slot per row with
+        it."""
         ...
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
@@ -1142,17 +1088,21 @@ trait Foldable(AggKernel):
     nodes. A node holds an `AggKernel`; `comptime if conforms_to(Agg, Foldable)`
     is what decides whether it can hand `Agg.Lane` to the fused operator.
 
-    The two methods below are the **lane-facing** half of that: a fused
-    driver folds in registers and needs somewhere to put the result, which
-    `update(groups, inputs)` cannot express because it takes a materialised
-    column. They are forwarding one-liners onto `AggState`, and they exist so
-    the expression layer stops holding an `AggState[K, V]` field directly —
-    reaching past the kernel into its own state struct was the leak.
+    `reduce` and `scatter` are the **lane-facing** half of that, and they own
+    the loops: a caller hands over a lane producer — `lanes[W](i)` answers
+    rows `i .. i + W` as `SIMD[Acc, W]` — and the fold reads it a register at
+    a time, folding into one slot or into the slots a `GROUP BY` names. The
+    producer may be a buffer load or a whole fused expression: `Fold.update`
+    passes the first, the comptime expression lane the second, so
+    `sum(a * 2 + b)` folds without ever writing `a * 2 + b`. Taking a closure
+    rather than an expression is what keeps this package independent of the
+    expression layer.
 
     Seeding slots for an input that produced no rows is **not** here: that is
     a property of every aggregate, not of the ones drivable from registers, so
     it lives on `AggKernel.reserve`. This protocol is exactly "this aggregate
-    can be driven from registers" — `Lane`, `Acc`, `scatter`, `combine_at`.
+    can be driven from registers" — `Lane`, `Acc`, `reduce`, `scatter`,
+    `combine_at`.
     """
 
     comptime Lane: FoldKernel
@@ -1161,27 +1111,49 @@ trait Foldable(AggKernel):
     comptime Acc: DType
     """The accumulator's element dtype, for the SIMD the driver folds in."""
 
-    def scatter[
-        W: Int
-    ](
-        mut self,
-        groups: SIMD[DType.int32, W],
-        values: SIMD[Self.Acc, W],
-        valid: SIMD[DType.bool, W],
-    ):
-        """Fold `W` lanes into the groups their ids name.
+    def reduce[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, length: Int, lanes: L) raises:
+        """Fold rows `0 .. length` of `lanes` into slot 0.
 
-        Called once per `W` rows by the fused loop, so a conformer must inline
-        it: out of line, every call copied the whole state in and out, which
-        made the fused lane 1.9-2.4x slower than materialising. It does not
-        grow — the caller `reserve`s every group id once per morsel."""
+        The ungrouped path: the rows are folded in registers and handed to the
+        slot once, crediting `length` rows — nothing when `length` is 0. Slot 0
+        must exist, as it does from construction in an ungrouped aggregate; a
+        grouped one `reserve`s it first."""
+        ...
+
+    def reduce[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, length: Int, lanes: L, valid: BitmapView[_]) raises:
+        """`reduce`, skipping every row whose `valid` bit is clear: it folds as
+        the identity and is not counted. `valid` holds one bit per row."""
+        ...
+
+    def scatter[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, groups: Groups, lanes: L) raises:
+        """Fold row `i` of `lanes` into slot `groups.ids[i]`, for every row
+        `groups.ids` names, after growing to `groups.num_groups` slots.
+
+        The grouped path: the lanes are read a register at a time, and each
+        lane is folded into its slot on its own. `groups` must be keyed: the
+        one-slot assignment holds no ids, and is `reduce`'s."""
+        ...
+
+    def scatter[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, groups: Groups, lanes: L, valid: BitmapView[_]) raises:
+        """`scatter`, skipping every row whose `valid` bit is clear: it adds
+        nothing to its slot and is not counted. `valid` holds one bit per
+        row."""
         ...
 
     def combine_at(
         mut self, slot: Int, value: Scalar[Self.Acc], count: Int
     ) raises:
-        """Fold an already-reduced register value into `slot`, crediting
-        `count` rows — the ungrouped path's once-per-morsel hand-off."""
+        """Fold an already-reduced value into `slot`, crediting `count` rows,
+        growing to it first — how `fold_frames` hands over each frame's
+        partial fold."""
         ...
 
     def fold_frames(
@@ -1282,7 +1254,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     **Typed on its input, like every other kernel in this package.** It holds
     an `AggState[K, V]` as a plain field: no dispatch, no box, no trampoline.
     Narrowing the erased column it is handed is one O(1) handle copy, and the
-    per-row loop inside `AggState.update` is fully monomorphized.
+    loops inside `reduce` and `AggState.scatter` are fully monomorphized.
 
     `V` is a parameter so the state can be a *typed field*. Resolving a
     runtime dtype per call would put the state behind an `ArcPointer` and two
@@ -1304,10 +1276,8 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     var _state: AggState[Self.K, Self.V]
     """The accumulator, built at construction.
 
-    Not an `Optional`. It was one while `open` was a separate lifecycle step,
-    and the cost landed in the worst place: the fused loop unwraps this once
-    per SIMD lane through `scatter`. Taking the dtype in the constructor is
-    what removes both the branch and the wrapper.
+    Not an `Optional`: the constructor takes the dtype, so the lane loops in
+    `reduce` and `scatter` reach the state with no unwrap and no branch.
 
     **The only owner of the group count.** A `_slots: Int` field beside it kept
     a parallel copy, `max`'d at four sites and handed back to
@@ -1355,33 +1325,26 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
         return in_dtype.copy()
 
     def update(mut self, groups: Groups, input: Self.InArray) raises:
-        ref column = input
+        """The column's values as a lane producer, through `reduce` for the
+        one slot and `scatter` otherwise — the loops a fused caller uses."""
+        var values = input.values()
+
+        @always_inline
+        def lanes[W: Int](i: Int) {var values} -> SIMD[Self.Acc, W]:
+            return values.load[W](i).cast[Self.Acc]()
+
         if groups.is_single():
-            # One slot: fold this morsel into a register with `views.reduce`
-            # and hand the accumulator to slot 0 — the shape the fused loop
-            # uses, once per morsel rather than once per row.
-            #
-            # **`views.reduce` with `K.combine`, not `K.reduce`.** The kernel's
-            # own `reduce` returns the *finalized* value, and for `mean` that
-            # is already the quotient; handing it to `combine_at` divided a
-            # second time at `finish`.
-            comptime Acc = Self.K.AccType[Self.V].native
-            var identity = Self.K.identity[Acc]()
-            var acc: Scalar[Acc]
-            if column.bitmap:
-                acc = reduce[Self.V.native, Self.K.combine, Acc](
-                    column.values(),
-                    column.validity().value(),
-                    identity,
-                    ExecContext.serial(),
-                )
+            # `reduce` needs slot 0, which a grouped `Fold` does not hold yet.
+            self._state.reserve(1)
+            if input.bitmap:
+                self.reduce(len(input), lanes, input.validity().value())
             else:
-                acc = reduce[Self.V.native, Self.K.combine, Acc](
-                    column.values(), identity, ExecContext.serial()
-                )
-            self._state.combine_at(0, acc, len(column) - column.null_count())
+                self.reduce(len(input), lanes)
         else:
-            self._state.update(groups.ids, column, groups.num_groups)
+            if input.bitmap:
+                self.scatter(groups, lanes, input.validity().value())
+            else:
+                self.scatter(groups, lanes)
 
     def reserve(mut self, slots: Int) raises:
         self._state.reserve(slots)
@@ -1397,18 +1360,53 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
         self._state.merge(groups, partials)
 
-    # -- Foldable: the lane-facing half, forwarded onto `AggState` -----------
+    # -- Foldable: the lane-facing half --------------------------------------
+
+    @always_inline
+    def reduce[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, length: Int, lanes: L) raises:
+        if length > 0:
+            var acc = reduce_lanes[Self.Acc, Self.K.combine](
+                length, lanes, Self.K.identity[Self.Acc]()
+            )
+            self._state.combine_reserved(0, acc, length)
+
+    @always_inline
+    def reduce[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, length: Int, lanes: L, valid: BitmapView[_]) raises:
+        debug_assert(len(valid) == length, "reduce: one bit per row")
+        var count = valid.count_set_bits()
+        if count > 0:
+            var identity = Self.K.identity[Self.Acc]()
+
+            # `lanes` reads data bits whatever the validity, so a null must
+            # become the identity here: a null slot's payload is arbitrary.
+            @always_inline
+            def masked[
+                W: Int
+            ](i: Int) {var valid, var identity, imm lanes} -> SIMD[Self.Acc, W]:
+                return valid.load[W](i).select(
+                    lanes[W](i), SIMD[Self.Acc, W](identity)
+                )
+
+            var acc = reduce_lanes[Self.Acc, Self.K.combine](
+                length, masked, identity
+            )
+            self._state.combine_reserved(0, acc, count)
 
     @always_inline
     def scatter[
-        W: Int
-    ](
-        mut self,
-        groups: SIMD[DType.int32, W],
-        values: SIMD[Self.Acc, W],
-        valid: SIMD[DType.bool, W],
-    ):
-        self._state.accumulate[W](groups, values, valid)
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, groups: Groups, lanes: L) raises:
+        self._state.scatter(groups, lanes)
+
+    @always_inline
+    def scatter[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](mut self, groups: Groups, lanes: L, valid: BitmapView[_]) raises:
+        self._state.scatter(groups, lanes, valid)
 
     def combine_at(
         mut self, slot: Int, value: Scalar[Self.Acc], count: Int
@@ -1571,7 +1569,7 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
             self._n[g] = total
 
 
-struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
+struct LexicalExtremum[min: Bool, A: BytesArray](AggKernel):
     """`min`/`max` over a string column — a bytewise (lexicographic) scan,
     matching Arrow's `hash_min`/`hash_max`.
 
@@ -1587,7 +1585,7 @@ struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
     Nulls are excluded and an empty or all-null slot yields null.
     """
 
-    comptime name = Self.Op.name
+    comptime name = MIN if Self.min else MAX
     comptime InArray = Self.A
     comptime OutArray = Self.A
 
@@ -1616,7 +1614,7 @@ struct LexicalExtremum[Op: MinMaxOp, A: BytesArray](AggKernel):
         var better: Bool
         if not self._best[g]:
             better = True
-        elif Self.Op.is_min:
+        elif Self.min:
             better = candidate < StringSlice(self._best[g].value())
         else:
             better = StringSlice(self._best[g].value()) < candidate

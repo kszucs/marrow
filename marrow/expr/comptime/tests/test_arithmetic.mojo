@@ -384,7 +384,8 @@ def test_arithmetic_nodes_still_fuse_into_one_pass() raises:
 
 
 def test_the_rest_of_the_float_unary_family_is_reachable() raises:
-    """Six floating-point `UnaryKernel`s that `NumericValue` named none of.
+    """Six floating-point `NumericUnaryKernel`s that `NumericValue` named none
+    of.
 
     Exactness is chosen the way the `sqrt`/`exp`/`ln` case above chooses it.
     `y` is [2, 4, 1, 2], so `exp2` and `log2` land on powers of two and are
@@ -442,7 +443,7 @@ def test_minimum_and_maximum_are_null_in_null_out_not_sql_least() raises:
     `n` is null on row 3 and `d` is 3 there. SQL's `LEAST(NULL, 3)` is **3**
     — it skips nulls — and so does `pc.min_element_wise` at its
     `skip_nulls=True` default. `MinKernel` intersects validity like every
-    other numeric `BinaryKernel`, so this answers NULL. That is a legitimate
+    other `NumericBinaryKernel`, so this answers NULL. That is a legitimate
     operation under PyArrow's `skip_nulls=False`, and a wrong answer under
     SQL's name, which is why the SQL name is withheld until a kernel skips.
     """

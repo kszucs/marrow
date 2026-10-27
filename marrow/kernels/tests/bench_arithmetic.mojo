@@ -6,8 +6,8 @@
 CPU: AddKernel with no nulls and with 10% nulls, across sizes 1k-1M for int32
 and float64, plus `//` and `%`.
 
-`add` is the control: it shares every line of `BinaryKernel.apply` with the
-other two and none of their per-lane corrections, so a delta that moves all
+`add` is the control: it shares every line of `NumericBinaryKernel.apply` with
+the other two and none of their per-lane corrections, so a delta that moves all
 three is the harness or the machine, and a delta that moves only `//` and `%`
 is theirs. They are the expensive pair — a truncating quotient costs a
 multiply and two comparisons over the floored one, and `apply` walks the

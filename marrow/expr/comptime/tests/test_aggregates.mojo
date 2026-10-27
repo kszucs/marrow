@@ -37,7 +37,7 @@ from ....builders import TimestampBuilder
 from ....tabular import RecordBatch, record_batch
 from ....kernels.groupby import Groups
 from ...logical import DynValue
-from ....engine.core import Morsel
+from ....engine.core import DynOperator, Morsel
 from ..aggregates import Count, Max, Mean, Min, Product, Sum
 from ..leaves import NumericColumn, NumericLiteral
 from ..numeric import Mul
@@ -174,6 +174,44 @@ def test_grouped_skips_nulls_per_group() raises:
     var s = col("a", int64).min().alias("t").to_operator(Schema(), True)
     _ = s.push(_m(_b([5, None, 1, 9]), _groups([0, 0, 1, 1]), 2))
     assert_true(s.drain().value().to_array(2) == array([5, 1], int64))
+
+
+def _check_grown_by_an_empty_morsel(
+    var s: DynOperator, expected: List[Optional[Int]]
+) raises:
+    """Push two keyed rows, then a keyed morsel with no rows naming a third
+    group, and check one answer per group."""
+    _ = s.push(_m(_b([1, 2]), _groups([0, 1]), 2))
+    _ = s.push(_m(_b(List[Optional[Int]]()), _groups(List[Optional[Int]]()), 3))
+    var out = s.drain().value().to_array(3)
+    ref sums = out.as_int64()
+    assert_equal(len(sums), 3)
+    for g in range(3):
+        if expected[g]:
+            assert_equal(sums[g].value(), Int64(expected[g].value()), String(g))
+        else:
+            assert_true(sums.is_null(g), String(g))
+
+
+def test_fused_grouped_empty_morsel_grows_to_its_groups() raises:
+    """A morsel with no rows still grows the state to the groups it names: the
+    third group, which saw no row, answers NULL."""
+    _check_grown_by_an_empty_morsel(
+        col("a", int64).sum().alias("t").to_operator(Schema(), True),
+        [1, 2, None],
+    )
+
+
+def test_filtered_fused_grouped_empty_morsel_grows_to_its_groups() raises:
+    """The same with a `FILTER`, which rejects group 0's only row."""
+    _check_grown_by_an_empty_morsel(
+        col("a", int64)
+        .sum()
+        .filter(col("a", int64) > lit(1, int64))
+        .alias("t")
+        .to_operator(Schema(), True),
+        [None, 2, None],
+    )
 
 
 def test_mean_uses_the_valid_count_as_divisor() raises:

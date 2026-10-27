@@ -231,8 +231,8 @@ trait DecimalBinaryKernel(Kernel):
     all a lane ever sees — the comptime lane calls it directly with the
     promotion's powers of ten applied, and `apply` calls it through `views`.
 
-    Not a `BinaryKernel`, whose `apply` labels the answer with an operand's
-    dtype: that is exactly what a decimal operator must not do.
+    Not a `NumericBinaryKernel`, whose `apply` labels the answer with an
+    operand's dtype: that is exactly what a decimal operator must not do.
     """
 
     @staticmethod

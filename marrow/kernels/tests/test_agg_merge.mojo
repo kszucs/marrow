@@ -34,10 +34,8 @@ from ...kernels.aggregate import (
     DistinctCount,
     Fold,
     LexicalExtremum,
-    MaxOp,
     MeanFold,
     MinFold,
-    MinOp,
     SumFold,
     ValidCount,
 )
@@ -225,11 +223,11 @@ def test_agg_merge_valid_count() raises:
 
 
 def test_agg_merge_string_min() raises:
-    _check[LexicalExtremum[MinOp, StringArray]](_strings())
+    _check[LexicalExtremum[True, StringArray]](_strings())
 
 
 def test_agg_merge_string_max() raises:
-    _check[LexicalExtremum[MaxOp, StringArray]](_strings())
+    _check[LexicalExtremum[False, StringArray]](_strings())
 
 
 def test_agg_merge_distinct_ints() raises:
