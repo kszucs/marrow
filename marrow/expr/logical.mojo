@@ -3867,8 +3867,9 @@ struct JoinLink(Copyable, Equatable, Movable, Writable):
 
     def swappable(self) -> Bool:
         """May the side built change without changing the answer? Not under
-        `JOIN_ANY`, which keeps one match per probe row."""
-        return self.strictness == JOIN_ALL and self.kind.commutes()
+        `JOIN_ANY`, which keeps one match per probe row. Every supported kind
+        has a mirror."""
+        return self.strictness == JOIN_ALL and self.kind.is_supported()
 
     def passes(self, left: Bool) -> Bool:
         """May a filter over the left side — or the right, when `left` is

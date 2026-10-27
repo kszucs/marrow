@@ -13,16 +13,20 @@ from std.collections import Set
 from std.memory import ArcPointer
 
 from ..errors import InternalError
-from ..arrays import BoolArray, DynArray, Int32Array, StructArray
-from ..buffers import Bitmap
+from ..arrays import DynArray, Int32Array, StructArray
 from std.builtin.rebind import downcast
 from ..builders import DynBuilder, Int32Builder, arange, nulls
 from ..dtypes import Field, Int32Type, field, null, struct_
 from ..kernels.aggregate import AggKernel, Windowable
-from ..kernels.conditional import CaseWhenKernel
 from ..execution import ExecContext
 from ..kernels.concat import concat
-from ..kernels.filter import FilterKernel, TakeKernel
+from ..kernels.filter import (
+    FilterKernel,
+    IndicesToMaskKernel,
+    MaskValidityKernel,
+    ScatterKernel,
+    TakeKernel,
+)
 from ..kernels.groupby import Groups
 from ..kernels.dictionary import DictionaryEncoder
 from ..dtypes import DynType
@@ -692,50 +696,49 @@ struct _SortKeys(Movable):
 
     @no_inline
     def sorted(mut self, var whole: StructArray) raises -> Datum:
-        """`whole` in key order, cut to `limit` rows when there is one.
-
-        Multiple keys are sorted **stably, last key first**: each pass keeps
-        the order the previous one established, so the composition orders by
-        key 0, ties broken by key 1, and so on."""
-        var order = Optional[Int32Array](None)
-        for k in range(len(self._keys) - 1, -1, -1):
-            var key = (
-                self._keys[k]
-                .push(Morsel.ungrouped(whole.copy()))
-                .value()
-                .to_array(len(whole))
-            )
-            if order:
-                key = TakeKernel.dispatch(key, order.value(), self.ctx)
-            # **The bound applies to the primary key only.** Every pass but
-            # the last must return a *full* permutation for the next one to
-            # permute: truncating an earlier pass discards rows the later keys
-            # still have to order. `k == 0` is the final, most significant
-            # pass.
-            var pass_order = SortIndices[nan_largest=True].dispatch(
-                key,
-                ascending=self._ascending[k],
-                nulls_first=self._nulls_first,
-                limit=self._limit if k == 0 else None,
-                ctx=self.ctx,
-            )
-            if order:
-                # Compose: this pass permutes the previous order, it does not
-                # replace it.
-                var prev: DynArray = order.value().copy()
-                order = (
-                    TakeKernel.dispatch(prev, pass_order, self.ctx)
-                    .as_int32()
-                    .copy()
-                )
-            else:
-                order = pass_order^
-
-        if not order:
+        """`whole` in key order, cut to `limit` rows when there is one; as
+        it is when there are no keys."""
+        if len(self._keys) == 0:
             return Datum(whole^.to_dyn())
-        return Datum(
-            TakeKernel.dispatch(whole.copy().to_dyn(), order.value(), self.ctx)
-        )
+        else:
+            var keys = List[DynArray](capacity=len(self._keys))
+            for k in range(len(self._keys)):
+                keys.append(
+                    self._keys[k]
+                    .push(Morsel.ungrouped(whole.copy()))
+                    .value()
+                    .to_array(len(whole))
+                )
+            var order = _sort_order(
+                keys, self._ascending, self._nulls_first, self._limit, self.ctx
+            )
+            return Datum(TakeKernel.dispatch(whole^.to_dyn(), order, self.ctx))
+
+
+def _sort_order(
+    keys: List[DynArray],
+    ascending: List[Bool],
+    nulls_first: Bool,
+    limit: Optional[Int],
+    ctx: ExecContext,
+) raises -> Int32Array:
+    """The order of `keys`' rows, most significant key first, NaN above every
+    number, cut to `limit` rows when there is one. `keys` is not empty."""
+    var n = len(keys[0])
+    var fields = List[Field](capacity=len(keys))
+    var indices = List[Int](capacity=len(keys))
+    for i in range(len(keys)):
+        fields.append(field(String("k", i), keys[i].dtype()))
+        indices.append(i)
+    var key_batch = _struct_of(schema(fields^), keys.copy(), n)
+    return SortIndices[nan_largest=True].multi(
+        key_batch,
+        indices,
+        ascending,
+        nulls_first=nulls_first,
+        limit=limit,
+        ctx=ctx,
+    )
 
 
 struct SortOperator(Operator):
@@ -910,7 +913,14 @@ struct WindowOperator(Operator):
         for i in range(len(spec.order_by)):
             keys.append(self._eval(spec.order_by[i], whole))
             ascending.append(spec.ascending[i])
-        var perm = self._permutation(keys, ascending, spec.nulls_first, n)
+        var perm: Int32Array
+        if len(keys) == 0:
+            # `OVER ()` is one partition, in input order.
+            perm = arange[Int32Type](0, n)
+        else:
+            perm = _sort_order(
+                keys, ascending, spec.nulls_first, None, self._ctx
+            )
 
         var sorted_keys = List[DynArray](capacity=len(keys))
         for ref k in keys:
@@ -926,7 +936,10 @@ struct WindowOperator(Operator):
                 TakeKernel.dispatch(whole.field(i), perm, self._ctx)
             )
         var sorted_batch = _struct_of(self._input_schema, sorted_columns^, n)
-        var inverse = self._inverse(perm, n)
+        # Where each input row landed in the sort: gathering a sorted result
+        # under it puts each value back beside the row it describes.
+        var rows = arange[Int32Type](0, n)
+        var inverse = ScatterKernel.apply(rows, perm, rows)
 
         var out = List[DynArray](capacity=len(which))
         for ref i in which:
@@ -939,52 +952,6 @@ struct WindowOperator(Operator):
             )
             out.append(TakeKernel.dispatch(column, inverse, self._ctx))
         return out^
-
-    def _permutation(
-        self,
-        keys: List[DynArray],
-        ascending: List[Bool],
-        nulls_first: Bool,
-        n: Int,
-    ) raises -> Int32Array:
-        """The order the window is evaluated in.
-
-        Identity when the window names no keys at all — `OVER ()` is one
-        partition in input order, and `SortIndices.multi` rejects an empty key
-        list rather than answering that.
-        """
-        if len(keys) == 0:
-            var identity = Int32Builder(n)
-            for i in range(n):
-                identity.append(Int32(i))
-            return identity.finish()
-        var fields = List[Field](capacity=len(keys))
-        var indices = List[Int](capacity=len(keys))
-        for i in range(len(keys)):
-            fields.append(field(String("k", i), keys[i].dtype()))
-            indices.append(i)
-        var key_batch = _struct_of(schema(fields^), keys.copy(), n)
-        return SortIndices[nan_largest=True].multi(
-            key_batch,
-            indices,
-            ascending,
-            nulls_first=nulls_first,
-            ctx=self._ctx,
-        )
-
-    def _inverse(self, perm: Int32Array, n: Int) raises -> Int32Array:
-        """`inv[perm[j]] = j` — where each input row landed in the sort.
-
-        Gathering a sorted result under this puts it back beside the row it
-        describes, which is what lets the batch itself stay in input order.
-        """
-        var positions = List[Int](length=n, fill=0)
-        for j in range(n):
-            positions[Int(perm[j].value())] = j
-        var out = Int32Builder(n)
-        for i in range(n):
-            out.append(Int32(positions[i]))
-        return out.finish()
 
 
 @fieldwise_init
@@ -1284,14 +1251,9 @@ struct ResidualJoinOperator(Operator):
             pairs = FilterKernel.dispatch(pairs, holds.as_bool(), self._ctx)
             probe = FilterKernel.dispatch(probe, holds.as_bool(), self._ctx)
         # The probe rows some pair stood for are the matched ones.
-        var n = len(batch)
-        var keep = Bitmap.alloc_zeroed(n)
-        if self._anti:
-            keep.set_range(0, n, True)
-        ref rows = probe.as_int32()
-        for k in range(len(rows)):
-            keep[Int(rows.unsafe_get(k))] = not self._anti
-        var mask = BoolArray(length=n, buffer=keep^.to_immutable(length=n))
+        var mask = IndicesToMaskKernel.apply(
+            probe.as_int32(), len(batch), self._anti
+        )
         var out = (
             FilterKernel.dispatch(batch.copy().to_dyn(), mask, self._ctx)
             .as_struct()
@@ -1350,17 +1312,14 @@ struct MultisetOperator[M: Multiplicity](Operator):
 
     def _count(mut self, batch: StructArray, left: Bool) raises:
         """Encode `batch`'s rows and count each code for one side."""
-        var n = len(batch)
         var placed = self._encoder.encode(batch.flatten())
         self._left.resize(len(self._encoder), 0)
         self._right.resize(len(self._encoder), 0)
-        var ids = placed.ids.values()
-        for i in range(n):
-            var g = Int(ids[i])
-            if left:
-                self._left[g] += 1
-            else:
-                self._right[g] += 1
+        var groups = Groups(placed.ids.copy(), len(self._encoder))
+        if left:
+            groups.count_into(self._left)
+        else:
+            groups.count_into(self._right)
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         self._count(morsel.batch, True)
@@ -1405,21 +1364,6 @@ def _struct_of(
     )
 
 
-def admitted_bits(mask: DynArray) raises -> Bitmap[mut=False]:
-    """The rows a `FILTER` predicate admits: TRUE, and neither FALSE nor NULL.
-
-    `values & validity`, the same expression `kernels.filter.filter` applies
-    to its mask. The fused machine masks the operand's validity with it and
-    the buffered one compacts, and either is enough because every
-    `AggKernel` already skips nulls. A function rather than inline code
-    because `intersect_views` needs views with an immutable origin, which a
-    borrowed argument has and a local `var` does not. The mask is boolean:
-    `reject_non_boolean_filter` refuses anything else at plan time.
-    """
-    ref m = mask.as_bool()
-    return Bitmap.intersect_views(Optional(m.values()), m.validity()).value()
-
-
 @no_inline
 def compact_to_admitted(
     mut column: DynArray,
@@ -1441,19 +1385,10 @@ def compact_to_admitted(
     group. `num_groups` does not shrink: a group whose rows were all
     rejected still produces a row, with its kernel's answer over no input.
     """
-    var rows = len(column)
-    var keep = BoolArray(
-        length=rows,
-        buffer=admitted_bits(predicate.push(morsel).value().to_array(rows)),
-    )
-    if not groups.is_single():
-        var ids = (
-            FilterKernel.dispatch(groups.ids.copy().to_dyn(), keep)
-            .as_int32()
-            .copy()
-        )
-        groups = Groups(ids^, groups.num_groups)
-    column = FilterKernel.dispatch(column, keep)
+    var mask = predicate.push(morsel).value().to_array(len(column))
+    var keep = FilterKernel.selection(mask.as_bool())
+    groups = groups.filter(keep.view())
+    column = FilterKernel.dispatch(column, keep.view())
 
 
 trait FrameEvaluator(Deinitable, Movable):
@@ -1513,8 +1448,8 @@ struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
 
     The window counterpart of `BufferedAggregateOperator`, and here for the
     same reason: it needs only an operand that evaluates to a column, which
-    both lanes have. A `FILTER` is applied as `CASE WHEN p THEN x END`: a row
-    it does not admit folds like a null.
+    both lanes have. A row the `FILTER` does not admit is made null, so it
+    folds like one.
     """
 
     var _input: Self.A
@@ -1539,17 +1474,19 @@ struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
     ) raises -> DynArray:
         comptime F = downcast[Self.Agg, Windowable]
         var n = len(sorted)
-        var operand = self._input.evaluate(sorted, self._bindings).to_array(n)
+        var operand = (
+            self._input.evaluate(sorted, self._bindings).to_array(n).to_data()
+        )
         if self._where:
-            var admitted = self._where.value().push(
-                Morsel.ungrouped(sorted.copy())
+            var mask = (
+                self._where.value()
+                .push(Morsel.ungrouped(sorted.copy()))
+                .value()
+                .to_array(n)
             )
-            operand = CaseWhenKernel.dispatch(
-                [admitted.value().to_array(n).as_bool().copy()], [operand^]
-            )
-        return F.over(
-            F.InArray(operand.to_data()), extents, self._frame
-        ).to_dyn()
+            var admitted = FilterKernel.selection(mask.as_bool())
+            operand = MaskValidityKernel.apply(operand, admitted.view())
+        return F.over(F.InArray(operand), extents, self._frame).to_dyn()
 
 
 struct PerFrameEvaluator[V: Value](FrameEvaluator):

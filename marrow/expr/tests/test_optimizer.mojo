@@ -1350,7 +1350,7 @@ def test_join_ordering_is_a_no_op_when_nothing_is_known() raises:
 
 
 def test_join_ordering_declines_a_kind_it_cannot_mirror() raises:
-    """`commutes` is the guard, and the pass declines where a kernel raises.
+    """`is_supported` is the guard, and the pass declines where a kernel raises.
 
     `JOIN_CROSS` has a constant and no implementation, so `JoinKind.mirror`
     raises for it. Reaching `mirror` from inside the pass would turn an

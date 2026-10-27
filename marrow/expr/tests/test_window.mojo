@@ -798,6 +798,30 @@ def test_a_filtered_aggregate_skips_rows_its_filter_rejects() raises:
     )
 
 
+def test_a_windowed_filter_admits_no_row_its_predicate_is_null_for() raises:
+    """`SUM(v) FILTER (WHERE w > 0) OVER (ORDER BY v)` with `w` null on one
+    row: a null predicate admits nothing, as in a grouped `FILTER`."""
+    var b = record_batch(
+        [
+            array([10, 20, 30, 40], int64).copy(),
+            array([1, None, 3, 4], int64).copy(),
+        ],
+        names=["v", "w"],
+    )
+    var plan = table(b^).with_columns(
+        ["s"],
+        [
+            col("v", int64)
+            .sum()
+            .filter(col("w", int64) > lit(0, int64))
+            .over(order_by=[col("v", int64)])
+        ],
+    )
+    assert_true(
+        plan.execute().column("s").as_int64() == array([10, 10, 40, 80], int64)
+    )
+
+
 def test_an_aggregate_without_over_is_evaluated_per_frame() raises:
     """`variance` has no `Windowable.over`, so it is evaluated frame by frame
     through its operator — the fallback, pinned so it stays reachable."""

@@ -76,6 +76,7 @@ from ..dtypes import (
 )
 from ..scalars import BoolScalar, PrimitiveScalar, DynScalar
 from ..views import BitmapView, cpu_lanes, reduce_lanes
+from .bitwise import BitAndKernel, BitOrKernel, BitXorKernel
 from .core import Associative, BinaryKernel, Commutative, Identity, Kernel
 from .groupby import Groups
 from .numeric import AddKernel, FloordivKernel, MaxKernel, MinKernel, MulKernel
@@ -148,6 +149,10 @@ trait FoldKernel(Kernel):
             comptime assert conforms_to(
                 V, DecimalType
             ), "this aggregate is defined for decimal columns only"
+        elif conforms_to(Self, IntegerAgg):
+            comptime assert conforms_to(
+                V, IntegerType
+            ), "this aggregate is defined for integer columns only"
 
     comptime empty_is_null: Bool = True
     """Whether a group with no valid rows has no answer. It usually does not —
@@ -244,6 +249,9 @@ comptime STDDEV = "stddev"
 comptime STDDEV_SAMP = "stddev_samp"
 comptime MIN = "min"
 comptime MAX = "max"
+comptime BIT_AND = "bit_and"
+comptime BIT_OR = "bit_or"
+comptime BIT_XOR = "bit_xor"
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +289,13 @@ trait ArithmeticAgg(FoldKernel):
 
     `sum`, `product`, `mean`, and later `variance` / `stddev`.
     """
+
+    pass
+
+
+trait IntegerAgg(FoldKernel):
+    """Needs the bits of an integer, so integer input only: the bitwise folds
+    `bit_and`, `bit_or` and `bit_xor`."""
 
     pass
 
@@ -382,6 +397,47 @@ struct MinMax[
 
 comptime MinFold = MinMax[MinKernel, MIN]
 comptime MaxFold = MinMax[MaxKernel, MAX]
+
+
+struct Bitwise[
+    K: BinaryKernel & Associative & Commutative & Identity, label: StaticString
+](IntegerAgg):
+    """`bit_and`/`bit_or`/`bit_xor` as one kernel: the accumulator keeps the
+    input type, the fold is `K.core` seeded with `K.identity`, and finalize is
+    the identity. `label` is the aggregate's name."""
+
+    comptime name = String(Self.label)
+    comptime AccType[V: PrimitiveType] = V
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Self.K.identity[T]()
+
+    @staticmethod
+    def acc_dtype[
+        V: PrimitiveType
+    ](dtype: V) raises InvalidError -> Self.AccType[V]:
+        return dtype.copy()
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return Self.K.core[T, W](a, b)
+
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return Self.K.fold_lanes[T, W](v)
+
+    @always_inline
+    @staticmethod
+    def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
+        return acc
+
+
+comptime BitAndFold = Bitwise[BitAndKernel, BIT_AND]
+comptime BitOrFold = Bitwise[BitOrKernel, BIT_OR]
+comptime BitXorFold = Bitwise[BitXorKernel, BIT_XOR]
 
 
 struct CountFold(FoldKernel):

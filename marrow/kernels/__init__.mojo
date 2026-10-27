@@ -13,17 +13,22 @@ A name ending ``Kernel`` is something you *apply* to arrays. A ``*Fold`` (such
 as ``SumFold``, ``Widening[AddKernel, SUM]``) is an algebra you *drive*:
 ``Fold[K, V]``, an ``AggKernel``, applies one to a column through ``reserve`` /
 ``update`` / ``finish``, or in one call through ``AggKernel.grouped``. The
-``sum``, ``product``, ``min`` and ``max`` folds are built from the kernels that
-claim ``Associative``, ``Commutative`` and ``Identity``: ``SumFold`` from
-``AddKernel``, ``ProductFold`` from ``MulKernel``, ``MinFold`` and ``MaxFold``
-from ``MinKernel`` and ``MaxKernel``.
+``sum``, ``product``, ``min``, ``max`` and bitwise folds are built from the
+kernels that claim ``Associative``, ``Commutative`` and ``Identity``:
+``SumFold`` from ``AddKernel``, ``ProductFold`` from ``MulKernel``, ``MinFold``
+and ``MaxFold`` from ``MinKernel`` and ``MaxKernel``, and ``BitAndFold``,
+``BitOrFold`` and ``BitXorFold`` from ``BitAndKernel``, ``BitOrKernel`` and
+``BitXorKernel``.
 
 The hash and partition machinery -- `dictionary`, `join`, `hashtable`,
 `hashing`, `partition`, which `expr` composes -- is reached through its own
-submodule rather than this namespace.
+submodule rather than this namespace; only the three public kernels on
+`dictionary`'s encoder, `DictionaryEncodeKernel`, `ValueCountsKernel` and
+`ModeKernel`, are re-exported.
 
 Submodules — element-wise first, then the ones that reshape or combine rows:
   - `numeric.mojo` — binary arithmetic and comparison
+  - `bitwise.mojo` — bitwise and, or, xor, not, and shifts over integers
   - `boolean.mojo` — logical ops and validity predicates, Kleene semantics
   - `string.mojo` — string predicates and transforms, incl. LIKE / ILIKE,
     and hex / base64 encoding
@@ -37,14 +42,16 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
     sums, products, minimums and maximums), shift, pairwise_diff and
     rolling windows
   - `distinct.mojo` — exact and approximate distinct counts
-  - `filter.mojo` — selection, take, drop_null
+  - `filter.mojo` — selection, take, drop_null, mask_validity, scatter,
+    indices_nonzero / indices_to_mask, replace_with_mask
   - `sort.mojo` — sort and sort_indices
   - `core.mojo` — the `Kernel` root trait and the `Partial` and `Prunable`
     properties
   - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
-  - *not re-exported* — `dictionary.mojo` / `join.mojo` / `hashtable.mojo` /
-    `hashing.mojo` / `partition.mojo` (the hash machinery group-by, join and
-    `is_in` share), `concat.mojo` (batches joined in parallel),
+  - `dictionary.mojo` — `dictionary_encode`, `value_counts` and `mode`
+  - *not re-exported* — the encoder in `dictionary.mojo`, `join.mojo` /
+    `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the hash machinery
+    group-by, join and `is_in` share), `concat.mojo` (batches joined in parallel),
     `segments.mojo` (a column cut into consecutive runs of rows, and folds
     over each run) and `statistics.mojo` (column bounds)
 """
@@ -87,8 +94,19 @@ from .aggregate import (
     CountFold,
     MinFold,
     MaxFold,
+    BitAndFold,
+    BitOrFold,
+    BitXorFold,
     AnyKernel,
     AllKernel,
+)
+from .bitwise import (
+    BitAndKernel,
+    BitOrKernel,
+    BitXorKernel,
+    BitNotKernel,
+    ShiftLeftKernel,
+    ShiftRightKernel,
 )
 from .numeric import (
     AddKernel,
@@ -193,7 +211,16 @@ from .scan import (
 from .cast import CastArm, CastKernel
 from .core import Kernel, Partial, Prunable
 from .groupby import Groups
+from .dictionary import DictionaryEncodeKernel, ModeKernel, ValueCountsKernel
 from .distinct import ApproxCountDistinctKernel, CountDistinctKernel
-from .filter import FilterKernel, TakeKernel
+from .filter import (
+    FilterKernel,
+    IndicesNonzeroKernel,
+    IndicesToMaskKernel,
+    MaskValidityKernel,
+    ReplaceWithMaskKernel,
+    ScatterKernel,
+    TakeKernel,
+)
 from .membership import IsInKernel
 from .sort import SortIndices, SortKernel

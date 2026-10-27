@@ -10,6 +10,8 @@ from std.testing import assert_equal, assert_raises, assert_true, assert_false
 
 from ...arrays import DynArray, ListArray, ListLikeArray, Int32Array, MapArray
 from ...builders import (
+    Float64Builder,
+    Int8Builder,
     Int32Builder,
     ListBuilder,
     ListLikeBuilder,
@@ -27,6 +29,7 @@ from ...dtypes import (
     ListLikeType,
     ListType,
     NumericType,
+    int8,
     int32,
     int64,
     string,
@@ -35,6 +38,9 @@ from ...dtypes import (
 )
 
 from ...kernels.aggregate import (
+    BitAndFold,
+    BitOrFold,
+    BitXorFold,
     CountFold,
     FoldKernel,
     MaxFold,
@@ -298,3 +304,56 @@ def test_list_reduce_dispatch() raises:
 
     with assert_raises(contains="expected a list array"):
         _ = ListReduceKernel[SumFold].dispatch(array([1, 2], int64))
+
+
+def test_list_reduce_bitwise_folds() raises:
+    """DuckDB's `list_bit_and`, `list_bit_or` and `list_bit_xor`: the element
+    type kept, and an empty, all-null or null list null."""
+    var b = ListBuilder(Int64Builder())
+    var child_any = b.values()
+    ref child = child_any.as_int64()
+    child.append(12)
+    child.append(10)
+    child.append(14)
+    b.append_valid()  # [12, 10, 14]
+    b.append_valid()  # []
+    child.append_null()
+    b.append_valid()  # [null]
+    b.append_null()  # null
+    child.append(5)
+    child.append_null()
+    child.append(3)
+    b.append_valid()  # [5, null, 3]
+    child.append(-1)
+    child.append(6)
+    b.append_valid()  # [-1, 6]
+    var lists: DynArray = b.finish()
+    assert_true(
+        ListReduceKernel[BitAndFold].dispatch(lists).as_int64()
+        == array([8, None, None, None, 1, 6], int64)
+    )
+    assert_true(
+        ListReduceKernel[BitOrFold].dispatch(lists).as_int64()
+        == array([14, None, None, None, 7, -1], int64)
+    )
+    assert_true(
+        ListReduceKernel[BitXorFold].dispatch(lists).as_int64()
+        == array([8, None, None, None, 6, -7], int64)
+    )
+
+    var narrow = ListBuilder(Int8Builder())
+    var narrow_any = narrow.values()
+    ref bytes = narrow_any.as_int8()
+    bytes.append(1)
+    bytes.append(3)
+    narrow.append_valid()
+    var anded = ListReduceKernel[BitAndFold].dispatch(narrow.finish())
+    assert_true(anded.as_int8() == array([1], int8))
+
+    var floats = ListBuilder(Float64Builder())
+    var floats_any = floats.values()
+    ref values = floats_any.as_float64()
+    values.append(1.0)
+    floats.append_valid()
+    with assert_raises(contains="not an integer type"):
+        _ = ListReduceKernel[BitAndFold].dispatch(floats.finish())

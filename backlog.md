@@ -1018,9 +1018,10 @@ Open, each needing a design before code:
   arithmetic with whole-array mapping; its scalar half and `TimestampFormat`
   belong in `utils/datetime.mojo`, and `ticks_per_second(dt)` on the dtype.
 - **Duplicated machinery**, next: the eight word-wise CTZ loops in
-  `kernels/filter.mojo` behind one set-bit walk; the allocation and validity
-  ladder repeated in every typed `apply` (the `Buffer.alloc_for` and rebased
-  validity rows of §1.15); a builder range-extend (arrow-rs
+  `kernels/filter.mojo`, and `IndicesNonzeroKernel._positions` a ninth,
+  behind one set-bit walk; the allocation and validity ladder repeated in
+  every typed `apply` (the `Buffer.alloc_for` and rebased validity rows of
+  §1.15); a builder range-extend (arrow-rs
   `MutableArrayData.extend(source, start, end)`) as the one output path for
   take, filter and the conditionals.
 - **Prefix sums written by hand**, which the kernel foundations leave alone
@@ -1028,16 +1029,16 @@ Open, each needing a design before code:
   binary kernel over a segment, the prefix sum being `SumScan`,
   `Scan[AddKernel]`. Most share their pass with other work; one is a plain
   scan:
-  - `kernels/filter.mojo:300-400`, binary-like filter: phase 1's set-bit walk
+  - `kernels/filter.mojo:323-423`, binary-like filter: phase 1's set-bit walk
     writes the running byte total as the output offsets while it filters the
     validity; the bytes are copied in phase 2, a pass of its own.
-  - `kernels/filter.mojo:500-560`, list-like filter: the running child total
+  - `kernels/filter.mojo:523-583`, list-like filter: the running child total
     is the output offset, written while the walk marks each selected row's
     child range.
-  - `kernels/filter.mojo:1006-1015`, `_take_present`: a gather of the indexed
+  - `kernels/filter.mojo:1029-1038`, `_take_present`: a gather of the indexed
     lengths and a scan of them into the offsets, with the overflow check, in
     a pass before the copy and apart from it -- a direct `Scan` candidate.
-  - `kernels/groupby.mojo:142-256`, `rows_by_group`: the per-stripe and
+  - `kernels/groupby.mojo:164-263`, `rows_by_group`: the per-stripe and
     per-range counts become the write cursors the rows are dealt out by.
   - `kernels/join.mojo:543-600`, `expand`: each stripe's pair count becomes
     where that stripe writes its pairs.
@@ -1091,6 +1092,30 @@ named:
 - Whether a CPU-only kernel should refuse a GPU `ctx` rather than run on
   the CPU, tree-wide: sort, take and the order kernels run on the host
   today.
+
+**Deferred by kernel-foundations step 4**, each waiting for the caller
+or measurement named:
+
+- The bitwise operators, the bitwise folds and `mode` have no expression
+  node: golden `math_bitwise_operators`, `agg_bitwise` and `agg_mode` stay
+  skipped. Binding them is gated on the AOT sizes, since step 4 links none
+  of its kernels into an existing binary.
+- The bitwise folds are reached per list only (`list_bit_and/or/xor`); no
+  whole-array `bit_and`/`bit_or`/`bit_xor` in Python, as no numeric fold is
+  bound whole-array.
+- `dictionary_encode` and `value_counts` raise the hash kernel's
+  `TypeError` for `fixed_size_binary` and `null` columns, which PyArrow
+  encodes, and key `-0.0` and `0.0` as one value, the group-by's identity,
+  where PyArrow keeps them apart.
+- Bitwise and shift operands must share one dtype, where PyArrow promotes
+  `int8 & int16` to `int16`; Python's `replace_with_mask` refuses a scalar
+  mask or replacements, which PyArrow broadcasts.
+- `replace_with_mask` concatenates `values` and `replacements` and takes
+  once: a copy of `values` on fixed-width input, where a scatter would
+  write the replacements alone. Unmeasured.
+- `Partial.null_undefined` copies the divisor's values to put its validity
+  at offset 0, where `MaskValidityKernel` places the validity at the
+  array's own offset and shares the values: a candidate to share it.
 
 **`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
 `query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the

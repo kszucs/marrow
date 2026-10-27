@@ -3,10 +3,17 @@
 
 """Filter, take, and selection kernels.
 
-``filter``     — select elements where a boolean mask is True.
-``take``       — gather elements at arbitrary indices (null index → null,
-                 out-of-range index → ``IndexError``).
-``drop_null``  — remove null elements using the validity bitmap.
+``filter``            — select elements where a boolean mask is True.
+``selection``         — the rows a boolean mask selects: true and valid.
+``take``              — gather elements at arbitrary indices (null index →
+                        null, out-of-range index → ``IndexError``).
+``drop_null``         — remove null elements using the validity bitmap.
+``mask_validity``     — null every row a selection does not keep, the values
+                        left as they are.
+``scatter``           — write values into a copy of an array at given rows.
+``indices_nonzero``   — the positions of the true or non-zero rows.
+``indices_to_mask``   — a mask true at given rows: the inverse.
+``replace_with_mask`` — replace the rows a mask selects, in order.
 
 All functions support arrays with non-zero offsets (sliced arrays).
 """
@@ -14,6 +21,7 @@ All functions support arrays with non-zero offsets (sliced arrays).
 from std.bit import count_trailing_zeros
 
 from ..arrays import (
+    ArrayData,
     BoolArray,
     PrimitiveArray,
     BinaryLikeArray,
@@ -26,6 +34,7 @@ from ..arrays import (
     FixedSizeListArray,
     DictionaryArray,
     Int32Array,
+    UInt64Array,
 )
 from ..buffers import Buffer
 from ..buffers import Bitmap
@@ -33,8 +42,12 @@ from ..builders import (
     BoolBuilder,
     BinaryLikeBuilder,
     BinaryViewLikeBuilder,
+    DynBuilder,
+    Int32Builder,
 )
 from ..dtypes import (
+    DecimalType,
+    NumericType,
     PrimitiveType,
     BinaryLikeType,
     BinaryViewLikeType,
@@ -48,7 +61,8 @@ from ..dtypes import (
 
 import std.math as math
 
-from ..views import BitmapView, cpu_lanes, reduce
+from ..views import BitmapView, apply, cpu_lanes, reduce
+from .cast import NumToBoolKernel
 from .core import Kernel
 from ..execution import ExecContext
 from ..errors import IndexError, InvalidError, TypeError
@@ -71,23 +85,32 @@ struct FilterKernel(Kernel):
         mask: BoolArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        """Filter `array`, keeping elements where `mask` is true.
+        """Filter `array`, keeping elements where `mask` is true: the rows
+        `selection(mask)` names."""
+        if mask.null_count() == 0:
+            return Self.dispatch(array, mask.values(), ctx)
+        var selected = Self.selection(mask)
+        return Self.dispatch(array, selected.view(), ctx)
+
+    @staticmethod
+    def selection(mask: BoolArray) raises -> Bitmap[mut=False]:
+        """The rows `mask` selects, one bit per row from its first: true and
+        valid.
 
         **A null mask entry does not select.** That is Arrow's rule — pyarrow's
         default `null_selection_behavior="drop"` — and SQL's: `WHERE v < 4`
-        omits the row where `v` is NULL. The comparison kernels write a data
-        bit for a null lane too, so selecting on the values alone would keep
-        rows the validity says are meaningless.
-
-        `intersect_views` rather than `intersect`: views index logically from
-        zero and owning bitmaps do not, so a sliced mask would otherwise have
-        its nulls applied `offset` positions from where they belong."""
-        if mask.null_count() == 0:
-            return Self.dispatch(array, mask.values(), ctx)
-        var selected = Bitmap.intersect_views(
+        omits the row where `v` is NULL, and a `FILTER (WHERE p)` admits no
+        row where `p` is NULL. The comparison kernels write a data bit for a
+        null lane too, so selecting on the values alone would keep rows the
+        validity says are meaningless.
+        """
+        # `intersect_views` rather than `intersect`: views index logically
+        # from zero and owning bitmaps do not, so a sliced mask would
+        # otherwise have its nulls applied `offset` positions from where they
+        # belong.
+        return Bitmap.intersect_views(
             Optional(mask.values()), mask.validity()
         ).value()
-        return Self.dispatch(array, selected.view(), ctx)
 
     @staticmethod
     def dispatch(
@@ -1317,4 +1340,262 @@ struct TakeKernel(Kernel):
             offset=0,
             bitmap=bm,
             children=children^,
+        )
+
+
+struct MaskValidityKernel(Kernel):
+    """Null every row a selection does not keep, leaving the values as they
+    are: a column that holds a value only where a `FILTER` admits its row."""
+
+    comptime name = "mask_validity"
+
+    @staticmethod
+    def apply(data: ArrayData, selection: BitmapView[_]) raises -> ArrayData:
+        """`data`, null wherever `selection` is clear: its validity ANDed with
+        `selection`, one bit per row from its first.
+
+        The buffers and children are shared and no payload changes, so a row
+        made null keeps the value it held. A `null` column is returned as it
+        is.
+
+        Raises:
+            InvalidError: when `selection` does not have one bit per row.
+        """
+        Self.expect_same_length(data.length, len(selection))
+        var out = data.copy()
+        if not data.dtype.is_null():
+            var valid = data.validity()
+            var kept: Bitmap[mut=False]
+            if valid:
+                kept = valid.value().intersection(selection).to_immutable()
+            else:
+                kept = selection.to_owned()
+            out.nulls = kept.unset_count()
+            # The bitmap shares the column's offset, so the kept bits start
+            # at it.
+            if data.offset == 0:
+                out.bitmap = kept^
+            else:
+                var placed = Bitmap.alloc_zeroed(data.offset + data.length)
+                placed.extend(kept.view(), data.offset, data.length)
+                out.bitmap = placed^.to_immutable()
+        return out^
+
+
+struct ScatterKernel(Kernel):
+    """Write values into a copy of an array at given rows: the inverse of a
+    take, `out[indices[j]] = values[j]`."""
+
+    comptime name = "scatter"
+
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](
+        target: PrimitiveArray[T],
+        indices: Int32Array,
+        values: PrimitiveArray[T],
+    ) raises -> PrimitiveArray[T]:
+        """A copy of `target` with row `indices[j]` set to `values[j]`, value
+        and validity, in `j` order, so a later `j` wins a repeated index.
+
+        Every index must be valid and in `[0, len(target))`.
+
+        Raises:
+            InvalidError: unless there is one index per value.
+        """
+        Self.expect_same_length(len(indices), len(values))
+        debug_assert(indices.null_count() == 0, "scatter: a null index")
+        comptime native = T.native
+        var n = len(target)
+        var buf = Buffer.alloc_uninit[native](n)
+        var out = buf.view[native](0, n)
+        out.copy_from(target.values(), n)
+        var at = indices.values()
+        var src = values.values()
+        var bitmap: Optional[Bitmap[]] = None
+        var nulls = 0
+        if target.null_count() == 0 and values.null_count() == 0:
+            for j in range(len(indices)):
+                out.unsafe_set(Int(at.unsafe_get(j)), src.unsafe_get(j))
+        else:
+            var valid = Bitmap.alloc_zeroed(n)
+            if target.bitmap:
+                valid.extend(target.validity().value(), 0, n)
+            else:
+                valid.set_range(0, n, True)
+            for j in range(len(indices)):
+                var i = Int(at.unsafe_get(j))
+                out.unsafe_set(i, src.unsafe_get(j))
+                valid[i] = values.is_valid(j)
+            var kept = valid^.to_immutable()
+            nulls = kept.unset_count()
+            bitmap = kept^
+        return PrimitiveArray[T](
+            dtype=target.dtype.copy(),
+            length=n,
+            nulls=nulls,
+            offset=0,
+            bitmap=bitmap,
+            buffer=buf^.to_immutable(),
+        )
+
+
+struct IndicesNonzeroKernel(Kernel):
+    """The positions of the true, or non-zero, rows of a column."""
+
+    comptime name = "indices_nonzero"
+
+    @staticmethod
+    def apply(values: BoolArray) raises -> UInt64Array:
+        """The positions of the valid true rows, ascending."""
+        if values.null_count() == 0:
+            return Self._positions(values.values())
+        else:
+            var selected = FilterKernel.selection(values)
+            return Self._positions(selected.view())
+
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](values: PrimitiveArray[T]) raises -> UInt64Array:
+        """The positions of the valid non-zero rows, ascending. NaN is
+        non-zero and -0.0 is zero."""
+        comptime native = T.native
+        var nonzero = Bitmap.alloc_uninit(len(values))
+        apply[native, NumToBoolKernel.core[native, _]](
+            values.values(), nonzero.view()
+        )
+        var valid = values.validity()
+        if valid:
+            var kept = nonzero.view() & valid.value()
+            return Self._positions(kept.view())
+        else:
+            return Self._positions(nonzero.view())
+
+    @staticmethod
+    def dispatch(
+        values: DynArray, ctx: ExecContext = ExecContext.serial()
+    ) raises -> DynArray:
+        """The positions of the valid true or non-zero rows of a bool,
+        numeric or decimal column, ascending, as `uint64`.
+
+        Raises:
+            TypeError: for any other dtype.
+        """
+
+        def numeric[T: NumericType](d: T) raises {imm} -> DynArray:
+            return Self.apply(values.as_primitive[T]()).to_dyn()
+
+        def decimal[T: DecimalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(values.as_primitive[T]()).to_dyn()
+
+        if values.isa[BoolArray]():
+            return Self.apply(values.as_bool()).to_dyn()
+        elif values.dtype().is_decimal():
+            return values.dtype().try_visit[DynArray, DecimalType](
+                decimal, "dtype is not decimal"
+            )
+        else:
+            return values.dtype().try_visit[DynArray, NumericType](
+                numeric, "dtype is not numeric"
+            )
+
+    @staticmethod
+    def _positions(bits: BitmapView[_]) -> UInt64Array:
+        """The positions of `bits`' set bits, ascending."""
+        var n = len(bits)
+        var count = bits.count_set_bits()
+        var buf = Buffer.alloc_uninit[DType.uint64](count)
+        var out = buf.view[DType.uint64](0, count)
+        var j = 0
+        var wb = 0
+        while wb < n:
+            var w = bits.load_bits[DType.uint64](wb)
+            var rem = n - wb
+            if rem < 64:
+                w &= (UInt64(1) << UInt64(rem)) - 1
+            while w != 0:
+                out.unsafe_set(j, UInt64(wb + Int(count_trailing_zeros(w))))
+                j += 1
+                w &= w - 1
+            wb += 64
+        return UInt64Array(length=count, buffer=buf^.to_immutable())
+
+
+struct IndicesToMaskKernel(Kernel):
+    """A mask from row positions: the inverse of `indices_nonzero`."""
+
+    comptime name = "indices_to_mask"
+
+    @staticmethod
+    def apply(indices: Int32Array, length: Int, invert: Bool) -> BoolArray:
+        """`length` rows, none null: true exactly where some index points,
+        or, with `invert`, false exactly there.
+
+        Indices may repeat; every one must be valid and in `[0, length)`.
+        """
+        debug_assert(indices.null_count() == 0, "indices_to_mask: a null index")
+        var bits = Bitmap.alloc_zeroed(length)
+        if invert:
+            bits.set_range(0, length, True)
+        var at = indices.values()
+        for k in range(len(indices)):
+            bits[Int(at.unsafe_get(k))] = not invert
+        return BoolArray(length=length, buffer=bits^.to_immutable())
+
+
+struct ReplaceWithMaskKernel(Kernel):
+    """Replace the rows a mask selects with values drawn in order from a
+    second array."""
+
+    comptime name = "replace_with_mask"
+
+    @staticmethod
+    def dispatch(
+        values: DynArray,
+        mask: DynArray,
+        replacements: DynArray,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """Row `i` is `values[i]` where `mask[i]` is false, the next unused
+        replacement where it is true, and null where it is null, which
+        consumes no replacement. Replacements left over are ignored.
+
+        Raises:
+            TypeError: unless `mask` is bool and `replacements` has `values`'
+                dtype.
+            InvalidError: when `mask` and `values` differ in length, or there
+                are fewer replacements than true rows.
+        """
+        if not mask.isa[BoolArray]():
+            raise Self.error[TypeError](
+                t"mask must be bool, got {mask.dtype()}"
+            )
+        Self.expect_same_dtype(values, replacements)
+        var n = values.length()
+        Self.expect_same_length(n, mask.length())
+        ref m = mask.as_bool()
+        var picked = FilterKernel.selection(m)
+        var wanted = picked.view().count_set_bits()
+        if replacements.length() < wanted:
+            raise Self.error[InvalidError](
+                t"replacement array must be of appropriate length (expected"
+                t" {wanted} items but got {replacements.length()} items)"
+            )
+        # One index per row into `values` followed by `replacements`.
+        var indices = Int32Builder(capacity=n)
+        var next = n
+        for i in range(n):
+            if not m.is_valid(i):
+                indices.append_null()
+            elif picked.test(i):
+                indices.append(Int32(next))
+                next += 1
+            else:
+                indices.append(Int32(i))
+        return TakeKernel.dispatch(
+            DynBuilder.concat([values.copy(), replacements.copy()]),
+            indices.finish(),
+            ctx,
         )

@@ -1019,7 +1019,7 @@ def test_a_right_sided_existence_filter_survives_the_optimizer() raises:
 
     The kind decides *which* rows come back, so a rule that lost it is a wrong
     answer rather than a slow one — and `JoinOrdering` reaches these two
-    precisely because `commutes` admits them.
+    precisely because `is_supported` admits them.
     """
     var kinds: List[JoinKind] = [JOIN_RIGHT_SEMI, JOIN_RIGHT_ANTI]
     for ref k in kinds:

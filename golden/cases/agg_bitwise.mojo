@@ -8,9 +8,10 @@ def plan() raises -> DynRelation:
     """
     SELECT CAST(bit_and(v) AS BIGINT) AS a, CAST(bit_or(v) AS BIGINT) AS o, CAST(bit_xor(v) AS BIGINT) AS x FROM basic
 
-    The bitwise reductions. They are ordinary folds with an ordinary identity,
-    so they would fit `Fold[K, V]` unchanged — the gap is three kernels, not a
-    shape. Nulls are skipped, so `bit_and` is not 0.
+    The bitwise reductions. They are ordinary folds with an ordinary identity:
+    `BitAndFold`, `BitOrFold` and `BitXorFold` (`marrow/kernels/aggregate.mojo`)
+    fold them, reached today as `list_bit_and/or/xor`, but no expression node
+    binds them. Nulls are skipped, so `bit_and` is not 0.
 
     -- skip mojo
     -- skip python

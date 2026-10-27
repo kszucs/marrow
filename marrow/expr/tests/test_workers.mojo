@@ -184,6 +184,17 @@ def test_workers_cut_a_top_n_per_morsel() raises:
         _check(plan, ordered=True)
 
 
+def test_workers_cut_a_two_key_top_n_per_morsel() raises:
+    for n in _sizes():
+        var plan = (
+            table(_data(n, 3))
+            .sort_by([col("k", int64), col("v", int64)], [True, False])
+            .limit(6)
+            .optimize[AllRules]()
+        )
+        _check(plan, ordered=True)
+
+
 def test_workers_combine_grouped_aggregates() raises:
     for n in _sizes():
         var plan = table(_data(n, 1)).aggregate(

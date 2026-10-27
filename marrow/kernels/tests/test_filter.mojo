@@ -1,6 +1,7 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
+from std.math import nan
 from std.testing import (
     assert_equal,
     assert_true,
@@ -11,6 +12,8 @@ from std.testing import (
 from ...arrays import (
     DynArray,
     Int32Array,
+    Int64Array,
+    NullArray,
     PrimitiveArray,
     BoolArray,
 )
@@ -26,12 +29,19 @@ from ...builders import (
     TimestampBuilder,
     DurationBuilder,
     BoolBuilder,
+    Decimal128Builder,
+    ListBuilder,
 )
 from ...dtypes import (
+    DynType,
+    int8,
     int32,
     int64,
     uint8,
+    uint64,
     float32,
+    float64,
+    decimal128,
     bool_,
     date32,
     timestamp,
@@ -43,7 +53,16 @@ from ...dtypes import (
     Float32Type,
 )
 from ...buffers import Bitmap
-from ...kernels.filter import FilterKernel, TakeKernel
+from ...kernels.cast import CastKernel
+from ...kernels.filter import (
+    FilterKernel,
+    IndicesNonzeroKernel,
+    IndicesToMaskKernel,
+    MaskValidityKernel,
+    ReplaceWithMaskKernel,
+    ScatterKernel,
+    TakeKernel,
+)
 from ...execution import ExecContext
 from ...arrays import BinaryLikeArray
 from ...builders import BinaryLikeBuilder
@@ -1093,3 +1112,258 @@ def test_take_strings_offset_overflow() raises:
         ib.append(0)
     with assert_raises(contains="offset"):
         _ = TakeKernel.apply(src, ib.finish())
+
+
+# ---------------------------------------------------------------------------
+# selection and mask_validity -- what a FILTER keeps
+# ---------------------------------------------------------------------------
+
+
+def test_filter_selection_is_true_and_valid() raises:
+    """A row is selected when its value is true and it is valid: a null
+    entry selects nothing whatever its data bit holds."""
+    var mask = BoolArray(
+        length=6,
+        validity=Bitmap([True, True, False, True, False, True]).to_immutable(),
+        buffer=Bitmap([True, False, True, True, True, True]).to_immutable(),
+    )
+    var selected = FilterKernel.selection(mask)
+    assert_true(
+        selected
+        == Bitmap([True, False, False, True, False, True]).to_immutable()
+    )
+    var tail = FilterKernel.selection(mask.slice(2))
+    assert_true(tail == Bitmap([False, True, False, True]).to_immutable())
+
+
+def test_mask_validity_nulls_unselected_rows() raises:
+    """An unselected row turns null and keeps its payload; a null row stays
+    null."""
+    var values = array([1, None, 3, 4], int64)
+    var selection = Bitmap([True, True, False, True]).to_immutable()
+    var masked = Int64Array(
+        MaskValidityKernel.apply(values.to_data(), selection.view())
+    )
+    assert_equal(len(masked), 4)
+    assert_equal(masked.null_count(), 2)
+    assert_true(masked.is_valid(0))
+    assert_false(masked.is_valid(1))
+    assert_false(masked.is_valid(2))
+    assert_true(masked.is_valid(3))
+    assert_equal(masked.unsafe_get(0), 1)
+    assert_equal(masked.unsafe_get(2), 3)
+    assert_equal(masked.unsafe_get(3), 4)
+
+
+def test_mask_validity_at_an_offset() raises:
+    """A sliced column keeps its offset: the new validity is placed where
+    the column's rows start in its buffers."""
+    var strings = array(["a", "b", None, "d", "e"]).slice(1)
+    var selection = Bitmap([False, True, True, False]).to_immutable()
+    var data = MaskValidityKernel.apply(strings.to_data(), selection.view())
+    assert_equal(data.offset, 1)
+    assert_equal(data.nulls, 3)
+    assert_equal(
+        String(DynArray.from_data(data)),
+        String(array([None, None, "d", None])),
+    )
+
+
+def test_mask_validity_edges() raises:
+    """An all-set selection keeps the nulls as they are, a `null` column
+    comes back unchanged, and the lengths must agree."""
+    var values = array([1, None, 3], int64)
+    var every = Bitmap([True, True, True]).to_immutable()
+    var kept = Int64Array(
+        MaskValidityKernel.apply(values.to_data(), every.view())
+    )
+    assert_true(kept == values)
+    var nothing = NullArray(length=3).to_data()
+    assert_true(MaskValidityKernel.apply(nothing, every.view()) == nothing)
+    var two = Bitmap([True, True]).to_immutable()
+    with assert_raises(contains="InvalidError"):
+        _ = MaskValidityKernel.apply(values.to_data(), two.view())
+
+
+# ---------------------------------------------------------------------------
+# scatter
+# ---------------------------------------------------------------------------
+
+
+def test_scatter_replaces_the_indexed_rows() raises:
+    """Each value lands at its index, validity included, and a later index
+    wins; the index and value counts must agree."""
+    var target = array([0, 0, 0, 0], int64)
+    var got = ScatterKernel.apply(
+        target, array([3, 1, 3], int32), array([7, None, 9], int64)
+    )
+    assert_true(got == array([0, None, 0, 9], int64))
+    with assert_raises(contains="InvalidError"):
+        _ = ScatterKernel.apply(
+            target, array([3, 1], int32), array([7, None, 9], int64)
+        )
+
+
+def test_scatter_inverts_a_permutation() raises:
+    """Scattering the row numbers at a permutation's indices inverts it."""
+    var b = Int32Builder(1000)
+    for j in range(1000):
+        b.append(Int32((j * 7) % 1000))
+    var perm = b.finish()
+    var rows = arange[Int32Type](0, 1000)
+    var inv = ScatterKernel.apply(rows, perm, rows)
+    for j in range(1000):
+        assert_equal(Int(inv.unsafe_get(Int(perm.unsafe_get(j)))), j)
+    assert_true(TakeKernel.apply(perm, inv) == rows)
+
+
+# ---------------------------------------------------------------------------
+# indices_nonzero, indices_to_mask, replace_with_mask
+# ---------------------------------------------------------------------------
+
+
+def test_indices_nonzero_follows_pyarrow() raises:
+    """PyArrow's answers: the valid true or non-zero rows, ascending, as
+    `uint64`. NaN is non-zero and -0.0 is zero."""
+    assert_true(
+        IndicesNonzeroKernel.apply(array([True, False, None, True]))
+        == array([0, 3], uint64)
+    )
+    assert_true(
+        IndicesNonzeroKernel.apply(array([0, 3, None, -1, 0], int8))
+        == array([1, 3], uint64)
+    )
+    var floats = array([0.0, -0.0, nan[DType.float64](), None, 2.5], float64)
+    assert_true(IndicesNonzeroKernel.apply(floats) == array([2, 4], uint64))
+    var d = Decimal128Builder(decimal128(5, 2), 2)
+    d.append(Scalar[DType.int128](0))
+    d.append(Scalar[DType.int128](1))
+    assert_true(IndicesNonzeroKernel.apply(d.finish()) == array([1], uint64))
+    var sliced = array([True, None, True, False, True]).slice(1)
+    assert_true(IndicesNonzeroKernel.apply(sliced) == array([1, 3], uint64))
+    var b = BoolBuilder(130)
+    var want = List[Optional[Int]]()
+    for i in range(130):
+        b.append(i % 3 == 0)
+        if i % 3 == 0:
+            want.append(i)
+    assert_true(IndicesNonzeroKernel.apply(b.finish()) == array(want, uint64))
+    assert_equal(len(IndicesNonzeroKernel.apply(BoolArray.empty())), 0)
+
+
+def test_indices_nonzero_dispatch_rejects_strings_and_temporal() raises:
+    with assert_raises(contains="TypeError"):
+        _ = IndicesNonzeroKernel.dispatch(array(["a"]))
+    var t = TimestampBuilder(timestamp(second, "UTC"), 1)
+    t.append(Scalar[int64.native](1))
+    with assert_raises(contains="TypeError"):
+        _ = IndicesNonzeroKernel.dispatch(t.finish())
+
+
+def test_indices_to_mask_inverts_indices_nonzero() raises:
+    """A null-free mask through `indices_nonzero` and back, and its
+    complement with `invert`."""
+    var b = BoolBuilder(200)
+    var c = BoolBuilder(200)
+    for i in range(200):
+        var bit = i % 3 == 0 or i % 7 == 1
+        b.append(bit)
+        c.append(not bit)
+    var mask = b.finish()
+    var positions = CastKernel.dispatch(
+        IndicesNonzeroKernel.apply(mask), DynType(int32)
+    )
+    ref rows = positions.as_int32()
+    assert_true(IndicesToMaskKernel.apply(rows, 200, False) == mask)
+    assert_true(IndicesToMaskKernel.apply(rows, 200, True) == c.finish())
+
+
+def test_indices_to_mask_repeats_and_empty() raises:
+    var repeated = array([1, 1, 3], int32)
+    assert_true(
+        IndicesToMaskKernel.apply(repeated, 5, False)
+        == array([False, True, False, True, False])
+    )
+    assert_true(
+        IndicesToMaskKernel.apply(repeated, 5, True)
+        == array([True, False, True, False, True])
+    )
+    var none = array(int32)
+    assert_true(
+        IndicesToMaskKernel.apply(none, 3, False)
+        == array([False, False, False])
+    )
+    assert_equal(len(IndicesToMaskKernel.apply(none, 0, False)), 0)
+
+
+def test_replace_with_mask_follows_pyarrow() raises:
+    """PyArrow's answers: a true row takes the next replacement, a null mask
+    row is null and takes none, and spare replacements are ignored."""
+    var values: DynArray = array([1, 2, None, 4, 5], int64)
+    var mask: DynArray = array([True, False, True, None, True])
+    var replaced = ReplaceWithMaskKernel.dispatch(
+        values, mask, array([10, 30, 50], int64)
+    )
+    assert_true(replaced.as_int64() == array([10, 2, 30, None, 50], int64))
+    replaced = ReplaceWithMaskKernel.dispatch(
+        values, mask, array([None, 30, None], int64)
+    )
+    assert_true(replaced.as_int64() == array([None, 2, 30, None, None], int64))
+    replaced = ReplaceWithMaskKernel.dispatch(
+        values, mask, array([10, 30, 50, 70], int64)
+    )
+    assert_true(replaced.as_int64() == array([10, 2, 30, None, 50], int64))
+
+    var strings = ReplaceWithMaskKernel.dispatch(
+        array(["a", "b", None]),
+        array([False, True, True]),
+        array(["X", "Y"]),
+    )
+    assert_equal(String(strings), String(array(["a", "X", "Y"])))
+
+    var sliced = ReplaceWithMaskKernel.dispatch(
+        values.slice(1), mask.slice(1), array([0, 0, 0], int64).slice(1)
+    )
+    assert_true(sliced.as_int64() == array([2, 0, None, 0], int64))
+
+    var lists = ListBuilder(Int64Builder())
+    lists.values().as_int64().append(1)
+    lists.append_valid()
+    lists.values().as_int64().append(2)
+    lists.append_valid()
+    lists.append_null()
+    var swaps = ListBuilder(Int64Builder())
+    swaps.values().as_int64().append(7)
+    swaps.values().as_int64().append(8)
+    swaps.append_valid()
+    swaps.append_valid()
+    var want = ListBuilder(Int64Builder())
+    want.values().as_int64().append(1)
+    want.append_valid()
+    want.values().as_int64().append(7)
+    want.values().as_int64().append(8)
+    want.append_valid()
+    want.append_valid()
+    var got = ReplaceWithMaskKernel.dispatch(
+        lists.finish(), array([False, True, True]), swaps.finish()
+    )
+    assert_equal(String(got), String(want.finish()))
+
+
+def test_replace_with_mask_rejects_bad_arguments() raises:
+    var values: DynArray = array([1, 2, None, 4, 5], int64)
+    var mask: DynArray = array([True, False, True, None, True])
+    with assert_raises(contains="expected 3 items but got 2 items"):
+        _ = ReplaceWithMaskKernel.dispatch(values, mask, array([10, 30], int64))
+    with assert_raises(contains="InvalidError"):
+        _ = ReplaceWithMaskKernel.dispatch(
+            values, array([True]), array([10], int64)
+        )
+    with assert_raises(contains="TypeError"):
+        _ = ReplaceWithMaskKernel.dispatch(
+            values, mask, array([10, 30, 50], int32)
+        )
+    with assert_raises(contains="TypeError"):
+        _ = ReplaceWithMaskKernel.dispatch(
+            values, array([1, 0, 1, 0, 1], int64), array([10, 30, 50], int64)
+        )

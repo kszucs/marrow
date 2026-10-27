@@ -47,6 +47,7 @@ from ...kernels.aggregate import (
     ProductFold,
     SumFold,
 )
+from ...kernels.bitwise import BitAndKernel, BitOrKernel, BitXorKernel
 from ...kernels.boolean import AndKernel
 from ...kernels.cast import CastKernel
 from ...kernels.core import (
@@ -971,6 +972,114 @@ def test_commutative_law_max_int64() raises:
 
 def test_commutative_law_max_float64() raises:
     _claims_commutative[MaxKernel](_float64_exact_domain())
+
+
+def test_identity_law_bit_and_int8() raises:
+    _claims_identity[BitAndKernel](_int8_every_value())
+
+
+def test_identity_law_bit_and_uint8() raises:
+    _claims_identity[BitAndKernel](_uint8_domain())
+
+
+def test_identity_law_bit_and_int64() raises:
+    _claims_identity[BitAndKernel](_int64_domain())
+
+
+def test_identity_law_bit_or_int8() raises:
+    _claims_identity[BitOrKernel](_int8_every_value())
+
+
+def test_identity_law_bit_or_uint8() raises:
+    _claims_identity[BitOrKernel](_uint8_domain())
+
+
+def test_identity_law_bit_or_int64() raises:
+    _claims_identity[BitOrKernel](_int64_domain())
+
+
+def test_identity_law_bit_xor_int8() raises:
+    _claims_identity[BitXorKernel](_int8_every_value())
+
+
+def test_identity_law_bit_xor_uint8() raises:
+    _claims_identity[BitXorKernel](_uint8_domain())
+
+
+def test_identity_law_bit_xor_int64() raises:
+    _claims_identity[BitXorKernel](_int64_domain())
+
+
+def test_associative_law_bit_and_int8() raises:
+    _claims_associative[BitAndKernel](_int8_triples())
+
+
+def test_associative_law_bit_and_uint8() raises:
+    _claims_associative[BitAndKernel](_uint8_domain())
+
+
+def test_associative_law_bit_and_int64() raises:
+    _claims_associative[BitAndKernel](_int64_domain())
+
+
+def test_associative_law_bit_or_int8() raises:
+    _claims_associative[BitOrKernel](_int8_triples())
+
+
+def test_associative_law_bit_or_uint8() raises:
+    _claims_associative[BitOrKernel](_uint8_domain())
+
+
+def test_associative_law_bit_or_int64() raises:
+    _claims_associative[BitOrKernel](_int64_domain())
+
+
+def test_associative_law_bit_xor_int8() raises:
+    _claims_associative[BitXorKernel](_int8_triples())
+
+
+def test_associative_law_bit_xor_uint8() raises:
+    _claims_associative[BitXorKernel](_uint8_domain())
+
+
+def test_associative_law_bit_xor_int64() raises:
+    _claims_associative[BitXorKernel](_int64_domain())
+
+
+def test_commutative_law_bit_and_int8() raises:
+    _claims_commutative[BitAndKernel](_int8_every_value())
+
+
+def test_commutative_law_bit_and_uint8() raises:
+    _claims_commutative[BitAndKernel](_uint8_domain())
+
+
+def test_commutative_law_bit_and_int64() raises:
+    _claims_commutative[BitAndKernel](_int64_domain())
+
+
+def test_commutative_law_bit_or_int8() raises:
+    _claims_commutative[BitOrKernel](_int8_every_value())
+
+
+def test_commutative_law_bit_or_uint8() raises:
+    _claims_commutative[BitOrKernel](_uint8_domain())
+
+
+def test_commutative_law_bit_or_int64() raises:
+    _claims_commutative[BitOrKernel](_int64_domain())
+
+
+def test_commutative_law_bit_xor_int8() raises:
+    _claims_commutative[BitXorKernel](_int8_every_value())
+
+
+def test_commutative_law_bit_xor_uint8() raises:
+    _claims_commutative[BitXorKernel](_uint8_domain())
+
+
+def test_commutative_law_bit_xor_int64() raises:
+    _claims_commutative[BitXorKernel](_int64_domain())
 
 
 def test_identity_law_rejects_a_non_identity() raises:

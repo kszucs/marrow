@@ -76,6 +76,7 @@ from ..logical import (
 )
 from ..logical import Bindings
 from ...execution import ExecContext
+from ...kernels.filter import FilterKernel
 from ...kernels.groupby import Groups
 from ...kernels.window import WindowExtents, WindowFrame
 from ...arrays import DynArray
@@ -89,7 +90,6 @@ from ..physical import (
     PerFrameEvaluator,
     Evaluable,
     EvalOperator,
-    admitted_bits,
 )
 from ...engine.core import Datum, DynOperator, Morsel, Operator
 
@@ -466,9 +466,8 @@ def _admitted_validity[
     predicate's evaluation. Both bitmaps are offset-0, so the offset-unaware
     `Bitmap.intersect` applies.
     """
-    var admitted = admitted_bits(
-        predicate.evaluate(batch, bindings).to_array(len(batch))
-    )
+    var mask = predicate.evaluate(batch, bindings).to_array(len(batch))
+    var admitted = FilterKernel.selection(mask.as_bool())
     return Bitmap.intersect(input.validity(bound), Optional(admitted^))
 
 

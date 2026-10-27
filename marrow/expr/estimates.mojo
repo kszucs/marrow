@@ -28,7 +28,9 @@ from ..kernels.join import (
     BUILD_LEFT,
     BUILD_RIGHT,
     JOIN_ALL,
+    JOIN_ANTI,
     JOIN_INNER,
+    JOIN_RIGHT_ANTI,
     JoinBuildSide,
     JoinKind,
 )
@@ -929,8 +931,8 @@ struct Estimate(Copyable, Movable, Writable):
         exactly zero. An inner `JOIN_ANY` keeps at most one match per row of its
         probe side, the one `build_side` does not name. An outer kind raises the
         matched count to each side it preserves, counting shared matches once
-        for FULL; an existence filter caps it at the side it projects, and one
-        that `negates` keeps the rest — never estimated at zero, which only a
+        for FULL; an existence filter caps it at the side it projects, and an
+        anti filter keeps the rest — never estimated at zero, which only a
         proof answers.
 
         Every column keeps its distinct count, capped by the output's rows — a
@@ -947,6 +949,8 @@ struct Estimate(Copyable, Movable, Writable):
             len(left_keys) == len(right_keys),
             "joined: the key lists differ in length",
         )
+        # An existence filter that keeps the rows that did not match.
+        var negates = kind == JOIN_ANTI or kind == JOIN_RIGHT_ANTI
         var inner: Approx
         if left.rows == Approx.exact(0) or right.rows == Approx.exact(0):
             inner = Approx.exact(0)
@@ -970,7 +974,7 @@ struct Estimate(Copyable, Movable, Writable):
         if not (kind.emits_left_columns() and kind.emits_right_columns()):
             var side = left.rows if kind.emits_left_columns() else right.rows
             var matched = inner.at_most(side.to_estimate())
-            if kind.negates():
+            if negates:
                 rows = (side.to_estimate() - matched).to_estimate()
                 if side != Approx.exact(0):
                     rows = rows.at_least(Approx.estimated(1))
@@ -1006,7 +1010,7 @@ struct Estimate(Copyable, Movable, Writable):
         # tighter of the two, and it is never NULL, since a NULL key matches
         # nothing. By position, because a key's name may appear on both sides.
         var matched_only = not (
-            kind.negates()
+            negates
             or kind.emits_unmatched_left()
             or kind.emits_unmatched_right()
         )

@@ -17,9 +17,10 @@ def plan() raises -> DynRelation:
     number outright — so that one operation is a place the two engines cannot
     be compared at all, only the non-negative half of it.
 
-    `marrow/kernels/numeric.mojo` has no such kernel.
-    `marrow/kernels/boolean.mojo`'s `and`/`or`/`xor` are *logical*, over bit-
-    packed booleans, which is a different operation on a different layout.
+    `marrow/kernels/bitwise.mojo` holds the kernels, but no expression node
+    binds them. `marrow/kernels/boolean.mojo`'s `and`/`or`/`xor` are
+    *logical*, over bit-packed booleans, which is a different operation on a
+    different layout.
 
     -- skip mojo
     -- skip python

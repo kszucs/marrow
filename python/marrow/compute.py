@@ -13,7 +13,7 @@ return :class:`~marrow.Array` or :class:`~marrow.Scalar` as appropriate.
 
 from . import libmarrow as _ma
 from ._wrapper import unwrap
-from .arrays import Array, _nulls_first, _serial
+from .arrays import Array, Scalar, _nulls_first, _serial
 
 
 # ── Arithmetic ────────────────────────────────────────────────────────────────
@@ -58,6 +58,67 @@ def divide(left, right, memory_pool=None, ctx=None):
     return Array.wrap(_ma.divide(left.unwrap(), right.unwrap(), (ctx or _serial())))
 
 
+# ── Bitwise ──────────────────────────────────────────────────────────────────
+
+
+def bit_wise_and(x, y, *, memory_pool=None, ctx=None):
+    """The bitwise AND of two integer arrays.
+
+    Equivalent to ``pyarrow.compute.bit_wise_and``, but both operands must
+    share one integer type, where PyArrow promotes ``int8 & int16`` to
+    ``int16``.
+    """
+    return Array.wrap(_ma.bit_wise_and(x.unwrap(), y.unwrap(), (ctx or _serial())))
+
+
+def bit_wise_or(x, y, *, memory_pool=None, ctx=None):
+    """The bitwise OR of two integer arrays.
+
+    Equivalent to ``pyarrow.compute.bit_wise_or``, but both operands must
+    share one integer type, where PyArrow promotes mixed integer types.
+    """
+    return Array.wrap(_ma.bit_wise_or(x.unwrap(), y.unwrap(), (ctx or _serial())))
+
+
+def bit_wise_xor(x, y, *, memory_pool=None, ctx=None):
+    """The bitwise XOR of two integer arrays.
+
+    Equivalent to ``pyarrow.compute.bit_wise_xor``, but both operands must
+    share one integer type, where PyArrow promotes mixed integer types.
+    """
+    return Array.wrap(_ma.bit_wise_xor(x.unwrap(), y.unwrap(), (ctx or _serial())))
+
+
+def bit_wise_not(x, *, memory_pool=None, ctx=None):
+    """The bitwise NOT of an integer array.
+
+    Equivalent to ``pyarrow.compute.bit_wise_not``.
+    """
+    return Array.wrap(_ma.bit_wise_not(x.unwrap(), (ctx or _serial())))
+
+
+def shift_left(x, y, *, memory_pool=None, ctx=None):
+    """*x* shifted left by *y* bits, wrapping.
+
+    Equivalent to ``pyarrow.compute.shift_left``: an amount below zero, or not
+    below the type's precision (its bit width, less the sign bit for a signed
+    type), leaves the value as it is. Both operands must share one integer
+    type, where PyArrow promotes mixed integer types.
+    """
+    return Array.wrap(_ma.shift_left(x.unwrap(), y.unwrap(), (ctx or _serial())))
+
+
+def shift_right(x, y, *, memory_pool=None, ctx=None):
+    """*x* shifted right by *y* bits, arithmetically for a signed type.
+
+    Equivalent to ``pyarrow.compute.shift_right``: an amount below zero, or
+    not below the type's precision (its bit width, less the sign bit for a
+    signed type), leaves the value as it is. Both operands must share one
+    integer type, where PyArrow promotes mixed integer types.
+    """
+    return Array.wrap(_ma.shift_right(x.unwrap(), y.unwrap(), (ctx or _serial())))
+
+
 # ── Aggregations ────────────────────────────────────────────────────────────────────────
 
 
@@ -79,6 +140,21 @@ def all(array, *, skip_nulls=True, min_count=1, memory_pool=None, ctx=None):
     could still make the answer false.
     """
     return _ma.all(array.unwrap(), skip_nulls, min_count, (ctx or _serial()))
+
+
+def mode(array, n=1, *, skip_nulls=True, min_count=0, memory_pool=None, ctx=None):
+    """The *n* most common values of *array*, as ``struct<mode, count>`` rows.
+
+    Equivalent to ``pyarrow.compute.mode``: the most common first, ties
+    smallest value first, NaN above every number; no rows when *skip_nulls* is
+    false and a value is null, or when fewer than *min_count* values are valid.
+    ``-0.0`` and ``0.0`` are one value, and so is every NaN. Strings and
+    temporal columns are accepted too, as DuckDB accepts them, where PyArrow
+    refuses them.
+    """
+    return Array.wrap(
+        _ma.mode(array.unwrap(), n, skip_nulls, min_count, (ctx or _serial()))
+    )
 
 
 # ── Cumulative ───────────────────────────────────────────────────────────────
@@ -297,6 +373,36 @@ def list_count(lists, *, memory_pool=None, ctx=None):
     return Array.wrap(_ma.list_count(lists.unwrap(), (ctx or _serial())))
 
 
+def list_bit_and(lists, *, memory_pool=None, ctx=None):
+    """The bitwise AND of each list's elements, skipping nulls.
+
+    Equivalent to DuckDB's ``list_bit_and``: integer elements only, the
+    answer in the element type, and an empty list, a list of nulls and a null
+    list each null.
+    """
+    return Array.wrap(_ma.list_bit_and(lists.unwrap(), (ctx or _serial())))
+
+
+def list_bit_or(lists, *, memory_pool=None, ctx=None):
+    """The bitwise OR of each list's elements, skipping nulls.
+
+    Equivalent to DuckDB's ``list_bit_or``: integer elements only, the answer
+    in the element type, and an empty list, a list of nulls and a null list
+    each null.
+    """
+    return Array.wrap(_ma.list_bit_or(lists.unwrap(), (ctx or _serial())))
+
+
+def list_bit_xor(lists, *, memory_pool=None, ctx=None):
+    """The bitwise XOR of each list's elements, skipping nulls.
+
+    Equivalent to DuckDB's ``list_bit_xor``: integer elements only, the
+    answer in the element type, and an empty list, a list of nulls and a null
+    list each null.
+    """
+    return Array.wrap(_ma.list_bit_xor(lists.unwrap(), (ctx or _serial())))
+
+
 # ── Comparisons ───────────────────────────────────────────────────────────────
 
 
@@ -399,6 +505,77 @@ def take(data, indices, *, boundscheck=True, memory_pool=None, ctx=None):
     if not boundscheck:
         raise NotImplementedError("boundscheck=False is not implemented")
     return Array.wrap(_ma.take(data.unwrap(), indices.unwrap(), (ctx or _serial())))
+
+
+def indices_nonzero(values, *, memory_pool=None, ctx=None):
+    """The positions of the true, or non-zero, values, as ``uint64``.
+
+    Equivalent to ``pyarrow.compute.indices_nonzero``: bool, numeric and
+    decimal input. A null is skipped, NaN is non-zero and ``-0.0`` is zero.
+    """
+    return Array.wrap(_ma.indices_nonzero(values.unwrap(), (ctx or _serial())))
+
+
+def replace_with_mask(values, mask, replacements, *, memory_pool=None, ctx=None):
+    """*values*, with each row *mask* selects replaced by the next unused
+    value of *replacements*.
+
+    Equivalent to ``pyarrow.compute.replace_with_mask``: a null in *mask*
+    makes its row null and uses no replacement, and spare replacements are
+    ignored. Every layout ``take`` accepts is accepted, where PyArrow refuses
+    string views, lists, structs and dictionaries. A scalar *mask* or
+    *replacements* is not implemented.
+    """
+    if isinstance(mask, Scalar) or isinstance(replacements, Scalar):
+        raise NotImplementedError("a scalar mask or replacements is not implemented")
+    return Array.wrap(
+        _ma.replace_with_mask(
+            values.unwrap(),
+            mask.unwrap(),
+            replacements.unwrap(),
+            (ctx or _serial()),
+        )
+    )
+
+
+# ── Associative transforms ───────────────────────────────────────────────────
+
+
+def dictionary_encode(array, null_encoding="mask", *, memory_pool=None, ctx=None):
+    """*array* as a dictionary of its distinct values, with ``int32`` indices.
+
+    Equivalent to ``pyarrow.compute.dictionary_encode``: the dictionary is in
+    first-seen order, and a dictionary array is returned as it is. A null has
+    a null index with ``null_encoding="mask"`` and an entry of its own with
+    ``"encode"``. Values are distinct as a group-by keys them, so ``-0.0`` and
+    ``0.0`` are one entry where PyArrow keeps two. Lists and structs are
+    accepted, where PyArrow refuses them; ``fixed_size_binary`` and ``null``
+    columns are not.
+    """
+    if null_encoding not in ("mask", "encode"):
+        raise ValueError(f'"{null_encoding}" is not a valid null encoding')
+    return Array.wrap(
+        _ma.dictionary_encode(
+            array.unwrap(), null_encoding == "encode", (ctx or _serial())
+        )
+    )
+
+
+def value_counts(array, *, memory_pool=None, ctx=None):
+    """How often each distinct value of *array* occurs, as
+    ``struct<values, counts>`` rows.
+
+    Equivalent to ``pyarrow.compute.value_counts``: one row per distinct
+    value in first-seen order, null counted as a value. Lists and structs
+    are accepted, where PyArrow refuses them; ``fixed_size_binary`` and
+    ``null`` columns are not.
+
+    Values are distinct as a group-by keys them: ``-0.0`` and ``0.0`` are
+    one value, where PyArrow keeps two. A dictionary array is counted by
+    value, so two dictionary entries holding the same value make one row;
+    PyArrow makes one row per index.
+    """
+    return Array.wrap(_ma.value_counts(array.unwrap(), (ctx or _serial())))
 
 
 # ── Conversion ────────────────────────────────────────────────────────────────

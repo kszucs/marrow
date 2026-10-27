@@ -238,11 +238,12 @@ indistinguishable from the genuine NULL group.
 `agg_string_agg_ordered`, `agg_bool_and_or`, `agg_corr_and_covar`,
 `agg_count_distinct_multi_column`, `agg_filter_clause`, `agg_sum_distinct`,
 `agg_skewness_and_kurtosis`, `agg_bitwise`. Three different kinds of gap:
-missing *kernels* (median, quantile, mode, skewness, kurtosis, bitwise),
-missing *nodes* over kernels marrow already has (`bool_and`/`bool_or` over
-`AnyKernel`/`AllKernel`), and missing *shapes* — `Aggregate[Agg, A]` binds one
-operand, so `arg_min`, `corr`, an ordered `first`, a `FILTER` clause and a
-`DISTINCT` modifier have nowhere to go.
+missing *kernels* (median, quantile, skewness, kurtosis), missing *nodes*
+over kernels marrow already has (`bool_and`/`bool_or` over
+`AnyKernel`/`AllKernel`, `mode` over `ModeKernel`, `bit_and`/`bit_or`/`bit_xor`
+over `BitAndFold`/`BitOrFold`/`BitXorFold`), and missing *shapes* —
+`Aggregate[Agg, A]` binds one operand, so `arg_min`, `corr`, an ordered
+`first`, a `FILTER` clause and a `DISTINCT` modifier have nowhere to go.
 
 **String functions** (2) — `string_concat_function_skips_null`,
 `string_concat_ws`. The three-way NULL split across `||`, `concat` and
@@ -263,6 +264,7 @@ opposite of every arithmetic operator. `signbit` is the only function that can
 tell `-0.0` from `0.0`, which is why the `floats` fixture carries both.
 The left shift in `math_bitwise_operators` takes `abs(n)` because DuckDB
 refuses to shift a negative at all — that one operation is not comparable.
+Its kernels exist (`kernels/bitwise.mojo`); the gap is the expression node.
 
 **Temporal** (7) — `temporal_literal_comparison`, `temporal_date_diff`,
 `temporal_add_month_interval`, `temporal_interval_between_timestamps`,

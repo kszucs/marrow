@@ -64,18 +64,19 @@ def _binary[
     return wrapper
 
 
-def _cumulative[
+def _flag[
     f: def(DynArray, Bool, ExecContext) raises thin -> DynArray,
 ]() -> def(
     PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
-    """``(array, skip_nulls, ctx) -> array``."""
+    """``(array, flag, ctx) -> array``: ``cumulative_*``'s ``skip_nulls``,
+    ``dictionary_encode``'s ``encode_nulls``."""
 
     def wrapper(
-        array: PythonObject, skip_nulls: PythonObject, ctx: PythonObject
+        array: PythonObject, flag: PythonObject, ctx: PythonObject
     ) raises -> PythonObject:
         return f(
-            DynArray(py=array), Bool(py=skip_nulls), ExecContext(py=ctx)
+            DynArray(py=array), Bool(py=flag), ExecContext(py=ctx)
         ).to_python_object()
 
     return wrapper
@@ -260,6 +261,36 @@ def _filter(
     return mk.FilterKernel.dispatch(array, mask.as_bool(), ctx)
 
 
+def _replace_with_mask(
+    values: PythonObject,
+    mask: PythonObject,
+    replacements: PythonObject,
+    ctx: PythonObject,
+) raises -> PythonObject:
+    return mk.ReplaceWithMaskKernel.dispatch(
+        DynArray(py=values),
+        DynArray(py=mask),
+        DynArray(py=replacements),
+        ExecContext(py=ctx),
+    ).to_python_object()
+
+
+def _mode(
+    array: PythonObject,
+    n: PythonObject,
+    skip_nulls: PythonObject,
+    min_count: PythonObject,
+    ctx: PythonObject,
+) raises -> PythonObject:
+    return mk.ModeKernel.dispatch(
+        DynArray(py=array),
+        Int(py=n),
+        Bool(py=skip_nulls),
+        Int(py=min_count),
+        ExecContext(py=ctx),
+    ).to_python_object()
+
+
 def _divide(
     left: DynArray, right: DynArray, ctx: ExecContext
 ) raises -> DynArray:
@@ -323,6 +354,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_binary[mk.AddKernel.dispatch]()]("add")
     mb.def_function[_binary[mk.SubKernel.dispatch]()]("subtract")
     mb.def_function[_binary[mk.MulKernel.dispatch]()]("multiply")
+    mb.def_function[_binary[mk.BitAndKernel.dispatch]()]("bit_wise_and")
+    mb.def_function[_binary[mk.BitOrKernel.dispatch]()]("bit_wise_or")
+    mb.def_function[_binary[mk.BitXorKernel.dispatch]()]("bit_wise_xor")
+    mb.def_function[_unary[mk.BitNotKernel.dispatch]()]("bit_wise_not")
+    mb.def_function[_binary[mk.ShiftLeftKernel.dispatch]()]("shift_left")
+    mb.def_function[_binary[mk.ShiftRightKernel.dispatch]()]("shift_right")
     mb.def_function[_binary[_divide]()]("divide")
     mb.def_function[_reduce[mk.AnyKernel.aggregate]()]("any")
     mb.def_function[_reduce[mk.AllKernel.aggregate]()]("all")
@@ -330,6 +367,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_unary[NotNullKernel.dispatch]()]("is_valid")
     mb.def_function[_unary[mk.FilterKernel.drop_null]()]("drop_null")
     mb.def_function[_binary[_filter]()]("filter")
+    mb.def_function[_unary[mk.IndicesNonzeroKernel.dispatch]()](
+        "indices_nonzero"
+    )
+    mb.def_function[_replace_with_mask]("replace_with_mask")
+    mb.def_function[_flag[mk.DictionaryEncodeKernel.dispatch]()](
+        "dictionary_encode"
+    )
+    mb.def_function[_unary[mk.ValueCountsKernel.dispatch]()]("value_counts")
+    mb.def_function[_mode]("mode")
     mb.def_function[_binary[mk.EqKernel[nan_safe=False].dispatch]()]("equal")
     mb.def_function[_binary[mk.NeKernel[nan_safe=False].dispatch]()](
         "not_equal"
@@ -362,16 +408,25 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_unary[mk.ListReduceKernel[mk.CountFold].dispatch]()](
         "list_count"
     )
-    mb.def_function[_cumulative[mk.CumulativeKernel[mk.AddKernel].dispatch]()](
+    mb.def_function[_unary[mk.ListReduceKernel[mk.BitAndFold].dispatch]()](
+        "list_bit_and"
+    )
+    mb.def_function[_unary[mk.ListReduceKernel[mk.BitOrFold].dispatch]()](
+        "list_bit_or"
+    )
+    mb.def_function[_unary[mk.ListReduceKernel[mk.BitXorFold].dispatch]()](
+        "list_bit_xor"
+    )
+    mb.def_function[_flag[mk.CumulativeKernel[mk.AddKernel].dispatch]()](
         "cumulative_sum"
     )
-    mb.def_function[_cumulative[mk.CumulativeKernel[mk.MulKernel].dispatch]()](
+    mb.def_function[_flag[mk.CumulativeKernel[mk.MulKernel].dispatch]()](
         "cumulative_prod"
     )
-    mb.def_function[_cumulative[mk.CumulativeKernel[mk.MinKernel].dispatch]()](
+    mb.def_function[_flag[mk.CumulativeKernel[mk.MinKernel].dispatch]()](
         "cumulative_min"
     )
-    mb.def_function[_cumulative[mk.CumulativeKernel[mk.MaxKernel].dispatch]()](
+    mb.def_function[_flag[mk.CumulativeKernel[mk.MaxKernel].dispatch]()](
         "cumulative_max"
     )
     mb.def_function[_offset[mk.ShiftKernel.dispatch]()]("shift")

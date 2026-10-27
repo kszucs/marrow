@@ -1864,15 +1864,16 @@ def test_join_preserves_field_members_through_record_batch() raises:
 
 
 # ---------------------------------------------------------------------------
-# commutes — the total predicate a rule guards on
+# is_supported — the total predicate a rule guards on
 # ---------------------------------------------------------------------------
 
 
-def test_commutes_agrees_with_mirror_on_every_kind() raises:
-    """`commutes` is `mirror` without the raise, and the two must not drift.
+def test_is_supported_agrees_with_mirror_on_every_kind() raises:
+    """Every supported kind has a mirror, and only those: the two must not
+    drift.
 
     Checked against `mirror` itself rather than against a second hand-written
-    list: a kind that gained a mirror and not a `commutes` arm would be a
+    list: a kind that gained a mirror and not an `is_supported` arm would be a
     reorder rule declining a swap it could have made, which nothing else in
     the tree would notice.
     """
@@ -1896,38 +1897,10 @@ def test_commutes_agrees_with_mirror_on_every_kind() raises:
         except:
             mirrors = False
         assert_equal(
-            k.commutes(),
+            k.is_supported(),
             mirrors,
-            String("kind ", k, ": commutes() disagrees with mirror()"),
+            String("kind ", k, ": is_supported() disagrees with mirror()"),
         )
-
-
-def test_negates_is_invariant_under_mirror() raises:
-    """Exchanging a join's sides cannot change whether it keeps the unmatched
-    rows, so `negates` must agree with its own mirror on every kind that has
-    one -- a kind added to the anti family on one side only fails here.
-    """
-    var kinds: List[JoinKind] = [
-        JOIN_INNER,
-        JOIN_LEFT,
-        JOIN_RIGHT,
-        JOIN_FULL,
-        JOIN_SEMI,
-        JOIN_ANTI,
-        JOIN_RIGHT_SEMI,
-        JOIN_RIGHT_ANTI,
-    ]
-    for ref k in kinds:
-        assert_equal(
-            k.negates(),
-            k.mirror().negates(),
-            String("kind ", k, ": negates() changes under mirror()"),
-        )
-    assert_true(JOIN_ANTI.negates())
-    assert_true(JOIN_RIGHT_ANTI.negates())
-    assert_false(JOIN_SEMI.negates())
-    assert_false(JOIN_RIGHT_SEMI.negates())
-    assert_false(JOIN_INNER.negates())
 
 
 from ...builders import StringViewBuilder

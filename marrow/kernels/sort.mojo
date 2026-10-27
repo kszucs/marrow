@@ -431,7 +431,9 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             key_indices: Column indices to sort by, most-significant first.
             ascending: Per-key sort direction.
             nulls_first: Where to place null rows.
-            limit: If set, return only the first ``limit`` indices.
+            limit: If set, return only the first ``limit`` indices. The most
+                significant pass applies it; every earlier pass orders all
+                the rows, which the later passes still have to permute.
             ctx: Execution context.
 
         `stable` decides only a single key: with several, every pass is
@@ -468,20 +470,16 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
         )
         for i in reversed(range(last)):
             var reordered = TakeKernel.dispatch(
-                array.field(key_indices[i]), perm
+                array.field(key_indices[i]), perm, ctx
             )
             var local = Pass.dispatch(
                 reordered,
                 ascending=ascending[i],
                 nulls_first=nulls_first,
+                limit=limit if i == 0 else None,
                 ctx=ctx,
             )
             perm = TakeKernel.apply(perm, local, ctx)
-
-        if limit:
-            var lim = limit.value()
-            if lim < len(perm):
-                perm = perm.slice(0, lim)
         return perm^
 
     @staticmethod

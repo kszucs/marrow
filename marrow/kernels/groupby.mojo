@@ -34,10 +34,12 @@ two numberings of the same value agree on where their codes would not.
 
 from std.math import ceildiv
 
-from ..arrays import Int32Array
+from ..arrays import Int32Array, Int64Array
 from ..buffers import Buffer
 from ..dtypes import int32
 from ..execution import ExecContext
+from ..views import BitmapView
+from .filter import FilterKernel
 
 
 comptime _PARALLEL_GROUP_ROWS = 65_536
@@ -139,6 +141,39 @@ struct Groups(Copyable, Movable):
         which holds no ids."""
         return 0 if self._single else Int(self.ids.unsafe_get(row))
 
+    def filter(self, selection: BitmapView[_]) raises -> Groups:
+        """The rows `selection` keeps, each in its group. `num_groups` does
+        not shrink: a group none of whose rows is kept still has its slot.
+        The one-slot assignment, which holds no ids, is returned as it is."""
+        if self._single:
+            return self.copy()
+        else:
+            return Groups(
+                FilterKernel.apply(self.ids, selection), self.num_groups
+            )
+
+    def counts(self) -> Int64Array:
+        """How many rows each group has: `num_groups` counts, 0 for a group
+        no row names. Not for the one-slot assignment, which holds no ids."""
+        var counts = List[Int](capacity=self.num_groups)
+        self.count_into(counts)
+        var buf = Buffer.alloc_uninit[DType.int64](self.num_groups)
+        var out = buf.view[DType.int64](0, self.num_groups)
+        for g in range(self.num_groups):
+            out.unsafe_set(g, Int64(counts[g]))
+        return Int64Array(length=self.num_groups, buffer=buf^.to_immutable())
+
+    def count_into(self, mut counts: List[Int]):
+        """Add each row to its group's entry of `counts`, which first grows
+        with zeros to `num_groups` entries, so counts accumulate over several
+        batches numbered alike. Not for the one-slot assignment, which holds
+        no ids."""
+        debug_assert(not self._single, "the one-slot assignment has no ids")
+        if len(counts) < self.num_groups:
+            counts.resize(self.num_groups, 0)
+        for i in range(len(self.ids)):
+            counts[Int(self.ids.unsafe_get(i))] += 1
+
     @no_inline
     def rows_by_group(
         self, mut offsets: Buffer[mut=True], ctx: ExecContext
@@ -162,9 +197,8 @@ struct Groups(Copyable, Movable):
         var ov = offsets.view[int32.native](0, groups + 1)
         var rv = rows.view[int32.native](0, n)
         if not ctx.worth_parallel(n, _PARALLEL_GROUP_ROWS):
-            var at = List[Int](length=groups, fill=0)
-            for i in range(n):
-                at[Int(self.ids.unsafe_get(i))] += 1
+            var at = List[Int](capacity=groups)
+            self.count_into(at)
             var pos = 0
             for g in range(groups):
                 ov.unsafe_set(g, Int32(pos))

@@ -664,3 +664,295 @@ def test_rolling_rejects_bad_window():
         ma.compute.rolling_sum(values, 2, min_samples=3)
     with pytest.raises(NotImplementedError):
         ma.compute.rolling_sum(values, 2, weights=[1, 2])
+
+
+# ── indices_nonzero, replace_with_mask ───────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pa.array([True, False, None, True]),
+        pa.array([0, 3, None, -1, 0], pa.int8()),
+        pa.array([0.0, -0.0, math.nan, None, 2.5]),
+        pa.array([0, 1], pa.decimal128(5, 2)),
+        pa.array([True, None, True, False, True]).slice(1),
+        pa.array([i % 3 == 0 for i in range(130)]),
+        pa.array([], pa.bool_()),
+        pa.array([0, 5, 0, 1], pa.uint64()),
+        pa.array([4, 0, None, 2, 0, 9], pa.int32()).slice(2),
+    ],
+    ids=str,
+)
+def test_indices_nonzero_matches_pyarrow(values):
+    expected = pc.indices_nonzero(values)
+    result = pa.array(ma.compute.indices_nonzero(ma.array(values)))
+    assert result.type == expected.type
+    assert result.to_pylist() == expected.to_pylist()
+
+
+_REPLACE_VALUES = pa.array([1, 2, None, 4, 5], pa.int64())
+_REPLACE_MASK = pa.array([True, False, True, None, True])
+
+
+@pytest.mark.parametrize(
+    "values, mask, replacements",
+    [
+        (_REPLACE_VALUES, _REPLACE_MASK, pa.array([10, 30, 50], pa.int64())),
+        (_REPLACE_VALUES, _REPLACE_MASK, pa.array([None, 30, None], pa.int64())),
+        (_REPLACE_VALUES, _REPLACE_MASK, pa.array([10, 30, 50, 70], pa.int64())),
+        (
+            pa.array(["a", "b", None]),
+            pa.array([False, True, True]),
+            pa.array(["X", "Y"]),
+        ),
+        (
+            pa.array([1, 2, 3, 4, 5, 6], pa.int8()),
+            pa.array([False, True, None, True, False, True]),
+            pa.array([9, None, 8, 7], pa.int8()),
+        ),
+        (
+            pa.array([1, 2], pa.timestamp("s")),
+            pa.array([True, False]),
+            pa.array([5], pa.timestamp("s")),
+        ),
+        (
+            pa.array([1, 2], pa.decimal128(5, 2)),
+            pa.array([True, False]),
+            pa.array([5], pa.decimal128(5, 2)),
+        ),
+        (
+            pa.array([b"ab", b"cd"], pa.binary(2)),
+            pa.array([True, False]),
+            pa.array([b"zz"], pa.binary(2)),
+        ),
+        (
+            pa.array(["a", None, "c"], pa.large_string()),
+            pa.array([True, True, False]),
+            pa.array(["x", "y"], pa.large_string()),
+        ),
+        (_REPLACE_VALUES, pa.array([False] * 5), pa.array([], pa.int64())),
+        (pa.array([], pa.int64()), pa.array([], pa.bool_()), pa.array([], pa.int64())),
+        (
+            _REPLACE_VALUES.slice(1),
+            _REPLACE_MASK.slice(1),
+            pa.array([0, 0, 0], pa.int64()).slice(1),
+        ),
+    ],
+)
+def test_replace_with_mask_matches_pyarrow(values, mask, replacements):
+    expected = pc.replace_with_mask(values, mask, replacements)
+    result = pa.array(
+        ma.compute.replace_with_mask(
+            ma.array(values), ma.array(mask), ma.array(replacements)
+        )
+    )
+    assert result.type == expected.type
+    assert result.to_pylist() == expected.to_pylist()
+
+
+def test_replace_with_mask_rejects():
+    values = ma.array(_REPLACE_VALUES)
+    mask = ma.array(_REPLACE_MASK)
+    with pytest.raises(ma.ArrowInvalid, match="appropriate length|expected"):
+        ma.compute.replace_with_mask(values, mask, ma.array([10, 30], ma.int64()))
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.replace_with_mask(values, mask, ma.array([10, 30, 50], ma.int32()))
+    with pytest.raises(NotImplementedError):
+        ma.compute.replace_with_mask(
+            values, ma.array([True])[0], ma.array([1, 2, 3, 4, 5], ma.int64())
+        )
+
+
+def test_replace_with_mask_on_lists():
+    """PyArrow refuses lists; marrow takes every layout ``take`` does."""
+    lists = pa.array([[1], [2], None], pa.list_(pa.int64()))
+    result = ma.compute.replace_with_mask(
+        ma.array(lists),
+        ma.array([False, True, True]),
+        ma.array(pa.array([[7, 8], []], pa.list_(pa.int64()))),
+    )
+    assert pa.array(result).to_pylist() == [[1], [7, 8], []]
+
+
+# ── dictionary_encode, value_counts, mode ────────────────────────────────────
+
+
+_ENCODED = [
+    pa.array(["b", "a", None, "b", "c", None, "a"]),
+    pa.array([3, 1, 3, None, 2], pa.int64()),
+    pa.array([True, None, False, True]),
+    pa.array([1.0, math.nan, 2.0, math.nan, None]),
+    pa.array([1, 1, 2], pa.decimal128(5, 2)),
+    pa.array([1, 1, 2], pa.timestamp("ms")),
+    pa.array(["a", None, "a"], pa.large_string()),
+    # No null: PyArrow 23 answers a string view's null entry as "", not null.
+    pa.array(["a", "b", "a"], pa.string_view()),
+    pa.array([], pa.int32()),
+    pa.array([None, None], pa.int64()),
+    pa.array([5, 6, 5, 7, 6], pa.int64()).slice(1),
+]
+
+
+@pytest.mark.parametrize("values", _ENCODED, ids=str)
+@pytest.mark.parametrize("null_encoding", ["mask", "encode"])
+def test_dictionary_encode_matches_pyarrow(values, null_encoding):
+    expected = pc.dictionary_encode(values, null_encoding=null_encoding)
+    result = pa.array(
+        ma.compute.dictionary_encode(ma.array(values), null_encoding=null_encoding)
+    )
+    assert result.type == expected.type
+    assert result.indices.to_pylist() == expected.indices.to_pylist()
+    _same_values(result.dictionary.to_pylist(), expected.dictionary.to_pylist())
+
+
+def test_dictionary_encode_passes_a_dictionary_through():
+    values = pa.DictionaryArray.from_arrays(
+        pa.array([0, 1, 0], pa.int8()), pa.array(["x", "y"])
+    )
+    result = pa.array(ma.compute.dictionary_encode(ma.array(values)))
+    assert result.type == values.type
+    assert result.to_pylist() == values.to_pylist()
+
+
+def test_dictionary_encode_rejects_an_unknown_null_encoding():
+    with pytest.raises(ValueError, match="not a valid null encoding"):
+        ma.compute.dictionary_encode(ma.array([1, 2]), null_encoding="drop")
+
+
+@pytest.mark.parametrize(
+    "values",
+    _ENCODED
+    + [
+        pa.DictionaryArray.from_arrays(
+            pa.array([1, None, 1, 0], pa.int8()), pa.array(["x", "y", "z"])
+        )
+    ],
+    ids=str,
+)
+def test_value_counts_matches_pyarrow(values):
+    expected = pc.value_counts(values)
+    result = pa.array(ma.compute.value_counts(ma.array(values)))
+    assert result.type == expected.type
+    _same_values(
+        result.field("values").to_pylist(), expected.field("values").to_pylist()
+    )
+    assert result.field("counts").to_pylist() == expected.field("counts").to_pylist()
+
+
+_MODE_INTS = pa.array([3, 1, 3, None, 2, 1, 2, None, None], pa.int64())
+
+
+@pytest.mark.parametrize(
+    "values, kwargs",
+    [
+        (_MODE_INTS, {}),
+        (_MODE_INTS, {"n": 2}),
+        (_MODE_INTS, {"n": 5}),
+        (_MODE_INTS, {"skip_nulls": False}),
+        (_MODE_INTS, {"min_count": 6}),
+        (_MODE_INTS, {"min_count": 8}),
+        (pa.array([], pa.int64()), {}),
+        (pa.array([None, None], pa.int64()), {}),
+        (pa.array([1.0, math.nan, math.nan, 2.0, 2.0, math.nan]), {"n": 3}),
+        (pa.array([True, None, False, True]), {"n": 2}),
+        (pa.array([200, 200, 1], pa.uint8()), {"n": 2}),
+        (pa.array([5, -3, 5, -3, 0], pa.int8()), {"n": 3}),
+        (pa.array([1, 2, 2, 1, 3], pa.decimal128(5, 2)), {"n": 3}),
+        (pa.array([9, 9, 9, 1, 1, 2], pa.int64()).slice(2), {"n": 2}),
+    ],
+)
+def test_mode_matches_pyarrow(values, kwargs):
+    expected = pc.mode(values, **kwargs)
+    result = pa.array(ma.compute.mode(ma.array(values), **kwargs))
+    assert result.type == expected.type
+    _same_values(result.field("mode").to_pylist(), expected.field("mode").to_pylist())
+    assert result.field("count").to_pylist() == expected.field("count").to_pylist()
+
+
+def test_mode_of_strings_follows_duckdb():
+    result = ma.compute.mode(ma.array(["a", "b", "a", None]))
+    assert pa.array(result).to_pylist() == [{"mode": "a", "count": 2}]
+
+
+def test_mode_rejects_n_below_one():
+    with pytest.raises(ma.ArrowInvalid):
+        ma.compute.mode(ma.array([1, 2]), n=0)
+
+
+# ── bitwise ──────────────────────────────────────────────────────────────────
+
+
+_INTEGERS = [pa.int8(), pa.uint8(), pa.int32(), pa.int64(), pa.uint64()]
+
+
+@pytest.mark.parametrize("name", ["bit_wise_and", "bit_wise_or", "bit_wise_xor"])
+@pytest.mark.parametrize("type_", _INTEGERS, ids=str)
+def test_bitwise_matches_pyarrow(name, type_):
+    x = [15, 5, None, 7, 0, 127]
+    y = [60, 3, 1, None, 0, 1]
+    if pa.types.is_signed_integer(type_):
+        x += [-1, -128]
+        y += [7, 1]
+    x, y = pa.array(x, type_), pa.array(y, type_)
+    expected = getattr(pc, name)(x, y)
+    result = pa.array(getattr(ma.compute, name)(ma.array(x), ma.array(y)))
+    assert result.type == expected.type
+    assert result.to_pylist() == expected.to_pylist()
+
+    expected = pc.bit_wise_not(x)
+    result = pa.array(ma.compute.bit_wise_not(ma.array(x)))
+    assert result.type == expected.type
+    assert result.to_pylist() == expected.to_pylist()
+
+
+@pytest.mark.parametrize("name", ["shift_left", "shift_right"])
+@pytest.mark.parametrize("type_", _INTEGERS, ids=str)
+def test_shift_matches_pyarrow(name, type_):
+    w = type_.bit_width
+    signed = pa.types.is_signed_integer(type_)
+    x = pa.array([1, 3, -5 if signed else 5, 1, 1, 7, None, 2], type_)
+    amounts = pa.array([0, 1, w - 2, w - 1, w, -1 if signed else w + 1, 1, None], type_)
+    expected = getattr(pc, name)(x, amounts)
+    result = pa.array(getattr(ma.compute, name)(ma.array(x), ma.array(amounts)))
+    assert result.type == expected.type
+    assert result.to_pylist() == expected.to_pylist()
+
+
+def test_bitwise_rejects_floats_and_mixed_types():
+    floats = ma.array([1.0, 2.0])
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.bit_wise_and(floats, floats)
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.bit_wise_and(
+            ma.array(pa.array([1], pa.int8())), ma.array(pa.array([1], pa.int16()))
+        )
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("list_bit_and", [8, None, None, None, 1, 6]),
+        ("list_bit_or", [14, None, None, None, 7, -1]),
+        ("list_bit_xor", [8, None, None, None, 6, -7]),
+    ],
+)
+def test_list_bit_aggregates_follow_duckdb(name, expected):
+    """DuckDB 1.5.5's answers: an empty list, a list of nulls and a null list
+    are null, and the element type is kept."""
+    lists = pa.array(
+        [[12, 10, 14], [], [None], None, [5, None, 3], [-1, 6]],
+        pa.list_(pa.int64()),
+    )
+    result = pa.array(getattr(ma.compute, name)(ma.array(lists)))
+    assert result.type == pa.int64()
+    assert result.to_pylist() == expected
+
+
+def test_list_bit_and_keeps_the_element_type_and_takes_integers_only():
+    narrow = pa.array([[1, 3]], pa.list_(pa.int8()))
+    result = pa.array(ma.compute.list_bit_and(ma.array(narrow)))
+    assert result.type == pa.int8()
+    assert result.to_pylist() == [1]
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.list_bit_and(ma.array(pa.array([[1.5]], pa.list_(pa.float64()))))

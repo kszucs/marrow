@@ -1266,3 +1266,31 @@ def test_null_struct_keys_are_one_group_whatever_their_fields_hold() raises:
     var groups = _groups(encoder, batch)
     assert_equal(groups.num_groups, 2)
     assert_true(groups.ids == array([0, 1, 1], int32))
+
+
+def test_groups_filter_keeps_each_row_group() raises:
+    """The kept rows keep their groups, and the group count does not shrink;
+    the one-slot assignment stays what it is."""
+    var groups = Groups(array([0, 1, 0, 2, 1], int32), 3)
+    var keep = Bitmap([True, False, True, True, False]).to_immutable()
+    var kept = groups.filter(keep.view())
+    assert_true(kept.ids == array([0, 0, 2], int32))
+    assert_equal(kept.num_groups, 3)
+    assert_true(Groups.single(5).filter(keep.view()).is_single())
+
+
+def test_groups_counts_rows_per_group() raises:
+    """One count per group, 0 for a group no row names."""
+    var counts = Groups(array([0, 2, 0, 1, 2, 2], int32), 4).counts()
+    assert_true(counts == array([2, 1, 3, 0], int64))
+    assert_equal(len(Groups(array(int32), 0).counts()), 0)
+
+
+def test_groups_count_into_accumulates_over_batches() raises:
+    """Each batch adds its rows to the counts so far, which grow with zeros
+    to cover groups first seen in a later batch."""
+    var counts = List[Int]()
+    Groups(array([1, 0, 1], int32), 2).count_into(counts)
+    assert_true(counts == [1, 2])
+    Groups(array([3, 1], int32), 5).count_into(counts)
+    assert_true(counts == [1, 3, 0, 1, 0])

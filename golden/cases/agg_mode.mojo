@@ -12,7 +12,8 @@ def plan() raises -> DynRelation:
     so the answer does not depend on the tie-breaking rule — which is
     unspecified and would make the case non-deterministic if it did.
 
-    `marrow/kernels/aggregate.mojo` has no mode kernel.
+    `ModeKernel` (`marrow/kernels/dictionary.mojo`) computes it over a
+    column, strings included, but no expression node binds it.
 
     -- skip mojo
     -- skip python

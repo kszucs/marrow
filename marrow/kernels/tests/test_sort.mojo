@@ -652,6 +652,46 @@ def test_sort_indices_nan_largest_multi() raises:
         assert_equal(_idx(idx, i), want[i])
 
 
+def test_multi_limit_is_the_full_order_prefix() raises:
+    """A limit binds the most significant pass only: whatever the limit, the
+    answer is the full order's first rows, ties, nulls and NaN included."""
+    var a = Int64Builder(capacity=50)
+    var s = StringBuilder()
+    var f = Float64Builder(capacity=50)
+    for i in range(50):
+        if i % 9 == 0:
+            a.append_null()
+        else:
+            a.append(Int64((i * 7) % 5))
+        s.append(String("s", i % 3))
+        if i % 11 == 0:
+            f.append(nan[float64.native]())
+        else:
+            f.append(Float64(i % 4))
+    var cols = List[DynArray]()
+    cols.append(a.finish().to_dyn())
+    cols.append(s.finish().to_dyn())
+    cols.append(f.finish().to_dyn())
+    var batch = record_batch(cols^, names=["a", "s", "f"]).to_struct_array()
+    comptime Sort = SortIndices[nan_largest=True]
+    for nulls_first in [True, False]:
+        var full = Sort.multi(
+            batch, [0, 1, 2], [True, False, True], nulls_first=nulls_first
+        )
+        for limit in [0, 1, 7, 49, 50, 80]:
+            var cut = Sort.multi(
+                batch,
+                [0, 1, 2],
+                [True, False, True],
+                nulls_first=nulls_first,
+                limit=limit,
+            )
+            assert_true(
+                cut == full.slice(0, min(limit, 50)),
+                String("limit ", limit, ", nulls_first ", nulls_first),
+            )
+
+
 def test_sort_indices_signed_zeros_tie() raises:
     """`-0.0` and `0.0` are equal, so a stable sort keeps them in input order
     on both paths — the composite PDQsort and radix."""

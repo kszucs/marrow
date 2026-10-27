@@ -30,9 +30,15 @@ from ..arrays import (
     PrimitiveArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..dtypes import ListLikeType, NumericType, PrimitiveType, DType
+from ..dtypes import (
+    DType,
+    IntegerType,
+    ListLikeType,
+    NumericType,
+    PrimitiveType,
+)
 from ..views import apply, valid_or_zero
-from .aggregate import FoldKernel
+from .aggregate import FoldKernel, IntegerAgg
 from .core import Kernel
 from .segments import ByEnds, Segmented
 from ..execution import ExecContext
@@ -184,7 +190,9 @@ struct ListReduceKernel[F: FoldKernel](Kernel):
     The answer is `F`'s accumulator type (a sum is int64, uint64 or float64, a
     mean float64). Null elements are skipped; a list with no valid element
     answers NULL (`count` answers 0), and so does a null list. Numeric
-    elements only.
+    elements only, and integer elements for the bitwise folds: `list_bit_and`,
+    `list_bit_or` and `list_bit_xor`, with `F = BitAndFold`, `BitOrFold` and
+    `BitXorFold`, which keep the element type.
     """
 
     comptime name = "list_reduce"
@@ -255,7 +263,14 @@ struct ListReduceKernel[F: FoldKernel](Kernel):
         def outer[T: ListLikeType](o: T) raises {imm} -> DynArray:
             # The offset width picks `T`, the child's dtype `V`.
             def leaf[V: NumericType](d: V) raises {imm} -> DynArray:
-                return Self.apply[V](list.as_list_like[T](), ctx).to_dyn()
+                comptime if conforms_to(Self.F, IntegerAgg) and not conforms_to(
+                    V, IntegerType
+                ):
+                    raise Self.error[TypeError](
+                        t"list element type {d} is not an integer type"
+                    )
+                else:
+                    return Self.apply[V](list.as_list_like[T](), ctx).to_dyn()
 
             return (
                 list.as_list_like[T]()

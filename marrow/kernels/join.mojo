@@ -146,22 +146,6 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
             or self == JOIN_ANTI
         )
 
-    def negates(self) -> Bool:
-        """Whether this existence filter keeps the rows that did not match:
-        true for ANTI and RIGHT_ANTI. With `emits_left_columns` and
-        `emits_right_columns`, which say which side a filter projects, it
-        describes an existence filter completely.
-        """
-        return self == JOIN_ANTI or self == JOIN_RIGHT_ANTI
-
-    def commutes(self) -> Bool:
-        """Whether the two sides may exchange roles: `mirror` without the
-        raise, for a rule that declines rather than fails. It answers what
-        `is_supported` does, because every supported kind has a mirror; it is
-        a separate method because the two ask different questions.
-        """
-        return self.is_supported()
-
     def mirror(self) raises -> Self:
         """This kind with its two sides exchanged: joining `(b, a)` under
         `k.mirror()` returns the rows that joining `(a, b)` under `k` does.

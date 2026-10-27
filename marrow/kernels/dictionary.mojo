@@ -39,6 +39,11 @@ by index. Hashing and comparison then run once per distinct value rather than
 once per row. A dictionary column among several key columns is decoded.
 
 Keys stay columnar throughout; nothing is serialised into rows.
+
+Three public kernels answer from one encoder over a whole column, in
+first-seen order and with the group-by's key identity: ``DictionaryEncodeKernel``
+(``dictionary_encode``), ``ValueCountsKernel`` (``value_counts``) and
+``ModeKernel`` (``mode``).
 """
 
 from ..utils.stats import count
@@ -59,6 +64,7 @@ from ..dtypes import (
     IntegerType,
     Int32Type,
     int32,
+    int64,
     struct_,
     uint64,
 )
@@ -67,8 +73,11 @@ from ..execution import ExecContext
 from ..views import apply
 from .cast import decode_dictionary, normalized_indices
 from .filter import FilterKernel, TakeKernel
+from .core import Kernel
+from .groupby import Groups
 from .hashing import HashKernel, KeyCompare, NULL_HASH_SENTINEL
 from .hashtable import HashIndex, Placement
+from .sort import SortIndices
 from ..utils import Fmix64, Hasher, KeyHash
 
 
@@ -701,3 +710,164 @@ struct _UsedEntries(Movable):
             ) if self._indices.is_valid(i) else self._null_slot
             out.store[1](i, entry_codes.unsafe_get(s))
         return Int32Array(length=n, buffer=buf^.to_immutable())
+
+
+# ---------------------------------------------------------------------------
+# dictionary_encode, value_counts, mode
+# ---------------------------------------------------------------------------
+# Each encodes on one thread: radix placement numbers codes partition by
+# partition, and these answer in first-seen order.
+
+
+struct DictionaryEncodeKernel(Kernel):
+    """A column as a dictionary of its distinct values, in first-seen order,
+    with an index per row."""
+
+    comptime name = "dictionary_encode"
+
+    @staticmethod
+    def dispatch(
+        values: DynArray,
+        encode_nulls: Bool = False,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """`values` as a `dictionary<int32, T>` array; a dictionary column is
+        returned as it is.
+
+        A null row has a null index, unless `encode_nulls` gives null an
+        entry of its own like any other value. Values are distinct as a
+        group-by keys them: `-0.0` and `0.0` are one entry, and so is every
+        NaN.
+        """
+        if values.isa[DictionaryArray]():
+            return values.copy()
+        else:
+            var encoder = DictionaryEncoder[KeyHash](
+                [values.dtype()], ExecContext.serial()
+            )
+            var placed = encoder.encode([values.copy()])
+            var entries = encoder.values()[0].copy()
+            if encode_nulls or entries.null_count() == 0:
+                return DictionaryArray.from_arrays(placed.ids.copy(), entries^)
+            else:
+                return DictionaryArray.from_arrays(
+                    Self._without_null_entry(placed.ids, entries),
+                    FilterKernel.drop_null(entries, ctx),
+                )
+
+    @staticmethod
+    def _without_null_entry(codes: Int32Array, entries: DynArray) -> Int32Array:
+        """`codes` once the null entry of `entries` goes: a row coded to it
+        is null, and every code past it moves down one."""
+        var null_code = 0
+        while entries.is_valid(null_code):
+            null_code += 1
+        var n = len(codes)
+        var buf = Buffer.alloc_uninit[int32.native](n)
+        var out = buf.view[int32.native](0, n)
+        var valid = Bitmap.alloc_zeroed(n)
+        var nulls = 0
+        for i in range(n):
+            var code = Int(codes.unsafe_get(i))
+            if code == null_code:
+                out.unsafe_set(i, 0)
+                nulls += 1
+            else:
+                out.unsafe_set(i, Int32(code - Int(code > null_code)))
+                valid.set(i)
+        return Int32Array(
+            dtype=int32,
+            length=n,
+            nulls=nulls,
+            offset=0,
+            bitmap=valid^.to_immutable(),
+            buffer=buf^.to_immutable(),
+        )
+
+
+struct ValueCountsKernel(Kernel):
+    """How often each distinct value of a column occurs."""
+
+    comptime name = "value_counts"
+
+    @staticmethod
+    def dispatch(
+        values: DynArray, ctx: ExecContext = ExecContext.serial()
+    ) raises -> DynArray:
+        """A `struct<values: T, counts: int64>` row per distinct value, in
+        first-seen order, null counted as a value. Values are distinct as a
+        group-by keys them: `-0.0` and `0.0` are one value, and so is every
+        NaN."""
+        var encoder = DictionaryEncoder[KeyHash](
+            [values.dtype()], ExecContext.serial()
+        )
+        var placed = encoder.encode([values.copy()])
+        var counts = Groups(placed.ids.copy(), len(encoder)).counts()
+        var distinct = encoder.values()[0].copy()
+        return StructArray(
+            dtype=struct_(
+                Field("values", distinct.dtype()), Field("counts", int64)
+            ),
+            length=len(counts),
+            children=[distinct^, counts^.to_dyn()],
+        ).to_dyn()
+
+
+struct ModeKernel(Kernel):
+    """The most common values of a column."""
+
+    comptime name = "mode"
+
+    @staticmethod
+    def dispatch(
+        values: DynArray,
+        n: Int = 1,
+        skip_nulls: Bool = True,
+        min_count: Int = 0,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """A `struct<mode: T, count: int64>` row for each of the `n` most
+        common valid values: the most common first, ties smallest value
+        first, NaN above every number. Values are distinct as a group-by keys
+        them: `-0.0` and `0.0` are one value, and so is every NaN.
+
+        No rows when `skip_nulls` is false and a value is null, or when fewer
+        than `min_count` values are valid.
+
+        Raises:
+            InvalidError: unless `n` is at least 1.
+        """
+        if n < 1:
+            raise Self.error[InvalidError]("n must be strictly positive")
+        var nulls = values.null_count()
+        var valid: DynArray
+        if (not skip_nulls and nulls > 0) or len(values) - nulls < min_count:
+            valid = values.slice(0, 0)
+        else:
+            valid = FilterKernel.drop_null(values, ctx)
+        var encoder = DictionaryEncoder[KeyHash](
+            [valid.dtype()], ExecContext.serial()
+        )
+        var placed = encoder.encode([valid^])
+        var counts = Groups(placed.ids.copy(), len(encoder)).counts()
+        var distinct = encoder.values()[0].copy()
+        var ranked = StructArray(
+            dtype=struct_(
+                Field("count", int64), Field("mode", distinct.dtype())
+            ),
+            length=len(counts),
+            children=[counts.copy().to_dyn(), distinct.copy()],
+        )
+        var order = SortIndices[nan_largest=True].multi(
+            ranked, [0, 1], [False, True], limit=n, ctx=ctx
+        )
+        return StructArray(
+            dtype=struct_(
+                Field("mode", distinct.dtype()), Field("count", int64)
+            ),
+            length=len(order),
+            children=[
+                TakeKernel.dispatch(distinct, order, ctx),
+                TakeKernel.apply(counts, order, ctx).to_dyn(),
+            ],
+        ).to_dyn()
