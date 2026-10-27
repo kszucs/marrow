@@ -393,8 +393,8 @@ def test_floordiv_and_mod_by_zero_divide_by_one_instead() raises:
     A SIMD lane can neither raise nor produce a null, so `core` substitutes 1
     and answers with a value. SQL's NULL is an expression-layer semantic —
     `pyarrow.compute`, whose names these mirror, does not null either — and
-    both lanes apply it themselves: see `DivisionBinary` and
-    `RuntimeValue._null_zeros`, and the cases in
+    both lanes apply it through the kernels' `Partial.defined`: see
+    `PartialBinary` and `Partial.null_undefined`, and the cases in
     `expr/comptime/tests/test_arithmetic.mojo`.
 
     Pinned here so the substitution is a documented answer rather than an
@@ -416,8 +416,9 @@ def test_floordiv_null_divisor_stays_null() raises:
     rule, and the one thing about `//`'s validity the kernel does decide.
 
     The row beside it is the contrast: a *zero* divisor is not null here, and
-    the two are only made to agree one layer up, where `RuntimeValue.
-    _null_zeros` turns the zero into a null and lets this same rule carry it.
+    the two are only made to agree one layer up, where the runtime lane
+    passes the divisor through `Partial.null_undefined`, which turns the zero
+    into a null and lets this same rule carry it.
     """
     var a = array([10, 10, 10], int32)
     var b = Int32Builder(3)

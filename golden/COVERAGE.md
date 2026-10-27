@@ -347,9 +347,9 @@ The last three were one root cause with three faces, and both halves of the
 fix were needed. `FloordivKernel` and `ModKernel` correct Mojo's Python
 rounding inside `core`, which serves both lanes; and because a SIMD lane can
 neither raise nor produce a null, the zero divisor is masked *outside* it —
-`RuntimeValue._null_zeros` in the erased path, and `DivisionBinary`'s
-third `Bound` slot in the fused one, which keeps the lane fused and pays only
-one pass over the divisor.
+`Partial.null_undefined` in the erased path, and `PartialBinary`'s third
+`Bound` slot in the fused one, which keeps the lane fused and pays only one
+pass over the divisor. Both read the kernels' `Partial.defined`.
 
 `math_mod_int64` used to ask the *agreeing* form, `((n % 3) + 3) % 3`, so that
 the corpus recorded both the working case and the divergence. Both sides now

@@ -68,6 +68,26 @@ def test_runtime_decimal_arithmetic() raises:
     _assert_text(out.columns[2], ["0.5000000", None, None, "0.0050000"])
 
 
+def test_runtime_decimal_divide_by_an_integer_zero_is_null() raises:
+    """The divisor is checked as it arrives, an `int64` not yet cast to the
+    decimal the division runs in, and its zero is NULL all the same."""
+    var out = (
+        table(
+            record_batch(
+                [
+                    _dec(["1.00", "2.00"], decimal128(10, 2)),
+                    array([0, 2], int64).to_dyn(),
+                ],
+                names=["a", "i"],
+            )
+        )
+        .project(["q"], [col("a") / col("i")])
+        .execute()
+    )
+    assert_true(out.columns[0].dtype() == DynType(decimal128(30, 22)))
+    _assert_text(out.columns[0], [None, "1.0000000000000000000000"])
+
+
 def test_runtime_decimal_integer_and_float_operands() raises:
     var out = (
         _prices()

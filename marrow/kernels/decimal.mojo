@@ -38,8 +38,9 @@ plain lane operators over the unscaled values, and why nothing here needs a
 
 **Division truncates toward zero**, as Arrow C++, arrow-rs and ClickHouse all
 do; Polars rounds and DuckDB answers `DOUBLE` (both measured 2026-09-27). A
-zero divisor is the caller's to handle, as for `DivKernel`: the expression
-lanes null that row, as they do for `//`.
+zero divisor is undefined: `DecimalDivKernel` is `Partial` with `//`'s rule,
+where `DivKernel` is not, and the expression lanes null that row through it,
+as they do for `//`.
 """
 
 from ..arrays import DynArray, PrimitiveArray
@@ -56,7 +57,7 @@ from ..dtypes import (
     float64,
 )
 from ..views import apply
-from .core import Kernel
+from .core import Kernel, Partial
 from ..errors import InvalidError, TypeError
 from .cast import CastKernel
 from .numeric import FloordivKernel
@@ -339,8 +340,15 @@ struct DecimalMulKernel(DecimalBinaryKernel):
         return a * b
 
 
-struct DecimalDivKernel(DecimalBinaryKernel):
+struct DecimalDivKernel(DecimalBinaryKernel, Partial):
     comptime name = "divide"
+
+    @always_inline
+    @staticmethod
+    def defined[T: DType, W: Int](b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        """A non-zero unscaled divisor: `FloordivKernel`'s rule, since `core`
+        is its lane."""
+        return FloordivKernel.defined[T, W](b)
 
     @staticmethod
     def promotion(l: DynType, r: DynType) raises -> DecimalPromotion:

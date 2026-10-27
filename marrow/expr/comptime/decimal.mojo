@@ -26,8 +26,8 @@ change its register width per batch, so `DecimalCompare` raises there instead,
 naming the types. The runtime lane follows Arrow.
 
 **Division by zero is NULL**, as `//` is in both lanes and as DuckDB does —
-not an error, which is what `pc.divide` answers. The expression layer has one
-rule for a zero divisor and decimals follow it.
+not an error, which is what `pc.divide` answers. `DecimalDivKernel` is
+`Partial` with `//`'s rule, and both lanes null through it.
 
 **The casts fuse where a lane can express them.** Rescaling is a multiply or a
 truncating divide, and decimal -> float a divide in `float64`, so those three
@@ -162,10 +162,11 @@ comptime DecimalMul = DecimalBinary[DecimalMulKernel, _, _]
 
 struct DecimalDiv[L: DecimalValue, R: DecimalValue](DecimalValue, Unnamed):
     """`/` over two decimal operands: the dividend scaled up, a truncating
-    quotient, and NULL where the divisor is zero.
+    quotient, and NULL wherever `DecimalDivKernel` is undefined for the
+    divisor — a zero.
 
-    Its own node rather than a `DecimalBinary` for the reason `DivisionBinary`
-    is not a `NumericBinary`: the zero-divisor bits are a third slot in the
+    Its own node rather than a `DecimalBinary` for the reason `PartialBinary`
+    is not a `NumericBinary`: the defined-divisor bits are a third slot in the
     `Bound`, which every `+` would otherwise carry too.
     """
 
@@ -174,17 +175,17 @@ struct DecimalDiv[L: DecimalValue, R: DecimalValue](DecimalValue, Unnamed):
     ]
     comptime N = Self.Type.native
     comptime DivisorType = Self.R.Type.native
-    """The divisor's lane type, which the zero scan reads in."""
+    """The divisor's lane type, which `defined` reads it in."""
 
     comptime shape = Shape.columnar
-    """Columnar regardless of the operands, as `DivisionBinary` — a scalar
+    """Columnar regardless of the operands, as `PartialBinary` — a scalar
     shape has no validity to carry the zero divisor's NULL."""
 
     comptime Bound = Tuple[
         Self.L.Bound, Self.R.Bound, Scalar[Self.N], Optional[Bitmap[mut=False]]
     ]
-    """The operands' bounds, the dividend's factor, and the rows whose
-    divisor is non-zero — `None` when none is zero."""
+    """The operands' bounds, the dividend's factor, and the rows where the
+    kernel is defined — `None` when every row is."""
 
     var l: Self.L
     var r: Self.R
@@ -213,15 +214,15 @@ struct DecimalDiv[L: DecimalValue, R: DecimalValue](DecimalValue, Unnamed):
         var mask = Bitmap.alloc_uninit(length)
 
         @always_inline
-        def nonzero[W: Int](i: Int) {imm} -> SIMD[DType.bool, W]:
-            return self.r.lane[W](rb, i).ne(0)
+        def defined[W: Int](i: Int) {imm} -> SIMD[DType.bool, W]:
+            return DecimalDivKernel.defined(self.r.lane[W](rb, i))
 
-        apply[Self.DivisorType](mask.view(), nonzero)
+        apply[Self.DivisorType](mask.view(), defined)
         var bits = mask^.to_immutable()
-        var nonzero_rows = Optional[Bitmap[mut=False]](None)
+        var defined_rows = Optional[Bitmap[mut=False]](None)
         if bits.unset_count() > 0:
-            nonzero_rows = Optional(bits^)
-        return (lb^, rb^, pow(Scalar[Self.N](10), promo.left_up), nonzero_rows^)
+            defined_rows = Optional(bits^)
+        return (lb^, rb^, pow(Scalar[Self.N](10), promo.left_up), defined_rows^)
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return Bitmap.intersect(

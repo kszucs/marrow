@@ -10,9 +10,10 @@ def plan() raises -> DynRelation:
 
     Division and modulo by zero. A SIMD lane can neither raise nor produce a
     null, so `FloordivKernel` and `ModKernel` still compute against a
-    substituted divisor of 1 — and the row is masked out afterwards, by
-    `RuntimeValue._null_zeros` in the erased path and by `DivisionBinary`'s
-    `Bound` in the fused one. Both answer NULL, as SQL does.
+    substituted divisor of 1 — and the row is masked out afterwards, from the
+    kernels' `Partial.defined`: by `Partial.null_undefined` in the erased path
+    and by `PartialBinary`'s `Bound` in the fused one. Both answer NULL, as
+    SQL does.
 
     The predicate keeps only the non-negative divisors so that this case asks
     *only* about zero: with negatives in the column the rounding rule

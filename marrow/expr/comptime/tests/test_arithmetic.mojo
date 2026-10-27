@@ -230,6 +230,60 @@ def test_division_by_zero_is_null_inside_a_fused_parent() raises:
     assert_true(got == array(expected, int64))
 
 
+def test_division_by_zero_is_null_on_a_sliced_batch() raises:
+    """A *sliced* divisor holding a zero and a null puts both nulls on their
+    own rows.
+
+    The slice drops the parent's first row, itself a zero, so a validity
+    indexed from the parent's row 0 rather than the slice's lands every null
+    one row away from the divisor that caused it.
+    """
+    var divisors: List[Optional[Int]] = [0, 5, 0, None, 25]
+    var full = record_batch(
+        [
+            array([100, 100, 100, 100, 100], int64).to_dyn(),
+            array(divisors, int64).to_dyn(),
+        ],
+        names=["n", "d"],
+    )
+    var sliced = full.slice(1, 4)
+    var quotients: List[Optional[Int]] = [20, None, None, 4]
+    assert_true(
+        _as_i64(col("n", int64) // col("d", int64), sliced)
+        == array(quotients, int64)
+    )
+    var remainders: List[Optional[Int]] = [0, None, None, 0]
+    assert_true(
+        _as_i64(col("n", int64) % col("d", int64), sliced)
+        == array(remainders, int64)
+    )
+
+
+def test_floordiv_by_negative_zero_is_null() raises:
+    """`-0.0` is a zero (`-0.0 == 0`), so a float `//` or `%` by it is NULL,
+    as by `0.0`."""
+    var negative_zero = -Float64(0.0)
+    assert_true(Float64(1.0) / negative_zero < 0.0)  # the sign survived
+    var divisors: List[Optional[Float64]] = [negative_zero, 2.0]
+    var batch = record_batch(
+        [
+            array([1.0, 2.0], float64).to_dyn(),
+            array(divisors, float64).to_dyn(),
+        ],
+        names=["a", "b"],
+    )
+    var quotients: List[Optional[Float64]] = [None, 1.0]
+    assert_true(
+        _as_f64(col("a", float64) // col("b", float64), batch)
+        == array(quotients, float64)
+    )
+    var remainders: List[Optional[Float64]] = [None, 0.0]
+    assert_true(
+        _as_f64(col("a", float64) % col("b", float64), batch)
+        == array(remainders, float64)
+    )
+
+
 def test_pow_and_the_float_unaries_answer_float64() raises:
     """`sqrt(9)` is 3.0 and `exp(0)`/`ln(1)` are the two inputs whose result
     is exact under IEEE 754 — the same restriction `golden/cases/math_exp_zero`

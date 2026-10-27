@@ -191,9 +191,7 @@ from ...kernels.temporal import (
     YearKernel,
 )
 from ...dtypes import (
-    DecimalType,
     DynType,
-    NumericType,
     PrimitiveType,
     bool_,
     field,
@@ -201,7 +199,7 @@ from ...dtypes import (
     int64,
     string,
 )
-from ...scalars import BoolScalar, DynScalar, PrimitiveScalar
+from ...scalars import BoolScalar, DynScalar
 from ...schema import Schema
 from ...schema import schema as make_schema
 from ...tabular import RecordBatch
@@ -321,11 +319,12 @@ struct RuntimeValue(Evaluable, Movable, Value):
     ) raises -> BoolArray:
         """This lane's half of the same contract.
 
-        The tag selects an operator, and `dispatch` is the erased entry the
-        interpreter already links — so pruning here costs no kernel this lane
-        was not paying for. The one dtype ladder is `_statistics` below: a
-        runtime node learns its column's type from the data, where a comptime
-        node knows it and asks the index for that type directly.
+        The tag picks a `Prunable` kernel, which owns the rule, before any
+        statistic is read; the kernel's erased `possible_segments` resolves
+        the bounds' dtype. That is one of the two dtype ladders this lane
+        prunes through; `_statistics` below is the other: a runtime node
+        learns its column's type from the data, where a comptime node knows it
+        and asks the index for that type directly.
 
         Anything unrecognised keeps every chunk, which is always correct.
         """
@@ -342,7 +341,21 @@ struct RuntimeValue(Evaluable, Movable, Value):
                 self._kids[1][].mask(index, bindings),
             )
 
-        # A comparison reads the extreme pair that decides it, and a chunk
+        var possible: Self._Possible
+        if self._tag == "lt":
+            possible = LtKernel[nan_safe=True].possible_segments
+        elif self._tag == "le":
+            possible = LeKernel[nan_safe=True].possible_segments
+        elif self._tag == "gt":
+            possible = GtKernel[nan_safe=True].possible_segments
+        elif self._tag == "ge":
+            possible = GeKernel[nan_safe=True].possible_segments
+        elif self._tag == "eq":
+            possible = EqKernel[nan_safe=True].possible_segments
+        else:
+            return keep_every(index.chunks())
+
+        # A comparison is decided by both operands' extremes, and a chunk
         # where either operand has no non-null value cannot match at all.
         var live = AndKernel.apply(
             self._kids[0][]._defined(index), self._kids[1][]._defined(index)
@@ -366,45 +379,20 @@ struct RuntimeValue(Evaluable, Movable, Value):
             or rhi.dtype() != lo.dtype()
         ):
             return keep_every(index.chunks())
+        return AndKernel.apply(live, possible(lo, hi, rlo, rhi))
 
-        if self._tag == "lt":
-            return self._decided(
-                live.copy(), LtKernel[nan_safe=True].dispatch(lo, rhi)
-            )
-        if self._tag == "le":
-            return self._decided(
-                live.copy(), LeKernel[nan_safe=True].dispatch(lo, rhi)
-            )
-        if self._tag == "gt":
-            return self._decided(
-                live.copy(), GtKernel[nan_safe=True].dispatch(hi, rlo)
-            )
-        if self._tag == "ge":
-            return self._decided(
-                live.copy(), GeKernel[nan_safe=True].dispatch(hi, rlo)
-            )
-        if self._tag == "eq":
-            # Interval overlap, read exactly as the fused node reads it: the
-            # value can only appear where neither side lies wholly beyond the
-            # other.
-            var below = LeKernel[nan_safe=True].dispatch(lo, rhi)
-            var above = GeKernel[nan_safe=True].dispatch(hi, rlo)
-            return AndKernel.apply(
-                live, AndKernel.apply(below.as_bool(), above.as_bool())
-            )
-        return keep_every(index.chunks())
-
-    @staticmethod
-    def _decided(var live: BoolArray, var answer: DynArray) raises -> BoolArray:
-        """The comparison's answer, kept only where both operands are live."""
-        return AndKernel.apply(live, answer.as_bool())
+    comptime _Possible = def(
+        DynArray, DynArray, DynArray, DynArray
+    ) thin raises -> BoolArray
+    """A `Prunable` kernel's erased `possible_segments`."""
 
     def _statistics(
         self, index: Index, bindings: Bindings, upper: Bool
     ) raises -> DynArray:
         """A leaf's per-chunk extreme, erased. Composites say nothing.
 
-        **The lane's one dtype ladder, and it is dead in a fused binary.** The
+        **The lane's own dtype ladder, and it is dead in a fused binary**; the
+        kernel's erased `possible_segments` is the other one `mask` uses. The
         index stores its statistics typed and hands them back in the type the
         reader asks for, which is a single `as_primitive[T]` arm for a comptime
         node. An interpreted node has no `T` to ask with, so it recovers one
@@ -776,54 +764,6 @@ struct RuntimeValue(Evaluable, Movable, Value):
         return Self._arith[K](l^, r^)
 
     @staticmethod
-    def _null_zeros(var divisor: DynArray) raises -> DynArray:
-        """`divisor` with its zeros marked null — SQL `NULLIF(divisor, 0)`.
-
-        A row divided by nothing and a row divided by zero have the same
-        answer in SQL, so this says the second in terms of the first and lets
-        the validity intersection `apply` already performs carry it. Both
-        conventions agree: polars and DuckDB null integer `//` and `%` by zero
-        exactly as they null a missing divisor (measured 2026-09-05).
-
-        It is `nullif` and a broadcast zero rather than a hand-written mask.
-        That version existed and was wrong: it rebuilt the array with a bitmap
-        indexed from 0 while keeping the column's `offset`, so a *sliced*
-        divisor got its nulls at the wrong rows. `nullif` already answers the
-        question this needs — nulled where equal, `a`'s own nulls kept — and
-        `DynScalar.to_array` is the same broadcast a literal operand takes.
-        The zeros are built in the divisor's own type, so there is no cast
-        pass; a decimal's zero is the unscaled 0 whatever its scale. Two
-        narrow dispatches rather than `try_visit[PrimitiveType]`, which would build
-        zeros for every temporal and interval type too.
-
-        `DivisionBinary` reaches the same result the other way, from the lane,
-        because a fused node has no array to hand to a kernel.
-        """
-        var n = divisor.length()
-
-        def numeric[T: NumericType](d: T) raises {imm} -> DynArray:
-            var zero = PrimitiveScalar[T](Optional(Scalar[T.native](0)), d)
-            return zero.repeat(n).to_dyn()
-
-        def decimal[T: DecimalType](d: T) raises {imm} -> DynArray:
-            var zero = PrimitiveScalar[T](Optional(Scalar[T.native](0)), d)
-            return zero.repeat(n).to_dyn()
-
-        if divisor.dtype().is_decimal():
-            return NullifKernel.dispatch(
-                divisor,
-                divisor.dtype().try_visit[DynArray, DecimalType](
-                    decimal, "dtype is not decimal"
-                ),
-            )
-        return NullifKernel.dispatch(
-            divisor,
-            divisor.dtype().try_visit[DynArray, NumericType](
-                numeric, "dtype is not numeric"
-            ),
-        )
-
-    @staticmethod
     def _arith[
         K: BinaryKernel
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
@@ -1047,20 +987,27 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return Self._decimal_arith[SubKernel, DecimalSubKernel](l^, r^)
         if self._tag == "mul":
             return Self._decimal_arith[MulKernel, DecimalMulKernel](l^, r^)
-        # `//` and `%` are undefined on a zero divisor and SQL spells that
-        # NULL. The kernels cannot: a SIMD lane can neither raise nor produce
-        # a null, so it divides by a substituted 1. Nulling the *divisor*
-        # first is what makes the answer fall out of the null-in-null-out rule
-        # `apply` already applies, instead of a second masking path.
+        # `//` and `%` are `Partial`: undefined on some divisors (a zero), and
+        # SQL spells that NULL. The kernels cannot: a SIMD lane can neither
+        # raise nor produce a null, so it divides by a substituted 1. Nulling
+        # the undefined *divisors* first is what makes the answer fall out of
+        # the null-in-null-out rule `apply` already applies, instead of a
+        # second masking path. The divisor is nulled as it arrives, before
+        # any promotion: see `Partial` on why `defined` answers the same
+        # there.
         if self._tag == "floordiv":
-            return Self._arith[FloordivKernel](l^, Self._null_zeros(r^))
+            return Self._arith[FloordivKernel](
+                l^, FloordivKernel.null_undefined(r)
+            )
         if self._tag == "mod":
-            return Self._arith[ModKernel](l^, Self._null_zeros(r^))
+            return Self._arith[ModKernel](l^, ModKernel.null_undefined(r))
         if self._tag == "truediv":
             # Decimal division stays decimal — exact to Arrow C++'s scale and
             # truncated — and a zero divisor is NULL, as for `//`.
             if DecimalPromotion.accepts(l, r):
-                return DecimalDivKernel.dispatch(l, Self._null_zeros(r^))
+                return DecimalDivKernel.dispatch(
+                    l, DecimalDivKernel.null_undefined(r)
+                )
             return Self._float_binary[DivKernel](l^, r^)
         if self._tag == "pow":
             return Self._float_binary[PowKernel](l^, r^)

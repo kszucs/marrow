@@ -69,6 +69,57 @@ def _prepare_dict(path: String, n: Int) raises:
     pq.write_table(tbl, path, compression="none")
 
 
+def _require_encoding(path: String, column: Int, encoding: String) raises:
+    """Fails unless the file's first row group wrote `column` with `encoding`,
+    so a benchmark provably measures the decoder it is named for."""
+    var pq = Python.import_module("pyarrow.parquet")
+    var encodings = (
+        pq.ParquetFile(path).metadata.row_group(0).column(column).encodings
+    )
+    if not (PythonObject(encoding) in encodings):
+        raise Error(
+            t"column {column} of {path} lacks {encoding}; encodings:"
+            t" {encodings}"
+        )
+
+
+def _prepare_dict_strings(path: String, n: Int) raises:
+    """One string column of 1,000 distinct values, dictionary encoded —
+    exercises the BYTE_ARRAY dictionary gather."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var keys = pa.array(np.char.add("key-", np.arange(1000).astype("U")))
+    var tbl = pa.table(Python.dict(s=keys.take(pa.array(np.arange(n) % 1000))))
+    pq.write_table(tbl, path, use_dictionary=True, compression="none")
+    _require_encoding(path, 0, "RLE_DICTIONARY")
+
+
+def _prepare_delta(path: String, n: Int) raises:
+    """Timestamp-like int64 and int32 columns written DELTA_BINARY_PACKED."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(n, dtype="int64")
+    var tbl = pa.table(
+        Python.dict(
+            a=pa.array(idx * 1000 + idx % 7),
+            c=pa.array((idx % 100_000).astype("int32")),
+        )
+    )
+    pq.write_table(
+        tbl,
+        path,
+        use_dictionary=False,
+        column_encoding=Python.dict(
+            a="DELTA_BINARY_PACKED", c="DELTA_BINARY_PACKED"
+        ),
+        compression="none",
+    )
+    _require_encoding(path, 0, "DELTA_BINARY_PACKED")
+    _require_encoding(path, 1, "DELTA_BINARY_PACKED")
+
+
 def _bench_read(mut b: Benchmark, n: Int, compression: String) raises:
     with ScratchDir() as dir:
         var path = join(dir, "marrow_bench_read.parquet")
@@ -138,6 +189,36 @@ def bench_read_dict_1m(mut b: Benchmark) raises:
 
         b.iter(call)
         keep(path)  # keep the captured path alive through the whole benchmark
+
+
+def bench_read_dict_strings_1m(mut b: Benchmark) raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bench_dict_strings.parquet")
+        var n = 1_000_000
+        _prepare_dict_strings(path, n)
+        b.throughput(BenchMetric.elements, n)
+
+        @always_inline
+        def call() raises {imm}:
+            keep(read_table(path))
+
+        b.iter(call)
+        keep(path)
+
+
+def bench_read_delta_1m(mut b: Benchmark) raises:
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_bench_delta.parquet")
+        var n = 1_000_000
+        _prepare_delta(path, n)
+        b.throughput(BenchMetric.elements, n)
+
+        @always_inline
+        def call() raises {imm}:
+            keep(read_table(path))
+
+        b.iter(call)
+        keep(path)
 
 
 def _bench_read_small(
@@ -336,20 +417,13 @@ def bench_read_small_uncompressed(mut b: Benchmark) raises:
 
 def bench_write_dict_strings_1m(mut b: Benchmark) raises:
     """Write a low-cardinality string column dictionary-encoded, so the time
-    is the dictionary build over byte strings."""
-    var pa = Python.import_module("pyarrow")
-    var pq = Python.import_module("pyarrow.parquet")
-    var np = Python.import_module("numpy")
+    is the dictionary build over byte strings. The column is
+    `bench_read_dict_strings_1m`'s."""
     var n = 1_000_000
     with ScratchDir() as dir:
         var src = join(dir, "marrow_bench_dict_strings_src.parquet")
         var dst = join(dir, "marrow_bench_dict_strings_dst.parquet")
-        var keys = np.char.add("key-", (np.arange(n) % 1000).astype("str"))
-        pq.write_table(
-            pa.table(Python.dict(s=pa.array(keys, type=pa.string()))),
-            src,
-            compression="none",
-        )
+        _prepare_dict_strings(src, n)
         var table = read_table(src)
         b.throughput(BenchMetric.elements, n)
 

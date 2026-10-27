@@ -357,6 +357,17 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
   `concat`'s `_Pieces.gather`; identical on main `fc1a335a` and after the
   `1.2.0.dev2026101905` bump. The task's Parquet path was stale until then,
   so it collected nothing and the lane reported no tests.
+- **Seven test directories run in no CI selection.** `test.yml` (and the
+  `asan` job, which mirrors its Mojo selections) runs `marrow/tests`,
+  `formats/parquet/tests`, `formats/ipc/tests`, `utils/tests`,
+  `codecs/tests`, `kernels/tests`, the three `expr` directories, `fuzz`,
+  `golden` and `python`. So `marrow/formats/tests`, `marrow/compress/tests`,
+  `marrow/iceberg/tests`, `marrow/formats/json/tests`,
+  `marrow/formats/avro/tests` and `marrow/datasets/tests` never run in CI,
+  and `marrow/io/tests` runs only in `opendal.yml`: Linux, pushes to `main`,
+  and pull requests matching its path filter. `bench.yml` names `bench_*`
+  files only, which leaves each test unit empty. Each needs a selection,
+  sized by its peak memory, or a recorded reason to stay out.
 - **No cross-lane parity test.** "One engine, two drivers" was enforced by a
   `test_parity.mojo` across four axes; it went with the previous expression
   package and has no replacement. The invariant is currently unenforced.
@@ -374,23 +385,26 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
   both forks to `mojo-community`, or return to upstream once each is
   published and builds on marrow's Mojo.
 
-**The vectorised zero-divisor scan has no caller left.** `//` and `%` answer
-NULL by first asking "is there a zero in this column", and
-`BufferView.__contains__` (`views.mojo:202`) is that question: SIMD, early
-exit, per-chunk reduction — the variant measured fastest on 2026-09-04, where
-the scalar form cost **+45%** on `bench_floordiv_int32_*`.
-`marrow/tests/bench_views.mojo` exists to keep the scalar form from coming
-back and says `RuntimeValue._null_zeros` and `DivisionBinary` both call it.
+**The vectorised zero-divisor scan has no caller left.**
+`BufferView.__contains__` (`views.mojo:336`) answers "is there a zero in this
+column": SIMD, early exit, per-chunk reduction — the variant measured
+fastest on 2026-09-04, where the scalar form cost **+45%** on
+`bench_floordiv_int32_*`. `marrow/tests/bench_views.mojo` exists to keep the
+scalar form from coming back.
 
-Neither does, and `grep -rn __contains__ marrow/` finds no production caller
-at all. `DivisionBinary.bind` (`expr/comptime/numeric.mojo:217`) walks the
-divisor a row at a time into a `Bitmap.alloc_zeroed(length)`, which is the
-shape the +45% measured; `RuntimeValue._null_zeros` pays a `nullif` against a
-broadcast zeros array instead. So the benchmark guards a helper nothing uses
-while the regression it was written to catch is in the tree. Re-point the two
-callers at `__contains__` before treating any cost here as measured — and a
-kernel bench cannot see it, since no kernel passes over the divisor:
-`BinaryKernel.apply` intersects the operands' validity and nothing else.
+Neither lane asks that question. Both null `//`, `%` and decimal `/` by
+evaluating the kernel's `Partial.defined` over every divisor row into a
+bitmap and then counting the rows it rejects: `PartialBinary.bind` and
+`DecimalDiv.bind` (`expr/comptime/`) over the divisor's lane through
+`views.apply`, keeping the bitmap only when some row is undefined, and
+`Partial.null_undefined` (`kernels/core.mojo`) over the divisor array for the
+runtime lane, answering the divisor unchanged when no row is. `grep -rn
+__contains__ marrow/` finds no production caller at all, so the benchmark
+guards a helper nothing uses. An early-exit scan would have to ask for any
+lane where `defined` is false, not for a zero, so `__contains__` does not fit
+as it stands. A kernel bench cannot see this cost either, since no kernel's
+`apply` passes over the divisor: `BinaryKernel.apply` intersects the
+operands' validity and nothing else.
 
 ### 1.8b The dylib layer: what was measured and dropped
 
@@ -783,7 +797,7 @@ statistics skip it; **(G)** dictionary logical nulls (§1.2).
 | Rebase every node, not only the root, in `_BatchEncoder.write_array` (A) | `ipc.mojo:2004` | a struct or list over a sliced child is written from element 0 |
 | `Table.to_batches` compares chunk lengths, not just counts | `tabular.mojo` | chunks `[2,3]` and `[3,2]` give batches with unequal columns |
 | Equal-width signed vs unsigned widens to the next signed type, both lanes | `expr/comptime/rules.mojo:45`, `expr/runtime/values.mojo:1143` | `col(uint8) == lit(-1, int8)` matches 255; the runtime lane raises instead |
-| A float chunk's upper bound is unknown unless its NaN count is 0 (F) | `expr/index.mojo:197`, `expr/comptime/numeric.mojo:529`, `expr/runtime/values.mojo:345`, `expr/analyze.mojo:151`, `parquet/statistics.mojo:77` | `x > 5` prunes a group of `[1, NaN, 3]` and loses the NaN row; the comments' reasoning is inverted |
+| A float chunk's upper bound is unknown unless its NaN count is 0 (F) | `expr/index.mojo:197`, the `Prunable` docstring (`kernels/core.mojo`) and the comparisons' `possible` methods (`kernels/numeric.mojo`), `expr/analyze.mojo:151`, `parquet/statistics.mojo:77` | `x > 5` prunes a group of `[1, NaN, 3]` and loses the NaN row; the comments' reasoning is inverted |
 | `DynArray.__eq__` compares each layout's logical window | `arrays.mojo:302`, `buffers.mojo:993` | a slice and an equal fresh array compare unequal; `alloc_uninit` tails make it nondeterministic |
 
 Lower stakes, same kind: `lit(300, int8)` wraps to 44
@@ -802,6 +816,23 @@ casts and `DecimalToString` ignore a negative scale (`kernels/cast.mojo:528,
 identifier with a dot splits as a qualifier, `GROUP BY UPPER(Name)` misses
 `UPPER(name)`, `Planner.schema` is never moved to the grouped schema
 (`expr/sql.mojo:2210, 1351, 2021, 1557`).
+
+Not a wrong answer, a prune given up: **a chunk whose bounds are only partly
+recorded is kept.** `Prunable.possible_segments` (`kernels/core.mojo`)
+answers null, read as keep, when *any* of a chunk's four bounds is null. The
+rules both lanes' `mask` applied before it kept such a chunk only when a
+bound the rule reads was null: `<` and `>` read two of the four, and `=`
+pruned on either false half under Kleene `AND`. It is sound -- a null only
+ever reads more -- and changes no query result; it costs reads only where a
+source records one bound without the other (an Iceberg file with a
+`lower_bounds` entry and no `upper_bounds` one). The tight fix: an absent bound is the
+loosest bound of the kernel's order. Substitute the order's bottom for an
+absent min and its top for an absent max before calling `possible` (under the
+total order a float's top is NaN). That is sound, and at least as tight as
+the former rules: `<` and `>` prune more where the recorded bound equals the
+order's extreme. It has to land with row F's fix, no later: once a float
+chunk's max is unknown unless its NaN count is 0, partly bounded float chunks
+are routine rather than rare.
 
 **Aborts and memory errors on valid input:**
 
@@ -967,9 +998,11 @@ first.
 Done: HLL into `utils.HyperLogLog`; `Utf8`, `LikePattern` and `RegexPattern`
 into `utils/text.mojo`, with `LikeKernel`/`ILikeKernel` one
 `MatchLikeKernel[ignore_case]`; concatenation as one typed `Builder.concat`
-default plus `DynBuilder.concat` and `RecordBatch.concat`, deleting
-`kernels/concat.mojo`; the SQL string kernels stating their own signatures
-instead of a `StringOperands` carrier with `uses_*` flags.
+default plus `DynBuilder.concat` and `RecordBatch.concat`, replacing the
+concat kernel (today's `kernels/concat.mojo` is the engine's parallel batch
+concatenation, which falls back to `StructBuilder.concat`); the SQL string
+kernels stating their own signatures instead of a `StringOperands` carrier
+with `uses_*` flags.
 
 Looked at and kept: `JoinKind.parse`, `CalendarUnit.parse`, the window
 kernels' `name`/`params` -- each is a value type owning its own spelling, and
@@ -991,6 +1024,32 @@ Open, each needing a design before code:
   `AddKernel`/`MinKernel`/`MaxKernel`'s `core`; a builder range-extend
   (arrow-rs `MutableArrayData.extend(source, start, end)`) as the one output
   path for take, filter and the conditionals.
+- **Prefix sums written by hand**, which the kernel foundations leave alone
+  and `Scan` can take up once it exists -- the design's running fold of a
+  binary kernel over a segment, the prefix sum being `Scan[AddKernel]`. Most
+  share their pass with other work; one is a plain scan:
+  - `kernels/filter.mojo:300-400`, binary-like filter: phase 1's set-bit walk
+    writes the running byte total as the output offsets while it filters the
+    validity; the bytes are copied in phase 2, a pass of its own.
+  - `kernels/filter.mojo:500-560`, list-like filter: the running child total
+    is the output offset, written while the walk marks each selected row's
+    child range.
+  - `kernels/filter.mojo:1006-1015`, `_take_present`: a gather of the indexed
+    lengths and a scan of them into the offsets, with the overflow check, in
+    a pass before the copy and apart from it -- a direct `Scan` candidate.
+  - `kernels/groupby.mojo:142-256`, `rows_by_group`: the per-stripe and
+    per-range counts become the write cursors the rows are dealt out by.
+  - `kernels/join.mojo:543-600`, `expand`: each stripe's pair count becomes
+    where that stripe writes its pairs.
+  - `kernels/partition.mojo:97-103`, `RadixHistogram`: the histogram becomes
+    a write cursor per (stripe, digit) for the scatter.
+  - `kernels/concat.mojo:108-134`, `_Pieces.add`: each input's output row and
+    byte position is the running total of the inputs added before it;
+    `rebased_offsets` only adds that position to the input's own offsets.
+- **The runtime lane's erased `possible_segments`** is one dtype ladder per
+  comparison kernel, 24 arms each; a body generic over `T.native` would let
+  the types sharing a native type (date, time, decimal and interval share the
+  integer bodies) share an arm. Unmeasured: measure it before adopting it.
 
 **`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
 `query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the

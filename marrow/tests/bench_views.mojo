@@ -3,10 +3,10 @@
 
 """Benchmarks for `BufferView`\'s value-level scans.
 
-`__contains__` is the one every caller shares — `RuntimeValue._null_zeros` and
-`DivisionBinary` both ask "is there a zero in this column" before deciding
-whether a division needs a validity bitmap at all, and a plan that divides
-asks it once per batch. It was a scalar loop until 2026-09-04; the scalar form
+`__contains__` answers "is there a zero in this column", the question a
+division asks once per batch before deciding whether it needs a validity
+bitmap at all — though neither expression lane asks it through this scan
+today (`backlog.md`). It was a scalar loop until 2026-09-04; the scalar form
 cost +45% on `bench_floordiv_int32_*`, which is what these exist to keep from
 coming back.
 

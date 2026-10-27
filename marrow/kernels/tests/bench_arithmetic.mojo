@@ -296,7 +296,7 @@ def bench_add_int32_1m_auto(mut b: Benchmark) raises:
 
 # ---------------------------------------------------------------------------
 # floordiv / mod — the two kernels whose lane corrects Mojo's rounding and
-# whose `apply` scans the divisor for zeros
+# substitutes 1 for a zero divisor
 # ---------------------------------------------------------------------------
 
 

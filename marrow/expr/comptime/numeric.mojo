@@ -13,9 +13,12 @@ pointer in the runtime lane: routing on a name would put every arithmetic
 kernel in every binary that builds any expression.
 """
 
+from std.builtin.rebind import downcast
+
 from ...errors import NotImplementedError
 from ...dtypes import DataType, DynType, Float64Type, Int64Type, NumericType
 from ...kernels.boolean import AndKernel
+from ...kernels.core import Partial, Prunable
 from ...kernels.numeric import (
     AbsKernel,
     AddKernel,
@@ -149,17 +152,18 @@ numeric `BinaryKernel`, so the SQL names stay free for the skipping verbs that
 
 
 # ---------------------------------------------------------------------------
-# DivisionBinary — `//` and `%`, whose divisor decides a null
+# PartialBinary — `//` and `%`, whose divisor decides a null
 # ---------------------------------------------------------------------------
-struct DivisionBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
-    NumericValue, Unnamed
-):
-    """`//` and `%`: `NumericBinary` plus SQL's NULL on a zero divisor.
+struct PartialBinary[
+    K: BinaryKernel & Partial, L: NumericValue, R: NumericValue
+](NumericValue, Unnamed):
+    """`NumericBinary` over a `Partial` kernel: SQL's NULL wherever the kernel
+    is undefined for the divisor — `//` and `%` by zero.
 
     Its own node rather than a flag on `NumericBinary` because the difference
-    is in the `Bound`: this one carries a third slot, the bits whose divisor is
-    non-zero, and a flag would make every `Add` and `Mul` in the tree carry it
-    too.
+    is in the `Bound`: this one carries a third slot, the rows where the kernel
+    is defined, and a flag would make every `Add` and `Mul` in the tree carry
+    it too.
 
     **It still fuses.** `lane` is `NumericBinary`'s — both operands inline into
     the one loop — and the only extra work is a pass over the divisor at bind
@@ -170,7 +174,7 @@ struct DivisionBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime Type = promote[Self.L.Type, Self.R.Type]
     comptime DivisorType = Self.R.Type.native
-    """The divisor's lane type, which the zero scan reads in."""
+    """The divisor's lane type, which `defined` reads it in."""
 
     comptime shape = Shape.columnar
     """Columnar regardless of the operands, as `ConditionalBinary` is.
@@ -184,12 +188,16 @@ struct DivisionBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     comptime Bound = Tuple[
         Self.L.Bound, Self.R.Bound, Optional[Bitmap[mut=False]]
     ]
-    """The operands' bounds, plus the rows where the divisor is non-zero.
+    """The operands' bounds, plus the rows where the kernel is defined.
 
-    `None` in the third slot when none is zero, which is the common case and
-    the same answer the erased path reaches through `nullif`: a validity
-    bitmap means "these rows *can* be null", so an all-set one would spend a
-    bit per row saying nothing."""
+    `None` in the third slot when every row is, which is the common case: a
+    validity bitmap means "these rows *can* be null", so an all-set one would
+    spend a bit per row saying nothing.
+
+    The erased path's `Partial.null_undefined` nulls the same rows but counts
+    only valid ones: where every zero divisor is already null, it answers the
+    divisor unchanged while this slot still holds a bitmap. The result is
+    identical; only the representation differs."""
 
     var l: Self.L
     var r: Self.R
@@ -201,13 +209,13 @@ struct DivisionBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        """Bind both operands, and mark the rows whose divisor is non-zero:
-        the lane's own `!= 0`, bit-packed by `views.apply`, and `None` when no
-        divisor is zero — the common case — so validity has nothing to do.
+        """Bind both operands, and mark the rows where the kernel is defined:
+        its `defined` over the divisor's lane, bit-packed by `views.apply`,
+        and `None` when every row is — the common case — so validity has
+        nothing to do.
 
         The divisor is read in its own type, before the promotion `lane`
-        applies: promotion only ever widens, and no widening turns a zero into
-        anything else.
+        applies, which `Partial` requires `defined` to be invariant under.
         """
         var lb = self.l.bind(batch, bindings)
         var rb = self.r.bind(batch, bindings)
@@ -215,18 +223,19 @@ struct DivisionBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         var mask = Bitmap.alloc_uninit(length)
 
         @always_inline
-        def nonzero[W: Int](i: Int) {imm} -> SIMD[DType.bool, W]:
-            return self.r.lane[W](rb, i).ne(0)
+        def defined[W: Int](i: Int) {imm} -> SIMD[DType.bool, W]:
+            return Self.K.defined(self.r.lane[W](rb, i))
 
-        apply[Self.DivisorType](mask.view(), nonzero)
+        apply[Self.DivisorType](mask.view(), defined)
         var bits = mask^.to_immutable()
-        var nonzero_rows = Optional[Bitmap[mut=False]](None)
+        var defined_rows = Optional[Bitmap[mut=False]](None)
         if bits.unset_count() > 0:
-            nonzero_rows = Optional(bits^)
-        return (lb^, rb^, nonzero_rows^)
+            defined_rows = Optional(bits^)
+        return (lb^, rb^, defined_rows^)
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        """Null where either operand is null **or** the divisor is zero."""
+        """Null where either operand is null **or** the kernel is undefined
+        for the divisor."""
         return Bitmap.intersect(
             Bitmap.intersect(
                 self.l.validity(bound[0]), self.r.validity(bound[1])
@@ -247,15 +256,15 @@ struct DivisionBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
 
-comptime Mod = DivisionBinary[ModKernel, _, _]
-comptime Floordiv = DivisionBinary[FloordivKernel, _, _]
+comptime Mod = PartialBinary[ModKernel, _, _]
+comptime Floordiv = PartialBinary[FloordivKernel, _, _]
 """`//` and `%` — SQL's, as of the fix to the three golden xfails.
 
 `//` truncates toward zero and `%` takes the sign of the **dividend**, so
 `-1 // 3` is 0 and `-1 % 3` is -1, and `a == (a // b) * b + a % b` still holds.
 A zero divisor is NULL rather than a number. Mojo's own operators are Python's
 on all three counts; the kernels correct for it in `core`, and this node
-supplies the validity a SIMD lane cannot.
+supplies, from their `defined`, the validity a SIMD lane cannot.
 """
 
 
@@ -468,11 +477,12 @@ struct NumericCompare[
     ) raises -> BoolArray:
         """Which chunks could hold a row this comparison keeps.
 
-        **The operator is never enumerated — `K.apply` *is* the operator**, the
-        same kernel that decides which rows match, run over one statistic per
-        chunk instead of one value per row. Only *which* statistic each side
-        reads is a choice, and it is the extreme pair that decides it: `l < r`
-        is possible exactly when `min(l) < max(r)`.
+        **The operator is never enumerated — the kernel owns its rule.** A
+        `Prunable` kernel tells from both sides' `[min, max]` whether any pair
+        inside them may match, under the total order (NaN greatest), which
+        contains every comparison's own order, so a kernel without `nan_safe`
+        prunes soundly too. The node only gathers the bounds per chunk. A
+        kernel that is not `Prunable` (`!=`) keeps every chunk.
 
         **Every operand answers in `ArgType`**, because that is what this asks
         them for — so there is no unwrap here and no dtype check. An operand
@@ -481,36 +491,31 @@ struct NumericCompare[
         binary that filters; reading a few extra chunks is much the cheaper
         trade, and the leaf makes it.
         """
-        # A chunk where either operand has no non-null value cannot produce a
-        # surviving row, whatever the bounds say — the one skip that needs no
-        # statistics at all.
-        var live = AndKernel.apply(self.l.defined(index), self.r.defined(index))
-        var lo = self.l.statistics[Self.ArgType](index, bindings, upper=False)
-        var hi = self.l.statistics[Self.ArgType](index, bindings, upper=True)
-        var rlo = self.r.statistics[Self.ArgType](index, bindings, upper=False)
-        var rhi = self.r.statistics[Self.ArgType](index, bindings, upper=True)
-
-        comptime if (
-            Self.K.name == LtKernel.name or Self.K.name == LeKernel.name
-        ):
+        comptime if conforms_to(Self.K, Prunable):
+            # A chunk where either operand has no non-null value cannot produce
+            # a surviving row, whatever the bounds say — the one skip that needs
+            # no statistics at all.
+            var live = AndKernel.apply(
+                self.l.defined(index), self.r.defined(index)
+            )
+            var lo = self.l.statistics[Self.ArgType](
+                index, bindings, upper=False
+            )
+            var hi = self.l.statistics[Self.ArgType](
+                index, bindings, upper=True
+            )
+            var rlo = self.r.statistics[Self.ArgType](
+                index, bindings, upper=False
+            )
+            var rhi = self.r.statistics[Self.ArgType](
+                index, bindings, upper=True
+            )
             return AndKernel.apply(
                 live,
-                Self.K.apply(lo, rhi),
+                downcast[Self.K, Prunable].possible_segments[Self.ArgType](
+                    lo, hi, rlo, rhi
+                ),
             )
-        elif Self.K.name == GtKernel.name or Self.K.name == GeKernel.name:
-            return AndKernel.apply(
-                live,
-                Self.K.apply(hi, rlo),
-            )
-        elif Self.K.name == EqKernel.name:
-            # Equality is interval overlap: possible exactly when neither side
-            # lies wholly beyond the other. `nan_safe` to match the order this
-            # lane *evaluates* under — pruning a chunk with an IEEE `<=` while
-            # the predicate runs a total one would drop a row group the query
-            # matches.
-            var below = LeKernel[nan_safe=True].apply(lo, rhi)
-            var above = GeKernel[nan_safe=True].apply(hi, rlo)
-            return AndKernel.apply(live, AndKernel.apply(below, above))
         else:
             return keep_every(index.chunks())
 

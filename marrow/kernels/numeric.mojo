@@ -56,7 +56,7 @@ from ..dtypes import (
     BinaryLikeType,
     BoolType,
 )
-from .core import Kernel, family
+from .core import Kernel, Partial, Prunable, family
 from .boolean import NotKernel, XorKernel
 from .string import StringEqKernel
 from ..execution import ExecContext
@@ -243,8 +243,10 @@ struct DivKernel(BinaryKernel):
         traps on both and LLVM leaves both undefined. Dividing by 1 there
         leaves `MIN`, the two's-complement wrap of `MIN // -1`, and a
         remainder of 0, which is exact. `FloordivKernel` and `ModKernel`
-        divide by it too."""
-        return (b.eq(0) | Self.overflows(a, b)).select(SIMD[T, W](1), b)
+        divide by it too, and its zero test is `FloordivKernel.defined`."""
+        return (~FloordivKernel.defined[T, W](b) | Self.overflows(a, b)).select(
+            SIMD[T, W](1), b
+        )
 
     @always_inline
     @staticmethod
@@ -284,8 +286,15 @@ struct DivKernel(BinaryKernel):
             return a / b
 
 
-struct FloordivKernel(BinaryKernel):
+struct FloordivKernel(BinaryKernel, Partial):
     comptime name = "floordiv"
+
+    @always_inline
+    @staticmethod
+    def defined[T: DType, W: Int](b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        """A non-zero divisor; `-0.0` is a zero. `DivKernel.divisor`
+        replaces every lane this rejects with 1."""
+        return b.ne(0)
 
     @always_inline
     @staticmethod
@@ -298,7 +307,8 @@ struct FloordivKernel(BinaryKernel):
           a null, so it divides by 1 — a value, not an answer. Turning that
           row into SQL's NULL is the expression layer's job, not this one's:
           `pyarrow.compute`, whose names these mirror, does not null either.
-          Both lanes do it, `DivisionBinary` and `RuntimeValue._null_zeros`.
+          Both lanes do it through `defined`: `PartialBinary` and
+          `Partial.null_undefined`.
         - **The rounding, integers only.** Floored and truncated division
           differ by one quotient step, and only where the signs differ and the
           division is inexact; `a - q * d` is that remainder, a multiply rather
@@ -320,8 +330,14 @@ struct FloordivKernel(BinaryKernel):
             return q
 
 
-struct ModKernel(BinaryKernel):
+struct ModKernel(BinaryKernel, Partial):
     comptime name = "modulo"
+
+    @always_inline
+    @staticmethod
+    def defined[T: DType, W: Int](b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        """`FloordivKernel`'s rule: both divide by `DivKernel.divisor`."""
+        return FloordivKernel.defined[T, W](b)
 
     @always_inline
     @staticmethod
@@ -711,7 +727,7 @@ struct EqualKernel(Kernel):
             )
 
 
-struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):
+struct EqKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     """Equality. `nan_safe=True` additionally makes a NaN equal itself.
 
     The parameter exists because marrow needs both answers and they differ on
@@ -726,13 +742,14 @@ struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):
     """
 
     # Constant, and deliberately not read off `nan_safe`: this is the
-    # *operator's* name and both parameterizations are equality. It reaches plan
-    # rendering (`NumericCompare.write_to`) and the pruning rule's
-    # `Self.K.name == EqKernel.name` test, so making it vary printed
-    # `equal_nan_safe(a, 1)` in `explain()` and silently dropped zone-map
-    # pruning for every equality predicate. A comptime member that does *not*
-    # read the struct parameter resolves off the unbound name too, which is why
-    # the siblings can say `GtKernel.name`.
+    # *operator's* name and both parameterizations are equality. It reaches
+    # plan rendering (`NumericCompare.write_to`), where a varying name printed
+    # `equal_nan_safe(a, 1)` in `explain()`, and `equates`, which tests
+    # `Self.K.name == EqKernel.name`. That test is why it stays constant: a
+    # name that varied with `nan_safe` would make `equates` false for every
+    # comptime equality and silently drop its decorrelation join keys. A
+    # comptime member that does *not* read the struct parameter resolves off
+    # the unbound name too, which is why the siblings can say `GtKernel.name`.
     comptime name = "equal"
 
     @always_inline
@@ -744,6 +761,19 @@ struct EqKernel[nan_safe: Bool = False](NumericCompareKernel):
             return a.eq(b) | (math.isnan(a) & math.isnan(b))
         else:
             return a.eq(b)
+
+    @always_inline
+    @staticmethod
+    def possible[
+        T: DType, W: Int
+    ](
+        lmin: SIMD[T, W], lmax: SIMD[T, W], rmin: SIMD[T, W], rmax: SIMD[T, W]
+    ) -> SIMD[DType.bool, W]:
+        """The intervals overlap under the total order: neither lies wholly
+        beyond the other."""
+        var below = LeKernel[nan_safe=True].core[T, W](lmin, rmax)
+        var above = GeKernel[nan_safe=True].core[T, W](lmax, rmin)
+        return below & above
 
     @always_inline
     @staticmethod
@@ -783,7 +813,7 @@ struct NeKernel[nan_safe: Bool = False](NumericCompareKernel):
         return ~EqKernel[Self.nan_safe].core[T, W](a, b)
 
 
-struct LtKernel[nan_safe: Bool = False](NumericCompareKernel):
+struct LtKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     """Ordering. `nan_safe=True` adopts SQL's total order, where NaN is greater
     than every number and than `inf` — DuckDB 1.5.5, DataFusion 54 and Polars
     1.43 all answer `nan > 1.0` true."""
@@ -802,8 +832,19 @@ struct LtKernel[nan_safe: Bool = False](NumericCompareKernel):
         else:
             return a.lt(b)
 
+    @always_inline
+    @staticmethod
+    def possible[
+        T: DType, W: Int
+    ](
+        lmin: SIMD[T, W], lmax: SIMD[T, W], rmin: SIMD[T, W], rmax: SIMD[T, W]
+    ) -> SIMD[DType.bool, W]:
+        """The left's least value against the right's greatest, under the
+        total order."""
+        return LtKernel[nan_safe=True].core[T, W](lmin, rmax)
 
-struct LeKernel[nan_safe: Bool = False](NumericCompareKernel):
+
+struct LeKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     """Ordering — see `LtKernel`. Under the total order a NaN is also `<=` a NaN,
     which IEEE denies."""
 
@@ -819,8 +860,19 @@ struct LeKernel[nan_safe: Bool = False](NumericCompareKernel):
         else:
             return a.le(b)
 
+    @always_inline
+    @staticmethod
+    def possible[
+        T: DType, W: Int
+    ](
+        lmin: SIMD[T, W], lmax: SIMD[T, W], rmin: SIMD[T, W], rmax: SIMD[T, W]
+    ) -> SIMD[DType.bool, W]:
+        """The left's least value against the right's greatest, under the
+        total order."""
+        return LeKernel[nan_safe=True].core[T, W](lmin, rmax)
 
-struct GtKernel[nan_safe: Bool = False](NumericCompareKernel):
+
+struct GtKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     comptime name = "greater"
 
     @always_inline
@@ -834,8 +886,19 @@ struct GtKernel[nan_safe: Bool = False](NumericCompareKernel):
         else:
             return a.gt(b)
 
+    @always_inline
+    @staticmethod
+    def possible[
+        T: DType, W: Int
+    ](
+        lmin: SIMD[T, W], lmax: SIMD[T, W], rmin: SIMD[T, W], rmax: SIMD[T, W]
+    ) -> SIMD[DType.bool, W]:
+        """The left's greatest value against the right's least, under the
+        total order."""
+        return GtKernel[nan_safe=True].core[T, W](lmax, rmin)
 
-struct GeKernel[nan_safe: Bool = False](NumericCompareKernel):
+
+struct GeKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     """Ordering — see `LtKernel`. Under the total order a NaN is also `>=` a NaN.
     """
 
@@ -850,3 +913,14 @@ struct GeKernel[nan_safe: Bool = False](NumericCompareKernel):
             return a.ge(b) | math.isnan(a)
         else:
             return a.ge(b)
+
+    @always_inline
+    @staticmethod
+    def possible[
+        T: DType, W: Int
+    ](
+        lmin: SIMD[T, W], lmax: SIMD[T, W], rmin: SIMD[T, W], rmax: SIMD[T, W]
+    ) -> SIMD[DType.bool, W]:
+        """The left's greatest value against the right's least, under the
+        total order."""
+        return GeKernel[nan_safe=True].core[T, W](lmax, rmin)

@@ -357,40 +357,35 @@ def test_runtime_arithmetic_over_two_columns() raises:
 
 
 def test_runtime_division_by_zero_on_a_sliced_batch() raises:
-    """A *sliced* divisor puts its nulls at the right rows.
+    """A *sliced* divisor holding a zero and a null puts both nulls on their
+    own rows, as `test_division_by_zero_is_null_on_a_sliced_batch` asks of
+    the fused lane.
 
-    This is the case a hand-written mask got wrong: it built a bitmap indexed
-    from 0 while keeping the column's `offset`, so every null landed `offset`
-    rows away from the zero that caused it. Answering it with `nullif` — which
-    already knows about offsets — is what fixed it, and this pins that rather
-    than the implementation.
-
-    `b` is [10, 20, 30, 40] and the slice drops the first row, so the divisor
-    [0, 30, 40] has its zero at slice-relative row 0 and the batch it came
-    from has none there at all.
+    A hand-written mask once got this wrong: it built a bitmap indexed from 0
+    while keeping the column's `offset`, so every null landed `offset` rows
+    away from the zero that caused it. The slice drops the parent's first
+    row, itself a zero, so that mistake cannot pass here.
     """
+    var divisors: List[Optional[Int]] = [0, 5, 0, None, 25]
     var full = record_batch(
         [
-            array([100, 100, 100, 100], int64).copy(),
-            array([5, 0, 30, 40], int64).copy(),
+            array([100, 100, 100, 100, 100], int64).copy(),
+            array(divisors, int64).copy(),
         ],
         names=["a", "b"],
     )
-    var sliced = full.slice(1, 3)
-    var out = (
-        floordiv(column("a"), column("b"))
-        .evaluate(sliced.to_struct_array(), Bindings())
-        .to_array(3)
-    )
-    assert_equal(out.null_count(), 1)
-    assert_false(out.is_valid(0))
-    assert_equal(out.as_int64()[1].value(), 3)
-    assert_equal(out.as_int64()[2].value(), 2)
+    var batch = full.slice(1, 4).to_struct_array()
+    var quotients: List[Optional[Int]] = [20, None, None, 4]
+    var got = floordiv(column("a"), column("b")).evaluate(batch, Bindings())
+    assert_true(got.to_array(4).as_int64() == array(quotients, int64))
+    var remainders: List[Optional[Int]] = [0, None, None, 0]
+    got = mod(column("a"), column("b")).evaluate(batch, Bindings())
+    assert_true(got.to_array(4).as_int64() == array(remainders, int64))
 
 
 def test_runtime_division_follows_sql_like_the_fused_lane() raises:
     """`//` truncates toward zero, `%` takes the dividend's sign, and a zero
-    divisor is NULL — the same three answers `DivisionBinary` gives, reached
+    divisor is NULL — the same three answers `PartialBinary` gives, reached
     here through `FloordivKernel.apply` instead of through a fused lane. Two
     implementations of one rule is exactly how the lanes drift."""
     assert_true(
@@ -400,6 +395,27 @@ def test_runtime_division_follows_sql_like_the_fused_lane() raises:
     var by_zero = _ints(floordiv(column("b"), _lit(0)))
     assert_equal(by_zero.null_count(), 4)
     assert_equal(_ints(mod(column("b"), _lit(0))).null_count(), 4)
+
+
+def test_runtime_floordiv_by_negative_zero_is_null() raises:
+    """`-0.0` is a zero (`-0.0 == 0`), so a float `//` or `%` by it is NULL,
+    as `test_floordiv_by_negative_zero_is_null` asks of the fused lane."""
+    var negative_zero = -Float64(0.0)
+    assert_true(Float64(1.0) / negative_zero < 0.0)  # the sign survived
+    var divisors: List[Optional[Float64]] = [negative_zero, 2.0]
+    var batch = record_batch(
+        [
+            array([1.0, 2.0], float64).copy(),
+            array(divisors, float64).copy(),
+        ],
+        names=["a", "b"],
+    ).to_struct_array()
+    var quotients: List[Optional[Float64]] = [None, 1.0]
+    var got = (build_col("a") // build_col("b")).evaluate(batch, Bindings())
+    assert_true(got.to_array(2).as_float64() == array(quotients, float64))
+    var remainders: List[Optional[Float64]] = [None, 0.0]
+    got = (build_col("a") % build_col("b")).evaluate(batch, Bindings())
+    assert_true(got.to_array(2).as_float64() == array(remainders, float64))
 
 
 def test_runtime_arithmetic_propagates_nulls() raises:
@@ -430,8 +446,8 @@ def test_runtime_division_by_zero_is_an_infinity_not_a_null() raises:
     """`/` by zero has a value where `//` and `%` have a null.
 
     `_float_binary` casts to `float64` and hands the divisor to the kernel
-    untouched, where `//` and `%` wrap theirs in `_null_zeros` first — the
-    whole of the difference from
+    untouched, where `//` and `%` pass theirs through `null_undefined` first —
+    the whole of the difference from
     `test_runtime_division_follows_sql_like_the_fused_lane` above.
     """
     var got = _ints(truediv(column("b"), _lit(0))).as_float64().copy()

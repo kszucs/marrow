@@ -1268,7 +1268,7 @@ trait NumericValue(PrimitiveValue):
     # The three operators whose answer is *not* the wider operand. `/` and
     # `**` produce `float64` whatever went in, so they route to `FloatBinary`
     # rather than `NumericBinary`; `%` and `//` stay in the operand type but
-    # decide a null from their divisor, so they route to `DivisionBinary`.
+    # decide a null from their divisor, so they route to `PartialBinary`.
 
     def __truediv__[Rhs: NumericValue](self, o: Rhs) -> Div[Self, Rhs]:
         """True division: `5 / 2` is 2.5, not 2. PyArrow's `divide` answers 2
