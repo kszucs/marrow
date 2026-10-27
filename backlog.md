@@ -1024,9 +1024,10 @@ Open, each needing a design before code:
   `MutableArrayData.extend(source, start, end)`) as the one output path for
   take, filter and the conditionals.
 - **Prefix sums written by hand**, which the kernel foundations leave alone
-  and `Scan` can take up once it exists -- the design's running fold of a
-  binary kernel over a segment, the prefix sum being `Scan[AddKernel]`. Most
-  share their pass with other work; one is a plain scan:
+  and `Scan` (`kernels/scan.mojo`) can now take up -- the running fold of a
+  binary kernel over a segment, the prefix sum being `SumScan`,
+  `Scan[AddKernel]`. Most share their pass with other work; one is a plain
+  scan:
   - `kernels/filter.mojo:300-400`, binary-like filter: phase 1's set-bit walk
     writes the running byte total as the output offsets while it filters the
     validity; the bytes are copied in phase 2, a pass of its own.
@@ -1049,6 +1050,47 @@ Open, each needing a design before code:
   comparison kernel, 24 arms each; a body generic over `T.native` would let
   the types sharing a native type (date, time, decimal and interval share the
   integer bodies) share an arm. Unmeasured: measure it before adopting it.
+
+**Deferred by kernel-foundations step 3**, each waiting for the caller
+named:
+
+- `Segmented.reduce_with[K]`, a per-segment fold of `K(child, operand[s])`
+  without materialising the broadcast, waits for the `ArrayContainsKernel`
+  rewrite, its one caller; that also needs `Out` (step 6a) and an any-fold
+  over bools, which `AnyKernel`, a bitmap `BoolReduceKernel`, is not.
+- `PerSegment` (one value per segment) and `Segments.of`, with `BySize`'s
+  power-of-two shift, wait for step 5's `broadcast` or step 6's
+  `FittedPack`; `Segmented.reduce` answers a typed `PrimitiveArray` until
+  then.
+- `ScanKernel` waits for step 6, where `Shift[k]`, `Lagged` and `Compose`
+  conform beside `Scan`, which has its member shape already. `MinScan`,
+  `MaxScan` and `ProductScan` wait for a caller: `CumulativeKernel` names
+  `Scan[K]`.
+- `Scan` has no parallel path: no caller asks for one.
+- The Parquet writer computes each page's bounds as it emits the page.
+  One `BoundsKernel` call over a chunk's pages, as `ByEnds` segments, means
+  collecting the page boundaries first, filling the `ColumnIndex` after the
+  loop and segmenting `Statistics.min_max`; no measurement asks for it.
+- `pairwise_diff` refuses temporal columns, where PyArrow answers a
+  duration. List aggregates and rolling windows take numeric children and
+  columns only.
+- Options refused with `NotImplementedError` until a caller needs them:
+  `cumulative_*(start=)`, `shift(fill_value=)`, `rolling_*(weights=)`.
+- `rolling_*` over a column without nulls counts each row's valid rows one
+  at a time, then makes a bitmap pass: only edge rows can fall short of
+  `min_samples`, so one `set_range` per segment would do for
+  `RollingKernel`, and `RollingMeanKernel` could take the clipped width
+  from the row inside its lane. Unmeasured.
+- van Herk-Gil-Werman's vector interior takes a vector modulo per register,
+  which lowers to one scalar division per row: lane phases computed once
+  per segment and advanced by `W % w` (one conditional subtraction) would
+  avoid it. Unmeasured.
+- `Segmented._fold` and `views._reduce_serial` (behind `Fold.reduce`) are
+  two register-fold loops of one shape; they become one when `fold_lanes`
+  gains its step-5 and step-6 callers.
+- Whether a CPU-only kernel should refuse a GPU `ctx` rather than run on
+  the CPU, tree-wide: sort, take and the order kernels run on the host
+  today.
 
 **`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
 `query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the
