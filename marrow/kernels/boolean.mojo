@@ -138,10 +138,7 @@ def _kleene[
     var valid = partial.view() | both_valid.view()
 
     var valid_bm = valid.to_immutable()
-    var nulls = valid_bm.unset_count()
-    return BoolArray(
-        length=n, nulls=nulls, offset=0, bitmap=valid_bm^, buffer=data^
-    )
+    return BoolArray(length=n, validity=valid_bm^, buffer=data^)
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +239,7 @@ struct XorKernel(BoolBinaryKernel):
         var b_valid = _validity_ones(right)
         var valid = a_valid.view() & b_valid.view()
         var valid_bm = valid.to_immutable()
-        var nulls = valid_bm.unset_count()
-        return BoolArray(
-            length=n, nulls=nulls, offset=0, bitmap=valid_bm^, buffer=data^
-        )
+        return BoolArray(length=n, validity=valid_bm^, buffer=data^)
 
 
 # ---------------------------------------------------------------------------

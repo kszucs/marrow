@@ -639,9 +639,7 @@ trait StringPredicateKernel(Kernel):
                     data.set(i)
         return BoolArray(
             length=n,
-            nulls=bm.value().unset_count() if bm else 0,
-            offset=0,
-            bitmap=bm,
+            validity=bm,
             buffer=data.to_immutable(),
         )
 
@@ -831,9 +829,7 @@ struct MatchLikeKernel[ignore_case: Bool](StringPredicateKernel):
                     data.set(i)
         return BoolArray(
             length=n,
-            nulls=bm.value().unset_count() if bm else 0,
-            offset=0,
-            bitmap=bm,
+            validity=bm,
             buffer=data.to_immutable(),
         )
 

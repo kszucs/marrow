@@ -662,6 +662,26 @@ struct BoolArray(Array):
             length=length, nulls=0, offset=0, bitmap=None, buffer=buffer^
         )
 
+    # Inlined: called out of line it grows every fused AOT binary.
+    @always_inline
+    def __init__(
+        out self,
+        *,
+        length: Int,
+        var validity: Optional[Bitmap[mut=False]],
+        var buffer: Bitmap[mut=False],
+    ):
+        """`length` values from `buffer`, valid where `validity` is set (all of
+        them when it is None)."""
+        var nulls = validity.value().unset_count() if validity else 0
+        self = Self(
+            length=length,
+            nulls=nulls,
+            offset=0,
+            bitmap=validity^,
+            buffer=buffer^,
+        )
+
     def __init__[
         A: Array
     ](out self, *, like: A, buffer: Bitmap[mut=False]) raises:
@@ -906,6 +926,27 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         """`length` values of `dtype` from `buffer`, every one valid."""
         self = Self(
             dtype, length=length, nulls=0, offset=0, bitmap=None, buffer=buffer
+        )
+
+    # Inlined: called out of line it grows every fused AOT binary.
+    @always_inline
+    def __init__(
+        out self,
+        dtype: Self.T,
+        *,
+        length: Int,
+        validity: Optional[Bitmap[mut=False]],
+        buffer: Buffer[mut=False],
+    ):
+        """`length` values of `dtype` from `buffer`, valid where `validity` is
+        set (all of them when it is None)."""
+        self = Self(
+            dtype,
+            length=length,
+            nulls=validity.value().unset_count() if validity else 0,
+            offset=0,
+            bitmap=validity,
+            buffer=buffer,
         )
 
     def __init__[

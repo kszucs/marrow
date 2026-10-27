@@ -489,9 +489,7 @@ trait PrimitiveValue(ComptimeValue):
                     Self.Type
                 ](),
                 length=length,
-                nulls=v.value().unset_count() if v else 0,
-                offset=0,
-                bitmap=v,
+                validity=v,
                 buffer=buf.to_immutable(),
             )
             return arr^.to_dyn()
@@ -1926,9 +1924,7 @@ trait BoolValue(ComptimeValue):
         return Datum(
             BoolArray(
                 length=length,
-                nulls=v.value().unset_count() if v else 0,
-                offset=0,
-                bitmap=v^,
+                validity=v^,
                 buffer=bits.to_immutable(),
             ).to_dyn()
         )

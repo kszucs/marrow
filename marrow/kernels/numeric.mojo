@@ -126,9 +126,7 @@ trait BinaryKernel(Kernel):
         return PrimitiveArray[T](
             dtype=left.dtype.copy(),
             length=length,
-            nulls=bm.value().unset_count() if bm else 0,
-            offset=0,
-            bitmap=bm,
+            validity=bm,
             buffer=buf.to_immutable(),
         )
 
@@ -589,9 +587,7 @@ def _binary_cmp[
     apply[native, func](left.values(), right.values(), result.view(), ctx)
     return BoolArray(
         length=length,
-        nulls=bm.value().unset_count() if bm else 0,
-        offset=0,
-        bitmap=bm,
+        validity=bm,
         buffer=result.to_immutable(),
     )
 

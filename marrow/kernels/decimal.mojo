@@ -267,9 +267,7 @@ trait DecimalBinaryKernel(Kernel):
         return PrimitiveArray[T](
             dtype=output,
             length=length,
-            nulls=bm.value().unset_count() if bm else 0,
-            offset=0,
-            bitmap=bm,
+            validity=bm,
             buffer=buf.to_immutable(),
         )
 

@@ -2534,6 +2534,32 @@ def test_all_valid_constructors() raises:
     assert_true(rows.is_valid(0))
 
 
+def test_validity_constructors() raises:
+    # validity= counts the nulls from the bitmap; None means all valid.
+    var bits = Bitmap.alloc_zeroed(3)
+    bits.set(0)
+    bits.set(2)
+    var validity = bits^.to_immutable()
+
+    var ints = array([1, 2, 3], int32)
+    var prim = Int32Array(
+        int32, length=3, validity=validity, buffer=ints.buffer
+    )
+    assert_true(prim == array([1, None, 3], int32))
+    var dense = Int32Array(int32, length=3, validity=None, buffer=ints.buffer)
+    assert_equal(dense.null_count(), 0)
+    assert_false(dense.bitmap)
+
+    var bools = BoolArray(
+        length=3,
+        validity=validity,
+        buffer=Bitmap.alloc_zeroed(3).to_immutable(),
+    )
+    assert_equal(bools.null_count(), 1)
+    assert_true(bools.is_null(1))
+    assert_true(bools.is_valid(2))
+
+
 def test_dictionary_array_data_roundtrip() raises:
     var vb = StringBuilder()
     vb.append("x")
