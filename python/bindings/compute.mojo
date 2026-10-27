@@ -81,6 +81,23 @@ def _cumulative[
     return wrapper
 
 
+def _offset[
+    f: def(DynArray, Int, ExecContext) raises thin -> DynArray,
+]() -> def(
+    PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    """``(array, offset, ctx) -> array``."""
+
+    def wrapper(
+        array: PythonObject, offset: PythonObject, ctx: PythonObject
+    ) raises -> PythonObject:
+        return f(
+            DynArray(py=array), Int(py=offset), ExecContext(py=ctx)
+        ).to_python_object()
+
+    return wrapper
+
+
 def _reduce[
     f: def(BoolArray, Bool, Int, ExecContext) raises thin -> BoolScalar,
 ]() -> def(
@@ -331,3 +348,5 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_cumulative[mk.CumulativeKernel[mk.MaxKernel].dispatch]()](
         "cumulative_max"
     )
+    mb.def_function[_offset[mk.ShiftKernel.dispatch]()]("shift")
+    mb.def_function[_offset[mk.PairwiseDiffKernel.dispatch]()]("pairwise_diff")

@@ -7,6 +7,7 @@
   second buffer, compared against `bench_views.bench_scan_int64_1m`, the
   in-place running sum it replaced.
 - `bench_cumulative_sum_int64_*`: `cumulative_sum` over a whole column, new.
+- `bench_pairwise_diff_int64_*`: `pairwise_diff` at period 1, new.
 
 Run with: pixi run -e dev pytest marrow/kernels/tests/bench_scan.mojo --benchmark
 """
@@ -17,7 +18,7 @@ from ...buffers import Buffer
 from ...builders import arange
 from ...dtypes import Int64Type
 from ...kernels.numeric import AddKernel
-from ...kernels.scan import CumulativeKernel, SumScan
+from ...kernels.scan import CumulativeKernel, PairwiseDiffKernel, SumScan
 from ...kernels.segments import BySize
 from ...utils.testing import Benchmark
 
@@ -74,3 +75,31 @@ def bench_cumulative_sum_int64_64k(mut b: Benchmark) raises:
 
 def bench_cumulative_sum_int64_1m(mut b: Benchmark) raises:
     _bench_cumulative(b, 1_000_000)
+
+
+def _bench_pairwise_diff(mut b: Benchmark, n: Int) raises:
+    var values = arange[Int64Type](0, n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(
+            PairwiseDiffKernel.apply(values, 1, BySize.whole(n)).unsafe_get(
+                n - 1
+            )
+        )
+
+    b.iter(call)
+    keep(values)
+
+
+def bench_pairwise_diff_int64_1k(mut b: Benchmark) raises:
+    _bench_pairwise_diff(b, 1_000)
+
+
+def bench_pairwise_diff_int64_64k(mut b: Benchmark) raises:
+    _bench_pairwise_diff(b, 64_000)
+
+
+def bench_pairwise_diff_int64_1m(mut b: Benchmark) raises:
+    _bench_pairwise_diff(b, 1_000_000)

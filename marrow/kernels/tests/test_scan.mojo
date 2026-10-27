@@ -9,12 +9,35 @@ from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from ...arrays import DynArray, Float64Array, Int64Array, PrimitiveArray
 from ...buffers import Buffer
-from ...builders import array
-from ...dtypes import float64, int32, int64
+from ...builders import (
+    Int32Builder,
+    Int64Builder,
+    ListBuilder,
+    TimestampBuilder,
+    array,
+)
+from ...dtypes import (
+    float64,
+    int8,
+    int32,
+    int64,
+    second,
+    timestamp,
+    uint8,
+)
 from ...views import BufferView, cpu_lanes
+from ...kernels.aggregate import SumFold
 from ...kernels.core import BinaryKernel, Identity
+from ...kernels.filter import TakeKernel
+from ...kernels.nested import ArrayLengthKernel, ListReduceKernel
 from ...kernels.numeric import AddKernel, MaxKernel, MinKernel, MulKernel
-from ...kernels.scan import CumulativeKernel, Scan, SumScan
+from ...kernels.scan import (
+    CumulativeKernel,
+    PairwiseDiffKernel,
+    Scan,
+    ShiftKernel,
+    SumScan,
+)
 from ...kernels.segments import ByEnds, BySize, Segments
 
 
@@ -263,3 +286,139 @@ def test_cumulative_dispatch_rejects_non_numeric() raises:
     var strings: DynArray = array(["a", "b"])
     with assert_raises(contains="not numeric"):
         _ = CumulativeKernel[AddKernel].dispatch(strings, True)
+
+
+# ---------------------------------------------------------------------------
+# ShiftKernel
+# ---------------------------------------------------------------------------
+
+
+def test_shift_offset_copy_matches_take() raises:
+    var b = Int64Builder(40)
+    for i in range(40):
+        if i % 5 == 0:
+            b.append_null()
+        else:
+            b.append(Int64(i * 3 - 7))
+    var values = b.finish().slice(3)
+    var n = len(values)
+    for offset in range(-n - 1, n + 2):
+        var idx = Int32Builder(n)
+        for i in range(n):
+            var src = i - offset
+            if src >= 0 and src < n:
+                idx.append(Int32(src))
+            else:
+                idx.append_null()
+        var expected = TakeKernel.apply(values, idx.finish())
+        var got = ShiftKernel.apply(values, offset, BySize.whole(n))
+        assert_true(got == expected, String("offset ", offset))
+        _payloads_zero_at_nulls(got)
+
+
+def _null_rows(result: Int64Array) -> List[Int]:
+    var rows = List[Int]()
+    for i in range(len(result)):
+        if not result.is_valid(i):
+            rows.append(i)
+    return rows^
+
+
+def test_shift_fills_each_segment_edge() raises:
+    var values = array([1, 2, 3, 4, 5, 6, 7], int64)
+    var lag = ShiftKernel.apply(values, 1, BySize(7, 3))
+    assert_true(_null_rows(lag) == [0, 3, 6])
+    assert_true(lag == array([None, 1, 2, None, 4, 5, None], int64))
+    var lead = ShiftKernel.apply(values, -1, BySize(7, 3))
+    assert_true(_null_rows(lead) == [2, 5, 6])
+    assert_true(lead == array([2, 3, None, 5, 6, None, None], int64))
+
+
+def test_shift_non_primitive_layouts() raises:
+    """Polars' answers."""
+    var strings: DynArray = array(["a", "b", None])
+    assert_true(
+        ShiftKernel.dispatch(strings, 1).as_string() == array([None, "a", "b"])
+    )
+    var bools: DynArray = array([True, False, None])
+    assert_true(
+        ShiftKernel.dispatch(bools, 1).as_bool() == array([None, True, False])
+    )
+    var b = ListBuilder(Int64Builder())
+    var child_any = b.values()
+    ref child = child_any.as_int64()
+    child.append(1)
+    child.append(2)
+    b.append_valid()  # [1, 2]
+    child.append(3)
+    b.append_valid()  # [3]
+    child.append(4)
+    child.append(5)
+    child.append(6)
+    b.append_valid()  # [4, 5, 6]
+    var lists: DynArray = b.finish()
+    var lead = ShiftKernel.dispatch(lists, -1)  # [[3], [4, 5, 6], null]
+    assert_true(
+        ArrayLengthKernel.dispatch(lead).as_int32()
+        == array([1, 3, None], int32)
+    )
+    assert_true(
+        ListReduceKernel[SumFold].dispatch(lead).as_int64()
+        == array([3, 15, None], int64)
+    )
+
+
+# ---------------------------------------------------------------------------
+# PairwiseDiffKernel
+# ---------------------------------------------------------------------------
+
+
+def test_pairwise_diff_periods() raises:
+    """Over a column and over a slice whose validity starts mid-byte."""
+    for values in [
+        array([5, 1, None, 7, 2], int64),
+        array([0, None, 3, 5, 1, None, 7, 2], int64).slice(3),
+    ]:
+        var n = len(values)
+        for period in range(-6, 7):
+            var expected = Int64Builder(n)
+            for i in range(n):
+                var j = i - period
+                if (
+                    j >= 0
+                    and j < n
+                    and values.is_valid(i)
+                    and values.is_valid(j)
+                ):
+                    expected.append(values.unsafe_get(i) - values.unsafe_get(j))
+                else:
+                    expected.append_null()
+            var got = PairwiseDiffKernel.apply(values, period, BySize.whole(n))
+            assert_true(got == expected.finish(), String("period ", period))
+            _payloads_zero_at_nulls(got)
+
+
+def test_pairwise_diff_wraps() raises:
+    assert_true(
+        PairwiseDiffKernel.apply(array([1, 0], uint8), 1, BySize.whole(2))
+        == array([None, 255], uint8)
+    )
+    assert_true(
+        PairwiseDiffKernel.apply(array([-128, 127], int8), 1, BySize.whole(2))
+        == array([None, -1], int8)
+    )
+
+
+def test_pairwise_diff_per_segment() raises:
+    var values = array([1, 3, 6, 10, 15, 21], int64)
+    var got = PairwiseDiffKernel.apply(values, 1, BySize(6, 3))
+    assert_true(got == array([None, 2, 3, None, 5, 6], int64))
+
+
+def test_pairwise_diff_rejects_temporal() raises:
+    var t = TimestampBuilder(timestamp(second, "UTC"), 2)
+    t.append(Int64(1))
+    t.append(Int64(5))
+    var stamps: DynArray = t.finish()
+    with assert_raises(contains="not numeric"):
+        _ = PairwiseDiffKernel.dispatch(stamps, 1)

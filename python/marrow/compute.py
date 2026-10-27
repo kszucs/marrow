@@ -146,6 +146,31 @@ def cumulative_max(values, start=None, *, skip_nulls=False, memory_pool=None, ct
     )
 
 
+# ── Order ────────────────────────────────────────────────────────────────────
+
+
+def pairwise_diff(input, period=1, *, memory_pool=None, ctx=None):
+    """Each value minus the value *period* rows before it.
+
+    Equivalent to ``pyarrow.compute.pairwise_diff``: numeric input only, in its
+    own type, integers wrapping; the first *period* rows are null, and a
+    negative *period* reads ahead. PyArrow also takes temporal input, answering
+    a duration; this does not.
+    """
+    return Array.wrap(_ma.pairwise_diff(input.unwrap(), period, (ctx or _serial())))
+
+
+def shift(values, n=1, *, fill_value=None, ctx=None):
+    """*values* moved *n* rows down, nulls filling the rows left empty.
+
+    Equivalent to Polars' ``Series.shift``: a negative *n* moves the values up,
+    and every type is accepted.
+    """
+    if fill_value is not None:
+        raise NotImplementedError("fill_value is not implemented")
+    return Array.wrap(_ma.shift(values.unwrap(), n, (ctx or _serial())))
+
+
 # ── List aggregates ─────────────────────────────────────────────────────────
 
 

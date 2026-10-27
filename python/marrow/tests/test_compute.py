@@ -560,3 +560,43 @@ def test_cumulative_matches_pyarrow(name, type_, skip_nulls):
 def test_cumulative_start_is_not_implemented():
     with pytest.raises(NotImplementedError):
         ma.compute.cumulative_sum(ma.array([1, 2, 3]), start=1)
+
+
+# ── pairwise_diff, shift ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("period", [-3, -1, 0, 1, 2, 3, 9])
+@pytest.mark.parametrize(
+    "type_", [pa.int8(), pa.uint8(), pa.int64(), pa.float64()], ids=str
+)
+def test_pairwise_diff_matches_pyarrow(period, type_):
+    values = pa.array([5, 1, None, 7, 2, 9, 4], type_)
+    expected = pc.pairwise_diff(values, period=period)
+    result = pa.array(ma.compute.pairwise_diff(ma.array(values), period=period))
+    assert result.type == expected.type
+    assert result.to_pylist() == expected.to_pylist()
+
+
+@pytest.mark.parametrize(
+    "n, expected",
+    [
+        (1, [None, 1, 2, None, 4]),
+        (-2, [None, 4, 5, None, None]),
+        (0, [1, 2, None, 4, 5]),
+        (9, [None, None, None, None, None]),
+    ],
+)
+def test_shift_matches_polars(n, expected):
+    """Polars 1.43.2's answers."""
+    values = ma.array([1, 2, None, 4, 5])
+    assert pa.array(ma.compute.shift(values, n)).to_pylist() == expected
+
+
+def test_shift_strings_match_polars():
+    values = ma.array(["a", "b", None])
+    assert pa.array(ma.compute.shift(values, 1)).to_pylist() == [None, "a", "b"]
+
+
+def test_shift_fill_value_is_not_implemented():
+    with pytest.raises(NotImplementedError):
+        ma.compute.shift(ma.array([1, 2, 3]), 1, fill_value=0)
