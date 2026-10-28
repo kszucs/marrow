@@ -338,6 +338,24 @@ def test_bitmap_extend_at_offset() raises:
     assert_false(dst.test(7))
 
 
+def test_bitmap_extend_shifted_to_the_source_end() raises:
+    """A shifted copy of a source whose 512 bits fill its 64 bytes exactly,
+    and of one whose last bits reach into a further source byte."""
+    var src = Bitmap.alloc_zeroed(512)
+    for i in range(0, 512, 3):
+        src.set(i)
+    for length in [512, 509]:
+        for shift in range(1, 8):
+            var dst = Bitmap.alloc_zeroed(520)
+            dst.extend(src.view(), shift, length)
+            for i in range(length):
+                assert_equal(
+                    dst.test(shift + i),
+                    src.test(i),
+                    String("length ", length, " shift ", shift, " bit ", i),
+                )
+
+
 # ---------------------------------------------------------------------------
 # Bitmap — constructors
 # ---------------------------------------------------------------------------

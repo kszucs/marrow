@@ -98,7 +98,7 @@ from ...kernels.aggregate import (
     ValidCount,
     Windowable,
 )
-from ...kernels.window import WindowExtents, WindowFrame
+from ...kernels.window import WindowFrame, WindowSegments
 from ...schema import Schema
 from ..logical import (
     References,
@@ -619,7 +619,10 @@ struct RuntimeAggregateEvaluator(FrameEvaluator):
         self._frame = frame
 
     def run(
-        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self,
+        sorted: StructArray,
+        segments: WindowSegments,
+        ctx: ExecContext,
     ) raises -> DynArray:
         var d = self._input.dtype(self._schema)
 
@@ -631,7 +634,7 @@ struct RuntimeAggregateEvaluator(FrameEvaluator):
                     self._bindings.copy(),
                     self._frame,
                 )
-                return column.run(sorted, extents, ctx)
+                return column.run(sorted, segments, ctx)
             else:
                 var per_frame = PerFrameEvaluator(
                     RuntimeAggregate(
@@ -643,6 +646,6 @@ struct RuntimeAggregateEvaluator(FrameEvaluator):
                     self._bindings.copy(),
                     self._frame,
                 )
-                return per_frame.run(sorted, extents, ctx)
+                return per_frame.run(sorted, segments, ctx)
 
         return resolve_aggregate(self._name, d, job)

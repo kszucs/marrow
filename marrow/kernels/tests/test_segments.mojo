@@ -4,10 +4,17 @@
 """Segments and `Segmented.reduce`, against a scalar fold per segment."""
 
 from std.math import isnan, nan
-from std.testing import assert_equal, assert_false, assert_true
+from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
-from ...arrays import Int32Array, PrimitiveArray
-from ...builders import Int64Builder, PrimitiveBuilder, array
+from ...arrays import (
+    DynArray,
+    Float64Array,
+    Int32Array,
+    Int64Array,
+    PrimitiveArray,
+)
+from ...buffers import Buffer
+from ...builders import Float64Builder, Int64Builder, PrimitiveBuilder, array
 from ...dtypes import (
     Float64Type,
     Int8Type,
@@ -19,6 +26,7 @@ from ...dtypes import (
     int32,
     int64,
 )
+from ...execution import ExecContext
 from ...views import cpu_lanes
 from ...kernels.aggregate import (
     CountFold,
@@ -28,7 +36,9 @@ from ...kernels.aggregate import (
     MinFold,
     SumFold,
 )
-from ...kernels.segments import ByEnds, BySize, Segmented, Segments
+from ...kernels.runs import RunsKernel
+from ...kernels.segments import ByEnds, BySize, PerSegment, Segmented, Segments
+from ...kernels.window import WindowFrame, WindowSegments
 
 
 def _bounds[S: Segments](segments: S) -> List[Tuple[Int, Int]]:
@@ -205,3 +215,182 @@ def test_segmented_reduce_float_min_max_nan_and_signed_zero() raises:
     var none = Segmented[MinFold].reduce(empty, ByEnds(ends.values()))
     assert_equal(len(none), 1)
     assert_false(none.is_valid(0))
+
+
+# ---------------------------------------------------------------------------
+# RunsKernel
+# ---------------------------------------------------------------------------
+
+
+def test_runs_end_where_any_key_changes() raises:
+    var a: DynArray = array([1, 1, 2, 2, 2, 3], int64)
+    assert_true(
+        RunsKernel.dispatch([a.copy()], 6) == array([0, 2, 5, 6], int64)
+    )
+    var b: DynArray = array(["a", "b", "b", "b", "b", "b"])
+    assert_true(
+        RunsKernel.dispatch([a.copy(), b.copy()], 6)
+        == array([0, 1, 2, 5, 6], int64)
+    )
+
+
+def test_runs_hold_nulls_and_nans_together() raises:
+    """Nulls are one key, and so is every NaN whatever its sign."""
+    var q = nan[DType.float64]()
+    var b = Float64Builder(6)
+    b.append_null()
+    b.append_null()
+    b.append(q)
+    b.append(-q)
+    b.append(1.0)
+    b.append(1.0)
+    var key: DynArray = b.finish()
+    assert_true(RunsKernel.dispatch([key^], 6) == array([0, 2, 4, 6], int64))
+
+
+def test_runs_edges() raises:
+    assert_true(
+        RunsKernel.dispatch(List[DynArray](), 4) == array([0, 4], int64)
+    )
+    var empty: DynArray = array(int64)
+    assert_true(RunsKernel.dispatch([empty^], 0) == array([0], int64))
+    var one: DynArray = array([7], int64)
+    assert_true(RunsKernel.dispatch([one^], 1) == array([0, 1], int64))
+    var sliced: DynArray = array([9, 1, 1, 2], int64).slice(1)
+    assert_true(RunsKernel.dispatch([sliced^], 3) == array([0, 2, 3], int64))
+    var short: DynArray = array([1, 2, 3], int64)
+    with assert_raises(contains="InvalidError: runs: a key holds 3 rows"):
+        _ = RunsKernel.dispatch([short^], 4)
+
+
+def test_runs_over_513_rows() raises:
+    """513 rows compare in 512 pairs, whose bits fill 64 bytes exactly; a
+    run starts at the last row."""
+    var b = Int64Builder(513)
+    for i in range(512):
+        b.append(Int64(i // 100))
+    b.append(Int64(-1))
+    var key: DynArray = b.finish()
+    assert_true(
+        RunsKernel.dispatch([key^], 513)
+        == array([0, 100, 200, 300, 400, 500, 512, 513], int64)
+    )
+
+
+# ---------------------------------------------------------------------------
+# PerSegment
+# ---------------------------------------------------------------------------
+
+
+def test_per_segment_broadcast_fills_each_segment() raises:
+    comptime I = DType.int64
+    comptime F = DType.float64
+    var ends = array([0, 2, 2, 5], int64)
+    var five = Buffer.alloc_zeroed[I](5)
+    PerSegment(array([7, 8, 9], int64).buffer).broadcast(
+        ByEnds(ends.values()), five.view[I](0, 5)
+    )
+    assert_true(
+        Int64Array(length=5, buffer=five^.to_immutable())
+        == array([7, 7, 9, 9, 9], int64)
+    )
+
+    var three = Buffer.alloc_zeroed[F](3)
+    PerSegment(array([0.5, 1.5], float64).buffer).broadcast(
+        BySize(3, 2), three.view[F](0, 3)
+    )
+    assert_true(
+        Float64Array(length=3, buffer=three^.to_immutable())
+        == array([0.5, 0.5, 1.5], float64)
+    )
+
+    var inner = array([1, 3], int64)
+    var four = Buffer.alloc_zeroed[I](4)
+    PerSegment(array([4], int64).buffer).broadcast(
+        ByEnds(inner.values()), four.view[I](0, 4)
+    )
+    assert_true(
+        Int64Array(length=4, buffer=four^.to_immutable())
+        == array([0, 4, 4, 0], int64)
+    )
+
+
+# ---------------------------------------------------------------------------
+# WindowSegments
+# ---------------------------------------------------------------------------
+
+
+def _window_keys() raises -> List[DynArray]:
+    """The partition key, then the order key, already sorted."""
+    var k: DynArray = array(["a", "a", "a", "b", "b"])
+    var o: DynArray = array([1, 2, 2, 5, 5], int64)
+    return [k^, o^]
+
+
+def test_window_segments_of_sorted() raises:
+    var ctx = ExecContext.serial()
+    var both = WindowSegments.of_sorted(_window_keys(), 1, 5, ctx)
+    assert_true(both.partition_ends == array([0, 3, 5], int64))
+    assert_true(both.peer_ends == array([0, 1, 3, 5], int64))
+    assert_true(both.partition_peers == array([0, 2, 3], int64))
+    assert_equal(len(both), 5)
+
+    var order = _window_keys()[1].copy()
+    var ordered = WindowSegments.of_sorted([order^], 0, 5, ctx)
+    assert_true(ordered.partition_ends == array([0, 5], int64))
+    assert_true(ordered.peer_ends == array([0, 1, 3, 5], int64))
+    assert_true(ordered.partition_peers == array([0, 3], int64))
+    assert_equal(len(ordered), 5)
+
+    var none = WindowSegments.of_sorted(List[DynArray](), 0, 5, ctx)
+    assert_true(none.partition_ends == array([0, 5], int64))
+    assert_true(none.peer_ends == array([0, 5], int64))
+    assert_true(none.partition_peers == array([0, 1], int64))
+    assert_equal(len(none), 5)
+
+
+def _check_frames(
+    segments: WindowSegments,
+    frame: WindowFrame,
+    starts: Int32Array,
+    stops: Int32Array,
+) raises:
+    var got = segments.frames(frame)
+    assert_true(got[0] == starts, String(frame, " starts"))
+    assert_true(got[1] == stops, String(frame, " stops"))
+
+
+def test_window_segments_frames() raises:
+    var segments = WindowSegments.of_sorted(
+        _window_keys(), 1, 5, ExecContext.serial()
+    )
+    _check_frames(
+        segments,
+        WindowFrame.default(),
+        array([0, 0, 0, 3, 3], int32),
+        array([1, 3, 3, 5, 5], int32),
+    )
+    _check_frames(
+        segments,
+        WindowFrame(True, -1, 0),
+        array([0, 0, 1, 3, 3], int32),
+        array([1, 2, 3, 4, 5], int32),
+    )
+    _check_frames(
+        segments,
+        WindowFrame(True, 0, 1),
+        array([0, 1, 2, 3, 4], int32),
+        array([2, 3, 3, 5, 5], int32),
+    )
+    _check_frames(
+        segments,
+        WindowFrame(True, 5, 10),
+        array([3, 3, 3, 5, 5], int32),
+        array([3, 3, 3, 5, 5], int32),
+    )
+    _check_frames(
+        segments,
+        WindowFrame(True, 3, 1),
+        array([3, 3, 3, 5, 5], int32),
+        array([3, 3, 3, 5, 5], int32),
+    )

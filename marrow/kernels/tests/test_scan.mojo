@@ -340,11 +340,13 @@ def test_shift_non_primitive_layouts() raises:
     """Polars' answers."""
     var strings: DynArray = array(["a", "b", None])
     assert_true(
-        ShiftKernel.dispatch(strings, 1).as_string() == array([None, "a", "b"])
+        ShiftKernel.dispatch(strings, 1, BySize.whole(3)).as_string()
+        == array([None, "a", "b"])
     )
     var bools: DynArray = array([True, False, None])
     assert_true(
-        ShiftKernel.dispatch(bools, 1).as_bool() == array([None, True, False])
+        ShiftKernel.dispatch(bools, 1, BySize.whole(3)).as_bool()
+        == array([None, True, False])
     )
     var b = ListBuilder(Int64Builder())
     var child_any = b.values()
@@ -359,7 +361,8 @@ def test_shift_non_primitive_layouts() raises:
     child.append(6)
     b.append_valid()  # [4, 5, 6]
     var lists: DynArray = b.finish()
-    var lead = ShiftKernel.dispatch(lists, -1)  # [[3], [4, 5, 6], null]
+    # [[3], [4, 5, 6], null]
+    var lead = ShiftKernel.dispatch(lists, -1, BySize.whole(3))
     assert_true(
         ArrayLengthKernel.dispatch(lead).as_int32()
         == array([1, 3, None], int32)
@@ -367,6 +370,41 @@ def test_shift_non_primitive_layouts() raises:
     assert_true(
         ListReduceKernel[SumFold].dispatch(lead).as_int64()
         == array([3, 15, None], int64)
+    )
+
+
+def test_shift_dispatch_restarts_at_every_segment() raises:
+    """Over two segments, `[0, 2)` and `[2, 6)`, each layout is null at both
+    edges of each segment."""
+    var ends = array([0, 2, 6], int64)
+    var segments = ByEnds(ends.values())
+    var values: DynArray = array([1, 2, 3, 4, 5, 6], int64)
+    assert_true(
+        ShiftKernel.dispatch(values, 1, segments).as_int64()
+        == array([None, 1, None, 3, 4, 5], int64)
+    )
+    assert_true(
+        ShiftKernel.dispatch(values, -2, segments).as_int64()
+        == array([None, None, 5, 6, None, None], int64)
+    )
+    assert_true(
+        ShiftKernel.dispatch(values, 0, segments).as_int64()
+        == array([1, 2, 3, 4, 5, 6], int64)
+    )
+    var none: List[Optional[Int]] = [None, None, None, None, None, None]
+    assert_true(
+        ShiftKernel.dispatch(values, 5, segments).as_int64()
+        == array(none, int64)
+    )
+    var strings: DynArray = array(["a", "b", "c", "d", "e", "f"])
+    assert_true(
+        ShiftKernel.dispatch(strings, 1, segments).as_string()
+        == array([None, "a", None, "c", "d", "e"])
+    )
+    var bools: DynArray = array([True, False, True, False, True, False])
+    assert_true(
+        ShiftKernel.dispatch(bools, 1, segments).as_bool()
+        == array([None, True, None, True, False, True])
     )
 
 
@@ -445,7 +483,9 @@ def _check_frames[
         var s1 = segments.end(s)
         for i in range(s0, s1):
             var acc = K.identity[T]()
-            for j in range(max(i + lo, s0), min(i + hi, s1 - 1) + 1):
+            # Offsets taken against the segment's edges first: `i + lo` and
+            # `i + hi` overflow for the widest frames.
+            for j in range(i + max(lo, s0 - i), i + min(hi, s1 - 1 - i) + 1):
                 acc = K.core[T, 1](acc, src[j])
             assert_true(
                 _same_value(dst[i], acc),
@@ -519,6 +559,31 @@ def test_rolling_preceding_only_frames() raises:
         _rolling_layouts[MaxKernel](src, frame[0], frame[1])
 
 
+def test_rolling_offsets_past_every_segment() raises:
+    """`Int.MIN`, `Int.MAX` and `2^62` reach past any segment, so each is
+    the segment's edge."""
+    var buf = _random_int64(157)
+    var src = buf.view[DType.int64](0, 157)
+    for frame in [(Int.MIN, 0), (-(1 << 62), 1 << 62), (0, Int.MAX)]:
+        _rolling_layouts[AddKernel](src, frame[0], frame[1])
+        _rolling_layouts[MinKernel](src, frame[0], frame[1])
+    var whole = BySize.whole(4)
+    var dense = array([1, 2, 3, 4], int64)
+    assert_true(
+        RollingKernel[AddKernel].apply(dense, 0, Int.MAX, 1, whole)
+        == array([10, 9, 7, 4], int64)
+    )
+    var gapped = array([1, None, 3, 4], int64)
+    assert_true(
+        RollingKernel[AddKernel].apply(gapped, Int.MIN, Int.MAX, 1, whole)
+        == array([8, 8, 8, 8], int64)
+    )
+    _assert_floats(
+        RollingMeanKernel.apply(gapped, 0, Int.MAX, 1, whole),
+        [8.0 / 3.0, 3.5, 3.5, 4.0],
+    )
+
+
 def test_rolling_min_max_nan() raises:
     """NaN is skipped unless the whole frame is NaN."""
     comptime n = 157
@@ -576,6 +641,21 @@ def test_rolling_nulls_and_min_samples() raises:
         RollingMeanKernel.apply(values, -2, 0, 1, whole),
         [1.0, 1.0, 2.0, 3.0, 3.0, 6.0],
     )
+
+
+def test_rolling_min_samples_past_32_bits() raises:
+    """A `min_samples` past 32 bits is more rows than any frame here holds,
+    so every row is null."""
+    var values = array([1, 2, 3], int64)
+    var whole = BySize.whole(3)
+    for need in [1 << 31, (1 << 32) + 1]:
+        var at = String("min_samples ", need)
+        var sums = RollingKernel[AddKernel].apply(
+            values, 1 - need, 0, need, whole
+        )
+        assert_equal(sums.null_count(), 3, at)
+        var means = RollingMeanKernel.apply(values, 1 - need, 0, need, whole)
+        assert_equal(means.null_count(), 3, at)
 
 
 def test_rolling_nulls_wider_than_a_block() raises:

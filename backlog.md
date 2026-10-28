@@ -722,20 +722,19 @@ feature".
 
 ### 1.13 Window `variance`, string `min`/`max` and `count_distinct` are O(n * frames)
 
-An aggregate with a `Windowable.over` (`kernels/aggregate.mojo`) runs over all
-its frames in one pass: a running fold while the frame's start holds still, a
-`SegmentTree` query otherwise, as DuckDB's `WindowSegmentTree` does. `Fold`
-(`sum`, `product`, `min`, `max`, `mean`, `count`) and `ValidCount` conform. The
-other three do not, so `PerFrameEvaluator` runs their operator once per
-distinct frame, and a cumulative `variance` over 100k distinct keys is
-quadratic.
+An aggregate with a `Windowable.over` (`kernels/aggregate.mojo`) answers all
+its frames in one pass. `Fold` (`sum`, `product`, `min`, `max`, `mean`,
+`count`) folds a running scan (`RANGE`) or a rolling window (`ROWS`) over the
+partitions through `Foldable.frames`, and `ValidCount` counts each frame's
+valid rows the same way. The other three do not conform, so
+`PerFrameEvaluator` runs their operator once per run of equal frames, and a
+cumulative `variance` over 100k distinct keys is quadratic.
 
-Each is one more `Windowable` conformer. `Dispersion` needs only a Welford
-`(n, mean, m2)` `Monoid` with Chan's merge — its math combines, it just has no
-`over`. String `min`/`max` needs a `Monoid` over `Optional[String]`, or over row
-indices plus one `take`. `count_distinct` needs a merge sort tree (DuckDB's
-`WindowDistinctAggregator`) rather than a segment tree, since a set union is
-not a cheap combine.
+`Scan` and `RollingKernel` fold one scalar lane. Welford's `(n, mean, m2)`
+triple with Chan's merge, and a string extremum (a value, or a row index plus
+one `take`), are not one scalar, so each needs a combinator over a non-scalar
+state. `count_distinct` needs a merge sort tree (DuckDB's
+`WindowDistinctAggregator`), since a set union is not a cheap combine.
 
 ### 1.14 Readers that crash on malformed input — the fuzzing findings
 
@@ -839,11 +838,10 @@ are routine rather than rare.
 | Fix | Where | What goes wrong |
 |---|---|---|
 | `BoolBuilder.reset()` zeroes `_capacity`; `finish()` calls it | `builders.mojo:2262` | reuse after `finish()` writes into a 0-byte bitmap |
-| `WindowExtents.of_sorted` takes `n` explicitly | `kernels/window.mojo:197` | `OVER ()` builds empty extents and reads out of bounds (`physical.mojo:1235, 2244`); untested |
 | `Filter.__init__` requires a boolean predicate (`reject_non_boolean_filter`) (C) | `expr/logical.mojo:2018` | `plan.filter(col("a"))` aborts the process from Python |
 | The IPC writer copies only the bytes the layout needs (B) | `ipc.mojo:2018` | exporting a C-Data import reads up to 63 bytes past the producer's allocation into the file |
 | `CArrowArrayStream` gets a releasing `__deinit__` and an `is_released()` check; `CArrowSchema`/`CArrowArray` become `Movable` only | `c_data.mojo:337, 1077, 1814` | a failed import leaks the stream, a consumed capsule calls a null `release`, a `.copy()` double-releases |
-| `load_bits` slides back like `load[W]`; `Bitmap.extend` reads its second byte only when needed (B) | `views.mojo:946`, `buffers.mojo:1487`, `kernels/aggregate.mojo:638, 676` | tails of `BitmapView.__eq__`, the filter loops and `any`/`all` read past a 64-multiple allocation |
+| `load_bits` slides back like `load[W]` (B) | `views.mojo:946`, `kernels/aggregate.mojo:638, 676` | tails of `BitmapView.__eq__`, the filter loops and `any`/`all` read past a 64-multiple allocation |
 | Comptime column leaves check `isa` in one `_column[T]` helper (C) | `expr/comptime/leaves.mojo:117, 215, 647, 746` | `col("a", int64)` over int32 aborts; `NumericColumn.dtype` also ignores the schema |
 | `dispatch_array` and `DynScalar.as_py` cover every layout | `arrays.mojo:3867`, `scalars.mojo:1223` | runtime `count` raises on binary, list, struct, dictionary; `Scalar.as_py()` raises on temporal and decimal |
 
@@ -1005,8 +1003,9 @@ kernels stating their own signatures instead of a `StringOperands` carrier
 with `uses_*` flags.
 
 Looked at and kept: `JoinKind.parse`, `CalendarUnit.parse`, the window
-kernels' `name`/`params` -- each is a value type owning its own spelling, and
-moving the parser alone would split one vocabulary across two owners.
+kernels' `name` -- each is a value type owning its own spelling, and moving
+the parser alone would split one vocabulary across two owners. (A window
+kernel's parameters are its fields, which `WindowCall` renders.)
 
 Open, each needing a design before code:
 
@@ -1059,10 +1058,10 @@ named:
   without materialising the broadcast, waits for the `ArrayContainsKernel`
   rewrite, its one caller; that also needs `Out` (step 6a) and an any-fold
   over bools, which `AnyKernel`, a bitmap `BoolReduceKernel`, is not.
-- `PerSegment` (one value per segment) and `Segments.of`, with `BySize`'s
-  power-of-two shift, wait for step 5's `broadcast` or step 6's
-  `FittedPack`; `Segmented.reduce` answers a typed `PrimitiveArray` until
-  then.
+- `PerSegment` (one value per segment) landed in step 5 with its
+  constructor and `broadcast`. Its `get` and `at`, and `Segments.of` with
+  `BySize`'s power-of-two shift, wait for step 6's `FittedPack`;
+  `Segmented.reduce` answers a typed `PrimitiveArray` until then.
 - `ScanKernel` waits for step 6, where `Shift[k]`, `Lagged` and `Compose`
   conform beside `Scan`, which has its member shape already. `MinScan`,
   `MaxScan` and `ProductScan` wait for a caller: `CumulativeKernel` names
@@ -1088,7 +1087,8 @@ named:
   avoid it. Unmeasured.
 - `Segmented._fold` and `views._reduce_serial` (behind `Fold.reduce`) are
   two register-fold loops of one shape; they become one when `fold_lanes`
-  gains its step-5 and step-6 callers.
+  gains its step-6 callers. Step 5's scans and rolling windows fold lane by
+  lane and call none.
 - Whether a CPU-only kernel should refuse a GPU `ctx` rather than run on
   the CPU, tree-wide: sort, take and the order kernels run on the host
   today.
@@ -1116,6 +1116,30 @@ or measurement named:
 - `Partial.null_undefined` copies the divisor's values to put its validity
   at offset 0, where `MaskValidityKernel` places the validity at the
   array's own offset and shares the values: a candidate to share it.
+
+**Deferred by kernel-foundations step 5**, each waiting for the
+measurement or step named:
+
+- A frame spanning its whole partition (`RANGE` with no `ORDER BY`) runs a
+  scan and broadcasts the partition's last row, not `Segmented[F].reduce`
+  plus a broadcast. The scan folds left to right as the window always has,
+  so a float sum keeps its bits; a register-wide reduce could be faster and
+  would regroup it. Unmeasured.
+- `RunsKernel` compares the partition keys a second time for the peer
+  groups when a window has both kinds of key; one pass over the order keys,
+  merged with the partition ends, would avoid it. Unmeasured.
+- `RunsKernel` compares adjacent rows through `KeyCompare`;
+  `Runs.store`'s skip of equal SIMD registers for one primitive column
+  waits for step 7's REE kernels.
+- A windowed fold's count lane runs even where no row is null and no frame
+  can be empty (`RANGE`), where each count is the frame's length.
+  Unmeasured.
+- `FoldLane[CountFold]` is an exception to "no law, no claim":
+  `CountFold.combine` keeps its left operand, so it has no identity and
+  does not commute. Its lane is folded and never read, since `finalize`
+  answers the count. Making `combine` `AddKernel.core` would remove the
+  exception at a read-modify-write per row in every grouped `COUNT`
+  (gated on `bench_groupby` and `bench-comptime`).
 
 **`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
 `query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the
@@ -1670,7 +1694,7 @@ twice. Python's `collect()` plans them itself.
     kernel, not the same one resolved twice.
   - `string_agg`/`array_agg` remain a separate epic whatever the node does:
     their fold is neither associative nor bounded, so `Foldable`'s
-    `combine_at` contract does not describe them.
+    contract does not describe them.
 
 #### 2.6 Nested-type operations
 

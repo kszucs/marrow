@@ -12,12 +12,14 @@ copy and owning nothing.
 one answer per segment. A list array's offsets are segments of its child
 (`ListReduceKernel`), and so are fixed-size morsels of a batch, the column a
 bound is computed over (`BoundsKernel`), and the partitions the order kernels
-in `scan.mojo` restart at.
+in `scan.mojo` restart at. `PerSegment` is the other direction: one value per
+segment, broadcast to every row of it.
 """
 
 from std.math import ceildiv
 
 from ..arrays import PrimitiveArray
+from ..buffers import Buffer
 from ..dtypes import PrimitiveType
 from ..views import BufferView, cpu_lanes
 from .aggregate import AggState, FoldKernel
@@ -170,3 +172,36 @@ struct Segmented[F: FoldKernel]:
                 folded = Self.F.combine[A, 1](folded, lanes[1](i))
                 i += 1
         return folded
+
+
+struct PerSegment(Movable):
+    """One value per segment, read at a dtype."""
+
+    var values: Buffer[mut=False]
+    """Segment `s`'s value at position `s`."""
+
+    def __init__(out self, var values: Buffer[mut=False]):
+        self.values = values^
+
+    def broadcast[
+        T: DType, S: Segments
+    ](self, segments: S, dst: BufferView[mut=True, T, _]):
+        """`dst[i]` is segment `s`'s value for every row `i` of `s`. Rows in
+        no segment are left as they are."""
+        var count = segments.count()
+        debug_assert(
+            self.values.length[T]() >= count,
+            "PerSegment.broadcast: one value per segment",
+        )
+        comptime W = cpu_lanes[T]
+        var src = self.values.view[T](0, count)
+        for s in range(count):
+            var value = src.load[1](s)
+            var i = segments.start(s)
+            var end = segments.end(s)
+            while i + W <= end:
+                dst.store[W](i, SIMD[T, W](value))
+                i += W
+            while i < end:
+                dst.store[1](i, value)
+                i += 1

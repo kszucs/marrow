@@ -53,7 +53,8 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
     `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the hash machinery
     group-by, join and `is_in` share), `concat.mojo` (batches joined in parallel),
     `segments.mojo` (a column cut into consecutive runs of rows, and folds
-    over each run) and `statistics.mojo` (column bounds)
+    over each run), `runs.mojo` (where runs of equal rows start) and
+    `statistics.mojo` (column bounds)
 """
 
 from marrow.dtypes import (

@@ -10,6 +10,7 @@ Covers:
 """
 
 import math
+import sys
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -654,6 +655,26 @@ def test_rolling_matches_polars(name, values, kwargs, expected):
     """Polars 1.43.2's answers."""
     result = getattr(ma.compute, name)(ma.array(values), **kwargs)
     _same_values(pa.array(result).to_pylist(), expected)
+
+
+def test_rolling_window_wider_than_sys_maxsize():
+    """A window of more than ``sys.maxsize`` rows reaches the column's first
+    row, and both its ends when centred."""
+    values = ma.array([1, 2, 3])
+    trailing = ma.compute.rolling_sum(values, sys.maxsize + 1, min_samples=1)
+    assert pa.array(trailing).to_pylist() == [1, 3, 6]
+    centred = ma.compute.rolling_sum(
+        values, 2 * sys.maxsize, center=True, min_samples=1
+    )
+    assert pa.array(centred).to_pylist() == [6, 6, 6]
+
+
+def test_rolling_min_samples_past_32_bits():
+    """No row's window holds ``2**32 + 1`` valid values, so every row is null."""
+    values = ma.array([1, 2, 3])
+    for name in ("rolling_sum", "rolling_mean"):
+        result = getattr(ma.compute, name)(values, 2**32 + 1, min_samples=2**32 + 1)
+        assert pa.array(result).to_pylist() == [None, None, None]
 
 
 def test_rolling_rejects_bad_window():

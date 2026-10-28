@@ -545,7 +545,7 @@ def test_sort_indices_keeps_both_nan_signs_together() raises:
 
     Sorting NaN by the encoded key's sign-dependent flip once answered
     `-nan, -inf, 1.0, inf, nan` — the two NaNs at opposite ends. It is not
-    cosmetic: `WindowExtents.of_sorted` compares adjacent rows, so NaNs that
+    cosmetic: a window's peer groups are runs of adjacent rows, so NaNs that
     never land together were never handed to `equal_nan_safe` and `rank` split
     them into peer groups no comparison could merge. Every NaN, whatever its
     sign, is now set aside beside the nulls, so they land together at Arrow's

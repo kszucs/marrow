@@ -75,7 +75,8 @@ from ..dtypes import (
     int64,
 )
 from ..scalars import BoolScalar, PrimitiveScalar, DynScalar
-from ..views import BitmapView, cpu_lanes, reduce_lanes
+from ..buffers import Buffer
+from ..views import BitmapView, apply, cpu_lanes, reduce_lanes
 from .bitwise import BitAndKernel, BitOrKernel, BitXorKernel
 from .core import Associative, BinaryKernel, Commutative, Identity, Kernel
 from .groupby import Groups
@@ -86,8 +87,8 @@ from .distinct import HLL_P
 from .dictionary import DictionaryEncoder
 from .filter import TakeKernel
 from .hashing import HashKernel
-from .window import WindowExtents, WindowFrame
-from ..utils import Fmix64, HyperLogLog, KeyHash, Monoid, SegmentTree
+from .window import WindowFrame, WindowSegments
+from ..utils import Fmix64, HyperLogLog, KeyHash
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +573,35 @@ comptime DecimalSumFold = DecimalFold[mean=False]
 comptime DecimalMeanFold = DecimalFold[mean=True]
 
 
+struct FoldLane[F: FoldKernel](
+    Associative, BinaryKernel, Commutative, Identity
+):
+    """A fold as a binary kernel over its accumulator dtype, for the scans and
+    rolling windows: `F`'s identity and `combine`.
+
+    `FoldLane[CountFold]` does not satisfy the `Identity` and `Commutative`
+    laws, because `CountFold.combine` keeps its left operand. That is
+    harmless: its lane is folded and never read, because its `finalize`
+    answers the count.
+    """
+
+    comptime name = Self.F.name
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Self.F.identity[T]()
+
+    @always_inline
+    @staticmethod
+    def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return Self.F.combine[T, W](a, b)
+
+    @always_inline
+    @staticmethod
+    def fold_lanes[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+        return Self.F.fold_lanes[T, W](v)
+
+
 # ---------------------------------------------------------------------------
 # any / all — boolean reductions via SIMD bitmap operations.
 #
@@ -836,25 +866,12 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         self.acc.extend_value(Self.K.identity[A](), grow)
         self.cnt.extend_value(Scalar[S](0), grow)
 
-    def combine_at(
-        mut self, g: Int, value: Scalar[Self.Acc.native], count: Int
-    ) raises:
-        """Fold an already-reduced value into group `g`, crediting `count` rows,
-        after growing to `g + 1` slots.
-
-        How a partial fold that may land in a new slot is handed over: `merge`
-        folds another state's partials, `fold_frames` each window frame. The
-        ungrouped per-morsel hand-off, whose slot always exists, is
-        `combine_reserved`.
-        """
-        self.reserve(g + 1)
-        self.combine_reserved(g, value, count)
-
     @always_inline
     def combine_reserved(
         mut self, g: Int, value: Scalar[Self.Acc.native], count: Int
     ):
-        """`combine_at` into a slot that already exists, so it never grows.
+        """Fold an already-reduced value into group `g`, crediting `count`
+        rows. The slot must already exist: this never grows.
 
         The ungrouped hand-off: `Fold.reduce` folds a whole morsel in
         **registers** to one value and one count, then calls this once per
@@ -945,14 +962,14 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
         return [acc.finish(), cnt.finish()]
 
     def merge(mut self, groups: Groups, partials: List[DynArray]) raises:
-        """Fold `partials` rows into the slots `groups` names, each through
-        `combine_at`."""
+        """Fold `partials` rows into the slots `groups` names, after growing
+        to `groups.num_groups` slots."""
         self.reserve(groups.num_groups)
         ref acc = partials[0].as_primitive[Self.Acc]()
         var accs = acc.values()
         var cnts = partials[1].as_int64().values()
         for i in range(len(acc)):
-            self.combine_at(groups.slot(i), accs[i], Int(cnts[i]))
+            self.combine_reserved(groups.slot(i), accs[i], Int(cnts[i]))
 
     def finish(mut self) raises -> PrimitiveArray[Self.Acc]:
         """Finalize into the typed output column. A group with no valid rows is
@@ -1179,10 +1196,11 @@ trait Foldable(AggKernel):
     nodes. A node holds an `AggKernel`; `comptime if conforms_to(Agg, Foldable)`
     is what decides whether it can hand `Agg.Lane` to the fused operator.
 
-    `reduce` and `scatter` are the **lane-facing** half of that, and they own
-    the loops: a caller hands over a lane producer — `lanes[W](i)` answers
-    rows `i .. i + W` as `SIMD[Acc, W]` — and the fold reads it a register at
-    a time, folding into one slot or into the slots a `GROUP BY` names. The
+    `reduce`, `scatter` and `frames` are the **lane-facing** half of that, and
+    they own the loops: a caller hands over a lane producer — `lanes[W](i)`
+    answers rows `i .. i + W` as `SIMD[Acc, W]` — and the fold reads it a
+    register at a time, folding into one slot, into the slots a `GROUP BY`
+    names, or into one slot per row over that row's window frame. The
     producer may be a buffer load or a whole fused expression: `Fold.update`
     passes the first, the comptime expression lane the second, so
     `sum(a * 2 + b)` folds without ever writing `a * 2 + b`. Taking a closure
@@ -1193,7 +1211,7 @@ trait Foldable(AggKernel):
     a property of every aggregate, not of the ones drivable from registers, so
     it lives on `AggKernel.reserve`. This protocol is exactly "this aggregate
     can be driven from registers" — `Lane`, `Acc`, `reduce`, `scatter`,
-    `combine_at`.
+    `frames`.
     """
 
     comptime Lane: FoldKernel
@@ -1239,55 +1257,37 @@ trait Foldable(AggKernel):
         row."""
         ...
 
-    def combine_at(
-        mut self, slot: Int, value: Scalar[Self.Acc], count: Int
-    ) raises:
-        """Fold an already-reduced value into `slot`, crediting `count` rows,
-        growing to it first — how `fold_frames` hands over each frame's
-        partial fold."""
-        ...
-
-    def fold_frames(
+    def frames[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](
         mut self,
-        leaves: List[FoldPartial[Self.Lane, Self.Acc]],
-        extents: WindowExtents,
+        length: Int,
+        lanes: L,
+        segments: WindowSegments,
         frame: WindowFrame,
     ) raises:
-        """Fold each row `j`'s frame, `extents.frame(j, frame)`, of `leaves`
-        into slot `j`.
+        """Fold row `j`'s window frame of `lanes` into slot `j`, for every row
+        `j` of `0 .. length`, after growing to `length` slots.
 
-        Each frame comes from the previous one where it can and from a
-        `SegmentTree` where it cannot; no row is ever subtracted. A frame
-        sharing the previous start extends the running fold by the rows it
-        adds, and one starting at or past the previous stop restarts it: frames
-        are monotone, so both total O(n) and cover cumulative frames, peer
-        groups and whole partitions without a tree. Only a frame overlapping
-        the previous one from a later start is a range query, O(log n). Answers
-        go through `reserve` and `combine_at`, so `finish` applies `finalize`
-        and `empty_is_null` exactly as in a `GROUP BY`.
-        """
-        comptime P = FoldPartial[Self.Lane, Self.Acc]
-        self.reserve(len(extents))
-        var tree: Optional[SegmentTree[P]] = None
-        var run = P.identity()
-        var prev_lo = 0
-        var prev_hi = 0
-        for j in range(len(extents)):
-            var lo, hi = extents.frame(j, frame)
-            if j > 0 and lo == prev_lo and hi >= prev_hi:
-                for i in range(prev_hi, hi):
-                    run = P.combine(run, leaves[i])
-            elif j == 0 or lo >= prev_hi:
-                run = P.identity()
-                for i in range(lo, hi):
-                    run = P.combine(run, leaves[i])
-            else:
-                if not tree:
-                    tree = SegmentTree(leaves)
-                run = tree.value().query(lo, hi)
-            self.combine_at(j, run.acc, run.count)
-            prev_lo = lo
-            prev_hi = hi
+        The window path: each row's accumulator comes from a running scan
+        (`RANGE`) or a rolling window (`ROWS`) over the partitions, and each
+        row's count from the same over the rows, so `finish` applies
+        `finalize` and `empty_is_null` exactly as in a `GROUP BY`."""
+        ...
+
+    def frames[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](
+        mut self,
+        length: Int,
+        lanes: L,
+        valid: BitmapView[_],
+        segments: WindowSegments,
+        frame: WindowFrame,
+    ) raises:
+        """`frames`, skipping every row whose `valid` bit is clear: it folds as
+        the identity and is not counted. `valid` holds one bit per row."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -1298,44 +1298,60 @@ trait Foldable(AggKernel):
 trait Windowable(AggKernel):
     """An aggregate that answers every row's window frame in one pass.
 
-    `over(input, extents, frame)` answers, for every sorted row `j`, this
-    aggregate over the rows of `extents.frame(j, frame)`, reusing work across
-    frames rather than evaluating each from scratch — which is O(n^2) under
-    SQL's default frame.
-
-    `Fold` conforms through a segment tree of partial folds, `ValidCount`
-    through a prefix count; a window evaluates any other aggregate frame by
+    `over(input, segments, frame)` answers, for every sorted row `j`, this
+    aggregate over row `j`'s frame, reusing work across frames rather than
+    evaluating each from scratch — which is O(n^2) under SQL's default
     frame.
+
+    `Fold` conforms through `Foldable.frames`, and `ValidCount` counts each
+    frame's valid rows the same way; a window evaluates any other aggregate
+    frame by frame.
     """
 
     @staticmethod
     def over(
-        input: Self.InArray, extents: WindowExtents, frame: WindowFrame
+        input: Self.InArray, segments: WindowSegments, frame: WindowFrame
     ) raises -> Self.OutArray:
         ...
 
 
-@fieldwise_init
-struct FoldPartial[K: FoldKernel, A: DType](Monoid):
-    """A fold over some rows, not yet finalized — one `AggState` slot — and
-    `K`'s lane algebra as a `Monoid` over them.
+def _frame_counts(
+    length: Int, segments: WindowSegments, frame: WindowFrame
+) raises -> Int64Array:
+    """How many rows each row's frame holds: a column of ones, folded over
+    every frame."""
+    comptime C = DType.int64
+    var ones = Buffer.alloc_uninit[C](length)
 
-    `K.combine` is associative with `K.identity` as its unit, and valid counts
-    add, so a `SegmentTree` can answer any range of rows. `finalize` stays
-    outside: it runs once per answer, on the combined partial, which is what
-    makes `mean` correct — the average of averages is not the average.
-    """
+    @always_inline
+    def one[W: Int](i: Int) -> SIMD[C, W]:
+        return SIMD[C, W](1)
 
-    var acc: Scalar[Self.A]
-    var count: Int
+    apply(ones.view[C](0, length), one)
+    var counts = Buffer.alloc_uninit[C](length)
+    segments.fold[AddKernel, C](
+        ones.view[C](0, length), counts.view[C](0, length), frame
+    )
+    return Int64Array(length=length, buffer=counts^.to_immutable())
 
-    @staticmethod
-    def identity() -> Self:
-        return Self(Self.K.identity[Self.A](), 0)
 
-    @staticmethod
-    def combine(a: Self, b: Self) -> Self:
-        return Self(Self.K.combine[Self.A, 1](a.acc, b.acc), a.count + b.count)
+def _frame_counts(
+    valid: BitmapView[_], segments: WindowSegments, frame: WindowFrame
+) raises -> Int64Array:
+    """How many valid rows each row's frame holds: the validity as int64,
+    folded over every frame."""
+    comptime C = DType.int64
+    var n = len(valid)
+    var bits = Buffer.alloc_uninit[C](n)
+
+    @always_inline
+    def bit[W: Int](i: Int) {var valid} -> SIMD[C, W]:
+        return valid.load[W](i).cast[C]()
+
+    apply(bits.view[C](0, n), bit)
+    var counts = Buffer.alloc_uninit[C](n)
+    segments.fold[AddKernel, C](bits.view[C](0, n), counts.view[C](0, n), frame)
+    return Int64Array(length=n, buffer=counts^.to_immutable())
 
 
 struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
@@ -1499,31 +1515,101 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Windowable):
     ](mut self, groups: Groups, lanes: L, valid: BitmapView[_]) raises:
         self._state.scatter(groups, lanes, valid)
 
-    def combine_at(
-        mut self, slot: Int, value: Scalar[Self.Acc], count: Int
+    @always_inline
+    def frames[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](
+        mut self,
+        length: Int,
+        lanes: L,
+        segments: WindowSegments,
+        frame: WindowFrame,
     ) raises:
-        self._state.combine_at(slot, value, count)
+        self._answer_frames(
+            length,
+            lanes,
+            _frame_counts(length, segments, frame),
+            segments,
+            frame,
+        )
+
+    @always_inline
+    def frames[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](
+        mut self,
+        length: Int,
+        lanes: L,
+        valid: BitmapView[_],
+        segments: WindowSegments,
+        frame: WindowFrame,
+    ) raises:
+        debug_assert(len(valid) == length, "frames: one bit per row")
+        var identity = Self.K.identity[Self.Acc]()
+
+        # A null slot's payload is arbitrary, so it folds as the identity.
+        @always_inline
+        def masked[
+            W: Int
+        ](i: Int) {var valid, var identity, imm lanes} -> SIMD[Self.Acc, W]:
+            return valid.load[W](i).select(
+                lanes[W](i), SIMD[Self.Acc, W](identity)
+            )
+
+        self._answer_frames(
+            length,
+            masked,
+            _frame_counts(valid, segments, frame),
+            segments,
+            frame,
+        )
+
+    def _answer_frames[
+        L: def[W: Int](Int) -> SIMD[Self.Acc, W]
+    ](
+        mut self,
+        length: Int,
+        lanes: L,
+        counts: Int64Array,
+        segments: WindowSegments,
+        frame: WindowFrame,
+    ) raises:
+        """Slot `j` takes row `j`'s frame of `lanes`, crediting `counts[j]`
+        rows: the lanes are written once, then folded over every frame."""
+        comptime A = Self.Acc
+        var values = Buffer.alloc_uninit[A](length)
+        apply(values.view[A](0, length), lanes)
+        var folded = Buffer.alloc_uninit[A](length)
+        var acc = folded.view[A](0, length)
+        segments.fold[FoldLane[Self.K], A](
+            values.view[A](0, length), acc, frame
+        )
+        var count = counts.values()
+        self._state.reserve(length)
+        for j in range(length):
+            self._state.combine_reserved(j, acc[j], Int(count[j]))
 
     # -- Windowable -----------------------------------------------------------
 
     @staticmethod
     def over(
-        input: Self.InArray, extents: WindowExtents, frame: WindowFrame
+        input: Self.InArray, segments: WindowSegments, frame: WindowFrame
     ) raises -> Self.OutArray:
-        """`Foldable.fold_frames` over the column's rows, a null folding as the
+        """`Foldable.frames` over the column's values, a null folding as the
         identity."""
-        comptime P = FoldPartial[Self.Lane, Self.Acc]
         var values = input.values()
-        var leaves = List[P](capacity=len(input))
-        for i in range(len(input)):
-            leaves.append(P(values[i].cast[Self.Acc](), 1))
-        if input.null_count() > 0:
-            var valid = input.validity().value()
-            for i in range(len(input)):
-                if not valid[i]:
-                    leaves[i] = P.identity()
+
+        @always_inline
+        def lanes[W: Int](i: Int) {var values} -> SIMD[Self.Acc, W]:
+            return values.load[W](i).cast[Self.Acc]()
+
         var agg = Self(input.type(), True)
-        agg.fold_frames(leaves, extents, frame)
+        if input.bitmap:
+            agg.frames(
+                len(input), lanes, input.validity().value(), segments, frame
+            )
+        else:
+            agg.frames(len(input), lanes, segments, frame)
         return agg.finish()
 
 
@@ -1767,6 +1853,9 @@ struct ValidCount[A: Array](Windowable):
     the two would mean paying the erased per-row cost on every numeric `count`,
     so the split stays. This is the path for the dtypes a fold cannot serve,
     and for a `count` named at run time.
+
+    Over a window it is the count lane alone: each frame's valid rows, as a
+    windowed `Fold` counts them beside its accumulator.
     """
 
     comptime name = CountFold.name
@@ -1833,27 +1922,15 @@ struct ValidCount[A: Array](Windowable):
 
     @staticmethod
     def over(
-        input: Self.InArray, extents: WindowExtents, frame: WindowFrame
+        input: Self.InArray, segments: WindowSegments, frame: WindowFrame
     ) raises -> Self.OutArray:
-        """The frame's length, less its nulls: a count is invertible and
-        exact, so a prefix count of the valid rows answers any frame in O(1)
-        and needs no tree."""
-        var out = Int64Builder(len(extents))
-        if input.null_count() > 0:
-            var data = input.to_data()
-            var valid = data.validity().value()
-            var prefix = List[Int](capacity=len(input) + 1)
-            prefix.append(0)
-            for i in range(len(input)):
-                prefix.append(prefix[i] + Int(valid[i]))
-            for j in range(len(extents)):
-                var lo, hi = extents.frame(j, frame)
-                out.append(Int64(prefix[hi] - prefix[lo]))
+        """Each row's frame's valid rows."""
+        var data = input.to_data()
+        var valid = data.validity()
+        if valid:
+            return _frame_counts(valid.value(), segments, frame)
         else:
-            for j in range(len(extents)):
-                var lo, hi = extents.frame(j, frame)
-                out.append(Int64(hi - lo))
-        return out.finish()
+            return _frame_counts(len(input), segments, frame)
 
 
 struct DistinctCount[A: Array](AggKernel):

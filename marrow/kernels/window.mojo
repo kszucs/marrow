@@ -1,7 +1,8 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Window-function kernels — partition extents, ranking, and frame gathers.
+"""Window-function kernels — partitions and peer groups as segments, ranking,
+and frame gathers.
 
 A window function is evaluated over a *sorted* input: `PARTITION BY k ORDER BY
 v` is one ordering, `[k..., v...]`, so the partitioning is a **prefix of the
@@ -16,33 +17,35 @@ Two boundaries, and the distinction between them is the whole of tie handling:
   peer boundaries are *peers*: equal under the ordering, and therefore
   indistinguishable to `RANK` and to the default `RANGE` frame.
 
+Both are runs of equal rows (`RunsKernel`), so `WindowSegments` holds them as
+segments: one position per partition and one per peer group, not one per row.
+
 `ROW_NUMBER` ignores peers, `RANK` numbers by the peer group's first position
 and `DENSE_RANK` by the peer group's ordinal. Those three lines are the only
-difference between the three ranking functions.
+difference between the three ranking functions. The ranking and distribution
+functions compute one value per peer group and broadcast it to the group's
+rows (`PerSegment`).
 
-The offset and frame-edge functions (`LAG`, `LEAD`, `FIRST_VALUE`,
-`LAST_VALUE`) allocate nothing of their own: each answers with an
-`Int32Array` of *source row indices*, null where the row it would read falls
-outside the partition, and the caller gathers with `take` — which maps a null
-index to a null element. That is why this module needs no per-dtype arm at
-all: `take` already has one.
+`LAG` and `LEAD` are `ShiftKernel` over the partitions. The frame-edge
+functions (`FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`) answer with an
+`Int32Array` of *source row indices*, null where the frame holds no such row,
+and gather with `take` — which maps a null index to a null element. That is
+why this module needs no per-dtype arm at all: `shift` and `take` already have
+one.
 """
 
-from ..arrays import (
-    BoolArray,
-    DynArray,
-    Float64Array,
-    Int32Array,
-    Int64Array,
-)
-from ..buffers import Bitmap
-from ..builders import Float64Builder, Int32Builder, Int64Builder, arange
-from ..dtypes import DynType, Int32Type, float64, int64
+from ..arrays import DynArray, Float64Array, Int32Array, Int64Array
+from ..buffers import Buffer
+from ..builders import Float64Builder, Int32Builder, Int64Builder
+from ..dtypes import DynType, float64, int64
 from ..execution import ExecContext
 from ..errors import InvalidError
-from .core import Kernel
+from ..views import BufferView, apply
+from .core import Associative, BinaryKernel, Identity, Kernel
 from .filter import TakeKernel
-from .hashing import KeyCompare
+from .runs import RunsKernel
+from .scan import RollingKernel, Scan, ShiftKernel
+from .segments import ByEnds, PerSegment
 
 
 struct WindowFrame(Copyable, ImplicitlyCopyable, Movable, Writable):
@@ -64,6 +67,14 @@ struct WindowFrame(Copyable, ImplicitlyCopyable, Movable, Writable):
     With no `ORDER BY` at all the default frame is the whole partition. That
     falls out here rather than being special-cased: with no order key every row
     is a peer of every other, so the peer group *is* the partition.
+
+    A `ROWS` frame has a bounded start and folds through `RollingKernel`: a
+    narrow frame lying inside its partition from its first row rather than
+    from the identity, a wide one in fixed blocks. So a floating-point sum,
+    mean or product may round differently from a left-to-right fold, and a sum
+    of negative zeros may answer `+0.0` on some rows and `-0.0` on others.
+    `RANGE` frames, which start `UNBOUNDED PRECEDING`, fold left to right from
+    the identity, through `Scan`.
     """
 
     var is_rows: Bool
@@ -99,143 +110,94 @@ struct WindowFrame(Copyable, ImplicitlyCopyable, Movable, Writable):
             writer.write("range unbounded..current")
 
 
-struct WindowExtents(Copyable, Movable, Sized):
-    """Where each row's partition and peer group begin and end.
+struct WindowSegments(Copyable, Movable, Sized):
+    """A sorted batch cut into partitions, and each partition into peer
+    groups.
 
-    Four parallel arrays over the *sorted* row positions, all half-open
-    (`start` inclusive, `end` exclusive). They are computed once per `Window`
-    node and read by every window expression on it, because every one of them
-    asks the same two questions and only differs in what it does with the
-    answer.
-
-    Stored as `List[Int]` rather than as Arrow arrays: this is operator
-    bookkeeping, read scalar-wise by the per-row loops below and never handed
-    to a kernel or to a user. Materialising four `Int32Array`s would buy
-    nothing and cost four allocations plus offset arithmetic on every read.
+    Three columns of positions, each O(segments) rather than O(rows), read
+    as `ByEnds`: the partitions, the peer groups, and which peer groups each
+    partition holds. Every partition end is a peer group end, because the
+    `ORDER BY` keys are compared after the `PARTITION BY` ones.
     """
 
-    var partition_start: List[Int]
-    """First sorted row of this row's partition."""
+    var partition_ends: Int64Array
+    """Where each partition starts, then the row count."""
 
-    var partition_end: List[Int]
-    """One past this row's partition's last sorted row."""
+    var peer_ends: Int64Array
+    """Where each peer group starts, then the row count."""
 
-    var peer_start: List[Int]
-    """First sorted row equal to this one under the `ORDER BY`."""
-
-    var peer_end: List[Int]
-    """One past this row's peer group's last sorted row."""
-
-    var peer_ordinal: List[Int]
-    """How many peer groups precede this one *within its partition*, 0-based.
-
-    `DENSE_RANK` is this plus one. Kept here rather than recomputed because it
-    is the one boundary fact that a backwards scan cannot recover in O(1) — it
-    counts groups rather than naming a position.
-    """
+    var partition_peers: Int64Array
+    """Partition `p`'s peer groups are
+    `[partition_peers[p], partition_peers[p + 1])`."""
 
     def __init__(
-        out self,
-        var new_partition: List[Bool],
-        var new_peer: List[Bool],
+        out self, var partition_ends: Int64Array, var peer_ends: Int64Array
     ) raises:
-        """Turn two boundary flags per row into the four extents.
-
-        `new_partition[j]` says row `j` starts a new partition, `new_peer[j]`
-        that it starts a new peer group. A partition boundary is always a peer
-        boundary too — the caller guarantees it, since the `ORDER BY` keys are
-        compared *after* the `PARTITION BY` ones and a changed prefix makes the
-        whole key different.
-        """
-        var n = len(new_partition)
-        self.partition_start = List[Int](length=n, fill=0)
-        self.partition_end = List[Int](length=n, fill=0)
-        self.peer_start = List[Int](length=n, fill=0)
-        self.peer_end = List[Int](length=n, fill=0)
-        self.peer_ordinal = List[Int](length=n, fill=0)
-
-        # Forward scan: a start is carried down until the next boundary.
-        var p_start = 0
-        var g_start = 0
-        var ordinal = 0
-        for j in range(n):
-            if new_partition[j]:
-                p_start = j
-                ordinal = 0
-            elif new_peer[j]:
-                ordinal += 1
-            if new_peer[j]:
-                g_start = j
-            self.partition_start[j] = p_start
-            self.peer_start[j] = g_start
-            self.peer_ordinal[j] = ordinal
-
-        # Backward scan: an end is carried up from the row after the last one.
-        var p_end = n
-        var g_end = n
-        for j in reversed(range(n)):
-            if j + 1 < n and new_partition[j + 1]:
-                p_end = j + 1
-            if j + 1 < n and new_peer[j + 1]:
-                g_end = j + 1
-            self.partition_end[j] = p_end
-            self.peer_end[j] = g_end
+        """The segments of partitions and peer groups at these positions;
+        each partition's peer groups are found in one walk."""
+        var parts = partition_ends.values()
+        var peers = peer_ends.values()
+        var first = Buffer.alloc_uninit[DType.int64](len(parts))
+        var dst = first.view[DType.int64](0, len(parts))
+        var g = 0
+        for p in range(len(parts)):
+            while g < len(peers) - 1 and peers[g] < parts[p]:
+                g += 1
+            debug_assert(
+                peers[g] == parts[p],
+                "WindowSegments: every partition end is a peer group end",
+            )
+            dst.store[1](p, Int64(g))
+        self.partition_peers = Int64Array(
+            length=len(parts), buffer=first^.to_immutable()
+        )
+        self.partition_ends = partition_ends^
+        self.peer_ends = peer_ends^
 
     @staticmethod
     def of_sorted(
-        sorted_keys: List[DynArray], partition_keys: Int, ctx: ExecContext
-    ) raises -> WindowExtents:
-        """The extents of a batch already sorted by `sorted_keys`, whose first
-        `partition_keys` columns are the `PARTITION BY` keys and the rest the
-        `ORDER BY` keys.
+        sorted_keys: List[DynArray],
+        partition_keys: Int,
+        length: Int,
+        ctx: ExecContext,
+    ) raises -> WindowSegments:
+        """The segments of `length` rows already sorted by `sorted_keys`,
+        whose first `partition_keys` columns are the `PARTITION BY` keys and
+        the rest the `ORDER BY` keys.
 
-        A row starts a partition where any partition key changes, and a peer
-        group where any key at all does — the `ORDER BY` keys are compared
-        after the `PARTITION BY` ones, so a partition boundary is always a peer
-        boundary too.
+        A partition is a run of rows equal on every partition key, and a peer
+        group a run equal on every key. With no key at all, the rows are one
+        partition of one peer group.
         """
-        var n = len(sorted_keys[0]) if len(sorted_keys) > 0 else 0
-        var new_partition = List[Bool](length=n, fill=False)
-        if n > 0:
-            new_partition[0] = True
+        var by = List[DynArray](capacity=partition_keys)
         for i in range(partition_keys):
-            Self._mark_changes(sorted_keys[i], new_partition, ctx)
-        var new_peer = new_partition.copy()
-        for i in range(partition_keys, len(sorted_keys)):
-            Self._mark_changes(sorted_keys[i], new_peer, ctx)
-        return WindowExtents(new_partition^, new_peer^)
-
-    @staticmethod
-    def _mark_changes(
-        key: DynArray, mut flags: List[Bool], ctx: ExecContext
-    ) raises:
-        """Set `flags[j]` where sorted `key` differs between rows `j-1` and
-        `j`.
-
-        ORs into `flags`, so a compound key changes wherever *any* of its
-        columns does. "Differs" is `IS DISTINCT FROM`, not `=`: neither null
-        nor NaN is distinct from itself here. That is what `PARTITION BY` and
-        `ORDER BY` both mean — the same key identity `GROUP BY` groups by — so
-        it is the same kernel, `KeyCompare`, comparing each row with the one
-        before it. Nested keys compare structurally for the same reason.
-        """
-        var n = len(key)
-        if n >= 2:
-            var same = Bitmap.alloc_zeroed(n - 1)
-            same.set_range(0, n - 1, True)
-            var rows = arange[Int32Type](0, n - 1)
-            KeyCompare.dispatch(
-                key.slice(1, n - 1), rows, key.slice(0, n - 1), rows, same, ctx
-            )
-            for j in range(1, n):
-                if not same.test(j - 1):
-                    flags[j] = True
+            by.append(sorted_keys[i].copy())
+        var partitions = RunsKernel.dispatch(by, length, ctx)
+        var peers: Int64Array
+        if partition_keys == len(sorted_keys):
+            peers = partitions.copy()
+        else:
+            peers = RunsKernel.dispatch(sorted_keys, length, ctx)
+        return WindowSegments(partitions^, peers^)
 
     def __len__(self) -> Int:
-        return len(self.partition_start)
+        """The rows: the last partition end."""
+        return Int(self.partition_ends.values()[len(self.partition_ends) - 1])
 
-    def frame(self, j: Int, frame: WindowFrame) -> Tuple[Int, Int]:
-        """Row `j`'s frame as a half-open `[start, stop)` of sorted rows.
+    def partitions(
+        self,
+    ) -> ByEnds[DType.int64, origin_of(self.partition_ends.buffer)]:
+        """The partitions, as segments."""
+        return ByEnds(self.partition_ends.values())
+
+    def peers(self) -> ByEnds[DType.int64, origin_of(self.peer_ends.buffer)]:
+        """The peer groups, as segments."""
+        return ByEnds(self.peer_ends.values())
+
+    def frames(
+        self, frame: WindowFrame
+    ) raises -> Tuple[Int32Array, Int32Array]:
+        """Each row's frame as a half-open `[start, stop)` of sorted rows.
 
         Under `ROWS` the offsets are clipped to the partition. Under `RANGE`
         the frame runs from the partition start to the end of the current
@@ -246,25 +208,92 @@ struct WindowExtents(Copyable, Movable, Sized):
         lying wholly past its partition (`rows=(5, 10)` on a 3-row partition)
         is pulled back to the partition end, so the range can be sliced as is.
         """
+        comptime I = DType.int32
+        var n = len(self)
+        var starts = Buffer.alloc_uninit[I](n)
+        var stops = Buffer.alloc_uninit[I](n)
+        var lo = starts.view[I](0, n)
+        var hi = stops.view[I](0, n)
+        var parts = self.partitions()
+        var peers = self.peers()
+        var first = self.partition_peers.values()
+        # An offset past `n` rows reaches past every partition, so it is the
+        # same frame as `n`, and keeps `j + offset` in range.
+        var preceding = min(max(frame.preceding, -n), n)
+        var following = min(max(frame.following, -n), n)
+        for p in range(parts.count()):
+            var s0 = parts.start(p)
+            var s1 = parts.end(p)
+            if frame.is_rows:
+                for j in range(s0, s1):
+                    var start = min(max(s0, j + preceding), s1)
+                    var stop = max(start, min(s1, j + following + 1))
+                    lo.store[1](j, Int32(start))
+                    hi.store[1](j, Int32(stop))
+            else:
+                for g in range(Int(first[p]), Int(first[p + 1])):
+                    var stop = peers.end(g)
+                    for j in range(peers.start(g), stop):
+                        lo.store[1](j, Int32(s0))
+                        hi.store[1](j, Int32(stop))
+        return (
+            Int32Array(length=n, buffer=starts^.to_immutable()),
+            Int32Array(length=n, buffer=stops^.to_immutable()),
+        )
+
+    def fold[
+        K: BinaryKernel & Associative & Identity, T: DType
+    ](
+        self,
+        src: BufferView[T, _],
+        dst: BufferView[mut=True, T, _],
+        frame: WindowFrame,
+    ) raises:
+        """`dst[j]` is `K` over `src`'s rows in row `j`'s frame, and `K`'s
+        identity where the frame is empty.
+
+        A `ROWS` frame is a rolling window over the partitions. The `RANGE`
+        frame is a running scan over the partitions, then each peer group's
+        last row broadcast to the group, whose rows share a frame; with no
+        `ORDER BY` the peer group is the partition, so every row sees all of
+        it.
+        """
         if frame.is_rows:
-            var start = min(
-                max(self.partition_start[j], j + frame.preceding),
-                self.partition_end[j],
-            )
-            var stop = max(
-                start, min(self.partition_end[j], j + frame.following + 1)
-            )
-            return (start, stop)
-        return (self.partition_start[j], self.peer_end[j])
+            if frame.preceding <= frame.following:
+                RollingKernel[K].frames(
+                    src,
+                    dst,
+                    self.partitions(),
+                    frame.preceding,
+                    frame.following,
+                )
+            else:
+                # The frame ends before it starts, so it is empty for every row.
+                var identity = K.identity[T]()
+
+                @always_inline
+                def empty[W: Int](i: Int) {var identity} -> SIMD[T, W]:
+                    return SIMD[T, W](identity)
+
+                apply(dst, empty)
+        else:
+            Scan[K]().run(src, dst, self.partitions())
+            var peers = self.peers()
+            var last = Buffer.alloc_uninit[T](peers.count())
+            var lasts = last.view[T](0, peers.count())
+            for g in range(peers.count()):
+                lasts.store[1](g, dst.load[1](peers.end(g) - 1))
+            PerSegment(last^.to_immutable()).broadcast(peers, dst)
 
 
 trait WindowKernel(Copyable, Deinitable, Movable):
     """A non-aggregate window function: a ranking, distribution, offset or
     frame-edge kernel over a sorted partition.
 
-    A kernel carries its own parameters as fields — `lag`'s offset,
-    `ntile`'s bucket count, `nth_value`'s `n` — validated when it is built, so
-    a plan cannot hold one that will fail at execution.
+    A kernel's parameters are its fields — `lag`'s offset, `ntile`'s bucket
+    count, `nth_value`'s `n` — validated when it is built, so a plan cannot
+    hold one that will fail at execution. A plan renders them after the
+    operand, in field order.
 
     `argument` is the operand column, already evaluated over the sorted batch;
     a kernel that reads none (`reads_argument()` is `False`) is handed a
@@ -292,19 +321,14 @@ trait WindowKernel(Copyable, Deinitable, Movable):
         read none, the operand's own for the gathers."""
         ...
 
-    def params(self) -> List[Int]:
-        """The parameters a plan renders after the operand, e.g. `[2]` for
-        `lag(v, 2)`."""
-        ...
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        """This kernel's column over the sorted batch the extents describe."""
+        """This kernel's column over the sorted batch the segments describe."""
         ...
 
 
@@ -324,19 +348,19 @@ struct RowNumber(WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return int64.to_dyn()
 
-    def params(self) -> List[Int]:
-        return List[Int]()
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var out = Int64Builder(len(extents))
-        for j in range(len(extents)):
-            out.append(Int64(j - extents.partition_start[j] + 1))
+        var out = Int64Builder(len(segments))
+        var parts = segments.partitions()
+        for p in range(parts.count()):
+            var lo = parts.start(p)
+            for j in range(lo, parts.end(p)):
+                out.append(Int64(j - lo + 1))
         return out.finish().to_dyn()
 
 
@@ -356,22 +380,25 @@ struct Rank(WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return int64.to_dyn()
 
-    def params(self) -> List[Int]:
-        return List[Int]()
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var out = Int64Builder(len(extents))
-        for j in range(len(extents)):
-            out.append(
-                Int64(extents.peer_start[j] - extents.partition_start[j] + 1)
-            )
-        return out.finish().to_dyn()
+        comptime I = DType.int64
+        var n = len(segments)
+        var parts = segments.partitions()
+        var peers = segments.peers()
+        var first = segments.partition_peers.values()
+        var ranks = Int64Builder(peers.count())
+        for p in range(parts.count()):
+            for g in range(Int(first[p]), Int(first[p + 1])):
+                ranks.append(Int64(peers.start(g) - parts.start(p) + 1))
+        var out = Buffer.alloc_uninit[I](n)
+        PerSegment(ranks.finish().buffer).broadcast(peers, out.view[I](0, n))
+        return Int64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 
 @fieldwise_init
@@ -390,20 +417,25 @@ struct DenseRank(WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return int64.to_dyn()
 
-    def params(self) -> List[Int]:
-        return List[Int]()
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var out = Int64Builder(len(extents))
-        for j in range(len(extents)):
-            out.append(Int64(extents.peer_ordinal[j] + 1))
-        return out.finish().to_dyn()
+        comptime I = DType.int64
+        var n = len(segments)
+        var parts = segments.partitions()
+        var peers = segments.peers()
+        var first = segments.partition_peers.values()
+        var ranks = Int64Builder(peers.count())
+        for p in range(parts.count()):
+            for g in range(Int(first[p]), Int(first[p + 1])):
+                ranks.append(Int64(g - Int(first[p]) + 1))
+        var out = Buffer.alloc_uninit[I](n)
+        PerSegment(ranks.finish().buffer).broadcast(peers, out.view[I](0, n))
+        return Int64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 
 struct Offset[lead: Bool](WindowKernel):
@@ -432,28 +464,16 @@ struct Offset[lead: Bool](WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return argument.copy()
 
-    def params(self) -> List[Int]:
-        return [self.offset]
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var step = self.offset if Self.lead else -self.offset
-        var idx = Int32Builder(len(extents))
-        for j in range(len(extents)):
-            var src = j + step
-            if (
-                src < extents.partition_start[j]
-                or src >= extents.partition_end[j]
-            ):
-                idx.append_null()
-            else:
-                idx.append(Int32(src))
-        return TakeKernel.dispatch(argument.copy(), idx.finish(), ctx)
+        # `shift` reads `offset` rows back; `lead` reads forward.
+        var back = -self.offset if Self.lead else self.offset
+        return ShiftKernel.dispatch(argument, back, segments.partitions(), ctx)
 
 
 @fieldwise_init
@@ -478,19 +498,20 @@ struct Edge[first: Bool](WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return argument.copy()
 
-    def params(self) -> List[Int]:
-        return List[Int]()
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var idx = Int32Builder(len(extents))
-        for j in range(len(extents)):
-            var start, stop = extents.frame(j, frame)
+        var bounds = segments.frames(frame)
+        var starts = bounds[0].values()
+        var stops = bounds[1].values()
+        var idx = Int32Builder(len(segments))
+        for j in range(len(segments)):
+            var start = Int(starts[j])
+            var stop = Int(stops[j])
             if stop == start:
                 idx.append_null()
             elif Self.first:
@@ -522,23 +543,30 @@ struct PercentRank(WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return float64.to_dyn()
 
-    def params(self) -> List[Int]:
-        return List[Int]()
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var out = Float64Builder(len(extents))
-        for j in range(len(extents)):
-            var lo = extents.partition_start[j]
-            var rows = extents.partition_end[j] - lo
-            var rank = extents.peer_start[j] - lo
-            out.append(0.0 if rows <= 1 else Float64(rank) / Float64(rows - 1))
-        return out.finish().to_dyn()
+        comptime F = DType.float64
+        var n = len(segments)
+        var parts = segments.partitions()
+        var peers = segments.peers()
+        var first = segments.partition_peers.values()
+        var ranks = Float64Builder(peers.count())
+        for p in range(parts.count()):
+            var lo = parts.start(p)
+            var rows = parts.end(p) - lo
+            for g in range(Int(first[p]), Int(first[p + 1])):
+                var rank = peers.start(g) - lo
+                ranks.append(
+                    0.0 if rows <= 1 else Float64(rank) / Float64(rows - 1)
+                )
+        var out = Buffer.alloc_uninit[F](n)
+        PerSegment(ranks.finish().buffer).broadcast(peers, out.view[F](0, n))
+        return Float64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 
 @fieldwise_init
@@ -557,22 +585,27 @@ struct CumeDist(WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return float64.to_dyn()
 
-    def params(self) -> List[Int]:
-        return List[Int]()
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var out = Float64Builder(len(extents))
-        for j in range(len(extents)):
-            var lo = extents.partition_start[j]
-            var rows = extents.partition_end[j] - lo
-            out.append(Float64(extents.peer_end[j] - lo) / Float64(rows))
-        return out.finish().to_dyn()
+        comptime F = DType.float64
+        var n = len(segments)
+        var parts = segments.partitions()
+        var peers = segments.peers()
+        var first = segments.partition_peers.values()
+        var dists = Float64Builder(peers.count())
+        for p in range(parts.count()):
+            var lo = parts.start(p)
+            var rows = parts.end(p) - lo
+            for g in range(Int(first[p]), Int(first[p + 1])):
+                dists.append(Float64(peers.end(g) - lo) / Float64(rows))
+        var out = Buffer.alloc_uninit[F](n)
+        PerSegment(dists.finish().buffer).broadcast(peers, out.view[F](0, n))
+        return Float64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 
 struct NTile(WindowKernel):
@@ -600,30 +633,27 @@ struct NTile(WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return int64.to_dyn()
 
-    def params(self) -> List[Int]:
-        return [self.buckets]
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var out = Int64Builder(len(extents))
-        for j in range(len(extents)):
-            var lo = extents.partition_start[j]
-            var rows = extents.partition_end[j] - lo
-            var i = j - lo
+        var out = Int64Builder(len(segments))
+        var parts = segments.partitions()
+        for p in range(parts.count()):
+            var rows = parts.end(p) - parts.start(p)
             var small = rows // self.buckets
             var extra = rows % self.buckets
-            if small == 0:
-                out.append(Int64(i + 1))
-            elif i < extra * (small + 1):
-                out.append(Int64(i // (small + 1) + 1))
-            else:
-                var rest = i - extra * (small + 1)
-                out.append(Int64(extra + rest // small + 1))
+            for i in range(rows):
+                if small == 0:
+                    out.append(Int64(i + 1))
+                elif i < extra * (small + 1):
+                    out.append(Int64(i // (small + 1) + 1))
+                else:
+                    var rest = i - extra * (small + 1)
+                    out.append(Int64(extra + rest // small + 1))
         return out.finish().to_dyn()
 
 
@@ -631,7 +661,7 @@ struct NthValue(WindowKernel):
     """`NTH_VALUE(v, n)` — the `n`-th row of the frame, 1-based.
 
     `FIRST_VALUE` is `NTH_VALUE(v, 1)` and answers through `Edge` instead,
-    because a frame's first row is an edge the extents already name; an
+    because a frame's first row is an edge `frames` already names; an
     arbitrary `n` has to be counted from that edge.
     """
 
@@ -655,22 +685,24 @@ struct NthValue(WindowKernel):
     def dtype(argument: DynType) -> DynType:
         return argument.copy()
 
-    def params(self) -> List[Int]:
-        return [self.n]
-
     def compute(
         self,
-        extents: WindowExtents,
+        segments: WindowSegments,
         argument: DynArray,
         frame: WindowFrame,
         ctx: ExecContext,
     ) raises -> DynArray:
-        var idx = Int32Builder(len(extents))
-        for j in range(len(extents)):
-            var lo, hi = extents.frame(j, frame)
-            var at = lo + self.n - 1
-            if at < hi:
-                idx.append(Int32(at))
+        var bounds = segments.frames(frame)
+        var starts = bounds[0].values()
+        var stops = bounds[1].values()
+        var idx = Int32Builder(len(segments))
+        for j in range(len(segments)):
+            var lo = Int(starts[j])
+            var hi = Int(stops[j])
+            # Against the frame's row count, so a huge `n` cannot overflow
+            # `lo + n`.
+            if self.n <= hi - lo:
+                idx.append(Int32(lo + self.n - 1))
             else:
                 idx.append_null()
         return TakeKernel.dispatch(argument.copy(), idx.finish(), ctx)

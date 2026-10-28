@@ -1487,13 +1487,11 @@ struct Bitmap[*, mut: Bool = False](
             if end_sub != 0:
                 var sb = src_bit_pos >> 3
                 var so = src_bit_pos & 7
-                var shifted: UInt8
-                if so == 0:
-                    shifted = src_ptr[unsafe_offset=sb]
-                else:
-                    shifted = (src_ptr[unsafe_offset=sb] >> UInt8(so)) | (
-                        src_ptr[unsafe_offset=sb + 1] << UInt8(8 - so)
-                    )
+                var shifted = src_ptr[unsafe_offset=sb] >> UInt8(so)
+                # The next byte only when the last bits reach into it: it
+                # may lie past the source's end.
+                if so + end_sub > 8:
+                    shifted |= src_ptr[unsafe_offset=sb + 1] << UInt8(8 - so)
                 var keep_mask = UInt8(0xFF) << UInt8(end_sub)
                 dst[unsafe_offset=end_byte] = (
                     dst[unsafe_offset=end_byte] & keep_mask

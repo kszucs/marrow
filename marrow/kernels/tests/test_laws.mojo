@@ -38,9 +38,13 @@ from ...dtypes import (
     int64,
 )
 from ...kernels.aggregate import (
+    BitAndFold,
+    BitOrFold,
+    BitXorFold,
     CountFold,
     DecimalSumFold,
     FoldKernel,
+    FoldLane,
     MaxFold,
     MeanFold,
     MinFold,
@@ -1287,3 +1291,57 @@ def test_fold_lanes_law_rejects_a_wrong_override() raises:
         check_fold_lanes[_FirstLane, DType.int64, 4](
             _registers[DType.int64, 4](_int64_domain())
         )
+
+
+# ---------------------------------------------------------------------------
+# FoldLane: every fold as a binary kernel. CountFold's combine keeps its left
+# operand and claims no law; its lane is never read.
+# ---------------------------------------------------------------------------
+
+
+def test_identity_law_fold_lane() raises:
+    _claims_identity[FoldLane[SumFold]](_int64_domain())
+    _claims_identity[FoldLane[SumFold]](_float64_exact_domain())
+    _claims_identity[FoldLane[ProductFold]](_int64_domain())
+    _claims_identity[FoldLane[ProductFold]](_float64_exact_domain())
+    _claims_identity[FoldLane[MinFold]](_int64_domain())
+    _claims_identity[FoldLane[MinFold]](_float64_exact_domain())
+    _claims_identity[FoldLane[MaxFold]](_int64_domain())
+    _claims_identity[FoldLane[MaxFold]](_float64_exact_domain())
+    _claims_identity[FoldLane[MeanFold]](_float64_exact_domain())
+    _claims_identity[FoldLane[BitAndFold]](_int64_domain())
+    _claims_identity[FoldLane[BitOrFold]](_int64_domain())
+    _claims_identity[FoldLane[BitXorFold]](_int64_domain())
+    _claims_identity[FoldLane[DecimalSumFold]](_int128_domain())
+
+
+def test_associative_law_fold_lane() raises:
+    _claims_associative[FoldLane[SumFold]](_int64_domain())
+    _claims_associative[FoldLane[SumFold]](_float64_exact_domain())
+    _claims_associative[FoldLane[ProductFold]](_int64_domain())
+    _claims_associative[FoldLane[ProductFold]](_float64_exact_domain())
+    _claims_associative[FoldLane[MinFold]](_int64_domain())
+    _claims_associative[FoldLane[MinFold]](_float64_exact_domain())
+    _claims_associative[FoldLane[MaxFold]](_int64_domain())
+    _claims_associative[FoldLane[MaxFold]](_float64_exact_domain())
+    _claims_associative[FoldLane[MeanFold]](_float64_exact_domain())
+    _claims_associative[FoldLane[BitAndFold]](_int64_domain())
+    _claims_associative[FoldLane[BitOrFold]](_int64_domain())
+    _claims_associative[FoldLane[BitXorFold]](_int64_domain())
+    _claims_associative[FoldLane[DecimalSumFold]](_int128_domain())
+
+
+def test_commutative_law_fold_lane() raises:
+    _claims_commutative[FoldLane[SumFold]](_int64_domain())
+    _claims_commutative[FoldLane[SumFold]](_float64_exact_domain())
+    _claims_commutative[FoldLane[ProductFold]](_int64_domain())
+    _claims_commutative[FoldLane[ProductFold]](_float64_exact_domain())
+    _claims_commutative[FoldLane[MinFold]](_int64_domain())
+    _claims_commutative[FoldLane[MinFold]](_float64_exact_domain())
+    _claims_commutative[FoldLane[MaxFold]](_int64_domain())
+    _claims_commutative[FoldLane[MaxFold]](_float64_exact_domain())
+    _claims_commutative[FoldLane[MeanFold]](_float64_exact_domain())
+    _claims_commutative[FoldLane[BitAndFold]](_int64_domain())
+    _claims_commutative[FoldLane[BitOrFold]](_int64_domain())
+    _claims_commutative[FoldLane[BitXorFold]](_int64_domain())
+    _claims_commutative[FoldLane[DecimalSumFold]](_int128_domain())

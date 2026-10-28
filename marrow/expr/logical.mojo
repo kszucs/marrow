@@ -74,9 +74,9 @@ from ..kernels.window import (
     LastValue,
     Lead,
     NthValue,
-    WindowExtents,
     WindowFrame,
     WindowKernel,
+    WindowSegments,
 )
 from ..io import StorageOptions
 from ..schema import Schema, schema
@@ -555,7 +555,7 @@ struct DynValue(Copyable, Movable, Writable):
     var _window_column: def(
         ArcPointer[NoneType],
         StructArray,
-        WindowExtents,
+        WindowSegments,
         Schema,
         Bindings,
         ExecContext,
@@ -643,7 +643,7 @@ struct DynValue(Copyable, Movable, Writable):
     ](
         ptr: ArcPointer[NoneType],
         sorted: StructArray,
-        extents: WindowExtents,
+        segments: WindowSegments,
         schema: Schema,
         bindings: Bindings,
         ctx: ExecContext,
@@ -651,7 +651,7 @@ struct DynValue(Copyable, Movable, Writable):
         var evaluator = rebind[ArcPointer[V]](ptr)[].to_evaluator(
             schema, bindings
         )
-        return evaluator.run(sorted, extents, ctx)
+        return evaluator.run(sorted, segments, ctx)
 
     @staticmethod
     def _not_windowed_spec(ptr: ArcPointer[NoneType]) raises -> WindowSpec:
@@ -661,7 +661,7 @@ struct DynValue(Copyable, Movable, Writable):
     def _not_windowed_column(
         ptr: ArcPointer[NoneType],
         sorted: StructArray,
-        extents: WindowExtents,
+        segments: WindowSegments,
         schema: Schema,
         bindings: Bindings,
         ctx: ExecContext,
@@ -724,16 +724,16 @@ struct DynValue(Copyable, Movable, Writable):
     def window_column(
         self,
         sorted: StructArray,
-        extents: WindowExtents,
+        segments: WindowSegments,
         schema: Schema,
         bindings: Bindings,
         ctx: ExecContext,
     ) raises -> DynArray:
         """The boxed window value's column over `sorted`, a batch of `schema`
-        already ordered by `window_spec()` and described by `extents` — in
-        that sorted order. Raises unless `windowed()`."""
+        already ordered by `window_spec()` and cut into `segments` — in that
+        sorted order. Raises unless `windowed()`."""
         return self._window_column(
-            self._boxed, sorted, extents, schema, bindings, ctx
+            self._boxed, sorted, segments, schema, bindings, ctx
         )
 
     def references(self, mut into: References):
@@ -1453,17 +1453,24 @@ struct WindowCall[K: WindowKernel, A: Value = Nothing](WindowFunction):
         return CallEvaluator(self._kernel.copy(), argument^, frame)
 
     def write_to[W: Writer](self, mut writer: W):
-        """`lag(v, 2)`, `ntile(4)`, `row_number()`."""
+        """`lag(v, 2)`, `ntile(4)`, `row_number()`: the operand, then each of
+        the kernel's fields."""
         writer.write(Self.K.name(), "(")
         var first = True
         comptime if is_filled[Self.A]:
             writer.write(self._argument)
             first = False
-        for p in self._kernel.params():
-            if not first:
-                writer.write(", ")
-            writer.write(p)
-            first = False
+        comptime r = reflect[Self.K]
+        comptime for i in range(r.field_count()):
+            comptime if conforms_to(r.field_at[i].T, Writable):
+                if not first:
+                    writer.write(", ")
+                r.field_ref[i](self._kernel).write_to(writer)
+                first = False
+            else:
+                comptime assert (
+                    False
+                ), "window: a kernel's fields render in its plan"
         writer.write(")")
 
 

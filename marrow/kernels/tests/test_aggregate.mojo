@@ -22,7 +22,9 @@ from ...builders import (
     nulls,
     Float64Builder,
     PrimitiveBuilder,
+    Decimal128Builder,
     Int32Builder,
+    Int64Builder,
     StringBuilder,
     Date32Builder,
     TimestampBuilder,
@@ -34,9 +36,11 @@ from ...dtypes import (
     float64,
     string,
     date32,
+    decimal128,
     timestamp,
     second,
     Date32Type,
+    Decimal128Type,
     Float64Type,
     Int8Type,
     Int16Type,
@@ -48,7 +52,7 @@ from ...dtypes import (
 )
 from ...kernels.groupby import Groups
 from ...kernels.numeric import AddKernel, MinKernel
-from ...kernels.window import WindowExtents, WindowFrame
+from ...kernels.window import WindowFrame, WindowSegments
 from ...kernels.aggregate import (
     AggKernel,
     Fold,
@@ -63,6 +67,7 @@ from ...kernels.aggregate import (
     MIN,
     SUM,
     CountFold,
+    DecimalSumFold,
     Windowable,
     ValidCount,
     AnyKernel,
@@ -271,19 +276,40 @@ def test_min_max_timestamp_preserves_unit_tz() raises:
 # -- Windowable.over: one answer per frame, against the aggregate over each --
 
 
+def _check_each_frame[
+    A: Windowable
+](value: DynArray, segments: WindowSegments, frames: List[WindowFrame]) raises:
+    """`A.over` every frame, each row checked against `A` over that row's
+    slice."""
+    var n = len(value)
+    for frame in frames:
+        var got = A.over(A.InArray(value.to_data()), segments, frame).to_dyn()
+        assert_equal(len(got), n)
+        var bounds = segments.frames(frame)
+        for j in range(n):
+            var lo = Int(bounds[0].values()[j])
+            var hi = Int(bounds[1].values()[j])
+            var expected = whole[A](value.slice(lo, hi - lo))
+            assert_equal(
+                String(got[j]), String(expected), String(frame, " row ", j)
+            )
+
+
 def _check_over[A: Windowable](value: DynArray) raises:
     """Every frame shape a window produces — the default `RANGE` frame over
     tied peers, sliding, whole-partition, empty, past the partition and
     two-sided `ROWS` frames — over three partitions, each row checked against
     `A` over that row's slice."""
     var n = len(value)
-    var new_partition = List[Bool](length=n, fill=False)
-    var new_peer = List[Bool](length=n, fill=False)
+    var peer_ends = Int64Builder(n + 1)
     for j in range(n):
-        new_partition[j] = j == 0 or j == 7 or j == 15
-        new_peer[j] = new_partition[j] or j % 3 == 0
-    var extents = WindowExtents(new_partition^, new_peer^)
-    var frames = [
+        if j == 0 or j == 7 or j == 15 or j % 3 == 0:
+            peer_ends.append(Int64(j))
+    peer_ends.append(Int64(n))
+    var segments = WindowSegments(
+        array([0, 7, 15, n], int64), peer_ends.finish()
+    )
+    var frames: List[WindowFrame] = [
         WindowFrame.default(),
         WindowFrame(True, -3, 0),
         WindowFrame(True, -1000, 1000),
@@ -292,25 +318,51 @@ def _check_over[A: Windowable](value: DynArray) raises:
         WindowFrame(True, 0, 0),
         WindowFrame(True, -1, 2),
     ]
-    for frame in frames:
-        var got = A.over(A.InArray(value.to_data()), extents, frame).to_dyn()
-        assert_equal(len(got), n)
-        for j in range(n):
-            var lo, hi = extents.frame(j, frame)
-            var expected = whole[A](value.slice(lo, hi - lo))
-            assert_equal(
-                String(got[j]), String(expected), String(frame, " row ", j)
-            )
+    _check_each_frame[A](value, segments, frames)
 
 
-def test_over_matches_the_aggregate_over_each_frame() raises:
-    var b = Int32Builder(23)
-    for i in range(23):
+def _int32_with_nulls(n: Int) raises -> DynArray:
+    var b = Int32Builder(n)
+    for i in range(n):
         if i % 5 == 2:
             b.append_null()
         else:
             b.append(Int32((i * 7919) % 41 - 20))
-    var col: DynArray = b.finish()
+    return b.finish()
+
+
+def _decimals_with_nulls(n: Int) raises -> DynArray:
+    var b = Decimal128Builder(decimal128(10, 2), n)
+    for i in range(n):
+        if i % 5 == 2:
+            b.append_null()
+        else:
+            b.append(Scalar[Decimal128Type.native]((i * 7919) % 41 - 20))
+    return b.finish()
+
+
+def _float64_with_nans(n: Int) raises -> DynArray:
+    var b = Float64Builder(n)
+    for i in range(n):
+        if i % 7 == 3 or (i >= 40 and i < 52):
+            b.append(nan[DType.float64]())
+        elif i % 6 == 1:
+            b.append_null()
+        else:
+            b.append(Float64((i * 31) % 17) - 8.5)
+    return b.finish()
+
+
+def _two_partitions(n: Int) raises -> WindowSegments:
+    """`n` rows cut at row 27, every row its own peer group."""
+    var peer_ends = Int64Builder(n + 1)
+    for j in range(n + 1):
+        peer_ends.append(Int64(j))
+    return WindowSegments(array([0, 27, n], int64), peer_ends.finish())
+
+
+def test_over_matches_the_aggregate_over_each_frame() raises:
+    var col = _int32_with_nulls(23)
     _check_over[Fold[SumFold, Int32Type]](col)
     _check_over[Fold[MinFold, Int32Type]](col)
     _check_over[Fold[MaxFold, Int32Type]](col)
@@ -332,6 +384,70 @@ def test_over_float_min_max_with_nan() raises:
     _check_over[Fold[MinFold, Float64Type]](col)
     _check_over[Fold[MaxFold, Float64Type]](col)
     _check_over[Fold[SumFold, Float64Type]](col)
+
+
+def test_over_decimal_sum_matches_each_frame() raises:
+    """A decimal sum folds every frame in its 128-bit accumulator."""
+    var col = _decimals_with_nulls(23)
+    _check_over[Fold[DecimalSumFold, Decimal128Type]](col)
+
+
+def test_over_rows_frames_wider_than_a_block() raises:
+    """`ROWS` frames wider than eight rows inside longer partitions: a row
+    inside its partition folds a block's suffix and the next block's prefix,
+    a register at a time."""
+    comptime n = 60
+    var segments = _two_partitions(n)
+    var frames: List[WindowFrame] = [
+        WindowFrame(True, -10, 0),
+        WindowFrame(True, 0, 12),
+        WindowFrame(True, -6, 5),
+    ]
+    var ints = _int32_with_nulls(n)
+    _check_each_frame[Fold[SumFold, Int32Type]](ints, segments, frames)
+    var floats = _float64_with_nans(n)
+    _check_each_frame[Fold[MinFold, Float64Type]](floats, segments, frames)
+    _check_each_frame[Fold[MaxFold, Float64Type]](floats, segments, frames)
+    var decimals = _decimals_with_nulls(n)
+    _check_each_frame[Fold[DecimalSumFold, Decimal128Type]](
+        decimals, segments, frames
+    )
+
+
+def test_over_rows_offsets_past_every_partition() raises:
+    """`Int.MIN`, `Int.MAX` and `2^62` reach past any partition, so each is
+    the partition's edge."""
+    comptime n = 60
+    var segments = _two_partitions(n)
+    var frames: List[WindowFrame] = [
+        WindowFrame(True, Int.MIN, 0),
+        WindowFrame(True, -(1 << 62), 1 << 62),
+        WindowFrame(True, 0, Int.MAX),
+    ]
+    var ints = _int32_with_nulls(n)
+    _check_each_frame[Fold[SumFold, Int32Type]](ints, segments, frames)
+    _check_each_frame[ValidCount[Int32Array]](ints, segments, frames)
+    var floats = _float64_with_nans(n)
+    _check_each_frame[Fold[MinFold, Float64Type]](floats, segments, frames)
+
+
+def test_over_a_frame_ending_before_it_starts_is_empty() raises:
+    """`ROWS BETWEEN 3 FOLLOWING AND 1 FOLLOWING` holds no row for any row:
+    the sum is null and both counts are 0."""
+    var values = array([1, 2, 3, 4, 5], int32)
+    var whole_column = array([0, 5], int64)
+    var segments = WindowSegments(whole_column.copy(), whole_column.copy())
+    var frame = WindowFrame(True, 3, 1)
+    var none: List[Optional[Int]] = [None, None, None, None, None]
+    assert_true(
+        Fold[SumFold, Int32Type].over(values, segments, frame)
+        == array(none, int64)
+    )
+    var zeros = array([0, 0, 0, 0, 0], int64)
+    assert_true(
+        Fold[CountFold, Int32Type].over(values, segments, frame) == zeros
+    )
+    assert_true(ValidCount[Int32Array].over(values, segments, frame) == zeros)
 
 
 # ---------------------------------------------------------------------------

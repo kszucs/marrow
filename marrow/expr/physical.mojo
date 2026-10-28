@@ -14,6 +14,7 @@ from std.memory import ArcPointer
 
 from ..errors import InternalError
 from ..arrays import DynArray, Int32Array, StructArray
+from ..buffers import Buffer
 from std.builtin.rebind import downcast
 from ..builders import DynBuilder, Int32Builder, arange, nulls
 from ..dtypes import Field, Int32Type, field, null, struct_
@@ -57,8 +58,10 @@ from .logical import (
     Value,
     WindowSpec,
 )
+from ..kernels.runs import RunsKernel
+from ..kernels.segments import ByEnds, PerSegment
 from ..kernels.sort import SortIndices
-from ..kernels.window import WindowExtents, WindowFrame, WindowKernel
+from ..kernels.window import WindowFrame, WindowKernel, WindowSegments
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 
@@ -810,8 +813,8 @@ struct WindowOperator(Operator):
 
     **The partitioning is a prefix of the sort key, not a second mechanism.**
     `PARTITION BY k ORDER BY v` is the ordering `[k, v]`, so one
-    `SortIndices.multi` answers both questions, and `WindowExtents` reads
-    partition and peer boundaries straight off the result. Hash-partitioning
+    `SortIndices.multi` answers both questions, and `WindowSegments` reads
+    partitions and peer groups straight off the result. Hash-partitioning
     first and sorting each bucket would need a `DictionaryEncoder`, a gather per
     bucket, and a second null convention to keep consistent with `GROUP BY`'s
     — three moving parts to express what the sort already expresses.
@@ -925,8 +928,8 @@ struct WindowOperator(Operator):
         var sorted_keys = List[DynArray](capacity=len(keys))
         for ref k in keys:
             sorted_keys.append(TakeKernel.dispatch(k.copy(), perm, self._ctx))
-        var extents = WindowExtents.of_sorted(
-            sorted_keys, len(spec.partition_by), self._ctx
+        var segments = WindowSegments.of_sorted(
+            sorted_keys, len(spec.partition_by), n, self._ctx
         )
 
         # -- the sorted batch, and the way back ------------------------------
@@ -945,7 +948,7 @@ struct WindowOperator(Operator):
         for ref i in which:
             var column = self._values[i].window_column(
                 sorted_batch,
-                extents,
+                segments,
                 self._input_schema,
                 self._bindings,
                 self._ctx,
@@ -1395,13 +1398,16 @@ trait FrameEvaluator(Deinitable, Movable):
     """Computes one window function over every frame of a sorted batch.
 
     What `WindowFunction.to_evaluator` builds — the window counterpart of
-    `Operator`. Built for one frame spec; the extents describe the partitions
-    and peer groups of the batch it runs over, so one `run` answers the whole
+    `Operator`. Built for one frame spec; the segments are the partitions and
+    peer groups of the batch it runs over, so one `run` answers the whole
     column, in sorted order.
     """
 
     def run(
-        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self,
+        sorted: StructArray,
+        segments: WindowSegments,
+        ctx: ExecContext,
     ) raises -> DynArray:
         ...
 
@@ -1426,7 +1432,10 @@ struct CallEvaluator[K: WindowKernel](FrameEvaluator):
         self._frame = frame
 
     def run(
-        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self,
+        sorted: StructArray,
+        segments: WindowSegments,
+        ctx: ExecContext,
     ) raises -> DynArray:
         var n = len(sorted)
         var argument: DynArray
@@ -1439,7 +1448,7 @@ struct CallEvaluator[K: WindowKernel](FrameEvaluator):
             )
         else:
             argument = nulls(n, null)
-        return self._kernel.compute(extents, argument, self._frame, ctx)
+        return self._kernel.compute(segments, argument, self._frame, ctx)
 
 
 struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
@@ -1470,7 +1479,10 @@ struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
         self._frame = frame
 
     def run(
-        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self,
+        sorted: StructArray,
+        segments: WindowSegments,
+        ctx: ExecContext,
     ) raises -> DynArray:
         comptime F = downcast[Self.Agg, Windowable]
         var n = len(sorted)
@@ -1486,19 +1498,20 @@ struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
             )
             var admitted = FilterKernel.selection(mask.as_bool())
             operand = MaskValidityKernel.apply(operand, admitted.view())
-        return F.over(F.InArray(operand), extents, self._frame).to_dyn()
+        return F.over(F.InArray(operand), segments, self._frame).to_dyn()
 
 
 struct PerFrameEvaluator[V: Value](FrameEvaluator):
-    """An aggregate evaluated once per distinct frame, through its own
+    """An aggregate evaluated once per run of equal frames, through its own
     operator — what an aggregate with no `Windowable.over` evaluates through,
     and what makes every aggregate a window aggregate at once.
 
-    A frame equal to the previous row's is not re-evaluated: under `RANGE`
-    that is every row of a peer group, and under `ROWS` every row whose frame
-    both partition edges clip. Two partitions never share a non-empty frame,
-    so the reuse cannot carry an answer across a partition boundary. Each
-    distinct answer is kept once and the column is one gather over them.
+    Adjacent rows with the same frame are one run (`RunsKernel` over the
+    frames' starts and stops), evaluated once: under `RANGE` a run is a peer
+    group, and under `ROWS` it is the rows whose frame both partition edges
+    clip. Two partitions never share a non-empty frame, so a run cannot carry
+    an answer across a partition boundary. Each run's answer is kept once, and
+    the column is one gather of them by each row's run.
 
     **An empty frame still runs the aggregate**, on a zero-row slice, rather
     than short-circuiting to null: `COUNT` over no rows is 0 and `MIN` over no
@@ -1528,27 +1541,36 @@ struct PerFrameEvaluator[V: Value](FrameEvaluator):
         self._frame = frame
 
     def run(
-        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self,
+        sorted: StructArray,
+        segments: WindowSegments,
+        ctx: ExecContext,
     ) raises -> DynArray:
-        var n = len(extents)
+        var n = len(segments)
         var dtype = self._aggregate.dtype(self._schema)
+        var out: DynArray
         if n == 0:
-            return nulls(0, dtype)
-        var reads = List[Int]()
-        for name in self._aggregate.columns():
-            # A name missing here is left for `to_operator` to report.
-            var i = self._schema.get_field_index(name)
-            if i >= 0:
-                reads.append(i)
-        var input = sorted.select(reads)
-        var input_schema = schema(input.dtype.as_struct().fields.copy())
-        var answers = List[DynArray]()
-        var which = Int32Builder(n)
-        var prev_lo = 0
-        var prev_hi = 0
-        for j in range(n):
-            var lo, hi = extents.frame(j, self._frame)
-            if j == 0 or lo != prev_lo or hi != prev_hi:
+            out = nulls(0, dtype)
+        else:
+            var reads = List[Int]()
+            for name in self._aggregate.columns():
+                # A name missing here is left for `to_operator` to report.
+                var i = self._schema.get_field_index(name)
+                if i >= 0:
+                    reads.append(i)
+            var input = sorted.select(reads)
+            var input_schema = schema(input.dtype.as_struct().fields.copy())
+            var bounds = segments.frames(self._frame)
+            var keys: List[DynArray] = [bounds[0].copy(), bounds[1].copy()]
+            var run_ends = RunsKernel.dispatch(keys, n, ctx)
+            var runs = ByEnds(run_ends.values())
+            var starts = bounds[0].values()
+            var stops = bounds[1].values()
+            var answers = List[DynArray](capacity=runs.count())
+            for r in range(runs.count()):
+                # Every row of a run has the frame of its first.
+                var lo = Int(starts[runs.start(r)])
+                var hi = Int(stops[runs.start(r)])
                 var op = self._aggregate.to_operator(
                     input_schema, False, self._bindings
                 )
@@ -1561,12 +1583,16 @@ struct PerFrameEvaluator[V: Value](FrameEvaluator):
                     answers.append(produced.value().to_array(1))
                 else:
                     answers.append(nulls(1, dtype.copy()))
-            which.append(Int32(len(answers) - 1))
-            prev_lo = lo
-            prev_hi = hi
-        return TakeKernel.dispatch(
-            DynBuilder.concat(answers), which.finish(), ctx
-        )
+            var ids = Buffer.alloc_uninit[DType.int32](n)
+            PerSegment(arange[Int32Type](0, runs.count()).buffer).broadcast(
+                runs, ids.view[DType.int32](0, n)
+            )
+            out = TakeKernel.dispatch(
+                DynBuilder.concat(answers),
+                Int32Array(length=n, buffer=ids^.to_immutable()),
+                ctx,
+            )
+        return out^
 
 
 struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):

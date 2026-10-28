@@ -13,6 +13,8 @@ The second is what matters; the first is what tells you *which* verb broke when
 it does not. PyArrow appears only as the interop oracle.
 """
 
+import sys
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -616,6 +618,33 @@ def test_an_explicit_rows_frame_slides(windowed):
         s=col("v").sum().over(order_by=[col("v")], rows=(-1, 0))
     )
     assert [x["s"] for x in rows(out)] == [1, 3, 5, 7]
+
+
+def test_a_window_rows_frame_past_every_partition_is_its_edge(windowed):
+    """`-sys.maxsize` preceding reaches the partition start, as `UNBOUNDED
+    PRECEDING` does, and `sys.maxsize` following its end."""
+    out = windowed.with_columns(
+        up=col("v")
+        .sum()
+        .over(
+            partition_by=[col("k")],
+            order_by=[col("v")],
+            rows=(-sys.maxsize, 0),
+        ),
+        down=col("v")
+        .sum()
+        .over(
+            partition_by=[col("k")],
+            order_by=[col("v")],
+            rows=(0, sys.maxsize),
+        ),
+    )
+    assert [(x["up"], x["down"]) for x in rows(out)] == [
+        (1, 3),
+        (3, 2),
+        (3, 7),
+        (7, 4),
+    ]
 
 
 def test_a_window_builds_a_window_node(windowed):

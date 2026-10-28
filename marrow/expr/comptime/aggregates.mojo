@@ -50,7 +50,6 @@ from ...kernels.aggregate import (
     DistinctCount,
     Fold,
     Foldable,
-    FoldPartial,
     Windowable,
     CountFold,
     DecimalMeanFold,
@@ -78,7 +77,7 @@ from ..logical import Bindings
 from ...execution import ExecContext
 from ...kernels.filter import FilterKernel
 from ...kernels.groupby import Groups
-from ...kernels.window import WindowExtents, WindowFrame
+from ...kernels.window import WindowFrame, WindowSegments
 from ...arrays import DynArray
 from ..physical import (
     BufferedAggregateOperator,
@@ -600,7 +599,7 @@ struct AggregateEvaluator[
     `Aggregate.to_operator` chooses one: a fused aggregate folds its frames
     straight from the operand's lanes (`FoldEvaluator`), any other
     `Windowable` one evaluates its operand to a column first
-    (`ColumnEvaluator`), and the rest run once per distinct frame
+    (`ColumnEvaluator`), and the rest run once per run of equal frames
     (`PerFrameEvaluator`).
 
     One type for the three, because `Aggregate.Evaluator` must name a single
@@ -628,7 +627,10 @@ struct AggregateEvaluator[
         self._frame = frame
 
     def run(
-        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self,
+        sorted: StructArray,
+        segments: WindowSegments,
+        ctx: ExecContext,
     ) raises -> DynArray:
         comptime if Aggregate[Self.Agg, Self.A, Self.P].fuses:
             var fold = FoldEvaluator[Self.Agg, Self.A, Self.P](
@@ -638,7 +640,7 @@ struct AggregateEvaluator[
                 self._input.dtype(self._schema),
                 self._frame,
             )
-            return fold.run(sorted, extents, ctx)
+            return fold.run(sorted, segments, ctx)
         elif conforms_to(Self.Agg, Windowable):
             var predicate: Optional[DynOperator] = None
             comptime if is_filled[Self.P]:
@@ -653,7 +655,7 @@ struct AggregateEvaluator[
                 self._bindings.copy(),
                 self._frame,
             )
-            return column.run(sorted, extents, ctx)
+            return column.run(sorted, segments, ctx)
         else:
             var per_frame = PerFrameEvaluator(
                 Aggregate[Self.Agg, Self.A, Self.P](
@@ -663,16 +665,16 @@ struct AggregateEvaluator[
                 self._bindings.copy(),
                 self._frame,
             )
-            return per_frame.run(sorted, extents, ctx)
+            return per_frame.run(sorted, segments, ctx)
 
 
 struct FoldEvaluator[Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing](
     FrameEvaluator
 ):
-    """A fused fold over every window frame of one batch: the frame leaves
-    come straight from the operand's lanes — `bind` once, `lane[1]` per row,
-    `FILTER` as a validity mask — with no intermediate column, and
-    `Foldable.fold_frames` answers each frame.
+    """A fused fold over every window frame of one batch: the operand is
+    bound once and its lanes go to `Foldable.frames`, the `FILTER` as a
+    validity mask. The lanes are written once, into one scratch column of the
+    accumulator type; no operand column of the input type is built.
 
     The window counterpart of `RegisterAggregateOperator`.
     """
@@ -700,16 +702,12 @@ struct FoldEvaluator[Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing](
         self._frame = frame
 
     def run(
-        mut self, sorted: StructArray, extents: WindowExtents, ctx: ExecContext
+        mut self,
+        sorted: StructArray,
+        segments: WindowSegments,
+        ctx: ExecContext,
     ) raises -> DynArray:
-        comptime Leaf = FoldPartial[Self.Agg.Lane, Self.Agg.Acc]
-        var n = len(sorted)
         var bound = self._input.bind(sorted, self._bindings)
-        var leaves = List[Leaf](capacity=n)
-        for i in range(n):
-            leaves.append(
-                Leaf(self._input.lane[1](bound, i).cast[Self.Agg.Acc](), 1)
-            )
         var valid: Optional[Bitmap[mut=False]]
         comptime if Self.filters:
             valid = _admitted_validity(
@@ -717,13 +715,23 @@ struct FoldEvaluator[Agg: Foldable, A: PrimitiveValue, P: Evaluable = Nothing](
             )
         else:
             valid = self._input.validity(bound)
-        if valid:
-            var bits = valid.value().view()
-            for i in range(n):
-                if not bits[i]:
-                    leaves[i] = Leaf.identity()
+        # The lanes borrow `self`, so nothing else of it is passed beside them.
+        var frame = self._frame
+        ref input = self._input
+
+        @always_inline
+        def lanes[
+            W: Int
+        ](i: Int) {imm input, imm bound} -> SIMD[Self.Agg.Acc, W]:
+            return input.lane[W](bound, i).cast[Self.Agg.Acc]()
+
         var agg = Self.Agg(self._in_dtype, True)
-        agg.fold_frames(leaves, extents, self._frame)
+        if valid:
+            agg.frames(
+                len(sorted), lanes, valid.value().view(), segments, frame
+            )
+        else:
+            agg.frames(len(sorted), lanes, segments, frame)
         return agg.finish().to_dyn()
 
 

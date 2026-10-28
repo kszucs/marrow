@@ -22,8 +22,8 @@ from std.math import align_up, iota
 
 from ..arrays import DynArray, Float64Array, PrimitiveArray
 from ..buffers import Bitmap, Buffer
-from ..builders import Int32Builder
-from ..dtypes import Float64Type, NumericType, PrimitiveType
+from ..builders import arange
+from ..dtypes import Float64Type, Int32Type, NumericType, PrimitiveType
 from ..errors import InvalidError
 from ..execution import ExecContext
 from ..views import BufferView, apply, cpu_lanes, valid_or_zero
@@ -284,33 +284,32 @@ struct ShiftKernel(Kernel):
         )
 
     @staticmethod
-    def dispatch(
+    def dispatch[
+        S: Segments
+    ](
         values: DynArray,
         offset: Int,
+        segments: S,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        """`apply` over the whole column for a fixed-width dtype; any other
-        layout is gathered by index."""
-        var n = len(values)
+        """Row `i` of segment `s` is row `i - offset` when that row is in `s`,
+        and null otherwise; rows in no segment are null. `apply` for a
+        fixed-width dtype; any other layout is gathered by index, each row's
+        index shifted the same way."""
         if values.dtype().is_primitive():
 
             def leaf[T: PrimitiveType](d: T) raises {imm} -> DynArray:
                 return Self.apply(
-                    values.as_primitive[T](), offset, BySize.whole(n), ctx
+                    values.as_primitive[T](), offset, segments, ctx
                 ).to_dyn()
 
             return values.dtype().try_visit[DynArray, PrimitiveType](
                 leaf, "dtype is not primitive"
             )
         else:
-            var indices = Int32Builder(n)
-            for i in range(n):
-                var j = i - offset
-                if j >= 0 and j < n:
-                    indices.append(Int32(j))
-                else:
-                    indices.append_null()
-            return TakeKernel.dispatch(values, indices.finish(), ctx)
+            var rows = arange[Int32Type](0, len(values))
+            var indices = Self.apply(rows, offset, segments, ctx)
+            return TakeKernel.dispatch(values, indices, ctx)
 
 
 struct PairwiseDiffKernel(Kernel):
@@ -418,21 +417,27 @@ def _check_frame[K: Kernel](lo: Int, hi: Int, min_samples: Int) raises:
         raise K.error[InvalidError](
             t"the frame [{lo}, {hi}] ends before it starts"
         )
-    if min_samples < 1 or min_samples > hi - lo + 1:
+    # In 128 bits: a frame may hold more rows than an `Int` counts.
+    var rows = Int128(hi) - Int128(lo) + 1
+    if min_samples < 1 or Int128(min_samples) > rows:
         raise K.error[InvalidError](
-            t"min_samples must be between 1 and the frame's {hi - lo + 1}"
+            t"min_samples must be between 1 and the frame's {rows}"
             t" rows, got {min_samples}"
         )
 
 
 def _valid_counts[
     T: PrimitiveType, S: Segments
-](values: PrimitiveArray[T], segments: S, lo: Int, hi: Int) raises -> Buffer[
-    mut=False
-]:
+](
+    values: PrimitiveArray[T], segments: S, var lo: Int, var hi: Int
+) raises -> Buffer[mut=False]:
     """How many valid rows each row's frame holds, clipped to its segment."""
     comptime C = DType.int32
     var n = len(values)
+    # An offset past `n` rows is the same frame as `n`, and keeps `i + lo`
+    # and `i + hi` in range.
+    lo = min(max(lo, -n), n)
+    hi = min(max(hi, -n), n)
     var counts = Buffer.alloc_zeroed[C](n)
     var dst = counts.view[C](0, n)
     if values.null_count() == 0:
@@ -482,11 +487,13 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
     segment: `rolling_sum`, `rolling_min` and `rolling_max` with
     `K = AddKernel`, `MinKernel` and `MaxKernel`, in the input's dtype.
 
-    A frame of at most eight rows is folded directly, several rows at a time;
-    a wider one by van Herk and Gil-Werman, which folds each row from a prefix
-    and a suffix of fixed blocks and so costs the same at every width. That
-    regroups the fold, which `Associative` allows: a floating-point sum may
-    round differently from a left fold.
+    A frame of at most eight rows is folded directly, several rows at a time:
+    from its first row where it lies inside its segment, and from `K`'s
+    identity where the segment clips it. A wider one is folded by van Herk and
+    Gil-Werman, from a prefix and a suffix of fixed blocks, and so costs the
+    same at every width. So a floating-point sum may round differently from a
+    left-to-right fold, and a sum of negative zeros may answer `+0.0` on some
+    rows and `-0.0` on others.
     """
 
     comptime name = "rolling"
@@ -498,8 +505,8 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
         src: BufferView[T, _],
         dst: BufferView[mut=True, T, _],
         segments: S,
-        lo: Int,
-        hi: Int,
+        var lo: Int,
+        var hi: Int,
     ) raises InvalidError:
         """`dst[i]` is `K` over `src[l .. r]` for every row `i` of segment
         `s`, with `l = max(i + lo, start(s))` and `r = min(i + hi, end(s) - 1)`,
@@ -509,10 +516,14 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
             raise Self.error[InvalidError](
                 t"the frame [{lo}, {hi}] ends before it starts"
             )
+        var n = len(src)
+        # An offset past `n` rows reaches past every segment, so it is the
+        # same frame as `n`, and keeps the width and every row index in range.
+        lo = min(max(lo, -n), n)
+        hi = min(max(hi, -n), n)
         comptime W = cpu_lanes[T]
         var w = hi - lo + 1
         var direct = w <= 8
-        var n = len(src)
         var identity = Self.K.identity[T]()
         # van Herk-Gil-Werman: the fold of each block up to each row, and
         # from each row to the block's end.
@@ -638,6 +649,9 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
         _check_frame[Self](lo, hi, min_samples)
         comptime N = T.native
         var n = len(values)
+        # A `min_samples` past `n` is never met, and `n + 1` says so in the
+        # 32-bit counts.
+        var need = min(min_samples, n + 1)
         var folded = Buffer.alloc_uninit[N](n)
         var acc = folded.view[N](0, n)
         if values.null_count() == 0:
@@ -660,7 +674,7 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
             apply(src, lane)
             Self.frames(src, acc, segments, lo, hi)
         var validity = _at_least(
-            _valid_counts(values, segments, lo, hi), n, min_samples
+            _valid_counts(values, segments, lo, hi), n, need
         )
         var buffer: Buffer[mut=False]
         if validity[0]:
@@ -727,6 +741,9 @@ struct RollingMeanKernel(Kernel):
         _check_frame[Self](lo, hi, min_samples)
         comptime F = DType.float64
         var n = len(values)
+        # A `min_samples` past `n` is never met, and `n + 1` says so in the
+        # 32-bit counts.
+        var need = min(min_samples, n + 1)
         var data = values.values()
         var cast = Buffer.alloc_uninit[F](n)
         var x = cast.view[F](0, n)
@@ -755,16 +772,14 @@ struct RollingMeanKernel(Kernel):
         var out = Buffer.alloc_uninit[F](n)
 
         @always_inline
-        def mean[
-            W: Int
-        ](i: Int) {var sums, var counts, var min_samples} -> SIMD[F, W]:
+        def mean[W: Int](i: Int) {var sums, var counts, var need} -> SIMD[F, W]:
             var c = counts.load[W](i)
-            return c.ge(SIMD[DType.int32, W](min_samples)).select(
+            return c.ge(SIMD[DType.int32, W](need)).select(
                 sums.load[W](i) / c.cast[F](), SIMD[F, W](0)
             )
 
         apply(out.view[F](0, n), mean)
-        var validity = _at_least(counted, n, min_samples)
+        var validity = _at_least(counted, n, need)
         return Float64Array(
             Float64Type(),
             length=n,

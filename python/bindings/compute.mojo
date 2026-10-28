@@ -23,6 +23,7 @@ from marrow.dtypes import DynType, IntegerType, bool_, int32
 import marrow.kernels as mk
 
 from marrow.kernels.boolean import IsNullKernel, NotNullKernel
+from marrow.kernels.segments import BySize
 from marrow.execution import ExecContext
 from marrow.utils.threads import ThreadPool
 
@@ -261,6 +262,11 @@ def _filter(
     return mk.FilterKernel.dispatch(array, mask.as_bool(), ctx)
 
 
+def _shift(array: DynArray, offset: Int, ctx: ExecContext) raises -> DynArray:
+    """`shift` over the whole column, one segment."""
+    return mk.ShiftKernel.dispatch(array, offset, BySize.whole(len(array)), ctx)
+
+
 def _replace_with_mask(
     values: PythonObject,
     mask: PythonObject,
@@ -429,7 +435,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_flag[mk.CumulativeKernel[mk.MaxKernel].dispatch]()](
         "cumulative_max"
     )
-    mb.def_function[_offset[mk.ShiftKernel.dispatch]()]("shift")
+    mb.def_function[_offset[_shift]()]("shift")
     mb.def_function[_offset[mk.PairwiseDiffKernel.dispatch]()]("pairwise_diff")
     mb.def_function[_rolling[mk.RollingKernel[mk.AddKernel].dispatch]()](
         "rolling_sum"

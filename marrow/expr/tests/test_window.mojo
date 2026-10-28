@@ -18,7 +18,7 @@ where an off-by-one produces a plausible number rather than a crash.
 
 from std.math import nan
 from std.python import Python
-from std.testing import assert_almost_equal, assert_true
+from std.testing import assert_almost_equal, assert_equal, assert_true
 from std.os.path import join
 
 from ...utils.testing import ScratchDir
@@ -112,6 +112,25 @@ def test_window_over_no_rows_at_all() raises:
     assert_true(out.schema.get_field_index("rn") == 1)
 
 
+def test_over_with_no_keys_is_one_partition_in_input_order() raises:
+    """`OVER ()` has no key, so every row is one partition and one peer
+    group, in input order: the numbering follows the rows, the sum is the
+    whole column's, and `lag` reads the row before."""
+    var b = record_batch([array([30, 10, 20], int64).copy()], names=["a"])
+    var plan = table(b^).with_columns(
+        ["rn", "s", "lg"],
+        [
+            row_number().over(),
+            col("a", int64).sum().over(),
+            col("a", int64).lag().over(),
+        ],
+    )
+    var out = plan.execute()
+    assert_true(out.column("rn").as_int64() == array([1, 2, 3], int64))
+    assert_true(out.column("s").as_int64() == array([60, 60, 60], int64))
+    assert_true(out.column("lg").as_int64() == array([None, 30, 10], int64))
+
+
 # ---------------------------------------------------------------------------
 # Ties — the whole difference between the three ranking functions
 # ---------------------------------------------------------------------------
@@ -188,8 +207,8 @@ def test_two_nans_in_the_order_key_are_peers() raises:
     `ORDER BY` compares with `IS NOT DISTINCT FROM`, so the two NaNs are one
     peer group and both rank 3. marrow answered 3, 4 when the sort placed them
     adjacent and `equal` then said they differ, because it is IEEE and the sort
-    is not. `WindowExtents.of_sorted` asks `KeyCompare`, under which NaN is
-    NaN, for that reason.
+    is not. `RunsKernel`, which cuts the peer groups, asks `KeyCompare`,
+    under which NaN is NaN, for that reason.
 
     The nulls go last here, where Arrow's placement — NaN beside the nulls —
     and DuckDB's — NaN above every number — agree, so DuckDB 1.5.5's answer
@@ -202,8 +221,8 @@ def test_two_nans_in_the_order_key_are_peers() raises:
 
     A mixed-sign pair is asserted alongside, because it takes *both* halves to
     work: a NaN-safe comparison alone left `-nan` and `+nan` at opposite ends of
-    the partition, where `WindowExtents.of_sorted` — which compares adjacent
-    rows — never handed them to it. The sort setting every NaN aside together
+    the partition, where `RunsKernel` — which compares adjacent rows — never
+    handed them to it. The sort setting every NaN aside together
     is what brings them together.
     """
     var q = nan[DType.float64]()
@@ -630,6 +649,62 @@ def test_a_frame_wholly_past_its_partition_is_empty() raises:
     assert_true(out.column("l").as_int64() == array(expected, int64))
 
 
+def test_a_rows_offset_past_every_partition_is_its_edge() raises:
+    """`Int.MIN`, `Int.MAX` and `2^62` reach past any partition, so each is
+    the partition's edge, in the second partition as in the first."""
+    var b = record_batch(
+        [
+            array(["a", "a", "b", "b", "b"]).copy(),
+            array([1, 2, 10, 20, 30], int64).copy(),
+        ],
+        names=["k", "v"],
+    )
+    var plan = table(b^).with_columns(
+        ["up", "all", "down", "last"],
+        [
+            col("v", int64)
+            .sum()
+            .over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(Int.MIN, 0),
+            ),
+            col("v", int64)
+            .sum()
+            .over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(-(1 << 62), 1 << 62),
+            ),
+            col("v", int64)
+            .sum()
+            .over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(0, Int.MAX),
+            ),
+            col("v", int64)
+            .last_value()
+            .over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(0, Int.MAX),
+            ),
+        ],
+    )
+    var out = plan.execute()
+    assert_true(out.column("up").as_int64() == array([1, 3, 10, 30, 60], int64))
+    assert_true(
+        out.column("all").as_int64() == array([3, 3, 60, 60, 60], int64)
+    )
+    assert_true(
+        out.column("down").as_int64() == array([3, 2, 60, 50, 30], int64)
+    )
+    assert_true(
+        out.column("last").as_int64() == array([2, 2, 30, 30, 30], int64)
+    )
+
+
 # ---------------------------------------------------------------------------
 # The distribution functions
 # ---------------------------------------------------------------------------
@@ -711,6 +786,37 @@ def test_nth_value_is_null_past_the_end_of_the_frame() raises:
     ref n2 = plan.execute().column("n2").as_int64()
     var expected: List[Optional[Int]] = [None, 20, 20]
     assert_true(n2 == array(expected, int64))
+
+
+def test_nth_value_near_int_max_is_null() raises:
+    """No frame holds `Int.MAX` rows, including the frames starting past row
+    0, where counting `n` from the frame's start would overflow."""
+    var b = record_batch(
+        [
+            array(["a", "a", "b", "b", "b"]).copy(),
+            array([1, 2, 10, 20, 30], int64).copy(),
+        ],
+        names=["k", "v"],
+    )
+    var plan = table(b^).with_columns(
+        ["range", "rows"],
+        [
+            col("v", int64)
+            .nth_value(Int.MAX)
+            .over(partition_by=[col("k", string)], order_by=[col("v", int64)]),
+            col("v", int64)
+            .nth_value(Int.MAX)
+            .over(
+                partition_by=[col("k", string)],
+                order_by=[col("v", int64)],
+                rows=(-1, 1),
+            ),
+        ],
+    )
+    var out = plan.execute()
+    var expected: List[Optional[Int]] = [None, None, None, None, None]
+    assert_true(out.column("range").as_int64() == array(expected, int64))
+    assert_true(out.column("rows").as_int64() == array(expected, int64))
 
 
 # ---------------------------------------------------------------------------
@@ -857,3 +963,67 @@ def test_a_windowed_filter_must_be_boolean() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+def test_a_window_call_renders_the_kernel_s_fields() raises:
+    """A window call renders its operand, then each of its kernel's
+    parameters: `lag`'s offset, `ntile`'s bucket count, `nth_value`'s `n`."""
+    var v = col("v", int64)
+    assert_true(
+        "lag(col(v), 2)" in String(v.lag(2).over(order_by=[col("v", int64)]))
+    )
+    assert_true(
+        "lead(col(v), 1)" in String(v.lead().over(order_by=[col("v", int64)]))
+    )
+    assert_true("ntile(4)" in String(ntile(4).over(order_by=[col("v", int64)])))
+    assert_true(
+        "nth_value(col(v), 3)"
+        in String(v.nth_value(3).over(order_by=[col("v", int64)]))
+    )
+    assert_true(
+        "row_number()" in String(row_number().over(order_by=[col("v", int64)]))
+    )
+    assert_true(
+        "first_value(col(v))"
+        in String(v.first_value().over(order_by=[col("v", int64)]))
+    )
+
+
+def test_a_per_frame_aggregate_answers_every_frame_shape() raises:
+    """`variance` has no `Windowable.over`, so it runs once per run of equal
+    frames: under `ROWS 1 PRECEDING` every row's frame differs from the one
+    before, and under the default frame the frames repeat within a peer
+    group and restart at each partition."""
+    var sliding = (
+        table(_partitioned_with_nulls())
+        .with_columns(["var"], [_sliding(col("v", int64).variance())])
+        .execute()
+    )
+    assert_true(
+        sliding.column("var").as_float64()
+        == array([0.0, 0.0, 0.0, 2.25, 0.0, 25.0, 0.0], float64)
+    )
+
+    var cumulative = (
+        table(_partitioned_with_nulls())
+        .with_columns(
+            ["var"],
+            [
+                col("v", int64)
+                .variance()
+                .over(
+                    partition_by=[col("k", string)],
+                    order_by=[col("o", int64)],
+                )
+            ],
+        )
+        .execute()
+    )
+    ref got = cumulative.column("var").as_float64()
+    var expected: List[Float64] = [0.0, 0.0, 1.0, 114.0 / 27.0, 0.0, 25.0, 25.0]
+    assert_equal(len(got), len(expected))
+    for i in range(len(expected)):
+        assert_almost_equal(got[i].value(), expected[i])

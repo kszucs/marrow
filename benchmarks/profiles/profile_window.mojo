@@ -5,13 +5,14 @@
 
     pixi run profile benchmarks/profiles/profile_window.mojo --sample --no-open
 
-`sum` runs over its frames in one pass (`Windowable.over`): a running fold
-while the frame's start holds still, a segment-tree query otherwise.
-`MARROW_PROFILE_SHAPE` picks what the trace shows:
+`sum` folds every frame in one pass (`Windowable.over`): a running scan over
+the partitions for the default `RANGE` frame, a rolling window for a `ROWS`
+frame. `MARROW_PROFILE_SHAPE` picks what the trace shows:
 
-- `sliding` (default) — `ROWS BETWEEN 9 PRECEDING AND CURRENT ROW`: every
-  frame's start moves, so every row is a tree query.
-- `cumulative` — the default `RANGE` frame over distinct keys: the running fold.
+- `sliding` (default) — `ROWS BETWEEN 9 PRECEDING AND CURRENT ROW`: the
+  rolling window.
+- `cumulative` — the default `RANGE` frame over distinct keys: the running
+  scan.
 - `ties` — the default frame over 16 ordering values: 16 peer groups.
 - `row_number` — no frame: the sort, boundary scan and scatter every shape pays.
 

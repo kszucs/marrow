@@ -21,7 +21,6 @@ harness.
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `XxHash32`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `SwissHashTable` — 64-bit hash to dense id |
 | `hll` | `HyperLogLog` — approximate distinct counts over 64-bit hashes |
 | `integers` | `Unsigned`, `zigzag` / `unzigzag`, `ordered` / `unordered` — integer bit tricks |
-| `segment_tree` | `SegmentTree`, `Monoid` — range folds over a fixed sequence |
 | `stats` | `count`, `Counters` — kernel counters under `-D MARROW_STATS=true` |
 | `testing` | `TestSuite`, `BenchSuite`, `Benchmark` — the harness pytest drives |
 | `text` | `Utf8`, `LikePattern`, `RegexPattern` — column-wide UTF-8 scans and patterns |
@@ -57,7 +56,6 @@ from .datetime import (
     weekday_name,
 )
 from .dylib import Dylib, LibSpec
-from .segment_tree import Monoid, SegmentTree
 from .hll import HyperLogLog
 from .text import LikePattern, RegexPattern, Utf8
 from .hashing import (
