@@ -131,7 +131,7 @@ trait NumericBinaryKernel(BinaryKernel):
         var length = len(left)
         var bm = Bitmap.intersect_views(left.validity(), right.validity())
         var buf = ctx.alloc_buffer[native](length)
-        apply[native, native, Self.core[native, _]](
+        apply[native, native, Self.same_core[native, _]](
             left.values(), right.values(), buf.view[native](0, length), ctx
         )
         return PrimitiveArray[T](
@@ -164,7 +164,7 @@ trait NumericUnaryKernel(UnaryKernel):
         comptime native = T.native
         var length = len(array)
         var buf = ctx.alloc_buffer[native](length)
-        apply[native, native, Self.core[native, _]](
+        apply[native, native, Self.same_core[native, _]](
             array.values(), buf.view[native](0, length), ctx
         )
         return PrimitiveArray[T](
@@ -650,8 +650,9 @@ def _binary_cmp[
 # ---------------------------------------------------------------------------
 
 
-trait NumericCompareKernel(Kernel):
-    """Element-wise comparison over fixed-width lanes, producing a BoolArray.
+trait NumericCompareKernel(BinaryKernel):
+    """Element-wise comparison over fixed-width lanes, producing a BoolArray:
+    a `BinaryKernel` whose `core` answers `bool`.
 
     Concrete structs define ``name`` and ``core`` (the SIMD
     predicate); ``apply`` and ``dispatch`` are defaulted. Every comparison
@@ -666,13 +667,10 @@ trait NumericCompareKernel(Kernel):
     time to pick between two unrelated implementations. Which family `a < b`
     means is a question about the operands, and it belongs to whoever is
     interpreting the operator, not to the SIMD kernel.
-    """
 
-    @staticmethod
-    def core[
-        T: DType, W: Int
-    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        ...
+    Each comparison declares `Out` as `bool` itself: a refinement cannot
+    re-default a member its base defaults.
+    """
 
     @staticmethod
     def apply[
@@ -683,7 +681,18 @@ trait NumericCompareKernel(Kernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         Self.expect_same_length(len(left), len(right))
-        return _binary_cmp[T, func=Self.core[T.native, _]](left, right, ctx)
+        return _binary_cmp[T, func=Self.bool_core[T.native, _]](
+            left, right, ctx
+        )
+
+    @always_inline
+    @staticmethod
+    def bool_core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        """`core`, typed as answering `bool`."""
+        comptime assert Self.Out[T] == DType.bool, "a comparison answers bool"
+        return rebind[SIMD[DType.bool, W]](Self.core[T, W](a, b))
 
     @staticmethod
     def dispatch(
@@ -790,6 +799,8 @@ struct EqKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     here agree `-0.0 == 0.0` and this one folds every NaN together.
     """
 
+    comptime Out[T: DType]: DType = DType.bool
+
     # Constant, and deliberately not read off `nan_safe`: this is the
     # *operator's* name and both parameterizations are equality. It reaches
     # plan rendering (`NumericCompare.write_to`), where a varying name printed
@@ -852,6 +863,7 @@ struct NeKernel[nan_safe: Bool = False](NumericCompareKernel):
     construction, and keeps `<>` the exact complement of `=` when `nan_safe`
     makes the latter total."""
 
+    comptime Out[T: DType]: DType = DType.bool
     comptime name = "not_equal"
 
     @always_inline
@@ -867,6 +879,7 @@ struct LtKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     than every number and than `inf` — DuckDB 1.5.5, DataFusion 54 and Polars
     1.43 all answer `nan > 1.0` true."""
 
+    comptime Out[T: DType]: DType = DType.bool
     comptime name = "less"
 
     @always_inline
@@ -897,6 +910,7 @@ struct LeKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     """Ordering — see `LtKernel`. Under the total order a NaN is also `<=` a NaN,
     which IEEE denies."""
 
+    comptime Out[T: DType]: DType = DType.bool
     comptime name = "less_equal"
 
     @always_inline
@@ -922,6 +936,7 @@ struct LeKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
 
 
 struct GtKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
+    comptime Out[T: DType]: DType = DType.bool
     comptime name = "greater"
 
     @always_inline
@@ -951,6 +966,7 @@ struct GeKernel[nan_safe: Bool = False](NumericCompareKernel, Prunable):
     """Ordering — see `LtKernel`. Under the total order a NaN is also `>=` a NaN.
     """
 
+    comptime Out[T: DType]: DType = DType.bool
     comptime name = "greater_equal"
 
     @always_inline

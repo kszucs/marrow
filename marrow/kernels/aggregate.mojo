@@ -341,7 +341,7 @@ struct Widening[
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return Self.K.core[T, W](a, b)
+        return Self.K.same_core[T, W](a, b)
 
     @always_inline
     @staticmethod
@@ -383,7 +383,7 @@ struct MinMax[
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return Self.K.core[T, W](a, b)
+        return Self.K.same_core[T, W](a, b)
 
     @always_inline
     @staticmethod
@@ -423,7 +423,7 @@ struct Bitwise[
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return Self.K.core[T, W](a, b)
+        return Self.K.same_core[T, W](a, b)
 
     @always_inline
     @staticmethod

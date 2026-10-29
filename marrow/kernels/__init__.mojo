@@ -49,12 +49,16 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
     properties
   - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
   - `dictionary.mojo` — `dictionary_encode`, `value_counts` and `mode`
-  - *not re-exported* — the encoder in `dictionary.mojo`, `join.mojo` /
-    `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the hash machinery
-    group-by, join and `is_in` share), `concat.mojo` (batches joined in parallel),
-    `segments.mojo` (a column cut into consecutive runs of rows, and folds
-    over each run), `runs.mojo` (where runs of equal rows start) and
-    `statistics.mojo` (column bounds)
+  - *not re-exported* — the encoder and the dictionary packers in
+    `dictionary.mojo`, the codec stages in `bitwise.mojo` and `cast.mojo`
+    (`ZigzagEncode`, `OrderedEncode`, `ByteSwap`, `NumericCast`, ...),
+    `join.mojo` / `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the
+    hash machinery group-by, join and `is_in` share), `concat.mojo` (batches
+    joined in parallel), `segments.mojo` (a column cut into consecutive runs
+    of rows, and folds over each run), `runs.mojo` (where runs of equal rows
+    start), `statistics.mojo` (column bounds), `compose.mojo` (stream stages
+    composed, and codecs built from stages and packers) and `packing.mojo`
+    (values and byte strings packed into bytes and back)
 """
 
 from marrow.dtypes import (

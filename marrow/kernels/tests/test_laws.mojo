@@ -52,7 +52,7 @@ from ...kernels.aggregate import (
     SumFold,
 )
 from ...kernels.bitwise import BitAndKernel, BitOrKernel, BitXorKernel
-from ...kernels.boolean import AndKernel
+from ...kernels.boolean import AndKernel, IsNanKernel
 from ...kernels.cast import CastKernel
 from ...kernels.core import (
     Associative,
@@ -61,6 +61,7 @@ from ...kernels.core import (
     Identity,
     Partial,
     Prunable,
+    UnaryKernel,
 )
 from ...kernels.decimal import DecimalDivKernel
 from ...kernels.numeric import (
@@ -75,6 +76,7 @@ from ...kernels.numeric import (
     MinKernel,
     ModKernel,
     MulKernel,
+    NegKernel,
     NumericCompareKernel,
     SubKernel,
 )
@@ -482,7 +484,7 @@ def _some_pair_holds[
         if _ordered(lmin, a) and _ordered(a, lmax):
             for b in domain:
                 if _ordered(rmin, b) and _ordered(b, rmax):
-                    if K.core[T, 1](a, b)[0]:
+                    if K.bool_core[T, 1](a, b):
                         return True
     return False
 
@@ -678,12 +680,12 @@ def check_identity[
     """The `Identity` law: `core(e, x)` and `core(x, e)` are both `x`, for
     every `x` in `domain`."""
     for x in domain:
-        var left = K.core[T, 1](e, x)[0]
+        var left = K.same_core[T, 1](e, x)
         assert_true(
             _same_value(left, x),
             String(t"identity: core({e}, {x}) is {left}, not {x}"),
         )
-        var right = K.core[T, 1](x, e)[0]
+        var right = K.same_core[T, 1](x, e)
         assert_true(
             _same_value(right, x),
             String(t"identity: core({x}, {e}) is {right}, not {x}"),
@@ -698,8 +700,10 @@ def check_associative[
     for a in domain:
         for b in domain:
             for c in domain:
-                var left = K.core[T, 1](K.core[T, 1](a, b), c)[0]
-                var right = K.core[T, 1](a, K.core[T, 1](b, c))[0]
+                var ab = K.same_core[T, 1](a, b)
+                var bc = K.same_core[T, 1](b, c)
+                var left = K.same_core[T, 1](ab, c)
+                var right = K.same_core[T, 1](a, bc)
                 assert_true(
                     _same_value(left, right),
                     String(
@@ -716,8 +720,8 @@ def check_commutative[
     from `domain`."""
     for a in domain:
         for b in domain:
-            var left = K.core[T, 1](a, b)[0]
-            var right = K.core[T, 1](b, a)[0]
+            var left = K.same_core[T, 1](a, b)
+            var right = K.same_core[T, 1](b, a)
             assert_true(
                 _same_value(left, right),
                 String(
@@ -1139,7 +1143,7 @@ def check_fold_lanes[
     for v in vectors:
         var expected = v[0]
         for k in range(1, W):
-            expected = K.core[T, 1](expected, v[k])
+            expected = K.same_core[T, 1](expected, v[k])
         var got = K.fold_lanes[T, W](v)
         assert_true(
             _same_value(got, expected),
@@ -1345,3 +1349,25 @@ def test_commutative_law_fold_lane() raises:
     _claims_commutative[FoldLane[BitOrFold]](_int64_domain())
     _claims_commutative[FoldLane[BitXorFold]](_int64_domain())
     _claims_commutative[FoldLane[DecimalSumFold]](_int128_domain())
+
+
+def _binary_out[K: BinaryKernel, T: DType]() -> DType:
+    """The dtype `K.core` answers for values of `T`, read through the bound."""
+    return K.Out[T]
+
+
+def _unary_out[K: UnaryKernel, T: DType]() -> DType:
+    """The dtype `K.core` answers for values of `T`, read through the bound."""
+    return K.Out[T]
+
+
+def test_comparisons_and_predicates_are_kernels_of_bool() raises:
+    """A comparison is a `BinaryKernel` and a value predicate a `UnaryKernel`
+    whose `core` answers `bool`; arithmetic keeps its operands' dtype."""
+    assert_true(_binary_out[LtKernel[], DType.int64]() == DType.bool)
+    assert_true(
+        _binary_out[EqKernel[nan_safe=True], DType.float64]() == DType.bool
+    )
+    assert_true(_binary_out[AddKernel, DType.int32]() == DType.int32)
+    assert_true(_unary_out[IsNanKernel, DType.float32]() == DType.bool)
+    assert_true(_unary_out[NegKernel, DType.float64]() == DType.float64)

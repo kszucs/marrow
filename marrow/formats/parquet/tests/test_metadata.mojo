@@ -133,6 +133,26 @@ def test_read_string_minmax() raises:
         assert_equal(cs.max.value().as_string().to_string(), "cherry")
 
 
+def test_read_dictionary_minmax() raises:
+    """A column read as a dictionary is bounded by its values, as PyArrow's
+    statistics are."""
+    var pa = Python.import_module("pyarrow")
+    with ScratchDir() as dir:
+        var path = _write_pa(
+            dir,
+            _col(
+                pa.array(
+                    Python.list("banana", "apple", "cherry", Python.none())
+                )
+            ),
+        )
+        var named: List[String] = ["c"]
+        var st = ParquetFile(path, read_dictionary=named).statistics()
+        ref cs = st[0][0]
+        assert_equal(cs.min.value().as_string().to_string(), "apple")
+        assert_equal(cs.max.value().as_string().to_string(), "cherry")
+
+
 def test_read_stats_multiple_row_groups() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")

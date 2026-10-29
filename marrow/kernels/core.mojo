@@ -7,13 +7,18 @@ Every kernel family in `marrow.kernels` — element-wise arithmetic, comparison,
 boolean, string, temporal, aggregate — descends from `Kernel`, so a kernel is
 nameable without knowing which family it belongs to. `UnaryKernel` and
 `BinaryKernel` add the register function `core` that fused loops and folds call,
-and `BinaryKernel` the `fold_lanes` a fold reduces one register with; family
-traits add the call shape over arrays (`apply`/`dispatch`,
-`combine`/`finalize`, ...).
+with `Out`, the dtype it answers, and `BinaryKernel` the `fold_lanes` a fold
+reduces one register with; family traits add the call shape over arrays
+(`apply`/`dispatch`, `combine`/`finalize`, ...).
 
 `Kernel` also owns the argument checks every family repeats, so the diagnostic
 a caller sees is the same sentence whichever kernel raised it, and a new family
 inherits it by conforming rather than by copying the message.
+
+`ScanKernel` is a stream stage that carries state from register to register,
+and `PackKernel` / `UnpackKernel` turn values into a typed `Packed` and back
+(`compose.mojo`, `packing.mojo`). Each keeps what one pass needs in a `State`
+value its caller owns, so the kernel itself holds only its parameters.
 
 A property trait (`Partial`, `Prunable`, `Identity`, `Associative`,
 `Commutative`) states one law about a kernel's values. A kernel lists every
@@ -27,7 +32,8 @@ from ..arrays import BoolArray, DynArray, PrimitiveArray
 from ..buffers import Bitmap, Buffer
 from ..dtypes import DecimalType, DynType, NumericType, PrimitiveType
 from ..errors import ArrowError, InvalidError, TypeError
-from ..views import apply
+from ..views import BufferView, apply
+from .packing import BLOCK
 
 
 comptime conforms[F: type_of(AnyType), T: AnyType]: Bool = conforms_to(T, F)
@@ -306,25 +312,60 @@ trait Prunable:
 trait UnaryKernel(Kernel):
     """A kernel that maps a register of lanes to a register of lanes, one
     operand in: `core`, the function a fused loop calls directly and every
-    array entry point applies lane by lane."""
+    array entry point applies lane by lane.
+
+    `Out[T]` is the dtype `core` answers for operands of `T`, and
+    `same_core` is `core` for a kernel that keeps the dtype, typed as
+    answering `T`.
+    """
+
+    comptime Out[T: DType]: DType = T
+    """The dtype `core` answers for operands of `T`; `T` unless the kernel
+    says otherwise."""
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[Self.Out[T], W]:
         """Per lane, the kernel's result for `a`."""
         ...
+
+    @always_inline
+    @staticmethod
+    def same_core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+        """`core`, typed as answering `T`: for a kernel whose `Out[T]` is
+        `T`, and refused at compile time for any other."""
+        comptime assert Self.Out[T] == T, "the kernel keeps the dtype"
+        return rebind[SIMD[T, W]](Self.core[T, W](a))
 
 
 trait BinaryKernel(Kernel):
     """A kernel that maps two registers of lanes to a register of lanes, two
     operands in: `core`, the function a fused loop or a fold calls directly and
-    every array entry point applies lane by lane."""
+    every array entry point applies lane by lane.
+
+    `Out[T]` is the dtype `core` answers for operands of `T`, and
+    `same_core` is `core` typed as answering `T`, as on `UnaryKernel`.
+    """
+
+    comptime Out[T: DType]: DType = T
+    """The dtype `core` answers for operands of `T`; `T` unless the kernel
+    says otherwise."""
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[Self.Out[T], W]:
         """Per lane, the kernel's result for `a` and `b`."""
         ...
+
+    @always_inline
+    @staticmethod
+    def same_core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        """`core`, typed as answering `T`: for a kernel whose `Out[T]` is
+        `T`, and refused at compile time for any other."""
+        comptime assert Self.Out[T] == T, "the kernel keeps the dtype"
+        return rebind[SIMD[T, W]](Self.core[T, W](a, b))
 
     @always_inline
     @staticmethod
@@ -334,11 +375,11 @@ trait BinaryKernel(Kernel):
 
         A kernel that claims `Associative` and `Commutative` may answer it in
         any order, and only a fold, which needs both, calls it. The default
-        is the left fold itself.
+        is the left fold itself, for a kernel that keeps the dtype.
         """
         var acc = v[0]
         comptime for k in range(1, W):
-            acc = Self.core[T, 1](acc, v[k])
+            acc = Self.same_core[T, 1](acc, v[k])
         return acc
 
 
@@ -387,4 +428,112 @@ trait Commutative:
     pass
 
 
-# TODO: have vectorwise and elementwise kernels conform to a common trait
+trait ScanKernel(Deinitable, Kernel, Movable):
+    """A stream stage that carries state through an in-order pass: a running
+    fold, a delay line, a fixed operand.
+
+    The instance holds the stage's parameters, and a `State[T]` value holds
+    what one pass has seen; the caller owns the state and passes it to every
+    call, so one stage serves any number of passes, and a pass may stop and
+    go on. `core` answers `Out[T]` for a register of `T`.
+    """
+
+    comptime Out[T: DType]: DType = T
+    """The dtype `core` answers for values of `T`."""
+
+    comptime State[T: DType]: Movable & Deinitable
+    """What a pass over values of `T` carries from one register to the
+    next."""
+
+    def start[T: DType](self) -> Self.State[T]:
+        """The state before the first row."""
+        ...
+
+    def reset[T: DType](self, mut state: Self.State[T]):
+        """Back to the state before the first row, at a segment start."""
+        state = self.start[T]()
+
+    @always_inline
+    def core[
+        T: DType, W: Int
+    ](self, v: SIMD[T, W], mut state: Self.State[T]) -> SIMD[Self.Out[T], W]:
+        """The stage's answer for the register `v`, the rows after the ones
+        `state` has seen; `state` then includes `v`."""
+        ...
+
+
+trait PackKernel(Deinitable, Kernel, Movable):
+    """Values in, a `Packed` out: the bytes, and whatever a decoder needs
+    besides. A column is packed a block at a time: `start` once, `store`
+    each block in order, then `finish`.
+
+    `Packed` may hold another packer's `Packed`: that is how a packer that
+    keeps more than its values carries it.
+    """
+
+    comptime Packed: Copyable & Deinitable
+    """What a column is packed as."""
+
+    comptime State[T: DType]: Movable & Deinitable
+    """What packing values of `T` keeps between blocks."""
+
+    def start[T: DType](self, count: Int) raises -> Self.State[T]:
+        """Before `count` values of `T` are stored; refuses parameters these
+        values cannot be packed by."""
+        ...
+
+    def store[
+        T: DType
+    ](self, mut state: Self.State[T], block: BufferView[T, _]) raises:
+        """The next block of values: `BLOCK` of them (`packing.mojo`), or
+        fewer in the last block only. A packer may keep a block of scratch
+        and start a segment at each block's first value; one that does
+        refuses any other block with an `InvalidError`."""
+        ...
+
+    def finish[T: DType](self, var state: Self.State[T]) raises -> Self.Packed:
+        """The column's `Packed`, once every block is stored."""
+        ...
+
+    # Out of line: its message is built in no packer's `store`.
+    @no_inline
+    @staticmethod
+    def block_error(count: Int) -> InvalidError:
+        """What `store` raises for a block of `count` values it does not
+        take."""
+        return Self.error[InvalidError](
+            t"a block of {count} values, where every block but the last"
+            t" holds {BLOCK}"
+        )
+
+
+trait UnpackKernel(Deinitable, Kernel, Movable):
+    """A `Packed` in, its values out, a register at a time and in order.
+
+    `start` refuses a `Packed` whose parts do not fit together. `load`
+    never raises: what it finds wrong it notes in the state, and `check`
+    raises it once the column is read.
+    """
+
+    comptime Packed: Copyable & Deinitable
+    """What the values were packed as."""
+
+    comptime State[T: DType]: Movable & Deinitable
+    """What reading values of `T` keeps between registers."""
+
+    def start[
+        T: DType
+    ](self, var packed: Self.Packed, count: Int) raises -> Self.State[T]:
+        """Before the `count` values `packed` holds are read as `T`."""
+        ...
+
+    @always_inline
+    def load[
+        T: DType, W: Int
+    ](self, mut state: Self.State[T], i: Int) -> SIMD[T, W]:
+        """The `W` values from value `i`, the registers read in order."""
+        ...
+
+    def check[T: DType](self, state: Self.State[T]) raises:
+        """Raise what `load` noted wrong; by default, nothing."""
+        pass

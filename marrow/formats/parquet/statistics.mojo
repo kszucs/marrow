@@ -359,6 +359,16 @@ struct Statistics:
             return dtype.try_visit[Optional[DynScalar], PrimitiveType](
                 decode_fixed, "dtype is not primitive"
             )
+        elif (
+            dtype.is_dictionary()
+            and dtype.as_dictionary().value_type().is_string()
+        ):
+            # A column read as a dictionary is bounded by its values. Its own
+            # arm rather than `dtype` rebound to the value type, which would
+            # copy a DataType in every size-gated reader.
+            return StringScalar(
+                String(StringSlice(unsafe_from_utf8=Span(b)))
+            ).to_dyn()
         else:
             # binary / large_binary have no scalar type; the raw min/max bytes are
             # still available via `read_metadata`.

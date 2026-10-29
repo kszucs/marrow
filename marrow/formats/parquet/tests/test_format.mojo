@@ -35,7 +35,7 @@ from ...parquet.format import (
     TC_BOOL_TRUE,
     TC_STRUCT,
 )
-from ....codecs import Zigzag
+from ....kernels.bitwise import ZigzagDecode, ZigzagEncode
 
 
 # ---------------------------------------------------------------------------
@@ -46,8 +46,8 @@ from ....codecs import Zigzag
 def test_zigzag_roundtrip() raises:
     for v in [Int64(0), 1, -1, 2, -2, 63, -64, 2147483647, -2147483648]:
         assert_equal(
-            Zigzag().backward[DType.int64, 1](
-                0, Zigzag().forward[DType.int64, 1](v)
+            ZigzagDecode.core[DType.uint64, 1](
+                ZigzagEncode.core[DType.int64, 1](v)
             ),
             v,
         )

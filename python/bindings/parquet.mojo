@@ -39,6 +39,7 @@ def parquet_read_table(
     path: PythonObject,
     columns: PythonObject,
     binary_type: PythonObject,
+    read_dictionary: PythonObject,
     native_codecs: PythonObject,
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
@@ -50,6 +51,7 @@ def parquet_read_table(
         String(py=path),
         columns=cols^,
         binary_type=DynType(py=binary_type),
+        read_dictionary=[String(py=v) for v in read_dictionary],
         native_codecs=Bool(py=native_codecs),
     ).to_python_object()
 

@@ -37,7 +37,7 @@ def _library_sources(repo):
     yield repo.golden_dir / "helpers.mojo"
 
 
-def _code_lines(path):
+def code_lines(path):
     """(line number, text) outside comments and docstrings."""
     in_docstring = False
     for number, line in enumerate(path.read_text().splitlines(), 1):
@@ -62,7 +62,7 @@ def test_library_raises_only_arrow_errors():
     offenders = [
         f"{path.relative_to(repo.root)}:{number}: {line.strip()}"
         for path in _library_sources(repo)
-        for number, line in _code_lines(path)
+        for number, line in code_lines(path)
         if _UNTYPED.search(line)
     ]
     assert not offenders, (

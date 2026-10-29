@@ -12,9 +12,11 @@ tested here is everything marrow adds on top — offsets, bounds checking,
 variable widths and LEB128, none of which exist in std.
 """
 
+from std.sys import size_of
 from std.testing import assert_equal, assert_true, assert_raises
 from ..byteorder import BigEndian, Leb128, LittleEndian
-from ..integers import ordered, unordered, unzigzag, zigzag
+from ..integers import Signed, Unsigned, ordered, unordered, unzigzag, zigzag
+from ...kernels.bitwise import ZigzagEncode
 
 
 def _bytes(*vals: Int) -> List[UInt8]:
@@ -209,6 +211,38 @@ def test_ordered_orders_as_the_numbers_do() raises:
     for i in range(3):
         assert_true(fkeys[i] < fkeys[i + 1])
     assert_true(unordered[DType.float32](fkeys).to_bits() == floats.to_bits())
+
+
+def _as_wide[T: DType]() -> Bool:
+    """`Unsigned[T]` and `Signed[T]` are the integers as wide as `T`."""
+    comptime B = size_of[Scalar[T]]()
+    comptime U = Unsigned[T]
+    comptime S = Signed[T]
+    return (
+        size_of[Scalar[U]]() == B
+        and U.is_integral()
+        and U.is_unsigned()
+        and size_of[Scalar[S]]() == B
+        and S.is_integral()
+        and S.is_signed()
+    )
+
+
+def test_unsigned_and_signed_match_each_width() raises:
+    assert_true(_as_wide[DType.int8]() and _as_wide[DType.uint8]())
+    assert_true(_as_wide[DType.int16]() and _as_wide[DType.uint16]())
+    assert_true(_as_wide[DType.int32]() and _as_wide[DType.uint32]())
+    assert_true(_as_wide[DType.int64]() and _as_wide[DType.uint64]())
+    assert_true(_as_wide[DType.float16]() and _as_wide[DType.float32]())
+    assert_true(_as_wide[DType.float64]() and _as_wide[DType.bfloat16]())
+    assert_true(_as_wide[DType.float8_e4m3fn]() and _as_wide[DType.bool]())
+    assert_true(_as_wide[DType.float8_e5m2]() and _as_wide[DType.int]())
+    assert_true(_as_wide[DType.int128]() and _as_wide[DType.uint256]())
+    # A concrete call site takes the stage's answer as the dtype it names.
+    var keys: SIMD[DType.uint32, 4] = ZigzagEncode.core[DType.int32, 4](
+        SIMD[DType.int32, 4](0, -1, 1, -2)
+    )
+    assert_true(keys == SIMD[DType.uint32, 4](0, 1, 2, 3))
 
 
 def test_leb128_raises_when_truncated() raises:

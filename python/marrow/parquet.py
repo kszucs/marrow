@@ -17,7 +17,14 @@ from . import types
 from .tabular import Table
 
 
-def read_table(source, columns=None, binary_type=None, native_codecs=True):
+def read_table(
+    source,
+    columns=None,
+    binary_type=None,
+    native_codecs=True,
+    *,
+    read_dictionary=None,
+):
     """Read a Parquet file into a marrow :class:`Table`.
 
     Parameters
@@ -34,11 +41,15 @@ def read_table(source, columns=None, binary_type=None, native_codecs=True):
     native_codecs : bool, default True
         Decode LZ4, SNAPPY and ZSTD pages in Mojo; ``False`` decodes them
         with liblz4, libsnappy and libzstd instead.
+    read_dictionary : list of str, optional
+        List of names to read directly as DictionaryArray. Only supported
+        for top-level string and binary columns.
     """
     cols = list(columns) if columns is not None else None
     bt = binary_type if binary_type is not None else types.binary()
+    rd = list(read_dictionary) if read_dictionary is not None else []
     return Table.wrap(
-        _ma.parquet_read_table(str(source), cols, unwrap(bt), native_codecs)
+        _ma.parquet_read_table(str(source), cols, unwrap(bt), rd, native_codecs)
     )
 
 

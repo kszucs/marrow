@@ -13,6 +13,11 @@ some rows back (`shift`), and `PairwiseDiffKernel` subtracts that row
 `ROWS BETWEEN lo AND hi` (`rolling_sum`, `rolling_min`, `rolling_max`), and
 `RollingMeanKernel` averages it (`rolling_mean`).
 
+`Lagged[K, k]` applies `K` to each row and the row `k` before it, zero
+standing for the rows before the first; `DiffScan` is `Lagged[SubKernel, 1]`.
+`Scan` and `Lagged` are stream stages (`ScanKernel`), which `Compose` chains
+and the codecs run a register at a time.
+
 Every kernel here takes `Segments` and computes within each segment, so a
 column cut into partitions is one call. Over a whole column the segments are
 `BySize.whole(n)`.
@@ -27,7 +32,7 @@ from ..dtypes import Float64Type, Int32Type, NumericType, PrimitiveType
 from ..errors import InvalidError
 from ..execution import ExecContext
 from ..views import BufferView, apply, cpu_lanes, valid_or_zero
-from .core import Associative, BinaryKernel, Identity, Kernel
+from .core import Associative, BinaryKernel, Identity, Kernel, ScanKernel
 from .filter import TakeKernel
 from .numeric import AddKernel, SubKernel
 from .segments import BySize, Segments
@@ -38,7 +43,8 @@ from .segments import BySize, Segments
 # ---------------------------------------------------------------------------
 
 
-struct Scan[K: BinaryKernel & Identity](Copyable, Defaultable, Movable):
+@fieldwise_init
+struct Scan[K: BinaryKernel & Identity](Copyable, Defaultable, ScanKernel):
     """The running fold of `K`: row `i` of a segment is `K` over the
     segment's rows up to and including `i`, folded left to right.
 
@@ -47,18 +53,12 @@ struct Scan[K: BinaryKernel & Identity](Copyable, Defaultable, Movable):
     across calls; `run` drives `core` over a column's segments.
     """
 
-    comptime State[T: DType] = Scalar[T]
-
-    def __init__(out self):
-        pass
+    comptime name = "scan"
+    comptime State[T: DType]: Movable & Deinitable = Scalar[T]
 
     def start[T: DType](self) -> Self.State[T]:
         """The state before the first row: `K`'s identity."""
         return Self.K.identity[T]()
-
-    def reset[T: DType](self, mut state: Self.State[T]):
-        """Back to the state before the first row, at a segment start."""
-        state = Self.K.identity[T]()
 
     @always_inline
     def core[
@@ -71,7 +71,7 @@ struct Scan[K: BinaryKernel & Identity](Copyable, Defaultable, Movable):
         var out = SIMD[T, W]()
         var p = state
         comptime for j in range(W):
-            p = Self.K.core[T, 1](p, v[j])
+            p = Self.K.same_core[T, 1](p, v[j])
             out[j] = p
         state = p
         return out
@@ -108,6 +108,53 @@ struct Scan[K: BinaryKernel & Identity](Copyable, Defaultable, Movable):
 
 comptime SumScan = Scan[AddKernel]
 """Running sums."""
+
+
+struct Lagged[K: BinaryKernel, k: Int](Copyable, Defaultable, ScanKernel):
+    """`K(x[i], x[i - k])`, with zero standing for the rows before the first:
+    `Lagged[SubKernel, 1]` is each row less the one before it.
+
+    The state is the last `k` values seen, oldest first.
+    """
+
+    comptime name = "lagged"
+    comptime Out[T: DType]: DType = Self.K.Out[T]
+    comptime State[T: DType]: Movable & Deinitable = Array[Scalar[T], Self.k]
+
+    def __init__(out self):
+        comptime assert Self.k > 0, "Lagged looks at least one row back"
+
+    def start[T: DType](self) -> Self.State[T]:
+        """Zeros: the rows before the first."""
+        return Array[Scalar[T], Self.k](fill=0)
+
+    @always_inline
+    def core[
+        T: DType, W: Int
+    ](self, v: SIMD[T, W], mut state: Self.State[T]) -> SIMD[Self.Out[T], W]:
+        # Lane `j` of `before` is the row `k` before lane `j` of `v`: from
+        # the state for the first `k` lanes, from `v` after.
+        var before: SIMD[T, W]
+        comptime if Self.k < W:
+            before = v.shift_right[Self.k]()
+            comptime for j in range(Self.k):
+                before[j] = state[j]
+        else:
+            before = SIMD[T, W]()
+            comptime for j in range(W):
+                before[j] = state[j]
+        # The state becomes the last `k` of the state then `v`.
+        comptime for j in range(Self.k):
+            comptime p = W + j
+            comptime if p < Self.k:
+                state[j] = state[p]
+            else:
+                state[j] = v[p - Self.k]
+        return Self.K.core[T, W](v, before)
+
+
+comptime DiffScan = Lagged[SubKernel, 1]
+"""Each row less the one before it, the first less zero. Integers wrap."""
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +596,7 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
                         j -= 1
                         suffix.store[1](
                             j,
-                            Self.K.core[T, 1](
+                            Self.K.same_core[T, 1](
                                 src.load[1](j), suffix.load[1](j + 1)
                             ),
                         )
@@ -570,7 +617,9 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
                     if l <= r:
                         if direct:
                             for j in range(l, r + 1):
-                                acc = Self.K.core[T, 1](acc, src.load[1](j))
+                                acc = Self.K.same_core[T, 1](
+                                    acc, src.load[1](j)
+                                )
                         elif (l - s0) // w == (r - s0) // w:
                             # One block: the frame starts it, or is clipped
                             # at the segment's end, which ends it.
@@ -579,7 +628,7 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
                             else:
                                 acc = suffix.load[1](l)
                         else:
-                            acc = Self.K.core[T, 1](
+                            acc = Self.K.same_core[T, 1](
                                 suffix.load[1](l), prefix.load[1](r)
                             )
                     dst.store[1](i, acc)
@@ -591,14 +640,14 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
                     if stop == i + W:
                         var acc = src.load[W](i + lo)
                         for d in range(1, w):
-                            acc = Self.K.core[T, W](
+                            acc = Self.K.same_core[T, W](
                                 acc, src.load[W](i + lo + d)
                             )
                         dst.store[W](i, acc)
                     else:
                         var acc = src.load[1](i + lo)
                         for d in range(1, w):
-                            acc = Self.K.core[T, 1](
+                            acc = Self.K.same_core[T, 1](
                                 acc, src.load[1](i + lo + d)
                             )
                         dst.store[1](i, acc)
@@ -619,7 +668,10 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
                         dst.store[W](
                             i,
                             starts.select(
-                                p, Self.K.core[T, W](suffix.load[W](i + lo), p)
+                                p,
+                                Self.K.same_core[T, W](
+                                    suffix.load[W](i + lo), p
+                                ),
                             ),
                         )
                     else:
@@ -628,7 +680,10 @@ struct RollingKernel[K: BinaryKernel & Associative & Identity](Kernel):
                             dst.store[1](i, p)
                         else:
                             dst.store[1](
-                                i, Self.K.core[T, 1](suffix.load[1](i + lo), p)
+                                i,
+                                Self.K.same_core[T, 1](
+                                    suffix.load[1](i + lo), p
+                                ),
                             )
                     i = stop
 

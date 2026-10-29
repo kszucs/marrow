@@ -86,10 +86,9 @@ bug = "B-PR4"
 note = "a negative RowGroup.num_rows sized the leaf builders' buffers"
 
 ["b-pr6-fixed-dictionary-short.parquet"]
-verdict = "crash"
+verdict = "reject"
 bug = "B-PR6"
-sanitizer = "address"
-note = "a fixed-width dictionary page with fewer bytes than num_values: PrimitiveLeafBuilder.consume copies past the page"
+note = "a fixed-width dictionary page with fewer bytes than num_values was copied past the page"
 
 ["b-pr7-dictionary-index-bytes.parquet"]
 verdict = "reject"
@@ -116,6 +115,16 @@ note = "a PLAIN byte-array value whose 4-byte length runs past the page"
 verdict = "reject"
 bug = "B-PR12"
 
+["b-pr14-fixed-page-short-decimal.parquet"]
+verdict = "reject"
+bug = "B-PR14"
+note = "a PLAIN decimal page with fewer bytes than its values was read past the page"
+
+["b-pr14-fixed-page-short-fixed-binary.parquet"]
+verdict = "reject"
+bug = "B-PR14"
+note = "the same for a fixed-size binary page"
+
 ["int96-page-overcount.parquet"]
 verdict = "reject"
 note = "an INT96 data page whose header counts 1000 values over a body of 100"
@@ -139,6 +148,10 @@ note = "a list of strings, every dictionary index past the dictionary"
 ["dictionary-overcount-decimal.parquet"]
 verdict = "reject"
 note = "a decimal dictionary page whose header counts 1000 values over a body of 96"
+
+["dictionary-page-after-data.parquet"]
+verdict = "reject"
+note = "a string chunk's dictionary page after its first data page, one of nulls"
 
 ["v2-required-nulls.parquet"]
 verdict = "reject"

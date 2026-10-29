@@ -214,6 +214,45 @@ def test_read_binary_type_view(tmp_path):
     assert got.equals(want)
 
 
+def test_read_dictionary(tmp_path):
+    """`read_dictionary=["s"]` reads the string column as a dictionary, as
+    pyarrow's option of the same name does."""
+    p = tmp_path / "t.parquet"
+    pq.write_table(_sample(), p)
+    got = _to_pa(mpq.read_table(p, read_dictionary=["s"]))
+    want = pq.read_table(p, read_dictionary=["s"])
+    assert got.schema.field("s").type == want.schema.field("s").type
+    assert got.to_pylist() == want.to_pylist()
+
+
+def test_read_dictionary_with_plain_pages(tmp_path):
+    """Two row groups whose dictionaries outgrow their pages, so each
+    falls back to PLAIN part-way through, read as pyarrow reads them."""
+    p = tmp_path / "t.parquet"
+    s = [
+        None if i % 13 == 0 else (f"v{i % 10}" if i % 2 == 0 else f"distinct-{i}")
+        for i in range(4000)
+    ]
+    pq.write_table(
+        pa.table({"s": pa.array(s, pa.string())}),
+        p,
+        row_group_size=2000,
+        dictionary_pagesize_limit=4096,
+        write_batch_size=256,
+    )
+    assert pq.ParquetFile(p).metadata.num_row_groups == 2
+    for g in range(2):
+        # A PLAIN dictionary page holds each distinct value with its 4-byte
+        # length, and this one outgrows the 4096-byte limit.
+        distinct = {v for v in s[2000 * g : 2000 * (g + 1)] if v is not None}
+        assert sum(4 + len(v) for v in distinct) > 4096
+    got = _to_pa(mpq.read_table(p, read_dictionary=["s"]))
+    want = pq.read_table(p, read_dictionary=["s"])
+    assert got.schema.field("s").type == want.schema.field("s").type
+    assert got.column("s").num_chunks == 2
+    assert got.to_pylist() == want.to_pylist()
+
+
 def test_write_string_view(tmp_path):
     """A string_view column writes as an ordinary string column."""
     import marrow as ma

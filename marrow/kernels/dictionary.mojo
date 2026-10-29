@@ -44,7 +44,20 @@ Three public kernels answer from one encoder over a whole column, in
 first-seen order and with the group-by's key identity: ``DictionaryEncodeKernel``
 (``dictionary_encode``), ``ValueCountsKernel`` (``value_counts``) and
 ``ModeKernel`` (``mode``).
+
+**A column packed by its dictionary** is the codec's form of the same idea,
+for a format's dictionary pages: ``DictionaryPack`` keeps each distinct value
+once, in first-seen order, and packs every value's ``uint32`` code with a value
+packer; ``DictionaryUnpack`` gathers the values back a register at a time and
+keeps no table. Values are equal when their bits are. ``DictionaryBytesPack``
+and ``DictionaryBytesUnpack`` do the same for byte strings, keeping the
+distinct strings as ``LengthsPacked``.
 """
+
+from std.algorithm import vectorize
+from std.builtin.rebind import rebind_var
+from std.memory import bitcast
+from std.sys import size_of
 
 from ..utils.stats import count
 from ..arrays import (
@@ -68,15 +81,26 @@ from ..dtypes import (
     struct_,
     uint64,
 )
-from ..errors import InvalidError, TypeError
+from ..errors import CorruptError, InvalidError, TypeError
 from ..execution import ExecContext
-from ..views import apply
+from ..utils.hashing import RapidHash64, SwissHashTable
+from ..utils.integers import Unsigned
+from ..views import BufferView, apply
 from .cast import decode_dictionary, normalized_indices
 from .filter import FilterKernel, TakeKernel
-from .core import Kernel
+from .core import Kernel, PackKernel, UnpackKernel
 from .groupby import Groups
 from .hashing import HashKernel, KeyCompare, NULL_HASH_SENTINEL
 from .hashtable import HashIndex, Placement
+from .packing import (
+    BLOCK,
+    LengthsPack,
+    LengthsPacked,
+    LengthsUnpack,
+    PlainPack,
+    PlainPacked,
+    PlainUnpack,
+)
 from .sort import SortIndices
 from ..utils import Fmix64, Hasher, KeyHash
 
@@ -871,3 +895,322 @@ struct ModeKernel(Kernel):
                 TakeKernel.apply(counts, order, ctx).to_dyn(),
             ],
         ).to_dyn()
+
+
+# ---------------------------------------------------------------------------
+# DictionaryPack / DictionaryBytesPack — a column packed as codes
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct DictionaryPacked[C: Copyable & Deinitable](Copyable, Movable):
+    """Each value as its code, a `uint32`, into the distinct values in the
+    order they first appear, and the codes packed by a value packer.
+
+        [5, 5, 9, 5]  ->  values [5, 9], codes [0, 0, 1, 0]
+    """
+
+    var values: PlainPacked
+    """The distinct values, in the order they first appear."""
+    var codes: Self.C
+
+
+struct _Distinct(Movable):
+    """The distinct values found so far, each code's by hash."""
+
+    var table: SwissHashTable
+    var values: Buffer[mut=True]
+
+    def __init__(out self, var values: Buffer[mut=True]):
+        self.table = SwissHashTable()
+        self.values = values^
+
+    def frozen(deinit self) -> Buffer[mut=False]:
+        """The distinct values found."""
+        return self.values^.to_immutable()
+
+
+@fieldwise_init
+struct DictionaryPack[Codes: PackKernel](PackKernel):
+    """Values of at most eight bytes as `DictionaryPacked`, the codes packed
+    by `Codes`. Values are equal when their bits are: `-0.0` and `0.0` get a
+    code each, and so does each NaN payload."""
+
+    comptime name = "dictionary_pack"
+    comptime Packed = DictionaryPacked[Self.Codes.Packed]
+    comptime State[T: DType]: Movable & Deinitable = Tuple[
+        _Distinct, Self.Codes.State[DType.uint32]
+    ]
+
+    var codes: Self.Codes
+
+    def start[T: DType](self, count: Int) raises -> Self.State[T]:
+        comptime assert (
+            size_of[Scalar[T]]() <= 8
+        ), "DictionaryPack takes values of at most 8 bytes"
+        return (
+            _Distinct(Buffer.alloc_uninit[T](count)),
+            self.codes.start[DType.uint32](count),
+        )
+
+    def store[
+        T: DType
+    ](self, mut state: Self.State[T], block: BufferView[T, _]) raises:
+        # A value's hash is `Fmix64` of its bits, a bijection, so equal
+        # hashes are equal values and none is compared.
+        comptime U = Unsigned[T]
+        var n = len(block)
+        if n > BLOCK:
+            raise Self.block_error(n)
+        var hashes = Array[UInt64, BLOCK](uninitialized=True)
+        var firsts = Array[Int32, BLOCK](uninitialized=True)
+        var scratch = Array[UInt8, BLOCK * 4](uninitialized=True)
+        var hv = BufferView(Span(hashes))[:n]
+
+        @always_inline
+        def hash[W: Int](i: Int) {imm}:
+            hv.store[W](
+                i,
+                Fmix64.mix[W](
+                    bitcast[U, W](block.load[W](i)).cast[DType.uint64]()
+                ),
+            )
+
+        vectorize[64 // size_of[Scalar[T]]()](n, hash)
+        var fv = BufferView(Span(firsts))[:n]
+        ref distinct = state[0]
+        var before = len(distinct.table)
+        # A code is never negative, so its bits as an `int32` are a
+        # `uint32`'s: the table writes the codes straight into the block.
+        var k = distinct.table.insert_all(
+            hv, BufferView[DType.int32].from_bytes(Span(scratch))[:n], fv
+        )
+        var values = distinct.values.view[T]()
+        for j in range(k):
+            values.unsafe_set(before + j, block[Int(fv[j])])
+        self.codes.store[DType.uint32](
+            state[1], BufferView[DType.uint32].from_bytes(Span(scratch))[:n]
+        )
+
+    def finish[T: DType](self, var state: Self.State[T]) raises -> Self.Packed:
+        var distinct = Optional[_Distinct](None)
+        var codes = Optional[Self.Codes.State[DType.uint32]](None)
+
+        def take[
+            k: Int
+        ](var part: Self.State[T].Ts[k]) {mut distinct, mut codes}:
+            comptime if k == 0:
+                distinct = rebind_var[_Distinct](part^)
+            else:
+                codes = rebind_var[Self.Codes.State[DType.uint32]](part^)
+
+        state^.consume_elements(take)
+        var found = distinct.take()
+        var size = len(found.table) * size_of[Scalar[T]]()
+        return Self.Packed(
+            PlainPacked(found^.frozen(), size),
+            self.codes.finish[DType.uint32](codes.take()),
+        )
+
+
+struct _Lookup(Movable):
+    """The distinct values, how many, and one past the largest code read."""
+
+    var values: Buffer[mut=False]
+    var known: Int
+    var seen: Int
+
+    def __init__(out self, var values: Buffer[mut=False], known: Int):
+        self.values = values^
+        self.known = known
+        self.seen = 0
+
+
+@fieldwise_init
+struct DictionaryUnpack[Codes: UnpackKernel](UnpackKernel):
+    """`DictionaryPacked`'s values: each code `Codes` loads, gathered from
+    the distinct values."""
+
+    comptime name = "dictionary_unpack"
+    comptime Packed = DictionaryPacked[Self.Codes.Packed]
+    comptime State[T: DType]: Movable & Deinitable = Tuple[
+        _Lookup, Self.Codes.State[DType.uint32]
+    ]
+
+    var codes: Self.Codes
+
+    def start[
+        T: DType
+    ](self, var packed: Self.Packed, count: Int) raises -> Self.State[T]:
+        var size = packed.values.size
+        comptime width = size_of[Scalar[T]]()
+        if size < 0 or size % width != 0 or size > len(packed.values.bytes):
+            raise Self.error[CorruptError](t"{size} bytes of {T} values")
+        var known = size // width
+        if count > 0 and known == 0:
+            raise Self.error[CorruptError](t"{count} codes into no values")
+        return (
+            _Lookup(packed.values.bytes, known),
+            self.codes.start[DType.uint32](packed.codes.copy(), count),
+        )
+
+    @always_inline
+    def load[
+        T: DType, W: Int
+    ](self, mut state: Self.State[T], i: Int) -> SIMD[T, W]:
+        var codes = self.codes.load[DType.uint32, W](state[1], i)
+        ref lookup = state[0]
+        # A code past the values is clamped to the last and noted, so the
+        # gather takes no branch and `check` raises after.
+        lookup.seen = max(lookup.seen, Int(codes.reduce_max()) + 1)
+        var last = UInt32(lookup.known - 1)
+        return lookup.values.view[T](0, lookup.known).gather[W](
+            min(codes, last).cast[DType.int64]()
+        )
+
+    def check[T: DType](self, state: Self.State[T]) raises:
+        self.codes.check[DType.uint32](state[1])
+        if state[0].seen > state[0].known:
+            raise Self.error[CorruptError](
+                t"code {state[0].seen - 1} past {state[0].known} values"
+            )
+
+
+@fieldwise_init
+struct DictionaryBytesPacked[C: Copyable & Deinitable](Copyable, Movable):
+    """Each byte string as its code, a `uint32`, into the distinct strings in
+    the order they first appear, kept as `LengthsPacked`; and the codes packed
+    by a value packer.
+
+        ["ab", "abc", "ab"]  ->  strings ["ab", "abc"], codes [0, 1, 0]
+    """
+
+    var strings: LengthsPacked[PlainPacked]
+    """The distinct strings, in the order they first appear."""
+    var codes: Self.C
+
+
+@fieldwise_init
+struct DictionaryBytesPack[Codes: PackKernel](Kernel, Movable):
+    """Byte strings as `DictionaryBytesPacked`, the codes packed by `Codes`.
+    Strings are equal when their bytes are."""
+
+    comptime name = "dictionary_bytes_pack"
+
+    var codes: Self.Codes
+
+    def pack(
+        self, offsets: Span[Int32, _], data: Span[UInt8, _]
+    ) raises -> DictionaryBytesPacked[Self.Codes.Packed]:
+        """String `i` is `data[offsets[i] : offsets[i + 1]]`."""
+        var n = max(len(offsets) - 1, 0)
+        var table = SwissHashTable()
+        # The distinct strings: where each ends in `bytes`, after a 0.
+        var ends: List[Int32] = [0]
+        var bytes = List[UInt8]()
+        var state = self.codes.start[DType.uint32](n)
+        var scratch = Array[UInt8, BLOCK * 4](uninitialized=True)
+        var lo = 0
+        while lo < n:
+            var m = min(BLOCK, n - lo)
+            var codes = BufferView[DType.uint32].from_bytes(Span(scratch))[:m]
+            Self._code(offsets, data, lo, table, ends, bytes, codes)
+            self.codes.store[DType.uint32](state, codes)
+            lo += m
+        return DictionaryBytesPacked(
+            LengthsPack(PlainPack()).pack(Span(ends), Span(bytes)),
+            self.codes.finish[DType.uint32](state^),
+        )
+
+    # Out of line, a block at a time: inlined into `pack`, the hash loop is
+    # compiled to slower code.
+    @no_inline
+    @staticmethod
+    def _code(
+        offsets: Span[Int32, _],
+        data: Span[UInt8, _],
+        lo: Int,
+        mut table: SwissHashTable,
+        mut ends: List[Int32],
+        mut bytes: List[UInt8],
+        codes: BufferView[mut=True, DType.uint32, _],
+    ) raises:
+        """The codes of the strings from `lo` on, a block of them, into
+        `codes`; a string not seen before is appended to `bytes` and
+        `ends`, and inserted into `table`."""
+        var bounds = BufferView(offsets)
+        for i in range(len(codes)):
+            var v = data[
+                Int(bounds.unsafe_get(lo + i)) : Int(
+                    bounds.unsafe_get(lo + i + 1)
+                )
+            ]
+            var h = RapidHash64.hash(v)
+
+            def same(code: Int) raises {imm} -> Bool:
+                var start = Int(ends[code])
+                return Span(bytes)[start : Int(ends[code + 1])] == v
+
+            var code = table.find_one(h, same)
+            if code < 0:
+                code = table.insert_new(h)
+                bytes.extend(v)
+                ends.append(Int32(len(bytes)))
+            codes.unsafe_set(i, UInt32(code))
+
+
+@fieldwise_init
+struct DictionaryBytesUnpack[Codes: UnpackKernel](Kernel, Movable):
+    """`DictionaryBytesPacked`'s byte strings: each code `Codes` loads, a
+    register at a time, as the distinct string it names."""
+
+    comptime name = "dictionary_bytes_unpack"
+
+    var codes: Self.Codes
+
+    def unpack(
+        self,
+        var packed: DictionaryBytesPacked[Self.Codes.Packed],
+        count: Int,
+        mut offsets: List[Int32],
+        mut data: List[UInt8],
+    ) raises:
+        """The `count` strings `packed` holds: their bytes appended to
+        `data`, and where each ends to `offsets`."""
+        # The distinct strings' lengths are plain `int32`s, so their bytes
+        # count them.
+        var known = packed.strings.lengths.size // 4
+        var ends: List[Int32] = [0]
+        var bytes = List[UInt8]()
+        LengthsUnpack(PlainUnpack()).unpack(
+            packed.strings.copy(), known, ends, bytes
+        )
+        var state = self.codes.start[DType.uint32](packed.codes.copy(), count)
+        offsets.reserve(len(offsets) + count)
+        var seen = 0
+        comptime W = 16
+        var i = 0
+        while i < count:
+            # A register at a time, then the tail one code at a time.
+            var v: SIMD[DType.uint32, W]
+            var lanes: Int
+            if i + W <= count:
+                v = self.codes.load[DType.uint32, W](state, i)
+                lanes = W
+            else:
+                v = SIMD[DType.uint32, W](
+                    self.codes.load[DType.uint32, 1](state, i)
+                )
+                lanes = 1
+            seen = max(seen, Int(v.reduce_max()) + 1)
+            for k in range(lanes):
+                var c = Int(v[k])
+                if c < known:
+                    data.extend(Span(bytes)[Int(ends[c]) : Int(ends[c + 1])])
+                offsets.append(Int32(len(data)))
+            i += lanes
+        self.codes.check[DType.uint32](state)
+        if seen > known:
+            raise Self.error[CorruptError](
+                t"code {seen - 1} past {known} strings"
+            )

@@ -320,9 +320,10 @@ struct DecimalCompare[
 
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
-        return Self.K.core[Self.NativeType, W](
-            self.l.lane[W](bound[0], idx).cast[Self.NativeType]() * bound[2],
-            self.r.lane[W](bound[1], idx).cast[Self.NativeType]() * bound[3],
+        comptime N = Self.NativeType
+        return Self.K.bool_core[N, W](
+            self.l.lane[W](bound[0], idx).cast[N]() * bound[2],
+            self.r.lane[W](bound[1], idx).cast[N]() * bound[3],
         )
 
     def equates(self) -> Bool:

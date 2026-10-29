@@ -283,7 +283,9 @@ struct WindowSegments(Copyable, Movable, Sized):
             var lasts = last.view[T](0, peers.count())
             for g in range(peers.count()):
                 lasts.store[1](g, dst.load[1](peers.end(g) - 1))
-            PerSegment(last^.to_immutable()).broadcast(peers, dst)
+            PerSegment(last^.to_immutable(), peers.count()).broadcast(
+                peers, dst
+            )
 
 
 trait WindowKernel(Copyable, Deinitable, Movable):
@@ -397,7 +399,9 @@ struct Rank(WindowKernel):
             for g in range(Int(first[p]), Int(first[p + 1])):
                 ranks.append(Int64(peers.start(g) - parts.start(p) + 1))
         var out = Buffer.alloc_uninit[I](n)
-        PerSegment(ranks.finish().buffer).broadcast(peers, out.view[I](0, n))
+        PerSegment(ranks.finish().buffer, peers.count()).broadcast(
+            peers, out.view[I](0, n)
+        )
         return Int64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 
@@ -434,7 +438,9 @@ struct DenseRank(WindowKernel):
             for g in range(Int(first[p]), Int(first[p + 1])):
                 ranks.append(Int64(g - Int(first[p]) + 1))
         var out = Buffer.alloc_uninit[I](n)
-        PerSegment(ranks.finish().buffer).broadcast(peers, out.view[I](0, n))
+        PerSegment(ranks.finish().buffer, peers.count()).broadcast(
+            peers, out.view[I](0, n)
+        )
         return Int64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 
@@ -565,7 +571,9 @@ struct PercentRank(WindowKernel):
                     0.0 if rows <= 1 else Float64(rank) / Float64(rows - 1)
                 )
         var out = Buffer.alloc_uninit[F](n)
-        PerSegment(ranks.finish().buffer).broadcast(peers, out.view[F](0, n))
+        PerSegment(ranks.finish().buffer, peers.count()).broadcast(
+            peers, out.view[F](0, n)
+        )
         return Float64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 
@@ -604,7 +612,9 @@ struct CumeDist(WindowKernel):
             for g in range(Int(first[p]), Int(first[p + 1])):
                 dists.append(Float64(peers.end(g) - lo) / Float64(rows))
         var out = Buffer.alloc_uninit[F](n)
-        PerSegment(dists.finish().buffer).broadcast(peers, out.view[F](0, n))
+        PerSegment(dists.finish().buffer, peers.count()).broadcast(
+            peers, out.view[F](0, n)
+        )
         return Float64Array(length=n, buffer=out^.to_immutable()).to_dyn()
 
 

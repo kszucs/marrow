@@ -10,6 +10,9 @@ directly by the AOT expression layer):
 - ``NumericCastKernel`` — numeric ↔ numeric SIMD ``pop.cast``; ``core`` /
   ``core_checked`` are the lane functors (the latter reused by the fused AOT
   node). ``safe`` is a **comptime** parameter selecting checked vs unchecked.
+- ``NumericCast[To]`` — ``NumericCastKernel.core`` as a codec stage, a
+  ``UnaryKernel`` answering ``To`` that ``Compose`` chains before a packer and
+  after an unpacker; the same stage with the other ``To`` undoes it.
 - ``DecimalRescaleKernel`` / ``IntToDecimalKernel`` / ``DecimalToIntKernel`` /
   ``FloatToDecimalKernel`` / ``DecimalToFloatKernel``, behind the
   ``DecimalCastKernel`` router — a decimal is an integer plus a scale, so each
@@ -97,7 +100,7 @@ from ..dtypes import (
     string,
     binary,
 )
-from .core import Kernel
+from .core import Kernel, UnaryKernel
 from .temporal import LocalTimestampKernel, ticks_per_second
 from ..utils import (
     CivilDate,
@@ -319,6 +322,25 @@ struct NumericCastKernel(CastArm):
         return array.dtype().try_visit[DynArray, NumericType](
             on_source, "dtype is not numeric"
         )
+
+
+@fieldwise_init
+struct NumericCast[To: DType](Deinitable, Movable, UnaryKernel):
+    """Each value as a `To`, a codec stage: what a format keeps a type as when
+    it has no narrower one, Parquet's INT32 for 8- and 16-bit integers, and
+    back. A value comes back as it went in when `To` holds it; a NaN comes
+    back a NaN, its payload not kept.
+
+        [1, -2] as int8, NumericCast[DType.int32]  ->  [1, -2] as int32
+    """
+
+    comptime name = "cast"
+    comptime Out[T: DType]: DType = Self.To
+
+    @always_inline
+    @staticmethod
+    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[Self.Out[T], W]:
+        return NumericCastKernel.core[T, Self.To, W](a)
 
 
 # ---------------------------------------------------------------------------

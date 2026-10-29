@@ -583,6 +583,7 @@ struct SchemaMapping(Movable):
         meta: FileMetaData,
         binary_type: dt.DynType = dt.binary,
         declared: Optional[Schema] = None,
+        read_dictionary: List[String] = [],
     ) raises -> SchemaMapping:
         """Parse a footer's schema for reading, and check the footer's row
         groups against it: each must hold one column chunk per leaf, and no
@@ -599,6 +600,14 @@ struct SchemaMapping(Movable):
         each `BYTE_ARRAY` leaf under it takes the layout its declared type
         has -- `string_view` in a `list<string_view>` reads as views -- and
         `binary_type` decides only the leaves it does not reach.
+
+        `read_dictionary` names top-level columns to read as
+        `dictionary<int32, T>`, as pyarrow's `read_table(read_dictionary=...)`
+        does: a column that reads as `string` or `binary` (`T`) does, and any
+        other, or an unknown name, reads as without it. A name that is the
+        dotted path of a string or binary leaf that is repeated, or inside a
+        list or struct, which pyarrow reads as dictionaries there, is refused,
+        unless the file has no row groups.
         """
         if not (
             binary_type.is_binary()
@@ -633,6 +642,13 @@ struct SchemaMapping(Movable):
                     if f.name == name:
                         want = f.dtype.copy()
             var node = m._parse_node(idx, 0, 0, depth=2, declared=want)
+            if node.kind == NODE_LEAF and node.field.name in read_dictionary:
+                ref leaf = m.leaves[node.leaf_index]
+                if leaf.max_rep == 0 and (
+                    leaf.dtype.is_string() or leaf.dtype.is_binary()
+                ):
+                    leaf.dtype = dt.dictionary(dt.int32, leaf.dtype.copy())
+                    node.field.dtype = leaf.dtype.copy()
             fields.append(node.field.copy())
             m.nodes.append(node^)
         if idx != len(m.elements):
@@ -651,6 +667,23 @@ struct SchemaMapping(Movable):
                     t"parquet: row group {i} has {len(rg.columns)} column"
                     t" chunks, the schema {len(m.leaves)} leaf columns"
                 )
+        if len(read_dictionary) > 0 and len(meta.row_groups) > 0:
+            # A name is a leaf's dotted path, as pyarrow matches it and each
+            # chunk records it: one still reading as string or binary is
+            # repeated, or inside a list or struct.
+            ref chunks = meta.row_groups[0].columns
+            for li in range(len(m.leaves)):
+                var path = String(".").join(chunks[li].meta_data.path_in_schema)
+                ref dtype = m.leaves[li].dtype
+                if path in read_dictionary and (
+                    dtype.is_string() or dtype.is_binary()
+                ):
+                    raise NotImplementedError(
+                        t"parquet: read_dictionary names '{path}', a"
+                        t" repeated column or one inside a list or struct;"
+                        t" only a top-level, unrepeated column reads as a"
+                        t" dictionary"
+                    )
         # File-level key/value metadata (incl. PyArrow's ARROW:schema) rides on
         # the schema, mirroring pyarrow's `read_table(...).schema.metadata`.
         var md = Dict[String, String]()

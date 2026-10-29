@@ -15,13 +15,27 @@ from std.memory import ArcPointer
 from std.os.path import join
 from ....utils.testing import ScratchDir
 from ...parquet import read_table, ParquetFile
-from ..reader import RowSelection
+from ..reader import ByteArrayLeafBuilder, Page, RowSelection
+from ..encodings import Encoding, PlainValues
+from ..format import PhysicalType
+from ..schema import LeafColumn
 from ..compression import Compression
 from ..writer import FileWriter
 from ....io import BufferSource, ByteSource, Fetched, FileSink
 from ....tabular import Table, record_batch
 from ....builders import StringBuilder, array
-from ....dtypes import binary_view, int64
+from ....c_data import CArrowArrayStream
+from ....arrays import DynArray
+from ....dtypes import (
+    DynType,
+    StringType,
+    binary_view,
+    dictionary,
+    int32,
+    int64,
+    string,
+)
+from ....kernels.packing import RlePack
 from ....execution import ExecContext
 
 
@@ -1427,3 +1441,287 @@ def test_parquet_read_one_file_from_many_threads() raises:
         var alone = ParquetFile(path)
         for i in range(2 * GROUPS):
             assert_equal(got[i], _read_group(alone, i % GROUPS, i >= GROUPS))
+
+
+# ---------------------------------------------------------------------------
+# Dictionary pages, and the PLAIN pages a writer falls back to
+# ---------------------------------------------------------------------------
+
+
+comptime _DICTIONARY_PAGES = """
+import decimal
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+
+def value(i):
+    # Every other row repeats one of ten values and the rest are distinct,
+    # so a row group's dictionary outgrows its page and the writer falls
+    # back to PLAIN part-way through.
+    return i % 10 if i % 2 == 0 else 1000 + i
+
+
+def column(f):
+    return [None if i % 13 == 0 else f(value(i)) for i in range(6000)]
+
+
+def lists(values):
+    return [None if i % 13 == 0 else values[i : i + i % 4] for i in range(6000)]
+
+
+s = column(lambda v: f"value-{v}")
+b = column(lambda v: f"bytes-{v}".encode())
+dec = column(lambda v: decimal.Decimal(v * 7).scaleb(-3))
+fsb = column(lambda v: v.to_bytes(4, "little"))
+# Whole microseconds: a nanosecond timestamp needs pandas to leave Arrow.
+ts = column(lambda v: v * 1000)
+pq.write_table(
+    pa.table({
+        "s": pa.array(s, pa.string()),
+        "ls": pa.array(s, pa.large_string()),
+        "b": pa.array(b, pa.binary()),
+        "dec": pa.array(dec, pa.decimal128(20, 3)),
+        "fsb": pa.array(fsb, pa.binary(4)),
+        "ts": pa.array(ts, pa.timestamp("ns")),
+        "ls_list": pa.array(lists(s), pa.list_(pa.large_string())),
+        "dec_list": pa.array(lists(dec), pa.list_(pa.decimal128(20, 3))),
+        "fsb_list": pa.array(lists(fsb), pa.list_(pa.binary(4))),
+        "ts_list": pa.array(lists(ts), pa.list_(pa.timestamp("ns"))),
+    }),
+    path,
+    row_group_size=2500,
+    data_page_size=4096,
+    # The writer weighs a dictionary once a batch: with these, even the
+    # 4-byte values outgrow theirs before a full row group ends.
+    dictionary_pagesize_limit=4096,
+    write_batch_size=256,
+    use_deprecated_int96_timestamps=True,
+)
+want = pq.read_table(path).to_pylist()
+"""
+
+
+def _to_pyarrow(var t: Table) raises -> PythonObject:
+    """Marrow Table -> PyArrow table via the Arrow C stream interface."""
+    var pa = Python.import_module("pyarrow")
+    var schema = t.schema.copy()
+    var batches = t.to_batches()
+    var caps = CArrowArrayStream.from_batches(schema^, batches^).to_pycapsule()
+    return pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
+
+
+def test_dictionary_pages_read_as_pyarrow_reads_them() raises:
+    """Strings, binary, decimals, fixed-size binary and INT96 timestamps,
+    flat and in lists, with nulls, over three row groups: each chunk holds a
+    dictionary page and the pages coded against it, and in the two full row
+    groups PLAIN pages after them. Read whole, as views, and as every third
+    row of one row group, they are what PyArrow reads."""
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_dictionary_pages.parquet")
+        var scope = Python.dict()
+        scope["path"] = path
+        _ = Python.import_module("builtins").exec(_DICTIONARY_PAGES, scope)
+        var want = scope["want"]
+        var f = ParquetFile(path)
+        for g in range(2):
+            for ref chunk in f.metadata().row_groups[g].columns:
+                assert_true(chunk.meta_data.plain_pages, "no PLAIN pages")
+        assert_true(Bool(_to_pyarrow(read_table(path)).to_pylist() == want))
+        assert_true(
+            Bool(
+                _to_pyarrow(
+                    read_table(path, binary_type=binary_view)
+                ).to_pylist()
+                == want
+            )
+        )
+        # The flat columns, as a selection cannot reach into a list.
+        var flat: List[String] = ["s", "ls", "b", "dec", "fsb", "ts"]
+        var rows = Python.list()
+        for i in range(2500, 5000, 3):
+            var row = Python.dict()
+            for name in flat:
+                row[name] = want[i][name]
+            rows.append(row)
+        var keep = List[Bool](capacity=2500)
+        for i in range(2500):
+            keep.append(i % 3 == 0)
+        for views in [False, True]:
+            var groups: List[Int] = [1]
+            var selections: List[RowSelection] = [RowSelection(keep.copy())]
+            var file = ParquetFile(
+                path, binary_type=binary_view
+            ) if views else ParquetFile(path)
+            var got = file.read(
+                columns=flat.copy(),
+                row_groups=groups^,
+                row_selections=selections^,
+            )
+            assert_true(Bool(_to_pyarrow(got^).to_pylist() == rows))
+
+
+comptime _READ_DICTIONARY = """
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+n = 4000
+# Every other row repeats one of ten values and the rest are distinct, so
+# each row group's dictionary outgrows its page and the writer falls back
+# to PLAIN part-way through.
+s = [
+    None if i % 13 == 0 else (f"v{i % 10}" if i % 2 == 0 else f"distinct-{i:06d}")
+    for i in range(n)
+]
+i64 = [None if i % 11 == 0 else i * 3 for i in range(n)]
+lst = [None if i % 17 == 0 else [f"e{i % 5}", f"x{i}"] for i in range(n)]
+pq.write_table(
+    pa.table({
+        "s": pa.array(s, pa.string()),
+        "i": pa.array(i64, pa.int64()),
+        "l": pa.array(lst, pa.list_(pa.string())),
+    }),
+    path,
+    row_group_size=2000,
+    dictionary_pagesize_limit=4096,
+    write_batch_size=256,
+)
+want = pq.read_table(path, read_dictionary=["s"])
+want_type = want.schema.field("s").type
+want_rows = want.to_pylist()
+"""
+
+
+def test_read_dictionary_answers_the_codes_and_the_dictionary() raises:
+    """`read_dictionary` reads a named string column as
+    `dictionary<int32, string>`, one chunk per row group, with PyArrow's
+    values, its PLAIN pages included; a named column of another type reads
+    as it would without it. So does every third row of one row group. An
+    unknown name, or a list's, is ignored, and a path into one is refused,
+    which PyArrow would read as a list of dictionaries."""
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_read_dictionary.parquet")
+        var scope = Python.dict()
+        scope["path"] = path
+        _ = Python.import_module("builtins").exec(_READ_DICTIONARY, scope)
+        var want = scope["want_rows"]
+        var f = ParquetFile(path)
+        for g in range(2):
+            assert_true(
+                f.metadata().row_groups[g].columns[0].meta_data.plain_pages,
+                "no PLAIN pages",
+            )
+        var names: List[String] = ["s", "i"]
+        var t = read_table(path, read_dictionary=names)
+        assert_true(t.schema.field(name="s").dtype == dictionary(int32, string))
+        assert_true(t.schema.field(name="i").dtype == int64)
+        assert_equal(len(t.column("s").chunks), 2)
+        for ref chunk in t.column("s").chunks:
+            assert_true(chunk.dtype() == dictionary(int32, string))
+        var got = _to_pyarrow(t^)
+        assert_true(Bool(got.schema.field("s").type == scope["want_type"]))
+        assert_true(Bool(got.to_pylist() == want))
+
+        var rows = Python.list()
+        for i in range(2000, 4000, 3):
+            var row = Python.dict()
+            row["s"] = want[i]["s"]
+            row["i"] = want[i]["i"]
+            rows.append(row)
+        var keep = List[Bool](capacity=2000)
+        for i in range(2000):
+            keep.append(i % 3 == 0)
+        var groups: List[Int] = [1]
+        var selections: List[RowSelection] = [RowSelection(keep^)]
+        var named: List[String] = ["s"]
+        var flat: List[String] = ["s", "i"]
+        var selected = ParquetFile(path, read_dictionary=named).read(
+            columns=flat^,
+            row_groups=groups^,
+            row_selections=selections^,
+        )
+        assert_true(
+            selected.schema.field(name="s").dtype == dictionary(int32, string)
+        )
+        assert_true(Bool(_to_pyarrow(selected^).to_pylist() == rows))
+
+        var plain = _to_pyarrow(read_table(path)).to_pylist()
+        for name in [String("nope"), String("l")]:
+            var ignored: List[String] = [name.copy()]
+            assert_true(
+                Bool(
+                    _to_pyarrow(
+                        read_table(path, read_dictionary=ignored)
+                    ).to_pylist()
+                    == plain
+                )
+            )
+        var nested: List[String] = ["l.list.element"]
+        with assert_raises(contains="NotImplementedError"):
+            _ = read_table(path, read_dictionary=nested)
+
+
+def _plain_bytes(values: List[String]) -> List[UInt8]:
+    """`values` as a PLAIN page, or a dictionary page, holds them."""
+    var out = List[UInt8]()
+    for v in values:
+        PlainValues.append_bytes(out, v.as_bytes())
+    return out^
+
+
+def _code_bytes(codes: List[UInt32]) raises -> List[UInt8]:
+    """`codes` as a dictionary-encoded page holds them: their width, 1, in
+    a byte, then their runs."""
+    var out: List[UInt8] = [1]
+    RlePack.write_runs[DType.uint32](Span(codes), 1, out)
+    return out^
+
+
+def _string_leaf(var dtype: DynType) raises -> ByteArrayLeafBuilder[StringType]:
+    """The leaf builder of a flat string chunk read as `dtype`."""
+    var leaf = LeafColumn("s", dtype^, PhysicalType.BYTE_ARRAY, 0, 0)
+    return ByteArrayLeafBuilder[StringType](8, leaf)
+
+
+def _codes_around_a_plain_page(var dtype: DynType) raises -> DynArray:
+    """A dictionary page ["a", "bb"], codes [1, 0], a PLAIN page ["ccc"],
+    then codes [0, 1, 1], read as `dtype`."""
+    var words = _plain_bytes(["a", "bb"])
+    var first = _code_bytes([1, 0])
+    var plain = _plain_bytes(["ccc"])
+    var last = _code_bytes([0, 1, 1])
+    var builder = _string_leaf(dtype^)
+    builder.consume(
+        Page(body=Span(words), num_values=2, num_present=2, dictionary=True)
+    )
+    builder.consume(
+        Page(
+            body=Span(first),
+            num_values=2,
+            num_present=2,
+            encoding=Encoding.RLE_DICTIONARY,
+        )
+    )
+    builder.consume(Page(body=Span(plain), num_values=1, num_present=1))
+    builder.consume(
+        Page(
+            body=Span(last),
+            num_values=3,
+            num_present=3,
+            encoding=Encoding.RLE_DICTIONARY,
+        )
+    )
+    return builder^.finish()
+
+
+def test_read_codes_resume_after_a_plain_page() raises:
+    """The pages of a chunk coded against its dictionary after a PLAIN page
+    read as codes again: into the values, and, read as a dictionary, into
+    the dictionary the PLAIN values extend."""
+    var values = _codes_around_a_plain_page(string)
+    assert_true(
+        values.as_string() == array(["bb", "a", "ccc", "a", "bb", "bb"])
+    )
+    var coded = _codes_around_a_plain_page(dictionary(int32, string))
+    ref both = coded.as_dictionary()
+    assert_true(both.indices().as_int32() == array([1, 0, 2, 0, 1, 1], int32))
+    assert_true(both.dictionary().as_string() == array(["a", "bb", "ccc"]))

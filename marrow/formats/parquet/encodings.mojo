@@ -1,21 +1,25 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parquet's page encodings, as cascades of `marrow.codecs`.
+"""Parquet's page encodings, as codecs of `marrow.kernels`.
 
-Each encoding is a cascade; what is here is Parquet's byte layout around it
--- the block headers, the zigzag varints, the length prefixes -- and how a
-page's present values come out of an Arrow array and go back into one. Its
-levels, dictionary codes and booleans are `marrow.codecs.Rle`'s runs.
+Each encoding is a codec -- stream stages and a packer, paired with the
+unpacker and stages that undo them; what is here is Parquet's byte layout
+around it -- the block headers, the zigzag varints, the length prefixes --
+and how a page's present values come out of an Arrow array and go back into
+one. Its levels, dictionary codes and booleans are `RlePack`'s runs.
 
-- `DeltaBinaryPackedEncoding` -- the first value, then `Delta(first)`,
-  `Ordered`, `FrameOfReference(128)`, `BitPack(32)`.
-- `DeltaLengthEncoding` -- `Lengths`, the lengths as DELTA_BINARY_PACKED.
-- `DeltaByteArrayEncoding` -- `Prefixes`, its prefixes and its suffixes'
-  lengths as DELTA_BINARY_PACKED.
+- `DeltaBinaryPackedEncoding` -- the first value, then each value less the
+  one before, `OrderedEncode`d, packed by `ReferencePack(128)` over
+  `BitPack(32)`: each block's smallest difference is its fit, the widths
+  are `BitPack`'s.
+- `DeltaLengthEncoding` -- `LengthsPack`, its lengths framed as
+  DELTA_BINARY_PACKED.
+- `DeltaByteArrayEncoding` -- `PrefixesPack`, its prefixes and its suffixes'
+  lengths framed as DELTA_BINARY_PACKED.
 - `PlainValues` · `DictionaryValues` · `ByteStreamSplitValues` -- a page's
-  present values to and from an array, through `Plain`, `Dictionary` over
-  `Rle`, and `ByteStreamSplit`.
+  present values to and from an array, through `PlainPack`,
+  `DictionaryPack` over `RlePack`, and `SplitPack`.
 - `Encoding` -- the enum that dispatches a data page's present values to the
   right one, so the flat and nested reader paths share one decoder.
 """
@@ -23,6 +27,7 @@ levels, dictionary codes and booleans are `marrow.codecs.Rle`'s runs.
 from std.sys import size_of
 
 from ...arrays import (
+    BinaryLikeArray,
     BoolArray,
     BytesArray,
     DynArray,
@@ -30,27 +35,124 @@ from ...arrays import (
     PrimitiveArray,
 )
 from ...buffers import Buffer
-from ...codecs import (
-    BitPack,
-    ByteStreamSplit,
-    ByteSwap,
-    Cascade,
-    Cast,
-    Delta,
-    Dictionary,
-    Encoded,
-    FrameOfReference,
-    Lengths,
-    Ordered,
-    Plain,
-    Prefixes,
-    Rle,
+from ...kernels.bitwise import ByteSwap, OrderedDecode, OrderedEncode
+from ...kernels.cast import NumericCast
+from ...kernels.compose import Codec, Compose, Decoder, Encoder, With
+from ...kernels.dictionary import (
+    DictionaryBytesPack,
+    DictionaryPack,
+    DictionaryPacked,
+    DictionaryUnpack,
 )
+from ...kernels.numeric import AddKernel, SubKernel
+from ...kernels.packing import (
+    BitPack,
+    BitPacked,
+    BitUnpack,
+    LengthsPack,
+    LengthsPacked,
+    LengthsUnpack,
+    PlainPack,
+    PlainPacked,
+    PlainUnpack,
+    PrefixesPack,
+    PrefixesPacked,
+    PrefixesUnpack,
+    ReferencePack,
+    ReferencePacked,
+    ReferenceUnpack,
+    RlePack,
+    RlePacked,
+    RleUnpack,
+    SplitPack,
+    SplitPacked,
+    SplitUnpack,
+)
+from ...kernels.scan import DiffScan, SumScan
+from ...kernels.segments import PerSegment
 from ...utils.byteorder import Leb128, LittleEndian
 from ...utils.integers import Unsigned, ordered, unordered, unzigzag, zigzag
 from ... import dtypes as dt
 from ...errors import CorruptError, NotImplementedError
 from ...views import BitmapView, BufferView
+
+
+comptime _DbpCodec[T: DType] = Codec[
+    Encoder[
+        Compose[With[SubKernel, T], DiffScan, OrderedEncode],
+        ReferencePack[BitPack],
+    ],
+    Decoder[
+        ReferenceUnpack[BitUnpack],
+        Compose[OrderedDecode[T], SumScan, With[AddKernel, T]],
+        Unsigned[T],
+    ],
+]
+"""DELTA_BINARY_PACKED after its first value: each value less the one before
+-- the first value before the first -- as the unsigned integers that order as
+the differences do, each block less its smallest, bit-packed by miniblock."""
+
+comptime _PlainCodec[store: DType, phys: DType] = Codec[
+    Encoder[Compose[NumericCast[phys]], PlainPack],
+    Decoder[PlainUnpack, Compose[NumericCast[store]], phys],
+]
+"""PLAIN: `store` values as little-endian `phys`."""
+
+comptime _SplitCodec[store: DType, phys: DType] = Codec[
+    Encoder[Compose[NumericCast[phys]], SplitPack],
+    Decoder[SplitUnpack, Compose[NumericCast[store]], phys],
+]
+"""BYTE_STREAM_SPLIT: `store` values as the byte planes of `phys`."""
+
+
+def _dbp_codec[
+    T: DType
+](first: Scalar[T], block: Int, per: Int) -> _DbpCodec[T]:
+    """`_DbpCodec` after `first`, in blocks of `block` values and miniblocks
+    of `per`."""
+    return _DbpCodec[T](
+        Encoder(
+            Compose((With[SubKernel, T](first), DiffScan(), OrderedEncode())),
+            ReferencePack(block, BitPack(per)),
+        ),
+        Decoder[
+            ReferenceUnpack[BitUnpack],
+            Compose[OrderedDecode[T], SumScan, With[AddKernel, T]],
+            Unsigned[T],
+        ](
+            ReferenceUnpack(block, BitUnpack(per)),
+            Compose((OrderedDecode[T](), SumScan(), With[AddKernel, T](first))),
+        ),
+    )
+
+
+def _plain_codec[store: DType, phys: DType]() -> _PlainCodec[store, phys]:
+    return _PlainCodec[store, phys](
+        Encoder(Compose((NumericCast[phys](),)), PlainPack()),
+        Decoder[PlainUnpack, Compose[NumericCast[store]], phys](
+            PlainUnpack(), Compose((NumericCast[store](),))
+        ),
+    )
+
+
+def _split_codec[store: DType, phys: DType]() -> _SplitCodec[store, phys]:
+    return _SplitCodec[store, phys](
+        Encoder(Compose((NumericCast[phys](),)), SplitPack()),
+        Decoder[SplitUnpack, Compose[NumericCast[store]], phys](
+            SplitUnpack(), Compose((NumericCast[store](),))
+        ),
+    )
+
+
+# Out of line: inlined, the copy is repeated in every decoder instantiated
+# per dtype.
+@no_inline
+def _plain[T: DType](values: Span[Scalar[T], _]) -> PlainPacked:
+    """`values`, copied as `PlainPack` packs them."""
+    var n = len(values)
+    var bytes = Buffer.alloc_uninit[T](n)
+    bytes.extend(BufferView(values), 0, n)
+    return PlainPacked(bytes^.to_immutable(), n * size_of[Scalar[T]]())
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +164,8 @@ struct DeltaBinaryPackedEncoding:
     """Parquet's DELTA_BINARY_PACKED: a header -- block size, miniblocks a
     block, how many values, the first one -- then each block's smallest
     difference, its miniblocks' widths and the miniblocks. After the first
-    value it frames `Delta(first), Ordered, FrameOfReference(block),
-    BitPack(miniblock)`: each block's smallest is what `FrameOfReference` sets
-    apart, the widths are `BitPack`'s."""
+    value it is `_DbpCodec`: each block's smallest is what `ReferencePack`
+    fits, the widths are `BitPack`'s."""
 
     comptime BLOCK = 128
     comptime MINIBLOCKS = 4
@@ -85,28 +186,26 @@ struct DeltaBinaryPackedEncoding:
         Leb128.write(out, UInt64(M))
         Leb128.write(out, UInt64(n))
         Leb128.write(out, zigzag(first).cast[DType.uint64]())
-        var cascade = Cascade(
-            (Delta(first), Ordered(), FrameOfReference(B), BitPack(PER))
-        )
-        var encoded = cascade.encode_view(
+        var packed = _dbp_codec(first, B, PER).encode(
             BufferView(values[1:] if n > 0 else values)
         )
-        var low = FrameOfReference.lows[U](encoded[2])
-        var w = BitPack.widths(encoded[3])
-        var packed = encoded[3].bytes()
+        ref widths = packed.inner.widths
+        var bits = packed.inner.bytes.view[DType.uint8](0, packed.inner.size)
         var deltas = max(n - 1, 0)
         var at = 0
         for b in range((deltas + B - 1) // B):
-            var smallest = unordered[T](low[b])
+            var smallest = unordered[T](packed.fits.get[U](b))
             Leb128.write(out, zigzag(smallest).cast[DType.uint64]())
             var left = min(B, deltas - b * B)
             var used = (left + PER - 1) // PER
             for m in range(M):
-                out.append(w[b * M + m] if m < used else 0)
+                out.append(
+                    widths.get[DType.uint8](b * M + m) if m < used else 0
+                )
             for m in range(used):
-                var width = Int(w[b * M + m])
+                var width = Int(widths.get[DType.uint8](b * M + m))
                 var bytes = (min(PER, left - m * PER) + 7) // 8 * width
-                out.extend(packed[at : at + bytes])
+                out.extend(bits.as_span()[at : at + bytes])
                 at += bytes
                 # A miniblock is stored whole: zeros past its last value.
                 for _ in range(PER * width // 8 - bytes):
@@ -118,8 +217,9 @@ struct DeltaBinaryPackedEncoding:
     ](data: Span[UInt8, _], count: Int, mut out: List[Scalar[T]]) raises -> Int:
         """Append the first `count` values of the blocks at the start of
         `data`; return where the last miniblock read ends. The blocks' parts
-        -- smallest values, widths, miniblocks -- are gathered into the tree
-        the cascade decodes, which writes the values in place."""
+        -- smallest values, widths, miniblocks -- are gathered into the
+        `ReferencePacked[BitPacked]` the codec decodes, which writes the
+        values in place."""
         comptime U = Unsigned[T]
         var pos = 0
         var block_size: UInt64
@@ -150,15 +250,23 @@ struct DeltaBinaryPackedEncoding:
         var mbs = Int(miniblocks)
         var per = block // mbs
         var first = unzigzag[T](first_z.cast[U]())
-        var lows = List[Scalar[U]]()
-        var widths = List[UInt8]()
-        var packed = List[UInt8]()
         var deltas = max(count - 1, 0)
+        # A fit a block, a width a miniblock, and the miniblocks, which take
+        # at most the bytes left.
+        var fits = Buffer.alloc_uninit[U]((deltas + block - 1) // block)
+        var widths = Buffer.alloc_uninit[DType.uint8]((deltas + per - 1) // per)
+        var bits = Buffer.alloc_uninit[DType.uint8](len(data) - pos)
+        var blocks = 0
+        var used = 0
+        var size = 0
         var done = 0
         while done < deltas:
             var smallest_z: UInt64
             smallest_z, pos = Leb128.read(data, pos)
-            lows.append(ordered(unzigzag[T](smallest_z.cast[U]())))
+            fits.unsafe_set[U](
+                blocks, ordered(unzigzag[T](smallest_z.cast[U]()))
+            )
+            blocks += 1
             if pos + mbs > len(data):
                 raise CorruptError("parquet: truncated miniblock widths")
             var widths_at = pos
@@ -171,48 +279,48 @@ struct DeltaBinaryPackedEncoding:
                 var bytes = (min(per, left - m * per) + 7) // 8 * width
                 if pos + bytes > len(data):
                     raise CorruptError("parquet: truncated miniblock")
-                widths.append(UInt8(width))
-                packed.extend(data[pos : pos + bytes])
+                widths.unsafe_set[DType.uint8](used, UInt8(width))
+                used += 1
+                bits.extend(BufferView(data[pos : pos + bytes]), size, bytes)
+                size += bytes
                 # A miniblock is stored whole, its padding included.
                 pos += min(per * width // 8, len(data) - pos)
             done += left
-        var bits = Encoded(bytes=Span(packed))
-        bits.children.append(Encoded(Span(widths)))
-        var tree = Encoded(
-            deltas,
-            [
-                Encoded(),
-                Encoded(),
-                Encoded(0, [Encoded(Span(lows))]),
-                bits^,
-            ],
-        )
-        var cascade = Cascade(
-            (Delta(first), Ordered(), FrameOfReference(block), BitPack(per))
-        )
         var base = len(out)
         out.resize(unsafe_uninit_length=base + count)
         if count > 0:
             out[base] = first
-            cascade.decode_into[T](tree, BufferView(Span(out)[base + 1 :]))
+            _dbp_codec(first, block, per).decode(
+                ReferencePacked[BitPacked](
+                    PerSegment(fits^.to_immutable(), blocks),
+                    BitPacked(
+                        bits^.to_immutable(),
+                        size,
+                        PerSegment(widths^.to_immutable(), used),
+                    ),
+                ),
+                BufferView(Span(out)[base + 1 :]),
+            )
         return pos
 
 
 struct DeltaLengthEncoding:
     """Parquet's DELTA_LENGTH_BYTE_ARRAY: the byte strings' lengths as
-    DELTA_BINARY_PACKED, then their bytes -- `Lengths`, its lengths framed
-    as DELTA_BINARY_PACKED."""
+    DELTA_BINARY_PACKED, then their bytes -- `LengthsPack`, its lengths
+    framed as DELTA_BINARY_PACKED."""
 
     @staticmethod
     def encode(
         offsets: Span[Int32, _], data: Span[UInt8, _], mut out: List[UInt8]
     ) raises:
-        var cascade = Cascade[Lengths[], Plain]()
-        var encoded = cascade.encode(offsets, data)
+        var packed = LengthsPack(PlainPack()).pack(offsets, data)
         DeltaBinaryPackedEncoding.encode(
-            encoded[1].values[DType.int32]().as_span(), out
+            packed.lengths.bytes.view[DType.int32](
+                0, packed.lengths.size // 4
+            ).as_span(),
+            out,
         )
-        out.extend(Lengths.bytes(encoded[0]))
+        out.extend(packed.bytes.view[DType.uint8](0, packed.size).as_span())
 
     @staticmethod
     def decode(
@@ -228,9 +336,8 @@ struct DeltaLengthEncoding:
             src, count, lengths
         )
         var total = Self.total(lengths, len(src) - pos)
-        var cascade = Cascade[Lengths[], Plain]()
-        cascade.decode(
-            Self.tree(lengths, src[pos : pos + total]), offsets, data
+        LengthsUnpack(PlainUnpack()).unpack(
+            Self.packed(lengths, src[pos : pos + total]), count, offsets, data
         )
         return pos + total
 
@@ -245,38 +352,39 @@ struct DeltaLengthEncoding:
         return total
 
     @staticmethod
-    def tree(lengths: List[Int32], bytes: Span[UInt8, _]) -> Encoded:
-        """What `Cascade[Lengths[], Plain]` stores `lengths` and `bytes`
-        as."""
-        return Encoded(
-            len(lengths),
-            [
-                Encoded(0, [Encoded(bytes)]),
-                Encoded(Span(lengths)),
-            ],
-        )
+    def packed(
+        lengths: List[Int32], bytes: Span[UInt8, _]
+    ) raises -> LengthsPacked[PlainPacked]:
+        """What `LengthsPack[PlainPack]` packs `lengths` and `bytes` as."""
+        var held = _plain(bytes)
+        return LengthsPacked(held.bytes, held.size, _plain(Span(lengths)))
 
 
 struct DeltaByteArrayEncoding:
     """Parquet's DELTA_BYTE_ARRAY: the prefix each byte string shares with
     the one before as DELTA_BINARY_PACKED, then the rest as
-    DELTA_LENGTH_BYTE_ARRAY -- `Prefixes`, its prefixes and its suffixes'
+    DELTA_LENGTH_BYTE_ARRAY -- `PrefixesPack`, its prefixes and its suffixes'
     lengths framed as DELTA_BINARY_PACKED."""
 
     @staticmethod
     def encode(
         offsets: Span[Int32, _], data: Span[UInt8, _], mut out: List[UInt8]
     ) raises:
-        var cascade = Cascade[Prefixes[], Plain]()
-        var encoded = cascade.encode(offsets, data)
-        ref suffixes = Prefixes.suffixes(encoded[0])
+        var packed = PrefixesPack(PlainPack(), PlainPack()).pack(offsets, data)
+        ref suffixes = packed.suffixes
         DeltaBinaryPackedEncoding.encode(
-            encoded[1].values[DType.int32]().as_span(), out
+            packed.prefixes.bytes.view[DType.int32](
+                0, packed.prefixes.size // 4
+            ).as_span(),
+            out,
         )
         DeltaBinaryPackedEncoding.encode(
-            suffixes[1].values[DType.int32]().as_span(), out
+            suffixes.lengths.bytes.view[DType.int32](
+                0, suffixes.lengths.size // 4
+            ).as_span(),
+            out,
         )
-        out.extend(Lengths.bytes(suffixes[0]))
+        out.extend(suffixes.bytes.view[DType.uint8](0, suffixes.size).as_span())
 
     @staticmethod
     def decode(
@@ -296,12 +404,13 @@ struct DeltaByteArrayEncoding:
             src[pos:], count, lengths
         )
         var total = DeltaLengthEncoding.total(lengths, len(src) - pos)
-        var suffixes = DeltaLengthEncoding.tree(lengths, src[pos : pos + total])
-        var tree = Encoded(
-            count, [Encoded(0, [suffixes^]), Encoded(Span(prefixes))]
+        var packed = PrefixesPacked(
+            _plain(Span(prefixes)),
+            DeltaLengthEncoding.packed(lengths, src[pos : pos + total]),
         )
-        var cascade = Cascade[Prefixes[], Plain]()
-        cascade.decode(tree, offsets, data)
+        PrefixesUnpack(PlainUnpack(), PlainUnpack()).unpack(
+            packed^, count, offsets, data
+        )
         return pos + total
 
 
@@ -324,17 +433,21 @@ struct PlainValues:
         may be numeric, temporal, decimal, or interval; `big_endian` (for DECIMAL
         FIXED_LEN_BYTE_ARRAY) writes the two's-complement value most-significant
         byte first."""
+        comptime T = store.native
         var present = Self.present(arr)
         comptime if big_endian:
-            var cascade = Cascade[ByteSwap, Plain]()
-            out.extend(
-                cascade.encode_view(BufferView(Span(present)))[1].bytes()
-            )
+            var packed = Codec(
+                Encoder(Compose((ByteSwap(),)), PlainPack()),
+                Decoder[PlainUnpack, Compose[ByteSwap], T](
+                    PlainUnpack(), Compose((ByteSwap(),))
+                ),
+            ).encode(BufferView(Span(present)))
+            out.extend(packed.bytes.view[DType.uint8](0, packed.size).as_span())
         else:
-            var cascade = Cascade[Cast[phys], Plain]()
-            out.extend(
-                cascade.encode_view(BufferView(Span(present)))[1].bytes()
+            var packed = _plain_codec[T, phys]().encode(
+                BufferView(Span(present))
             )
+            out.extend(packed.bytes.view[DType.uint8](0, packed.size).as_span())
 
     @staticmethod
     def present[
@@ -388,7 +501,7 @@ struct PlainValues:
         A: BytesArray
     ](arr: A, mut offsets: List[Int32], mut data: List[UInt8]) raises:
         """The present values of a byte-array column, nulls left out, as the
-        offsets and data a byte-string codec takes."""
+        offsets and data a byte-string packer takes."""
         offsets.append(Int32(len(data)))
         for i in range(len(arr)):
             if arr.is_valid(i):
@@ -408,17 +521,14 @@ struct PlainValues:
     @staticmethod
     def decode_primitive[
         store: DType, phys: DType
-    ](values: Span[UInt8, _], np: Int, mut out: List[Scalar[store]]) raises:
-        """Append the `np` values at the start of `values`, each stored as
-        a little-endian `phys`."""
+    ](values: Span[UInt8, _], dst: BufferView[mut=True, store, _]) raises:
+        """Decode the `len(dst)` values at the start of `values`, each stored
+        as a little-endian `phys`, into `dst`."""
         comptime PW = size_of[Scalar[phys]]()
+        var np = len(dst)
         if len(values) < np * PW:
             raise CorruptError(t"parquet: {len(values)} bytes for {np} values")
-        var tree = Encoded(np, [Encoded(), Encoded(bytes=values[: np * PW])])
-        var base = len(out)
-        out.resize(unsafe_uninit_length=base + np)
-        var cascade = Cascade[Cast[phys], Plain]()
-        cascade.decode_into[store](tree, BufferView(Span(out))[base:])
+        _plain_codec[store, phys]().decode(_plain(values[: np * PW]), dst)
 
     @staticmethod
     def decode_bytes(
@@ -471,9 +581,9 @@ struct PlainValues:
 
 struct DictionaryValues:
     """The dictionary codec — a dictionary page of distinct values, then data
-    pages of RLE/bit-packed indices into it. `encode` builds both from a column;
-    `decode_page_*` reads the dictionary page and `decode_*` reads a data page's
-    indices and gathers the values."""
+    pages of RLE/bit-packed codes into it. `encode` builds both from a column;
+    `read_page` and `read_page_bytes` read the dictionary page, once a column
+    chunk, and `decode_into` a data page's codes, gathering the values."""
 
     # --- encode: column -> dictionary-page bytes + per-present-value indices ---
 
@@ -483,7 +593,7 @@ struct DictionaryValues:
     ](
         values: Span[UInt8, _],
         count: Int,
-        ref dict: Encoded,
+        dict: PlainPacked,
         dst: BufferView[mut=True, T, _],
     ) raises:
         """Decode a data page's `count` codes -- their width in a byte, then
@@ -492,67 +602,70 @@ struct DictionaryValues:
         if len(values) == 0:
             if count > 0:
                 raise CorruptError("parquet: a dictionary page with no codes")
-            return
-        # The `Dictionary` node holds the distinct values as its one slot;
-        # the `Rle` node holds the codes.
-        var tree = Encoded(
-            count, [Encoded(0, [dict.copy()]), Encoded(bytes=values[1:])]
-        )
-        var cascade = Cascade((Dictionary(), Rle(Int(values[0]))))
-        cascade.decode_into[T](tree, dst)
+        else:
+            var width = Int(values[0])
+            var runs = _plain(values[1:])
+            Codec(
+                DictionaryPack(RlePack(width)),
+                DictionaryUnpack(RleUnpack(width)),
+            ).decode(
+                DictionaryPacked(dict.copy(), RlePacked(runs.bytes, runs.size)),
+                dst,
+            )
 
     @staticmethod
     def _encode_prim[
         store: dt.NumericType, phys: DType
     ](
         arr: PrimitiveArray[store],
-        mut dict_body: List[UInt8],
+        mut page: List[UInt8],
         mut indices: List[Int32],
     ) raises -> Int:
         """Dictionary-encode a primitive column: PLAIN-encode each distinct value
-        (widened to `phys`) into `dict_body`, collect the per-value index.
+        (widened to `phys`) into `page`, collect the per-value index.
         Values are keyed by their bits, so `0.0` and `-0.0` stay distinct."""
+        comptime T = store.native
         var present = PlainValues.present(arr)
-        var cascade = Cascade[Dictionary[], Plain]()
-        var encoded = cascade.encode_view(BufferView(Span(present)))
-        var distinct = Dictionary.distinct(encoded[0]).values[store.native]()
-        var codes = encoded[1].values[DType.uint32]()
+        var packed = Codec(
+            DictionaryPack(PlainPack()), DictionaryUnpack(PlainUnpack())
+        ).encode(BufferView(Span(present)))
+        var distinct = packed.values.size // size_of[Scalar[T]]()
+        var codes = packed.codes.bytes.view[DType.uint32](0, len(present))
         indices.reserve(len(indices) + len(codes))
         for i in range(len(codes)):
             indices.append(Int32(codes[i]))
-        var page = Cascade[Cast[phys], Plain]()
-        dict_body.extend(
-            page.encode_view(BufferView(distinct.as_span()))[1].bytes()
+        var plain = _plain_codec[T, phys]().encode(
+            packed.values.bytes.view[T](0, distinct)
         )
-        return len(distinct)
+        page.extend(plain.bytes.view[DType.uint8](0, plain.size).as_span())
+        return distinct
 
     @staticmethod
     def _encode_bytes[
         A: BytesArray
-    ](
-        arr: A,
-        mut dict_body: List[UInt8],
-        mut indices: List[Int32],
-    ) raises -> Int:
+    ](arr: A, mut page: List[UInt8], mut indices: List[Int32]) raises -> Int:
         """Dictionary-encode a byte-array column (string/binary, their large_
         and view variants): length-prefixed distinct values in the dictionary
         page, one index per present value."""
         var offsets = List[Int32]()
         var data = List[UInt8]()
         PlainValues.present_bytes(arr, offsets, data)
-        var cascade = Cascade[Dictionary[], Plain]()
-        var encoded = cascade.encode(Span(offsets), Span(data))
-        # The distinct strings, stored as `Lengths`, then `Plain`, make the
+        var packed = DictionaryBytesPack(PlainPack()).pack(
+            Span(offsets), Span(data)
+        )
+        # The distinct strings, their lengths and their bytes, make the
         # dictionary page: each as PLAIN writes it.
-        ref strings = Dictionary.distinct(encoded[0])
-        var lengths = strings[1].values[DType.int32]()
-        var bytes = Lengths.bytes(strings[0])
+        ref strings = packed.strings
+        var lengths = strings.lengths.bytes.view[DType.int32](
+            0, strings.lengths.size // 4
+        )
+        var bytes = strings.bytes.view[DType.uint8](0, strings.size).as_span()
         var at = 0
         for i in range(len(lengths)):
             var length = Int(lengths[i])
-            PlainValues.append_bytes(dict_body, bytes[at : at + length])
+            PlainValues.append_bytes(page, bytes[at : at + length])
             at += length
-        var codes = encoded[1].values[DType.uint32]()
+        var codes = packed.codes.bytes.view[DType.uint32](0, len(offsets) - 1)
         indices.reserve(len(indices) + len(codes))
         for i in range(len(codes)):
             indices.append(Int32(codes[i]))
@@ -562,7 +675,7 @@ struct DictionaryValues:
     def encode(
         dtype: dt.DynType,
         col: DynArray,
-        mut dict_body: List[UInt8],
+        mut page: List[UInt8],
         mut indices: List[Int32],
     ) raises -> Int:
         """Build the dictionary page bytes + per-value indices for `col`; returns
@@ -573,12 +686,12 @@ struct DictionaryValues:
         # numeric keeps its own type (FLOAT16 included).
         def numeric[
             T: dt.NumericType
-        ](t: T) raises {imm col, mut dict_body, mut indices} -> Int:
+        ](t: T) raises {imm col, mut page, mut indices} -> Int:
             comptime phys = DType.int32 if T.native.is_integral() and size_of[
                 T.native
             ]() < 4 else T.native
             return Self._encode_prim[T, phys](
-                col.get[PrimitiveArray[T]](), dict_body, indices
+                col.get[PrimitiveArray[T]](), page, indices
             )
 
         if dtype.is_numeric():
@@ -593,8 +706,8 @@ struct DictionaryValues:
 
             def encode_bytes[
                 A: BytesArray
-            ](arr: A) raises {mut dict_body, mut indices, imm} -> Int:
-                return Self._encode_bytes(arr, dict_body, indices)
+            ](arr: A) raises {mut page, mut indices, imm} -> Int:
+                return Self._encode_bytes(arr, page, indices)
 
             return col.try_visit[Int, BytesArray](
                 encode_bytes, "expected a binary or string array"
@@ -609,59 +722,42 @@ struct DictionaryValues:
     @staticmethod
     def read_page[
         store: DType, phys: DType
-    ](body: Span[UInt8, _], num_values: Int) raises -> Encoded:
-        """A primitive dictionary page -- PLAIN `phys` values -- as `Plain`'s
-        node of `store` values: read once a column chunk, shared by every
+    ](body: Span[UInt8, _], num_values: Int) raises -> PlainPacked:
+        """A primitive dictionary page -- PLAIN `phys` values -- as the
+        `store` values it holds: read once a column chunk, shared by every
         data page of it."""
-        var values = List[Scalar[store]](capacity=num_values)
-        PlainValues.decode_primitive[store, phys](body, num_values, values)
-        return Encoded(Span(values))
+        var values = Buffer.alloc_uninit[store](num_values)
+        PlainValues.decode_primitive[store, phys](
+            body, values.view[store](0, num_values)
+        )
+        return PlainPacked(
+            values^.to_immutable(), num_values * size_of[Scalar[store]]()
+        )
 
     @staticmethod
-    def decode_page_bytes(
-        body: Span[UInt8, _],
-        num_values: Int,
-        mut dict_body: List[UInt8],
-        mut dict_off: List[Int],
-        mut dict_len: List[Int],
-    ) raises:
-        """Read a byte-array dictionary page: its bytes into `dict_body`, and
-        where each value sits in them (see `byte_offsets`)."""
-        dict_body.clear()
-        dict_body.extend(body)
-        Self.byte_offsets(body, num_values, dict_off, dict_len)
-
-    @staticmethod
-    def byte_offsets(
-        body: Span[UInt8, _],
-        num_values: Int,
-        mut dict_off: List[Int],
-        mut dict_len: List[Int],
-    ) raises:
-        """Where each value of a byte-array dictionary page starts and how
-        long it is: the page is length-prefixed values, so each offset points
-        past its 4-byte prefix. Replaces what the lists held -- the indices of
-        a data page address one chunk's dictionary."""
-        dict_off.clear()
-        dict_len.clear()
+    def read_page_bytes[
+        T: dt.BinaryLikeType
+    ](body: Span[UInt8, _], num_values: Int) raises -> BinaryLikeArray[T]:
+        """A byte-array dictionary page -- PLAIN length-prefixed values -- as
+        an array: read once a column chunk, and taken from by its data
+        pages."""
+        comptime O = T.offset
+        var offsets = Buffer.alloc_uninit[O](num_values + 1)
+        offsets.unsafe_set[O](0, 0)
+        # The values take less than the page, which holds a length each too.
+        var values = Buffer.alloc_uninit[DType.uint8](len(body))
         var pos = 0
-        for _ in range(num_values):
+        var size = 0
+        for i in range(num_values):
             var start, n = PlainValues.locate(body, pos)
-            dict_off.append(start)
-            dict_len.append(n)
-
-    @staticmethod
-    def decode_primitive[
-        store: DType
-    ](
-        values: Span[UInt8, _],
-        np: Int,
-        ref dict: Encoded,
-        mut out: List[Scalar[store]],
-    ) raises:
-        var base = len(out)
-        out.resize(unsafe_uninit_length=base + np)
-        Self.decode_into[store](values, np, dict, BufferView(Span(out))[base:])
+            values.extend(BufferView(body[start : start + n]), size, n)
+            size += n
+            offsets.unsafe_set[O](i + 1, Scalar[O](size))
+        return BinaryLikeArray[T](
+            length=num_values,
+            offsets=offsets^.to_immutable(),
+            values=values^.to_immutable(),
+        )
 
 
 struct ByteStreamSplitValues:
@@ -671,15 +767,17 @@ struct ByteStreamSplitValues:
     @staticmethod
     def decode_primitive[
         store: DType, phys: DType
-    ](values: Span[UInt8, _], np: Int, mut out: List[Scalar[store]]) raises:
+    ](values: Span[UInt8, _], dst: BufferView[mut=True, store, _]) raises:
+        """Decode the `len(dst)` values at the start of `values`, the byte
+        planes of `phys` values, into `dst`."""
         comptime B = size_of[Scalar[phys]]()
+        var np = len(dst)
         if len(values) < np * B:
             raise CorruptError(t"parquet: {len(values)} bytes for {np} values")
-        var tree = Encoded(np, [Encoded(), Encoded(bytes=values[: np * B])])
-        var base = len(out)
-        out.resize(unsafe_uninit_length=base + np)
-        var cascade = Cascade[Cast[phys], ByteStreamSplit[]]()
-        cascade.decode_into[store](tree, BufferView(Span(out))[base:])
+        var planes = _plain(values[: np * B])
+        _split_codec[store, phys]().decode(
+            SplitPacked(planes.bytes, planes.size), dst
+        )
 
     @staticmethod
     def encode[
@@ -687,9 +785,10 @@ struct ByteStreamSplitValues:
     ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
         """Transpose the present values into per-byte planes: byte `k` of value
         `i` at `out[base + k*np + i]` (inverse of `decode_primitive`)."""
+        comptime T = store.native
         var present = PlainValues.present(arr)
-        var cascade = Cascade[Cast[phys], ByteStreamSplit[]]()
-        out.extend(cascade.encode_view(BufferView(Span(present)))[1].bytes())
+        var packed = _split_codec[T, phys]().encode(BufferView(Span(present)))
+        out.extend(packed.bytes.view[DType.uint8](0, packed.size).as_span())
 
 
 @fieldwise_init
@@ -724,36 +823,37 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         self,
         values: Span[UInt8, _],
         num_present: Int,
-        ref dict: Encoded,
+        dict: PlainPacked,
         mut out: List[Scalar[store]],
     ) raises:
         """Append the present fixed-width values (widened `phys` -> `store`);
         `dict` is the chunk's dictionary, as `DictionaryValues.read_page`
         gave it."""
+        var base = len(out)
+        out.resize(unsafe_uninit_length=base + num_present)
+        var dst = BufferView(Span(out))[base:]
         if self.is_plain():
-            PlainValues.decode_primitive[store, phys](values, num_present, out)
+            PlainValues.decode_primitive[store, phys](values, dst)
         elif self.is_dictionary():
-            DictionaryValues.decode_primitive[store](
-                values, num_present, dict, out
-            )
+            DictionaryValues.decode_into[store](values, num_present, dict, dst)
         elif self == Self.DELTA_BINARY_PACKED:
             comptime if phys.is_integral() and phys.is_signed():
-                if num_present == 0:
-                    return
-                var decoded = List[Scalar[phys]](capacity=num_present)
-                _ = DeltaBinaryPackedEncoding.decode[phys](
-                    values, num_present, decoded
-                )
-                for v in decoded:
-                    out.append(v.cast[store]())
+                if num_present > 0:
+                    var decoded = List[Scalar[phys]](capacity=num_present)
+                    _ = DeltaBinaryPackedEncoding.decode[phys](
+                        values, num_present, decoded
+                    )
+                    # Iterated, not indexed: an index is bounds-checked.
+                    var i = 0
+                    for v in decoded:
+                        dst.unsafe_set(i, v.cast[store]())
+                        i += 1
             else:
                 raise CorruptError(
                     t"parquet: DELTA_BINARY_PACKED over a {phys} column"
                 )
         elif self == Self.BYTE_STREAM_SPLIT:
-            ByteStreamSplitValues.decode_primitive[store, phys](
-                values, num_present, out
-            )
+            ByteStreamSplitValues.decode_primitive[store, phys](values, dst)
         else:
             raise NotImplementedError(
                 t"parquet: unsupported data page encoding {self.code}"
@@ -837,7 +937,7 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
                     t" {len(values) - 4}"
                 )
             var decoded = List[Int32](capacity=num_present)
-            _ = Rle.read_runs[DType.int32](
+            _ = RleUnpack.read_runs[DType.int32](
                 values[4 : 4 + length], 1, num_present, decoded
             )
             var out = List[Bool](capacity=num_present)

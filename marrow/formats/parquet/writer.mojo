@@ -52,7 +52,7 @@ from .encodings import (
     Encoding,
     PlainValues,
 )
-from ...codecs import Rle
+from ...kernels.packing import RlePack
 from ...utils import Crc32
 from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import (
@@ -495,7 +495,7 @@ struct ColumnWriter(Movable):
 
     def _write_dict_page(
         mut self,
-        var dict_body: List[UInt8],
+        var page: List[UInt8],
         num_dict: Int,
         mut out: List[UInt8],
         native: Bool,
@@ -504,8 +504,8 @@ struct ColumnWriter(Movable):
         return `(offset, uncompressed_incl_header, compressed_incl_header)`,
         `offset` being the page's index in `out`."""
         var offset = len(out)
-        var raw_len = len(dict_body)
-        self._pack(dict_body^, native)
+        var raw_len = len(page)
+        self._pack(page^, native)
         var comp_len = len(self.packed)
         var ph = PageHeader.dictionary_page(raw_len, comp_len, num_dict)
         if self.write_crc:
@@ -655,11 +655,11 @@ struct ColumnWriter(Movable):
         # chunk (the dictionary size); -1 leaves Statistics.distinct_count absent.
         var chunk_distinct = -1
         if encoding == Encoding.RLE_DICTIONARY:
-            var dict_body = List[UInt8]()
+            var dict_page = List[UInt8]()
             var num_dict = DictionaryValues.encode(
-                self.leaf.dtype, values, dict_body, indices
+                self.leaf.dtype, values, dict_page, indices
             )
-            if len(dict_body) > _DICT_PAGE_LIMIT:
+            if len(dict_page) > _DICT_PAGE_LIMIT:
                 # High-cardinality: the dictionary would exceed PLAIN, fall back.
                 encoding = Encoding.PLAIN
                 indices = List[Int32]()
@@ -667,7 +667,7 @@ struct ColumnWriter(Movable):
                 chunk_distinct = num_dict
                 if num_dict > 0:  # one bit even for a one-entry dictionary
                     dict_width = max(1, Int(bit_width(UInt64(num_dict - 1))))
-                var d = self._write_dict_page(dict_body^, num_dict, out, native)
+                var d = self._write_dict_page(dict_page^, num_dict, out, native)
                 dict_page_offset = base + d[0]
                 total_uncompressed += d[1]
                 total_compressed += d[2]
@@ -741,12 +741,12 @@ struct ColumnWriter(Movable):
             var def_bytes = List[UInt8]()
             if max_rep >= 1:
                 var page_reps = Self._sub(reps, i0, i)
-                Rle.write_runs(
+                RlePack.write_runs(
                     Span(page_reps), Int(bit_width(UInt64(max_rep))), rep_bytes
                 )
             if max_def >= 1:
                 var page_defs = Self._sub(defs, i0, i)
-                Rle.write_runs(
+                RlePack.write_runs(
                     Span(page_defs), Int(bit_width(UInt64(max_def))), def_bytes
                 )
 
@@ -755,7 +755,7 @@ struct ColumnWriter(Movable):
             if encoding == Encoding.RLE_DICTIONARY:
                 value_bytes.append(UInt8(dict_width))
                 var page_indices = Self._sub(indices, p0, p)
-                Rle.write_runs(Span(page_indices), dict_width, value_bytes)
+                RlePack.write_runs(Span(page_indices), dict_width, value_bytes)
             else:
                 var page_vals = values.slice(e0, e - e0)
                 if (

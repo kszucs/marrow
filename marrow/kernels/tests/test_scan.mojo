@@ -27,12 +27,21 @@ from ...dtypes import (
 )
 from ...views import BufferView, cpu_lanes
 from ...kernels.aggregate import SumFold
-from ...kernels.core import Associative, BinaryKernel, Identity
+from ...kernels.compose import Compose, With
+from ...kernels.core import Associative, BinaryKernel, Identity, ScanKernel
 from ...kernels.filter import TakeKernel
 from ...kernels.nested import ArrayLengthKernel, ListReduceKernel
-from ...kernels.numeric import AddKernel, MaxKernel, MinKernel, MulKernel
+from ...kernels.numeric import (
+    AddKernel,
+    MaxKernel,
+    MinKernel,
+    MulKernel,
+    SubKernel,
+)
 from ...kernels.scan import (
     CumulativeKernel,
+    DiffScan,
+    Lagged,
     PairwiseDiffKernel,
     RollingKernel,
     RollingMeanKernel,
@@ -146,6 +155,74 @@ def test_scan_empty_returns_carry() raises:
 
 
 # ---------------------------------------------------------------------------
+# Stream stages: Scan, Lagged and DiffScan through the ScanKernel bound
+# ---------------------------------------------------------------------------
+
+
+def test_diff_scan_is_each_row_less_the_one_before() raises:
+    var diff = DiffScan()
+    var state = diff.start[DType.int64]()
+    assert_true(
+        diff.core[DType.int64, 4](SIMD[DType.int64, 4](10, 12, 15, 15), state)
+        == SIMD[DType.int64, 4](10, 2, 3, 0)
+    )
+
+    # It wraps.
+    var bytes = diff.start[DType.uint8]()
+    var wrapped = List[UInt8]()
+    for v in [UInt8(0), 255, 1]:
+        wrapped.append(diff.core[DType.uint8, 1](v, bytes))
+    assert_true(wrapped == [UInt8(0), 255, 2])
+
+    # A register, then the rows left one at a time, with one state.
+    var carried = diff.start[DType.int64]()
+    var head = diff.core[DType.int64, 2](SIMD[DType.int64, 2](10, 12), carried)
+    var third = diff.core[DType.int64, 1](15, carried)
+    var fourth = diff.core[DType.int64, 1](15, carried)
+    assert_true(head == SIMD[DType.int64, 2](10, 2))
+    assert_true(third == 3 and fourth == 0)
+
+    var lag = Lagged[SubKernel, 2]()
+    var lagged = lag.start[DType.int64]()
+    var first = lag.core[DType.int64, 4](
+        SIMD[DType.int64, 4](1, 2, 4, 8), lagged
+    )
+    var last = lag.core[DType.int64, 1](16, lagged)
+    assert_true(first == SIMD[DType.int64, 4](1, 2, 3, 6) and last == 12)
+
+
+def _run_stage[
+    S: ScanKernel, T: DType
+](stage: S, src: BufferView[T, _], dst: BufferView[mut=True, T, _]):
+    """`stage` over `src` into `dst`, a register of 8 at a time, then the
+    tail one row at a time."""
+    comptime assert S.Out[T] == T, "the stage keeps the dtype"
+    var state = stage.start[T]()
+    var i = 0
+    while i + 8 <= len(src):
+        dst.store[8](
+            i, rebind[SIMD[T, 8]](stage.core[T, 8](src.load[8](i), state))
+        )
+        i += 8
+    while i < len(src):
+        dst.store[1](
+            i, rebind[Scalar[T]](stage.core[T, 1](src.load[1](i), state))
+        )
+        i += 1
+
+
+def test_compose_runs_its_stages_in_order() raises:
+    var values: List[Int64] = [10, 12, 15]
+    var out = List[Int64](length=3, fill=0)
+    _run_stage(
+        Compose((With[SubKernel, DType.int64](5), DiffScan())),
+        BufferView(Span(values)),
+        BufferView(Span(out)),
+    )
+    assert_true(out == [Int64(5), 2, 3])
+
+
+# ---------------------------------------------------------------------------
 # Scan over segments
 # ---------------------------------------------------------------------------
 
@@ -166,7 +243,7 @@ def _check_scan_segments[
     for s in range(segments.count()):
         var acc = K.identity[T]()
         for i in range(segments.start(s), segments.end(s)):
-            acc = K.core[T, 1](acc, src[i])
+            acc = K.same_core[T, 1](acc, src[i])
             covered[i] = True
             assert_true(
                 _same_value(dst[i], acc),
@@ -486,7 +563,7 @@ def _check_frames[
             # Offsets taken against the segment's edges first: `i + lo` and
             # `i + hi` overflow for the widest frames.
             for j in range(i + max(lo, s0 - i), i + min(hi, s1 - 1 - i) + 1):
-                acc = K.core[T, 1](acc, src[j])
+                acc = K.same_core[T, 1](acc, src[j])
             assert_true(
                 _same_value(dst[i], acc),
                 String(

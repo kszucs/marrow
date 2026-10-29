@@ -27,7 +27,7 @@ from ..dtypes import (
     PrimitiveType,
 )
 from ..views import apply
-from .core import Kernel
+from .core import Kernel, UnaryKernel
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 
@@ -300,13 +300,11 @@ trait NullPredicateKernel(Kernel):
         return BoolArray(length=n, buffer=buf)
 
 
-trait ValuePredicateKernel(Kernel):
+trait ValuePredicateKernel(UnaryKernel):
     """`is_nan` / `is_inf` — scans values with the SIMD `core` predicate,
-    bit-packing through the shared `apply` and keeping the input's nulls."""
-
-    @staticmethod
-    def core[T: DType, W: Int](x: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        ...
+    bit-packing through the shared `apply` and keeping the input's nulls: a
+    `UnaryKernel` whose `core` answers `bool`. Each predicate declares `Out`
+    itself: a refinement cannot re-default a member its base defaults."""
 
     @staticmethod
     def apply[
@@ -315,10 +313,17 @@ trait ValuePredicateKernel(Kernel):
         array: PrimitiveArray[T], ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
         var result = ctx.alloc_bitmap(len(array))
-        apply[T.native, Self.core[T.native, _]](
+        apply[T.native, Self.bool_core[T.native, _]](
             array.values(), result.view(), ctx
         )
         return BoolArray(like=array, buffer=result.to_immutable())
+
+    @always_inline
+    @staticmethod
+    def bool_core[T: DType, W: Int](x: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        """`core`, typed as answering `bool`."""
+        comptime assert Self.Out[T] == DType.bool, "a predicate answers bool"
+        return rebind[SIMD[DType.bool, W]](Self.core[T, W](x))
 
     @staticmethod
     def dispatch(
@@ -345,6 +350,7 @@ struct NotNullKernel(NullPredicateKernel):
 
 
 struct IsNanKernel(ValuePredicateKernel):
+    comptime Out[T: DType]: DType = DType.bool
     comptime name = "is_nan"
 
     @always_inline
@@ -354,6 +360,7 @@ struct IsNanKernel(ValuePredicateKernel):
 
 
 struct IsInfKernel(ValuePredicateKernel):
+    comptime Out[T: DType]: DType = DType.bool
     comptime name = "is_inf"
 
     @always_inline

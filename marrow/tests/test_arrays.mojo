@@ -2488,6 +2488,10 @@ def test_empty_factory() raises:
     var prim = PrimitiveArray[Int32Type].empty(Int32Type())
     assert_equal(len(prim), 0)
     assert_equal(prim.null_count(), 0)
+    var fixed = FixedSizeBinaryArray.empty(4)
+    assert_equal(len(fixed), 0)
+    assert_equal(fixed.null_count(), 0)
+    assert_true(fixed.type() == fixed_size_binary_(4).to_dyn())
 
 
 def test_all_valid_constructors() raises:

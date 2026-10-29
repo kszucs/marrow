@@ -953,8 +953,6 @@ marrow/
 ├── execution.mojo        # ExecContext — threads, device, `stripe`, GPU_ENABLED
 ├── errors.mojo           # ArrowError + ErrorKind — the error taxonomy
 ├── io/                   # core (ByteSource/ByteSink), local, opendal, dispatch
-├── codecs/               # the Codec trait, Cascade, Encoded, and the
-│                         #   column codecs
 ├── compress/             # core (the Compressor trait, Codecs); Zstd, Lz4,
 │                         #   Snappy, Brotli, each beside its Lib* twin;
 │                         #   Huffman; zlib (LibGzip, LibDeflate)
@@ -962,17 +960,25 @@ marrow/
 │                         #   dylib, uri, threads (ThreadPool, Thread, Mutex)
 │   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/
-│   ├── core.mojo         # the Kernel base trait
+│   ├── core.mojo         # Kernel and its bases (Unary, Binary, Scan,
+│                         #   Pack/Unpack), the algebraic properties
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
+│   ├── decimal.mojo      # decimal arithmetic and its result types
+│   ├── bitwise.mojo      # bit_wise_*, shifts; Zigzag, Ordered, ByteSwap
 │   ├── boolean.mojo      # and/or/not/xor, is_null, is_nan, is_inf
 │   ├── cast.mojo         # cast() and the per-family cast kernels,
 │                         #   decimals included (one struct per conversion)
 │   ├── conditional.mojo  # case_when, coalesce, nullif, fill_null
+│   ├── segments.mojo     # BySize, ByEnds, Segmented, PerSegment
+│   ├── scan.mojo         # Scan, cumulative, shift, pairwise_diff, rolling
+│   ├── runs.mojo         # RunsKernel (runs of equal keys), RunsPack/Unpack
 │   ├── aggregate.mojo    # sum, product, min/max, count, mean, any/all, var/std
+│   ├── statistics.mojo   # BoundsKernel: a column's least and greatest value
 │   ├── distinct.mojo     # (approx_)count_distinct, grouped variants
 │   ├── filter.mojo       # filter / take / drop_null
 │   ├── sort.mojo         # sort / sort_indices
-│   ├── dictionary.mojo   # DictionaryEncoder: distinct keys -> dense codes
+│   ├── dictionary.mojo   # DictionaryEncoder, dictionary_encode, value_counts,
+│                         #   mode; the dictionary packers
 │   ├── groupby.mojo      # `Groups` (row -> slot)
 │   ├── join.mojo         # hash join
 │   ├── hashtable.mojo    # SwissHashTable, HashIndex (serial -> radix)
@@ -980,10 +986,14 @@ marrow/
 │   ├── partition.mojo    # radix partitioning
 │   ├── membership.mojo   # is_in
 │   ├── string.mojo       # string kernels incl. LIKE/ILIKE
+│   ├── regex.mojo        # regexp_matches, regexp_extract, regexp_replace
 │   ├── temporal.mojo     # date/time field extraction, date_trunc
 │   ├── nested.mojo       # array_length, array_contains
-│   ├── window.mojo       # partition extents, ranking, frame gathers
+│   ├── window.mojo       # WindowSegments, ranking, LAG/LEAD, frame values
 │   ├── concat.mojo       # batch concat on a context, in parallel when large
+│   ├── compose.mojo      # Compose, With, Encoder, Decoder, Codec
+│   ├── packing.mojo      # Plain, Split, Bit, Fitted (Reference), Rle,
+│                         #   Lengths and Prefixes packers
 │   └── tests/            # test_*.mojo + bench_*.mojo
 ├── engine/               # core (Operator, Pipeline), driver (Driver, Phase,
 │                         #   barriers), sources, observe, report; imports

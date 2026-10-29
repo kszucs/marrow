@@ -1584,9 +1584,9 @@ struct PerFrameEvaluator[V: Value](FrameEvaluator):
                 else:
                     answers.append(nulls(1, dtype.copy()))
             var ids = Buffer.alloc_uninit[DType.int32](n)
-            PerSegment(arange[Int32Type](0, runs.count()).buffer).broadcast(
-                runs, ids.view[DType.int32](0, n)
-            )
+            PerSegment(
+                arange[Int32Type](0, runs.count()).buffer, runs.count()
+            ).broadcast(runs, ids.view[DType.int32](0, n))
             out = TakeKernel.dispatch(
                 DynBuilder.concat(answers),
                 Int32Array(length=n, buffer=ids^.to_immutable()),

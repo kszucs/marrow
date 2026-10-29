@@ -287,7 +287,7 @@ def test_per_segment_broadcast_fills_each_segment() raises:
     comptime F = DType.float64
     var ends = array([0, 2, 2, 5], int64)
     var five = Buffer.alloc_zeroed[I](5)
-    PerSegment(array([7, 8, 9], int64).buffer).broadcast(
+    PerSegment(array([7, 8, 9], int64).buffer, 3).broadcast(
         ByEnds(ends.values()), five.view[I](0, 5)
     )
     assert_true(
@@ -296,7 +296,7 @@ def test_per_segment_broadcast_fills_each_segment() raises:
     )
 
     var three = Buffer.alloc_zeroed[F](3)
-    PerSegment(array([0.5, 1.5], float64).buffer).broadcast(
+    PerSegment(array([0.5, 1.5], float64).buffer, 2).broadcast(
         BySize(3, 2), three.view[F](0, 3)
     )
     assert_true(
@@ -306,13 +306,23 @@ def test_per_segment_broadcast_fills_each_segment() raises:
 
     var inner = array([1, 3], int64)
     var four = Buffer.alloc_zeroed[I](4)
-    PerSegment(array([4], int64).buffer).broadcast(
+    PerSegment(array([4], int64).buffer, 1).broadcast(
         ByEnds(inner.values()), four.view[I](0, 4)
     )
     assert_true(
         Int64Array(length=4, buffer=four^.to_immutable())
         == array([0, 4, 4, 0], int64)
     )
+
+
+def test_by_size_finds_each_row_s_segment() raises:
+    var sixteen = BySize(100, 16)
+    for i in range(100):
+        assert_equal(sixteen.of(i), i // 16)
+    assert_equal(BySize(100, 12).of(37), 3)
+    var two = PerSegment(array([7, 9], int64).buffer, 2)
+    assert_equal(len(two), 2)
+    assert_true(two.get[DType.int64](1) == 9)
 
 
 # ---------------------------------------------------------------------------

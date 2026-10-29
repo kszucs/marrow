@@ -1306,6 +1306,152 @@ def test_parquet_sink_memory_bytes_match_file() raises:
         assert_equal(Int(py=pq.read_table(path).num_rows), 8)
 
 
+comptime _PINNED_TABLES = """
+import decimal
+import pyarrow as pa
+
+
+def every7(f):
+    return [None if i % 7 == 0 else f(i) for i in range(3000)]
+
+
+def ints(bits, signed):
+    m = 1 << bits
+    shift = m // 2 if signed else 0
+    return every7(lambda i: (i * 7919) % m - shift)
+
+
+def floats():
+    values = every7(lambda i: (i % 1000) * 0.25)
+    values[1:5] = [float("nan"), -0.0, 0.0, float("inf")]
+    return values
+
+
+def decimals(unit, scale):
+    return every7(
+        lambda i: decimal.Decimal(((i * 7919) % 10**5 - 50000) * unit).scaleb(
+            -scale
+        )
+    )
+
+
+def lists(i):
+    return [] if i % 5 == 0 else list(range(i, i + i % 4 + 1))
+
+
+wide = pa.table({
+    "i8": pa.array(ints(8, True), pa.int8()),
+    "i16": pa.array(ints(16, True), pa.int16()),
+    "i32": pa.array(ints(32, True), pa.int32()),
+    "i64": pa.array(ints(64, True), pa.int64()),
+    "u8": pa.array(ints(8, False), pa.uint8()),
+    "u16": pa.array(ints(16, False), pa.uint16()),
+    "u32": pa.array(ints(32, False), pa.uint32()),
+    "u64": pa.array(ints(64, False), pa.uint64()),
+    "f16": pa.array(floats(), pa.float16()),
+    "f32": pa.array(floats(), pa.float32()),
+    "f64": pa.array(floats(), pa.float64()),
+    "b": pa.array(every7(lambda i: i % 3 == 0), pa.bool_()),
+    "d": pa.array(every7(lambda i: 18000 + i), pa.date32()),
+    "ts": pa.array(
+        every7(lambda i: 1_700_000_000_000_000 + i * 1_000_003),
+        pa.timestamp("us"),
+    ),
+    "dec32": pa.array(decimals(1, 2), pa.decimal32(7, 2)),
+    "dec64": pa.array(decimals(10**5, 4), pa.decimal64(15, 4)),
+    "dec128": pa.array(decimals(10**12, 3), pa.decimal128(20, 3)),
+    "dec256": pa.array(decimals(10**30, 3), pa.decimal256(40, 3)),
+    "s": pa.array(every7(lambda i: f"key-{i % 97}"), pa.string()),
+    "ls": pa.array(every7(lambda i: f"large-{i % 89}"), pa.large_string()),
+    "bin": pa.array(every7(lambda i: f"b{i % 53}".encode()), pa.binary()),
+    "sv": pa.array(every7(lambda i: f"view-{i % 61}"), pa.string_view()),
+    "fsb": pa.array(
+        every7(lambda i: (i % 1000).to_bytes(4, "little")), pa.binary(4)
+    ),
+    "li": pa.array(every7(lists), pa.list_(pa.int64())),
+    "st": pa.array(
+        every7(lambda i: {"a": i * 3, "b": f"s{i % 41}"}),
+        pa.struct([("a", pa.int32()), ("b", pa.string())]),
+    ),
+})
+
+# The writer refuses BYTE_STREAM_SPLIT for float16.
+wide_bss = wide.drop_columns(["f16"])
+
+long = pa.table({
+    "n": pa.array(
+        [None if i % 11 == 0 else i % 300 for i in range(25000)], pa.int64()
+    ),
+    "t": pa.array(
+        [None if i % 11 == 0 else f"v{i % 300}" for i in range(25000)],
+        pa.string(),
+    ),
+})
+"""
+
+
+def _pinned(
+    table: Table,
+    version: Int,
+    use_dictionary: Bool,
+    encoding: Optional[Encoding],
+) raises -> Tuple[Int, UInt32]:
+    """The length and CRC-32 of the uncompressed file `table` writes."""
+    var mw = FileWriter(
+        MemorySink(),
+        table.schema,
+        Compression.UNCOMPRESSED,
+        version,
+        use_dictionary,
+        encoding,
+    )
+    mw.write(table)
+    mw.close()
+    ref bytes = mw.out.sink().bytes()
+    return (len(bytes), Crc32.compute(Span(bytes)))
+
+
+def test_the_writer_s_bytes_are_pinned_per_encoding() raises:
+    """The writer's bytes, as a length and a CRC-32 per file: ten files that
+    together use every encoding and both page versions. A changed pair is a
+    change to the written file."""
+    var scope = Python.dict()
+    _ = Python.import_module("builtins").exec(_PINNED_TABLES, scope)
+    var wide = _to_marrow(scope["wide"])
+    var wide_bss = _to_marrow(scope["wide_bss"])
+    var long = _to_marrow(scope["long"])
+    var none = Optional[Encoding](None)
+    var got = List[Tuple[Int, UInt32]]()
+    got.append(_pinned(wide, 1, False, none))
+    got.append(_pinned(wide, 2, False, none))
+    got.append(_pinned(wide, 1, True, none))
+    got.append(_pinned(wide, 2, True, none))
+    got.append(_pinned(wide, 1, False, Encoding.DELTA_BINARY_PACKED))
+    got.append(_pinned(wide, 1, False, Encoding.DELTA_LENGTH_BYTE_ARRAY))
+    got.append(_pinned(wide, 1, False, Encoding.DELTA_BYTE_ARRAY))
+    got.append(_pinned(wide_bss, 1, False, Encoding.BYTE_STREAM_SPLIT))
+    got.append(_pinned(long, 1, True, none))
+    got.append(_pinned(long, 1, False, Encoding.DELTA_BINARY_PACKED))
+    var want: List[Tuple[Int, UInt32]] = [
+        (521431, UInt32(3135746839)),
+        (521532, UInt32(2475353435)),
+        (408034, UInt32(2802865492)),
+        (408135, UInt32(3019135239)),
+        (438836, UInt32(1226433025)),
+        (473154, UInt32(2164145343)),
+        (424585, UInt32(4286505591)),
+        (515775, UInt32(2453035520)),
+        (65454, UInt32(784651489)),
+        (197427, UInt32(2248244983)),
+    ]
+    var same = True
+    var listed = String()
+    for i in range(len(got)):
+        same = same and got[i][0] == want[i][0] and got[i][1] == want[i][1]
+        listed += String("(", got[i][0], ", UInt32(", got[i][1], ")),\n")
+    assert_true(same, String("the written bytes changed:\n", listed))
+
+
 # ---------------------------------------------------------------------------
 # Content-defined chunking (CDC) — data page boundaries from a rolling hash
 # over each column's `(def_level, rep_level, value)` stream instead of a row

@@ -20,7 +20,7 @@ harness.
 | `enum` | `Enum`, `EnumVariant`, `Members` / `ArcMembers` / `OwnedMembers` — the storage behind every erased handle |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `XxHash32`, `Fmix64`, `TruncatedHash64`, `KeyHash`; `SwissHashTable` — 64-bit hash to dense id |
 | `hll` | `HyperLogLog` — approximate distinct counts over 64-bit hashes |
-| `integers` | `Unsigned`, `zigzag` / `unzigzag`, `ordered` / `unordered` — integer bit tricks |
+| `integers` | `Unsigned` / `Signed`, `zigzag` / `unzigzag`, `ordered` / `unordered` — integer bit tricks |
 | `stats` | `count`, `Counters` — kernel counters under `-D MARROW_STATS=true` |
 | `testing` | `TestSuite`, `BenchSuite`, `Benchmark` — the harness pytest drives |
 | `text` | `Utf8`, `LikePattern`, `RegexPattern` — column-wide UTF-8 scans and patterns |

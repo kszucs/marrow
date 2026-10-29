@@ -13,10 +13,13 @@ one answer per segment. A list array's offsets are segments of its child
 (`ListReduceKernel`), and so are fixed-size morsels of a batch, the column a
 bound is computed over (`BoundsKernel`), and the partitions the order kernels
 in `scan.mojo` restart at. `PerSegment` is the other direction: one value per
-segment, broadcast to every row of it.
+segment, broadcast to every row of it or read by segment, as a packer reads
+its per-segment widths and fits, finding a row's segment with `BySize.of`.
 """
 
+from std.bit import count_trailing_zeros
 from std.math import ceildiv
+from std.sys import size_of
 
 from ..arrays import PrimitiveArray
 from ..buffers import Buffer
@@ -52,11 +55,17 @@ struct BySize(Segments, TrivialRegisterPassable):
 
     var length: Int
     var size: Int
+    var shift: Int
+    """`size`'s base-2 logarithm when it is a power of two, else -1."""
 
     def __init__(out self, length: Int, size: Int):
         debug_assert(size >= 1, "BySize: a segment holds at least one row")
         self.length = length
         self.size = size
+        if size > 0 and size & (size - 1) == 0:
+            self.shift = Int(count_trailing_zeros(size))
+        else:
+            self.shift = -1
 
     @staticmethod
     def whole(length: Int) -> Self:
@@ -72,6 +81,15 @@ struct BySize(Segments, TrivialRegisterPassable):
 
     def end(self, s: Int) -> Int:
         return min(self.start(s) + self.size, self.length)
+
+    @always_inline
+    def of(self, i: Int) -> Int:
+        """The segment row `i` is in: a shift when `size` is a power of
+        two."""
+        if self.shift >= 0:
+            return i >> self.shift
+        else:
+            return i // self.size
 
 
 struct ByEnds[mut: Bool, //, E: DType, origin: Origin[mut=mut]](
@@ -174,14 +192,29 @@ struct Segmented[F: FoldKernel]:
         return folded
 
 
-struct PerSegment(Movable):
+struct PerSegment(Copyable, Movable, Sized):
     """One value per segment, read at a dtype."""
 
     var values: Buffer[mut=False]
     """Segment `s`'s value at position `s`."""
+    var count: Int
+    """How many segments have a value."""
 
-    def __init__(out self, var values: Buffer[mut=False]):
+    def __init__(out self, var values: Buffer[mut=False], count: Int):
         self.values = values^
+        self.count = count
+
+    def __len__(self) -> Int:
+        return self.count
+
+    def holds[T: DType](self) -> Bool:
+        """Whether `values` holds a value of `T` for every segment."""
+        return self.count * size_of[Scalar[T]]() <= len(self.values)
+
+    @always_inline
+    def get[T: DType](self, s: Int) -> Scalar[T]:
+        """Segment `s`'s value."""
+        return self.values.view[T]().unsafe_get(s)
 
     def broadcast[
         T: DType, S: Segments
@@ -190,8 +223,7 @@ struct PerSegment(Movable):
         no segment are left as they are."""
         var count = segments.count()
         debug_assert(
-            self.values.length[T]() >= count,
-            "PerSegment.broadcast: one value per segment",
+            self.count >= count, "PerSegment.broadcast: one value per segment"
         )
         comptime W = cpu_lanes[T]
         var src = self.values.view[T](0, count)

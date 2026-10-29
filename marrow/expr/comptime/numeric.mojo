@@ -118,9 +118,10 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def lane[
         W: Int
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
-        return Self.K.core[Self.Type.native, W](
-            self.l.lane[W](bound[0], idx).cast[Self.Type.native](),
-            self.r.lane[W](bound[1], idx).cast[Self.Type.native](),
+        comptime N = Self.Type.native
+        return Self.K.same_core[N, W](
+            self.l.lane[W](bound[0], idx).cast[N](),
+            self.r.lane[W](bound[1], idx).cast[N](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -246,9 +247,10 @@ struct PartialBinary[
     def lane[
         W: Int
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
-        return Self.K.core[Self.Type.native, W](
-            self.l.lane[W](bound[0], idx).cast[Self.Type.native](),
-            self.r.lane[W](bound[1], idx).cast[Self.Type.native](),
+        comptime N = Self.Type.native
+        return Self.K.same_core[N, W](
+            self.l.lane[W](bound[0], idx).cast[N](),
+            self.r.lane[W](bound[1], idx).cast[N](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -314,9 +316,8 @@ struct NumericUnary[K: NumericUnaryKernel, A: NumericValue](
         # compiler reports `SIMD[A.Type.native, W]` "cannot be converted" to
         # `SIMD[NumericUnary[K, A].Type.native, W]`, which is the same type.
         # `TemporalCompare.lane` spells two casts for exactly this reason.
-        return Self.K.core[Self.Type.native, W](
-            self.a.lane[W](bound, idx).cast[Self.Type.native]()
-        )
+        comptime N = Self.Type.native
+        return Self.K.same_core[N, W](self.a.lane[W](bound, idx).cast[N]())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.a, ")")
@@ -379,9 +380,10 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def lane[
         W: Int
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
-        return Self.K.core[Self.Type.native, W](
-            self.l.lane[W](bound[0], idx).cast[Self.Type.native](),
-            self.r.lane[W](bound[1], idx).cast[Self.Type.native](),
+        comptime N = Self.Type.native
+        return Self.K.same_core[N, W](
+            self.l.lane[W](bound[0], idx).cast[N](),
+            self.r.lane[W](bound[1], idx).cast[N](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -462,9 +464,10 @@ struct NumericCompare[
 
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
-        return Self.K.core[Self.ArgType.native, W](
-            self.l.lane[W](bound[0], idx).cast[Self.ArgType.native](),
-            self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
+        comptime N = Self.ArgType.native
+        return Self.K.bool_core[N, W](
+            self.l.lane[W](bound[0], idx).cast[N](),
+            self.r.lane[W](bound[1], idx).cast[N](),
         )
 
     def equates(self) -> Bool:
@@ -713,9 +716,10 @@ struct TemporalCompare[
         # Both casts are no-ops — the constructor's assert guarantees the two
         # natives are identical — but the compiler cannot see that through the
         # projection, so they are spelled.
-        return Self.K.core[Self.ArgType.native, W](
-            self.l.lane[W](bound[0], idx).cast[Self.ArgType.native](),
-            self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
+        comptime N = Self.ArgType.native
+        return Self.K.bool_core[N, W](
+            self.l.lane[W](bound[0], idx).cast[N](),
+            self.r.lane[W](bound[1], idx).cast[N](),
         )
 
     def equates(self) -> Bool:

@@ -2550,6 +2550,18 @@ struct FixedSizeBinaryArray(Array):
     var bitmap: Optional[Bitmap[mut=False]]
     var buffer: Buffer[mut=False]
 
+    @staticmethod
+    def empty(byte_width: Int) -> Self:
+        """A zero-length array of `byte_width`-byte values."""
+        return Self(
+            length=0,
+            nulls=0,
+            offset=0,
+            byte_width=byte_width,
+            bitmap=None,
+            buffer=Buffer.alloc_zeroed[DType.uint8](0).to_immutable(),
+        )
+
     def validity(
         ref self,
     ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:

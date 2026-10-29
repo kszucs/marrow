@@ -221,9 +221,9 @@ dispatch helper** (the `Enum` visits) since nightly
 Spelling `-> None` does not help; returning a value does, so the affected
 closures (the boxes' `write_to`/`write_repr_to`, `DynBuilder`'s mutators,
 `KeyCompare`'s family arms, the Parquet writer's encoders and `SchemaNode`'s
-list slot) return a dummy `Bool` that their call sites discard. The codecs
-are `Codec` conformers composed by `Cascade` and dispatch through no such
-closure. Revert once upstream fixes it. Reproducer:
+list slot) return a dummy `Bool` that their call sites discard. The codec
+kernels (`kernels/compose.mojo`, `kernels/packing.mojo`) go through no `Enum`
+visit. Revert once upstream fixes it. Reproducer:
 
 ```mojo
 from std.utils import Variant
@@ -360,7 +360,7 @@ concat, cast, hash, equality, sort, min/max) and the hot string kernels
 - **Seven test directories run in no CI selection.** `test.yml` (and the
   `asan` job, which mirrors its Mojo selections) runs `marrow/tests`,
   `formats/parquet/tests`, `formats/ipc/tests`, `utils/tests`,
-  `codecs/tests`, `kernels/tests`, the three `expr` directories, `fuzz`,
+  `kernels/tests`, the three `expr` directories, `fuzz`,
   `golden` and `python`. So `marrow/formats/tests`, `marrow/compress/tests`,
   `marrow/iceberg/tests`, `marrow/formats/json/tests`,
   `marrow/formats/avro/tests` and `marrow/datasets/tests` never run in CI,
@@ -754,11 +754,10 @@ entries.
 |---|---|---|
 | B10 | `parquet/reader.mojo:733` `PrimitiveLeafBuilder._scatter` | a page with more values than the chunk has rows **writes** past the values buffer (ASAN: heap-buffer-overflow, WRITE of size 8) |
 | B16 | `utils/snappy.mojo` | a literal whose 4-byte length is `0xFFFFFFFF`: libsnappy wraps it to 0 and accepts, the native decoder refuses -- a parity gap, not a memory bug |
-| B-PR6 | `parquet/reader.mojo` `PrimitiveLeafBuilder.consume` | a fixed-width dictionary page with fewer bytes than `num_values` is copied past the page (ASAN only) |
 | B-PR13 | `parquet/reader.mojo` leaf builders | a huge positive `RowGroup.num_rows` is preallocated up front and aborts (an allocation, not corruption); the builders should grow as pages arrive |
 
-B8, B9, B11-B15, B-PR7 to B-PR12 and the footer's Thrift bugs (B-PR1 to
-B-PR4) are fixed; their reproducers stay as `reject` entries.
+B8, B9, B11-B15, B-PR6 to B-PR12, B-PR14 and the footer's Thrift bugs
+(B-PR1 to B-PR4) are fixed; their reproducers stay as `reject` entries.
 
 ### 1.15 The abstraction audit (2026-10-08)
 
@@ -1056,16 +1055,18 @@ named:
 
 - `Segmented.reduce_with[K]`, a per-segment fold of `K(child, operand[s])`
   without materialising the broadcast, waits for the `ArrayContainsKernel`
-  rewrite, its one caller; that also needs `Out` (step 6a) and an any-fold
-  over bools, which `AnyKernel`, a bitmap `BoolReduceKernel`, is not.
+  rewrite, its one caller; that also needs an any-fold over bools, which
+  `AnyKernel`, a bitmap `BoolReduceKernel`, is not (`Out`, which it needs
+  too, landed in step 6).
 - `PerSegment` (one value per segment) landed in step 5 with its
-  constructor and `broadcast`. Its `get` and `at`, and `Segments.of` with
-  `BySize`'s power-of-two shift, wait for step 6's `FittedPack`;
-  `Segmented.reduce` answers a typed `PrimitiveArray` until then.
-- `ScanKernel` waits for step 6, where `Shift[k]`, `Lagged` and `Compose`
-  conform beside `Scan`, which has its member shape already. `MinScan`,
-  `MaxScan` and `ProductScan` wait for a caller: `CumulativeKernel` names
-  `Scan[K]`.
+  constructor and `broadcast`, and step 6 added `get` (with a `count`) and
+  `BySize.of` with its power-of-two shift, for `FittedPack`.
+  `PerSegment.at` (its one caller writes `get(segments.of(i))`) and
+  `Segments.of` on `ByEnds`, which needs a binary search, wait for a caller;
+  `Segmented.reduce` still answers a typed `PrimitiveArray`.
+- `ScanKernel` landed in step 6, with `Scan`, `Lagged`, `With` and
+  `Compose` conforming. `MinScan`, `MaxScan` and `ProductScan` wait for a
+  caller: `CumulativeKernel` names `Scan[K]`.
 - `Scan` has no parallel path: no caller asks for one.
 - The Parquet writer computes each page's bounds as it emits the page.
   One `BoundsKernel` call over a chunk's pages, as `ByEnds` segments, means
@@ -1086,9 +1087,11 @@ named:
   per segment and advanced by `W % w` (one conditional subtraction) would
   avoid it. Unmeasured.
 - `Segmented._fold` and `views._reduce_serial` (behind `Fold.reduce`) are
-  two register-fold loops of one shape; they become one when `fold_lanes`
-  gains its step-6 callers. Step 5's scans and rolling windows fold lane by
-  lane and call none.
+  two register-fold loops of one shape. Step 5's scans and rolling windows
+  fold lane by lane and call none, and step 6's `FittedPack` fits each
+  segment with a loop of its own (`F.fold_lanes` per register, then
+  `F.combine`), the form the proof measured at parity; the loops stay
+  separate.
 - Whether a CPU-only kernel should refuse a GPU `ctx` rather than run on
   the CPU, tree-wide: sort, take and the order kernels run on the host
   today.
@@ -1140,6 +1143,76 @@ measurement or step named:
   answers the count. Making `combine` `AddKernel.core` would remove the
   exception at a read-modify-write per row in every grouped `COUNT`
   (gated on `bench_groupby` and `bench-comptime`).
+
+**Deferred by kernel-foundations step 6**, each waiting for the caller
+or measurement named:
+
+- Not built until a caller needs them: `Shift[k]`; `Fill`, `Constant[c]` and
+  `FirstValue` for `Lagged`, which fills with zero (step 7's `rle_id` is
+  the second policy); `MinScan`, `MaxScan` and `ProductScan`; the GCD and
+  T64 instances of `FittedPack`.
+- Parquet still copies each page into a packed value before decoding it
+  (`formats/parquet/encodings.mojo`: the DELTA_BINARY_PACKED widths and
+  miniblocks, the DELTA_LENGTH_BYTE_ARRAY and DELTA_BYTE_ARRAY bytes, PLAIN,
+  BYTE_STREAM_SPLIT and the dictionary codes), and keeps hand-written PLAIN
+  bool, FIXED_LEN_BYTE_ARRAY, BYTE_STREAM_SPLIT FIXED_LEN_BYTE_ARRAY and
+  INT96 paths. A packed value over the page's own buffer would drop the
+  copies.
+- DELTA_BINARY_PACKED over a narrow integer column decodes into a
+  `List[phys]`, then casts value by value (`Encoding.decode_primitive`); a
+  `NumericCast[store]` stage at the end of `_DbpCodec`'s decoder would
+  write the column once.
+- `read_dictionary`:
+  - a dotted path to a leaf inside a list or struct (`l.list.element`,
+    `st.f`), which `pyarrow.parquet.read_table` accepts, raises
+    `NotImplementedError`; only a top-level, unrepeated leaf is read as a
+    dictionary;
+  - a chunk that falls back to PLAIN appends those values to its dictionary
+    without removing duplicates: every value equals PyArrow's, but PyArrow's
+    dictionary holds each distinct value once (928 entries where marrow
+    holds 1,615 in the probe file). Deduplicating needs a hash table on the
+    fallback path, gated on the AOT sizes;
+  - the PLAIN byte-array path asks whether the leaf reads as a dictionary
+    once a value (`ByteArrayLeafBuilder._append`), a runtime flag rather
+    than a parameter of the builder.
+- **DELTA_BINARY_PACKED over a `uint32` or `uint64` column is refused**
+  (`CorruptError: DELTA_BINARY_PACKED over a uint64 column`,
+  `Encoding.decode_primitive` in `formats/parquet/encodings.mojo`), though
+  PyArrow writes it when asked (`column_encoding='DELTA_BINARY_PACKED'`).
+  Decoding the page as `Signed[phys]` and reinterpreting the bits would read
+  it. Pre-existing; found by step 6's review probe.
+- A list of `string_view` or `binary_view` reads its strings as `binary`,
+  then copies each into the views builder (`ColumnReader._emit_views`): one
+  copy of every string more than a flat view column makes.
+- The devkit stage check (`devkit/tests/test_stages.py`) reads
+  `kernels/compose.mojo` and `kernels/packing.mojo` only; the stages in the
+  files that also hold array kernels (`bitwise`, `cast`, `scan`, `runs`,
+  `dictionary`) are checked by review.
+- **The Parquet writer refuses float16 under BYTE_STREAM_SPLIT that it
+  offers**: `ColumnWriter.can_bss` (`formats/parquet/writer.mojo`) accepts
+  every floating-point dtype, and the BYTE_STREAM_SPLIT encode raises
+  `NotImplementedError` for `float16` ("cannot BYTE_STREAM_SPLIT type").
+  Either encode 2-byte planes or refuse it in `can_bss`. Found by step 6's
+  pinned-bytes test, which leaves `float16` out of its BYTE_STREAM_SPLIT
+  file.
+- **`bench_bitpack_decode` and `bench_cascade_sparse_decode` are over step
+  6's speed gate** (+3%), measured against the base tree (`927ab322`)
+  alternated with the head in one session and normalised by `bench_sort`'s
+  22 single-key rows: 1.063 and 1.048 over three pairs (1.036 and 1.029 by
+  paired medians). `BitUnpack` looks up each group's segment, then its width,
+  then the `PackedGroup` of that width, where the base kept a group a segment
+  (`1325cf0a`, which DELTA_BINARY_PACKED reads needed), and builds a group for
+  each width up to the widest, 29 for the sparse row where the base built 2.
+  Looking the segment
+  up once a register, or remembering it for a register wider than a group,
+  made `bench_bitpack_decode` 1.7x slower: one width shared by a register's
+  groups has the compiler set up every group's fallback path. Built with
+  `mojo build -O3`, both rows equal the base tree's, so the gap is the bench
+  driver's code for this loop; each build of the driver puts a handful of
+  rows, ones a change did not touch included, a few percent either side of
+  the gate. The user accepted both rows for step 6 (2026-10-29); recovering
+  them needs a `BitUnpack` shape that keeps a group a segment without
+  slowing DELTA_BINARY_PACKED reads.
 
 **`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
 `query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the
@@ -1767,29 +1840,34 @@ differentiator hiding inside a table-stakes item.
     `Index.from_iceberg_manifest` beside `Index.from_parquet`
     (`marrow/expr/index.mojo`) -- is unwritten. So are field ids on the
     *Parquet* reader, which Iceberg's data files need the same way.
-- **Codecs, beyond what Parquet uses.** `marrow/codecs/` encodes a block of
-  values (a `BufferView`, or byte strings as offsets and data) to an
-  `Encoded` node -- byte streams and child nodes, nothing framed -- and back.
-  Lanes (`Delta`, `Zigzag`, `Ordered`, `Cast`, `ByteSwap`,
-  `FrameOfReference`, `Dictionary`) fuse inside a `Cascade`, which a store
-  (`Plain`, `ByteStreamSplit`, `BitPack`, `Runs`) ends; `Lengths` and
-  `Prefixes` take byte strings first. The codecs only tests used -- `Alp`,
-  `Patch`, `Gcd`, `Xor`, `Gorilla`, `Buckets`, `Frequency`, `Compressed[C]`
-  -- were deleted and are recoverable from the parent of the commit
-  `refactor(codecs): drop codecs nothing but their tests used`. What is
-  missing:
-  - **Serialization.** Nothing writes a node to bytes but Parquet's own
-    layouts; a marrow-native column or spill format needs one, and the chain
-    stored beside it.
-  - **More codecs**: patched FOR and floating-point codecs (ALP, Chimp,
-    pseudodecimal), and the compressors (`Lz4`, `Zstd`, `Snappy`) as codecs
-    over a stream -- each a `Codec`, a lane or a store.
-  - **One dictionary builder.** `codecs.Dictionary` assigns fixed-width codes
-    through `SwissHashTable`; its byte strings, Parquet's byte-array pages and
-    `kernels.DictionaryEncoder` still each map values to codes their own way.
-  - **A sampling picker**, as BtrBlocks has: trial encodes of a sample, the
-    smallest composition kept.
-  - **Nulls.** Codecs see present values only; a consumer drops nulls first.
+- **Codecs, beyond what Parquet uses.** A codec is kernels
+  (`kernels/compose.mojo`): stream stages fused by `Compose` (`DiffScan`,
+  `SumScan`, `ZigzagEncode`, `OrderedEncode`, `NumericCast`, `ByteSwap`,
+  `With`), then a packer (`kernels/packing.mojo`: `PlainPack`, `SplitPack`,
+  `BitPack`, `FittedPack`/`ReferencePack`, `RlePack`; `RunsPack` in
+  `runs.mojo`, `DictionaryPack` in `dictionary.mojo`) into a typed `Packed`
+  held in memory, and back a register at a time through `Codec`. Byte
+  strings go through `LengthsPack`, `PrefixesPack` and `DictionaryBytesPack`.
+  The codecs only tests used before step 6 -- `Alp`, `Patch`, `Gcd`, `Xor`,
+  `Gorilla`, `Buckets`, `Frequency`, `Compressed[C]` -- were deleted and are
+  recoverable from the parent of the commit `refactor(codecs): drop codecs
+  nothing but their tests used`. What is missing:
+  - **Serialization.** Nothing writes a `Packed` to bytes but Parquet's own
+    layouts. How one is written belongs to the Arrow IPC encoding design,
+    which is also the encodings' production caller.
+  - **More encodings**: the BtrBlocks and FastLanes techniques (patched
+    FOR, constant and frequency encodings, ALP and ALP-RD, FSST, per-segment
+    scheme selection by sampling, the FastLanes layouts) are step 8 of the
+    kernel foundations (`research_notes/2026-10-26-kernel-foundations-design.md`
+    §11). Outside it: Chimp, pseudodecimal (ALP supersedes it on the ALP
+    paper's benchmarks), and the compressors (`Lz4`, `Zstd`, `Snappy`) as
+    packers over a stream.
+  - **One dictionary builder.** `DictionaryPack` and `DictionaryBytesPack`
+    assign codes through `SwissHashTable` by bits and by bytes, and
+    `kernels.DictionaryEncoder` (the group-by's key identity) maps values to
+    codes its own way.
+  - **Nulls.** Packers see present values only; a consumer drops nulls
+    first.
 
 #### 2.10 Operability
 
