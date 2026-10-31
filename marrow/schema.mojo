@@ -34,6 +34,8 @@ struct Schema(
     Sized,
     Writable,
 ):
+    comptime ConversionToPythonErrorType = Error
+
     var fields: List[Field]
 
     @staticmethod
@@ -187,8 +189,6 @@ struct Schema(
             if self.fields[i] != other.fields[i]:
                 return False
         return True
-
-    comptime ConversionToPythonErrorType = Error
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

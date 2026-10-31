@@ -43,7 +43,7 @@ def _unary[
     """``(array, ctx) -> array``."""
 
     def wrapper(array: PythonObject, ctx: PythonObject) raises -> PythonObject:
-        return f(DynArray(py=array), ExecContext(py=ctx)).to_python_object()
+        return f(DynArray(py=array), ExecContext(py=ctx))
 
     return wrapper
 
@@ -58,9 +58,7 @@ def _binary[
     def wrapper(
         left: PythonObject, right: PythonObject, ctx: PythonObject
     ) raises -> PythonObject:
-        return f(
-            DynArray(py=left), DynArray(py=right), ExecContext(py=ctx)
-        ).to_python_object()
+        return f(DynArray(py=left), DynArray(py=right), ExecContext(py=ctx))
 
     return wrapper
 
@@ -76,9 +74,7 @@ def _flag[
     def wrapper(
         array: PythonObject, flag: PythonObject, ctx: PythonObject
     ) raises -> PythonObject:
-        return f(
-            DynArray(py=array), Bool(py=flag), ExecContext(py=ctx)
-        ).to_python_object()
+        return f(DynArray(py=array), Bool(py=flag), ExecContext(py=ctx))
 
     return wrapper
 
@@ -93,9 +89,7 @@ def _offset[
     def wrapper(
         array: PythonObject, offset: PythonObject, ctx: PythonObject
     ) raises -> PythonObject:
-        return f(
-            DynArray(py=array), Int(py=offset), ExecContext(py=ctx)
-        ).to_python_object()
+        return f(DynArray(py=array), Int(py=offset), ExecContext(py=ctx))
 
     return wrapper
 
@@ -121,7 +115,7 @@ def _rolling[
             Int(py=hi),
             Int(py=min_samples),
             ExecContext(py=ctx),
-        ).to_python_object()
+        )
 
     return wrapper
 
@@ -159,11 +153,11 @@ def _reduce[
 
 
 def _ctx_serial() raises -> PythonObject:
-    return ExecContext.serial().to_python_object()
+    return ExecContext.serial()
 
 
 def _ctx_parallel() raises -> PythonObject:
-    return ExecContext.parallel().to_python_object()
+    return ExecContext.parallel()
 
 
 def _cpu_count() raises -> PythonObject:
@@ -195,16 +189,12 @@ def _sort_indices(
     nulls_first: PythonObject,
     ctx: PythonObject,
 ) raises -> PythonObject:
-    return (
-        mk.SortIndices.dispatch(
-            DynArray(py=array),
-            Bool(py=ascending),
-            Bool(py=nulls_first),
-            ctx=ExecContext(py=ctx),
-        )
-        .to_dyn()
-        .to_python_object()
-    )
+    return mk.SortIndices.dispatch(
+        DynArray(py=array),
+        Bool(py=ascending),
+        Bool(py=nulls_first),
+        ctx=ExecContext(py=ctx),
+    ).to_dyn()
 
 
 def _sort(
@@ -221,7 +211,7 @@ def _sort(
     )
     # `sort_indices` answers a *typed* `Int32Array`, so it needs `to_dyn`
     # above; `take` over an erased input already answers a `DynArray`.
-    return mk.TakeKernel.dispatch(values, indices, context).to_python_object()
+    return mk.TakeKernel.dispatch(values, indices, context)
 
 
 def _take(
@@ -237,9 +227,7 @@ def _take(
         idx = mk.CastKernel.dispatch(idx, DynType(int32), True, context)
     var values = DynArray(py=array)
     mk.TakeKernel.check_bounds(len(values), idx.as_int32(), context)
-    return mk.TakeKernel.dispatch(
-        values, idx.as_int32().copy(), context
-    ).to_python_object()
+    return mk.TakeKernel.dispatch(values, idx.as_int32().copy(), context)
 
 
 def _cast(
@@ -253,7 +241,7 @@ def _cast(
         DynType(py=target),
         Bool(py=safe),
         ExecContext(py=ctx),
-    ).to_python_object()
+    )
 
 
 def _filter(
@@ -278,7 +266,7 @@ def _replace_with_mask(
         DynArray(py=mask),
         DynArray(py=replacements),
         ExecContext(py=ctx),
-    ).to_python_object()
+    )
 
 
 def _mode(
@@ -294,7 +282,7 @@ def _mode(
         Bool(py=skip_nulls),
         Int(py=min_count),
         ExecContext(py=ctx),
-    ).to_python_object()
+    )
 
 
 def _divide(
@@ -344,7 +332,7 @@ def _concat(arrays: PythonObject) raises -> PythonObject:
     var out = List[DynArray](capacity=n)
     for i in range(n):
         out.append(DynArray(py=arrays[i]))
-    return DynBuilder.concat(out).to_python_object()
+    return DynBuilder.concat(out)
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

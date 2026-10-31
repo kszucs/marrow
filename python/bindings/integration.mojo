@@ -17,7 +17,7 @@ def read_integration_json(path: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var batches = builtins.list()
     for batch in parsed.batches:
-        batches.append(batch.copy().to_python_object())
+        batches.append(batch.copy())
     return builtins.tuple([parsed.schema.copy().to_python_object(), batches])
 
 

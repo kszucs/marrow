@@ -63,7 +63,7 @@ def json_read_table(
         String(py=path),
         ReadOptions(Int(py=block_size)),
         _options(schema, behavior),
-    ).to_python_object()
+    )
 
 
 def json_open(
@@ -81,11 +81,7 @@ def json_open(
 
 
 def _stream_schema(py_self: PythonObject) raises -> PythonObject:
-    return (
-        py_self.downcast_value_ptr[JsonStreamReader]()[]
-        .reader.schema()
-        .to_python_object()
-    )
+    return py_self.downcast_value_ptr[JsonStreamReader]()[].reader.schema()
 
 
 def _stream_read_next_batch(py_self: PythonObject) raises -> PythonObject:
@@ -94,7 +90,7 @@ def _stream_read_next_batch(py_self: PythonObject) raises -> PythonObject:
     ]()[].reader.read_next_batch()
     if not batch:
         return Python.evaluate("None")
-    return batch.take().to_python_object()
+    return batch.take()
 
 
 def json_write_table(

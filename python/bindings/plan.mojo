@@ -210,7 +210,7 @@ def subquery_in(value: PythonObject, plan: PythonObject) raises -> PythonObject:
 
 
 def _plan_schema(py_self: PythonObject) raises -> PythonObject:
-    return _plan(py_self).schema().to_python_object()
+    return _plan(py_self).schema()
 
 
 def _plan_column_names(py_self: PythonObject) raises -> PythonObject:
@@ -238,11 +238,7 @@ def _plan_execute(
     no context, and `DynRelation.execute`'s `ExecContext.auto()` default would
     decide for every query — which is right for a Mojo caller who can pass a
     context and wrong for a Python one who then has no way to."""
-    return (
-        _runnable(py_self)
-        .execute(ExecContext.parallel(Int(py=num_threads)))
-        .to_python_object()
-    )
+    return _runnable(py_self).execute(ExecContext.parallel(Int(py=num_threads)))
 
 
 def _plan_select(
@@ -448,9 +444,7 @@ def _plan_batches(
     var builtins = Python.import_module("builtins")
     var out = builtins.list()
     for ref batch in batches:
-        _ = out.append(
-            RecordBatch.from_struct_array(batch.copy()).to_python_object()
-        )
+        _ = out.append(RecordBatch.from_struct_array(batch.copy()))
     return out
 
 

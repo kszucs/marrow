@@ -876,6 +876,8 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
     create the divergence this removal is undoing.
     """
 
+    comptime ConversionToPythonErrorType = Error
+
     # Boxed, not inline `Members`: the decimal scalars are 16- and 32-aligned,
     # and a `List` of a variant whose largest member is less aligned than
     # another drops elements as it grows
@@ -1143,8 +1145,6 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
             return True
 
         _ = self.visit[Bool](f)
-
-    comptime ConversionToPythonErrorType = Error
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""

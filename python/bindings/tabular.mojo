@@ -91,7 +91,7 @@ def _build_from_arrays_with_schema(
 
 def _record_batch_schema(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return ptr[].schema.to_python_object()
+    return ptr[].schema
 
 
 def _record_batch_columns(py_self: PythonObject) raises -> PythonObject:
@@ -99,7 +99,7 @@ def _record_batch_columns(py_self: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for i in range(len(ptr[].columns)):
-        result.append(ptr[].columns[i].copy().to_python_object())
+        result.append(ptr[].columns[i].copy())
     return result
 
 
@@ -123,13 +123,13 @@ def _record_batch_column(
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var builtins = Python.import_module("builtins")
     if builtins.isinstance(key, builtins.int):
-        return ptr[].columns[Int(py=key)].copy().to_python_object()
+        return ptr[].columns[Int(py=key)].copy()
     else:
         var name = String(py=key)
         var idx = ptr[].schema.get_field_index(name)
         if idx == -1:
             raise KeyError(t"Column '{name}' not found.")
-        return ptr[].columns[idx].copy().to_python_object()
+        return ptr[].columns[idx].copy()
 
 
 def _record_batch_slice(
@@ -138,7 +138,7 @@ def _record_batch_slice(
     length: PythonObject,
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return ptr[].slice(Int(py=offset), Int(py=length)).to_python_object()
+    return ptr[].slice(Int(py=offset), Int(py=length))
 
 
 def _record_batch_equals(
@@ -156,10 +156,10 @@ def _record_batch_select(
     var builtins = Python.import_module("builtins")
     if n > 0 and builtins.isinstance(columns[0], builtins.int):
         var indices = [Int(py=v) for v in columns]
-        return ptr[].select(indices).to_python_object()
+        return ptr[].select(indices)
     else:
         var names = [String(py=v) for v in columns]
-        return ptr[].select(names).to_python_object()
+        return ptr[].select(names)
 
 
 def _record_batch_arrow_c_array(
@@ -222,7 +222,7 @@ def import_record_batch_from_c_device(
     """Take ownership of the CPU device array at `array_address`, whose
     children are `schema`'s columns."""
     var array = CArrowDeviceArray.from_address(Int(py=array_address)).to_cpu()
-    return RecordBatch.from_c(array^, Schema(py=schema)).to_python_object()
+    return RecordBatch.from_c(array^, Schema(py=schema))
 
 
 def import_record_batch_from_c(
@@ -232,7 +232,7 @@ def import_record_batch_from_c(
     children are `schema`'s columns."""
     return RecordBatch.from_c(
         CArrowArray.from_address(Int(py=array_address)), Schema(py=schema)
-    ).to_python_object()
+    )
 
 
 # def _record_batch_rich_compare(
@@ -254,19 +254,19 @@ def record_batch(
     """Create a RecordBatch from a dict, list+names, or Arrow protocol object.
     """
     try:
-        return RecordBatch(py=data).to_python_object()
+        return RecordBatch(py=data)
     except:
         pass
 
     var builtins = Python.import_module("builtins")
     if builtins.isinstance(data, builtins.dict):
-        return _build_from_dict(data).to_python_object()
+        return _build_from_dict(data)
 
     if not schema.__is__(builtins.None):
-        return _build_from_arrays_with_schema(data, schema).to_python_object()
+        return _build_from_arrays_with_schema(data, schema)
 
     if not names.__is__(builtins.None):
-        return _build_from_arrays(data, names).to_python_object()
+        return _build_from_arrays(data, names)
 
     raise TypeError(
         "record_batch: expected a dict, or a list of arrays with names= or "
@@ -281,7 +281,7 @@ def record_batch(
 
 def _table_schema(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
-    return ptr[].schema.to_python_object()
+    return ptr[].schema
 
 
 def _table_columns(py_self: PythonObject) raises -> PythonObject:
@@ -366,7 +366,7 @@ def _table_arrow_c_schema(py_self: PythonObject) raises -> PythonObject:
 def table(data: PythonObject, names: PythonObject) raises -> PythonObject:
     """Create a Table from a dict, list+names, or Arrow protocol object."""
     try:
-        return Table(py=data).to_python_object()
+        return Table(py=data)
     except:
         pass
 
@@ -384,7 +384,7 @@ def table(data: PythonObject, names: PythonObject) raises -> PythonObject:
     var schema = rb.schema
     var batch_list = List[RecordBatch]()
     batch_list.append(rb^)
-    return Table.from_batches(schema, batch_list).to_python_object()
+    return Table.from_batches(schema, batch_list)
 
 
 def table_from_batches(
@@ -407,7 +407,7 @@ def table_from_batches(
         table_schema = out[0].schema.copy()
     else:
         raise InvalidError("from_batches: needs a schema or at least one batch")
-    return Table.from_batches(table_schema, out^).to_python_object()
+    return Table.from_batches(table_schema, out^)
 
 
 def _record_batch_join(
@@ -439,7 +439,7 @@ def _record_batch_join(
         rkeys,
         String(py=join_type),
         ExecContext.parallel(Int(py=num_threads)),
-    ).to_python_object()
+    )
 
 
 def _record_batch_sort_by(
@@ -477,7 +477,7 @@ def _record_batch_sort_by(
         ascending,
         Bool(py=nulls_first),
         ExecContext.parallel(Int(py=num_threads)),
-    ).to_python_object()
+    )
 
 
 def _record_batch_str(py_self: PythonObject) raises -> PythonObject:
@@ -509,7 +509,7 @@ def _record_batch_rename_columns(
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var out = [String(py=v) for v in names]
-    return ptr[].rename_columns(out).to_python_object()
+    return ptr[].rename_columns(out)
 
 
 def _record_batch_add_column(
@@ -519,29 +519,21 @@ def _record_batch_add_column(
     column: PythonObject,
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return (
-        ptr[]
-        .add_column(Int(py=index), Field(py=field), DynArray(py=column))
-        .to_python_object()
-    )
+    return ptr[].add_column(Int(py=index), Field(py=field), DynArray(py=column))
 
 
 def _record_batch_append_column(
     py_self: PythonObject, field: PythonObject, column: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return (
-        ptr[]
-        .append_column(Field(py=field), DynArray(py=column))
-        .to_python_object()
-    )
+    return ptr[].append_column(Field(py=field), DynArray(py=column))
 
 
 def _record_batch_remove_column(
     py_self: PythonObject, index: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return ptr[].remove_column(Int(py=index)).to_python_object()
+    return ptr[].remove_column(Int(py=index))
 
 
 def _record_batch_set_column(
@@ -551,11 +543,7 @@ def _record_batch_set_column(
     column: PythonObject,
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return (
-        ptr[]
-        .set_column(Int(py=index), Field(py=field), DynArray(py=column))
-        .to_python_object()
-    )
+    return ptr[].set_column(Int(py=index), Field(py=field), DynArray(py=column))
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +562,7 @@ def _chunked_len(py_self: PythonObject) raises -> PythonObject:
 
 def _chunked_type(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[ChunkedArray]()
-    return ptr[].dtype.copy().to_python_object()
+    return ptr[].dtype.copy()
 
 
 def _chunked_num_chunks(py_self: PythonObject) raises -> PythonObject:
@@ -586,7 +574,7 @@ def _chunked_chunk(
     py_self: PythonObject, index: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[ChunkedArray]()
-    return ptr[].chunk(Int(py=index)).copy().to_python_object()
+    return ptr[].chunk(Int(py=index)).copy()
 
 
 def _chunked_chunks(py_self: PythonObject) raises -> PythonObject:
@@ -594,14 +582,14 @@ def _chunked_chunks(py_self: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var out = builtins.list()
     for ref chunk in ptr[].chunks:
-        _ = out.append(chunk.copy().to_python_object())
+        _ = out.append(chunk.copy())
     return out
 
 
 def _chunked_combine_chunks(py_self: PythonObject) raises -> PythonObject:
     """One contiguous `Array`. Copies, since `combine_chunks` consumes."""
     var ptr = py_self.downcast_value_ptr[ChunkedArray]()
-    return ptr[].copy().combine_chunks().to_python_object()
+    return ptr[].copy().combine_chunks()
 
 
 def _chunked_str(py_self: PythonObject) raises -> PythonObject:
@@ -611,7 +599,7 @@ def _chunked_str(py_self: PythonObject) raises -> PythonObject:
 def _table_combine_chunks(py_self: PythonObject) raises -> PythonObject:
     """The whole table as one `RecordBatch`."""
     var ptr = py_self.downcast_value_ptr[Table]()
-    return ptr[].combine_chunks().to_python_object()
+    return ptr[].combine_chunks()
 
 
 def _table_num_rows(py_self: PythonObject) raises -> PythonObject:
@@ -627,7 +615,7 @@ def _table_to_batches(py_self: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var out = builtins.list()
     for ref batch in ptr[].to_batches():
-        _ = out.append(batch.copy().to_python_object())
+        _ = out.append(batch.copy())
     return out
 
 

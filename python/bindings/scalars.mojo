@@ -41,7 +41,7 @@ def _scalar_is_null(py_self: PythonObject) raises -> PythonObject:
 
 def _scalar_type(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynScalar]()
-    return ptr[].type().to_python_object()
+    return ptr[].type()
 
 
 def _scalar_str(py_self: PythonObject) raises -> PythonObject:

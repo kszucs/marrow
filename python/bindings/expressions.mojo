@@ -546,7 +546,6 @@ def _expr_execute(
         unwrap(py_self)
         .evaluate(b.to_struct_array(), Bindings())
         .to_array(b.num_rows())
-        .to_python_object()
     )
 
 

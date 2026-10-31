@@ -282,7 +282,7 @@ def _any_array_getitem(
     var n = array.length()
     if index < 0 or index >= n:
         raise IndexError(t"index {index} out of bounds for length {n}")
-    return array[index].to_python_object()
+    return array[index]
 
 
 def _any_array_getitem_py(
@@ -1081,7 +1081,7 @@ def arrow_c_schema[
 
 def infer_type(obj: PythonObject) raises -> PythonObject:
     var inferrer = PyInferrer()
-    return inferrer.infer(obj).to_python_object()
+    return inferrer.infer(obj)
 
 
 def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
@@ -1090,7 +1090,7 @@ def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
     # An Arrow producer is imported, and an import error is the answer rather
     # than a cue to read the object as a Python sequence.
     if not type_given and Bool(py=builtins.hasattr(obj, "__arrow_c_array__")):
-        return DynArray(py=obj).to_python_object()
+        return DynArray(py=obj)
 
     var dtype: dt.DynType
     var has_nulls = True
@@ -1103,7 +1103,7 @@ def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
 
     if dtype.is_null():
         if type_given:
-            return NullArray(length=len(obj)).to_dyn().to_python_object()
+            return NullArray(length=len(obj)).to_dyn()
         raise InvalidError(
             "cannot build array: sequence is empty or all-None (provide type= "
             "explicitly)"
@@ -1112,7 +1112,7 @@ def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
     var builder = DynBuilder(dtype, len(obj))
     var converter = PyAnyConverter(builder, dtype, has_nulls)
     converter.extend(obj._obj_ptr)
-    return builder.finish().to_python_object()
+    return builder.finish()
 
 
 def _build_mask_array(
@@ -1147,11 +1147,7 @@ def list_array_from_arrays(
     var child = DynArray(py=values)
     var n = offsets_arr.length - 1
     var mask_opt = _build_mask_array(mask, n)
-    return (
-        ListArray.from_arrays(offsets_arr, child^, mask_opt^)
-        .to_dyn()
-        .to_python_object()
-    )
+    return ListArray.from_arrays(offsets_arr, child^, mask_opt^).to_dyn()
 
 
 def fixed_size_list_array_from_arrays(
@@ -1162,11 +1158,7 @@ def fixed_size_list_array_from_arrays(
     var list_size = dtype.as_fixed_size_list().size
     var n = child.length() // list_size if list_size > 0 else 0
     var mask_opt = _build_mask_array(mask, n)
-    return (
-        FixedSizeListArray.from_arrays(child^, list_size, mask_opt^)
-        .to_dyn()
-        .to_python_object()
-    )
+    return FixedSizeListArray.from_arrays(child^, list_size, mask_opt^).to_dyn()
 
 
 def struct_array_from_arrays(
@@ -1183,11 +1175,7 @@ def struct_array_from_arrays(
         children.append(arr^)
         fields_list.append(fields[i].downcast_value_ptr[dt.Field]()[].copy())
     var mask_opt = _build_mask_array(mask, n)
-    return (
-        StructArray.from_arrays(children^, fields_list^, mask_opt^)
-        .to_dyn()
-        .to_python_object()
-    )
+    return StructArray.from_arrays(children^, fields_list^, mask_opt^).to_dyn()
 
 
 def _any_array_str(py_self: PythonObject) raises -> PythonObject:
@@ -1204,7 +1192,7 @@ def _array_null_count(py_self: PythonObject) raises -> PythonObject:
 
 
 def _array_type(py_self: PythonObject) raises -> PythonObject:
-    return py_self.downcast_value_ptr[DynArray]()[].dtype().to_python_object()
+    return py_self.downcast_value_ptr[DynArray]()[].dtype()
 
 
 def _array_is_valid(
@@ -1218,23 +1206,21 @@ def _array_slice(
     py_self: PythonObject, offset: PythonObject, length: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynArray]()
-    return ptr[].slice(Int(py=offset), Int(py=length)).to_python_object()
+    return ptr[].slice(Int(py=offset), Int(py=length))
 
 
 def _array_to_device(
     py_self: PythonObject, ctx: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynArray]()
-    return (
-        ptr[].to_device(ExecContext(py=ctx).device.value()).to_python_object()
-    )
+    return ptr[].to_device(ExecContext(py=ctx).device.value())
 
 
 def _array_to_cpu(
     py_self: PythonObject, ctx: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynArray]()
-    return ptr[].to_cpu(ExecContext(py=ctx).device.value()).to_python_object()
+    return ptr[].to_cpu(ExecContext(py=ctx).device.value())
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

@@ -53,7 +53,7 @@ def parquet_read_table(
         binary_type=DynType(py=binary_type),
         read_dictionary=[String(py=v) for v in read_dictionary],
         native_codecs=Bool(py=native_codecs),
-    ).to_python_object()
+    )
 
 
 def parquet_write_table(

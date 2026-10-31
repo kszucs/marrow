@@ -93,6 +93,8 @@ struct ExecContext(
     CPU-serial context with the given device.
     """
 
+    comptime ConversionToPythonErrorType = Error
+
     var num_threads: Int
     """CPU dispatch strategy, encoded as an Int sentinel.
 
@@ -573,8 +575,6 @@ struct ExecContext(
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[ExecContext]()[].copy()
-
-    comptime ConversionToPythonErrorType = Error
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

@@ -30,11 +30,7 @@ def _schema_export_to_c(
 
 def import_schema_from_c(address: PythonObject) raises -> PythonObject:
     """Take ownership of the C Data schema struct at `address`."""
-    return (
-        CArrowSchema.from_address(Int(py=address))
-        .to_schema()
-        .to_python_object()
-    )
+    return CArrowSchema.from_address(Int(py=address)).to_schema()
 
 
 def _schema_len(py_self: PythonObject) raises -> PythonObject:
@@ -53,7 +49,7 @@ def _schema_types(py_self: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var out = builtins.list()
     for ref f in py_self.downcast_value_ptr[Schema]()[].fields:
-        _ = out.append(f.dtype.copy().to_python_object())
+        _ = out.append(f.dtype.copy())
     return out
 
 
@@ -64,8 +60,8 @@ def _schema_field(
     var ptr = py_self.downcast_value_ptr[Schema]()
     var builtins = Python.import_module("builtins")
     if Bool(py=builtins.isinstance(key, builtins.int)):
-        return ptr[].field(index=Int(py=key)).copy().to_python_object()
-    return ptr[].field(name=String(py=key)).copy().to_python_object()
+        return ptr[].field(index=Int(py=key)).copy()
+    return ptr[].field(name=String(py=key)).copy()
 
 
 def _schema_get_field_index(

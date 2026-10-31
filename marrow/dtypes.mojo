@@ -595,6 +595,8 @@ struct Field(
     Movable,
     Writable,
 ):
+    comptime ConversionToPythonErrorType = Error
+
     var name: String
     var dtype: DynType
     var nullable: Bool
@@ -670,8 +672,6 @@ struct Field(
         writer.write(
             "Field(name=", self.name, ", nullable=", self.nullable, ")"
         )
-
-    comptime ConversionToPythonErrorType = Error
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
@@ -968,6 +968,8 @@ struct DynType(
     body was `DynType(self^)`, which for `Self = DynType` would ask the variant
     to hold a `DynType` — and it deliberately does not list itself."""
 
+    comptime ConversionToPythonErrorType = Error
+
     comptime Storage = ArcMembers[
         DataType,
         NullType,
@@ -1051,8 +1053,6 @@ struct DynType(
         except:
             raise TypeError("cannot convert Python object to DynType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
-
-    comptime ConversionToPythonErrorType = Error
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

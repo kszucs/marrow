@@ -27,7 +27,7 @@ def read_ipc_file(
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for batch in batches:
-        result.append(batch.copy().to_python_object())
+        result.append(batch.copy())
     return result
 
 
@@ -86,7 +86,7 @@ def read_ipc_stream(
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for batch in batches:
-        result.append(batch.copy().to_python_object())
+        result.append(batch.copy())
     return result
 
 
@@ -129,13 +129,13 @@ def write_ipc_stream(
 def read_ipc_file_schema(path: PythonObject) raises -> PythonObject:
     var path_str = String(py=path)
     var batch = _ipc_read_file_schema(path_str)
-    return batch.copy().to_python_object()
+    return batch.copy()
 
 
 def read_ipc_stream_schema(path: PythonObject) raises -> PythonObject:
     var path_str = String(py=path)
     var batch = _ipc_read_stream_schema(path_str)
-    return batch.copy().to_python_object()
+    return batch.copy()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

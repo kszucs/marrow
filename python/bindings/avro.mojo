@@ -19,9 +19,9 @@ def avro_read_table(
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     if columns.__is__(builtins.None):
-        return read_avro(String(py=path)).to_python_object()
+        return read_avro(String(py=path))
     var cols = [String(py=v) for v in columns]
-    return read_avro(String(py=path), cols^).to_python_object()
+    return read_avro(String(py=path), cols^)
 
 
 def avro_write_table(
