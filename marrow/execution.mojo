@@ -574,5 +574,7 @@ struct ExecContext(
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[ExecContext]()[].copy()
 
+    comptime ConversionToPythonErrorType = Error
+
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

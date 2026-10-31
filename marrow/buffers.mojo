@@ -108,8 +108,7 @@ and SIMD bulk operations.
 """
 
 from std.builtin.builtin_slice import ContiguousSlice
-from std.ffi import external_call
-from std.io.file import FileHandle
+from std.ffi import c_int, external_call
 from std.memory import (
     MutPointer,
     unsafe_memset_zero,
@@ -374,15 +373,15 @@ struct Allocation(Movable):
     def device_id(self) raises -> Int64:
         """Return the physical device index.  -1 for CPU and FOREIGN allocations.
 
-        For HOST allocations reads from `HostBuffer.context().id()`.
-        For DEVICE allocations reads from `DeviceBuffer.context().id()`.
+        For HOST allocations reads from `HostBuffer.context().device().id`.
+        For DEVICE allocations reads from `DeviceBuffer.context().device().id`.
         """
         if self._host:
             var hb = self._host.value()
-            return hb.context().id()
+            return hb.context().device().id
         elif self._device:
             var db = self._device.value()
-            return db.context().id()
+            return db.context().device().id
         else:
             return -1
 
@@ -633,21 +632,24 @@ struct Buffer[*, mut: Bool = False](
         rounds the mapping up to a whole page and bytes past EOF within it read
         as zero, so the padding is always addressable.
         """
-        var f: FileHandle
-        try:
-            f = FileHandle(path, "r")
-        except e:
-            raise IOError(e)
+        var c_path = path.copy()
+        # O_RDONLY is 0 on every target.
+        var fd = external_call["open", c_int, num_fixed_args=2](
+            c_path.as_c_string_span(), c_int(0), c_int(0)
+        )
+        if fd < 0:
+            raise IOError(t"Buffer.mmap_file: cannot open {path}")
         var size = Int(
-            external_call["lseek", Int64](f.handle, Int64(0), Int(2))
+            external_call["lseek", Int64](fd, Int64(0), c_int(2))
         )  # SEEK_END
         if size <= 0:
+            _ = external_call["close", c_int](fd)
             raise IOError(t"Buffer.mmap_file: empty or unreadable file {path}")
         # PROT_READ=1, MAP_PRIVATE=2; the mapping outlives the fd.
         var ptr = external_call["mmap", Pointer[UInt8, MutUntrackedOrigin]](
-            UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0)
+            UInt(0), size, Int32(1), Int32(2), fd, Int64(0)
         )
-        _ = f^  # close the fd; the mapping stays valid
+        _ = external_call["close", c_int](fd)
         if Int(ptr) == 0 or Int(ptr) == -1:
             raise IOError(t"Buffer.mmap_file: mmap failed for {path}")
         return Buffer[mut=False](
@@ -940,7 +942,7 @@ struct Buffer[*, mut: Bool = False](
         """Return the physical device index.  -1 for CPU and FOREIGN buffers.
 
         Delegates to `Allocation.device_id()`, which reads from
-        `HostBuffer.context().id()` or `DeviceBuffer.context().id()` as needed.
+        `HostBuffer.context().device().id` or `DeviceBuffer.context().device().id` as needed.
         """
         return self._owner[].device_id()
 

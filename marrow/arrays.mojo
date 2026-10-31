@@ -3612,6 +3612,8 @@ struct DynArray(
     def __ne__(self, other: DynArray) -> Bool:
         return not (self == other)
 
+    comptime ConversionToPythonErrorType = Error
+
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Array object (type-erased)."""
         return PythonObject(alloc=self^)

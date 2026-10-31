@@ -84,6 +84,8 @@ struct RecordBatch(
         var columns = struct_arr.as_struct().children.copy()
         return RecordBatch(schema=schema, columns=columns^)
 
+    comptime ConversionToPythonErrorType = Error
+
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
@@ -449,6 +451,8 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         except:
             raise TypeError("cannot convert Python object to Table")
         self = CArrowArrayStream.from_pycapsule(capsule).to_table()
+
+    comptime ConversionToPythonErrorType = Error
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

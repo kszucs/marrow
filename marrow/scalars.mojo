@@ -1144,6 +1144,8 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
 
         _ = self.visit[Bool](f)
 
+    comptime ConversionToPythonErrorType = Error
+
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
         return PythonObject(alloc=self^)

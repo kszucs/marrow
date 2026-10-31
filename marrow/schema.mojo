@@ -188,6 +188,8 @@ struct Schema(
                 return False
         return True
 
+    comptime ConversionToPythonErrorType = Error
+
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 

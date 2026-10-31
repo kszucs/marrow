@@ -671,6 +671,8 @@ struct Field(
             "Field(name=", self.name, ", nullable=", self.nullable, ")"
         )
 
+    comptime ConversionToPythonErrorType = Error
+
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
@@ -1049,6 +1051,8 @@ struct DynType(
         except:
             raise TypeError("cannot convert Python object to DynType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
+
+    comptime ConversionToPythonErrorType = Error
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
