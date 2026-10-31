@@ -4,7 +4,13 @@
 from std.testing import assert_equal, assert_true, assert_false
 
 
-from ...arrays import DynArray, DictionaryArray, PrimitiveArray, StringArray
+from ...arrays import (
+    DynArray,
+    DictionaryArray,
+    PrimitiveArray,
+    RunEndEncodedArray,
+    StringArray,
+)
 from ...builders import (
     Int8Builder,
     Int16Builder,
@@ -45,6 +51,7 @@ from ...arrays import UInt64Array, Int64Array
 from ...builders import Int64Builder
 from ...utils import RapidHash64
 from ...kernels.hashing import RapidHashKernel, NULL_HASH_SENTINEL
+from ...kernels.runs import RunEndDecodeKernel
 
 
 def _children(ref a: DynArray, ref b: DynArray) -> List[DynArray]:
@@ -628,3 +635,17 @@ def test_hash_apply_takes_every_byte_layout() raises:
     assert_true(
         RapidHashKernel.apply(bv.finish()) == RapidHashKernel.apply(bb.finish())
     )
+
+
+def test_hash_run_end_encoded_matches_decoded() raises:
+    """A run-end encoded column hashes like the rows it encodes: read through
+    a window that starts and ends inside a run, over a run of nulls."""
+    var ree: DynArray = RunEndEncodedArray.from_arrays(
+        array([3, 5, 8], int32), array(["red", None, "blue"])
+    ).slice(1, 6)
+    var h = RapidHashKernel.dispatch(ree)
+    assert_equal(len(h), 6)
+    assert_true(h == RapidHashKernel.dispatch(RunEndDecodeKernel.dispatch(ree)))
+    assert_true(h[2].value() == NULL_HASH_SENTINEL)
+    assert_true(h[0].value() == h[1].value())
+    assert_true(h[0].value() != h[5].value())

@@ -12,6 +12,7 @@ from ...arrays import (
     NullArray,
     DictionaryArray,
     MapArray,
+    RunEndEncodedArray,
 )
 from ...buffers import Bitmap
 from ...builders import (
@@ -60,6 +61,7 @@ from ...dtypes import (
     struct_,
     dictionary,
     field,
+    run_end_encoded,
     Int16Type,
     Int32Type,
     Float16Type,
@@ -81,6 +83,7 @@ from ...kernels.cast import (
     FixedSizeBinaryCastKernel,
     NumericCastKernel,
 )
+from ...kernels.runs import RunEndDecodeKernel
 
 
 # ---------------------------------------------------------------------------
@@ -1539,3 +1542,60 @@ def test_cast_string_view_numeric() raises:
     assert_equal(ints.as_int64()[2].value(), 333)
     var back = CastKernel.dispatch(ints, string_view)
     assert_equal(back.as_string_view()[1].value(), "22")
+
+
+# ---------------------------------------------------------------------------
+# Run-end encoded arrays
+# ---------------------------------------------------------------------------
+
+
+def _ree_seven_null_nine() raises -> DynArray:
+    """Rows 7, 7, null, 9, 9: the window `(1, 5)` of runs 7 x3, null x1 and
+    9 x3, starting and ending inside a run."""
+    return RunEndEncodedArray.from_arrays(
+        array([3, 4, 7], int32), array([7, None, 9], int32)
+    ).slice(1, 5)
+
+
+def test_cast_run_end_encoded_values() raises:
+    var ree = _ree_seven_null_nine()
+    var decoded = RunEndDecodeKernel.dispatch(ree)
+    var wider = CastKernel.dispatch(ree, run_end_encoded(int32, int64))
+    assert_true(wider.dtype() == DynType(run_end_encoded(int32, int64)))
+    assert_true(
+        wider.as_run_end_encoded().run_ends().as_int32()
+        == array([2, 3, 5], int32)
+    )
+    assert_equal(
+        String(RunEndDecodeKernel.dispatch(wider)),
+        String(CastKernel.dispatch(decoded, int64)),
+    )
+    var longer = CastKernel.dispatch(ree, run_end_encoded(int64, int32))
+    assert_true(longer.dtype() == DynType(run_end_encoded(int64, int32)))
+    assert_equal(
+        String(longer.as_run_end_encoded().run_ends()),
+        String(array([2, 3, 5], int64)),
+    )
+    assert_equal(String(RunEndDecodeKernel.dispatch(longer)), String(decoded))
+
+
+def test_cast_run_end_encoded_decodes() raises:
+    var ree = _ree_seven_null_nine()
+    var got = CastKernel.dispatch(ree, int32)
+    assert_true(got.as_int32() == RunEndDecodeKernel.dispatch(ree).as_int32())
+    assert_equal(String(got), String(array([7, 7, None, 9, 9], int32)))
+
+
+def test_cast_run_end_encoded_decodes_then_casts() raises:
+    var ree = _ree_seven_null_nine()
+    var got = CastKernel.dispatch(ree, float64)
+    assert_equal(
+        String(got), String(array([7.0, 7.0, None, 9.0, 9.0], float64))
+    )
+
+
+def test_cast_to_run_end_encoded_is_not_implemented() raises:
+    with assert_raises(contains="NotImplementedError"):
+        _ = CastKernel.dispatch(
+            array([1, 2], int32), run_end_encoded(int32, int32)
+        )

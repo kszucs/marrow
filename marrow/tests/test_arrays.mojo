@@ -3115,6 +3115,215 @@ def test_dictionary_scalar_eq_permuted_dictionary() raises:
     assert_equal(d2[0].index(), 0)
 
 
+# ---------------------------------------------------------------------------
+# RunEndEncodedArray
+# ---------------------------------------------------------------------------
+
+
+def _five_one_two() raises -> RunEndEncodedArray:
+    """Rows 5, 5, 5, 1, 2, 2, as three runs."""
+    return RunEndEncodedArray.from_arrays(
+        array([3, 4, 6], int32), array([5, 1, 2], int64)
+    )
+
+
+def _assert_ree_rows(arr: RunEndEncodedArray, want: List[Optional[Int]]) raises:
+    """`arr` reads `want` row by row, a null where `want` holds None."""
+    assert_equal(len(arr), len(want))
+    for i in range(len(want)):
+        if want[i]:
+            assert_true(arr.is_valid(i))
+            assert_equal(
+                Int(arr[i].value().as_int64().value()), want[i].value()
+            )
+        else:
+            assert_false(arr.is_valid(i))
+            assert_false(arr[i].is_valid())
+
+
+def test_run_end_encoded_array() raises:
+    var arr = _five_one_two()
+    assert_true(arr.type() == DynType(run_end_encoded(int32, int64)))
+    _assert_ree_rows(arr, [5, 5, 5, 1, 2, 2])
+    assert_equal(arr.null_count(), 0)
+    assert_equal(arr.find_physical_offset(), 0)
+    assert_equal(arr.find_physical_length(), 3)
+    assert_true(arr.run_ends().as_int32() == array([3, 4, 6], int32))
+    assert_true(arr.values().as_int64() == array([5, 1, 2], int64))
+    assert_true(String(arr).startswith("RunEndEncodedArray(run_ends="))
+    with assert_raises(contains="IndexError"):
+        _ = arr[6]
+    var erased: DynArray = arr^
+    assert_equal(len(erased), 6)
+    assert_equal(
+        Int(erased[3].as_run_end_encoded().value().as_int64().value()), 1
+    )
+
+
+def test_run_end_encoded_array_null() raises:
+    """A row is null when its run's value is; the array counts no nulls."""
+    var arr = RunEndEncodedArray.from_arrays(
+        array([3, 4, 6], int32), array([5, None, 2], int64)
+    )
+    _assert_ree_rows(arr, [5, 5, 5, None, 2, 2])
+    assert_equal(arr.null_count(), 0)
+    assert_false(arr[3].is_valid())
+    var erased: DynArray = arr^
+    assert_equal(erased.null_count(), 0)
+    assert_false(erased.is_valid(3))
+    assert_true(erased.is_valid(4))
+
+
+def test_run_end_encoded_array_slice() raises:
+    """A slice moves the window; the children stay whole."""
+    var arr = _five_one_two()
+    var middle = arr.slice(2, 3)
+    _assert_ree_rows(middle, [5, 1, 2])
+    assert_equal(middle.find_physical_offset(), 0)
+    assert_equal(middle.find_physical_length(), 3)
+    var one = arr.slice(3, 1)
+    _assert_ree_rows(one, [1])
+    assert_equal(one.find_physical_offset(), 1)
+    assert_equal(one.find_physical_length(), 1)
+    var physical = one.physical_values()
+    assert_equal(len(physical), 1)
+    assert_equal(Int(physical.as_int64()[0].value()), 1)
+    var empty = arr.slice(6, 0)
+    assert_equal(len(empty), 0)
+    assert_equal(empty.find_physical_length(), 0)
+    var erased: DynArray = arr^
+    assert_true(erased.slice(2, 3).as_run_end_encoded() == middle)
+
+
+def test_run_end_encoded_children_offset() raises:
+    """Children that are slices themselves: their offsets apply beneath the
+    array's."""
+    var ends: DynArray = array([9, 3, 4, 6], int32).slice(1, 3)
+    var values: DynArray = array([7, 5, 1, 2], int64).slice(1, 3)
+    var arr = RunEndEncodedArray.from_arrays(ends^, values^)
+    _assert_ree_rows(arr, [5, 5, 5, 1, 2, 2])
+    var window = arr.slice(1, 4)
+    _assert_ree_rows(window, [5, 5, 1, 2])
+    assert_true(window.segment_ends() == array([0, 2, 3, 4], int64))
+    window.to_data().validate(full=True)
+
+
+def test_run_end_encoded_array_data_roundtrip() raises:
+    """No buffers and no validity: the two children, unsliced, under the
+    logical offset."""
+    var sliced = _five_one_two().slice(2, 3)
+    var data = sliced.to_data()
+    assert_true(data.dtype.is_run_end_encoded())
+    assert_equal(len(data.buffers), 0)
+    assert_false(Bool(data.bitmap))
+    assert_equal(data.nulls, 0)
+    assert_equal(data.length, 3)
+    assert_equal(data.offset, 2)
+    assert_equal(len(data.children), 2)
+    assert_equal(data.children[0].length, 3)
+    assert_equal(data.children[1].length, 3)
+    data.validate(full=True)
+    var back = DynArray.from_data(data)
+    assert_true(back.as_run_end_encoded() == sliced)
+    var erased: DynArray = sliced^
+    assert_true(back == erased)
+
+
+def test_run_end_encoded_segment_ends() raises:
+    """Where the window's runs end, from its start: the first run cut by the
+    offset and the last by the length."""
+    var arr = _five_one_two()
+    assert_true(arr.slice(1, 4).segment_ends() == array([0, 2, 3, 4], int64))
+    assert_true(arr.segment_ends() == array([0, 3, 4, 6], int64))
+    assert_true(arr.slice(6, 0).segment_ends() == array([0], int64))
+
+
+def test_run_end_encoded_array_eq_is_structural() raises:
+    """Equal encodings are equal; the same rows split into other runs are
+    not."""
+    assert_true(_five_one_two() == _five_one_two())
+    var a: DynArray = _five_one_two()
+    var b: DynArray = _five_one_two()
+    assert_true(a == b)
+    var split = RunEndEncodedArray.from_arrays(
+        array([3, 6], int32), array([5, 5], int64)
+    )
+    var whole = RunEndEncodedArray.from_arrays(
+        array([6], int32), array([5], int64)
+    )
+    assert_false(split == whole)
+    var split_erased: DynArray = split^
+    var whole_erased: DynArray = whole^
+    assert_false(split_erased == whole_erased)
+    assert_false(_five_one_two().slice(0, 2) == _five_one_two().slice(1, 2))
+
+
+def test_validate_run_end_encoded_refuses() raises:
+    """One refusal per rule; the last two read every run end."""
+    var good = _five_one_two().to_data()
+    good.validate(full=True)
+    _five_one_two().slice(1, 4).to_data().validate(full=True)
+
+    var data = good.copy()
+    data.bitmap = array([1, None, 3, 4, 5, 6], int64).to_data().bitmap
+    assert_true(_invalid(data))  # a validity bitmap
+
+    data = good.copy()
+    data.nulls = 1
+    assert_true(_invalid(data))  # a null count
+
+    data = good.copy()
+    data.children[0] = array([3, None, 6], int32).to_data()
+    assert_true(_invalid(data))  # a null run end
+
+    data = good.copy()
+    data.children[0] = array([3, 4, 6], int64).to_data()
+    assert_true(_invalid(data))  # run ends of another type
+
+    data = good.copy()
+    data.children[0] = array([1, 3, 4, 6], int32).to_data()
+    assert_true(_invalid(data))  # four run ends for three values
+
+    data = good.copy()
+    data.children[0] = array(int32).to_data()
+    assert_true(_invalid(data))  # no run ends under six rows
+    data.length = 0
+    data.validate(full=True)
+
+    var wide = RunEndEncodedArray.from_arrays(
+        array([32767], int16), array([5], int64)
+    ).to_data()
+    wide.validate(full=True)
+    wide.offset = 32767
+    wide.length = 1
+    assert_true(_invalid(wide))  # offset + length past int16
+
+    data = good.copy()
+    data.offset = 1
+    assert_true(_invalid(data))  # the last run end, 6, short of 7
+
+    data = good.copy()
+    data.children[0] = array([0, 4, 6], int32).to_data()
+    assert_false(_invalid(data))
+    assert_true(_invalid(data, full=True))  # a first run end of 0
+
+    data = good.copy()
+    data.children[0] = array([3, 3, 6], int32).to_data()
+    assert_false(_invalid(data))
+    assert_true(_invalid(data, full=True))  # a repeated run end
+
+
+def test_empty_run_end_encoded() raises:
+    var arr = array(run_end_encoded(int64, string).to_dyn())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_run_end_encoded())
+    ref ree = arr.as_run_end_encoded()
+    assert_equal(len(ree.run_ends()), 0)
+    assert_equal(ree.find_physical_length(), 0)
+    arr.to_data().validate(full=True)
+
+
 def test_slice_default_length_null_count() raises:
     """`slice(offset)` must count nulls over the slice's own range, not to the
     end of the parent's bitmap. Every `slice` passed the raw `length` — `-1` on

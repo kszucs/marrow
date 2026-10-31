@@ -21,6 +21,7 @@ from emberjson.utils import write_escaped_string
 
 from ...arrays import DynArray
 from ...errors import InvalidError, NotImplementedError
+from ...kernels.runs import RunEndDecodeKernel
 from ..core import BatchWriter
 from ...io import ByteSink, DynSink, StorageOptions
 from ...tabular import RecordBatch, Table
@@ -45,7 +46,11 @@ struct _Column(Movable):
     items, the whole child array, indexed through the list's offsets."""
 
     def __init__(out self, array: DynArray) raises:
-        var dtype = array.dtype()
+        # A run-end encoded array is written as its values.
+        var values = array.copy()
+        if array.dtype().is_run_end_encoded():
+            values = RunEndDecodeKernel.dispatch(array)
+        var dtype = values.dtype()
         var json_type = JsonType.of(dtype)
         if not json_type:
             raise NotImplementedError(t"JSON writer: unsupported type {dtype}")
@@ -53,19 +58,19 @@ struct _Column(Movable):
         self.digits = (
             dtype.as_timestamp().unit.fraction_digits() if dtype.is_timestamp() else 0
         )
-        self.array = array.copy()
+        self.array = values.copy()
         self.keys = []
         self.children = []
         if self.json_type == JsonType.STRUCT:
-            ref s = array.as_struct()
+            ref s = values.as_struct()
             ref fields = dtype.as_struct().fields
             for i in range(len(fields)):
                 self.keys.append(Self.key(fields[i].name))
                 self.children.append(_Column(s.field(i)))
         elif self.json_type == JsonType.LIST:
-            self.children.append(_Column(array.as_list().values()))
+            self.children.append(_Column(values.as_list().values()))
         elif self.json_type == JsonType.LARGE_LIST:
-            self.children.append(_Column(array.as_large_list().values()))
+            self.children.append(_Column(values.as_large_list().values()))
 
     # `children: List[_Column]` cycles back through `_Column`.
     def __deinit__(deinit self):

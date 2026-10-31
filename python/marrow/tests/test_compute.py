@@ -10,6 +10,7 @@ Covers:
 """
 
 import math
+import struct
 import sys
 
 import pyarrow as pa
@@ -899,6 +900,285 @@ def test_mode_of_strings_follows_duckdb():
 def test_mode_rejects_n_below_one():
     with pytest.raises(ma.ArrowInvalid):
         ma.compute.mode(ma.array([1, 2]), n=0)
+
+
+# ── run-end encoding ─────────────────────────────────────────────────────────
+
+
+_NAN_PAYLOAD = struct.unpack("<d", struct.pack("<Q", 0x7FF8000000000001))[0]
+
+_RUNS = [
+    pa.array([5, 5, 5, 1, None, None, 2, 2], pa.int64()),
+    # Two NaN payloads and both zeros: every one a run of its own bits.
+    pa.array([math.nan, _NAN_PAYLOAD, _NAN_PAYLOAD, -0.0, 0.0, 0.0, None]),
+    pa.array([True, True, None, False, False]),
+    pa.array(["a", "a", None, "b", "b"]),
+    pa.array([b"x", b"x", b"y"], pa.large_binary()),
+    pa.array([1, 1, 2], pa.decimal128(5, 2)),
+    pa.array([1, 1, None, 3], pa.date32()),
+    pa.nulls(3),
+    pa.array([], pa.int64()),
+    pa.array([9, 5, 5, 1, 1, 7], pa.int64()).slice(1, 4),
+]
+
+
+def _bits(values):
+    """A float array's values as their bits, so NaN payloads and signed
+    zeros compare; any other array's values as they are."""
+    if pa.types.is_floating(values.type):
+        return values.view(pa.uint64()).to_pylist()
+    return values.to_pylist()
+
+
+@pytest.mark.parametrize("run_end_type", [pa.int16(), pa.int32(), pa.int64()], ids=str)
+@pytest.mark.parametrize("values", _RUNS, ids=str)
+def test_run_end_encode_matches_pyarrow(values, run_end_type):
+    expected = pc.run_end_encode(values, run_end_type=run_end_type)
+    result = pa.array(
+        ma.compute.run_end_encode(ma.array(values), run_end_type=run_end_type)
+    )
+    assert result.type == expected.type
+    assert result.run_ends.to_pylist() == expected.run_ends.to_pylist()
+    assert _bits(result.values) == _bits(expected.values)
+
+
+def test_run_end_encode_defaults_to_int32_run_ends():
+    result = pa.array(ma.compute.run_end_encode(ma.array([1, 1, 2])))
+    assert result.type == pa.run_end_encoded(pa.int32(), pa.int64())
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pa.array([[1], [1]]),
+        pa.array([{"a": 1}]),
+        pa.array(["a", "a"]).dictionary_encode(),
+        pc.run_end_encode(pa.array([1, 1])),
+    ],
+    ids=str,
+)
+def test_run_end_encode_refuses_what_pyarrow_refuses(values):
+    with pytest.raises(pa.ArrowNotImplementedError):
+        pc.run_end_encode(values)
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.run_end_encode(ma.array(values))
+
+
+def test_run_end_encode_refuses_an_int8_run_end_type():
+    with pytest.raises(pa.ArrowInvalid):
+        pc.run_end_encode(pa.array([1]), run_end_type=pa.int8())
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.run_end_encode(ma.array([1]), run_end_type=pa.int8())
+
+
+def test_run_end_encode_overflows_int16():
+    fits = ma.array(pa.array(range(32767), pa.int64()))
+    assert len(ma.compute.run_end_encode(fits, run_end_type=pa.int16())) == 32767
+    over = ma.array(pa.array(range(32768), pa.int64()))
+    with pytest.raises(ma.ArrowInvalid, match="32767"):
+        ma.compute.run_end_encode(over, run_end_type=pa.int16())
+
+
+@pytest.mark.parametrize("sliced", [False, True], ids=["whole", "sliced"])
+@pytest.mark.parametrize("values", _RUNS, ids=str)
+def test_run_end_decode_matches_pyarrow(values, sliced):
+    encoded = pc.run_end_encode(values)
+    if sliced:
+        # The window starts and ends inside a run where there are any.
+        encoded = encoded.slice(1, max(len(encoded) - 2, 0))
+    expected = pc.run_end_decode(encoded)
+    result = pa.array(ma.compute.run_end_decode(ma.array(encoded)))
+    assert result.type == expected.type
+    assert _bits(result) == _bits(expected)
+
+
+def test_run_end_decode_refuses_a_plain_array():
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.run_end_decode(ma.array([1, 2]))
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        (pa.array([1, 1, None, None, 2, 1]), [0, 0, 1, 1, 2, 3]),
+        (pa.array([math.nan, math.nan, 1.0]), [0, 0, 1]),
+        (pa.array([math.nan, _NAN_PAYLOAD]), [0, 0]),
+        (pa.array([-0.0, 0.0, 1.0]), [0, 0, 1]),
+        (pa.array(["a", "a", None, "b"]), [0, 0, 1, 2]),
+        (pa.array([True, True, None, False]), [0, 0, 1, 2]),
+        (pa.array([], pa.int64()), []),
+        (pa.array([[1], [1], [2]]), [0, 0, 1]),
+        (pa.array([{"a": 1}, {"a": 1}, {"a": 2}]), [0, 0, 1]),
+        (pa.array([None, None], pa.int64()), [0, 0]),
+    ],
+    ids=str,
+)
+def test_run_index_numbers_each_run(values, expected):
+    """Each row's run, numbered from 0 under the group-by identity."""
+    result = pa.array(ma.compute.run_index(ma.array(values)))
+    assert result.type == pa.uint32()
+    assert result.to_pylist() == expected
+
+
+@pytest.mark.parametrize("name", ["is_null", "is_valid"])
+def test_is_null_run_end_encoded_matches_the_decoded(name):
+    """An encoded array's nulls are its values'; PyArrow 23 answers from the
+    encoded array's own (absent) bitmap, so the oracle is the decoded array."""
+    encoded = pc.run_end_encode(pa.array([1, 1, None, 2, 2, None])).slice(1, 4)
+    expected = getattr(pc, name)(pc.run_end_decode(encoded))
+    result = pa.array(getattr(ma.compute, name)(ma.array(encoded)))
+    assert result.to_pylist() == expected.to_pylist()
+
+
+# Rows 5, 5, null, null, 2, 2, 2, 7: a window starting and ending inside runs.
+# PyArrow 23 has no filter, take, sort, cast or aggregate over run-end encoded
+# values, so each kernel is compared with PyArrow's over the decoded rows.
+_WINDOW = pc.run_end_encode(
+    pa.array([5, 5, 5, None, None, 2, 2, 2, 7, 7], pa.int64())
+).slice(1, 8)
+_ROWS = pc.run_end_decode(_WINDOW)
+
+
+def _rows(result):
+    """A marrow result as PyArrow, decoded when it is run-end encoded."""
+    out = pa.array(result)
+    if pa.types.is_run_end_encoded(out.type):
+        out = pc.run_end_decode(out)
+    return out
+
+
+def test_filter_run_end_encoded_matches_the_decoded():
+    mask = pa.array([False, False, True, None, True, False, True, True])
+    result = pa.array(ma.compute.filter(ma.array(_WINDOW), ma.array(mask)))
+    assert result.type == _WINDOW.type
+    assert _rows(result).to_pylist() == pc.filter(_ROWS, mask).to_pylist()
+
+
+def test_take_run_end_encoded_matches_the_decoded():
+    indices = pa.array([0, 1, 4, 6, None, 2, 7, 0], pa.int32())
+    result = pa.array(ma.compute.take(ma.array(_WINDOW), ma.array(indices)))
+    assert result.type == _WINDOW.type
+    assert _rows(result).to_pylist() == pc.take(_ROWS, indices).to_pylist()
+    with pytest.raises(ma.ArrowIndexError):
+        ma.compute.take(ma.array(_WINDOW), ma.array(pa.array([8], pa.int32())))
+
+
+@pytest.mark.parametrize("null_placement", ["at_start", "at_end"])
+@pytest.mark.parametrize("order", ["ascending", "descending"])
+def test_sort_run_end_encoded_matches_the_decoded(order, null_placement):
+    keys = [("", order)]
+    expected = pc.sort_indices(_ROWS, sort_keys=keys, null_placement=null_placement)
+    indices = ma.compute.sort_indices(
+        ma.array(_WINDOW), keys, null_placement=null_placement
+    )
+    assert pa.array(indices).to_pylist() == expected.to_pylist()
+    result = pa.array(
+        ma.compute.sort(ma.array(_WINDOW), keys, null_placement=null_placement)
+    )
+    assert result.type == _WINDOW.type
+    assert _rows(result).to_pylist() == pc.take(_ROWS, expected).to_pylist()
+
+
+def test_cast_run_end_encoded_matches_the_decoded():
+    """To another run-end encoded type the values and run ends are cast; to
+    a plain type the rows are decoded, then cast. A plain array is not cast
+    to a run-end encoded type, as PyArrow does not."""
+    expected = pc.cast(_ROWS, pa.float64()).to_pylist()
+    target = pa.run_end_encoded(pa.int16(), pa.float64())
+    result = pa.array(ma.compute.cast(ma.array(_WINDOW), target))
+    assert result.type == target
+    assert _rows(result).to_pylist() == expected
+    result = pa.array(ma.compute.cast(ma.array(_WINDOW), pa.float64()))
+    assert result.type == pa.float64()
+    assert result.to_pylist() == expected
+    with pytest.raises(pa.ArrowNotImplementedError):
+        pc.cast(_ROWS, _WINDOW.type)
+    with pytest.raises(ma.ArrowNotImplementedError):
+        ma.compute.cast(ma.array(_ROWS), _WINDOW.type)
+
+
+def test_bit_wise_not_run_end_encoded_matches_the_decoded():
+    result = pa.array(ma.compute.bit_wise_not(ma.array(_WINDOW)))
+    assert result.type == _WINDOW.type
+    assert _rows(result).to_pylist() == pc.bit_wise_not(_ROWS).to_pylist()
+
+
+@pytest.mark.parametrize("name", ["add", "equal"])
+def test_binary_kernels_decode_run_end_encoded_operands(name):
+    """An encoded operand is decoded: beside a plain one, and beside an
+    encoding of the same rows in other runs."""
+    plain = pa.array([10, 5, 20, None, 2, 30, 2, 7], pa.int64())
+    oracle, kernel = getattr(pc, name), getattr(ma.compute, name)
+    result = pa.array(kernel(ma.array(_WINDOW), ma.array(plain)))
+    assert result.to_pylist() == oracle(_ROWS, plain).to_pylist()
+    result = pa.array(kernel(ma.array(plain), ma.array(_WINDOW)))
+    assert result.to_pylist() == oracle(plain, _ROWS).to_pylist()
+    other = pc.run_end_encode(_ROWS)
+    result = pa.array(kernel(ma.array(_WINDOW), ma.array(other)))
+    assert result.to_pylist() == oracle(_ROWS, _ROWS).to_pylist()
+
+
+def test_drop_null_run_end_encoded_matches_the_decoded():
+    result = pa.array(ma.compute.drop_null(ma.array(_WINDOW)))
+    assert result.type == _WINDOW.type
+    assert _rows(result).to_pylist() == pc.drop_null(_ROWS).to_pylist()
+
+
+@pytest.mark.parametrize("min_count", [0, 1, 3, 4])
+@pytest.mark.parametrize("skip_nulls", [True, False])
+@pytest.mark.parametrize("name", ["any", "all"])
+def test_any_all_run_end_encoded_matches_the_decoded(name, skip_nulls, min_count):
+    """`min_count` counts rows, not runs; these no longer abort the process."""
+    values = pc.run_end_encode(
+        pa.array([False, False, False, None, None, None, True, True])
+    ).slice(1, 5)
+    expected = getattr(pc, name)(
+        pc.run_end_decode(values), skip_nulls=skip_nulls, min_count=min_count
+    ).as_py()
+    got = getattr(ma.compute, name)(
+        ma.array(values), skip_nulls=skip_nulls, min_count=min_count
+    )
+    assert got == expected
+
+
+def test_any_refuses_a_non_boolean_array():
+    with pytest.raises(ma.ArrowTypeError):
+        ma.compute.any(ma.array([1, 2]))
+
+
+def test_encoder_kernels_run_end_encoded_match_the_decoded():
+    encoded = pc.run_end_encode(pa.array([2, 2, None, 1, 1, 2, 2], pa.int64())).slice(
+        1, 5
+    )
+    rows = pc.run_end_decode(encoded)
+    for null_encoding in ["mask", "encode"]:
+        expected = pc.dictionary_encode(rows, null_encoding=null_encoding)
+        result = pa.array(
+            ma.compute.dictionary_encode(ma.array(encoded), null_encoding=null_encoding)
+        )
+        assert result.type == expected.type
+        assert result.to_pylist() == expected.to_pylist()
+    expected = pc.value_counts(rows)
+    result = pa.array(ma.compute.value_counts(ma.array(encoded)))
+    assert result.type == expected.type
+    assert result.to_pylist() == expected.to_pylist()
+    expected = pc.mode(rows, n=2)
+    result = pa.array(ma.compute.mode(ma.array(encoded), n=2))
+    assert result.to_pylist() == expected.to_pylist()
+
+
+def test_run_index_and_run_end_decode_read_run_end_encoded_values():
+    """``run_index`` numbers an encoded array's rows as it numbers the decoded
+    ones, and decoding an encoding of encoded values answers their
+    encoding."""
+    encoded = pc.run_end_encode(pa.array([1, 1, None, None, 2, 1, 1])).slice(1, 5)
+    result = pa.array(ma.compute.run_index(ma.array(encoded)))
+    assert result.to_pylist() == [0, 1, 1, 2, 3]
+    inner = pc.run_end_encode(pa.array([5, 5, 6]))
+    outer = pa.RunEndEncodedArray.from_arrays(pa.array([2, 5, 6], pa.int32()), inner)
+    result = pa.array(ma.compute.run_end_decode(ma.array(outer)))
+    assert result.type == inner.type
+    assert pc.run_end_decode(result).to_pylist() == [5, 5, 5, 5, 5, 6]
 
 
 # ── bitwise ──────────────────────────────────────────────────────────────────

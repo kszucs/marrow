@@ -82,3 +82,11 @@ note = "fixed: the reader validates every array it builds"
 verdict = "reject"
 bug = "B18"
 note = "new, from fuzzing after B1-B7: a map whose entries are not a key/value struct reached as_type when the dtype was printed; fixed in _read_field"
+
+["run_end_encoded.arrows"]
+verdict = "accept"
+note = "run-end encoded columns of archery's four types, nulls included, one sliced inside its runs, over two batches"
+
+["ree-run-ends.arrows"]
+verdict = "reject"
+note = "run ends [1, 1, 3]: the reader validates every array in full, and a run end must be past the one before"

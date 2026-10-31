@@ -7,7 +7,7 @@ on `DictionaryEncoder`."""
 from std.math import nan
 from std.testing import assert_equal, assert_raises, assert_true
 
-from ...arrays import DictionaryArray, DynArray, StructArray
+from ...arrays import DictionaryArray, DynArray, RunEndEncodedArray, StructArray
 from ...builders import Int64Builder, array, nulls
 from ...dtypes import float64, int8, int32, int64, string, uint8
 from ...execution import ExecContext
@@ -16,6 +16,7 @@ from ...kernels.dictionary import (
     ModeKernel,
     ValueCountsKernel,
 )
+from ...kernels.runs import RunEndDecodeKernel
 
 
 def _strings() raises -> DynArray:
@@ -244,3 +245,32 @@ def test_mode_of_strings() raises:
         array(["a"]),
         array([2], int64),
     )
+
+
+# ---------------------------------------------------------------------------
+# Run-end encoded input
+# ---------------------------------------------------------------------------
+
+
+def test_encoder_kernels_decode_run_end_encoded() raises:
+    """Each kernel answers over a run-end encoded column what it answers
+    over the decoded rows: b, null, a, a, b, read through a window inside the
+    runs."""
+    var ree: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5, 7], int32), array(["b", None, "a", "b"])
+    ).slice(1, 5)
+    var decoded = RunEndDecodeKernel.dispatch(ree)
+    for encode_nulls in [False, True]:
+        assert_equal(
+            String(DictionaryEncodeKernel.dispatch(ree, encode_nulls)),
+            String(DictionaryEncodeKernel.dispatch(decoded, encode_nulls)),
+        )
+    assert_equal(
+        String(ValueCountsKernel.dispatch(ree)),
+        String(ValueCountsKernel.dispatch(decoded)),
+    )
+    assert_equal(
+        String(ModeKernel.dispatch(ree, 2)),
+        String(ModeKernel.dispatch(decoded, 2)),
+    )
+    assert_equal(len(ModeKernel.dispatch(ree, 1, skip_nulls=False)), 0)

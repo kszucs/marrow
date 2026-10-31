@@ -4,11 +4,11 @@
 """Tests for the bitwise and shift kernels, against PyArrow's and Arrow
 C++'s answers."""
 
-from std.testing import assert_raises, assert_true
+from std.testing import assert_equal, assert_raises, assert_true
 
-from ...arrays import DynArray
+from ...arrays import DynArray, RunEndEncodedArray
 from ...builders import array
-from ...dtypes import float64, int8, int16, int64, uint8
+from ...dtypes import float64, int8, int16, int32, int64, uint8
 from ...kernels.bitwise import (
     BitAndKernel,
     BitNotKernel,
@@ -17,6 +17,7 @@ from ...kernels.bitwise import (
     ShiftLeftKernel,
     ShiftRightKernel,
 )
+from ...kernels.runs import RunEndDecodeKernel
 
 
 def test_bitwise_follows_pyarrow() raises:
@@ -90,3 +91,27 @@ def test_bitwise_dispatch_rejects_non_integers() raises:
         _ = BitOrKernel.dispatch(bools, bools)
     with assert_raises(contains="dtype mismatch"):
         _ = BitXorKernel.dispatch(array([1], int8), array([1], int16))
+
+
+def test_bit_wise_not_run_end_encoded_keeps_runs() raises:
+    """Over the window's runs' values, the runs unchanged: rows 5, 5, null,
+    -1, -1 of runs 5 x3, null x1 and -1 x3."""
+    var ree: DynArray = RunEndEncodedArray.from_arrays(
+        array([3, 4, 7], int32), array([5, None, -1], int8)
+    ).slice(1, 5)
+    var got = BitNotKernel.dispatch(ree)
+    assert_true(got.isa[RunEndEncodedArray]())
+    assert_true(got.dtype() == ree.dtype())
+    ref runs = got.as_run_end_encoded()
+    assert_equal(runs.find_physical_length(), 3)
+    assert_true(runs.physical_values().as_int8() == array([-6, None, 0], int8))
+    assert_equal(
+        String(RunEndDecodeKernel.dispatch(got)),
+        String(BitNotKernel.dispatch(RunEndDecodeKernel.dispatch(ree))),
+    )
+    with assert_raises(contains="TypeError"):
+        _ = BitNotKernel.dispatch(
+            RunEndEncodedArray.from_arrays(
+                array([1], int32), array([1.0], float64)
+            )
+        )

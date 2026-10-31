@@ -29,7 +29,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 import marrow as ma
-from marrow.tests.strategies import any_arrays, assert_same
+from marrow.tests.strategies import any_arrays, assert_same, run_end_encoded_types
 
 # ── valid exports ──────────────────────────────────────────────────────────
 
@@ -58,6 +58,14 @@ def test_record_batch_roundtrips_through_c_data(columns):
     assert back.schema.names == batch.schema.names
     for i in range(batch.num_columns):
         assert_same(back.column(i), batch.column(i))
+
+
+@given(any_arrays(run_end_encoded_types))
+def test_run_end_encoded_roundtrips_through_c_data(arr):
+    """A run-end encoding crosses as one: the same type, the same runs."""
+    back = pa.array(ma.array(arr))
+    assert back.type == arr.type
+    assert_same(back, arr)
 
 
 # ── malformed exports ──────────────────────────────────────────────────────

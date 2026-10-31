@@ -16,7 +16,7 @@ from ..errors import InternalError
 from ..arrays import DynArray, Int32Array, StructArray
 from ..buffers import Buffer
 from std.builtin.rebind import downcast
-from ..builders import DynBuilder, Int32Builder, arange, nulls
+from ..builders import DynBuilder, arange, nulls
 from ..dtypes import Field, Int32Type, field, null, struct_
 from ..kernels.aggregate import AggKernel, Windowable
 from ..execution import ExecContext
@@ -58,8 +58,9 @@ from .logical import (
     Value,
     WindowSpec,
 )
-from ..kernels.runs import RunsKernel
-from ..kernels.segments import ByEnds, PerSegment
+from ..kernels.runs import RunEndDecodeKernel, RunsKernel
+from ..kernels.scan import SumScan
+from ..kernels.segments import ByEnds, BySize
 from ..kernels.sort import SortIndices
 from ..kernels.window import WindowFrame, WindowKernel, WindowSegments
 from ..schema import Schema, schema
@@ -1336,13 +1337,27 @@ struct MultisetOperator[M: Multiplicity](Operator):
         self._other = List[StructArray]()
         for ref b in other:
             self._count(b, False)
-        var which = Int32Builder(capacity=len(self._left))
-        for g in range(len(self._left)):
-            for _ in range(
-                Self.M.copies(self._left[g], self._right[g], self._all)
-            ):
-                which.append(Int32(g))
-        var indices = which.finish()
+        # Each group is a run of its copies, ending where the running sum of
+        # the copies does; a group with none is an empty run.
+        var groups = len(self._left)
+        var copies = Buffer.alloc_uninit[DType.int32](groups)
+        var counts = copies.view[DType.int32](0, groups)
+        for g in range(groups):
+            counts.store[1](
+                g,
+                Int32(Self.M.copies(self._left[g], self._right[g], self._all)),
+            )
+        var ends = Buffer.alloc_uninit[DType.int32](groups + 1)
+        ends.view[DType.int32](0, 1).store[1](0, 0)
+        SumScan().run(
+            copies.view[DType.int32](0, groups),
+            ends.view[DType.int32](1, groups),
+            BySize.whole(groups),
+        )
+        var indices = RunEndDecodeKernel.apply(
+            arange[Int32Type](0, groups),
+            ByEnds(ends.view[DType.int32](0, groups + 1)),
+        )
         if len(indices) > 0:
             var keys = self._encoder.values()
             var distinct = _struct_of(self._schema, keys^, len(self._left))
@@ -1583,15 +1598,10 @@ struct PerFrameEvaluator[V: Value](FrameEvaluator):
                     answers.append(produced.value().to_array(1))
                 else:
                     answers.append(nulls(1, dtype.copy()))
-            var ids = Buffer.alloc_uninit[DType.int32](n)
-            PerSegment(
-                arange[Int32Type](0, runs.count()).buffer, runs.count()
-            ).broadcast(runs, ids.view[DType.int32](0, n))
-            out = TakeKernel.dispatch(
-                DynBuilder.concat(answers),
-                Int32Array(length=n, buffer=ids^.to_immutable()),
-                ctx,
+            var ids = RunEndDecodeKernel.apply(
+                arange[Int32Type](0, runs.count()), runs
             )
+            out = TakeKernel.dispatch(DynBuilder.concat(answers), ids, ctx)
         return out^
 
 

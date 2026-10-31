@@ -7,9 +7,17 @@ back to the same values and types."""
 from std.os.path import join
 from std.testing import assert_equal, assert_raises, assert_true
 
-from ....arrays import DynArray
+from ....arrays import DynArray, RunEndEncodedArray
 from ....builders import array
-from ....dtypes import binary, field, int64, millisecond, second, timestamp
+from ....dtypes import (
+    binary,
+    field,
+    int32,
+    int64,
+    millisecond,
+    second,
+    timestamp,
+)
 from ....io import BufferSource
 from ....schema import Schema
 from ....tabular import RecordBatch, record_batch
@@ -101,6 +109,22 @@ def test_render_json_of_a_slice() raises:
     assert_equal(
         render_json(batch.slice(1, 2)),
         '{"s":{"x":2},"l":[2,3]}\n{"s":{"x":3},"l":[]}\n',
+    )
+
+
+def test_write_json_run_end_encoded_writes_values() raises:
+    """A run-end encoded column is written as its values; a slice starting
+    and ending inside its runs, as its own rows."""
+    var encoded = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int32), array([1, None, 2], int64)
+    )
+    var batch = record_batch([encoded^.to_dyn()], names=["n"])
+    assert_equal(
+        render_json(batch),
+        '{"n":1}\n{"n":1}\n{"n":null}\n{"n":2}\n{"n":2}\n',
+    )
+    assert_equal(
+        render_json(batch.slice(1, 3)), '{"n":1}\n{"n":null}\n{"n":2}\n'
     )
 
 

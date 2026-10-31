@@ -380,6 +380,11 @@ def _from_type(f: Field, namespace: String) raises -> AvroSchema:
         return s^
     elif dt.is_struct():
         return _record_of(dt.as_struct().fields, path)
+    elif dt.is_run_end_encoded():
+        # Written as its values, which the encoder decodes.
+        var values = f.copy()
+        values.dtype = dt.as_run_end_encoded().value_type().copy()
+        return _from_type(values, namespace)
     raise NotImplementedError(
         t"avro: column '{f.name}' of type {dt} has no Avro form"
     )

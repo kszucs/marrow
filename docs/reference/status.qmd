@@ -27,7 +27,7 @@ Four checks, none of which grades marrow against itself:
 - **Arrow archery integration** — the official cross-implementation suite, run
   against the **C++, Rust and Go** implementations in both directions
   (`pixi run -e integration integration`), skipping the layouts marrow does not
-  implement: unions, list views, run-end encoding and extension types. Marrow
+  implement: unions, list views and extension types. Marrow
   reads the suite's JSON, writes and reads IPC, and exports and imports C Data
   itself; pyarrow only compares the results. See [Spec compliance](compliance.qmd) for
   what is checked, type by type.
@@ -85,7 +85,7 @@ table.
 
 | | Status |
 |---|---|
-| **Layouts** | bool, numeric, string/large_string, binary/large_binary, string_view/binary_view, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — **implemented**. Union, run-end-encoded and list-view layouts — **not** |
+| **Layouts** | bool, numeric, string/large_string, binary/large_binary, string_view/binary_view, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, run-end encoded, decimal (32/64/128/256), temporal — **implemented**. Union and list-view layouts — **not** |
 | **Sources** | A lazy scan reads one Parquet or newline-delimited JSON file (`read_parquet`, `read_json`), an Iceberg table (`read_iceberg`), many Parquet, JSON Lines or Arrow files matched by glob patterns or a Hugging Face Hub dataset ([`load_dataset`](../guide/datasets.qmd)), or an in-memory batch. Files are local or at an object-store URI through OpenDAL (whose C library is installed separately). Arrow IPC, NDJSON and Avro are also read and written eagerly. **No CSV**, and hive-style `key=value/` directories do not become columns |
 | **Parquet** | native reader and writer; reads snappy, gzip, brotli, lz4, lz4_raw and zstd pages and writes snappy, zstd and lz4 (snappy, lz4, zstd and brotli in Mojo unless `native_codecs=False` hands them to the system libraries; gzip always through zlib); data page v1 & v2, statistics, page index. Bloom filters are implemented but **off by default** and unreachable from Python. No modular encryption |
 | **Optimizer** | 19 rules plus column pruning, a cost model, and a join search over every join chain that also picks each join's build side (exhaustive, greedy past a budget) |

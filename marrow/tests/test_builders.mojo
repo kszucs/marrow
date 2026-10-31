@@ -4,7 +4,8 @@
 """Tests for array builders (BoolBuilder, PrimitiveBuilder, StringBuilder,
 ListBuilder, FixedSizeListBuilder, StructBuilder) and factory functions."""
 
-from std.testing import assert_equal, assert_true, assert_false
+from std.math import nan
+from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from ..arrays import (
     DynArray,
     BoolArray,
@@ -13,6 +14,7 @@ from ..arrays import (
     ListArray,
     FixedSizeListArray,
     StructArray,
+    RunEndEncodedArray,
 )
 from ..builders import (
     DynBuilder,
@@ -23,6 +25,7 @@ from ..builders import (
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    RunEndEncodedBuilder,
     array,
     nulls,
     arange,
@@ -34,6 +37,7 @@ from ..builders import (
     Float64Builder,
 )
 from ..dtypes import *
+from ..scalars import Float64Scalar, Int32Scalar, Int64Scalar
 from ..views import BitmapView
 
 
@@ -964,6 +968,69 @@ def test_dictionary_builder_set_dictionary() raises:
     b.as_dictionary().append(1)
     var d = b.finish().as_dictionary().copy()
     assert_true(d.dictionary().as_string() == array(["x", "y"]))
+
+
+def test_run_end_encoded_builder_merges_equal_bits() raises:
+    """A value extends the open run when its bits are the run's: one NaN
+    payload is one run, and -0.0 is not 0.0. Nulls extend a run of nulls,
+    whichever scalar holds them."""
+    var b = RunEndEncodedBuilder(run_end_encoded(int16, float64))
+    b.append(Float64Scalar(1.0))
+    b.append(Float64Scalar(1.0))
+    b.append(Float64Scalar(nan[DType.float64]()))
+    b.append(Float64Scalar(nan[DType.float64]()))
+    b.append(Float64Scalar(-0.0))
+    b.append(Float64Scalar(0.0))
+    b.append_null()
+    b.append(Float64Scalar(Optional[Float64](None)))
+    var arr = b.finish()
+    assert_equal(len(arr), 8)
+    assert_true(arr.run_ends().as_int16() == array([2, 4, 5, 6, 8], int16))
+    var values = arr.values()
+    assert_equal(len(values), 5)
+    assert_equal(values.null_count(), 1)
+    assert_false(values.is_valid(4))
+    arr.to_data().validate(full=True)
+
+
+def test_run_end_encoded_builder_append_run_and_extend() raises:
+    """`extend` appends a slice's runs cut to its window, merged with neither
+    the run before nor the run after."""
+    var source = RunEndEncodedArray.from_arrays(
+        array([3, 4, 6], int32), array([7, 1, 2], int64)
+    )
+    var b = RunEndEncodedBuilder(run_end_encoded(int32, int64))
+    b.append_run(Int64Scalar(7), 3)
+    b.extend(source.slice(1, 4))  # rows 7, 7, 1, 2
+    b.append(Int64Scalar(2))
+    var arr = b.finish()
+    assert_equal(len(arr), 8)
+    assert_true(arr.run_ends().as_int32() == array([3, 5, 6, 7, 8], int32))
+    assert_true(arr.values().as_int64() == array([7, 7, 1, 2, 2], int64))
+    arr.to_data().validate(full=True)
+
+
+def test_run_end_encoded_builder_refuses_plain_and_overflow() raises:
+    var b = RunEndEncodedBuilder(run_end_encoded(int16, int64))
+    with assert_raises(contains="TypeError"):
+        b.extend(array([1, 2], int64))
+    with assert_raises(contains="TypeError"):
+        b.append(Int32Scalar(1))
+    b.append_run(Int64Scalar(1), 32768)
+    with assert_raises(contains="InvalidError"):
+        _ = b.finish()
+
+
+def test_run_end_encoded_nulls() raises:
+    """`nulls` of a run-end encoded type is one run of a null value."""
+    var arr = nulls(5, run_end_encoded(int32, int64).to_dyn())
+    assert_equal(len(arr), 5)
+    assert_equal(arr.null_count(), 0)
+    assert_false(arr.is_valid(4))
+    ref ree = arr.as_run_end_encoded()
+    assert_true(ree.run_ends().as_int32() == array([5], int32))
+    assert_equal(len(ree.values()), 1)
+    assert_equal(ree.values().null_count(), 1)
 
 
 def test_primitive_builder_extend_value() raises:

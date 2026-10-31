@@ -13,11 +13,19 @@ that `RuntimeAggregate` refuses a name it cannot serve at the point it is
 written rather than on the first morsel.
 """
 
-from std.testing import assert_equal, assert_true
+from std.testing import assert_equal, assert_raises, assert_true
 
-from ....arrays import StringArray
+from ....arrays import RunEndEncodedArray, StringArray
 from ....builders import array
-from ....dtypes import DynType, Int64Type, float64, int32, int64, string
+from ....dtypes import (
+    DynType,
+    Int64Type,
+    float64,
+    int32,
+    int64,
+    run_end_encoded,
+    string,
+)
 from ....dtypes import StringType
 from ....kernels.aggregate import (
     AggKernel,
@@ -89,6 +97,53 @@ def test_named_aggregate_resolution_answers_dtype_and_fold_together() raises:
     # catalog's.
     assert_true(_out_dtype("sum", DynType(int32)) == int64)
     assert_true(_out_dtype("variance", DynType(int64)) == float64)
+
+
+def test_named_aggregate_refuses_run_end_encoded() raises:
+    """No aggregate reads a run-end encoded column yet, so the catalog
+    refuses one: neither a valid count nor a buffered aggregate ever reads
+    its absent bitmap as "no nulls"."""
+    var encoded = DynType(run_end_encoded(int32, int64))
+    var names: List[String] = [
+        "count",
+        "count_distinct",
+        "approx_count_distinct",
+        "sum",
+        "min",
+        "mean",
+        "variance",
+    ]
+    for ref name in names:
+        with assert_raises(contains="TypeError"):
+            _ = _out_dtype(name, encoded)
+    var batch = record_batch(
+        [
+            RunEndEncodedArray.from_arrays(
+                array([2, 3], int32), array([1, None], int64)
+            ).to_dyn(),
+            array([1, 1, 2], int64).to_dyn(),
+        ],
+        names=["x", "g"],
+    )
+    with assert_raises(contains="TypeError"):
+        _ = (
+            table(batch.copy())
+            .aggregate([col("x").count()], List[DynValue]())
+            .execute()
+        )
+    with assert_raises(contains="TypeError"):
+        _ = (
+            table(batch.copy())
+            .aggregate([col("x").count()], [col("g")])
+            .execute()
+        )
+    # `count_distinct` has no lane algebra: the buffered operator's.
+    with assert_raises(contains="TypeError"):
+        _ = (
+            table(batch^)
+            .aggregate([col("x").count_distinct()], [col("g")])
+            .execute()
+        )
 
 
 def test_named_aggregate_rejects_a_dtype_it_has_no_arm_for() raises:

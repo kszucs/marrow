@@ -124,6 +124,7 @@ from .dtypes import (
     large_list_,
     list_,
     null,
+    run_end_encoded,
     struct_,
     uint16,
     uint32,
@@ -132,6 +133,7 @@ from .dtypes import (
 )
 from .builders import (
     DynBuilder,
+    Int64Builder,
     PrimitiveBuilder,
     BinaryLikeBuilder,
     BinaryViewLikeBuilder,
@@ -147,6 +149,7 @@ from .scalars import (
     ListScalar,
     StructScalar,
     DictionaryScalar,
+    RunEndEncodedScalar,
     ArrowScalar,
 )
 
@@ -177,6 +180,9 @@ trait Array(
     and `DynArray.__eq__` routes through it via `to_data()`. Element-wise,
     value-level comparison -- where `a.slice(1, 2) == b` can be True by
     contents alone -- is `EqKernel`'s job, not this trait's.
+
+    `RunEndEncodedArray` follows the rule as well: two encodings of the same
+    rows split into different runs are not equal.
 
     `DictionaryArray` is the one deliberate exception: its typed `__eq__`
     decodes both sides and compares values, so that two encodings of the same
@@ -388,7 +394,8 @@ struct ArrayData(Copyable, Equatable, Movable):
         children its dtype's `layout()` describes, each long enough for
         `offset + length` values, and any nulls come with a validity bitmap.
         With `full`, also the checks that read every value: offsets never
-        decrease, and every valid dictionary index names a value.
+        decrease, every valid dictionary index names a value, and run ends
+        are positive and strictly increasing.
 
         This node only: a reader validates each child as it builds it, so
         `validate` would repeat the work below. Without `full` it is O(1). A
@@ -463,6 +470,55 @@ struct ArrayData(Copyable, Equatable, Movable):
                         t" parent: {held} values, fewer than {end} x"
                         t" {layout.width}"
                     )
+        elif layout.kind == ArrayLayout.RUN_END:
+            ref ree = self.dtype.as_run_end_encoded()
+            ref ends = self.children[0]
+            ref values = self.children[1]
+            # A row's nulls are its run's value's; the array has none.
+            if self.bitmap or self.nulls != 0:
+                raise InvalidError(
+                    t"ArrayData: {self.dtype} has no validity of its own, got"
+                    t" {self.nulls} nulls"
+                )
+            if (
+                ends.dtype != ree.run_end_type()
+                or values.dtype != ree.value_type()
+            ):
+                raise InvalidError(
+                    t"ArrayData: {self.dtype} has children of {ends.dtype} and"
+                    t" {values.dtype}"
+                )
+            if ends.nulls != 0:
+                raise InvalidError(
+                    t"ArrayData: {self.dtype} has {ends.nulls} null run ends"
+                )
+            if ends.length > values.length:
+                raise InvalidError(
+                    t"ArrayData: {self.dtype} has {ends.length} run ends for"
+                    t" {values.length} values"
+                )
+            var width = ends.dtype.byte_width()
+            var limit = (1 << (8 * width - 1)) - 1 if width < 8 else Int.MAX
+            if end > limit:
+                raise InvalidError(
+                    t"ArrayData: offset + length {end} does not fit"
+                    t" {ends.dtype}"
+                )
+            if ends.length == 0:
+                if self.length > 0:
+                    raise InvalidError(
+                        t"ArrayData: {self.dtype} of length {self.length} has"
+                        t" no run ends"
+                    )
+            else:
+                # The run ends are read here, before `validate` reaches them.
+                ends.validate_node()
+                var last = ends._offset(ends.length - 1, width)
+                if last < end:
+                    raise InvalidError(
+                        t"ArrayData: the last run end is {last}, short of"
+                        t" offset + length {end}"
+                    )
         elif layout.kind != ArrayLayout.NULL:
             self._expect(end, layout.width)
         if full:
@@ -513,6 +569,18 @@ struct ArrayData(Copyable, Equatable, Movable):
                     t"ArrayData: dictionary index at {bad} is outside"
                     t" 0..{n_values}"
                 )
+        elif layout.kind == ArrayLayout.RUN_END:
+            ref ends = self.children[0]
+            var width = ends.dtype.byte_width()
+            var last = 0
+            for i in range(ends.length):
+                var end = ends._offset(i, width)
+                if end <= last:
+                    raise InvalidError(
+                        t"ArrayData: {self.dtype} run end {i} is {end}, not"
+                        t" past {last}"
+                    )
+                last = end
 
     def _expect(self, count: Int, width: Int) raises InvalidError:
         """Raise unless buffer 0 holds `count` values of `width` bytes."""
@@ -523,10 +591,14 @@ struct ArrayData(Copyable, Equatable, Movable):
             )
 
     def _offset(self, i: Int, width: Int) -> Int:
-        """Offset `i`, read from buffer 0's `width`-byte offsets."""
-        if width == 4:
+        """Value `i` of buffer 0's `width`-byte signed integers: an offset,
+        or a run end."""
+        if width == 2:
+            return Int(self.buffers[0].view[DType.int16](self.offset)[i])
+        elif width == 4:
             return Int(self.buffers[0].view[DType.int32](self.offset)[i])
-        return Int(self.buffers[0].view[DType.int64](self.offset)[i])
+        else:
+            return Int(self.buffers[0].view[DType.int64](self.offset)[i])
 
     def _first_decrease[T: DType](self) -> Int:
         """The first position whose offset is below the one before, or -1."""
@@ -3304,6 +3376,292 @@ struct DictionaryArray(Array):
 
 
 # ---------------------------------------------------------------------------
+# RunEndEncodedArray
+# ---------------------------------------------------------------------------
+
+
+struct RunEndEncodedArray(Array):
+    """A run-end encoded array: each run of equal values stored once, with
+    the row its run ends at.
+
+    Equivalent to PyArrow's ``pyarrow.RunEndEncodedArray``. Child 0 holds the
+    run ends, child 1 each run's value. A slice moves the logical offset and
+    length and leaves the children as they are, so a window may start and end
+    inside a run.
+
+    The array has no validity of its own: `null_count()` is 0, and a row is
+    null when its run's value is.
+    """
+
+    comptime ScalarType = RunEndEncodedScalar
+
+    var _dtype: DynType
+    var _length: Int
+    var _offset: Int  # logical; the children are not sliced
+    var _run_ends: DynArray
+    var _values: DynArray
+
+    def __init__(
+        out self,
+        *,
+        dtype: DynType,
+        length: Int,
+        offset: Int,
+        var run_ends: DynArray,
+        var values: DynArray,
+    ):
+        """From its parts, unchecked; `from_arrays` checks them."""
+        self._dtype = dtype.copy()
+        self._length = length
+        self._offset = offset
+        self._run_ends = run_ends^
+        self._values = values^
+
+    def __init__(out self, data: ArrayData) raises:
+        self._dtype = data.dtype.copy()
+        self._length = data.length
+        self._offset = data.offset
+        self._run_ends = DynArray.from_data(data.children[0])
+        self._values = DynArray.from_data(data.children[1])
+
+    def __init__(
+        out self, dtype: DynType, ends: List[Int], var values: DynArray
+    ) raises:
+        """The runs ending at `ends`, rows counted from 0, each holding its
+        value from `values`; unchecked, as the keyword constructor is.
+
+        The run ends are built at `dtype`'s run-end type.
+        """
+        var count = len(ends)
+
+        def build[T: IntegerType](d: T) raises {imm} -> DynArray:
+            var b = PrimitiveBuilder[T](d, count)
+            for e in ends:
+                b.unsafe_append(Scalar[T.native](e))
+            return b.finish()
+
+        self = Self(
+            dtype=dtype,
+            length=ends[count - 1] if count > 0 else 0,
+            offset=0,
+            run_ends=dtype.as_run_end_encoded()
+            .run_end_type()
+            .try_visit[DynArray, IntegerType](build, "dtype is not integer"),
+            values=values^,
+        )
+
+    @staticmethod
+    def from_arrays(
+        var run_ends: DynArray, var values: DynArray
+    ) raises -> Self:
+        """The runs ending at `run_ends`, each holding its value from
+        `values`: as long as the last run end.
+
+        Matches PyArrow's ``RunEndEncodedArray.from_arrays(run_ends, values)``.
+        Raises `TypeError` unless the run ends are int16, int32 or int64, and
+        `InvalidError` unless they are positive, strictly increasing, free of
+        nulls and no more than the values.
+        """
+        var dtype = run_end_encoded(run_ends.dtype(), values.dtype())
+        var out = Self(
+            dtype=dtype^,
+            length=0,
+            offset=0,
+            run_ends=run_ends^,
+            values=values^,
+        )
+        var n = len(out._run_ends)
+        if n > 0:
+            out._length = out._end(n - 1)
+        out.to_data().validate(full=True)
+        return out^
+
+    def __len__(self) -> Int:
+        return self._length
+
+    def type(self) -> DynType:
+        return self._dtype.copy()
+
+    def null_count(self) -> Int:
+        """0: the nulls of a run-end encoded array are its values'."""
+        return 0
+
+    def is_valid(self, index: Int) -> Bool:
+        """Whether row `index`'s run holds a valid value."""
+        return self._values.is_valid(self._find(self._offset + index))
+
+    def run_ends(self) -> DynArray:
+        """Where each run ends, as stored: the window's offset not applied.
+        Matches PyArrow's ``RunEndEncodedArray.run_ends``."""
+        return self._run_ends.copy()
+
+    def values(self) -> DynArray:
+        """Each run's value, as stored: the window's offset not applied.
+        Matches PyArrow's ``RunEndEncodedArray.values``."""
+        return self._values.copy()
+
+    def find_physical_offset(self) -> Int:
+        """The first run the window reads. Matches PyArrow's
+        ``RunEndEncodedArray.find_physical_offset``."""
+        return self._find(self._offset)
+
+    def find_physical_length(self) -> Int:
+        """How many runs the window reads. Matches PyArrow's
+        ``RunEndEncodedArray.find_physical_length``."""
+        if self._length == 0:
+            return 0
+        else:
+            var last = self._find(self._offset + self._length - 1)
+            return last - self.find_physical_offset() + 1
+
+    def physical_values(self) -> DynArray:
+        """The values of the runs the window reads."""
+        return self._values.slice(
+            self.find_physical_offset(), self.find_physical_length()
+        )
+
+    def segment_ends(self) raises -> Int64Array:
+        """Where the window's runs end, counted from the window's start: 0,
+        then one position a run, the last cut to the length."""
+        var first = self.find_physical_offset()
+        var count = self.find_physical_length()
+        var ends = Int64Builder(count + 1)
+        ends.unsafe_append(0)
+        for k in range(first, first + count):
+            ends.unsafe_append(
+                Int64(min(self._end(k) - self._offset, self._length))
+            )
+        return ends.finish()
+
+    def physical_indices(self, rows: Int32Array) raises -> Int32Array:
+        """Each of `rows`' run, as an index into `physical_values()`, by
+        binary search. A null row stays null.
+
+        Trusts `rows` to lie in `[0, len(self))`, as `take` trusts its
+        indices.
+        """
+        var first = self.find_physical_offset()
+        var count = self.find_physical_length()
+        var offset = self._offset
+        var n = len(rows)
+        var out = Buffer.alloc_uninit[DType.int32](n)
+        var dst = out.view[DType.int32](0, n)
+        var src = rows.values()
+
+        # The run-end type is resolved once, not at every probe.
+        def search[T: IntegerType](ends: PrimitiveArray[T]) {imm}:
+            var at = ends.values()
+            for i in range(n):
+                var row = offset + Int(src.unsafe_get(i))
+                var lo = first
+                var hi = first + count
+                while lo < hi:
+                    var mid = (lo + hi) // 2
+                    if Int(at.unsafe_get(mid)) <= row:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                dst.unsafe_set(i, Int32(lo - first))
+
+        if self._run_ends.isa[Int16Array]():
+            search(self._run_ends.as_int16())
+        elif self._run_ends.isa[Int32Array]():
+            search(self._run_ends.as_int32())
+        else:
+            search(self._run_ends.as_int64())
+        var validity: Optional[Bitmap[mut=False]] = None
+        if rows.null_count() > 0:
+            validity = rows.validity().value().to_owned()
+        return Int32Array(
+            length=n,
+            nulls=rows.null_count(),
+            offset=0,
+            bitmap=validity,
+            buffer=out^.to_immutable(),
+        )
+
+    def _end(self, k: Int) -> Int:
+        """Where run `k` of the children ends."""
+        if self._run_ends.isa[Int16Array]():
+            return Int(self._run_ends.as_int16().unsafe_get(k))
+        elif self._run_ends.isa[Int32Array]():
+            return Int(self._run_ends.as_int32().unsafe_get(k))
+        else:
+            return Int(self._run_ends.as_int64().unsafe_get(k))
+
+    def _find(self, row: Int) -> Int:
+        """The run of the children holding `row`: the first whose end is past
+        it, by binary search."""
+        var lo = 0
+        var hi = len(self._run_ends)
+        while lo < hi:
+            var mid = (lo + hi) // 2
+            if self._end(mid) <= row:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    def __getitem__(self, index: Int) raises -> RunEndEncodedScalar:
+        if index < 0 or index >= self._length:
+            raise IndexError(
+                t"index {index} out of bounds for length {self._length}"
+            )
+        return RunEndEncodedScalar(
+            dtype=self._dtype,
+            value=self._values[self._find(self._offset + index)],
+        )
+
+    def slice(self, offset: Int, length: Int) -> Self:
+        """Zero-copy slice: moves the logical window, shares the children."""
+        return Self(
+            dtype=self._dtype,
+            length=length,
+            offset=self._offset + offset,
+            run_ends=self._run_ends.copy(),
+            values=self._values.copy(),
+        )
+
+    def to_data(self) raises -> ArrayData:
+        """No buffers and no validity: the run ends are `children[0]` and the
+        values `children[1]`, unsliced, under the logical offset."""
+        return ArrayData(
+            dtype=self._dtype.copy(),
+            length=self._length,
+            nulls=0,
+            offset=self._offset,
+            bitmap=None,
+            buffers=[],
+            children=[self._run_ends.to_data(), self._values.to_data()],
+        )
+
+    def __eq__(self, other: Self) -> Bool:
+        """Structural: the same dtype, window and children. The same rows
+        split into different runs are not equal; comparing rows is
+        `EqKernel`'s.
+        """
+        return (
+            self._dtype == other._dtype
+            and self._length == other._length
+            and self._offset == other._offset
+            and self._run_ends == other._run_ends
+            and self._values == other._values
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "RunEndEncodedArray(run_ends=",
+            self._run_ends,
+            ", values=",
+            self._values,
+            ")",
+        )
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+# ---------------------------------------------------------------------------
 # ChunkedArray
 # ---------------------------------------------------------------------------
 
@@ -3450,6 +3808,7 @@ struct DynArray(
         DictionaryArray,
         BinaryViewArray,
         StringViewArray,
+        RunEndEncodedArray,
     ]
 
     var _storage: Self.Storage
@@ -3795,6 +4154,11 @@ struct DynArray(
     ) -> ref[self] DictionaryArray:
         return self.get[DictionaryArray]()
 
+    def as_run_end_encoded(
+        ref self,
+    ) -> ref[self] RunEndEncodedArray:
+        return self.get[RunEndEncodedArray]()
+
     # --- factory from generic layout ---
 
     @staticmethod
@@ -3846,5 +4210,7 @@ struct DynArray(
             return StructArray(data)
         elif dt.is_dictionary():
             return DictionaryArray(data)
+        elif dt.is_run_end_encoded():
+            return RunEndEncodedArray(data)
         else:
             raise NotImplementedError("from_data: unsupported dtype")

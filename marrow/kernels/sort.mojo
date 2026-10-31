@@ -57,6 +57,7 @@ from ..arrays import (
     StructArray,
     DynArray,
     Int32Array,
+    RunEndEncodedArray,
 )
 from ..buffers import Buffer
 from ..dtypes import (
@@ -384,6 +385,10 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
                 limit,
                 ctx,
             )
+        elif array.isa[RunEndEncodedArray]():
+            result = Self.apply(
+                array.as_run_end_encoded(), ascending, nulls_first, ctx
+            )
         elif array.dtype().is_primitive():
             # One arm for every fixed-width type. `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and *all four*
@@ -688,6 +693,33 @@ struct SortIndices[stable: Bool = True, nan_largest: Bool = False](Kernel):
             ov.unsafe_set(nan_off + i, nan_list[i])
         for i in range(n_valid):
             ov.unsafe_set(valid_off + i, sv.unsafe_get(i))
+        return Int32Array(length=n, buffer=out^.to_immutable())
+
+    @staticmethod
+    def apply(
+        array: RunEndEncodedArray,
+        ascending: Bool = True,
+        nulls_first: Bool = False,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> Int32Array:
+        """Sort a run-end encoded array by its runs: the window's runs' values
+        are sorted, and each run's rows follow in their order. The answer is
+        a stable sort of the decoded rows."""
+        var order = Self.dispatch(
+            array.physical_values(), ascending, nulls_first, None, ctx
+        )
+        var ends = array.segment_ends()
+        var n = len(array)
+        var out = Buffer.alloc_uninit[DType.int32](n)
+        var ov = out.view[DType.int32](0, n)
+        var pos = 0
+        for k in range(len(order)):
+            var s = Int(order.unsafe_get(k))
+            for row in range(
+                Int(ends.unsafe_get(s)), Int(ends.unsafe_get(s + 1))
+            ):
+                ov.unsafe_set(pos, Int32(row))
+                pos += 1
         return Int32Array(length=n, buffer=out^.to_immutable())
 
     @staticmethod

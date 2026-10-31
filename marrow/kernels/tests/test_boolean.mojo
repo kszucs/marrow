@@ -14,9 +14,9 @@ from std.testing import (
     assert_raises,
 )
 
-from ...arrays import BoolArray
+from ...arrays import BoolArray, DynArray, RunEndEncodedArray
 from ...builders import array, nulls
-from ...dtypes import int64, null
+from ...dtypes import int32, int64, null
 
 from ...kernels.boolean import (
     AndKernel,
@@ -154,3 +154,23 @@ def test_is_null_without_a_bitmap_is_false_everywhere() raises:
     var v = array([1, 2], int64)
     assert_true(IsNullKernel.apply(v) == array([False, False]))
     assert_true(NotNullKernel.apply(v) == array([True, True]))
+
+
+def test_is_null_run_end_encoded_reads_the_values() raises:
+    """A run-end encoded array has no bitmap; its nulls are its values'. The
+    window starts and ends inside runs: rows 1, 1, null, 2, 2, null read from
+    row 1 for four rows."""
+    var encoded = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5, 6], int32), array([1, None, 2, None], int64)
+    ).slice(1, 4)
+    var decoded = array([1, None, 2, 2], int64)
+    var erased: DynArray = encoded.copy()
+    assert_true(IsNullKernel.dispatch(erased) == IsNullKernel.apply(decoded))
+    assert_true(NotNullKernel.dispatch(erased) == NotNullKernel.apply(decoded))
+    assert_true(
+        IsNullKernel.apply(encoded.to_data())
+        == array([False, True, False, False])
+    )
+    assert_true(
+        NotNullKernel.apply(encoded) == array([True, False, True, True])
+    )

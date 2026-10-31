@@ -16,6 +16,7 @@ it does not. PyArrow appears only as the interop oracle.
 import sys
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 
@@ -404,6 +405,27 @@ def test_a_set_operation_takes_the_left_names(table):
 def test_a_set_operation_rejects_different_widths(table):
     with pytest.raises(Exception, match="columns"):
         table.union_all(_regions("a"))
+
+
+def test_lazy_plans_keep_a_run_end_encoded_column():
+    """A filter, a sort, a limit and an ``except_all`` carry a run-end encoded
+    column through typed as it is, its rows PyArrow's over the decoded
+    table."""
+    k = pa.array([4, 1, 3, 2, 8, 6, 5, 7], pa.int64())
+    x = pc.run_end_encode(pa.array([7, 7, 7, None, None, 3, 3, 9], pa.int64()))
+    table = ma.memtable(ma.record_batch({"k": ma.array(k), "x": ma.array(x)}))
+    decoded = pa.table({"k": k, "x": pc.run_end_decode(x)})
+
+    got = table.filter(col("k") > 2).sort_by("k").limit(5).to_pyarrow()
+    want = decoded.filter(pc.greater(decoded["k"], 2)).sort_by("k").slice(0, 5)
+    assert got.schema.field("x").type == x.type
+    assert got.column("k").to_pylist() == want["k"].to_pylist()
+    assert pc.run_end_decode(got.column("x")).to_pylist() == want["x"].to_pylist()
+
+    got = table.except_all(table.filter(col("k") != 6)).to_pyarrow()
+    assert got.schema.field("x").type == x.type
+    assert got.column("k").to_pylist() == [6]
+    assert pc.run_end_decode(got.column("x")).to_pylist() == [3]
 
 
 # ── execution ───────────────────────────────────────────────────────────────

@@ -40,6 +40,7 @@ from ...arrays import (
     DynArray,
     Int32Array,
     Int64Array,
+    RunEndEncodedArray,
     StringViewArray,
     StructArray,
 )
@@ -74,10 +75,12 @@ from ...dtypes import (
     int16,
     int32,
     int64,
+    run_end_encoded,
     string,
     struct_,
 )
 from ...kernels.filter import TakeKernel
+from ...kernels.runs import RunEndDecodeKernel
 from ...kernels.cast import decode_dictionary
 from ...kernels.hashing import HashKernel, NULL_HASH_SENTINEL
 from ...kernels.hashtable import insert_hashes
@@ -1294,3 +1297,78 @@ def test_groups_count_into_accumulates_over_batches() raises:
     assert_true(counts == [1, 2])
     Groups(array([3, 1], int32), 5).count_into(counts)
     assert_true(counts == [1, 3, 0, 1, 0])
+
+
+# ---------------------------------------------------------------------------
+# Run-end encoded keys
+# ---------------------------------------------------------------------------
+
+
+def test_run_end_encoded_keys_group_as_their_values() raises:
+    """Keys 5, 5, null, null, 2, 2, 2, 7, 5, 5 -- a window inside the runs,
+    the 5s in two runs -- group as their decoded rows do, and the encoder
+    keeps its keys encoded, across a second batch that merges them."""
+    var keys: DynArray = RunEndEncodedArray.from_arrays(
+        array([3, 5, 8, 9, 12], int32), array([5, None, 2, 7, 5], int64)
+    ).slice(1, 10)
+    var more: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 4], int32), array([7, 9], int64)
+    )
+    var decoded = RunEndDecodeKernel.dispatch(keys)
+    var encoder = _encoder[RapidHash64]([keys.copy()], ExecContext.serial())
+    var plain = _encoder[RapidHash64]([decoded.copy()], ExecContext.serial())
+    assert_true(
+        _groups(encoder, [keys.copy()]).ids
+        == _groups(plain, [decoded.copy()]).ids
+    )
+    assert_true(
+        _groups(encoder, [more.copy()]).ids == array([3, 3, 4, 4], int32)
+    )
+    assert_equal(len(encoder), 5)
+    var values = encoder.values()
+    assert_true(values[0].isa[RunEndEncodedArray]())
+    assert_equal(
+        String(RunEndDecodeKernel.dispatch(values[0])),
+        String(array([5, None, 2, 7, 9], int64)),
+    )
+
+
+def _ree_struct_key(
+    var a: List[Optional[Int]],
+    var ends: List[Optional[Int]],
+    var names: List[Optional[String]],
+) raises -> List[DynArray]:
+    """One `struct<a: int32, r: run_end_encoded<int32, string>>` key
+    column."""
+    var children = List[DynArray]()
+    children.append(array[Int32Type](a, int32))
+    children.append(
+        RunEndEncodedArray.from_arrays(
+            array[Int32Type](ends, int32), array(names)
+        )
+    )
+    var fields = List[Field]()
+    fields.append(field("a", int32))
+    fields.append(field("r", run_end_encoded(int32, string)))
+    var batch = List[DynArray]()
+    batch.append(StructArray.from_arrays(children^, fields))
+    return batch^
+
+
+def test_struct_keys_with_a_run_end_encoded_child() raises:
+    """A struct key whose field is run-end encoded groups by the field's
+    rows, and its stored keys keep the field encoded."""
+    # (1, x), (1, x), (2, y), (1, y), then (1, y), (2, y), (3, z).
+    var first = _ree_struct_key([1, 1, 2, 1], [2, 4], ["x", "y"])
+    var second = _ree_struct_key([1, 2, 3], [2, 3], ["y", "z"])
+    var encoder = _encoder[RapidHash64](first, ExecContext.serial())
+    assert_true(_groups(encoder, first).ids == array([0, 0, 1, 2], int32))
+    assert_true(_groups(encoder, second).ids == array([2, 1, 3], int32))
+    var values = encoder.values()
+    ref key = values[0].as_struct()
+    assert_true(key.field("a").as_int32() == array([1, 2, 1, 3], int32))
+    assert_true(key.field("r").isa[RunEndEncodedArray]())
+    assert_equal(
+        String(RunEndDecodeKernel.dispatch(key.field("r"))),
+        String(array(["x", "y", "y", "z"])),
+    )

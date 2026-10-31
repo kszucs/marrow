@@ -46,6 +46,7 @@ from ..arrays import (
     FixedSizeBinaryArray,
     Int64Array,
     ListArray,
+    RunEndEncodedArray,
 )
 from ..builders import (
     Float64Builder,
@@ -635,6 +636,54 @@ trait BoolReduceKernel(Kernel):
     ) raises -> Bool:
         """Runtime-dtype entry: fold a boolean `DynArray` to a `Bool`."""
         return Self.reduce(array.as_bool(), ctx)
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        skip_nulls: Bool,
+        min_count: Int,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> BoolScalar:
+        """Runtime-dtype entry for `aggregate`: a boolean array, or the rows
+        of a run-end encoded one.
+
+        Raises:
+            TypeError: unless `array` holds booleans.
+        """
+        if array.isa[BoolArray]():
+            return Self.aggregate(array.as_bool(), skip_nulls, min_count, ctx)
+        elif array.isa[RunEndEncodedArray]():
+            return Self._run_end_encoded(
+                array.as_run_end_encoded(), skip_nulls, min_count, ctx
+            )
+        else:
+            raise Self.error[TypeError](t"{array.dtype()} is not boolean")
+
+    @staticmethod
+    def _run_end_encoded(
+        array: RunEndEncodedArray,
+        skip_nulls: Bool,
+        min_count: Int,
+        ctx: ExecContext,
+    ) raises -> BoolScalar:
+        """`aggregate` over the rows of a run-end encoded array: the window's
+        runs' values are folded once, and the valid rows counted as the
+        lengths of the valid runs."""
+        var values = array.physical_values()
+        if not values.isa[BoolArray]():
+            raise Self.error[TypeError](t"{array.type()} is not boolean")
+        ref runs = values.as_bool()
+        var ends = array.segment_ends()
+        var valid = 0
+        for s in range(len(runs)):
+            if runs.is_valid(s):
+                valid += Int(ends.unsafe_get(s + 1) - ends.unsafe_get(s))
+        var value = Self.reduce(runs, ctx)
+        var nulls = len(array) - valid
+        var unknown = not skip_nulls and nulls > 0 and value != Self.absorbing
+        if valid < min_count or unknown:
+            return BoolScalar.null()
+        return BoolScalar(value)
 
     @staticmethod
     def aggregate(

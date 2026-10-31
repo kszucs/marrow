@@ -77,21 +77,33 @@ struct BatchEncoder(Movable):
 
     @staticmethod
     def dense(arr: DynArray) raises -> ArrayData:
-        """Rebase a sliced array to offset 0.
+        """Rebase a sliced array, or one holding a sliced child, to offset 0.
 
         Arrow IPC bodies are written dense from index 0 — there is no offset
         field on the wire. The encoder writes whole value buffers under the
         slice's declared length and the decoder hardcodes `offset=0`, so a
         sliced column would round-trip as the parent's *first* `length`
-        elements. A builder copies the slice densely for every layout, nested
-        children included, and is paid only when `offset != 0`.
+        elements, and a sliced child -- the run ends or values of a run-end
+        encoding, a struct's field -- as its own. A builder copies the column
+        densely for every layout, nested children included, and is paid only
+        when some node has an offset.
         """
         var data = arr.to_data()
-        if data.offset == 0:
+        if not BatchEncoder._has_offset(data):
             return data^
         var b = DynBuilder(arr.dtype(), len(arr))
         b.extend(arr)
         return b.finish().to_data()
+
+    @staticmethod
+    def _has_offset(data: ArrayData) -> Bool:
+        """Whether a node the body holds has an offset. A dictionary's values
+        are not among them: they travel in their own batch, rebased there."""
+        var found = data.offset != 0
+        if not found and not data.dtype.is_dictionary():
+            for child in data.children:
+                found = found or BatchEncoder._has_offset(child)
+        return found
 
     def write_array(mut self, root: ArrayData) raises:
         var stack = List[ArrayData]()
@@ -118,19 +130,22 @@ struct BatchEncoder(Movable):
                     BinaryViewArray(unsafe_from_data=data).compact().to_data()
                 )
 
-            var validity_bytes = List[UInt8]()
-            if data.nulls > 0 and data.bitmap:
-                var bv = data.bitmap.value()
-                var n_bits = data.offset + data.length
-                var n_bytes = ceildiv(n_bits, 8)
-                for byte_idx in range(n_bytes):
-                    var byte_val = UInt8(0)
-                    for bit_idx in range(8):
-                        var bit_pos = byte_idx * 8 + bit_idx
-                        if bit_pos < n_bits and bv.unsafe_test(bit_pos):
-                            byte_val |= UInt8(1 << bit_idx)
-                    validity_bytes.append(byte_val)
-            self.raw_bufs.append(validity_bytes^)
+            # A run-end encoded node has no validity buffer: its nulls are its
+            # values', and its children follow it.
+            if not data.dtype.is_run_end_encoded():
+                var validity_bytes = List[UInt8]()
+                if data.nulls > 0 and data.bitmap:
+                    var bv = data.bitmap.value()
+                    var n_bits = data.offset + data.length
+                    var n_bytes = ceildiv(n_bits, 8)
+                    for byte_idx in range(n_bytes):
+                        var byte_val = UInt8(0)
+                        for bit_idx in range(8):
+                            var bit_pos = byte_idx * 8 + bit_idx
+                            if bit_pos < n_bits and bv.unsafe_test(bit_pos):
+                                byte_val |= UInt8(1 << bit_idx)
+                        validity_bytes.append(byte_val)
+                self.raw_bufs.append(validity_bytes^)
 
             if data.dtype.is_string_view() or data.dtype.is_binary_view():
                 self.variadic_counts.append(Int64(len(data.buffers) - 1))
@@ -309,15 +324,17 @@ struct BatchDecoder(Movable):
                 raise CorruptError(t"ipc: a null column of length {length}")
             return NullArray(length)
 
-        var validity_buf = self._next_buffer()
-
+        # A run-end encoded node has no validity buffer; a null count other
+        # than 0 is refused when the node is validated below.
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if null_count > 0 and validity_buf.length > 0:
-            var off = Int(validity_buf.offset) + self.body_offset
-            var n_bytes = Int(validity_buf.length)
-            bitmap = Bitmap[mut=False](
-                self._body_buffer(off, n_bytes), length=length
-            )
+        if not dtype.is_run_end_encoded():
+            var validity_buf = self._next_buffer()
+            if null_count > 0 and validity_buf.length > 0:
+                var off = Int(validity_buf.offset) + self.body_offset
+                var n_bytes = Int(validity_buf.length)
+                bitmap = Bitmap[mut=False](
+                    self._body_buffer(off, n_bytes), length=length
+                )
 
         var layout = dtype.layout()
         var data_buffers = List[Buffer[mut=False]]()

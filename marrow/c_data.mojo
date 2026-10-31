@@ -60,6 +60,7 @@ from .dtypes import (
     month_day_nano_interval,
     nanosecond,
     null,
+    run_end_encoded,
     string,
     struct_,
     time32,
@@ -311,6 +312,16 @@ def _format_int(fmt: StringSlice, text: StringSlice) raises InvalidError -> Int:
         return Int(String(text))
     except:
         raise InvalidError(t"c_data: malformed format string '{fmt}'")
+
+
+def _run_end_encoded_dtype(schema: CArrowSchema) raises -> DynType:
+    """The run-end encoded type of a `+r` schema: its first child's type for
+    the run ends, its second's for the values. The type names its children
+    itself, so the imported names and nullability are not kept."""
+    return run_end_encoded(
+        schema.children[unsafe_offset=0][].to_dtype(),
+        schema.children[unsafe_offset=1][].to_dtype(),
+    )
 
 
 def _release_schema_capsule(capsule: PyObjectPtr) abi("C"):
@@ -599,6 +610,9 @@ struct CArrowSchema(Copyable, Movable):
             dictionary_ptr = dict_schema_ptr
             if dt.ordered:
                 flags = ARROW_FLAG_DICT_ORDERED
+        elif dtype.is_run_end_encoded():
+            # Its two children, the run ends and the values, follow below.
+            fmt = "+r"
         else:
             raise NotImplementedError(
                 t"CArrowSchema.from_dtype: unsupported dtype: {dtype}"
@@ -761,11 +775,14 @@ struct CArrowSchema(Copyable, Movable):
             unsafe_from_utf8=CStringSpan(unsafe_from_ptr=self.format.as_imm())
         )
         # Only nested formats carry children: the list-likes and the map
-        # exactly one, `+s` any number, and so does a nested format marrow
-        # does not read, which is refused below as not implemented.
+        # exactly one, a run-end encoding two, `+s` any number, and so does a
+        # nested format marrow does not read, which is refused below as not
+        # implemented.
         var n_children = 0
         if fmt == "+l" or fmt == "+L" or fmt == "+m" or fmt.startswith("+w:"):
             n_children = 1
+        elif fmt == "+r":
+            n_children = 2
         elif fmt.startswith("+"):
             n_children = -1
         self._check_children(fmt, n_children)
@@ -902,6 +919,8 @@ struct CArrowSchema(Copyable, Movable):
                 )
             var sorted = Bool(self.flags & ARROW_FLAG_MAP_KEYS_SORTED)
             return MapType(entries^, sorted).to_dyn()
+        elif fmt == "+r":
+            return _run_end_encoded_dtype(self)
         elif fmt.startswith("d:"):
             var rest = String(fmt).removeprefix("d:")
             var parts = rest.split(",")
@@ -1089,7 +1108,8 @@ struct CArrowArray(Copyable, Movable):
         one `dtype`'s layout has: validity plus its data buffers.
 
         A view array carries any number of data buffers plus a trailing sizes
-        buffer, and a null array none (one in Arrow C++'s legacy export)."""
+        buffer, a null array none (one in Arrow C++'s legacy export), and a
+        run-end encoded array none, not even validity."""
         if self.length < 0 or self.offset < 0:
             raise InvalidError(
                 t"c_data: negative length ({self.length}) or offset "
@@ -1107,6 +1127,9 @@ struct CArrowArray(Copyable, Movable):
         var ok: Bool
         if layout.kind == ArrayLayout.NULL:
             ok = n == 0 or n == 1
+        elif layout.kind == ArrayLayout.RUN_END:
+            want = 0
+            ok = n == 0
         elif layout.kind == ArrayLayout.VIEW:
             want += 1
             ok = n >= want
@@ -1201,10 +1224,15 @@ struct CArrowArray(Copyable, Movable):
         # that states them.
         self._check_layout(dtype)
         self._check_children(dtype)
-        # Null arrays carry no buffers — `self.buffers` itself may be a null
-        # pointer — so skip the validity read for them.
+        # Null and run-end encoded arrays carry no buffers — `self.buffers`
+        # itself may be a null pointer — so skip the validity read for them.
+        # A run-end encoded array's nulls are its values'.
         var bitmap: Optional[Bitmap[]] = None
-        if not dtype.is_null() and Int(self.buffers[unsafe_offset=0]) != 0:
+        if (
+            not dtype.is_null()
+            and not dtype.is_run_end_encoded()
+            and Int(self.buffers[unsafe_offset=0]) != 0
+        ):
             bitmap = Bitmap(
                 self._buffer(
                     0,
@@ -1295,8 +1323,11 @@ struct CArrowArray(Copyable, Movable):
         # These buffers are a foreign producer's memory: an offset past its
         # data or a child shorter than its parent is a read past the end of
         # somebody else's allocation rather than a Mojo error. Dictionary
-        # indices are checked in full, as the kernels gather by them unchecked.
-        data.validate_node(full=dtype.is_dictionary())
+        # indices and run ends are checked in full, as the kernels gather by
+        # them unchecked.
+        data.validate_node(
+            full=dtype.is_dictionary() or dtype.is_run_end_encoded()
+        )
         return data^
 
     def to_array(
@@ -1325,12 +1356,13 @@ struct CArrowArray(Copyable, Movable):
         Call `.to_pycapsule()` to wrap the result in a Python capsule, or pass
         `Pointer(to=c_array)` directly to an Arrow importer.
         """
-        # Null arrays carry no buffers at all (not even validity).  Every other
-        # type has a leading validity slot followed by `data.buffers`.
-        var is_null_dtype = data.dtype.is_null()
+        # Null and run-end encoded arrays carry no buffers at all (not even
+        # validity).  Every other type has a leading validity slot followed
+        # by `data.buffers`.
+        var no_buffers = data.dtype.is_null() or data.dtype.is_run_end_encoded()
         var is_dictionary = data.dtype.is_dictionary()
         var n_buffers: Int64
-        if is_null_dtype:
+        if no_buffers:
             n_buffers = 0
         else:
             n_buffers = Int64(1 + len(data.buffers))  # 1 = validity bitmap slot
@@ -1365,7 +1397,7 @@ struct CArrowArray(Copyable, Movable):
         var buffers: Pointer[
             OpaquePointer[MutUntrackedOrigin], MutUntrackedOrigin
         ] = _null_ptr[OpaquePointer[MutUntrackedOrigin]]()
-        if not is_null_dtype:
+        if not no_buffers:
             buffers = _alloc[OpaquePointer[MutUntrackedOrigin]](Int(n_buffers))
             if data_heap[].bitmap:
                 buffers[unsafe_offset=0] = OpaquePointer[MutUntrackedOrigin](

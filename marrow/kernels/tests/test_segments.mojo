@@ -1,30 +1,52 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
-"""Segments and `Segmented.reduce`, against a scalar fold per segment."""
+"""Segments and `Segmented.reduce`, against a scalar fold per segment; runs,
+and the run-end encoding built on them."""
 
 from std.math import isnan, nan
+from std.memory import bitcast
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
 from ...arrays import (
+    DictionaryArray,
     DynArray,
     Float64Array,
     Int32Array,
     Int64Array,
     PrimitiveArray,
+    RunEndEncodedArray,
+    StructArray,
 )
 from ...buffers import Buffer
-from ...builders import Float64Builder, Int64Builder, PrimitiveBuilder, array
+from ...builders import (
+    Decimal128Builder,
+    Float64Builder,
+    Int64Builder,
+    ListBuilder,
+    PrimitiveBuilder,
+    arange,
+    array,
+    nulls,
+)
 from ...dtypes import (
+    DynType,
+    Field,
     Float64Type,
     Int8Type,
     Int32Type,
     Int64Type,
     NumericType,
+    decimal128,
     float64,
     int8,
+    int16,
     int32,
     int64,
+    null,
+    run_end_encoded,
+    struct_,
+    uint32,
 )
 from ...execution import ExecContext
 from ...views import cpu_lanes
@@ -36,7 +58,12 @@ from ...kernels.aggregate import (
     MinFold,
     SumFold,
 )
-from ...kernels.runs import RunsKernel
+from ...kernels.runs import (
+    RunIndexKernel,
+    RunEndDecodeKernel,
+    RunEndEncodeKernel,
+    RunsKernel,
+)
 from ...kernels.segments import ByEnds, BySize, PerSegment, Segmented, Segments
 from ...kernels.window import WindowFrame, WindowSegments
 
@@ -275,6 +302,263 @@ def test_runs_over_513_rows() raises:
         RunsKernel.dispatch([key^], 513)
         == array([0, 100, 200, 300, 400, 500, 512, 513], int64)
     )
+
+
+# ---------------------------------------------------------------------------
+# RunEndEncodeKernel, RunEndDecodeKernel, RunIndexKernel
+# ---------------------------------------------------------------------------
+
+
+def _encodes(values: DynArray, run_ends: Int32Array, runs: DynArray) raises:
+    """`values` encodes to `runs`, ending at `run_ends`, and decodes back to
+    its rows."""
+    var encoded = RunEndEncodeKernel.dispatch(values, int32)
+    assert_true(
+        encoded.type() == DynType(run_end_encoded(int32, values.dtype()))
+    )
+    assert_equal(len(encoded), len(values))
+    assert_true(encoded.run_ends().as_int32() == run_ends)
+    assert_equal(String(encoded.values()), String(runs))
+    assert_equal(String(RunEndDecodeKernel.dispatch(encoded^)), String(values))
+
+
+def test_run_end_encode_finds_runs_of_equal_bits() raises:
+    _encodes(
+        array([5, 5, 5, 1, 2, 2], int64),
+        array([3, 4, 6], int32),
+        array([5, 1, 2], int64),
+    )
+    # Consecutive nulls are one run, of a null value.
+    _encodes(
+        array([1, None, None, 1], int64),
+        array([1, 3, 4], int32),
+        array([1, None, 1], int64),
+    )
+    _encodes(
+        array(["a", "a", None, "b"]),
+        array([2, 3, 4], int32),
+        array(["a", None, "b"]),
+    )
+    _encodes(
+        array([True, True, None, False]),
+        array([2, 3, 4], int32),
+        array([True, None, False]),
+    )
+    var decimals = Decimal128Builder(decimal128(5, 2), 3)
+    decimals.append(Scalar[DType.int128](1))
+    decimals.append(Scalar[DType.int128](1))
+    decimals.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
+    var two = Decimal128Builder(decimal128(5, 2), 2)
+    two.append(Scalar[DType.int128](1))
+    two.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
+    _encodes(decimals.finish(), array([2, 3], int32), two.finish())
+    _encodes(
+        nulls(3, DynType(null)), array([3], int32), nulls(1, DynType(null))
+    )
+    _encodes(array(int64), array(int32), array(int64))
+    _encodes(
+        array([9, 5, 5, 1], int64).slice(1),
+        array([2, 3], int32),
+        array([5, 1], int64),
+    )
+
+    # A float is compared by its bits: NaNs with two payloads are two runs,
+    # and so are -0.0 and 0.0.
+    var floats = Float64Builder(5)
+    floats.append(nan[DType.float64]())
+    floats.append(bitcast[DType.float64](UInt64(0x7FF8000000000001)))
+    floats.append(-0.0)
+    floats.append(0.0)
+    floats.append(0.0)
+    var column: DynArray = floats.finish()
+    var bits = RunEndEncodeKernel.dispatch(column, int32)
+    assert_true(bits.run_ends().as_int32() == array([1, 2, 3, 5], int32))
+    var runs = bits.values()
+    ref kept = runs.as_float64()
+    assert_equal(
+        bitcast[DType.uint64](kept.unsafe_get(1)), UInt64(0x7FF8000000000001)
+    )
+    assert_equal(
+        bitcast[DType.uint64](kept.unsafe_get(2)), UInt64(0x8000000000000000)
+    )
+    var decoded = RunEndDecodeKernel.dispatch(bits^)
+    assert_equal(
+        bitcast[DType.uint64](decoded.as_float64().unsafe_get(1)),
+        UInt64(0x7FF8000000000001),
+    )
+
+    var five: DynArray = array([5, 5, 5, 1, 2, 2], int64)
+    var narrow = RunEndEncodeKernel.dispatch(five, int16)
+    assert_true(narrow.run_ends().as_int16() == array([3, 4, 6], int16))
+    var wide = RunEndEncodeKernel.dispatch(five, int64)
+    assert_true(wide.run_ends().as_int64() == array([3, 4, 6], int64))
+
+
+def test_run_end_encode_refuses() raises:
+    var lists = ListBuilder(Int64Builder())
+    lists.values().as_int64().append(1)
+    lists.append_valid()
+    var refused = List[DynArray]()
+    refused.append(lists.finish())
+    var children = List[DynArray]()
+    children.append(array([1], int64))
+    refused.append(
+        StructArray(
+            dtype=struct_(Field("a", int64)), length=1, children=children^
+        )
+    )
+    refused.append(
+        DictionaryArray.from_arrays(array([0, 0], int32), array(["a"]))
+    )
+    refused.append(
+        RunEndEncodedArray.from_arrays(array([2], int32), array([1], int64))
+    )
+    for ref values in refused:
+        with assert_raises(contains="TypeError: run_end_encode: cannot encode"):
+            _ = RunEndEncodeKernel.dispatch(values, int32)
+    var ints: DynArray = array([1], int64)
+    with assert_raises(contains="TypeError: run_end_encode: run ends must be"):
+        _ = RunEndEncodeKernel.dispatch(ints, int8)
+    var full: DynArray = arange[Int64Type](0, 32767)
+    assert_equal(len(RunEndEncodeKernel.dispatch(full, int16)), 32767)
+    var over: DynArray = arange[Int64Type](0, 32768)
+    with assert_raises(contains="InvalidError"):
+        _ = RunEndEncodeKernel.dispatch(over, int16)
+
+
+def test_run_end_decode_restores_the_rows() raises:
+    """A window starting and ending inside runs decodes to its rows only;
+    fixed-width and boolean values are repeated, the rest gathered."""
+    var five = RunEndEncodedArray.from_arrays(
+        array([3, 4, 6], int32), array([5, 1, 2], int64)
+    )
+    assert_true(
+        RunEndDecodeKernel.apply(five.slice(1, 4)).as_int64()
+        == array([5, 5, 1, 2], int64)
+    )
+    var gapped = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int32), array([1, None, 2], int64)
+    )
+    assert_true(
+        RunEndDecodeKernel.apply(gapped.slice(1, 3)).as_int64()
+        == array([1, None, 2], int64)
+    )
+    var flags = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int16), array([True, None, False])
+    )
+    assert_true(
+        RunEndDecodeKernel.apply(flags.slice(1, 4)).as_bool()
+        == array([True, None, False, False])
+    )
+    var words = RunEndEncodedArray.from_arrays(
+        array([1, 3, 4], int64), array(["a", "b", None])
+    )
+    assert_equal(
+        String(RunEndDecodeKernel.apply(words.slice(1, 3))),
+        String(array(["b", "b", None])),
+    )
+    assert_equal(len(RunEndDecodeKernel.apply(five.slice(6, 0))), 0)
+
+    var lists = ListBuilder(Int64Builder())
+    lists.values().as_int64().append(1)
+    lists.append_valid()
+    lists.values().as_int64().append(2)
+    lists.values().as_int64().append(3)
+    lists.append_valid()
+    var listed = RunEndEncodedArray.from_arrays(
+        array([2, 3], int32), lists.finish()
+    )
+    var want = ListBuilder(Int64Builder())
+    for _ in range(2):
+        want.values().as_int64().append(1)
+        want.append_valid()
+    want.values().as_int64().append(2)
+    want.values().as_int64().append(3)
+    want.append_valid()
+    assert_equal(
+        String(RunEndDecodeKernel.apply(listed)), String(want.finish())
+    )
+
+    var children = List[DynArray]()
+    children.append(array([1, 2], int64))
+    var pairs = StructArray(
+        dtype=struct_(Field("a", int64)), length=2, children=children^
+    )
+    var structs = RunEndEncodedArray.from_arrays(array([1, 3], int32), pairs^)
+    var expected = List[DynArray]()
+    expected.append(array([1, 2, 2], int64))
+    assert_equal(
+        String(RunEndDecodeKernel.apply(structs)),
+        String(
+            StructArray(
+                dtype=struct_(Field("a", int64)),
+                length=3,
+                children=expected^,
+            )
+        ),
+    )
+
+    var plain: DynArray = array([1], int64)
+    with assert_raises(contains="TypeError: run_end_decode"):
+        _ = RunEndDecodeKernel.dispatch(plain)
+
+
+def test_run_end_decode_core_over_empty_segments() raises:
+    """A segment may be empty: the multiset's groups with no copies."""
+    var ends = array([0, 2, 2, 5], int64)
+    assert_true(
+        RunEndDecodeKernel.apply(arange[Int32Type](0, 3), ByEnds(ends.values()))
+        == array([0, 0, 2, 2, 2], int32)
+    )
+    var none = array([0], int64)
+    assert_equal(
+        len(
+            RunEndDecodeKernel.apply(
+                arange[Int32Type](0, 0), ByEnds(none.values())
+            )
+        ),
+        0,
+    )
+    with assert_raises(contains="InvalidError: run_end_decode: 2 values"):
+        _ = RunEndDecodeKernel.apply(
+            arange[Int32Type](0, 2), ByEnds(ends.values())
+        )
+
+
+def test_run_index_numbers_each_run() raises:
+    """Rows are numbered by run under the group-by identity, as `uint32`."""
+    var ints: DynArray = array([1, 1, None, None, 2, 1], int64)
+    var ids = RunIndexKernel.dispatch(ints)
+    assert_true(ids.type() == DynType(uint32))
+    assert_true(ids == array([0, 0, 1, 1, 2, 3], uint32))
+
+    var floats = Float64Builder(5)
+    floats.append(nan[DType.float64]())
+    floats.append(bitcast[DType.float64](UInt64(0x7FF8000000000001)))
+    floats.append(-0.0)
+    floats.append(0.0)
+    floats.append(1.0)
+    var signed: DynArray = floats.finish()
+    assert_true(
+        RunIndexKernel.dispatch(signed) == array([0, 0, 1, 1, 2], uint32)
+    )
+
+    var lists = ListBuilder(Int64Builder())
+    for item in [1, 1, 2]:
+        lists.values().as_int64().append(Int64(item))
+        lists.append_valid()
+    var listed: DynArray = lists.finish()
+    assert_true(RunIndexKernel.dispatch(listed) == array([0, 0, 1], uint32))
+
+    var children = List[DynArray]()
+    children.append(array([1, 1, 2], int64))
+    var structs: DynArray = StructArray(
+        dtype=struct_(Field("a", int64)), length=3, children=children^
+    )
+    assert_true(RunIndexKernel.dispatch(structs) == array([0, 0, 1], uint32))
+
+    var empty: DynArray = array(int64)
+    assert_equal(len(RunIndexKernel.dispatch(empty)), 0)
 
 
 # ---------------------------------------------------------------------------

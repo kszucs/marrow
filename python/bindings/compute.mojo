@@ -15,7 +15,7 @@ in the file that performs it.
 
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from marrow.arrays import BoolArray, DynArray, Int32Array
+from marrow.arrays import DynArray, Int32Array
 from marrow.builders import DynBuilder
 from marrow.scalars import BoolScalar
 from marrow.errors import InvalidError
@@ -121,7 +121,7 @@ def _rolling[
 
 
 def _reduce[
-    f: def(BoolArray, Bool, Int, ExecContext) raises thin -> BoolScalar,
+    f: def(DynArray, Bool, Int, ExecContext) raises thin -> BoolScalar,
 ]() -> def(
     PythonObject, PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
@@ -135,7 +135,7 @@ def _reduce[
         ctx: PythonObject,
     ) raises -> PythonObject:
         var out = f(
-            DynArray(py=array).as_bool(),
+            DynArray(py=array),
             Bool(py=skip_nulls),
             Int(py=min_count),
             ExecContext(py=ctx),
@@ -241,6 +241,26 @@ def _cast(
         DynType(py=target),
         Bool(py=safe),
         ExecContext(py=ctx),
+    )
+
+
+def _run_end_encode(
+    array: PythonObject, run_end_type: PythonObject, ctx: PythonObject
+) raises -> PythonObject:
+    return (
+        mk.RunEndEncodeKernel.dispatch(
+            DynArray(py=array), DynType(py=run_end_type), ExecContext(py=ctx)
+        )
+        .to_dyn()
+        .to_python_object()
+    )
+
+
+def _run_index(array: PythonObject, ctx: PythonObject) raises -> PythonObject:
+    return (
+        mk.RunIndexKernel.dispatch(DynArray(py=array), ExecContext(py=ctx))
+        .to_dyn()
+        .to_python_object()
     )
 
 
@@ -355,8 +375,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_binary[mk.ShiftLeftKernel.dispatch]()]("shift_left")
     mb.def_function[_binary[mk.ShiftRightKernel.dispatch]()]("shift_right")
     mb.def_function[_binary[_divide]()]("divide")
-    mb.def_function[_reduce[mk.AnyKernel.aggregate]()]("any")
-    mb.def_function[_reduce[mk.AllKernel.aggregate]()]("all")
+    mb.def_function[_reduce[mk.AnyKernel.dispatch]()]("any")
+    mb.def_function[_reduce[mk.AllKernel.dispatch]()]("all")
     mb.def_function[_unary[IsNullKernel.dispatch]()]("is_null")
     mb.def_function[_unary[NotNullKernel.dispatch]()]("is_valid")
     mb.def_function[_unary[mk.FilterKernel.drop_null]()]("drop_null")
@@ -370,6 +390,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     )
     mb.def_function[_unary[mk.ValueCountsKernel.dispatch]()]("value_counts")
     mb.def_function[_mode]("mode")
+    mb.def_function[_run_end_encode]("run_end_encode")
+    mb.def_function[_unary[mk.RunEndDecodeKernel.dispatch]()]("run_end_decode")
+    mb.def_function[_run_index]("run_index")
     mb.def_function[_binary[mk.EqKernel[nan_safe=False].dispatch]()]("equal")
     mb.def_function[_binary[mk.NeKernel[nan_safe=False].dispatch]()](
         "not_equal"

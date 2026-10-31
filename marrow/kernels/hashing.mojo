@@ -56,6 +56,7 @@ from ..arrays import (
     FixedSizeListArray,
     DictionaryArray,
     DynArray,
+    RunEndEncodedArray,
     UInt64Array,
     Int32Array,
 )
@@ -65,6 +66,8 @@ from ..views import BufferView, apply
 from .cast import decode_dictionary
 from .numeric import EqKernel
 from .core import Kernel
+from .runs import RunEndDecodeKernel
+from .segments import ByEnds
 from ..utils import Hasher, RapidHash64
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
@@ -287,6 +290,8 @@ struct HashKernel[H: Hasher](Kernel):
             return Self.dispatch(
                 decode_dictionary(keys.as_dictionary(), ctx), ctx
             )
+        elif keys.isa[RunEndEncodedArray]():
+            return Self.apply(keys.as_run_end_encoded(), ctx)
         elif keys.dtype().is_primitive():
             # One arm for every fixed-width type. `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and *all four*
@@ -470,6 +475,19 @@ struct HashKernel[H: Hasher](Kernel):
                 )
             result = UInt64Array(length=n, buffer=buf^.to_immutable())
         return result^
+
+    @staticmethod
+    def apply(
+        keys: RunEndEncodedArray,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> UInt64Array:
+        """Hash a run-end encoded array: each run's value once, the hash then
+        repeated over the run's rows, so the rows hash as their decoded values
+        do."""
+        var ends = keys.segment_ends()
+        return RunEndDecodeKernel.apply(
+            Self.dispatch(keys.physical_values(), ctx), ByEnds(ends.values())
+        )
 
     @staticmethod
     def apply[
@@ -701,6 +719,15 @@ struct KeyCompare(Kernel):
                 equal,
                 ctx,
             )
+        elif left.isa[RunEndEncodedArray]():
+            Self.apply(
+                left.as_run_end_encoded(),
+                left_rows,
+                right.as_run_end_encoded(),
+                right_rows,
+                equal,
+                ctx,
+            )
         elif left.dtype().isa[StructType]():
             Self.apply(
                 left.as_struct(),
@@ -741,6 +768,27 @@ struct KeyCompare(Kernel):
             )
 
     # --- typed leaves -------------------------------------------------------
+
+    @staticmethod
+    def apply(
+        left: RunEndEncodedArray,
+        left_rows: Int32Array,
+        right: RunEndEncodedArray,
+        right_rows: Int32Array,
+        mut equal: Bitmap[mut=True],
+        ctx: ExecContext,
+    ) raises:
+        """Run-end encoded rows compare as their runs' values: each side's
+        rows are mapped to its runs, by binary search, and the runs' values
+        compared."""
+        Self.dispatch(
+            left.physical_values(),
+            left.physical_indices(left_rows),
+            right.physical_values(),
+            right.physical_indices(right_rows),
+            equal,
+            ctx,
+        )
 
     @staticmethod
     def apply[

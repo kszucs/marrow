@@ -9,7 +9,7 @@ from std.testing import (
     assert_raises,
 )
 
-from ...arrays import DynArray, PrimitiveArray
+from ...arrays import DynArray, PrimitiveArray, RunEndEncodedArray
 from ...builders import (
     array,
     arange,
@@ -953,3 +953,25 @@ def test_add_sliced_when_only_one_side_has_a_bitmap() raises:
     assert_equal(out.null_count(), 0)
     for i in range(3):
         assert_true(out.is_valid(i))
+
+
+def test_add_run_end_encoded_operands_decode() raises:
+    """An encoded operand is decoded: the answer is plain, beside a plain
+    operand or another encoding of other runs."""
+    # Rows 1, null, 3, 3: the window (1, 4) of runs 1 x2, null x1, 3 x2.
+    var ree: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int32), array([1, None, 3], int64)
+    ).slice(1, 4)
+    var plain: DynArray = array([10, 20, 30, 40], int64)
+    var want = String(array([11, None, 33, 43], int64))
+    assert_equal(String(AddKernel.dispatch(ree, plain)), want)
+    assert_equal(String(AddKernel.dispatch(plain, ree)), want)
+    var other: DynArray = RunEndEncodedArray.from_arrays(
+        array([1, 4], int16), array([10, 20], int64)
+    )
+    assert_equal(
+        String(AddKernel.dispatch(ree, other)),
+        String(array([11, None, 23, 23], int64)),
+    )
+    with assert_raises(contains="TypeError"):
+        _ = AddKernel.dispatch(ree, array([1, 2, 3, 4], int32))

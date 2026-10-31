@@ -44,6 +44,7 @@ from ..arrays import (
     DynArray,
     StructArray,
     Int32Array,
+    RunEndEncodedArray,
 )
 from ..buffers import Bitmap, Buffer
 from ..builders import Int32Builder, nulls
@@ -520,7 +521,9 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
         ``-1`` where none does — a NULL key included. Looked up on ``ctx``."""
         var codes = self._keys.lookup(keys, ctx)
         for ref key in keys:
-            if key.null_count() != 0:
+            # A run-end encoded key counts no nulls: its runs' values hold
+            # them.
+            if key.null_count() != 0 or key.isa[RunEndEncodedArray]():
                 codes = Self._unmatched_where_null(codes, key)
         return codes^
 

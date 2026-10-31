@@ -62,7 +62,7 @@ implementation does not support the type.
 | Dictionary (signed and unsigned indices, nested dictionaries) | ✅ | C++, Rust, Go |
 | List view, large list view | ❌ | |
 | Union (sparse and dense) | ❌ | |
-| Run-end encoded | ❌ | |
+| Run-end encoded | ✅ | C++, Go |
 | Extension types | ❌ | |
 
 ### Nesting

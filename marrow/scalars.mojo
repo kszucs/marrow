@@ -13,6 +13,7 @@ Typed scalars:
   ListScalar          — holds DynArray (child values) + DataType + Bool validity
   StructScalar        — holds List[DynScalar] (one per field) + DataType + Bool validity
   DictionaryScalar    — holds integer index + decoded DynScalar value + DataType + Bool validity
+  RunEndEncodedScalar — holds its run's value as a DynScalar + DataType
 
 Type-erased container:
   DynScalar          — wraps any typed scalar via @implicit conversion;
@@ -48,6 +49,7 @@ from .arrays import (
     FixedSizeBinaryArray,
     NullArray,
     PrimitiveArray,
+    RunEndEncodedArray,
     StructArray,
 )
 from .buffers import Bitmap, Buffer
@@ -58,6 +60,7 @@ from .builders import (
     DynBuilder,
     FixedSizeBinaryBuilder,
     PrimitiveBuilder,
+    RunEndEncodedBuilder,
     array,
     nulls,
 )
@@ -836,6 +839,65 @@ struct DictionaryScalar(ArrowScalar):
         self.write_to(writer)
 
 
+# ---------------------------------------------------------------------------
+# RunEndEncodedScalar
+# ---------------------------------------------------------------------------
+
+
+struct RunEndEncodedScalar(ArrowScalar):
+    """One value of a run-end encoded array: the value of its row's run.
+
+    Equivalent to PyArrow's ``pyarrow.RunEndEncodedScalar``.
+    """
+
+    var _dtype: DynType
+    var _value: ArcPointer[DynScalar]  # NullScalar when built by `null`
+
+    def __init__(out self, *, dtype: DynType, var value: DynScalar):
+        self._dtype = dtype.copy()
+        self._value = ArcPointer(value^)
+
+    @staticmethod
+    def null(dtype: DynType) -> Self:
+        return Self(dtype=dtype, value=NullScalar())
+
+    def type(self) -> DynType:
+        return self._dtype.copy()
+
+    def is_valid(self) -> Bool:
+        return self._value[].is_valid()
+
+    def value(self) -> DynScalar:
+        """The run's value. Matches PyArrow's ``RunEndEncodedScalar.value``."""
+        return self._value[].copy()
+
+    def to_array(self, length: Int) raises -> DynArray:
+        return self.repeat(length).to_dyn()
+
+    def repeat(self, times: Int) raises -> RunEndEncodedArray:
+        """Broadcast this value into a column of `times` rows: one run, or
+        none when `times` is 0."""
+        var builder = RunEndEncodedBuilder(self._dtype.as_run_end_encoded())
+        builder.append_run(self._value[], times)
+        return builder.finish()
+
+    def __eq__(self, other: Self) -> Bool:
+        """Return True for equal dtypes and equal values; two nulls are equal
+        whichever scalar holds them."""
+        if self._dtype != other._dtype:
+            return False
+        elif self.is_valid() and other.is_valid():
+            return self._value[] == other._value[]
+        else:
+            return self.is_valid() == other.is_valid()
+
+    def write_to[W: Writer](self, mut writer: W):
+        self._value[].write_to(writer)
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self._value[].write_repr_to(writer)
+
+
 def _stepped_offsets[
     D: DType
 ](times: Int, step: Int) raises -> Buffer[mut=False]:
@@ -920,6 +982,7 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
         DictionaryScalar,
         BinaryViewScalar,
         StringViewScalar,
+        RunEndEncodedScalar,
     ]
 
     var _storage: Self.Storage
@@ -1129,6 +1192,11 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
     ) -> ref[self] DictionaryScalar:
         return self.get[DictionaryScalar]()
 
+    def as_run_end_encoded(
+        ref self,
+    ) -> ref[self] RunEndEncodedScalar:
+        return self.get[RunEndEncodedScalar]()
+
     def __eq__(self, other: Self) -> Bool:
         return self.storage() == other.storage()
 
@@ -1205,6 +1273,8 @@ struct DynScalar(ConvertibleToPython, Copyable, Enum, Equatable, Writable):
             for i in range(st.num_fields()):
                 d[dt.as_struct().fields[i].name] = st.field(i).as_py()
             return d
+        elif dt.is_run_end_encoded():
+            return self.as_run_end_encoded().value().as_py()
         else:
             raise NotImplementedError(t"as_py: unsupported dtype {dt}")
 

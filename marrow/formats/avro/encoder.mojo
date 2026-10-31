@@ -12,6 +12,7 @@ since that is the order Avro's encoding has.
 from ...arrays import DynArray
 from ...dtypes import DynType, IntegerType
 from ...errors import InvalidError, TypeError
+from ...kernels.runs import RunEndDecodeKernel
 from ...tabular import RecordBatch
 from .binary import AvroBytes
 from .mapping import (
@@ -198,6 +199,9 @@ def _compile(avro: AvroSchema, array: DynArray) raises -> _Node:
     """The node writing `array` as `avro`."""
     ref k = avro.kind
     var dtype = array.dtype()
+    if dtype.is_run_end_encoded():
+        # Written as its values, decoded before anything reads their nulls.
+        return _compile(avro, RunEndDecodeKernel.dispatch(array))
     if k == AvroKind.UNION:
         var v = avro.value_index()
         var n = _Node(_UNION, k, array)

@@ -1241,8 +1241,13 @@ struct SchemaMapping(Movable):
         root.num_children = len(schema.fields)
         m.elements.append(root^)
         for ref f in schema.fields:
+            # A run-end encoded column is written as its values, which
+            # `FileWriter` decodes; nested deeper, it is refused as a leaf.
+            var written = f.copy()
+            if f.dtype.is_run_end_encoded():
+                written.dtype = f.dtype.as_run_end_encoded().value_type().copy()
             m.nodes.append(
-                m._emit_field(f, 0, 0, slot_def=0, under_optional=False)
+                m._emit_field(written, 0, 0, slot_def=0, under_optional=False)
             )
         return m^
 

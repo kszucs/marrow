@@ -11,7 +11,7 @@ integration`.
 
 from std.testing import assert_equal, assert_false, assert_raises, assert_true
 
-from ..arrays import DynArray
+from ..arrays import DynArray, RunEndEncodedArray
 from ..builders import array
 from ..dtypes import (
     DynType,
@@ -29,9 +29,11 @@ from ..dtypes import (
     int8,
     int16,
     int32,
+    int64,
     large_string,
     nanosecond,
     null,
+    run_end_encoded,
     string,
     string_view,
     struct_,
@@ -533,6 +535,68 @@ def test_integration_json_nested_dictionaries_resolve_in_any_order() raises:
     assert_equal(codes.buffers[0].unsafe_get[DType.int8](2), 1)
     assert_equal(
         String(DynArray.from_data(codes.children[0])), "StringArray([a, b])"
+    )
+
+
+comptime _RUN_ENDS = (
+    '{"name": "run_ends", "nullable": false, "type": {"name": "int",'
+    ' "isSigned": true, "bitWidth": 16}, "children": []}'
+)
+comptime _VALUES = (
+    '{"name": "values", "nullable": true, "type": {"name": "int",'
+    ' "isSigned": true, "bitWidth": 64}, "children": []}'
+)
+
+
+def test_integration_json_run_end_encoded() raises:
+    """A column of no buffers whose children are the run ends and the
+    values, as archery writes it."""
+    var b = _batch(
+        _file(
+            String(
+                '{"name": "r", "nullable": true, "type": {"name":',
+                ' "runendencoded"}, "children": [',
+                _RUN_ENDS,
+                ", ",
+                _VALUES,
+                "]}",
+            ),
+            (
+                '{"name": "r", "count": 6, "children": [{"name": "run_ends",'
+                ' "count": 3, "VALIDITY": [1, 1, 1], "DATA": [3, 4, 6]},'
+                ' {"name": "values", "count": 3, "VALIDITY": [1, 0, 1],'
+                ' "DATA": ["5", "0", "2"]}]}'
+            ),
+            count=6,
+        )
+    )
+    var expected = RunEndEncodedArray.from_arrays(
+        array([3, 4, 6], int16), array([5, None, 2], int64)
+    )
+    var dtype: DynType = run_end_encoded(int16, int64)
+    assert_true(b.schema.fields[0].dtype == dtype)
+    assert_true(b.columns[0].dtype() == dtype)
+    assert_true(b.columns[0].as_run_end_encoded() == expected)
+    assert_equal(b.columns[0].null_count(), 0)
+    assert_false(b.columns[0].is_valid(3))
+
+
+def test_integration_json_run_end_encoded_needs_two_children() raises:
+    _raises(
+        _file(
+            String(
+                '{"name": "r", "nullable": true, "type": {"name":',
+                ' "runendencoded"}, "children": [',
+                _RUN_ENDS,
+                "]}",
+            ),
+            (
+                '{"name": "r", "count": 1, "children": [{"name": "run_ends",'
+                ' "count": 1, "VALIDITY": [1], "DATA": [1]}]}'
+            ),
+            count=1,
+        ),
+        "CorruptError: integration json: a runendencoded has 1 children",
     )
 
 

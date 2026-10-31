@@ -8,6 +8,7 @@ plus compute kernel usage with PyArrow-created arrays.
 """
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 import marrow as ma
 
@@ -63,6 +64,15 @@ def test_datatype_dictionary_roundtrip():
         ma_schema = ma.schema(pa.schema([pa.field("d", pa_type)]))
         roundtripped = pa.schema(ma_schema)
         assert roundtripped.field("d").type == pa_type
+
+
+@pytest.mark.parametrize("run_end_type", [pa.int16(), pa.int32(), pa.int64()])
+def test_datatype_run_end_encoded_roundtrip(run_end_type):
+    for value_type in [pa.int64(), pa.string(), pa.float64(), pa.list_(pa.int32())]:
+        pa_type = pa.run_end_encoded(run_end_type, value_type)
+        ma_schema = ma.schema(pa.schema([pa.field("r", pa_type)]))
+        roundtripped = pa.schema(ma_schema)
+        assert roundtripped.field("r").type == pa_type
 
 
 def test_datatype_nested_roundtrip():
@@ -380,6 +390,67 @@ def test_dictionary_of_nested_values_roundtrip():
     assert result.equals(pa_arr)
 
 
+def test_array_from_pyarrow_run_end_encoded():
+    pa_arr = pc.run_end_encode(pa.array(["cat", "cat", "dog", "fish", "fish"]))
+    ma_arr = ma.array(pa_arr)
+    assert len(ma_arr) == 5
+    assert pa.array(ma_arr).equals(pa_arr)
+
+
+def test_array_roundtrip_run_end_encoded_with_nulls():
+    # The nulls are the values': neither side counts any of its own.
+    pa_arr = pc.run_end_encode(pa.array([1, 1, 2, None, None, 3]))
+    ma_arr = ma.array(pa_arr)
+    assert ma_arr.null_count == 0
+    roundtripped = pa.array(ma_arr)
+    assert roundtripped.null_count == 0
+    assert roundtripped.equals(pa_arr)
+
+
+def test_array_roundtrip_run_end_encoded_sliced():
+    pa_arr = pc.run_end_encode(pa.array([1, 1, 2, None, None, 3])).slice(1, 4)
+    ma_arr = ma.array(pa_arr)
+    assert ma_arr.to_pylist() == [1, 2, None, None]
+    roundtripped = pa.array(ma_arr)
+    roundtripped.validate(full=True)
+    assert roundtripped.equals(pa_arr)
+    assert pa.array(ma_arr.slice(1, 2)).to_pylist() == [2, None]
+
+
+def test_array_import_run_end_encoded_rejects_decreasing_run_ends():
+    # `Array.from_buffers` checks no more than the last run end.
+    pa_arr = pa.Array.from_buffers(
+        pa.run_end_encoded(pa.int32(), pa.int64()),
+        3,
+        [None],
+        children=[pa.array([2, 1, 3], pa.int32()), pa.array([7, 8, 9])],
+    )
+    with pytest.raises(ma.ArrowInvalid, match="run end 1 is 1, not past 2"):
+        ma.array(pa_arr)
+
+
+def test_run_end_encoded_of_nested_values_roundtrip():
+    for values in [
+        pa.array([{"a": 1, "b": "x"}, None, {"a": 3, "b": "z"}]),
+        pa.array([[1, 2], [3], None], pa.list_(pa.int64())),
+    ]:
+        pa_arr = pa.RunEndEncodedArray.from_arrays(
+            pa.array([2, 3, 5], pa.int32()), values
+        )
+        result = pa.array(ma.array(pa_arr))
+        assert result.type == pa_arr.type
+        assert result.equals(pa_arr)
+
+
+def test_run_end_encoded_to_pylist():
+    pa_arr = pc.run_end_encode(pa.array(["x", "x", None, "y"]))
+    ma_arr = ma.array(pa_arr)
+    assert ma_arr.to_pylist() == ["x", "x", None, "y"]
+    assert [s.as_py() for s in ma_arr] == ["x", "x", None, "y"]
+    assert ma_arr[0].is_valid()
+    assert not ma_arr[2].is_valid()
+
+
 # ===========================================================================
 # RecordBatch roundtrips
 # ===========================================================================
@@ -452,6 +523,20 @@ def test_record_batch_with_dictionary_column():
     ma_rb = ma.record_batch(pa_rb)
     assert ma_rb.num_rows == 4
     assert pa.record_batch(ma_rb).column("cat").equals(pa_rb.column("cat"))
+
+
+def test_record_batch_with_run_end_encoded_column():
+    pa_rb = pa.record_batch(
+        {
+            "r": pc.run_end_encode(pa.array([1, 1, None, 4]), run_end_type=pa.int16()),
+            "x": pa.array([1, 2, 3, 4]),
+        }
+    )
+    ma_rb = ma.record_batch(pa_rb)
+    assert ma_rb.num_rows == 4
+    back = pa.record_batch(ma_rb)
+    assert back.schema == pa_rb.schema
+    assert back.column("r").equals(pa_rb.column("r"))
 
 
 def test_record_batch_arrow_c_schema():

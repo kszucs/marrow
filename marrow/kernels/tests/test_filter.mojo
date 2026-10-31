@@ -16,6 +16,7 @@ from ...arrays import (
     NullArray,
     PrimitiveArray,
     BoolArray,
+    RunEndEncodedArray,
 )
 from ...builders import (
     array,
@@ -35,6 +36,7 @@ from ...builders import (
 from ...dtypes import (
     DynType,
     int8,
+    int16,
     int32,
     int64,
     uint8,
@@ -52,8 +54,9 @@ from ...dtypes import (
     UInt8Type,
     Float32Type,
 )
-from ...buffers import Bitmap
+from ...buffers import Bitmap, Buffer
 from ...kernels.cast import CastKernel
+from ...kernels.runs import RunEndDecodeKernel
 from ...kernels.filter import (
     FilterKernel,
     IndicesNonzeroKernel,
@@ -1367,3 +1370,83 @@ def test_replace_with_mask_rejects_bad_arguments() raises:
         _ = ReplaceWithMaskKernel.dispatch(
             values, array([1, 0, 1, 0, 1], int64), array([10, 30, 50], int64)
         )
+
+
+# ---------------------------------------------------------------------------
+# filter / take / drop_null — run-end encoded arrays
+# ---------------------------------------------------------------------------
+
+
+def _ree_window() raises -> DynArray:
+    """Rows 5, 5, null, null, 2, 2, 2, 7: the window `(1, 8)` of runs 5 x3,
+    null x2, 2 x3 and 7 x2, starting and ending inside a run."""
+    return RunEndEncodedArray.from_arrays(
+        array([3, 5, 8, 10], int32), array([5, None, 2, 7], int64)
+    ).slice(1, 8)
+
+
+def test_filter_run_end_encoded_keeps_runs() raises:
+    var ree = _ree_window()
+    var decoded = RunEndDecodeKernel.dispatch(ree)
+    # No row of the 5s is kept, so their run goes; the null entry drops
+    # its row.
+    var mask = array([False, False, True, None, True, False, True, True])
+    var got = FilterKernel.dispatch(ree, mask)
+    assert_true(got.isa[RunEndEncodedArray]())
+    ref runs = got.as_run_end_encoded()
+    assert_true(runs.type() == ree.dtype())
+    assert_true(runs.run_ends().as_int32() == array([1, 3, 4], int32))
+    assert_equal(
+        String(RunEndDecodeKernel.dispatch(got)),
+        String(FilterKernel.dispatch(decoded, mask)),
+    )
+
+
+def test_take_run_end_encoded_answers_runs() raises:
+    var ree = _ree_window()
+    var decoded = RunEndDecodeKernel.dispatch(ree)
+    # Rows 0 and 1 read one run, as do 4 and 6; the two null indices are
+    # one null run, apart from rows 2 and 3, whose run holds a null.
+    var indices = array([0, 1, 4, 6, None, None, 2, 3, 7, 0], int32)
+    var got = TakeKernel.dispatch(ree, indices)
+    assert_true(got.isa[RunEndEncodedArray]())
+    ref runs = got.as_run_end_encoded()
+    assert_true(runs.type() == ree.dtype())
+    assert_true(runs.run_ends().as_int32() == array([2, 4, 6, 8, 9, 10], int32))
+    assert_equal(
+        String(RunEndDecodeKernel.dispatch(got)),
+        String(TakeKernel.dispatch(decoded, indices)),
+    )
+    var none = TakeKernel.dispatch(ree, array(int32))
+    assert_equal(len(none), 0)
+    assert_true(none.isa[RunEndEncodedArray]())
+
+
+def _zeros(n: Int) -> Int32Array:
+    """`n` indices, every one 0."""
+    return Int32Array(
+        length=n, buffer=Buffer.alloc_zeroed[DType.int32](n).to_immutable()
+    )
+
+
+def test_take_run_end_encoded_overflows_its_run_ends() raises:
+    var ree: DynArray = RunEndEncodedArray.from_arrays(
+        array([2], int16), array([1], int64)
+    )
+    assert_equal(len(TakeKernel.dispatch(ree, _zeros(32767))), 32767)
+    with assert_raises(contains="InvalidError"):
+        _ = TakeKernel.dispatch(ree, _zeros(32768))
+
+
+def test_drop_null_run_end_encoded_drops_null_runs() raises:
+    var ree: DynArray = _ree_window()
+    var got = FilterKernel.drop_null(ree)
+    assert_true(got.isa[RunEndEncodedArray]())
+    assert_true(
+        got.as_run_end_encoded().run_ends().as_int32()
+        == array([2, 5, 6], int32)
+    )
+    assert_equal(
+        String(RunEndDecodeKernel.dispatch(got)),
+        String(array([5, 5, 2, 2, 2, 7], int64)),
+    )

@@ -60,6 +60,7 @@ from ..arrays import (
     FixedSizeBinaryArray,
     Int32Array,
     PrimitiveArray,
+    RunEndEncodedArray,
     TimestampArray,
 )
 from ..buffers import Buffer, Bitmap
@@ -118,6 +119,7 @@ from ..utils import (
 from ..execution import ExecContext
 from ..errors import InternalError, InvalidError, NotImplementedError, TypeError
 from .filter import TakeKernel
+from .runs import RunEndDecodeKernel
 
 
 # ---------------------------------------------------------------------------
@@ -2134,6 +2136,14 @@ struct CastKernel(Kernel):
             return DictionaryCastKernel.dispatch(
                 array, to, safe, ctx
             )  # decode first
+        elif array.isa[RunEndEncodedArray]():
+            return Self._run_end_encoded(
+                array.as_run_end_encoded(), to, safe, ctx
+            )
+        elif to.is_run_end_encoded():
+            raise Self.error[NotImplementedError](
+                t"unsupported cast {array.dtype()} -> {to}"
+            )
         elif array.dtype().is_binary_like() and to.is_binary_like():
             return BinaryLikeCastKernel.dispatch(
                 array, to, safe, ctx
@@ -2216,3 +2226,34 @@ struct CastKernel(Kernel):
         raise Self.error[NotImplementedError](
             t"unsupported cast {array.dtype()} -> {to}"
         )
+
+    @staticmethod
+    def _run_end_encoded(
+        array: RunEndEncodedArray, to: DynType, safe: Bool, ctx: ExecContext
+    ) raises -> DynArray:
+        """Cast a run-end encoded array. To another run-end encoded type,
+        the window's runs' values are cast over the same runs, and their ends
+        to the new run-end type; to any other type, the rows are decoded,
+        then cast."""
+        if to.is_run_end_encoded():
+            ref target = to.as_run_end_encoded()
+            var ends = array.segment_ends()
+            return RunEndEncodedArray(
+                dtype=to,
+                length=len(array),
+                offset=0,
+                # Always checked: a truncated run end is a corrupt array.
+                run_ends=Self.dispatch(
+                    ends.slice(1, len(ends) - 1),
+                    target.run_end_type(),
+                    True,
+                    ctx,
+                ),
+                values=Self.dispatch(
+                    array.physical_values(), target.value_type(), safe, ctx
+                ),
+            ).to_dyn()
+        else:
+            return Self.dispatch(
+                RunEndDecodeKernel.apply(array, ctx), to, safe, ctx
+            )

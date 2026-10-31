@@ -36,9 +36,11 @@ from .errors import (
     debug_assert_lazy,
 )
 from .utils.enum import ArcMembers, Enum, widen
+from .utils.integers import Unsigned
 from .buffers import Buffer, Bitmap
 
 from std.builtin.rebind import downcast
+from std.memory import bitcast
 from std.os import abort
 from .dtypes import (
     DynType,
@@ -60,6 +62,7 @@ from .dtypes import (
     Float16Type,
     Float32Type,
     Float64Type,
+    FloatingType,
     Int16Type,
     Int32Type,
     Int64Type,
@@ -74,6 +77,7 @@ from .dtypes import (
     MonthDayNanoIntervalType,
     NumericType,
     PrimitiveType,
+    RunEndEncodedType,
     StringType,
     Time32Type,
     Time64Type,
@@ -116,7 +120,9 @@ from .arrays import (
     FixedSizeBinaryArray,
     StructArray,
     DictionaryArray,
+    RunEndEncodedArray,
 )
+from .scalars import DynScalar, NullScalar
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +256,7 @@ struct DynBuilder(Enum, ImplicitlyCopyable):
         DictionaryBuilder,
         BinaryViewBuilder,
         StringViewBuilder,
+        RunEndEncodedBuilder,
     ]
 
     # `ArcMembers`: copies share the member, and a change made through one copy is
@@ -325,6 +332,8 @@ struct DynBuilder(Enum, ImplicitlyCopyable):
             self = DictionaryBuilder(
                 idx_builder^, array(dt.value_type()), dt.ordered
             )
+        elif dtype.is_run_end_encoded():
+            self = RunEndEncodedBuilder(dtype.as_run_end_encoded(), capacity)
         else:
             raise NotImplementedError(t"unsupported type: {dtype}")
 
@@ -561,6 +570,11 @@ struct DynBuilder(Enum, ImplicitlyCopyable):
         ref self,
     ) -> ref[self] DictionaryBuilder:
         return self.get[DictionaryBuilder]()
+
+    def as_run_end_encoded(
+        ref self,
+    ) -> ref[self] RunEndEncodedBuilder:
+        return self.get[RunEndEncodedBuilder]()
 
 
 # ---------------------------------------------------------------------------
@@ -2055,6 +2069,197 @@ struct DictionaryBuilder(Builder):
             self._indices.reset()
         except:
             pass
+
+
+# ---------------------------------------------------------------------------
+# RunEndEncodedBuilder
+# ---------------------------------------------------------------------------
+
+
+struct RunEndEncodedBuilder(Builder):
+    """Builder for run-end encoded arrays.
+
+    ``append`` extends the open run when the value is its value, or when both
+    are null, and starts a new run otherwise. Floats compare by their bits,
+    so NaNs of different payloads, and ``-0.0`` and ``0.0``, start runs of
+    their own. ``extend`` appends an array's runs as they are, never merged
+    into the run before them.
+    """
+
+    comptime ArrayType = RunEndEncodedArray
+
+    var _dtype: DynType
+    var _run_ends: DynBuilder
+    var _values: DynBuilder
+    var _length: Int
+    # Rows of the open run: `_values` holds its value, `_run_ends` not yet its
+    # end.
+    var _open: Int
+    # The open run's value; a `NullScalar` for a run of nulls.
+    var _last: DynScalar
+
+    def __init__(out self, dtype: RunEndEncodedType, capacity: Int = 0) raises:
+        # `capacity` counts rows, and a run holds any number of them: the
+        # children grow as runs close.
+        self._dtype = dtype.copy()
+        self._run_ends = DynBuilder(dtype.run_end_type())
+        self._values = DynBuilder(dtype.value_type())
+        self._length = 0
+        self._open = 0
+        self._last = NullScalar()
+
+    def __init__(
+        out self, *, like: RunEndEncodedArray, capacity: Int = 0
+    ) raises:
+        ref dt = like.type().as_run_end_encoded()
+        self = Self(dt, capacity)
+
+    def length(self) -> Int:
+        return self._length
+
+    def null_count(self) -> Int:
+        """0: the nulls of a run-end encoded array are its values'."""
+        return 0
+
+    def dtype(self) -> DynType:
+        return self._dtype.copy()
+
+    def reserve(mut self, additional: Int) raises:
+        # Rows are not runs; the children grow as runs close.
+        pass
+
+    def append(mut self, value: DynScalar) raises:
+        """Append one row of `value`; see `append_run`."""
+        self.append_run(value, 1)
+
+    def append_run(mut self, value: DynScalar, n: Int) raises:
+        """Append `n` rows of `value`: onto the open run when `value` is its
+        value, else as a new run.
+
+        Raises `TypeError` when a valid `value` is not of the value type.
+        """
+        if value.is_null():
+            self._append_nulls(n)
+        elif n > 0:
+            ref t = self._dtype.as_run_end_encoded().value_type()
+            if value.type() != t:
+                raise TypeError(
+                    t"RunEndEncodedBuilder.append: expected a {t} value, got"
+                    t" {value.type()}"
+                )
+
+            def bits[T: FloatingType](d: T) raises {imm} -> Bool:
+                comptime U = Unsigned[T.native]
+                return bitcast[U](value.as_primitive[T]().value()) == bitcast[
+                    U
+                ](self._last.as_primitive[T]().value())
+
+            var same = False
+            if self._open > 0 and not self._last.isa[NullScalar]():
+                if t.is_floating_point():
+                    same = t.try_visit[Bool, FloatingType](
+                        bits, "dtype is not floating point"
+                    )
+                else:
+                    same = value == self._last
+            if not same:
+                self._close()
+                self._values.extend(value.to_array(1))
+                self._last = value.copy()
+            self._open += n
+            self._length += n
+
+    def append_null(mut self) raises:
+        self._append_nulls(1)
+
+    def _append_nulls(mut self, n: Int) raises:
+        """Append `n` null rows: onto the open run when it is a run of nulls,
+        else as a new run."""
+        if n > 0:
+            if not (self._open > 0 and self._last.isa[NullScalar]()):
+                self._close()
+                self._values.append_null()
+                self._last = NullScalar()
+            self._open += n
+            self._length += n
+
+    def _close(mut self) raises:
+        """End the open run, at the rows appended so far."""
+        if self._open > 0:
+            self._append_end(self._length)
+            self._open = 0
+
+    def _append_end(mut self, end: Int) raises:
+        """Append run end `end`, at the run-end type's width."""
+        if self._run_ends.isa[Int16Builder]():
+            self._run_ends.as_int16().append(Int16(end))
+        elif self._run_ends.isa[Int32Builder]():
+            self._run_ends.as_int32().append(Int32(end))
+        else:
+            self._run_ends.as_int64().append(Int64(end))
+
+    def extend(mut self, arr: DynArray) raises:
+        """Append `arr`'s runs; see the typed overload. Raises `TypeError`
+        unless `arr` is run-end encoded."""
+        if not arr.isa[RunEndEncodedArray]():
+            raise TypeError(
+                t"RunEndEncodedBuilder.extend: expected RunEndEncodedArray,"
+                t" got: {arr.dtype()}"
+            )
+        self.extend(arr.as_run_end_encoded())
+
+    def extend(mut self, arr: RunEndEncodedArray) raises:
+        """Append the runs `arr`'s window reads, the first and the last cut
+        to the window. The first is not merged into the run before it.
+
+        Raises `TypeError` unless `arr` is of this builder's dtype.
+        """
+        if arr.type() != self._dtype:
+            raise TypeError(
+                t"RunEndEncodedBuilder.extend: expected {self._dtype}, got"
+                t" {arr.type()}"
+            )
+        self._close()
+        var ends = arr.segment_ends()
+        self._values.extend(arr.physical_values())
+        for k in range(1, len(ends)):
+            self._append_end(self._length + Int(ends.unsafe_get(k)))
+        self._length += len(arr)
+
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> RunEndEncodedArray:
+        """The rows appended so far. Raises `InvalidError` when their count
+        does not fit the run-end type."""
+        ref t = self._dtype.as_run_end_encoded().run_end_type()
+        var width = t.byte_width()
+        var limit = (1 << (8 * width - 1)) - 1 if width < 8 else Int.MAX
+        if self._length > limit:
+            raise InvalidError(
+                t"RunEndEncodedBuilder.finish: {self._length} rows do not fit"
+                t" {t} run ends"
+            )
+        self._close()
+        var out = RunEndEncodedArray(
+            dtype=self._dtype,
+            length=self._length,
+            offset=0,
+            run_ends=self._run_ends.finish(shrink_to_fit=shrink_to_fit),
+            values=self._values.finish(shrink_to_fit=shrink_to_fit),
+        )
+        self._length = 0
+        self._last = NullScalar()
+        return out^
+
+    def reset(mut self):
+        try:
+            self._run_ends.reset()
+            self._values.reset()
+        except:
+            pass
+        self._length = 0
+        self._open = 0
+        self._last = NullScalar()
 
 
 # ---------------------------------------------------------------------------

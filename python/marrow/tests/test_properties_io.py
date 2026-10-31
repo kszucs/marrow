@@ -36,6 +36,7 @@ from marrow.tests.strategies import (
     flat_types,
     lengths,
     nested_types,
+    run_end_encoded_types,
 )
 
 # ── tables ─────────────────────────────────────────────────────────────────
@@ -195,7 +196,9 @@ def test_parquet_marrow_roundtrip(tmp_path, table, codec, cdc):
 # ── IPC ────────────────────────────────────────────────────────────────────
 
 _IPC_LEAVES = flat_types
-_IPC_TYPES = st.one_of(_IPC_LEAVES, nested_types(_IPC_LEAVES), dictionary_types)
+_IPC_TYPES = st.one_of(
+    _IPC_LEAVES, nested_types(_IPC_LEAVES), dictionary_types, run_end_encoded_types
+)
 
 
 @st.composite

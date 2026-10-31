@@ -51,6 +51,7 @@ from ..dtypes import (
     millisecond,
     microsecond,
     nanosecond,
+    run_end_encoded,
 )
 from ..scalars import (
     Decimal128Scalar,
@@ -67,6 +68,7 @@ from ..scalars import (
     YearMonthIntervalScalar,
     DayTimeIntervalScalar,
     MonthDayNanoIntervalScalar,
+    RunEndEncodedScalar,
 )
 
 
@@ -551,3 +553,42 @@ def test_interval_scalar_month_day_nano() raises:
 #     var s = TemporalScalar(Int64(7), duration(nanosecond).to_dyn())
 #     var any_s = s^.to_dyn()
 #     assert_true(any_s.as_temporal() == TemporalScalar(Int64(7), duration(nanosecond).to_dyn()))
+
+
+# ---------------------------------------------------------------------------
+# RunEndEncodedScalar
+# ---------------------------------------------------------------------------
+
+
+def test_run_end_encoded_scalar() raises:
+    var dtype: DynType = run_end_encoded(int32, int64)
+    var five = RunEndEncodedScalar(dtype=dtype, value=Int64Scalar(5))
+    assert_true(five.is_valid())
+    assert_true(five.type() == dtype)
+    assert_equal(Int(five.value().as_int64().value()), 5)
+    assert_equal(String(five), "5")
+
+    var four = five.repeat(4)
+    assert_equal(len(four), 4)
+    assert_true(four.run_ends().as_int32() == array([4], int32))
+    assert_true(four.values().as_int64() == array([5], int64))
+    var none = five.repeat(0)
+    assert_equal(len(none), 0)
+    assert_equal(len(none.run_ends()), 0)
+
+    var null = RunEndEncodedScalar.null(dtype)
+    assert_false(null.is_valid())
+    var two = null.repeat(2)
+    assert_true(two.run_ends().as_int32() == array([2], int32))
+    assert_true(two.values().dtype() == DynType(int64))
+    assert_equal(two.values().null_count(), 1)
+
+    assert_true(five == RunEndEncodedScalar(dtype=dtype, value=Int64Scalar(5)))
+    assert_false(five == RunEndEncodedScalar(dtype=dtype, value=Int64Scalar(6)))
+    assert_false(five == null)
+    # A row's null holds the value type's null scalar; it equals `null`.
+    assert_true(null == two[0])
+    var erased: DynScalar = five.copy()
+    var again: DynScalar = five.copy()
+    assert_true(erased == again)
+    assert_equal(Int(erased.as_run_end_encoded().value().as_int64().value()), 5)

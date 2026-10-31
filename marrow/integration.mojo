@@ -25,7 +25,10 @@ The encoding follows Arrow C++'s reader (`arrow/integration/json_internal.cc`):
 - a dictionary-encoded field's `type` and `children` describe its *values*,
   its column holds the indices, and `dictionary.id` names the dictionary batch.
 
-Union, run-end-encoded and list-view columns are not supported.
+- a run-end encoded column has no buffers of its own: its `children` are the
+  run ends and the values, and its `count` is its logical length.
+
+Union and list-view columns are not supported.
 
 This is test infrastructure, not a data format: it exists so marrow can take
 part in the cross-implementation integration suite with no other Arrow library
@@ -73,6 +76,7 @@ from .dtypes import (
     month_day_nano_interval,
     nanosecond,
     null,
+    run_end_encoded,
     second,
     string,
     string_view,
@@ -550,6 +554,21 @@ struct _Reader[o: ImmOrigin]:
         return Self.field(children[0])
 
     @staticmethod
+    def run_end_encoded_type(node: _Node[Self.o]) raises -> DynType:
+        """The run-end encoded type whose children are the run ends and the
+        values. The type names its children itself."""
+        var children = node.items("children")
+        if len(children) != 2:
+            raise CorruptError(
+                t"integration json: a runendencoded has {len(children)}"
+                t" children, not 2"
+            )
+        return run_end_encoded(
+            Self.field(children[0]).dtype.copy(),
+            Self.field(children[1]).dtype.copy(),
+        )
+
+    @staticmethod
     def value_type(node: _Node[Self.o]) raises -> DynType:
         """The type `node["type"]` and `node["children"]` describe."""
         var spec = node["type"]
@@ -650,6 +669,8 @@ struct _Reader[o: ImmOrigin]:
         elif name == "struct":
             var fields = [Self.field(child) for child in node.items("children")]
             return struct_(fields^)
+        elif name == "runendencoded":
+            return Self.run_end_encoded_type(node)
         raise NotImplementedError(
             t"integration json: unsupported type '{name}'"
         )
@@ -709,6 +730,8 @@ struct _Reader[o: ImmOrigin]:
                 buffers=[],
                 children=[],
             )
+        elif dtype.is_run_end_encoded():
+            return self.run_end_encoded_values(dtype, node, column)
 
         var validity = column.validity()
         var buffers = List[Buffer[mut=False]]()
@@ -767,6 +790,27 @@ struct _Reader[o: ImmOrigin]:
             buffers=buffers^,
             children=children^,
         )
+
+    def run_end_encoded_values(
+        mut self, dtype: DynType, node: _Node[Self.o], column: _Column[Self.o]
+    ) raises -> ArrayData:
+        """A run-end encoded column: no buffers, its children the run ends
+        and the values, validated in full as a foreign array is."""
+        var validity = column.validity()
+        var data = ArrayData(
+            dtype=dtype.copy(),
+            length=column.count,
+            nulls=validity.nulls,
+            offset=0,
+            bitmap=validity.bitmap.copy(),
+            buffers=[],
+            children=self.children(dtype.children(), node, column),
+        )
+        try:
+            data.validate_node(full=True)
+        except e:
+            raise CorruptError(t"integration json: {e.message()}")
+        return data^
 
     def children(
         mut self,

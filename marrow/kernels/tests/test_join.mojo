@@ -10,6 +10,7 @@ from ...arrays import (
     DynArray,
     Int32Array,
     PrimitiveArray,
+    RunEndEncodedArray,
     StringArray,
     StructArray,
     UInt64Array,
@@ -66,6 +67,7 @@ from ...kernels.join import (
     BUILD_RIGHT,
 )
 from ...kernels.sort import SortKernel
+from ...kernels.runs import RunEndDecodeKernel
 from std.builtin.sort import sort as sort_list
 
 
@@ -2364,3 +2366,56 @@ def test_join_concurrent_probes() raises:
         )
     )
     assert_true(got == whole)
+
+
+# ---------------------------------------------------------------------------
+# hash_join — run-end encoded keys
+# ---------------------------------------------------------------------------
+
+
+def _rows(column: DynArray) raises -> String:
+    """A column's rows, decoded when it is run-end encoded."""
+    if column.isa[RunEndEncodedArray]():
+        return String(RunEndDecodeKernel.dispatch(column))
+    else:
+        return String(column)
+
+
+def test_join_on_run_end_encoded_keys() raises:
+    """Keys encoded as runs join as their decoded rows do, a null key
+    matching nothing, and an encoded payload stays encoded."""
+    # Left keys 1, 1, null, 2, 2 with a payload of one run; right keys
+    # 2, 1, 1, null.
+    var lk: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int32), array([1, None, 2], int64)
+    )
+    var lv: DynArray = RunEndEncodedArray.from_arrays(
+        array([5], int32), array([10], int64)
+    )
+    var rk: DynArray = RunEndEncodedArray.from_arrays(
+        array([1, 3, 4], int32), array([2, 1, None], int64)
+    )
+    var rv: DynArray = array([20, 21, 22, 23], int64)
+    var left = record_batch(
+        [lk.copy(), lv.copy()], names=["k", "v"]
+    ).to_struct_array()
+    var right = record_batch(
+        [rk.copy(), rv.copy()], names=["k", "v"]
+    ).to_struct_array()
+    var got = HashJoinKernel.apply(left, right, _left_on(), _right_on())
+
+    var plain_left = record_batch(
+        [RunEndDecodeKernel.dispatch(lk), RunEndDecodeKernel.dispatch(lv)],
+        names=["k", "v"],
+    ).to_struct_array()
+    var plain_right = record_batch(
+        [RunEndDecodeKernel.dispatch(rk), rv.copy()], names=["k", "v"]
+    ).to_struct_array()
+    var want = HashJoinKernel.apply(
+        plain_left, plain_right, _left_on(), _right_on()
+    )
+    assert_equal(len(got), 6)
+    assert_equal(len(got), len(want))
+    assert_true(got.children[1].isa[RunEndEncodedArray]())
+    for c in range(len(want.children)):
+        assert_equal(_rows(got.children[c]), _rows(want.children[c]))

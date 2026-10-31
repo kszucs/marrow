@@ -50,6 +50,7 @@ from .format import (
     TYPE_LIST,
     TYPE_MAP,
     TYPE_NULL,
+    TYPE_RUN_END_ENCODED,
     TYPE_STRUCT,
     TYPE_TIME,
     TYPE_TIMESTAMP,
@@ -298,6 +299,8 @@ struct IpcEncoder(Movable):
             return TYPE_DECIMAL
         elif dtype.is_struct():
             return TYPE_STRUCT
+        elif dtype.is_run_end_encoded():
+            return TYPE_RUN_END_ENCODED
         elif dtype.is_dictionary():
             # Schema encodes the value type; DictionaryEncoding carries index type.
             return self._type_code(dtype.as_dictionary().value_type())
@@ -317,6 +320,7 @@ struct IpcEncoder(Movable):
             or dtype.is_list()
             or dtype.is_large_list()
             or dtype.is_struct()
+            or dtype.is_run_end_encoded()
         ):
             var ts = self._fb.offset()
             return self._fb.write_table(List[FieldOffset](), ts)
@@ -653,6 +657,19 @@ struct IpcDecoder(Movable):
         if not unit:
             raise CorruptError(t"ipc: unknown time unit {v}")
         return unit.value()
+
+    @staticmethod
+    def _run_end_encoded(children: List[dt.Field]) raises -> dt.DynType:
+        """The run-end encoded type of a Field whose children are the run
+        ends and the values. The type names its children itself."""
+        if len(children) != 2:
+            raise CorruptError(
+                t"run_end_encoded Field must have 2 children, got"
+                t" {len(children)}"
+            )
+        return dt.run_end_encoded(
+            children[0].dtype.copy(), children[1].dtype.copy()
+        )
 
     def _read_kv_vec(
         self, table_pos: UInt32, slot: Int
@@ -1036,6 +1053,8 @@ struct IpcDecoder(Movable):
                 dtype = dt.year_month_interval().to_dyn()
         elif type_type == TYPE_STRUCT:
             dtype = dt.struct_(children^)
+        elif type_type == TYPE_RUN_END_ENCODED:
+            dtype = IpcDecoder._run_end_encoded(children)
         else:
             raise NotImplementedError(
                 t"IpcDecoder: unsupported type_type: {Int(type_type)}"

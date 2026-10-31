@@ -116,9 +116,9 @@ See the [compile guide](https://marrow.kszucs.dev/guide/compile.html).
 ## What's in it
 
 - **Layouts** — bool, numeric, string/binary (+large), fixed-size binary,
-  list/large_list/fixed_size_list, struct, map, dictionary, decimal
-  (32/64/128/256) and the temporal family. Union, run-end-encoded and view
-  layouts are not implemented.
+  list/large_list/fixed_size_list, struct, map, dictionary, run-end encoded,
+  decimal (32/64/128/256) and the temporal family. Union and view layouts are
+  not implemented.
 - **Kernels** — arithmetic, comparison, boolean, cast, aggregate, distinct,
   filter/take/drop_null, sort, hash join (6 kinds), group-by, window, string
   (incl. `LIKE`/`ILIKE`), temporal, conditional, membership and nested.

@@ -3,7 +3,7 @@
 
 from std.testing import assert_equal, assert_true
 
-from ...arrays import DynArray
+from ...arrays import DynArray, RunEndEncodedArray
 from ...builders import array, nulls, Int64Builder, StringBuilder
 from ...dtypes import int32, int64, string
 from ...kernels.distinct import (
@@ -114,3 +114,17 @@ def test_count_distinct_parallel_matches_serial() raises:
     assert_equal(
         CountDistinctKernel.dispatch(a, ExecContext.parallel(4)).value(), 5000
     )
+
+
+def test_count_distinct_run_end_encoded_excludes_null_runs() raises:
+    """Rows 5, 5, null, 2, 2, 5, 5 -- the 5s in two runs, read through a
+    window inside the runs -- count two values, exactly and approximately;
+    a window of the null run alone counts none."""
+    var a: DynArray = RunEndEncodedArray.from_arrays(
+        array([3, 4, 6, 9], int32), array([5, None, 2, 5], int64)
+    ).slice(1, 7)
+    assert_equal(CountDistinctKernel.dispatch(a).value(), 2)
+    assert_equal(ApproxCountDistinctKernel.dispatch(a).value(), 2)
+    var null_run = a.slice(2, 1)
+    assert_equal(CountDistinctKernel.dispatch(null_run).value(), 0)
+    assert_equal(ApproxCountDistinctKernel.dispatch(null_run).value(), 0)

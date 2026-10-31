@@ -481,6 +481,30 @@ expected = pa.table({
         assert_true(Bool(back.equals(scope["expected"])), String(back))
 
 
+def test_avro_writes_run_end_encoded_as_its_values() raises:
+    """A run-end encoded column is written as its values, and a slice starting
+    and ending inside its runs as its own rows."""
+    var scope = Python.dict()
+    _ = Python.import_module("builtins").exec(
+        """
+import pyarrow as pa, pyarrow.compute as pc
+numbers = pa.array([1, 1, None, 2, 2, 2, 3], pa.int64())
+names = pa.array(["a", "a", "b", "b", None, None, "c"])
+source = pa.table({
+    "n": pc.run_end_encode(numbers).slice(1, 5),
+    "s": pc.run_end_encode(names).slice(1, 5),
+})
+expected = pa.table({"n": numbers.slice(1, 5), "s": names.slice(1, 5)})
+""",
+        scope,
+    )
+    with ScratchDir() as tmp:
+        var path = join(tmp, "t.avro")
+        write_avro(_to_marrow(scope["source"]), path)
+        var back = _to_pyarrow(read_avro(path))
+        assert_true(Bool(back.equals(scope["expected"])), String(back))
+
+
 def test_avro_write_many_blocks() raises:
     """A sync interval smaller than a row puts every row in its own block."""
     var py = _roundtrip_table()

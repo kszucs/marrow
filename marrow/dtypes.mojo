@@ -29,6 +29,7 @@ Concrete zero-size type structs (one per Arrow type):
     BinaryLikeType (trait), StringLikeType (trait), BinaryType, LargeBinaryType, StringType, LargeStringType,
     BinaryViewLikeType (trait), StringViewLikeType (trait), BinaryViewType, StringViewType,
     ListType, FixedSizeListType, FixedSizeBinaryType, StructType, DictionaryType,
+    RunEndEncodedType,
     Date32Type, Date64Type, Time32Type, Time64Type, TimestampType, DurationType,
     YearMonthIntervalType, DayTimeIntervalType, MonthDayNanoIntervalType,
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type
@@ -895,6 +896,54 @@ struct DictionaryType(DataType):
         )
 
 
+struct RunEndEncodedType(DataType):
+    """Each run of equal values stored once, with the row its run ends at.
+
+    Equivalent to PyArrow's ``pa.run_end_encoded(run_end_type, value_type)``.
+    The run-end type must be int16, int32 or int64; the value type can be any
+    Arrow type.
+    """
+
+    var _run_end_type: DynType
+    var _value_type: DynType
+
+    def __init__(
+        out self, var run_end_type: DynType, var value_type: DynType
+    ) raises:
+        if not (
+            run_end_type.is_int16()
+            or run_end_type.is_int32()
+            or run_end_type.is_int64()
+        ):
+            raise TypeError(
+                t"RunEndEncodedType: run_end_type must be int16, int32 or"
+                t" int64, got: {run_end_type}"
+            )
+        self._run_end_type = run_end_type^
+        self._value_type = value_type^
+
+    def run_end_type(ref self) -> ref[self._run_end_type] DynType:
+        return self._run_end_type
+
+    def value_type(ref self) -> ref[self._value_type] DynType:
+        return self._value_type
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self._run_end_type == other._run_end_type
+            and self._value_type == other._value_type
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "run_end_encoded<run_ends: ",
+            self._run_end_type,
+            ", values: ",
+            self._value_type,
+            ">",
+        )
+
+
 # ---------------------------------------------------------------------------
 # ArrayLayout — the buffers and children an array of a type holds
 # ---------------------------------------------------------------------------
@@ -921,6 +970,8 @@ struct ArrayLayout(Equatable, TrivialRegisterPassable):
     comptime LIST = 6
     # No buffers; each child holds `width` values per value.
     comptime NESTED = 7
+    # No buffers; child 0 holds where each run ends, child 1 each run's value.
+    comptime RUN_END = 8
 
     var kind: Int
     var width: Int
@@ -933,7 +984,11 @@ struct ArrayLayout(Equatable, TrivialRegisterPassable):
 
     def num_buffers(self) -> Int:
         """How many data buffers it holds; a view's data buffers follow them."""
-        if self.kind == Self.NULL or self.kind == Self.NESTED:
+        if (
+            self.kind == Self.NULL
+            or self.kind == Self.NESTED
+            or self.kind == Self.RUN_END
+        ):
             return 0
         elif self.kind == Self.BINARY:
             return 2
@@ -1011,6 +1066,7 @@ struct DynType(
         Decimal256Type,
         BinaryViewType,
         StringViewType,
+        RunEndEncodedType,
     ]
     var _storage: Self.Storage
 
@@ -1213,6 +1269,8 @@ struct DynType(
         elif self.is_dictionary():
             ref index = self.as_dictionary().index_type()
             return ArrayLayout(ArrayLayout.DICTIONARY, index.byte_width(), 1)
+        elif self.is_run_end_encoded():
+            return ArrayLayout(ArrayLayout.RUN_END, 0, 2)
         elif self.is_fixed_size_binary():
             return ArrayLayout(
                 ArrayLayout.FIXED_WIDTH, self.as_fixed_size_binary().byte_width
@@ -1227,6 +1285,12 @@ struct DynType(
             return self.as_struct().fields[i].dtype.copy()
         elif self.is_dictionary():
             return self.as_dictionary().value_type().copy()
+        elif self.is_run_end_encoded():
+            ref ree = self.as_run_end_encoded()
+            if i == 0:
+                return ree.run_end_type().copy()
+            else:
+                return ree.value_type().copy()
         elif self.is_map():
             return self.as_map().entries.dtype.copy()
         elif self.is_list():
@@ -1289,14 +1353,21 @@ struct DynType(
 
     def children(self) -> List[Field]:
         """The child fields, as a schema lists them: a struct's fields, a
-        list's value field, a map's entries struct, and a dictionary's value
-        type's children. Empty for every other type.
+        list's value field, a map's entries struct, a dictionary's value
+        type's children, and a run-end encoded type's ``run_ends`` and
+        ``values``. Empty for every other type.
 
         `layout()` counts the children of an array instead, where a
         dictionary's values are one -- see `child_type`.
         """
         if self.is_dictionary():
             return self.as_dictionary().value_type().children()
+        elif self.is_run_end_encoded():
+            ref ree = self.as_run_end_encoded()
+            return [
+                field("run_ends", ree.run_end_type().copy(), nullable=False),
+                field("values", ree.value_type().copy()),
+            ]
         elif self.is_struct():
             return self.as_struct().fields.copy()
         elif self.is_map():
@@ -1317,6 +1388,9 @@ struct DynType(
 
     def is_dictionary(self) -> Bool:
         return self.isa[DictionaryType]()
+
+    def is_run_end_encoded(self) -> Bool:
+        return self.isa[RunEndEncodedType]()
 
     def is_date32(self) -> Bool:
         return self.isa[Date32Type]()
@@ -1429,6 +1503,10 @@ struct DynType(
     def as_dictionary(ref self) -> ref[self] DictionaryType:
         """For dictionary types, returns the inner DictionaryType."""
         return self.get[DictionaryType]()
+
+    def as_run_end_encoded(ref self) -> ref[self] RunEndEncodedType:
+        """For run-end encoded types, returns the inner RunEndEncodedType."""
+        return self.get[RunEndEncodedType]()
 
     def as_fixed_size_binary(
         ref self,
@@ -1575,6 +1653,17 @@ def dictionary(
     The index type must be an integer type (int8/16/32/64, uint8/16/32/64).
     """
     return DictionaryType(index_type^, value_type^, ordered)
+
+
+def run_end_encoded(
+    var run_end_type: DynType, var value_type: DynType
+) raises -> RunEndEncodedType:
+    """Construct a run-end encoded type. Equivalent to PyArrow's
+    ``pa.run_end_encoded()``.
+
+    The run-end type must be int16, int32 or int64.
+    """
+    return RunEndEncodedType(run_end_type^, value_type^)
 
 
 def struct_(var *fields: Field) -> StructType:

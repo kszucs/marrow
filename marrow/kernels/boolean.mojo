@@ -19,7 +19,14 @@ Three tiers per kernel (same scheme as ``numeric.mojo``):
 
 from std.math import isnan, isinf
 
-from ..arrays import Array, ArrayData, BoolArray, DynArray, PrimitiveArray
+from ..arrays import (
+    Array,
+    ArrayData,
+    BoolArray,
+    DynArray,
+    PrimitiveArray,
+    RunEndEncodedArray,
+)
 from ..buffers import Bitmap
 from ..dtypes import (
     FloatingType,
@@ -28,6 +35,8 @@ from ..dtypes import (
 )
 from ..views import apply
 from .core import Kernel, UnaryKernel
+from .runs import RunEndDecodeKernel
+from .segments import ByEnds
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 
@@ -251,7 +260,10 @@ trait NullPredicateKernel(Kernel):
     """`is_null` / `not_null` — reads only the validity bitmap. `negate` picks the
     polarity (`is_null` inverts validity, `not_null` copies it). It reads the
     layout alone, so `apply(ArrayData)` is the operation and the typed `apply`
-    and `dispatch` hand it their array's data."""
+    and `dispatch` hand it their array's data.
+
+    A run-end encoded array has no validity of its own: a row is null when its
+    run's value is, so its mask is its values', repeated over their runs."""
 
     comptime negate: Bool
 
@@ -273,13 +285,36 @@ trait NullPredicateKernel(Kernel):
     def dispatch(
         arr: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
-        return Self.apply(arr.to_data(), ctx)
+        if arr.isa[RunEndEncodedArray]():
+            return Self._run_end_encoded(arr.as_run_end_encoded(), ctx)
+        else:
+            return Self._mask(arr.to_data(), ctx)
 
     @staticmethod
     def apply(
         data: ArrayData, ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
-        """The mask over any layout: only its validity is read."""
+        """The mask over any layout: only its validity is read, or a run-end
+        encoded array's values'."""
+        if data.dtype.is_run_end_encoded():
+            return Self._run_end_encoded(RunEndEncodedArray(data), ctx)
+        else:
+            return Self._mask(data, ctx)
+
+    @staticmethod
+    def _run_end_encoded(
+        array: RunEndEncodedArray, ctx: ExecContext
+    ) raises -> BoolArray:
+        """The mask of the window's runs' values, over their rows."""
+        var ends = array.segment_ends()
+        return RunEndDecodeKernel.apply(
+            Self._mask(array.physical_values().to_data(), ctx),
+            ByEnds(ends.values()),
+        )
+
+    @staticmethod
+    def _mask(data: ArrayData, ctx: ExecContext) raises -> BoolArray:
+        """The mask of `data`'s own validity."""
         var n = data.length
         var null_count = data.nulls
         var validity = data.validity()

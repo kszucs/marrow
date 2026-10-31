@@ -19,6 +19,7 @@ from ..arrays import (
     DynArray,
     BoolArray,
     PrimitiveArray,
+    RunEndEncodedArray,
     StringArray,
     StringViewArray,
 )
@@ -1622,3 +1623,128 @@ def test_c_stream_import_frees_its_struct_shells() raises:
     # The import is zero-copy: the exported arrays live as long as the table.
     _ = table^
     assert_equal(live_allocations(), before)
+
+
+# ---------------------------------------------------------------------------
+# Run-end encoded arrays: "+r", two children, no buffers
+# ---------------------------------------------------------------------------
+
+
+def _ree_rows() raises -> RunEndEncodedArray:
+    """Rows 1, 1, 2, null, null, 3, in the runs `pc.run_end_encode` makes."""
+    return RunEndEncodedArray.from_arrays(
+        array([2, 3, 5, 6], int32), array([1, 2, None, 3], int64)
+    )
+
+
+def test_run_end_encoded_dtype_schema_roundtrip() raises:
+    """`+r` with two child schemas, `run_ends` (not nullable) and `values`,
+    for every run-end type."""
+    var run_end_types: List[DynType] = [int16, int32, int64]
+    for run_end_type in run_end_types:
+        var dt: DynType = run_end_encoded(run_end_type.copy(), string)
+        var c_schema = CArrowSchema.from_dtype(dt)
+        var fmt = String(
+            StringSlice(
+                unsafe_from_utf8=CStringSpan(
+                    unsafe_from_ptr=Pointer(to=c_schema.format[])
+                )
+            )
+        )
+        assert_equal(fmt, "+r")
+        assert_equal(c_schema.n_children, 2)
+        var run_ends = c_schema.children[unsafe_offset=0][].to_field()
+        var values = c_schema.children[unsafe_offset=1][].to_field()
+        assert_equal(run_ends.name, "run_ends")
+        assert_false(run_ends.nullable)
+        assert_true(run_ends.dtype == run_end_type)
+        assert_equal(values.name, "values")
+        assert_true(values.nullable)
+        assert_true(values.dtype == DynType(string))
+        assert_true(c_schema.to_dtype() == dt)
+
+
+def test_run_end_encoded_from_pyarrow() raises:
+    """PyArrow's encoding imports as the same runs, and its slice as the same
+    window over whole children."""
+    var pa = Python.import_module("pyarrow")
+    var pc = Python.import_module("pyarrow.compute")
+    var py = pc.run_end_encode(pa.array(Python.list(1, 1, 2, None, None, 3)))
+    var dtype = c_schema_from_pyobj(py.type).to_dtype()
+    assert_true(dtype == DynType(run_end_encoded(int32, int64)))
+    var expected = _ree_rows()
+    var whole = c_array_from_pyobj(py).to_array(dtype)
+    assert_true(whole.as_run_end_encoded() == expected)
+    var c_slice = c_array_from_pyobj(py.slice(1, 4))
+    assert_equal(c_slice.offset, 1)
+    assert_equal(c_slice.n_buffers, 0)
+    var window = c_slice^.to_array(dtype)
+    assert_true(window.as_run_end_encoded() == expected.slice(1, 4))
+    assert_equal(window.null_count(), 0)
+    assert_true(window.is_valid(1))
+    assert_false(window.is_valid(2))
+
+
+def test_run_end_encoded_to_pyarrow() raises:
+    """A sliced marrow encoding exports no buffers, its offset and whole
+    children, and PyArrow reads the window."""
+    var pa = Python.import_module("pyarrow")
+    var sliced: DynArray = _ree_rows().slice(1, 4)
+    var c_array = CArrowArray.from_array(sliced)
+    assert_equal(c_array.n_buffers, 0)
+    assert_equal(Int(c_array.buffers), 0)
+    assert_equal(c_array.null_count, 0)
+    assert_equal(c_array.offset, 1)
+    assert_equal(c_array.length, 4)
+    assert_equal(c_array.n_children, 2)
+    assert_equal(c_array.children[unsafe_offset=0][].length, 4)
+    var pyarr = pa.Array._import_from_c_capsule(
+        CArrowSchema.from_dtype(sliced.dtype()).to_pycapsule(),
+        c_array^.to_pycapsule(),
+    )
+    pyarr.validate(full=True)
+    assert_true(pyarr.type == pa.run_end_encoded(pa.int32(), pa.int64()))
+    assert_true(pyarr.to_pylist() == Python.list(1, 2, None, None))
+    assert_equal(Int(py=pyarr.null_count), 0)
+
+
+def _import_error(arr: CArrowArray, dtype: DynType) raises -> String:
+    """What importing `arr` as `dtype` raises; fails when it imports."""
+    try:
+        _ = arr.to_data(dtype, _no_owner())
+    except e:
+        return String(e)
+    raise Error("the import did not raise")
+
+
+def test_import_refuses_malformed_run_end_encoded() raises:
+    """A buffer, a null count, or run ends that do not increase: each an
+    `InvalidError`, before any value is read."""
+    var pc = Python.import_module("pyarrow.compute")
+    var py = pc.run_end_encode(_pyarrow("array([1, 1, 2])"))
+    var dtype = c_schema_from_pyobj(py.type).to_dtype()
+    var arr = c_array_from_pyobj(py)
+    arr.n_buffers = 1
+    var error = _import_error(arr, dtype)
+    assert_true(
+        error.startswith("InvalidError") and "takes 0 buffers" in error, error
+    )
+    arr.n_buffers = 0
+    arr.null_count = 1
+    error = _import_error(arr, dtype)
+    assert_true(
+        error.startswith("InvalidError") and "null_count is 1" in error, error
+    )
+    arr.null_count = 0
+    keep(arr)  # outlives the writes above
+
+    # `Array.from_buffers` checks no more than the last run end.
+    var bad = _pyarrow(
+        "Array.from_buffers(pa.run_end_encoded(pa.int32(), pa.int64()), 2,"
+        " [None], children=[pa.array([2, 2], pa.int32()), pa.array([1, 2])])"
+    )
+    var bad_dtype = c_schema_from_pyobj(bad.type).to_dtype()
+    error = _import_error(c_array_from_pyobj(bad), bad_dtype)
+    assert_true(
+        error.startswith("InvalidError") and "not past 2" in error, error
+    )

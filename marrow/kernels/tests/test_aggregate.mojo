@@ -3,7 +3,7 @@
 
 from std.math import iota, isnan, nan
 from std.sys.info import simd_width_of
-from std.testing import assert_equal, assert_true, assert_false
+from std.testing import assert_equal, assert_true, assert_false, assert_raises
 
 from ...arrays import (
     DynArray,
@@ -11,6 +11,7 @@ from ...arrays import (
     Int32Array,
     Int64Array,
     PrimitiveArray,
+    RunEndEncodedArray,
     StringArray,
 )
 from ...buffers import Bitmap, Buffer
@@ -51,6 +52,7 @@ from ...dtypes import (
     TimestampType,
 )
 from ...kernels.groupby import Groups
+from ...kernels.runs import RunEndDecodeKernel
 from ...kernels.numeric import AddKernel, MinKernel
 from ...kernels.window import WindowFrame, WindowSegments
 from ...kernels.aggregate import (
@@ -990,3 +992,39 @@ def test_fold_lanes_float_min_max_nan() raises:
     assert_equal(highs[1].as_float64().value(), 3.0)
     assert_equal(lows[2].as_float64().value(), -1.0)
     assert_equal(highs[2].as_float64().value(), 2.0)
+
+
+def _same(got: BoolScalar, want: BoolScalar) raises:
+    assert_equal(got.is_valid(), want.is_valid())
+    if want.is_valid():
+        assert_equal(got.value(), want.value())
+
+
+def test_any_all_run_end_encoded() raises:
+    """Rows false, false, null, null, null, true: three runs, read through a
+    window inside them. `min_count` and the nulls count rows, not runs."""
+    var values: DynArray = RunEndEncodedArray.from_arrays(
+        array([3, 6, 8], int32), array([False, None, True])
+    ).slice(1, 6)
+    var decoded = RunEndDecodeKernel.dispatch(values).as_bool().copy()
+    for skip_nulls in [True, False]:
+        for min_count in [0, 1, 3, 4]:
+            _same(
+                AnyKernel.dispatch(values, skip_nulls, min_count),
+                AnyKernel.aggregate(decoded, skip_nulls, min_count),
+            )
+            _same(
+                AllKernel.dispatch(values, skip_nulls, min_count),
+                AllKernel.aggregate(decoded, skip_nulls, min_count),
+            )
+    _is(AnyKernel.dispatch(values, True, 3), True)
+    _is(AnyKernel.dispatch(values, True, 4), None)
+    _is(AllKernel.dispatch(values, True, 1), False)
+    _is(AnyKernel.dispatch(values, False, 1), True)
+    _is(AllKernel.dispatch(values, False, 1), False)
+    var falses = values.slice(0, 4)
+    _is(AnyKernel.dispatch(falses, False, 1), None)
+    _is(AnyKernel.dispatch(falses, True, 2), False)
+    _is(AnyKernel.dispatch(falses, True, 3), None)
+    with assert_raises(contains="TypeError"):
+        _ = AnyKernel.dispatch(array([1], int64), True, 1)

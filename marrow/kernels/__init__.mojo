@@ -49,16 +49,18 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
     properties
   - `groupby.mojo` — `Groups`, a batch's rows assigned to group ids
   - `dictionary.mojo` — `dictionary_encode`, `value_counts` and `mode`
+  - `runs.mojo` — `run_end_encode`, `run_end_decode` and `run_index`
   - *not re-exported* — the encoder and the dictionary packers in
     `dictionary.mojo`, the codec stages in `bitwise.mojo` and `cast.mojo`
     (`ZigzagEncode`, `OrderedEncode`, `ByteSwap`, `NumericCast`, ...),
     `join.mojo` / `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the
     hash machinery group-by, join and `is_in` share), `concat.mojo` (batches
     joined in parallel), `segments.mojo` (a column cut into consecutive runs
-    of rows, and folds over each run), `runs.mojo` (where runs of equal rows
-    start), `statistics.mojo` (column bounds), `compose.mojo` (stream stages
-    composed, and codecs built from stages and packers) and `packing.mojo`
-    (values and byte strings packed into bytes and back)
+    of rows, and folds over each run), `RunsKernel` and the runs packers in
+    `runs.mojo` (where runs of equal rows start), `statistics.mojo` (column
+    bounds), `compose.mojo` (stream stages composed, and codecs built from
+    stages and packers) and `packing.mojo` (values and byte strings packed
+    into bytes and back)
 """
 
 from marrow.dtypes import (
@@ -217,6 +219,7 @@ from .cast import CastArm, CastKernel
 from .core import Kernel, Partial, Prunable
 from .groupby import Groups
 from .dictionary import DictionaryEncodeKernel, ModeKernel, ValueCountsKernel
+from .runs import RunIndexKernel, RunEndDecodeKernel, RunEndEncodeKernel
 from .distinct import ApproxCountDistinctKernel, CountDistinctKernel
 from .filter import (
     FilterKernel,

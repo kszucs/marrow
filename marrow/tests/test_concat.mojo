@@ -10,6 +10,7 @@ from std.testing import (
 
 from ..arrays import (
     DictionaryArray,
+    RunEndEncodedArray,
     DynArray,
     PrimitiveArray,
     BoolArray,
@@ -30,6 +31,7 @@ from ..builders import (
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    RunEndEncodedBuilder,
     Int8Builder,
     Int32Builder,
     Float32Builder,
@@ -601,6 +603,45 @@ def test_concat_dictionaries_beyond_their_index_type_raise() raises:
         )
     with assert_raises(contains="do not fit its index type"):
         _ = DynBuilder.concat(parts)
+
+
+# ---------------------------------------------------------------------------
+# concat — run-end encoded arrays
+# ---------------------------------------------------------------------------
+
+
+def test_concat_run_end_encoded_offsets_run_ends() raises:
+    """Each input's run ends count from its own start, so the result's count
+    from the first's: `[3, 4]` then `[2]` end at `[3, 4, 6]`."""
+    var a = RunEndEncodedArray.from_arrays(
+        array([3, 4], int32), array([1, 2], int64)
+    )
+    var b = RunEndEncodedArray.from_arrays(array([2], int32), array([3], int64))
+    var out = DynBuilder.concat([a^.to_dyn(), b^.to_dyn()])
+    assert_true(out.dtype().is_run_end_encoded())
+    assert_equal(len(out), 6)
+    ref ree = out.as_run_end_encoded()
+    assert_true(ree.run_ends().as_int32() == array([3, 4, 6], int32))
+    assert_true(ree.values().as_int64() == array([1, 2, 3], int64))
+
+
+def test_concat_run_end_encoded_slices() raises:
+    """Slices that start and end inside runs keep only their windows' rows of
+    the runs they cut."""
+    var whole = RunEndEncodedArray.from_arrays(
+        array([3, 4, 6], int32), array([5, 1, 2], int64)
+    )
+    var out = DynBuilder.concat(
+        [whole.slice(1, 3).to_dyn(), whole.slice(4, 2).to_dyn()]
+    )
+    assert_equal(len(out), 5)
+    ref ree = out.as_run_end_encoded()
+    assert_true(ree.run_ends().as_int32() == array([2, 3, 5], int32))
+    assert_true(ree.values().as_int64() == array([5, 1, 2], int64))
+    var typed = RunEndEncodedBuilder.concat(
+        [whole.slice(1, 3), whole.slice(4, 2)]
+    )
+    assert_true(typed == ree)
 
 
 # ---------------------------------------------------------------------------

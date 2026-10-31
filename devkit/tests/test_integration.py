@@ -66,7 +66,7 @@ def test_the_module_imports_and_exposes_the_participants(integration):
 
 def test_the_skip_sets_name_only_unimplemented_layouts(integration):
     unsupported = integration.ArcherySuite.UNSUPPORTED
-    assert unsupported == {"union", "list_view", "extension", "run_end_encoded"}
+    assert unsupported == {"union", "list_view", "extension"}
 
 
 # ---------------------------------------------------------------------------

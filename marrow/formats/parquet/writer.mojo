@@ -22,6 +22,7 @@ from std.sys.info import Endian
 from ...errors import InternalError, InvalidError, NotImplementedError
 from ..core import BatchWriter
 from ...kernels.cast import TemporalCastKernel
+from ...kernels.runs import RunEndDecodeKernel
 from ...arrays import (
     DynArray,
     PrimitiveArray,
@@ -1039,10 +1040,15 @@ struct FileWriter[S: ByteSink = FileSink](BatchWriter):
         var columns = List[ColumnChunk]()
         var total = 0
         for ci in range(len(self.nodes)):
+            # A run-end encoded column is written as its values
+            # (`SchemaMapping.from_arrow`).
+            var column = batch.columns[ci].copy()
+            if column.dtype().is_run_end_encoded():
+                column = RunEndDecodeKernel.dispatch(column)
             var col_leaves = List[Int]()
             self.nodes[ci].collect_leaf_indices(col_leaves)
             var leaf_values = List[DynArray]()
-            self.nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_values)
+            self.nodes[ci].collect_leaf_arrays(column, leaf_values)
 
             # Per-leaf rep/def levels: empty for a flat column (each leaf's
             # levels are synthesized below from its own validity), Dremel-
@@ -1054,9 +1060,7 @@ struct FileWriter[S: ByteSink = FileSink](BatchWriter):
                 defs.append(List[Int32]())
                 reps.append(List[Int32]())
             if self.nodes[ci].needs_levels():
-                self.nodes[ci].shred_levels(
-                    batch.columns[ci], self.leaves, defs, reps
-                )
+                self.nodes[ci].shred_levels(column, self.leaves, defs, reps)
 
             for k in range(len(col_leaves)):
                 var gi = col_leaves[k]

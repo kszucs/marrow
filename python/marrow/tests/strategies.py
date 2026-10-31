@@ -129,6 +129,26 @@ dictionary_types = st.builds(
 )
 
 
+# Not part of `all_types()`: the compute property tests use PyArrow's kernels
+# as their oracle, and PyArrow has none over run-end encoded values.
+RUN_END_TYPES = [pa.int16(), pa.int32(), pa.int64()]
+run_end_encoded_types = st.builds(
+    pa.run_end_encoded,
+    st.sampled_from(RUN_END_TYPES),
+    st.sampled_from(
+        [
+            pa.int64(),
+            pa.float64(),
+            pa.bool_(),
+            pa.string(),
+            pa.binary(),
+            pa.decimal128(38, 10),
+            pa.timestamp("us", "UTC"),
+        ]
+    ),
+)
+
+
 def all_types(leaves=flat_types):
     return st.one_of(leaves, nested_types(leaves), dictionary_types)
 
@@ -212,7 +232,7 @@ def values(t):
         return st.lists(maybe_null(t.value_type), max_size=4)
     if pa.types.is_struct(t):
         return st.fixed_dictionaries({f.name: maybe_null(f.type) for f in t})
-    if pa.types.is_dictionary(t):
+    if pa.types.is_dictionary(t) or pa.types.is_run_end_encoded(t):
         return values(t.value_type)
     raise NotImplementedError(f"no value strategy for {t}")
 
@@ -230,13 +250,19 @@ def arrays(draw, dtype=all_types(), size=None, nullable=True):
     t = draw(dtype) if isinstance(dtype, st.SearchStrategy) else dtype
     n = draw(size if size is not None else lengths())
     has_nulls = nullable and draw(st.booleans())
-    if pa.types.is_dictionary(t):
-        # A small pool, so values repeat and the index type never overflows.
+    if pa.types.is_dictionary(t) or pa.types.is_run_end_encoded(t):
+        # A small pool, so values repeat -- into runs, for a run-end encoding
+        # -- and a dictionary's index type never overflows.
         pool = draw(st.lists(values(t.value_type), min_size=1, max_size=8))
         v = st.sampled_from(pool)
         item = st.one_of(st.none(), v, v, v) if has_nulls else v
     else:
         item = maybe_null(t) if has_nulls else values(t)
+    if pa.types.is_run_end_encoded(t):
+        column = pa.array(
+            draw(st.lists(item, min_size=n, max_size=n)), type=t.value_type
+        )
+        return pc.run_end_encode(column, run_end_type=t.run_end_type)
     return pa.array(draw(st.lists(item, min_size=n, max_size=n)), type=t)
 
 
@@ -277,6 +303,8 @@ def _canon(arr):
         return clean.view(pa.int64() if wide.type == pa.float64() else pa.int32())
     if pa.types.is_dictionary(t):
         return _canon(arr.dictionary_decode())
+    if pa.types.is_run_end_encoded(t):
+        return _canon(pc.run_end_decode(arr))
     mask = arr.is_null() if arr.null_count else None
     if pa.types.is_struct(t):
         children = [_canon(arr.field(i)) for i in range(t.num_fields)]

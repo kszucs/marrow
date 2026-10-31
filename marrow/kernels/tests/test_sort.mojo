@@ -11,6 +11,7 @@ from ...arrays import (
     DictionaryArray,
     Int32Array,
     PrimitiveArray,
+    RunEndEncodedArray,
     StringArray,
     StructArray,
 )
@@ -60,6 +61,7 @@ from ...dtypes import (
 from ...tabular import record_batch
 from ...kernels.sort import SortIndices, SortKernel
 from ...kernels.filter import TakeKernel
+from ...kernels.runs import RunEndDecodeKernel
 from ...execution import ExecContext
 from std.utils.numerics import nan, inf, neg_inf
 
@@ -1529,3 +1531,20 @@ def test_sort_string_view_prefix_ties_and_short_values() raises:
     var expected = [4, 2, 1, 3, 0, 5]
     for i in range(6):
         assert_equal(Int(idx[i].value()), expected[i])
+
+
+def test_sort_indices_run_end_encoded() raises:
+    """Rows 3, 3, null, 1, 1, 3, 3 -- two runs of 3 apart, read through a
+    window inside its runs -- sort as their decoded rows do, stably."""
+    var a: DynArray = RunEndEncodedArray.from_arrays(
+        array([3, 4, 6, 8, 9], int32), array([3, None, 1, 3, 2], int64)
+    ).slice(1, 7)
+    var decoded = RunEndDecodeKernel.dispatch(a)
+    _assert_perm(SortIndices.dispatch(a), [3, 4, 0, 1, 5, 6, 2])
+    assert_true(SortIndices.dispatch(a) == SortIndices.dispatch(decoded))
+    var down = SortIndices.dispatch(a, ascending=False, nulls_first=True)
+    _assert_perm(down, [2, 0, 1, 5, 6, 3, 4])
+    assert_true(
+        down == SortIndices.dispatch(decoded, ascending=False, nulls_first=True)
+    )
+    _assert_perm(SortIndices.dispatch(a, limit=3), [3, 4, 0])

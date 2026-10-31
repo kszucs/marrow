@@ -13,7 +13,12 @@ from std.utils.numerics import nan
 from std.python import Python, PythonObject
 from ....utils.testing import ScratchDir
 from ....dtypes import *
-from ....arrays import DynArray, DictionaryArray
+from ....arrays import (
+    DynArray,
+    DictionaryArray,
+    RunEndEncodedArray,
+    StructArray,
+)
 from ....builders import (
     DynBuilder,
     MapBuilder,
@@ -1851,3 +1856,173 @@ def test_ipc_refuses_map_entries_that_are_not_key_value_structs() raises:
     if not _refused[CorruptError](b):
         accepted.append("entries without a value")
     assert_true(len(accepted) == 0, String(", ").join(accepted))
+
+
+# ---------------------------------------------------------------------------
+# Run-end encoded columns: a node with no buffers, then its two children
+# ---------------------------------------------------------------------------
+
+
+def _ree_ints() raises -> RunEndEncodedArray:
+    """Rows 5, 5, 5, null, 2, 2, as three runs."""
+    return RunEndEncodedArray.from_arrays(
+        array([3, 4, 6], int32), array([5, None, 2], int64)
+    )
+
+
+def _ree_batches() raises -> List[RecordBatch]:
+    """Two encodings, one of strings over int16 run ends; then the first
+    alone, sliced inside its runs."""
+    var ints: DynArray = _ree_ints()
+    var words: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 6], int16), array(["ab", "c"])
+    )
+    var window: DynArray = _ree_ints().slice(1, 4)
+    return [
+        record_batch([ints^, words^], names=["r", "s"]),
+        record_batch([window^], names=["r"]),
+    ]
+
+
+def _assert_ree_roundtrip(got: RecordBatch, written: RecordBatch) raises:
+    """`got` reads as `written`, the slice rebased to its own runs."""
+    assert_true(got.schema == written.schema)
+    assert_equal(got.num_rows(), written.num_rows())
+    if written.num_columns() == 2:
+        for i in range(2):
+            assert_true(
+                got.columns[i].as_run_end_encoded()
+                == written.columns[i].as_run_end_encoded()
+            )
+    else:
+        var rebased = RunEndEncodedArray.from_arrays(
+            array([2, 3, 4], int32), array([5, None, 2], int64)
+        )
+        assert_true(got.columns[0].as_run_end_encoded() == rebased)
+
+
+def test_file_run_end_encoded_roundtrip() raises:
+    var batches = _ree_batches()
+    for batch in batches:
+        _assert_ree_roundtrip(_roundtrip_file(batch), batch)
+
+
+def test_stream_run_end_encoded_roundtrip() raises:
+    var batches = _ree_batches()
+    for batch in batches:
+        _assert_ree_roundtrip(_roundtrip_stream(batch), batch)
+
+
+def test_ipc_rebases_sliced_children() raises:
+    """Children that are slices of their own, under a parent that is not:
+    the run ends and values of an encoding, and a struct's field, are written
+    from their offsets rather than from the start of their buffers."""
+    var ends: DynArray = array([9, 3, 4, 6], int32).slice(1, 3)
+    var values: DynArray = array([7, 5, None, 2], int64).slice(1, 3)
+    var ree: DynArray = RunEndEncodedArray.from_arrays(ends^, values^)
+    var fields: List[DynArray] = [array([7, 5, 1, 2], int64).slice(1, 3)]
+    var rows: DynArray = StructArray(
+        dtype=struct_(field("a", int64)), length=3, children=fields^
+    )
+    var reads: List[RecordBatch] = [
+        _roundtrip_file(record_batch([ree.copy()], names=["r"])),
+        _roundtrip_stream(record_batch([ree.copy()], names=["r"])),
+        _roundtrip_file(record_batch([rows.copy()], names=["s"])),
+    ]
+    for i in range(2):
+        assert_true(reads[i].columns[0].as_run_end_encoded() == _ree_ints())
+    var a = reads[2].columns[0].as_struct().field(0)
+    assert_true(a.as_int64() == array([5, 1, 2], int64))
+
+
+def test_marrow_reads_pyarrow_run_end_encoded() raises:
+    """PyArrow's encoding, whole and sliced, reads back as its rows."""
+    var pa = Python.import_module("pyarrow")
+    var pc = Python.import_module("pyarrow.compute")
+    var path = _tmp_path()
+    var py = pc.run_end_encode(pa.array(Python.list(5, 5, 5, None, 2, 2)))
+    var schema = pa.schema(Python.list(pa.field("r", py.type)))
+    var writer = pa.ipc.new_file(path, schema)
+    writer.write(pa.record_batch(Python.list(py), schema=schema))
+    writer.write(pa.record_batch(Python.list(py.slice(1, 4)), schema=schema))
+    writer.close()
+    var got = read_ipc_file(path)
+    assert_equal(len(got), 2)
+    assert_true(got[0].columns[0].as_run_end_encoded() == _ree_ints())
+    assert_equal(got[1].num_rows(), 4)
+    assert_true(
+        Bool(_pyarrow_of(got^).equals(pa.ipc.open_file(path).read_all()))
+    )
+
+
+def test_pyarrow_reads_marrow_run_end_encoded() raises:
+    var pa = Python.import_module("pyarrow")
+    var batches = _ree_batches()
+    var wants: List[PythonObject] = [
+        Python.list(5, 5, 5, None, 2, 2),
+        Python.list(5, 5, None, 2),
+    ]
+    for i in range(len(batches)):
+        var path = _tmp_path()
+        write_ipc_file(path, [batches[i].copy()])
+        var table = pa.ipc.open_file(path).read_all()
+        table.validate(full=True)
+        var column = table.column("r")
+        assert_true(column.type == pa.run_end_encoded(pa.int32(), pa.int64()))
+        assert_true(column.to_pylist() == wants[i])
+    var path = _tmp_path(".arrows")
+    write_ipc_stream(path, [batches[0].copy()])
+    var words = pa.ipc.open_stream(path).read_all().column("s")
+    assert_true(words.type == pa.run_end_encoded(pa.int16(), pa.string()))
+    assert_true(
+        words.to_pylist() == Python.list("ab", "ab", "c", "c", "c", "c")
+    )
+
+
+def test_ipc_run_end_encoded_of_dictionary_values() raises:
+    """Values that are a dictionary: the dictionary travels in a dictionary
+    batch, and the runs read back over it."""
+    var pa = Python.import_module("pyarrow")
+    var words: DynArray = DictionaryArray.from_arrays(
+        array([1, 0, 1], int32), array(["cat", "dog"])
+    )
+    var column: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int32), words^
+    )
+    var batch = record_batch([column.copy()], names=["r"])
+    var reads: List[RecordBatch] = [
+        _roundtrip_file(batch),
+        _roundtrip_stream(batch),
+    ]
+    for got in reads:
+        ref r = got.columns[0].as_run_end_encoded()
+        assert_true(r.values().dtype().is_dictionary())
+        assert_true(r == column.as_run_end_encoded())
+    var path = _tmp_path(".arrows")
+    write_ipc_stream(path, [batch.copy()])
+    var read = pa.ipc.open_stream(path).read_all().column("r")
+    assert_true(
+        read.to_pylist() == Python.list("dog", "dog", "cat", "dog", "dog")
+    )
+
+
+def test_ipc_refuses_run_end_encoded_with_one_child() raises:
+    """A run_end_encoded Field holds the run ends and the values; a Field
+    with one child is refused when the schema is read."""
+    var b = _stream_bytes(_empty_batch(run_end_encoded(int32, int64).to_dyn()))
+    _read_every_value(b)
+    var children = _follow(b, _slot(b, _schema_field(b, 0), 5))
+    assert_equal(_u32(b, children), 2)
+    _put(b, children, 1)
+    assert_true(_refused[CorruptError](b))
+
+
+def test_ipc_refuses_run_end_encoded_with_nulls_of_its_own() raises:
+    """A run-end encoded node's nulls are its values'; a node claiming one
+    is refused."""
+    var b = _stream_bytes(record_batch([_ree_ints()], names=["r"]))
+    _read_every_value(b)
+    var nodes = _follow(b, _slot(b, _header(b, 1), 1))
+    assert_equal(_u32(b, nodes), 3)  # the encoding, its run ends, its values
+    _put(b, nodes + 4 + 8, 1, width=8)  # the encoding's null_count
+    assert_true(_refused[CorruptError](b))

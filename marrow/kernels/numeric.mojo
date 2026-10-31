@@ -52,6 +52,7 @@ from ..arrays import (
     BytesArray,
     DynArray,
     BoolArray,
+    RunEndEncodedArray,
 )
 from ..buffers import Buffer, Bitmap
 from ..views import apply
@@ -74,6 +75,7 @@ from .core import (
     family,
 )
 from .boolean import NotKernel, XorKernel
+from .runs import RunEndDecodeKernel
 from .string import StringEqKernel
 from ..execution import ExecContext
 from ..errors import TypeError
@@ -103,20 +105,34 @@ trait NumericBinaryKernel(BinaryKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """The typed `apply` for the operands' dtype, which must be one
-        `accepts` admits and the same on both sides."""
-        Self.expect_same_dtype(left, right)
+        `accepts` admits and the same on both sides. A run-end encoded
+        operand is decoded first."""
+        if left.isa[RunEndEncodedArray]():
+            return Self.dispatch(
+                RunEndDecodeKernel.apply(left.as_run_end_encoded(), ctx),
+                right,
+                ctx,
+            )
+        elif right.isa[RunEndEncodedArray]():
+            return Self.dispatch(
+                left,
+                RunEndDecodeKernel.apply(right.as_run_end_encoded(), ctx),
+                ctx,
+            )
+        else:
+            Self.expect_same_dtype(left, right)
 
-        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
-            comptime if Self.accepts[T]:
-                return Self.apply(
-                    left.as_primitive[T](), right.as_primitive[T](), ctx
-                ).to_dyn()
-            else:
-                raise Self.error[TypeError](t"unsupported dtype {d}")
+            def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
+                comptime if Self.accepts[T]:
+                    return Self.apply(
+                        left.as_primitive[T](), right.as_primitive[T](), ctx
+                    ).to_dyn()
+                else:
+                    raise Self.error[TypeError](t"unsupported dtype {d}")
 
-        return left.dtype().try_visit[DynArray, NumericType](
-            leaf, "dtype is not numeric"
-        )
+            return left.dtype().try_visit[DynArray, NumericType](
+                leaf, "dtype is not numeric"
+            )
 
     @staticmethod
     def apply[
@@ -179,17 +195,37 @@ trait NumericUnaryKernel(UnaryKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """The typed `apply` for `array`'s dtype, which must be one
-        `accepts` admits."""
+        `accepts` admits. A run-end encoded array answers one, over the same
+        runs."""
+        if array.isa[RunEndEncodedArray]():
+            return Self._run_end_encoded(array.as_run_end_encoded(), ctx)
+        else:
 
-        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
-            comptime if Self.accepts[T]:
-                return Self.apply(array.as_primitive[T](), ctx).to_dyn()
-            else:
-                raise Self.error[TypeError](t"unsupported dtype {d}")
+            def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
+                comptime if Self.accepts[T]:
+                    return Self.apply(array.as_primitive[T](), ctx).to_dyn()
+                else:
+                    raise Self.error[TypeError](t"unsupported dtype {d}")
 
-        return array.dtype().try_visit[DynArray, NumericType](
-            leaf, "dtype is not numeric"
-        )
+            return array.dtype().try_visit[DynArray, NumericType](
+                leaf, "dtype is not numeric"
+            )
+
+    @staticmethod
+    def _run_end_encoded(
+        array: RunEndEncodedArray, ctx: ExecContext
+    ) raises -> DynArray:
+        """The kernel over the window's runs' values, over the same runs."""
+        var first = array.find_physical_offset()
+        return RunEndEncodedArray(
+            dtype=array.type(),
+            length=len(array),
+            offset=array.to_data().offset,
+            run_ends=array.run_ends().slice(
+                first, array.find_physical_length()
+            ),
+            values=Self.dispatch(array.physical_values(), ctx),
+        ).to_dyn()
 
 
 # ---------------------------------------------------------------------------
@@ -701,17 +737,30 @@ trait NumericCompareKernel(BinaryKernel):
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """The typed `apply` for the operands' dtype, which must be the
-        same on both sides."""
-        Self.expect_same_dtype(left, right)
+        same on both sides. A run-end encoded operand is decoded first."""
+        if left.isa[RunEndEncodedArray]():
+            return Self.dispatch(
+                RunEndDecodeKernel.apply(left.as_run_end_encoded(), ctx),
+                right,
+                ctx,
+            )
+        elif right.isa[RunEndEncodedArray]():
+            return Self.dispatch(
+                left,
+                RunEndDecodeKernel.apply(right.as_run_end_encoded(), ctx),
+                ctx,
+            )
+        else:
+            Self.expect_same_dtype(left, right)
 
-        def leaf[T: PrimitiveType](d: T) raises {imm} -> DynArray:
-            return Self.apply(
-                left.as_primitive[T](), right.as_primitive[T](), ctx
-            ).to_dyn()
+            def leaf[T: PrimitiveType](d: T) raises {imm} -> DynArray:
+                return Self.apply(
+                    left.as_primitive[T](), right.as_primitive[T](), ctx
+                ).to_dyn()
 
-        return left.dtype().try_visit[DynArray, PrimitiveType](
-            leaf, "dtype is not primitive"
-        )
+            return left.dtype().try_visit[DynArray, PrimitiveType](
+                leaf, "dtype is not primitive"
+            )
 
 
 # ---------------------------------------------------------------------------

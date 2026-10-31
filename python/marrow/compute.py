@@ -578,6 +578,39 @@ def value_counts(array, *, memory_pool=None, ctx=None):
     return Array.wrap(_ma.value_counts(array.unwrap(), (ctx or _serial())))
 
 
+def run_end_encode(array, run_end_type=None, *, memory_pool=None, ctx=None):
+    """*array* as runs of equal values, each value once with the row its run
+    ends at, the run ends typed *run_end_type* (``int32`` by default).
+
+    Equivalent to ``pyarrow.compute.run_end_encode``. Rows are equal when
+    their bits are, so NaNs with different payloads and ``-0.0`` and ``0.0``
+    stay apart, and consecutive nulls are one run. Lists, structs,
+    dictionaries and run-end encoded arrays are refused; string and binary
+    views are accepted, where PyArrow refuses them.
+    """
+    run_ends = _ma.int32() if run_end_type is None else unwrap(run_end_type)
+    return Array.wrap(_ma.run_end_encode(array.unwrap(), run_ends, (ctx or _serial())))
+
+
+def run_end_decode(array, *, memory_pool=None, ctx=None):
+    """The rows of a run-end encoded *array*, each run's value repeated over
+    its run.
+
+    Equivalent to ``pyarrow.compute.run_end_decode``.
+    """
+    return Array.wrap(_ma.run_end_decode(array.unwrap(), (ctx or _serial())))
+
+
+def run_index(values, *, ctx=None):
+    """Each row's run of equal values, numbered from 0, as ``uint32``.
+
+    Rows are equal as a group-by keys them: a null equals a null, every NaN
+    is one value and ``-0.0`` equals ``0.0``. ``[1, 1, None, None, 2, 1]``
+    gives ``[0, 0, 1, 1, 2, 3]``.
+    """
+    return Array.wrap(_ma.run_index(values.unwrap(), (ctx or _serial())))
+
+
 # ── Conversion ────────────────────────────────────────────────────────────────
 
 

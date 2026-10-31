@@ -66,6 +66,7 @@ from ..arrays import (
     DynArray,
     Int32Array,
     PrimitiveArray,
+    RunEndEncodedArray,
     StructArray,
     UInt64Array,
 )
@@ -92,6 +93,7 @@ from .core import Kernel, PackKernel, UnpackKernel
 from .groupby import Groups
 from .hashing import HashKernel, KeyCompare, NULL_HASH_SENTINEL
 from .hashtable import HashIndex, Placement
+from .runs import RunEndDecodeKernel
 from .packing import (
     BLOCK,
     LengthsPack,
@@ -762,9 +764,16 @@ struct DictionaryEncodeKernel(Kernel):
         entry of its own like any other value. Values are distinct as a
         group-by keys them: `-0.0` and `0.0` are one entry, and so is every
         NaN.
+        A run-end encoded column is decoded first.
         """
         if values.isa[DictionaryArray]():
             return values.copy()
+        elif values.isa[RunEndEncodedArray]():
+            return Self.dispatch(
+                RunEndDecodeKernel.apply(values.as_run_end_encoded(), ctx),
+                encode_nulls,
+                ctx,
+            )
         else:
             var encoder = DictionaryEncoder[KeyHash](
                 [values.dtype()], ExecContext.serial()
@@ -821,20 +830,26 @@ struct ValueCountsKernel(Kernel):
         """A `struct<values: T, counts: int64>` row per distinct value, in
         first-seen order, null counted as a value. Values are distinct as a
         group-by keys them: `-0.0` and `0.0` are one value, and so is every
-        NaN."""
-        var encoder = DictionaryEncoder[KeyHash](
-            [values.dtype()], ExecContext.serial()
-        )
-        var placed = encoder.encode([values.copy()])
-        var counts = Groups(placed.ids.copy(), len(encoder)).counts()
-        var distinct = encoder.values()[0].copy()
-        return StructArray(
-            dtype=struct_(
-                Field("values", distinct.dtype()), Field("counts", int64)
-            ),
-            length=len(counts),
-            children=[distinct^, counts^.to_dyn()],
-        ).to_dyn()
+        NaN. A run-end encoded column is decoded first."""
+        if values.isa[RunEndEncodedArray]():
+            return Self.dispatch(
+                RunEndDecodeKernel.apply(values.as_run_end_encoded(), ctx),
+                ctx,
+            )
+        else:
+            var encoder = DictionaryEncoder[KeyHash](
+                [values.dtype()], ExecContext.serial()
+            )
+            var placed = encoder.encode([values.copy()])
+            var counts = Groups(placed.ids.copy(), len(encoder)).counts()
+            var distinct = encoder.values()[0].copy()
+            return StructArray(
+                dtype=struct_(
+                    Field("values", distinct.dtype()), Field("counts", int64)
+                ),
+                length=len(counts),
+                children=[distinct^, counts^.to_dyn()],
+            ).to_dyn()
 
 
 struct ModeKernel(Kernel):
@@ -856,45 +871,57 @@ struct ModeKernel(Kernel):
         them: `-0.0` and `0.0` are one value, and so is every NaN.
 
         No rows when `skip_nulls` is false and a value is null, or when fewer
-        than `min_count` values are valid.
+        than `min_count` values are valid. A run-end encoded column is decoded
+        first.
 
         Raises:
             InvalidError: unless `n` is at least 1.
         """
         if n < 1:
             raise Self.error[InvalidError]("n must be strictly positive")
-        var nulls = values.null_count()
-        var valid: DynArray
-        if (not skip_nulls and nulls > 0) or len(values) - nulls < min_count:
-            valid = values.slice(0, 0)
+        if values.isa[RunEndEncodedArray]():
+            return Self.dispatch(
+                RunEndDecodeKernel.apply(values.as_run_end_encoded(), ctx),
+                n,
+                skip_nulls,
+                min_count,
+                ctx,
+            )
         else:
-            valid = FilterKernel.drop_null(values, ctx)
-        var encoder = DictionaryEncoder[KeyHash](
-            [valid.dtype()], ExecContext.serial()
-        )
-        var placed = encoder.encode([valid^])
-        var counts = Groups(placed.ids.copy(), len(encoder)).counts()
-        var distinct = encoder.values()[0].copy()
-        var ranked = StructArray(
-            dtype=struct_(
-                Field("count", int64), Field("mode", distinct.dtype())
-            ),
-            length=len(counts),
-            children=[counts.copy().to_dyn(), distinct.copy()],
-        )
-        var order = SortIndices[nan_largest=True].multi(
-            ranked, [0, 1], [False, True], limit=n, ctx=ctx
-        )
-        return StructArray(
-            dtype=struct_(
-                Field("mode", distinct.dtype()), Field("count", int64)
-            ),
-            length=len(order),
-            children=[
-                TakeKernel.dispatch(distinct, order, ctx),
-                TakeKernel.apply(counts, order, ctx).to_dyn(),
-            ],
-        ).to_dyn()
+            var nulls = values.null_count()
+            var valid: DynArray
+            if (not skip_nulls and nulls > 0) or len(
+                values
+            ) - nulls < min_count:
+                valid = values.slice(0, 0)
+            else:
+                valid = FilterKernel.drop_null(values, ctx)
+            var encoder = DictionaryEncoder[KeyHash](
+                [valid.dtype()], ExecContext.serial()
+            )
+            var placed = encoder.encode([valid^])
+            var counts = Groups(placed.ids.copy(), len(encoder)).counts()
+            var distinct = encoder.values()[0].copy()
+            var ranked = StructArray(
+                dtype=struct_(
+                    Field("count", int64), Field("mode", distinct.dtype())
+                ),
+                length=len(counts),
+                children=[counts.copy().to_dyn(), distinct.copy()],
+            )
+            var order = SortIndices[nan_largest=True].multi(
+                ranked, [0, 1], [False, True], limit=n, ctx=ctx
+            )
+            return StructArray(
+                dtype=struct_(
+                    Field("mode", distinct.dtype()), Field("count", int64)
+                ),
+                length=len(order),
+                children=[
+                    TakeKernel.dispatch(distinct, order, ctx),
+                    TakeKernel.apply(counts, order, ctx).to_dyn(),
+                ],
+            ).to_dyn()
 
 
 # ---------------------------------------------------------------------------

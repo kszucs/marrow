@@ -27,6 +27,7 @@ comptime TYPE_UTF8: UInt8 = 5
 comptime TYPE_LARGE_BINARY: UInt8 = 19
 comptime TYPE_LARGE_UTF8: UInt8 = 20
 comptime TYPE_LARGE_LIST: UInt8 = 21
+comptime TYPE_RUN_END_ENCODED: UInt8 = 22
 comptime TYPE_BINARY_VIEW: UInt8 = 23
 comptime TYPE_UTF8_VIEW: UInt8 = 24
 comptime TYPE_INTERVAL: UInt8 = 11

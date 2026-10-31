@@ -1133,7 +1133,8 @@ measurement or step named:
   merged with the partition ends, would avoid it. Unmeasured.
 - `RunsKernel` compares adjacent rows through `KeyCompare`;
   `Runs.store`'s skip of equal SIMD registers for one primitive column
-  waits for step 7's REE kernels.
+  waits for a measurement. Step 7's `run_end_encode` and `run_index` find
+  their runs through `RunsKernel` as well.
 - A windowed fold's count lane runs even where no row is null and no frame
   can be empty (`RANGE`), where each count is the frame's length.
   Unmeasured.
@@ -1148,9 +1149,9 @@ measurement or step named:
 or measurement named:
 
 - Not built until a caller needs them: `Shift[k]`; `Fill`, `Constant[c]` and
-  `FirstValue` for `Lagged`, which fills with zero (step 7's `rle_id` is
-  the second policy); `MinScan`, `MaxScan` and `ProductScan`; the GCD and
-  T64 instances of `FittedPack`.
+  `FirstValue` for `Lagged`, which fills with zero (step 7's `run_index`
+  finds its runs with `RunsKernel`, so it is not their caller); `MinScan`,
+  `MaxScan` and `ProductScan`; the GCD and T64 instances of `FittedPack`.
 - Parquet still copies each page into a packed value before decoding it
   (`formats/parquet/encodings.mojo`: the DELTA_BINARY_PACKED widths and
   miniblocks, the DELTA_LENGTH_BYTE_ARRAY and DELTA_BYTE_ARRAY bytes, PLAIN,
@@ -1213,6 +1214,81 @@ or measurement named:
   the gate. The user accepted both rows for step 6 (2026-10-29); recovering
   them needs a `BitUnpack` shape that keeps a group a segment without
   slowing DELTA_BINARY_PACKED reads.
+
+**Deferred by kernel-foundations step 7** (the run-end encoded layout),
+each waiting for the caller or measurement named:
+
+- **7d, the REE expression family** (user, 2026-10-30): the family trait,
+  the `col`/`lit`/`param` leaves, the builder overloads, `ParamSpec` and the
+  runtime lane's arm. It waits for pina, which replaces `marrow.expr`.
+  Until then `resolve_aggregate` refuses an REE input with `TypeError`, so
+  `ValidCount` and the aggregate operators never see one; tests pin each
+  refusal.
+- **The arms whose only caller is `marrow.expr`** wait with 7d: `sum`,
+  `count` (the lengths of the valid runs), `mean`, `min` and `max`; the
+  string, temporal, `is_nan`/`is_inf` and `NotKernel` arms, each raising
+  `TypeError` on an REE meanwhile; `Estimate.width_of`, which answers
+  `Approx.unknown()` for an REE column.
+- **No binary kernel takes a scalar operand**, so "an REE compared with or
+  added to a scalar" cannot run over the runs' values alone: the numeric
+  binary and comparison families decode each REE operand, the same path
+  as REE ⊕ REE.
+- **`DictionaryEncoder` still places every row of an REE key.** `HashKernel`
+  hashes each run once and decodes the hashes; encoding each run once and
+  expanding the slot ids is a second path through the encoder, which every
+  group-by gate links.
+- **A cast from a plain array to REE** raises `NotImplementedError`; REE to
+  REE casts the values, and REE to anything else decodes first.
+- **`run_end_encode` refuses nested, dictionary and REE values**
+  (`TypeError`). It compares rows by their bits, and `KeyCompare` compares a
+  nested float by value; a nested encode needs a bitwise nested comparison.
+- **`RunsUnpack` does not expose its runs as a `RunEndEncodedArray`.**
+  Nothing asks for it; it waits for the IPC encoding design.
+- **Adjacent equal runs.** `RunEndEncodedBuilder.extend` (and so `concat`),
+  filter and take can leave two adjacent runs of one value. Arrow allows it,
+  and Arrow C++'s and arrow-rs's concatenation keeps them; merging them
+  would need a comparison at every seam.
+- **Two run detectors.** `TakeKernel`'s REE arm finds the runs of its
+  physical indices with a loop of its own over `int32` positions, because
+  `RunEndEncodeKernel` reaches `KeyCompare.dispatch` (about 75 KB in
+  `query_join`), which every gate linking take would then carry.
+- **`RunEndDecodeKernel.apply` instantiates its typed core once per
+  primitive dtype** (`try_visit[PrimitiveType]`). No AOT gate links it
+  (`SortIndices` sorts the runs rather than decode the rows), so the
+  per-byte-width fallback was not built; it waits for a gate that does.
+- **`is_null` reads one level.** `NullPredicateKernel` reads the bitmap of
+  an REE's values, as Arrow C++'s `SetLogicalNullBits` does, so an REE whose
+  values are themselves REE reads as never null. Recursing through
+  `dispatch` would be mutual recursion across static methods, which
+  deadlocks the `libmarrow.so` build.
+- **The Parquet writer refuses an REE nested inside a struct or list**
+  (`NotImplementedError`): it decodes top-level REE columns only. JSON and
+  Avro decode an REE at any depth.
+- **The "REE claims nulls" errors are generic.** C Data answers "null_count
+  is 1 but the validity buffer is NULL" and IPC "N nulls but no validity
+  bitmap"; both are the right kind, but neither says that an REE has no
+  nulls of its own.
+- **Validation trusts the run ends' stored null count**, as Arrow C++'s
+  `GetNullCount` does: a foreign run-ends child claiming 0 nulls over a
+  bitmap with clear bits passes. Readers read run ends raw, so it is not
+  unsafe.
+- **archery's four `*_no_batches` gold files fail**: `read_ipc_file`
+  answers one batch for a file with none ("Expected 0 batches, got 1").
+  Pre-existing at `a986f27a`; a full `integration` run exits 1 until it is
+  fixed.
+- **devkit's archery coverage table can count a failed phase as passing**
+  (`ArcheryReport._parse` marks a case passed at `-- Validating`, which archery
+  prints before the producer or consumer step that then fails). A run whose
+  Rust file/stream steps all failed still read 18/18 for every case; the
+  `FAILED TEST` lines are the authority.
+- **The local archery clones are not `pixi.toml`'s pins**: Arrow C++
+  25.0.0-SNAPSHOT (`a0d2885`) and arrow-rs 58.3.0 (`7abb225`), not
+  `apache-arrow-24.0.0` and 58.2.0. The Rust tester's binaries carry an
+  rpath into a deleted worktree (`.claude/worktrees/integration-json`) and
+  load only with `DYLD_FALLBACK_LIBRARY_PATH` naming an environment's
+  `lib`. Archery runs the Rust file/stream converters through `/bin/sh`
+  (`run_shell_command`, `shell=True`), which SIP strips of `DYLD_*`, so
+  those steps load only through a wrapper that sets the variable itself.
 
 **`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
 `query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the

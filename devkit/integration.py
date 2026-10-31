@@ -423,7 +423,6 @@ class ArcherySuite:
             "union",
             "list_view",
             "extension",
-            "run_end_encoded",
         }
     )
 

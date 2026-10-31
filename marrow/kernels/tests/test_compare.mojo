@@ -16,6 +16,7 @@ from ...arrays import (
     Int32Array,
     NullArray,
     PrimitiveArray,
+    RunEndEncodedArray,
     StringViewArray,
 )
 from ...buffers import Bitmap
@@ -57,6 +58,7 @@ from ...dtypes import (
 )
 from ...builders import Date32Builder, Decimal128Builder
 from ...kernels.cast import CastKernel
+from ...kernels.runs import RunEndDecodeKernel
 
 from ...kernels.string import (
     StringEqKernel,
@@ -881,3 +883,36 @@ def test_key_compare_striped_matches_serial() raises:
     var serial = _same_keys(a, li, a, ri)
     var striped = _same_keys(a, li, a, ri, ExecContext.parallel(4))
     assert_true(serial == striped)
+
+
+def test_equal_run_end_encoded_operands_decode() raises:
+    """An encoded operand is decoded: rows 1, null, 3, 3 against plain and
+    encoded operands."""
+    var ree: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int32), array([1, None, 3], int64)
+    ).slice(1, 4)
+    var want = String(array([True, None, True, False]))
+    assert_equal(
+        String(EqKernel.dispatch(ree, array([1, 2, 3, 4], int64))), want
+    )
+    assert_equal(
+        String(EqKernel.dispatch(array([1, 2, 3, 4], int64), ree)), want
+    )
+    assert_equal(
+        String(EqKernel.dispatch(ree, RunEndDecodeKernel.dispatch(ree))),
+        String(array([True, None, True, True])),
+    )
+
+
+def test_key_compare_run_end_encoded_by_value() raises:
+    """Two encodings of different runs compare by the rows' values, and a
+    null row matches a null row: rows 1, 1, 2, null, 3 against 1, 2, 2,
+    null, 3, the second read through a window inside its runs."""
+    var left: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 4, 5], int32), array([1, 2, None, 3], int64)
+    )
+    var right: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 4, 5, 6], int32), array([1, 2, None, 3], int64)
+    ).slice(1, 5)
+    var got = _same_keys(left, [0, 1, 2, 3, 4, 0], right, [0, 1, 2, 3, 4, 4])
+    assert_true(got == [True, False, True, True, True, False])

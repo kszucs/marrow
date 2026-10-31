@@ -613,6 +613,39 @@ def test_layout_dictionary_follows_its_index_type() raises:
     assert_true(d.child_type(0) == DynType(string))
 
 
+def test_run_end_encoded_dtype() raises:
+    var t = run_end_encoded(int32, int64)
+    assert_equal(String(t), "run_end_encoded<run_ends: int32, values: int64>")
+    var d = DynType(t.copy())
+    assert_true(d.is_run_end_encoded())
+    assert_false(d.is_dictionary())
+    assert_true(d == DynType(run_end_encoded(int32, int64)))
+    assert_false(d == DynType(run_end_encoded(int16, int64)))
+    assert_false(d == DynType(run_end_encoded(int32, int32)))
+    assert_true(d.as_run_end_encoded().run_end_type() == DynType(int32))
+    assert_true(d.as_run_end_encoded().value_type() == DynType(int64))
+    with assert_raises(contains="TypeError"):
+        _ = run_end_encoded(int8, int64)
+    with assert_raises(contains="TypeError"):
+        _ = run_end_encoded(uint16, int64)
+    with assert_raises(contains="TypeError"):
+        _ = run_end_encoded(float64, int64)
+    var children = d.children()
+    assert_equal(len(children), 2)
+    assert_true(children[0] == field("run_ends", int32, nullable=False))
+    assert_true(children[1] == field("values", int64))
+
+
+def test_layout_run_end_encoded_has_two_children_and_no_buffers() raises:
+    """A run-end encoded array owns no buffers: its run ends are child 0 and
+    its values child 1."""
+    var r = DynType(run_end_encoded(int16, string))
+    assert_true(r.layout() == ArrayLayout(ArrayLayout.RUN_END, 0, 2))
+    assert_equal(r.layout().num_buffers(), 0)
+    assert_true(r.child_type(0) == DynType(int16))
+    assert_true(r.child_type(1) == DynType(string))
+
+
 def test_dispatch_binaryview() raises:
     """Resolves both view dtypes to their comptime type and refuses the
     offsets layout, which `try_visit[BinaryLikeType]` owns."""

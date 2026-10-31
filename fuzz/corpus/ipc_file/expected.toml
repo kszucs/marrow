@@ -59,3 +59,11 @@ note = "fixed: B3 stopped swallowing errors under a field, and its metadata is m
 verdict = "reject"
 bug = "B7"
 note = "fixed: the reader validates every array it builds"
+
+["run_end_encoded.arrow"]
+verdict = "accept"
+note = "run-end encoded columns of archery's four types, nulls included, one sliced inside its runs, over two batches"
+
+["ree-run-ends.arrow"]
+verdict = "reject"
+note = "run ends [1, 1, 3]: the reader validates every array in full, and a run end must be past the one before"

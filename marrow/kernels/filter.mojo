@@ -34,6 +34,7 @@ from ..arrays import (
     FixedSizeListArray,
     DictionaryArray,
     Int32Array,
+    RunEndEncodedArray,
     UInt64Array,
 )
 from ..buffers import Buffer
@@ -62,6 +63,7 @@ from ..dtypes import (
 import std.math as math
 
 from ..views import BitmapView, apply, cpu_lanes, reduce
+from .boolean import NotNullKernel
 from .cast import NumToBoolKernel
 from .core import Kernel
 from ..execution import ExecContext
@@ -181,6 +183,10 @@ struct FilterKernel(Kernel):
             ).to_dyn()
         elif array.isa[DictionaryArray]():
             return FilterKernel.apply(array.as_dictionary(), mask, ctx).to_dyn()
+        elif array.isa[RunEndEncodedArray]():
+            return FilterKernel.apply(
+                array.as_run_end_encoded(), mask, ctx
+            ).to_dyn()
         else:
             raise Self.error[TypeError](
                 String("unsupported dtype ", array.dtype())
@@ -202,13 +208,19 @@ struct FilterKernel(Kernel):
     def drop_null(
         array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> DynArray:
-        """Remove null elements: the validity bitmap is itself the keep-mask."""
+        """Remove null elements: the validity bitmap is itself the keep-mask,
+        or, for a run-end encoded array, its runs' values' validity."""
         if array.isa[NullArray]():
             return NullArray(length=0).to_dyn()
-        var data = array.to_data()
-        if not data.bitmap:
-            return array.copy()
-        return FilterKernel.dispatch(array, data.validity().value(), ctx)
+        elif array.isa[RunEndEncodedArray]():
+            return FilterKernel.dispatch(
+                array, NotNullKernel.dispatch(array, ctx), ctx
+            )
+        else:
+            var data = array.to_data()
+            if not data.bitmap:
+                return array.copy()
+            return FilterKernel.dispatch(array, data.validity().value(), ctx)
 
     @staticmethod
     def apply[
@@ -692,6 +704,35 @@ struct FilterKernel(Kernel):
             children=children^,
         )
 
+    @staticmethod
+    def apply(
+        array: RunEndEncodedArray,
+        mask: BitmapView[_],
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> RunEndEncodedArray:
+        """Filter a run-end encoded array run by run: each run keeps the rows
+        ``mask`` sets over it, and a run left with none goes. The answer is
+        run-end encoded."""
+        Self.expect_same_length(len(array), len(mask))
+        var ends = array.segment_ends()
+        var count = len(ends) - 1
+        var keep = Bitmap.alloc_zeroed(count)
+        var kept = List[Int](capacity=count)
+        var total = 0
+        for s in range(count):
+            var start = Int(ends.unsafe_get(s))
+            var rows = mask.slice(start, Int(ends.unsafe_get(s + 1)) - start)
+            var n = rows.count_set_bits()
+            if n > 0:
+                total += n
+                keep.set(s)
+                kept.append(total)
+        return RunEndEncodedArray(
+            array.type(),
+            kept,
+            FilterKernel.dispatch(array.physical_values(), keep.view(), ctx),
+        )
+
 
 struct TakeKernel(Kernel):
     """Gather kernel — collect elements at arbitrary indices (null index → null).
@@ -778,6 +819,10 @@ struct TakeKernel(Kernel):
         elif array.isa[DictionaryArray]():
             return TakeKernel.apply(
                 array.as_dictionary(), indices, ctx
+            ).to_dyn()
+        elif array.isa[RunEndEncodedArray]():
+            return TakeKernel.apply(
+                array.as_run_end_encoded(), indices, ctx
             ).to_dyn()
         else:
             raise Self.error[TypeError](
@@ -1296,6 +1341,66 @@ struct TakeKernel(Kernel):
             offset=0,
             indices=new_indices^,
             values=array.dictionary(),
+        )
+
+    @staticmethod
+    def apply(
+        array: RunEndEncodedArray,
+        indices: Int32Array,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> RunEndEncodedArray:
+        """Gather rows from a run-end encoded array, answering one: indices
+        reading one run in a row are one run, null indices in a row a null
+        run.
+
+        Raises:
+            InvalidError: when there are more indices than the run-end type
+                can count.
+        """
+        var dtype = array.type()
+        ref run_end_type = dtype.as_run_end_encoded().run_end_type()
+        var n = len(indices)
+        var most = Int(Int64.MAX)
+        if run_end_type.is_int16():
+            most = Int(Int16.MAX)
+        elif run_end_type.is_int32():
+            most = Int(Int32.MAX)
+        if n > most:
+            raise Self.error[InvalidError](
+                t"{n} rows are more than {run_end_type} run ends can hold:"
+                t" {most}"
+            )
+        # Each index's run, then a run for each stretch of indices into one
+        # run: its end, and the run its value is taken from.
+        var physical = array.physical_indices(indices)
+        var at = physical.values()
+        var nullable = physical.null_count() > 0
+        var ends = List[Int]()
+        var picks = Int32Builder(capacity=n)
+        var was_valid = False
+        for i in range(n):
+            var valid = not nullable or physical.is_valid(i)
+            var same: Bool
+            if i == 0 or valid != was_valid:
+                same = False
+            elif valid:
+                same = at.unsafe_get(i) == at.unsafe_get(i - 1)
+            else:
+                same = True
+            if not same:
+                if i > 0:
+                    ends.append(i)
+                if valid:
+                    picks.unsafe_append(at.unsafe_get(i))
+                else:
+                    picks.unsafe_append_null()
+            was_valid = valid
+        if n > 0:
+            ends.append(n)
+        return RunEndEncodedArray(
+            dtype,
+            ends,
+            TakeKernel.dispatch(array.physical_values(), picks.finish(), ctx),
         )
 
     @staticmethod

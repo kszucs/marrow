@@ -341,6 +341,30 @@ def test_write_empty_table() raises:
         assert_equal(back.num_columns(), 2)
 
 
+def test_write_run_end_encoded_writes_its_values() raises:
+    """A run-end encoded column, whole and sliced inside its runs, is written
+    as its values: PyArrow reads back the value type and the decoded rows."""
+    var pa = Python.import_module("pyarrow")
+    var pc = Python.import_module("pyarrow.compute")
+    var pq = Python.import_module("pyarrow.parquet")
+    var whole = pa.array([1, 1, 1, 4, 4], type=pa.int64())
+    var values = pa.array(["a", "a", None, None, "b", "b", "c"])
+    var t = _to_marrow(
+        pa.table(
+            {
+                "x": pc.run_end_encode(whole),
+                "y": pc.run_end_encode(values).slice(1, 5),
+            }
+        )
+    )
+    var want = pa.table({"x": whole, "y": values.slice(1, 5)})
+    with ScratchDir() as dir:
+        var path = join(dir, "marrow_run_end_encoded.parquet")
+        write_table(t, path, Compression.UNCOMPRESSED)
+        var back = pq.read_table(path)
+        assert_true(Bool(back.equals(want)), String(back))
+
+
 def test_write_all_null_roundtrip() raises:
     var pa = Python.import_module("pyarrow")
     var t = _one_col(pa.array([None, None, None, None, None], type=pa.int64()))

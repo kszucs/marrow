@@ -7,10 +7,11 @@
 # a runtime aggregate links the whole name x dtype ladder, so these few cases
 # cost more to compile than every other expression test together.
 
-from std.testing import assert_true
+from std.testing import assert_raises, assert_true
 
+from ....arrays import RunEndEncodedArray
 from ....builders import array
-from ....dtypes import int64
+from ....dtypes import int32, int64
 from ....tabular import record_batch
 from ...builders import col, table
 
@@ -115,3 +116,24 @@ def test_a_runtime_windowed_filter_must_be_boolean() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_a_runtime_window_aggregate_refuses_run_end_encoded() raises:
+    """A window aggregate evaluates its operand to a column and folds it, so a
+    run-end encoded column's absent bitmap would read as "no nulls"; the
+    catalog refuses the dtype first."""
+    var b = record_batch(
+        [
+            array([0, 1, 2], int64).copy(),
+            RunEndEncodedArray.from_arrays(
+                array([2, 3], int32), array([1, None], int64)
+            ).to_dyn(),
+        ],
+        names=["o", "v"],
+    )
+    with assert_raises(contains="TypeError"):
+        _ = (
+            table(b^)
+            .with_columns(["n"], [col("v").count().over(order_by=[col("o")])])
+            .execute()
+        )

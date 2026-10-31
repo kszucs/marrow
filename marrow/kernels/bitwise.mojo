@@ -157,7 +157,8 @@ struct ZigzagEncode(Deinitable, Movable, UnaryKernel):
 
 @fieldwise_init
 struct ZigzagDecode(Deinitable, Movable, UnaryKernel):
-    """The signed integers `ZigzagEncode` made unsigned ones of.
+    """The signed integers `ZigzagEncode` made unsigned ones of, each
+    small value back to a small magnitude.
 
         [0, 1, 2, 3]  ->  [0, -1, 1, -2]
     """
