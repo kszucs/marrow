@@ -159,3 +159,94 @@ def test_big_endian_ipc_is_refused(read, suffix):
     big = GOLD / "1.0.0-bigendian" / f"generated_primitive.{suffix}"
     with pytest.raises(marrow.ArrowNotImplementedError, match="big-endian"):
         read(str(big))
+
+
+class TestIPCObjects:
+    """`marrow.ipc.new_file` and friends against pyarrow."""
+
+    def test_file_metadata_read_by_pyarrow(self, tmp_path):
+        path = tmp_path / "m.arrow"
+        batch = _make_pa_batch()
+        with marrow.ipc.new_file(
+            path, batch.schema, metadata={"origin": b"marrow"}
+        ) as w:
+            w.write_batch(marrow.record_batch(batch), custom_metadata={"k": "v"})
+            w.write(marrow.record_batch(batch))
+        reader = pa.ipc.open_file(path)
+        assert reader.metadata == {b"origin": b"marrow"}
+        first = reader.get_batch_with_custom_metadata(0)
+        assert first.batch.equals(batch)
+        assert first.custom_metadata.to_dict() == {b"k": b"v"}
+        assert reader.get_batch_with_custom_metadata(1).custom_metadata is None
+
+    def test_stream_metadata_read_by_pyarrow(self, tmp_path):
+        path = tmp_path / "m.arrows"
+        batch = _make_pa_batch()
+        with marrow.ipc.new_stream(path, batch.schema) as w:
+            w.write_batch(marrow.record_batch(batch), {"k": "v"})
+        got = list(pa.ipc.open_stream(path).iter_batches_with_custom_metadata())
+        assert len(got) == 1
+        assert got[0].batch.equals(batch)
+        assert got[0].custom_metadata.to_dict() == {b"k": b"v"}
+
+    def test_file_metadata_written_by_pyarrow(self, tmp_path):
+        path = str(tmp_path / "p.arrow")
+        batch = _make_pa_batch()
+        with pa.ipc.new_file(path, batch.schema, metadata={"origin": "pyarrow"}) as w:
+            w.write_batch(batch, custom_metadata={"k": "v"})
+            w.write_batch(batch)
+        reader = marrow.ipc.open_file(path)
+        assert reader.metadata == {b"origin": b"pyarrow"}
+        assert reader.num_record_batches == 2
+        first = reader.get_batch_with_custom_metadata(0)
+        assert pa.record_batch(first.batch).equals(batch)
+        assert first.custom_metadata == {b"k": b"v"}
+        assert reader.get_batch_with_custom_metadata(1).custom_metadata is None
+        assert pa.table(reader.read_all()).equals(pa.Table.from_batches([batch, batch]))
+
+    def test_stream_metadata_written_by_pyarrow(self, tmp_path):
+        path = str(tmp_path / "p.arrows")
+        batch = _make_pa_batch()
+        with pa.ipc.new_stream(path, batch.schema) as w:
+            w.write_batch(batch, custom_metadata={"k": "v"})
+            w.write_batch(batch)
+        reader = marrow.ipc.open_stream(path)
+        got = list(reader.iter_batches_with_custom_metadata())
+        assert [g.custom_metadata for g in got] == [{b"k": b"v"}, None]
+        assert pa.record_batch(got[0].batch).equals(batch)
+
+    def test_write_table_iterate_and_read_all(self, tmp_path):
+        path = tmp_path / "t.arrows"
+        batch = _make_pa_batch()
+        table = pa.Table.from_batches([batch, batch])
+        with marrow.ipc.new_stream(path, table.schema) as w:
+            w.write_table(marrow.table(table))
+        assert len(list(marrow.ipc.open_stream(path))) == 2
+        assert pa.table(marrow.ipc.open_stream(path).read_all()).equals(table)
+        reader = marrow.ipc.open_stream(path)
+        assert pa.record_batch(reader.read_next_batch()).equals(batch)
+
+    def test_compression_option_and_sink_type(self, tmp_path):
+        batch = _make_pa_batch()
+        path = tmp_path / "c.arrow"
+        options = marrow.ipc.IpcWriteOptions(compression="zstd")
+        with marrow.ipc.new_file(path, batch.schema, options=options) as w:
+            w.write(marrow.record_batch(batch))
+        assert pa.ipc.open_file(path).get_batch(0).equals(batch)
+        with pytest.raises(TypeError):
+            marrow.ipc.new_file(object(), batch.schema)
+
+    def test_write_accepts_batches_and_tables_only(self, tmp_path):
+        batch = _make_pa_batch()
+        table = pa.Table.from_batches([batch])
+        path = tmp_path / "w.arrow"
+        with marrow.ipc.new_file(path, batch.schema) as w:
+            w.write(batch)
+            w.write(table)
+            with pytest.raises(TypeError):
+                w.write(pa.array([1, 2]))
+        assert (
+            pa.ipc.open_file(path)
+            .read_all()
+            .equals(pa.Table.from_batches([batch, batch]))
+        )

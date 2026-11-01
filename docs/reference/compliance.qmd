@@ -103,6 +103,8 @@ suite's tooling and read by every implementation.
 | Shared dictionaries across fields | ✅ | gold files (4.0.0-shareddict) |
 | Files from older Arrow releases | ✅ | gold files 0.14.1, 0.17.1, 1.0.0 and 21.0.0 |
 | Schema and field metadata | ✅ | integration suite, compared exactly |
+| Custom metadata on record batch messages and the file footer | ✅ | round trips with pyarrow, both directions |
+| Buffer alignment: 8, 16, 32 or 64 bytes, 64 by default | ✅ | integration suite, every type, written at 64 |
 | Big-endian data | ❌ refused | reading one raises an error instead of returning wrong values |
 | Tensor and sparse tensor messages | ❌ | |
 

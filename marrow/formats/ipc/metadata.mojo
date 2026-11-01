@@ -84,7 +84,7 @@ struct IpcEncoder(Movable):
         var enc = IpcEncoder(512)
         var schema_pos = enc._write_schema_table(schema)
         var msg_pos = enc._write_message_table(
-            HEADER_SCHEMA, schema_pos, Int64(0)
+            HEADER_SCHEMA, schema_pos, Int64(0), Dict[String, String]()
         )
         return enc._finish(msg_pos)
 
@@ -96,6 +96,7 @@ struct IpcEncoder(Movable):
         variadic_counts: List[Int64],
         compression: Optional[BodyCompression],
         body_length: Int64,
+        custom_metadata: Dict[String, String],
     ) raises -> List[UInt8]:
         var enc = IpcEncoder(512)
         var nodes_vec = enc._write_field_nodes_vec(nodes)
@@ -104,7 +105,7 @@ struct IpcEncoder(Movable):
             length, nodes_vec, bufs_vec, variadic_counts, compression
         )
         var msg_pos = enc._write_message_table(
-            HEADER_RECORD_BATCH, rb_pos, body_length
+            HEADER_RECORD_BATCH, rb_pos, body_length, custom_metadata
         )
         return enc._finish(msg_pos)
 
@@ -113,13 +114,14 @@ struct IpcEncoder(Movable):
         schema: Schema,
         dict_blocks: List[Block],
         blocks: List[Block],
+        metadata: Dict[String, String],
     ) raises -> List[UInt8]:
         var enc = IpcEncoder(512)
         var schema_pos = enc._write_schema_table(schema)
         var dicts_vec = enc._write_blocks_vec(dict_blocks)
         var blocks_vec = enc._write_blocks_vec(blocks)
         var footer_pos = enc._write_footer_table(
-            schema_pos, dicts_vec, blocks_vec
+            schema_pos, dicts_vec, blocks_vec, metadata
         )
         return enc._finish(footer_pos)
 
@@ -201,8 +203,11 @@ struct IpcEncoder(Movable):
         schema_pos: UInt32,
         dicts_vec: UInt32,
         blocks_vec: UInt32,
+        metadata: Dict[String, String],
     ) raises -> UInt32:
+        var meta_vec = self._write_kv_vec(metadata)
         var ts = self._fb.offset()
+        var meta_at = self._prepend_kv_vec(4, meta_vec)
         var bv_at = self._fb.prepend_uoffset(blocks_vec)
         var dv_at = self._fb.prepend_uoffset(dicts_vec)
         var sc_at = self._fb.prepend_uoffset(schema_pos)
@@ -212,6 +217,8 @@ struct IpcEncoder(Movable):
         flds.append(FieldOffset(1, sc_at))
         flds.append(FieldOffset(2, dv_at))
         flds.append(FieldOffset(3, bv_at))
+        if meta_at:
+            flds.append(meta_at.take())
         return self._fb.write_table(flds, ts)
 
     def _write_field_nodes_vec(
@@ -489,19 +496,34 @@ struct IpcEncoder(Movable):
 
     def _write_kv_vec(
         mut self, metadata: Dict[String, String]
-    ) raises -> UInt32:
-        var kv_positions = List[UInt32]()
-        for entry in metadata.items():
-            var key_pos = self._fb.create_string(entry.key)
-            var val_pos = self._fb.create_string(entry.value)
-            var ts = self._fb.offset()
-            var val_at = self._fb.prepend_uoffset(val_pos)
-            var key_at = self._fb.prepend_uoffset(key_pos)
-            var kv_flds = List[FieldOffset]()
-            kv_flds.append(FieldOffset(0, key_at))
-            kv_flds.append(FieldOffset(1, val_at))
-            kv_positions.append(self._fb.write_table(kv_flds, ts))
-        return self._fb.create_vector_offsets(kv_positions)
+    ) raises -> Optional[UInt32]:
+        """The `KeyValue` vector holding `metadata`, or `None` when it is
+        empty; written before the table that refers to it starts."""
+        var result = Optional[UInt32]()
+        if len(metadata) > 0:
+            var kv_positions = List[UInt32]()
+            for entry in metadata.items():
+                var key_pos = self._fb.create_string(entry.key)
+                var val_pos = self._fb.create_string(entry.value)
+                var ts = self._fb.offset()
+                var val_at = self._fb.prepend_uoffset(val_pos)
+                var key_at = self._fb.prepend_uoffset(key_pos)
+                var kv_flds = List[FieldOffset]()
+                kv_flds.append(FieldOffset(0, key_at))
+                kv_flds.append(FieldOffset(1, val_at))
+                kv_positions.append(self._fb.write_table(kv_flds, ts))
+            result = self._fb.create_vector_offsets(kv_positions)
+        return result
+
+    def _prepend_kv_vec(
+        mut self, slot: Int, vec: Optional[UInt32]
+    ) raises -> Optional[FieldOffset]:
+        """The field at `slot` referring to a `_write_kv_vec` vector,
+        prepended into the table being written; `None` when there is none."""
+        var result = Optional[FieldOffset]()
+        if vec:
+            result = FieldOffset(slot, self._fb.prepend_uoffset(vec.value()))
+        return result^
 
     def _write_field(
         mut self, f: dt.Field, mut next_dict_id: Int
@@ -534,9 +556,7 @@ struct IpcEncoder(Movable):
         if len(child_positions) > 0:
             children_vec_pos = self._fb.create_vector_offsets(child_positions)
 
-        var meta_vec_pos: Optional[UInt32] = None
-        if len(f.metadata) > 0:
-            meta_vec_pos = self._write_kv_vec(f.metadata)
+        var meta_vec = self._write_kv_vec(f.metadata)
 
         var dict_enc_pos: Optional[UInt32] = None
         if own_dict_id >= 0:
@@ -549,9 +569,7 @@ struct IpcEncoder(Movable):
         var ch_at = UInt32(0)
         if children_vec_pos:
             ch_at = self._fb.prepend_uoffset(children_vec_pos.value())
-        var meta_at = UInt32(0)
-        if meta_vec_pos:
-            meta_at = self._fb.prepend_uoffset(meta_vec_pos.value())
+        var meta_at = self._prepend_kv_vec(6, meta_vec)
         var de_at = UInt32(0)
         if dict_enc_pos:
             de_at = self._fb.prepend_uoffset(dict_enc_pos.value())
@@ -569,8 +587,8 @@ struct IpcEncoder(Movable):
             flds.append(FieldOffset(4, de_at))
         if children_vec_pos:
             flds.append(FieldOffset(5, ch_at))
-        if meta_vec_pos:
-            flds.append(FieldOffset(6, meta_at))
+        if meta_at:
+            flds.append(meta_at.take())
         return self._fb.write_table(flds, ts)
 
     def _write_schema_table(mut self, schema: Schema) raises -> UInt32:
@@ -580,21 +598,17 @@ struct IpcEncoder(Movable):
             field_positions.append(self._write_field(f, next_dict_id))
         var fields_vec = self._fb.create_vector_offsets(field_positions)
 
-        var meta_vec_pos: Optional[UInt32] = None
-        if len(schema.metadata) > 0:
-            meta_vec_pos = self._write_kv_vec(schema.metadata)
+        var meta_vec = self._write_kv_vec(schema.metadata)
 
         var ts = self._fb.offset()
-        var meta_at = UInt32(0)
-        if meta_vec_pos:
-            meta_at = self._fb.prepend_uoffset(meta_vec_pos.value())
+        var meta_at = self._prepend_kv_vec(2, meta_vec)
         var fv_at = self._fb.prepend_uoffset(fields_vec)
         var en_at = self._fb.prepend_i16(ENDIANNESS_LITTLE)
         var flds = List[FieldOffset]()
         flds.append(FieldOffset(0, en_at))
         flds.append(FieldOffset(1, fv_at))
-        if meta_vec_pos:
-            flds.append(FieldOffset(2, meta_at))
+        if meta_at:
+            flds.append(meta_at.take())
         return self._fb.write_table(flds, ts)
 
     def _write_message_table(
@@ -602,8 +616,11 @@ struct IpcEncoder(Movable):
         header_type: UInt8,
         header_pos: UInt32,
         body_len: Int64,
+        custom_metadata: Dict[String, String],
     ) raises -> UInt32:
+        var meta_vec = self._write_kv_vec(custom_metadata)
         var ts = self._fb.offset()
+        var meta_at = self._prepend_kv_vec(4, meta_vec)
         var bl_at = self._fb.prepend_i64(body_len)
         var hdr_at = self._fb.prepend_uoffset(header_pos)
         var ht_at = self._fb.prepend_u8(header_type)
@@ -613,6 +630,8 @@ struct IpcEncoder(Movable):
         flds.append(FieldOffset(1, ht_at))
         flds.append(FieldOffset(2, hdr_at))
         flds.append(FieldOffset(3, bl_at))
+        if meta_at:
+            flds.append(meta_at.take())
         return self._fb.write_table(flds, ts)
 
 
@@ -636,6 +655,14 @@ struct IpcDecoder(Movable):
     def body_length(self) raises -> Int64:
         """Body length in bytes from the Message table (slot 3)."""
         return self._r.read_i64(self._r.root(), 3, 0)
+
+    def custom_metadata(self) raises -> Dict[String, String]:
+        """The message's `custom_metadata`, empty when it carries none."""
+        var root = self._r.root()
+        var result = Dict[String, String]()
+        if self._r.has_field(root, 4):
+            result = self._read_kv_vec(root, 4)
+        return result^
 
     def peek_dict_id(self) raises -> Int:
         """Dict id from a DictionaryBatch message header."""
@@ -764,8 +791,11 @@ struct IpcDecoder(Movable):
         mut dict_blocks: List[Block],
         mut blocks: List[Block],
         mut out_ipc: List[FieldIpcInfo],
+        mut custom_metadata: Dict[String, String],
     ) raises -> Schema:
         var footer_pos = self._r.root()
+        if self._r.has_field(footer_pos, 4):
+            custom_metadata = self._read_kv_vec(footer_pos, 4)
         var schema_pos = self._r.read_table(footer_pos, 1)
         var fields = self._decode_schema_fields(schema_pos, out_ipc)
         var metadata = Dict[String, String]()

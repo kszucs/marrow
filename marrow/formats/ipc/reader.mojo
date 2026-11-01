@@ -134,6 +134,7 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](
     var _next: Int
     var _src: Self.S
     var _dict_values: List[DynArray]
+    var _metadata: Dict[String, String]
     var _native_codecs: Bool
     """Whether compressed bodies decode in Mojo, the default, or through
     liblz4 and libzstd."""
@@ -190,7 +191,11 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](
         var dict_blocks = List[Block]()
         var blocks = List[Block]()
         var ipc_infos = List[FieldIpcInfo]()
-        self._schema = dec.read_footer(dict_blocks, blocks, ipc_infos)
+        var footer_metadata = Dict[String, String]()
+        self._schema = dec.read_footer(
+            dict_blocks, blocks, ipc_infos, footer_metadata
+        )
+        self._metadata = footer_metadata^
         self._ipc_infos = ipc_infos^
         self._blocks = blocks^
         self._next = 0
@@ -229,6 +234,10 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](
     def num_record_batches(self) -> Int:
         return len(self._blocks)
 
+    def metadata(self) -> Dict[String, String]:
+        """The file's custom metadata, from its footer."""
+        return self._metadata.copy()
+
     def read_next_batch(mut self) raises -> Optional[RecordBatch]:
         """The batch after the last one this returned, in file order, or
         `None` after the last; `read_batch` is the random-access path."""
@@ -241,6 +250,14 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](
         """One batch, by index. `ref self` rather than `mut self`: this format is
         random-access -- the footer's `Block` table holds every offset -- so the
         cursor is a local, and several readers of one file do not contend."""
+        var custom_metadata = Dict[String, String]()
+        return self.read_batch_with_custom_metadata(i, custom_metadata)
+
+    def read_batch_with_custom_metadata(
+        ref self, i: Int, mut custom_metadata: Dict[String, String]
+    ) raises -> RecordBatch:
+        """One batch, by index; the custom metadata of its message goes to
+        `custom_metadata`, empty when it carries none."""
         if i < 0 or i >= len(self._blocks):
             raise IndexError("RecordBatchFileReader: batch index out of range")
         var pos = Int(self._blocks[i].offset)
@@ -248,6 +265,7 @@ struct RecordBatchFileReader[S: ByteSource = BufferSource](
         var body = List[UInt8]()
         var _ok = _read_message(self._src, pos, meta, body)
         var dec = IpcDecoder(meta^)
+        custom_metadata = dec.custom_metadata()
         return dec.decode_record_batch(
             self._schema,
             self._ipc_infos,
@@ -318,6 +336,15 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](BatchReader):
     def read_next_batch(mut self) raises -> Optional[RecordBatch]:
         """The next record batch, applying the dictionary messages before it,
         or `None` at the end of the stream."""
+        var custom_metadata = Dict[String, String]()
+        return self.read_next_batch_with_custom_metadata(custom_metadata)
+
+    def read_next_batch_with_custom_metadata(
+        mut self, mut custom_metadata: Dict[String, String]
+    ) raises -> Optional[RecordBatch]:
+        """The next record batch, or `None` at the end of the stream; the
+        custom metadata of its message goes to `custom_metadata`, empty when
+        it carries none."""
         while True:
             var meta = List[UInt8]()
             var body = List[UInt8]()
@@ -351,6 +378,7 @@ struct RecordBatchStreamReader[S: ByteSource = BufferSource](BatchReader):
                         self._dict_values[dict_id] = values^
             elif Int(header_type) == Int(HEADER_RECORD_BATCH):
                 var dec = IpcDecoder(meta^)
+                custom_metadata = dec.custom_metadata()
                 return dec.decode_record_batch(
                     self._schema,
                     self._ipc_infos,

@@ -200,7 +200,9 @@ struct BatchEncoder(Movable):
             buf_meta.append(BodyBuffer(Int64(at), Int64(len(body) - at)))
         pad_to(body, self.alignment)
 
-    def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
+    def encode(
+        mut self, batch: RecordBatch, custom_metadata: Dict[String, String]
+    ) raises -> _EncodedBatch:
         for col in batch.columns:
             self.write_array(BatchEncoder.dense(col))
         var buf_meta = List[BodyBuffer]()
@@ -213,6 +215,7 @@ struct BatchEncoder(Movable):
             self.variadic_counts,
             self.compression,
             Int64(len(body)),
+            custom_metadata,
         )
         var padded_meta = IpcEncoder.padded_metadata_length(
             len(rb_meta), self.alignment
@@ -251,7 +254,10 @@ struct BatchEncoder(Movable):
         var db_pos = enc._write_dictionary_batch_table(dict_id, False, rb_pos)
 
         var msg_pos = enc._write_message_table(
-            HEADER_DICTIONARY_BATCH, db_pos, Int64(len(body))
+            HEADER_DICTIONARY_BATCH,
+            db_pos,
+            Int64(len(body)),
+            Dict[String, String](),
         )
         var meta = enc._finish(msg_pos)
         var padded_meta = IpcEncoder.padded_metadata_length(

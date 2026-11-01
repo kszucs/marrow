@@ -2153,3 +2153,131 @@ def test_ipc_file_alignment_8_roundtrips() raises:
     )
     var pa = Python.import_module("pyarrow")
     assert_equal(Int(py=pa.ipc.open_file(path).read_all().num_rows), 5)
+
+
+# ---------------------------------------------------------------------------
+# Custom metadata
+# ---------------------------------------------------------------------------
+
+
+def _text(metadata: PythonObject) raises -> String:
+    """A pyarrow key-value metadata, as sorted `str` pairs."""
+    var f = Python.evaluate(
+        "lambda md: str(sorted((k.decode(), v.decode())"
+        " for k, v in md.items()))"
+    )
+    return String(py=f(metadata))
+
+
+def test_ipc_file_metadata_read_by_pyarrow() raises:
+    """Footer metadata and per-batch custom metadata written by marrow are
+    read by pyarrow."""
+    var path = _tmp_path()
+    var batch = _mk_batch()
+    var w = RecordBatchFileWriter(
+        path, batch.schema, metadata={"origin": "marrow"}
+    )
+    w.write(batch, {"batch": "first", "n": "1"})
+    w.write(batch)
+    w.close()
+
+    var pa = Python.import_module("pyarrow")
+    var reader = pa.ipc.open_file(path)
+    assert_equal(_text(reader.metadata), "[('origin', 'marrow')]")
+    var first = reader.get_batch_with_custom_metadata(0)
+    assert_equal(_text(first[1]), "[('batch', 'first'), ('n', '1')]")
+    var second = reader.get_batch_with_custom_metadata(1)
+    assert_true(second[1] is None or Int(py=pa.builtins.len(second[1])) == 0)
+
+
+def test_ipc_stream_custom_metadata_read_by_pyarrow() raises:
+    """Per-batch custom metadata written by marrow to a stream is read by
+    pyarrow."""
+    var path = _tmp_path(".arrows")
+    var batch = _mk_batch()
+    var w = RecordBatchStreamWriter(path, batch.schema)
+    w.write(batch, {"k": "v"})
+    w.close()
+
+    var pa = Python.import_module("pyarrow")
+    var reader = pa.ipc.open_stream(path)
+    var got = reader.read_next_batch_with_custom_metadata()
+    assert_equal(_text(got[1]), "[('k', 'v')]")
+
+
+def test_ipc_file_metadata_written_by_pyarrow() raises:
+    """Footer metadata and per-batch custom metadata written by pyarrow are
+    read by marrow."""
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var pa_batch = pa.RecordBatch.from_pydict(
+        Python.evaluate("{'x': [1, 2, 3]}")
+    )
+    var writer = pa.ipc.new_file(
+        path, pa_batch.schema, metadata=Python.evaluate("{'origin': 'pyarrow'}")
+    )
+    writer.write_batch(
+        pa_batch, custom_metadata=Python.evaluate("{'batch': 'one'}")
+    )
+    writer.write_batch(pa_batch)
+    writer.close()
+
+    var reader = RecordBatchFileReader(path)
+    var footer = reader.metadata()
+    assert_equal(len(footer), 1)
+    assert_equal(footer["origin"], "pyarrow")
+    var custom_metadata = Dict[String, String]()
+    var first = reader.read_batch_with_custom_metadata(0, custom_metadata)
+    assert_equal(first.num_rows(), 3)
+    assert_equal(len(custom_metadata), 1)
+    assert_equal(custom_metadata["batch"], "one")
+    _ = reader.read_batch_with_custom_metadata(1, custom_metadata)
+    assert_equal(len(custom_metadata), 0)
+
+
+def test_ipc_stream_custom_metadata_written_by_pyarrow() raises:
+    """Per-batch custom metadata written by pyarrow to a stream is read by
+    marrow."""
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path(".arrows")
+    var pa_batch = pa.RecordBatch.from_pydict(
+        Python.evaluate("{'x': [1, 2, 3]}")
+    )
+    var writer = pa.ipc.new_stream(path, pa_batch.schema)
+    writer.write_batch(
+        pa_batch, custom_metadata=Python.evaluate("{'batch': 'one'}")
+    )
+    writer.close()
+
+    var reader = RecordBatchStreamReader(path)
+    var custom_metadata = Dict[String, String]()
+    var first = reader.read_next_batch_with_custom_metadata(custom_metadata)
+    assert_true(Bool(first))
+    assert_equal(first.value().num_rows(), 3)
+    assert_equal(custom_metadata["batch"], "one")
+    assert_false(
+        Bool(reader.read_next_batch_with_custom_metadata(custom_metadata))
+    )
+
+
+def test_ipc_custom_metadata_roundtrips_in_marrow() raises:
+    """Metadata written by marrow reads back through marrow, with the batch
+    unchanged and an empty map for a batch that carried none."""
+    var path = _tmp_path()
+    var batch = _mk_dict_batch()
+    var w = RecordBatchFileWriter(path, batch.schema, metadata={"a": "b"})
+    w.write(batch, {"k": "v"})
+    w.write(batch)
+    w.close()
+    var r = RecordBatchFileReader(path)
+    assert_equal(r.metadata()["a"], "b")
+    var custom_metadata = Dict[String, String]()
+    var first = r.read_batch_with_custom_metadata(0, custom_metadata)
+    assert_equal(custom_metadata["k"], "v")
+    assert_true(
+        DictionaryArray(first.columns[0].to_data())
+        == DictionaryArray(batch.columns[0].to_data())
+    )
+    _ = r.read_batch_with_custom_metadata(1, custom_metadata)
+    assert_equal(len(custom_metadata), 0)
+    assert_equal(r.num_record_batches(), 2)

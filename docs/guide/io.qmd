@@ -94,6 +94,35 @@ ma.write_ipc_file(zstd_path, batches=[batch], compression="zstd")
 print(ma.read_ipc_file(zstd_path)[0].to_pydict())
 ```
 
+### Batch by batch, with custom metadata
+
+`marrow.ipc` also has PyArrow's incremental writers and readers:
+`new_file` / `new_stream` write one batch at a time, and `open_file` /
+`open_stream` read them back. A file carries key/value `metadata` in its
+footer, and every batch can carry `custom_metadata` of its own. Both come back
+as a `dict` of `bytes`, or `None` when there is none, as in PyArrow:
+
+```{python}
+meta_path = os.path.join(tempfile.mkdtemp(), "people-meta.arrow")
+with ma.ipc.new_file(meta_path, batch.schema, metadata={"source": "crm"}) as writer:
+    writer.write_batch(batch, custom_metadata={"region": "eu"})
+    writer.write_batch(batch)
+
+reader = ma.ipc.open_file(meta_path)
+print("file:", reader.metadata)
+for i in range(reader.num_record_batches):
+    print(f"batch {i}:", reader.get_batch_with_custom_metadata(i).custom_metadata)
+```
+
+`open_stream` reads a stream the same way, one batch at a time with
+`read_next_batch_with_custom_metadata()` or `iter_batches_with_custom_metadata()`.
+The writers take `options=ma.ipc.IpcWriteOptions(compression="zstd")` for
+compressed bodies.
+
+Every buffer and message is padded to 64 bytes, the alignment the format
+recommends, so a memory-mapped file hands out aligned buffers. The Mojo writers
+take `alignment=8`, `16` or `32` for smaller files.
+
 ## Parquet
 
 Marrow ships a **from-scratch** Parquet reader and writer — it decodes and

@@ -52,6 +52,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
     var _blocks: List[Block]
     var _enc: BatchEncoder
     var _dicts: List[DynArray]
+    var _metadata: Dict[String, String]
     var _closed: Bool
 
     def __init__(
@@ -61,6 +62,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
         compression: Optional[BodyCompression] = None,
         native_codecs: Bool = True,
         alignment: Int = 64,
+        metadata: Dict[String, String] = {},
     ) raises:
         """Write to a local file — the convenience that pins `S == FileSink`."""
         _check_alignment(alignment)
@@ -70,6 +72,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
             compression,
             native_codecs,
             alignment,
+            metadata,
         )
 
     def __init__(
@@ -79,11 +82,12 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
         compression: Optional[BodyCompression] = None,
         native_codecs: Bool = True,
         alignment: Int = 64,
+        metadata: Dict[String, String] = {},
     ) raises:
         """`compression` compresses every body buffer, dictionaries'
         included -- in Mojo, or with `native_codecs=False` through liblz4
         and libzstd. Buffers and messages are padded to `alignment` bytes,
-        one of 8, 16, 32 or 64."""
+        one of 8, 16, 32 or 64. `metadata` is stored in the file's footer."""
         _check_alignment(alignment)
         self._out = BufferedSink(sink^)
         self._schema = Schema(copy=schema)
@@ -91,6 +95,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
         self._blocks = List[Block]()
         self._enc = BatchEncoder(compression, native_codecs, alignment)
         self._dicts = []
+        self._metadata = metadata.copy()
         self._closed = False
 
         for b in magic():
@@ -104,6 +109,12 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
         self._out.write(Span(schema_msg))
 
     def write(mut self, batch: RecordBatch) raises:
+        self.write(batch, Dict[String, String]())
+
+    def write(
+        mut self, batch: RecordBatch, custom_metadata: Dict[String, String]
+    ) raises:
+        """Write `batch`, attaching `custom_metadata` to its message."""
         if self._closed:
             raise InvalidError("RecordBatchFileWriter: writer is closed")
         # Collect all (dict_id, values) pairs in DFS inner-first order; ids
@@ -131,7 +142,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
             )
             self._dicts.append(pair.values.copy())
         var blk_start = Int64(self._out.tell())
-        var eb = self._enc.encode(batch)
+        var eb = self._enc.encode(batch, custom_metadata)
         self._out.write(Span(eb.msg))
         self._blocks.append(
             Block(blk_start, eb.metadata_length, eb.body_length)
@@ -145,7 +156,7 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
             return
         self._out.pad_to(8)
         var footer_bytes = IpcEncoder.encode_footer(
-            self._schema, self._dict_blocks, self._blocks
+            self._schema, self._dict_blocks, self._blocks, self._metadata
         )
         self._out.write(Span(footer_bytes))
         LittleEndian.append[DType.int32](
@@ -209,6 +220,12 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](BatchWriter):
         self._out.write(Span(schema_msg))
 
     def write(mut self, batch: RecordBatch) raises:
+        self.write(batch, Dict[String, String]())
+
+    def write(
+        mut self, batch: RecordBatch, custom_metadata: Dict[String, String]
+    ) raises:
+        """Write `batch`, attaching `custom_metadata` to its message."""
         if self._closed:
             raise InvalidError("RecordBatchStreamWriter: writer is closed")
         # Stream format sends all dicts before each record batch.
@@ -221,7 +238,7 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](BatchWriter):
                 Int64(pairs[j].dict_id), pairs[j].values
             )
             self._out.write(Span(eb.msg))
-        var eb = self._enc.encode(batch)
+        var eb = self._enc.encode(batch, custom_metadata)
         self._out.write(Span(eb.msg))
         self._out.flush()
 
