@@ -101,3 +101,41 @@ print(typed[0].value())      # 1
 # Export from Mojo back to PyArrow — __arrow_c_array__ protocol is supported
 var pa_result = pa.array(data.copy())
 ```
+
+## Extension types
+
+An extension type is a storage type under a name: `pa.uuid()` is
+`fixed_size_binary(16)` named `arrow.uuid`. Marrow keeps the name where the
+Arrow format does, in the field's `ARROW:extension:name` and
+`ARROW:extension:metadata` metadata, so an extension column crosses the C Data
+Interface, IPC and Parquet with its type intact, including types marrow has
+never heard of:
+
+```{python}
+uuids = pa.ExtensionArray.from_storage(
+    pa.uuid(), pa.array([b"\x01" * 16, None], pa.binary(16))
+)
+batch = ma.record_batch(pa.record_batch({"id": uuids}))
+
+print(batch.schema.field(0).type)       # the storage
+print(batch.schema.field(0).metadata)   # the extension
+print(pa.record_batch(batch).schema)    # PyArrow sees pa.uuid() again
+```
+
+In Mojo, `marrow.extensions` has the canonical `UuidType`, `JsonType` and
+`Bool8Type`. `Field.with_extension` attaches one, checking the storage, and
+`Field.extension[E]` reads it back, or answers `None` for a field carrying
+another extension or none:
+
+```mojo
+from marrow.dtypes import field, fixed_size_binary_
+from marrow.extensions import UuidType
+
+var id = field("id", fixed_size_binary_(16)).with_extension(UuidType())
+print(id.extension_name().value())        # arrow.uuid
+print(Bool(id.extension[UuidType]()))     # True
+```
+
+An extension of your own implements the `ExtensionType` trait: a static
+`extension_name()` and `deserialize(storage, serialized)`, plus
+`storage_type()` and `serialize()`.

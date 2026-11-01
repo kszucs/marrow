@@ -63,7 +63,20 @@ implementation does not support the type.
 | List view, large list view | ❌ | |
 | Union (sparse and dense) | ❌ | |
 | Run-end encoded | ✅ | C++, Go |
-| Extension types | ❌ | |
+| Extension types (as field metadata over their storage) | ✅ | C++, Rust, Go |
+
+### Canonical extension types
+
+Every extension type crosses IPC, the C Data Interface and Parquet with its
+name and parameters intact. These also have a typed Mojo form in
+`marrow.extensions`, which checks the storage:
+
+| Type | Typed | How it is checked |
+|---|:---:|---|
+| `arrow.uuid` | ✅ | IPC, C Data and Parquet round trips with pyarrow |
+| `arrow.json` | ✅ | IPC files read by pyarrow, over `string`, `large_string` and `string_view` |
+| `arrow.bool8` | ✅ | IPC files read by pyarrow |
+| `arrow.fixed_shape_tensor`, `arrow.opaque`, variants | ❌ | carried as metadata only |
 
 ### Nesting
 

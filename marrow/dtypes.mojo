@@ -593,6 +593,33 @@ comptime EXTENSION_METADATA = "ARROW:extension:metadata"
 serialized parameters: an extension type is its storage type under these."""
 
 
+trait ExtensionType(Copyable, Movable):
+    """A typed view of an extension type: its registered name, its storage and
+    its serialized parameters. Carry one on a field with
+    `Field.with_extension` and read it back with `Field.extension[E]`."""
+
+    @staticmethod
+    def extension_name() -> String:
+        """The name the type is registered under, e.g. `arrow.uuid`."""
+        ...
+
+    def storage_type(self) -> DynType:
+        """The type of the array that holds the values."""
+        ...
+
+    def serialize(self) -> String:
+        """The type's parameters, as stored under `EXTENSION_METADATA`."""
+        ...
+
+    @staticmethod
+    def deserialize(
+        storage: DynType, serialized: String
+    ) raises InvalidError -> Self:
+        """The type for `storage` and `serialized` parameters; raises when
+        either is not one this extension accepts."""
+        ...
+
+
 struct Field(
     ConvertibleFromPython,
     ConvertibleToPython,
@@ -649,6 +676,38 @@ struct Field(
                 t"field '{self.name}': {FIELD_ID_KEY} is not an integer:"
                 t" '{value.value()}'"
             )
+
+    def extension_name(self) -> Optional[String]:
+        """The extension type's name, or `None` for a plain field."""
+        return self.metadata.get(EXTENSION_NAME)
+
+    def extension[E: ExtensionType](self) raises InvalidError -> Optional[E]:
+        """The extension `E` this field carries, or `None` when it carries no
+        extension or another one. Raises when the storage or the serialized
+        parameters are not valid for `E`."""
+        var name = self.extension_name()
+        if name and name.value() == E.extension_name():
+            return E.deserialize(
+                self.dtype,
+                self.metadata.get(EXTENSION_METADATA).or_else(""),
+            )
+        else:
+            return None
+
+    def with_extension[
+        E: ExtensionType
+    ](self, ext: E) raises InvalidError -> Field:
+        """This field as the extension `ext`; raises unless the field's type
+        is `ext`'s storage."""
+        if ext.storage_type() != self.dtype:
+            raise InvalidError(
+                t"field '{self.name}': extension {E.extension_name()} needs"
+                t" storage {ext.storage_type()}, got {self.dtype}"
+            )
+        var out = self.copy()
+        out.metadata[EXTENSION_NAME] = E.extension_name()
+        out.metadata[EXTENSION_METADATA] = ext.serialize()
+        return out^
 
     def with_field_id(self, id: Int) -> Field:
         """This field carrying `id` under `FIELD_ID_KEY`."""

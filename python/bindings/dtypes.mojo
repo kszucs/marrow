@@ -3,7 +3,7 @@
 
 """Python interface for data types."""
 
-from std.python import PythonObject
+from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 from std.memory import ArcPointer
 import marrow.dtypes as dt
@@ -21,6 +21,16 @@ def _field_type(py_self: PythonObject) raises -> PythonObject:
 
 def _field_nullable(py_self: PythonObject) raises -> PythonObject:
     return PythonObject(py_self.downcast_value_ptr[dt.Field]()[].nullable)
+
+
+def _field_metadata(py_self: PythonObject) raises -> PythonObject:
+    """The metadata as a flat list `[key, value, key, value, ...]`."""
+    var builtins = Python.import_module("builtins")
+    var out = builtins.list()
+    for ref entry in py_self.downcast_value_ptr[dt.Field]()[].metadata.items():
+        out.append(entry.key)
+        out.append(entry.value)
+    return out
 
 
 def _field_equals(
@@ -249,6 +259,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_field_name]("name")
         .def_method[_field_type]("type")
         .def_method[_field_nullable]("nullable")
+        .def_method[_field_metadata]("metadata")
         .def_method[_field_equals]("equals")
         .def_method[_field_str]("__str__")
     )

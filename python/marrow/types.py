@@ -103,6 +103,15 @@ class Field(_Wrapper):
     def nullable(self):
         return self._binding.nullable()
 
+    @property
+    def metadata(self):
+        """The field's key/value metadata as a `dict[bytes, bytes]`, or `None`
+        when it has none (as PyArrow)."""
+        flat = self._binding.metadata()
+        if not flat:
+            return None
+        return {flat[i].encode(): flat[i + 1].encode() for i in range(0, len(flat), 2)}
+
     def equals(self, other):
         return self._binding.equals(unwrap(other))
 

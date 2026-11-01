@@ -71,11 +71,9 @@ from ...dtypes import (
     timestamp,
 )
 from ...errors import InvalidError, NotImplementedError
+from ...extensions import UuidType
 from ...schema import Schema
 from .schema import AvroKind, AvroSchema, check_name
-
-comptime UUID_EXTENSION = "arrow.uuid"
-
 
 # ---------------------------------------------------------------------------
 # Avro -> Arrow
@@ -129,7 +127,7 @@ def _arrow_field_of(
     var metadata: Dict[String, String],
 ) raises -> Field:
     if is_uuid(schema):
-        metadata[EXTENSION_NAME] = UUID_EXTENSION
+        metadata[EXTENSION_NAME] = UuidType.extension_name()
     return Field(name, arrow_type(schema), nullable, metadata^)
 
 
@@ -317,8 +315,8 @@ def _from_type(f: Field, namespace: String) raises -> AvroSchema:
         return AvroSchema(AvroKind.STRING)
     elif dt.is_fixed_size_binary():
         var s = AvroSchema.fixed(path, dt.as_fixed_size_binary().byte_width)
-        var ext = f.metadata.get(EXTENSION_NAME)
-        if ext and ext.value() == UUID_EXTENSION and s.size == 16:
+        var ext = f.extension_name()
+        if ext and ext.value() == UuidType.extension_name() and s.size == 16:
             s.logical = "uuid"
         return s^
     elif dt.is_date32():

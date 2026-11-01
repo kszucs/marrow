@@ -194,7 +194,7 @@ marrow: 240 run, 51 wait on features marrow does not have yet, and one records
 a divergence chosen on purpose.
 Arrow's own integration suite round-trips IPC files and
 C Data with the C++, Rust and Go implementations, skipping the layouts marrow
-does not implement (unions, list views, extension types). See
+does not implement (unions, list views). See
 [Status & limitations](reference/status.qmd) for the full list.
 :::
 

@@ -27,7 +27,7 @@ Four checks, none of which grades marrow against itself:
 - **Arrow archery integration** — the official cross-implementation suite, run
   against the **C++, Rust and Go** implementations in both directions
   (`pixi run -e integration integration`), skipping the layouts marrow does not
-  implement: unions, list views and extension types. Marrow
+  implement: unions and list views. Marrow
   reads the suite's JSON, writes and reads IPC, and exports and imports C Data
   itself; pyarrow only compares the results. See [Spec compliance](compliance.qmd) for
   what is checked, type by type.

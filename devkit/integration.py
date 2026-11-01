@@ -422,7 +422,6 @@ class ArcherySuite:
         {
             "union",
             "list_view",
-            "extension",
         }
     )
 

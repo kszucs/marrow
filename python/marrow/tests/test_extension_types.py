@@ -125,3 +125,29 @@ def test_parquet_marrow_roundtrip(tmp_path):
         pq.read_table(path).drop_columns(["map"]).schema
         == table.drop_columns(["map"]).schema
     )
+
+
+def test_field_metadata_matches_pyarrow(tmp_path):
+    plain = pa.field("plain", pa.int64(), metadata={"k": "v"})
+    storage = pa.field(
+        "uuid",
+        pa.binary(16),
+        metadata={
+            "ARROW:extension:name": "arrow.uuid",
+            "ARROW:extension:metadata": "",
+        },
+    )
+    batch = pa.record_batch(
+        [pa.array([1]), pa.array([b"\x01" * 16], pa.binary(16)), pa.array([2])],
+        schema=pa.schema([plain, storage, pa.field("bare", pa.int64())]),
+    )
+    path = str(tmp_path / "meta.arrow")
+    ma.write_ipc_file(path, batches=[ma.record_batch(batch)])
+    schema = ma.read_ipc_file(path)[0].schema
+    for expected in batch.schema:
+        assert schema.field(expected.name).metadata == expected.metadata
+    assert schema.field("plain").metadata == {b"k": b"v"}
+    assert schema.field("bare").metadata is None
+    # PyArrow folds the extension keys into the field's type; marrow keeps
+    # them as the metadata they travel as.
+    assert schema.field("uuid").metadata[b"ARROW:extension:name"] == b"arrow.uuid"
