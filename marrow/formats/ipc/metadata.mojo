@@ -56,7 +56,6 @@ from .format import (
     TYPE_TIMESTAMP,
     TYPE_UTF8,
     TYPE_UTF8_VIEW,
-    pad_to,
 )
 
 
@@ -96,6 +95,7 @@ struct IpcEncoder(Movable):
         buffers: List[BodyBuffer],
         variadic_counts: List[Int64],
         compression: Optional[BodyCompression],
+        body_length: Int64,
     ) raises -> List[UInt8]:
         var enc = IpcEncoder(512)
         var nodes_vec = enc._write_field_nodes_vec(nodes)
@@ -103,15 +103,8 @@ struct IpcEncoder(Movable):
         var rb_pos = enc._write_record_batch_table(
             length, nodes_vec, bufs_vec, variadic_counts, compression
         )
-
-        var max_end = Int64(0)
-        for b in buffers:
-            max_end = max(max_end, b.offset + b.length)
-        var r = max_end % Int64(8)
-        var body_len = max_end + (Int64(8) - r) % Int64(8)
-
         var msg_pos = enc._write_message_table(
-            HEADER_RECORD_BATCH, rb_pos, body_len
+            HEADER_RECORD_BATCH, rb_pos, body_length
         )
         return enc._finish(msg_pos)
 
@@ -131,14 +124,26 @@ struct IpcEncoder(Movable):
         return enc._finish(footer_pos)
 
     @staticmethod
-    def frame_message(metadata: List[UInt8], body: List[UInt8]) -> List[UInt8]:
+    def padded_metadata_length(metadata_length: Int, alignment: Int) -> Int:
+        """The metadata length after padding, so that the 8-byte frame prefix
+        and the metadata together fill whole `alignment` units and the body
+        starts on one."""
+        var rem = (8 + metadata_length) % alignment
+        return metadata_length + (alignment - rem) % alignment
+
+    @staticmethod
+    def frame_message(
+        metadata: List[UInt8], body: List[UInt8], alignment: Int
+    ) -> List[UInt8]:
         var out = List[UInt8]()
         LittleEndian.append[DType.uint32](out, UInt32(0xFFFFFFFF))
-        var meta_len = len(metadata)
-        var padded_len = meta_len + (8 - meta_len % 8) % 8
+        var padded_len = IpcEncoder.padded_metadata_length(
+            len(metadata), alignment
+        )
         LittleEndian.append[DType.int32](out, Int32(padded_len))
         out.extend(Span(metadata))
-        pad_to(out, 8)
+        for _ in range(padded_len - len(metadata)):
+            out.append(UInt8(0))
         out.extend(Span(body))
         return out^
 

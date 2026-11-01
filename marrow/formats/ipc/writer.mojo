@@ -17,6 +17,18 @@ from .format import Block, magic, pad_to
 from .metadata import IpcEncoder
 
 
+def _check_alignment(alignment: Int) raises InvalidError:
+    if (
+        alignment != 8
+        and alignment != 16
+        and alignment != 32
+        and alignment != 64
+    ):
+        raise InvalidError(
+            t"IPC writer: alignment must be 8, 16, 32 or 64, got {alignment}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public: incremental file and stream writers
 # ---------------------------------------------------------------------------
@@ -48,10 +60,16 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
         schema: Schema,
         compression: Optional[BodyCompression] = None,
         native_codecs: Bool = True,
+        alignment: Int = 64,
     ) raises:
         """Write to a local file — the convenience that pins `S == FileSink`."""
+        _check_alignment(alignment)
         self = RecordBatchFileWriter[FileSink](
-            FileSink(path), schema, compression, native_codecs
+            FileSink(path),
+            schema,
+            compression,
+            native_codecs,
+            alignment,
         )
 
     def __init__(
@@ -60,22 +78,28 @@ struct RecordBatchFileWriter[S: ByteSink = FileSink](BatchWriter):
         schema: Schema,
         compression: Optional[BodyCompression] = None,
         native_codecs: Bool = True,
+        alignment: Int = 64,
     ) raises:
         """`compression` compresses every body buffer, dictionaries'
         included -- in Mojo, or with `native_codecs=False` through liblz4
-        and libzstd."""
+        and libzstd. Buffers and messages are padded to `alignment` bytes,
+        one of 8, 16, 32 or 64."""
+        _check_alignment(alignment)
         self._out = BufferedSink(sink^)
         self._schema = Schema(copy=schema)
         self._dict_blocks = List[Block]()
         self._blocks = List[Block]()
-        self._enc = BatchEncoder(compression, native_codecs)
+        self._enc = BatchEncoder(compression, native_codecs, alignment)
         self._dicts = []
         self._closed = False
 
         for b in magic():
             self._out.buffer().append(b)
+        self._out.pad_to(alignment)
         var schema_msg = IpcEncoder.frame_message(
-            IpcEncoder.encode_schema_message(self._schema), List[UInt8]()
+            IpcEncoder.encode_schema_message(self._schema),
+            List[UInt8](),
+            alignment,
         )
         self._out.write(Span(schema_msg))
 
@@ -152,10 +176,12 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](BatchWriter):
         schema: Schema,
         compression: Optional[BodyCompression] = None,
         native_codecs: Bool = True,
+        alignment: Int = 64,
     ) raises:
         """Write to a local file — the convenience that pins `S == FileSink`."""
+        _check_alignment(alignment)
         self = RecordBatchStreamWriter[FileSink](
-            FileSink(path), schema, compression, native_codecs
+            FileSink(path), schema, compression, native_codecs, alignment
         )
 
     def __init__(
@@ -164,17 +190,21 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](BatchWriter):
         schema: Schema,
         compression: Optional[BodyCompression] = None,
         native_codecs: Bool = True,
+        alignment: Int = 64,
     ) raises:
         """`compression` compresses every body buffer, dictionaries'
         included -- in Mojo, or with `native_codecs=False` through liblz4
-        and libzstd."""
+        and libzstd. Buffers and messages are padded to `alignment` bytes,
+        one of 8, 16, 32 or 64."""
+        _check_alignment(alignment)
         self._out = BufferedSink(sink^)
-        self._enc = BatchEncoder(compression, native_codecs)
+        self._enc = BatchEncoder(compression, native_codecs, alignment)
         self._closed = False
 
         var schema_msg = IpcEncoder.frame_message(
             IpcEncoder.encode_schema_message(schema),
             List[UInt8](),
+            alignment,
         )
         self._out.write(Span(schema_msg))
 
@@ -191,7 +221,8 @@ struct RecordBatchStreamWriter[S: ByteSink = FileSink](BatchWriter):
                 Int64(pairs[j].dict_id), pairs[j].values
             )
             self._out.write(Span(eb.msg))
-        self._out.write(Span(self._enc.encode(batch).msg))
+        var eb = self._enc.encode(batch)
+        self._out.write(Span(eb.msg))
         self._out.flush()
 
     def close(mut self) raises:
@@ -217,12 +248,18 @@ def write_ipc_file(
     options: StorageOptions = StorageOptions(),
     compression: Optional[BodyCompression] = None,
     native_codecs: Bool = True,
+    alignment: Int = 64,
 ) raises:
     """Write RecordBatches to an Arrow IPC file with an explicit schema;
     `compression` runs in Mojo, or with `native_codecs=False` through liblz4
     and libzstd."""
+    _check_alignment(alignment)
     var w = RecordBatchFileWriter(
-        DynSink.open(uri, options), schema, compression, native_codecs
+        DynSink.open(uri, options),
+        schema,
+        compression,
+        native_codecs,
+        alignment,
     )
     for batch in batches:
         w.write(batch)
@@ -235,6 +272,7 @@ def write_ipc_file(
     options: StorageOptions = StorageOptions(),
     compression: Optional[BodyCompression] = None,
     native_codecs: Bool = True,
+    alignment: Int = 64,
 ) raises:
     """Write RecordBatches to an Arrow IPC file."""
     if len(batches) == 0:
@@ -243,7 +281,13 @@ def write_ipc_file(
             "batches) for schema-only files"
         )
     write_ipc_file(
-        uri, batches[0].schema, batches, options, compression, native_codecs
+        uri,
+        batches[0].schema,
+        batches,
+        options,
+        compression,
+        native_codecs,
+        alignment,
     )
 
 
@@ -254,11 +298,17 @@ def write_ipc_stream(
     options: StorageOptions = StorageOptions(),
     compression: Optional[BodyCompression] = None,
     native_codecs: Bool = True,
+    alignment: Int = 64,
 ) raises:
     """Write RecordBatches to an Arrow IPC stream with an explicit schema;
     `compression` runs as `write_ipc_file` says."""
+    _check_alignment(alignment)
     var w = RecordBatchStreamWriter(
-        DynSink.open(uri, options), schema, compression, native_codecs
+        DynSink.open(uri, options),
+        schema,
+        compression,
+        native_codecs,
+        alignment,
     )
     for batch in batches:
         w.write(batch)
@@ -271,6 +321,7 @@ def write_ipc_stream(
     options: StorageOptions = StorageOptions(),
     compression: Optional[BodyCompression] = None,
     native_codecs: Bool = True,
+    alignment: Int = 64,
 ) raises:
     """Write RecordBatches to an Arrow IPC stream."""
     if len(batches) == 0:
@@ -279,5 +330,11 @@ def write_ipc_stream(
             "batches) for schema-only streams"
         )
     write_ipc_stream(
-        uri, batches[0].schema, batches, options, compression, native_codecs
+        uri,
+        batches[0].schema,
+        batches,
+        options,
+        compression,
+        native_codecs,
+        alignment,
     )

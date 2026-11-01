@@ -65,15 +65,20 @@ struct BatchEncoder(Movable):
     var variadic_counts: List[Int64]
     var compression: Optional[BodyCompression]
     var native_codecs: Bool
+    var alignment: Int
 
     def __init__(
-        out self, compression: Optional[BodyCompression], native_codecs: Bool
+        out self,
+        compression: Optional[BodyCompression],
+        native_codecs: Bool,
+        alignment: Int,
     ):
         self.nodes = List[FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
         self.variadic_counts = List[Int64]()
         self.compression = compression
         self.native_codecs = native_codecs
+        self.alignment = alignment
 
     @staticmethod
     def dense(arr: DynArray) raises -> ArrayData:
@@ -184,7 +189,7 @@ struct BatchEncoder(Movable):
         """Assemble the buffers into a padded body, populating buf_meta
         offsets -- each non-empty one compressed if the batch is."""
         for buf in self.raw_bufs:
-            pad_to(body, 8)
+            pad_to(body, self.alignment)
             var at = len(body)
             if self.compression:
                 self.compression.value().compress(
@@ -193,7 +198,7 @@ struct BatchEncoder(Movable):
             else:
                 body.extend(Span(buf))
             buf_meta.append(BodyBuffer(Int64(at), Int64(len(body) - at)))
-        pad_to(body, 8)
+        pad_to(body, self.alignment)
 
     def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
         for col in batch.columns:
@@ -207,12 +212,14 @@ struct BatchEncoder(Movable):
             buf_meta,
             self.variadic_counts,
             self.compression,
+            Int64(len(body)),
         )
-        var meta_len = len(rb_meta)
-        var padded_meta = meta_len + (8 - meta_len % 8) % 8
+        var padded_meta = IpcEncoder.padded_metadata_length(
+            len(rb_meta), self.alignment
+        )
         var metadata_length = Int32(8 + padded_meta)
         var body_length = Int64(len(body))
-        var msg = IpcEncoder.frame_message(rb_meta, body)
+        var msg = IpcEncoder.frame_message(rb_meta, body, self.alignment)
         self.nodes = List[FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
         self.variadic_counts = List[Int64]()
@@ -223,7 +230,9 @@ struct BatchEncoder(Movable):
     ) raises -> _EncodedBatch:
         """Encode a dictionary values array as a DictionaryBatch IPC message,
         compressed as this encoder's batches are."""
-        var benc = BatchEncoder(self.compression, self.native_codecs)
+        var benc = BatchEncoder(
+            self.compression, self.native_codecs, self.alignment
+        )
         benc.write_array(BatchEncoder.dense(values))
         var buf_meta = List[BodyBuffer]()
         var body = List[UInt8]()
@@ -241,21 +250,16 @@ struct BatchEncoder(Movable):
         )
         var db_pos = enc._write_dictionary_batch_table(dict_id, False, rb_pos)
 
-        var max_end = Int64(0)
-        for b in buf_meta:
-            max_end = max(max_end, b.offset + b.length)
-        var r = max_end % Int64(8)
-        var body_len = max_end + (Int64(8) - r) % Int64(8)
-
         var msg_pos = enc._write_message_table(
-            HEADER_DICTIONARY_BATCH, db_pos, body_len
+            HEADER_DICTIONARY_BATCH, db_pos, Int64(len(body))
         )
         var meta = enc._finish(msg_pos)
-        var meta_len = len(meta)
-        var padded_meta = meta_len + (8 - meta_len % 8) % 8
+        var padded_meta = IpcEncoder.padded_metadata_length(
+            len(meta), self.alignment
+        )
         var metadata_length = Int32(8 + padded_meta)
         var body_length = Int64(len(body))
-        var msg = IpcEncoder.frame_message(meta, body)
+        var msg = IpcEncoder.frame_message(meta, body, self.alignment)
         return _EncodedBatch(msg^, metadata_length, body_length)
 
 

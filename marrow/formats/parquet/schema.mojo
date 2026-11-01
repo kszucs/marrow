@@ -555,7 +555,7 @@ def arrow_schema_value(schema: Schema) -> Optional[String]:
     describes the file, so a schema the IPC encoder rejects gets none."""
     try:
         var message = IpcEncoder.encode_schema_message(schema)
-        return b64encode(IpcEncoder.frame_message(message, List[UInt8]()))
+        return b64encode(IpcEncoder.frame_message(message, List[UInt8](), 8))
     except:
         return None
 

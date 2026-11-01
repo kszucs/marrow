@@ -2026,3 +2026,130 @@ def test_ipc_refuses_run_end_encoded_with_nulls_of_its_own() raises:
     assert_equal(_u32(b, nodes), 3)  # the encoding, its run ends, its values
     _put(b, nodes + 4 + 8, 1, width=8)  # the encoding's null_count
     assert_true(_refused[CorruptError](b))
+
+
+# ---------------------------------------------------------------------------
+# Buffer alignment
+# ---------------------------------------------------------------------------
+
+
+def _aligned_stream_bytes(
+    batch: RecordBatch, alignment: Int
+) raises -> List[UInt8]:
+    var out = List[UInt8]()
+    with ScratchDir() as dir:
+        var path = join(dir, "aligned.arrows")
+        write_ipc_stream(
+            path,
+            batch.schema,
+            [batch.copy()],
+            alignment=alignment,
+        )
+        out = _file_bytes(path)
+    return out^
+
+
+def _assert_message_aligned(b: List[UInt8], index: Int, alignment: Int) raises:
+    """The message's metadata, buffers and body all sit on `alignment`."""
+    var pos = _message(b, index)
+    assert_equal(pos % alignment, 0)
+    assert_equal((8 + _u32(b, pos + 4)) % alignment, 0)
+    assert_equal(_u32(b, _slot(b, _follow(b, pos + 8), 3)) % alignment, 0)
+
+
+def test_ipc_stream_pads_to_64_by_default() raises:
+    """With the default alignment every message starts on 64 bytes, its
+    metadata ends on 64 and each body buffer starts on 64."""
+    var b = _stream_bytes(_mk_batch())
+    _assert_message_aligned(b, 0, 64)
+    _assert_message_aligned(b, 1, 64)
+    var buffers = _follow(b, _slot(b, _header(b, 1), 2))
+    assert_equal(_u32(b, buffers), 4)
+    for i in range(4):
+        assert_equal(_u32(b, _buffer(b, 1, i)) % 64, 0)
+
+
+def test_ipc_stream_alignment_8_roundtrips() raises:
+    """Alignment 8 pads buffers to 8 bytes only, and still reads back."""
+    var batch = _mk_batch()
+    var b = _aligned_stream_bytes(batch, 8)
+    _assert_message_aligned(b, 1, 8)
+    var reader = RecordBatchStreamReader(BufferSource(Span(b)))
+    var got = reader.read_all().to_batches()
+    assert_equal(len(got), 1)
+    assert_true(KeyCompare.equals(got[0].columns[1], batch.columns[1]))
+    var path = _tmp_path(".arrows")
+    write_ipc_stream(path, batch.schema, [batch.copy()], alignment=8)
+    var pa = Python.import_module("pyarrow")
+    assert_equal(Int(py=pa.ipc.open_stream(path).read_all().num_rows), 5)
+
+
+def test_ipc_alignment_16_and_32_pad_buffers() raises:
+    """Every permitted alignment pads messages and buffers to its size."""
+    for alignment in [16, 32]:
+        var b = _aligned_stream_bytes(_mk_batch(), alignment)
+        _assert_message_aligned(b, 1, alignment)
+        for i in range(4):
+            assert_equal(_u32(b, _buffer(b, 1, i)) % alignment, 0)
+
+
+def test_ipc_writers_refuse_unsupported_alignment() raises:
+    """Only 8, 16, 32 and 64 are accepted, by every writer."""
+    var batch = _mk_batch()
+    var refused = 0
+    for alignment in [0, 4, 12, 128]:
+        try:
+            _ = RecordBatchStreamWriter(
+                _tmp_path(".arrows"), batch.schema, alignment=alignment
+            )
+        except e:
+            if DynError(e).isa[InvalidError]():
+                refused += 1
+        try:
+            _ = RecordBatchFileWriter(
+                _tmp_path(), batch.schema, alignment=alignment
+            )
+        except e:
+            if DynError(e).isa[InvalidError]():
+                refused += 1
+    assert_equal(refused, 8)
+
+
+def test_ipc_file_pads_to_64_and_pyarrow_reads_it() raises:
+    """A file at 64 starts its first message on 64 (after the magic), and
+    reads back in pyarrow and in marrow, dictionaries included."""
+    var path = _tmp_path()
+    var plain = _mk_batch()
+    var dict_batch = _mk_dict_batch()
+    write_ipc_file(path, [plain.copy()])
+    var b = _file_bytes(path)
+    assert_equal(_u32(b, 64), 0xFFFFFFFF)
+    assert_equal((8 + _u32(b, 68)) % 64, 0)
+    var pa = Python.import_module("pyarrow")
+    var table = pa.ipc.open_file(path).read_all()
+    assert_equal(Int(py=table.num_rows), 5)
+    assert_true(
+        KeyCompare.equals(read_ipc_file(path)[0].columns[0], plain.columns[0])
+    )
+
+    var dict_path = _tmp_path()
+    write_ipc_file(dict_path, [dict_batch.copy()])
+    var got = read_ipc_file(dict_path)
+    assert_true(
+        DictionaryArray(got[0].columns[0].to_data())
+        == DictionaryArray(dict_batch.columns[0].to_data())
+    )
+    var py_dict = pa.ipc.open_file(dict_path).read_all()
+    assert_equal(Int(py=py_dict.num_rows), 4)
+
+
+def test_ipc_file_alignment_8_roundtrips() raises:
+    """A file at alignment 8 reads back in marrow and in pyarrow."""
+    var path = _tmp_path()
+    var batch = _mk_batch()
+    write_ipc_file(path, batch.schema, [batch.copy()], alignment=8)
+    assert_true(
+        KeyCompare.equals(read_ipc_file(path)[0].columns[1], batch.columns[1])
+    )
+    var pa = Python.import_module("pyarrow")
+    assert_equal(Int(py=pa.ipc.open_file(path).read_all().num_rows), 5)
