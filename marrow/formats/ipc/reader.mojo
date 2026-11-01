@@ -425,7 +425,10 @@ def read_ipc_file(
     bodies decode in Mojo, or with `native_codecs=False` through liblz4 and
     libzstd."""
     var r = RecordBatchFileReader(DynSource.open(uri, options), native_codecs)
-    return r.read_all().to_batches()
+    var batches = List[RecordBatch]()
+    for i in range(r.num_record_batches()):
+        batches.append(r.read_batch(i))
+    return batches^
 
 
 def read_ipc_stream(
@@ -436,7 +439,15 @@ def read_ipc_stream(
     """Read an Arrow IPC stream and return all RecordBatches; compressed
     bodies decode as `read_ipc_file` says."""
     var r = RecordBatchStreamReader(DynSource.open(uri, options), native_codecs)
-    return r.read_all().to_batches()
+    var batches = List[RecordBatch]()
+    var done = False
+    while not done:
+        var batch = r.read_next_batch()
+        if batch:
+            batches.append(batch.take())
+        else:
+            done = True
+    return batches^
 
 
 def read_ipc_file_schema(

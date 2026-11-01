@@ -2281,3 +2281,15 @@ def test_ipc_custom_metadata_roundtrips_in_marrow() raises:
     _ = r.read_batch_with_custom_metadata(1, custom_metadata)
     assert_equal(len(custom_metadata), 0)
     assert_equal(r.num_record_batches(), 2)
+
+
+def test_ipc_zero_batches_read_as_none() raises:
+    """A file or stream holding a schema and no batches reads back as no
+    batches, not as one empty batch."""
+    var schema = _mk_batch().schema
+    var file_path = _tmp_path()
+    write_ipc_file(file_path, schema, List[RecordBatch]())
+    assert_equal(len(read_ipc_file(file_path)), 0)
+    var stream_path = _tmp_path(".arrows")
+    write_ipc_stream(stream_path, schema, List[RecordBatch]())
+    assert_equal(len(read_ipc_stream(stream_path)), 0)
