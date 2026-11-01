@@ -10,6 +10,7 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 from std.builtin.rebind import rebind_var
+from std.sys import size_of
 
 from ...utils.testing import Benchmark
 from ...views import BufferView
@@ -19,7 +20,14 @@ from ...kernels.bitwise import (
     ZigzagDecode,
     ZigzagEncode,
 )
-from ...kernels.compose import Codec, Compose, Decoder, Encoder
+from ...kernels.compose import (
+    Auto,
+    ChoicePack,
+    Codec,
+    Compose,
+    Decoder,
+    Encoder,
+)
 from ...kernels.core import PackKernel, UnpackKernel
 from ...kernels.dictionary import (
     DictionaryBytesPack,
@@ -28,15 +36,25 @@ from ...kernels.dictionary import (
     DictionaryPack,
     DictionaryUnpack,
 )
+from ...kernels.float import AlpPack, AlpRdPack, AlpRdUnpack, AlpUnpack
 from ...kernels.packing import (
     BLOCK,
     BitPack,
     BitUnpack,
+    ConstantPack,
+    ConstantUnpack,
+    FrequencyPack,
+    FrequencyUnpack,
+    FsstPack,
+    FsstPacked,
+    FsstUnpack,
     LengthsPack,
     LengthsPacked,
     LengthsUnpack,
     PlainPack,
     PlainUnpack,
+    PforPack,
+    PforUnpack,
     PrefixesPack,
     PrefixesPacked,
     PrefixesUnpack,
@@ -74,6 +92,11 @@ def _data[T: DType, shape: StaticString]() -> List[Scalar[T]]:
             out.append(Scalar[T]((i * 7919) % 201 - 100))
         elif shape == "sparse":
             out.append(Scalar[T](0 if i % 1000 < 990 else (i * 7919) % 100_000))
+        elif shape == "outliers":
+            # Small values, every hundredth far past them.
+            out.append(
+                Scalar[T]((1 << 40) + i if i % 100 == 0 else (i * 7919) % 100)
+            )
         elif shape == "gauge":
             # A reading held for ten samples at a time.
             out.append(
@@ -82,9 +105,22 @@ def _data[T: DType, shape: StaticString]() -> List[Scalar[T]]:
                     + Float64((i // 10) % 7) * 0.125
                 )
             )
+        elif shape == "real":
+            # Doubles with more digits than a decimal integer holds.
+            out.append(
+                Scalar[T](
+                    Float64(i) * 0.7071067811865476
+                    + Float64((i * 7919) % 1000) * 1e-9
+                )
+            )
         else:
             out.append(Scalar[T](Float64(i % 1000) * 0.25 + 20.0))
     return out^
+
+
+def _ratio(raw: Int, packed: Int) -> String:
+    """Raw bytes over packed bytes, to two decimals."""
+    return String(round(Float64(raw) / Float64(max(packed, 1)), 2))
 
 
 def _bench[
@@ -102,6 +138,11 @@ def _bench[
         if out[i] != values[i]:
             raise Error("bench: the codec does not round-trip")
     b.throughput(BenchMetric.elements, N)
+    b.extra_info("shape", shape)
+    b.extra_info(
+        "ratio",
+        _ratio(N * size_of[Scalar[T]](), codec.encoder.nbytes[T](packed)),
+    )
 
     @always_inline
     def call() raises {mut out, imm}:
@@ -147,6 +188,10 @@ def _bench_bytes[
     if not (ends == offsets and bytes == data):
         raise Error("bench: the packers do not round-trip")
     b.throughput(BenchMetric.elements, N)
+    b.extra_info("shape", "strings")
+    b.extra_info(
+        "ratio", _ratio(len(data) + 4 * (N + 1), packer.nbytes(packed))
+    )
 
     @always_inline
     def call() raises {imm}:
@@ -201,6 +246,10 @@ def _bench_bytes[
     if not (ends == offsets and bytes == data):
         raise Error("bench: the packers do not round-trip")
     b.throughput(BenchMetric.elements, N)
+    b.extra_info("shape", "strings")
+    b.extra_info(
+        "ratio", _ratio(len(data) + 4 * (N + 1), packer.nbytes(packed))
+    )
 
     @always_inline
     def call() raises {imm}:
@@ -249,6 +298,10 @@ def _bench_bytes[
     if not (ends == offsets and bytes == data):
         raise Error("bench: the packers do not round-trip")
     b.throughput(BenchMetric.elements, N)
+    b.extra_info("shape", "strings")
+    b.extra_info(
+        "ratio", _ratio(len(data) + 4 * (N + 1), packer.nbytes(packed))
+    )
 
     @always_inline
     def call() raises {imm}:
@@ -257,6 +310,53 @@ def _bench_bytes[
             var bytes = List[UInt8]()
             unpacker.unpack(
                 rebind_var[DictionaryBytesPacked[D.Packed]](packed.copy()),
+                N,
+                ends,
+                bytes,
+            )
+            keep(len(bytes))
+        else:
+            var again = packer.pack(Span(offsets), Span(data))
+            keep(again)
+
+    b.iter(call)
+    keep(offsets)
+    keep(data)
+    keep(packed)
+    keep(packer)
+    keep(unpacker)
+
+
+def _bench_bytes[
+    decode: Bool, L: PackKernel, M: UnpackKernel
+](
+    mut b: Benchmark, var packer: FsstPack[L], var unpacker: FsstUnpack[M]
+) raises:
+    comptime assert L.Packed == M.Packed, "the unpacker takes what is packed"
+    var offsets = List[Int32](capacity=N + 1)
+    var data = List[UInt8]()
+    _strings(offsets, data)
+    var packed = packer.pack(Span(offsets), Span(data))
+    var ends: List[Int32] = [0]
+    var bytes = List[UInt8]()
+    unpacker.unpack(
+        rebind_var[FsstPacked[M.Packed]](packed.copy()), N, ends, bytes
+    )
+    if not (ends == offsets and bytes == data):
+        raise Error("bench: the packers do not round-trip")
+    b.throughput(BenchMetric.elements, N)
+    b.extra_info("shape", "strings")
+    b.extra_info(
+        "ratio", _ratio(len(data) + 4 * (N + 1), packer.nbytes(packed))
+    )
+
+    @always_inline
+    def call() raises {imm}:
+        comptime if decode:
+            var ends: List[Int32] = [0]
+            var bytes = List[UInt8]()
+            unpacker.unpack(
+                rebind_var[FsstPacked[M.Packed]](packed.copy()),
                 N,
                 ends,
                 bytes,
@@ -552,6 +652,114 @@ def _cascade_sparse() -> (
     )
 
 
+def _pfor() -> (
+    Codec[
+        Encoder[Compose[OrderedEncode], ReferencePack[PforPack]],
+        Decoder[
+            ReferenceUnpack[PforUnpack],
+            Compose[OrderedDecode[DType.int64]],
+            DType.uint64,
+        ],
+    ]
+):
+    """Patched frame of reference."""
+    return Codec(
+        Encoder(
+            Compose((OrderedEncode(),)),
+            ReferencePack(BLOCK, PforPack(128, BitPack(128))),
+        ),
+        Decoder[
+            ReferenceUnpack[PforUnpack],
+            Compose[OrderedDecode[DType.int64]],
+            DType.uint64,
+        ](
+            ReferenceUnpack(BLOCK, PforUnpack(128, BitUnpack(128))),
+            Compose((OrderedDecode[DType.int64](),)),
+        ),
+    )
+
+
+def _frequency() -> Codec[FrequencyPack, FrequencyUnpack]:
+    return Codec(
+        FrequencyPack(BLOCK, ConstantPack()),
+        FrequencyUnpack(BLOCK, ConstantUnpack()),
+    )
+
+
+def _alp() -> Codec[AlpPack, AlpUnpack[DType.float64]]:
+    """Floats as the integers of their decimal digits, framed and packed."""
+    return Codec(
+        AlpPack(
+            BLOCK,
+            Encoder(
+                Compose((OrderedEncode(),)), ReferencePack(BLOCK, BitPack())
+            ),
+        ),
+        AlpUnpack[DType.float64](
+            BLOCK,
+            Decoder[
+                ReferenceUnpack[BitUnpack],
+                Compose[OrderedDecode[DType.int64]],
+                DType.uint64,
+            ](
+                ReferenceUnpack(BLOCK, BitUnpack()),
+                Compose((OrderedDecode[DType.int64](),)),
+            ),
+        ),
+    )
+
+
+def _alp_rd() -> (
+    Codec[
+        AlpRdPack[DictionaryPack[BitPack], BitPack],
+        AlpRdUnpack[DictionaryUnpack[BitUnpack], BitUnpack],
+    ]
+):
+    """Floats' bits cut in two, the left parts through a dictionary and the
+    right bit-packed."""
+    return Codec(
+        AlpRdPack(BLOCK, DictionaryPack(BitPack()), BitPack()),
+        AlpRdUnpack(BLOCK, DictionaryUnpack(BitUnpack()), BitUnpack()),
+    )
+
+
+def _bench_choice[
+    T: DType,
+    shape: StaticString,
+    decode: Bool,
+    D: UnpackKernel,
+    *Ps: PackKernel,
+](mut b: Benchmark, var codec: Codec[ChoicePack[*Ps], D]) raises:
+    """`_bench`, recording too the most a segment packs past the bytes its
+    sample predicted."""
+    var values = _data[T, shape]()
+    var packed = codec.encode(BufferView(Span(values)))
+    var most = 0.0
+    for s in range(len(packed.chosen)):
+        var nbytes = codec.encoder.segment_nbytes[T](packed, s)
+        most = max(most, Float64(nbytes) / Float64(packed.predicted[s]))
+    b.extra_info("overshoot", String(round(most, 3)))
+    _bench[T, shape, decode](b, codec^)
+
+
+def _choice[T: DType, U: DType]() -> Codec[Auto.Int2, Auto.IntUnpack2[T, U]]:
+    """Integers chosen for three levels deep."""
+    return Codec(Auto.int2(), Auto.int_unpack2[T, U]())
+
+
+def _float_choice() -> (
+    Codec[
+        Auto.Float2,
+        Auto.FloatUnpack2[DType.int64, DType.uint64],
+    ]
+):
+    """Floats chosen for three levels deep."""
+    return Codec(
+        Auto.float2(),
+        Auto.float_unpack2[DType.int64, DType.uint64](),
+    )
+
+
 # --- each packer alone ---------------------------------------------------------
 
 
@@ -669,6 +877,201 @@ def bench_dictionary_bytes_decode(mut b: Benchmark) raises:
         DictionaryBytesPack(PlainPack()),
         DictionaryBytesUnpack(PlainUnpack()),
     )
+
+
+def bench_fsst_encode(mut b: Benchmark) raises:
+    _bench_bytes[False](
+        b,
+        FsstPack(PlainPack()),
+        FsstUnpack(PlainUnpack()),
+    )
+
+
+def bench_fsst_decode(mut b: Benchmark) raises:
+    _bench_bytes[True](
+        b,
+        FsstPack(PlainPack()),
+        FsstUnpack(PlainUnpack()),
+    )
+
+
+def bench_constant_encode(mut b: Benchmark) raises:
+    _bench[DType.int64, "constant", False](
+        b, Codec(ConstantPack(), ConstantUnpack())
+    )
+
+
+def bench_constant_decode(mut b: Benchmark) raises:
+    _bench[DType.int64, "constant", True](
+        b, Codec(ConstantPack(), ConstantUnpack())
+    )
+
+
+def bench_frequency_encode(mut b: Benchmark) raises:
+    _bench[DType.int64, "sparse", False](b, _frequency())
+
+
+def bench_frequency_decode(mut b: Benchmark) raises:
+    _bench[DType.int64, "sparse", True](b, _frequency())
+
+
+def bench_pfor_encode(mut b: Benchmark) raises:
+    _bench[DType.int64, "outliers", False](b, _pfor())
+
+
+def bench_pfor_decode(mut b: Benchmark) raises:
+    _bench[DType.int64, "outliers", True](b, _pfor())
+
+
+def bench_alp_encode(mut b: Benchmark) raises:
+    _bench[DType.float64, "floats", False](b, _alp())
+
+
+def bench_alp_decode(mut b: Benchmark) raises:
+    _bench[DType.float64, "floats", True](b, _alp())
+
+
+def bench_alp_rd_encode(mut b: Benchmark) raises:
+    _bench[DType.float64, "real", False](b, _alp_rd())
+
+
+def bench_alp_rd_decode(mut b: Benchmark) raises:
+    _bench[DType.float64, "real", True](b, _alp_rd())
+
+
+# --- packers chosen per segment ----------------------------------------------
+
+
+def bench_choice_timestamps_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "timestamps", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_timestamps_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "timestamps", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_runs_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "runs", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_runs_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "runs", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_cardinality_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "cardinality", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_cardinality_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "cardinality", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_constant_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "constant", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_constant_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "constant", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_interval_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "interval", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_interval_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "interval", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_signed_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "signed", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_signed_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "signed", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_sparse_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "sparse", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_sparse_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "sparse", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_outliers_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "outliers", False](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_outliers_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.int64, "outliers", True](
+        b, _choice[DType.int64, DType.uint64]()
+    )
+
+
+def bench_choice_small_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.uint32, "small", False](
+        b, _choice[DType.uint32, DType.uint32]()
+    )
+
+
+def bench_choice_small_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.uint32, "small", True](
+        b, _choice[DType.uint32, DType.uint32]()
+    )
+
+
+def bench_choice_gauge_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.float64, "gauge", False](b, _float_choice())
+
+
+def bench_choice_gauge_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.float64, "gauge", True](b, _float_choice())
+
+
+def bench_choice_floats_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.float64, "floats", False](b, _float_choice())
+
+
+def bench_choice_floats_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.float64, "floats", True](b, _float_choice())
+
+
+def bench_choice_real_encode(mut b: Benchmark) raises:
+    _bench_choice[DType.float64, "real", False](b, _float_choice())
+
+
+def bench_choice_real_decode(mut b: Benchmark) raises:
+    _bench_choice[DType.float64, "real", True](b, _float_choice())
 
 
 # --- cascades, after ClickHouse's codec chains ---------------------------------
@@ -799,6 +1202,22 @@ def bench_cascade_prefixes_decode(mut b: Benchmark) raises:
         b,
         PrefixesPack(_delta_zigzag_pack(), PlainPack()),
         PrefixesUnpack(_delta_zigzag_unpack[DType.uint32](), PlainUnpack()),
+    )
+
+
+def bench_cascade_fsst_encode(mut b: Benchmark) raises:
+    _bench_bytes[False](
+        b,
+        FsstPack(_delta_zigzag_pack()),
+        FsstUnpack(_delta_zigzag_unpack[DType.uint32]()),
+    )
+
+
+def bench_cascade_fsst_decode(mut b: Benchmark) raises:
+    _bench_bytes[True](
+        b,
+        FsstPack(_delta_zigzag_pack()),
+        FsstUnpack(_delta_zigzag_unpack[DType.uint32]()),
     )
 
 

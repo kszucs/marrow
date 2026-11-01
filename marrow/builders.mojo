@@ -2231,13 +2231,11 @@ struct RunEndEncodedBuilder(Builder):
     ) raises -> RunEndEncodedArray:
         """The rows appended so far. Raises `InvalidError` when their count
         does not fit the run-end type."""
-        ref t = self._dtype.as_run_end_encoded().run_end_type()
-        var width = t.byte_width()
-        var limit = (1 << (8 * width - 1)) - 1 if width < 8 else Int.MAX
-        if self._length > limit:
+        var most = self._dtype.as_run_end_encoded().max_length()
+        if self._length > most:
             raise InvalidError(
-                t"RunEndEncodedBuilder.finish: {self._length} rows do not fit"
-                t" {t} run ends"
+                t"RunEndEncodedBuilder.finish: {self._length} rows are more"
+                t" than {self._dtype} can hold: {most}"
             )
         self._close()
         var out = RunEndEncodedArray(

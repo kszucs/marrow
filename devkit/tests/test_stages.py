@@ -3,10 +3,11 @@
 
 """A stream stage calls register cores, never an array entry.
 
-The stages and packers in `kernels/compose.mojo` and `kernels/packing.mojo`
-compute a register at a time, through each kernel's `core`. An array entry
--- `apply` or `dispatch` -- takes and answers whole arrays, so a stage that
-called one would leave the register loop it is composed into. This check
+The stages and packers in `kernels/compose.mojo`, `kernels/packing.mojo` and
+`kernels/float.mojo` compute a register at a time, through each kernel's
+`core`. An array entry -- `apply` or `dispatch` -- takes and answers whole
+arrays, so a stage that called one would leave the register loop it is
+composed into. This check
 reads source text, so it runs in the devkit suite rather than waiting on a
 compile.
 """
@@ -20,11 +21,15 @@ from devkit.tests.test_errors import code_lines
 # and `.dispatch[T](`, which call the same entries.
 _ARRAY_ENTRY = re.compile(r"\.(?:apply|dispatch)[(\[]")
 
-_STAGE_MODULES = ("kernels/compose.mojo", "kernels/packing.mojo")
+_STAGE_MODULES = (
+    "kernels/compose.mojo",
+    "kernels/packing.mojo",
+    "kernels/float.mojo",
+)
 
 
 def test_stream_stages_call_only_cores():
-    """A stage in kernels/compose.mojo or kernels/packing.mojo calls register cores, never an
+    """A stage in kernels/compose.mojo, kernels/packing.mojo or kernels/float.mojo calls register cores, never an
     array entry: `.apply` or `.dispatch` followed by `(` or `[`, outside comments and docstrings."""
     repo = Repo.locate()
     offenders = [

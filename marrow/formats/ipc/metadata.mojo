@@ -658,19 +658,6 @@ struct IpcDecoder(Movable):
             raise CorruptError(t"ipc: unknown time unit {v}")
         return unit.value()
 
-    @staticmethod
-    def _run_end_encoded(children: List[dt.Field]) raises -> dt.DynType:
-        """The run-end encoded type of a Field whose children are the run
-        ends and the values. The type names its children itself."""
-        if len(children) != 2:
-            raise CorruptError(
-                t"run_end_encoded Field must have 2 children, got"
-                t" {len(children)}"
-            )
-        return dt.run_end_encoded(
-            children[0].dtype.copy(), children[1].dtype.copy()
-        )
-
     def _read_kv_vec(
         self, table_pos: UInt32, slot: Int
     ) raises -> Dict[String, String]:
@@ -1054,7 +1041,19 @@ struct IpcDecoder(Movable):
         elif type_type == TYPE_STRUCT:
             dtype = dt.struct_(children^)
         elif type_type == TYPE_RUN_END_ENCODED:
-            dtype = IpcDecoder._run_end_encoded(children)
+            # The children are the run ends and the values; the type names
+            # them itself.
+            if len(children) != 2:
+                raise CorruptError(
+                    t"run_end_encoded Field must have 2 children, got"
+                    t" {len(children)}"
+                )
+            try:
+                dtype = dt.run_end_encoded(
+                    children[0].dtype.copy(), children[1].dtype.copy()
+                ).to_dyn()
+            except e:
+                raise CorruptError(t"ipc: {e.message()}")
         else:
             raise NotImplementedError(
                 t"IpcDecoder: unsupported type_type: {Int(type_type)}"

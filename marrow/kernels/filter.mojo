@@ -66,6 +66,7 @@ from ..views import BitmapView, apply, cpu_lanes, reduce
 from .boolean import NotNullKernel
 from .cast import NumToBoolKernel
 from .core import Kernel
+from .runs import RunEndDecodeKernel
 from ..execution import ExecContext
 from ..errors import IndexError, InvalidError, TypeError
 
@@ -93,6 +94,35 @@ struct FilterKernel(Kernel):
             return Self.dispatch(array, mask.values(), ctx)
         var selected = Self.selection(mask)
         return Self.dispatch(array, selected.view(), ctx)
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        mask: DynArray,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """Filter `array` by a predicate's column: a boolean mask, or a run-end
+        encoded one, decoded first.
+
+        Raises:
+            TypeError: unless `mask` holds booleans.
+        """
+        var dtype = mask.dtype()
+        if mask.isa[BoolArray]():
+            return Self.dispatch(array, mask.as_bool(), ctx)
+        elif (
+            dtype.is_run_end_encoded()
+            and dtype.as_run_end_encoded().value_type().is_bool()
+        ):
+            ref encoded = mask.as_run_end_encoded()
+            var rows = RunEndDecodeKernel.apply(
+                encoded.physical_values().as_bool(), encoded
+            )
+            return Self.dispatch(array, rows, ctx)
+        else:
+            raise Self.error[TypeError](
+                t"the mask must be boolean, got {dtype}"
+            )
 
     @staticmethod
     def selection(mask: BoolArray) raises -> Bitmap[mut=False]:
@@ -1358,17 +1388,13 @@ struct TakeKernel(Kernel):
                 can count.
         """
         var dtype = array.type()
-        ref run_end_type = dtype.as_run_end_encoded().run_end_type()
+        ref encoded = dtype.as_run_end_encoded()
         var n = len(indices)
-        var most = Int(Int64.MAX)
-        if run_end_type.is_int16():
-            most = Int(Int16.MAX)
-        elif run_end_type.is_int32():
-            most = Int(Int32.MAX)
+        var most = encoded.max_length()
         if n > most:
             raise Self.error[InvalidError](
-                t"{n} rows are more than {run_end_type} run ends can hold:"
-                t" {most}"
+                t"{n} rows are more than {encoded.run_end_type()} run ends can"
+                t" hold: {most}"
             )
         # Each index's run, then a run for each stretch of indices into one
         # run: its end, and the run its value is taken from.

@@ -428,6 +428,18 @@ def test_lazy_plans_keep_a_run_end_encoded_column():
     assert pc.run_end_decode(got.column("x")).to_pylist() == [3]
 
 
+def test_lazy_filter_on_a_run_end_encoded_boolean_column():
+    """A run-end encoded boolean column filters as its decoded rows do, and a
+    predicate that is not boolean raises rather than aborting."""
+    f = pc.run_end_encode(pa.array([True, True, None, False, True]))
+    a = pa.array([1, 2, 3, 4, 5], pa.int64())
+    table = ma.memtable(ma.record_batch({"a": ma.array(a), "f": ma.array(f)}))
+    got = table.filter(col("f")).to_pyarrow()
+    assert got.column("a").to_pylist() == [1, 2, 5]
+    with pytest.raises(ma.ArrowTypeError, match="mask must be boolean"):
+        table.filter(col("a")).to_pyarrow()
+
+
 # ── execution ───────────────────────────────────────────────────────────────
 
 

@@ -1039,6 +1039,11 @@ struct DictionaryPack[Codes: PackKernel](PackKernel):
             self.codes.finish[DType.uint32](codes.take()),
         )
 
+    def nbytes[T: DType](self, packed: Self.Packed) -> Int:
+        return packed.values.size + self.codes.nbytes[DType.uint32](
+            packed.codes
+        )
+
 
 struct _Lookup(Movable):
     """The distinct values, how many, and one past the largest code read."""
@@ -1148,6 +1153,13 @@ struct DictionaryBytesPack[Codes: PackKernel](Kernel, Movable):
             LengthsPack(PlainPack()).pack(Span(ends), Span(bytes)),
             self.codes.finish[DType.uint32](state^),
         )
+
+    def nbytes(self, packed: DictionaryBytesPacked[Self.Codes.Packed]) -> Int:
+        """The bytes `packed` holds: the distinct strings', and the
+        codes'."""
+        return LengthsPack(PlainPack()).nbytes(
+            packed.strings
+        ) + self.codes.nbytes[DType.uint32](packed.codes)
 
     # Out of line, a block at a time: inlined into `pack`, the hash loop is
     # compiled to slower code.

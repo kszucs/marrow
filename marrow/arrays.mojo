@@ -497,9 +497,7 @@ struct ArrayData(Copyable, Equatable, Movable):
                     t"ArrayData: {self.dtype} has {ends.length} run ends for"
                     t" {values.length} values"
                 )
-            var width = ends.dtype.byte_width()
-            var limit = (1 << (8 * width - 1)) - 1 if width < 8 else Int.MAX
-            if end > limit:
+            if end > ree.max_length():
                 raise InvalidError(
                     t"ArrayData: offset + length {end} does not fit"
                     t" {ends.dtype}"
@@ -513,7 +511,9 @@ struct ArrayData(Copyable, Equatable, Movable):
             else:
                 # The run ends are read here, before `validate` reaches them.
                 ends.validate_node()
-                var last = ends._offset(ends.length - 1, width)
+                var last = ends._offset(
+                    ends.length - 1, ends.dtype.byte_width()
+                )
                 if last < end:
                     raise InvalidError(
                         t"ArrayData: the last run end is {last}, short of"
@@ -3435,10 +3435,18 @@ struct RunEndEncodedArray(Array):
         var count = len(ends)
 
         def build[T: IntegerType](d: T) raises {imm} -> DynArray:
-            var b = PrimitiveBuilder[T](d, count)
-            for e in ends:
-                b.unsafe_append(Scalar[T.native](e))
-            return b.finish()
+            # The other integer types are no run-end type.
+            comptime if (
+                T.native == DType.int16
+                or T.native == DType.int32
+                or T.native == DType.int64
+            ):
+                var b = PrimitiveBuilder[T](d, count)
+                for e in ends:
+                    b.unsafe_append(Scalar[T.native](e))
+                return b.finish()
+            else:
+                raise InternalError(t"{d} is not a run-end type")
 
         self = Self(
             dtype=dtype,
@@ -3500,6 +3508,11 @@ struct RunEndEncodedArray(Array):
         Matches PyArrow's ``RunEndEncodedArray.values``."""
         return self._values.copy()
 
+    def offset(self) -> Int:
+        """The window's first row, counted from the children's first.
+        Matches PyArrow's ``RunEndEncodedArray.offset``."""
+        return self._offset
+
     def find_physical_offset(self) -> Int:
         """The first run the window reads. Matches PyArrow's
         ``RunEndEncodedArray.find_physical_offset``."""
@@ -3508,23 +3521,17 @@ struct RunEndEncodedArray(Array):
     def find_physical_length(self) -> Int:
         """How many runs the window reads. Matches PyArrow's
         ``RunEndEncodedArray.find_physical_length``."""
-        if self._length == 0:
-            return 0
-        else:
-            var last = self._find(self._offset + self._length - 1)
-            return last - self.find_physical_offset() + 1
+        return self._window()[1]
 
     def physical_values(self) -> DynArray:
         """The values of the runs the window reads."""
-        return self._values.slice(
-            self.find_physical_offset(), self.find_physical_length()
-        )
+        var first, count = self._window()
+        return self._values.slice(first, count)
 
     def segment_ends(self) raises -> Int64Array:
         """Where the window's runs end, counted from the window's start: 0,
         then one position a run, the last cut to the length."""
-        var first = self.find_physical_offset()
-        var count = self.find_physical_length()
+        var first, count = self._window()
         var ends = Int64Builder(count + 1)
         ends.unsafe_append(0)
         for k in range(first, first + count):
@@ -3540,35 +3547,24 @@ struct RunEndEncodedArray(Array):
         Trusts `rows` to lie in `[0, len(self))`, as `take` trusts its
         indices.
         """
-        var first = self.find_physical_offset()
-        var count = self.find_physical_length()
-        var offset = self._offset
+        var ends = self.segment_ends()
+        var at = ends.values()
         var n = len(rows)
         var out = Buffer.alloc_uninit[DType.int32](n)
         var dst = out.view[DType.int32](0, n)
         var src = rows.values()
-
-        # The run-end type is resolved once, not at every probe.
-        def search[T: IntegerType](ends: PrimitiveArray[T]) {imm}:
-            var at = ends.values()
-            for i in range(n):
-                var row = offset + Int(src.unsafe_get(i))
-                var lo = first
-                var hi = first + count
-                while lo < hi:
-                    var mid = (lo + hi) // 2
-                    if Int(at.unsafe_get(mid)) <= row:
-                        lo = mid + 1
-                    else:
-                        hi = mid
-                dst.unsafe_set(i, Int32(lo - first))
-
-        if self._run_ends.isa[Int16Array]():
-            search(self._run_ends.as_int16())
-        elif self._run_ends.isa[Int32Array]():
-            search(self._run_ends.as_int32())
-        else:
-            search(self._run_ends.as_int64())
+        for i in range(n):
+            # The run is the last whose start is at or before the row.
+            var row = Int64(src.unsafe_get(i))
+            var lo = 1
+            var hi = len(ends)
+            while lo < hi:
+                var mid = (lo + hi) // 2
+                if at.unsafe_get(mid) <= row:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            dst.unsafe_set(i, Int32(lo - 1))
         var validity: Optional[Bitmap[mut=False]] = None
         if rows.null_count() > 0:
             validity = rows.validity().value().to_owned()
@@ -3589,14 +3585,35 @@ struct RunEndEncodedArray(Array):
         else:
             return Int(self._run_ends.as_int64().unsafe_get(k))
 
+    def _window(self) -> Tuple[Int, Int]:
+        """The first run the window reads, and how many it reads."""
+        var first = self._find(self._offset)
+        if self._length == 0:
+            return (first, 0)
+        else:
+            var last = self._find(self._offset + self._length - 1)
+            return (first, last - first + 1)
+
     def _find(self, row: Int) -> Int:
         """The run of the children holding `row`: the first whose end is past
-        it, by binary search."""
+        it, by binary search. The run-end type is resolved once, not at every
+        probe."""
+        if self._run_ends.isa[Int16Array]():
+            return Self._first_past(self._run_ends.as_int16(), row)
+        elif self._run_ends.isa[Int32Array]():
+            return Self._first_past(self._run_ends.as_int32(), row)
+        else:
+            return Self._first_past(self._run_ends.as_int64(), row)
+
+    @staticmethod
+    def _first_past[T: IntegerType](ends: PrimitiveArray[T], row: Int) -> Int:
+        """The first of `ends` past `row`, by binary search."""
+        var at = ends.values()
         var lo = 0
-        var hi = len(self._run_ends)
+        var hi = len(ends)
         while lo < hi:
             var mid = (lo + hi) // 2
-            if self._end(mid) <= row:
+            if Int(at.unsafe_get(mid)) <= row:
                 lo = mid + 1
             else:
                 hi = mid

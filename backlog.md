@@ -1151,7 +1151,9 @@ or measurement named:
 - Not built until a caller needs them: `Shift[k]`; `Fill`, `Constant[c]` and
   `FirstValue` for `Lagged`, which fills with zero (step 7's `run_index`
   finds its runs with `RunsKernel`, so it is not their caller); `MinScan`,
-  `MaxScan` and `ProductScan`; the GCD and T64 instances of `FittedPack`.
+  `MaxScan` and `ProductScan`; the GCD and T64 instances of `FittedPack`,
+  which step 8 did not need either (its patched packers fit through
+  `FitKernel`).
 - Parquet still copies each page into a packed value before decoding it
   (`formats/parquet/encodings.mojo`: the DELTA_BINARY_PACKED widths and
   miniblocks, the DELTA_LENGTH_BYTE_ARRAY and DELTA_BYTE_ARRAY bytes, PLAIN,
@@ -1256,11 +1258,6 @@ each waiting for the caller or measurement named:
   primitive dtype** (`try_visit[PrimitiveType]`). No AOT gate links it
   (`SortIndices` sorts the runs rather than decode the rows), so the
   per-byte-width fallback was not built; it waits for a gate that does.
-- **`is_null` reads one level.** `NullPredicateKernel` reads the bitmap of
-  an REE's values, as Arrow C++'s `SetLogicalNullBits` does, so an REE whose
-  values are themselves REE reads as never null. Recursing through
-  `dispatch` would be mutual recursion across static methods, which
-  deadlocks the `libmarrow.so` build.
 - **The Parquet writer refuses an REE nested inside a struct or list**
   (`NotImplementedError`): it decodes top-level REE columns only. JSON and
   Avro decode an REE at any depth.
@@ -1289,6 +1286,91 @@ each waiting for the caller or measurement named:
   `lib`. Archery runs the Rust file/stream converters through `/bin/sh`
   (`run_shell_command`, `shell=True`), which SIP strips of `DYLD_*`, so
   those steps load only through a wrapper that sets the variable itself.
+
+**Deferred by kernel-foundations step 8** (the BtrBlocks and FastLanes
+encodings), each waiting for the caller or measurement named. Their only
+callers are `kernels/tests/test_codecs.mojo` and `bench_codecs.mojo` until
+the Arrow IPC encoding design adopts them. Times are per 65,536 values,
+built `-O3`.
+
+- **`Choice` gathers no statistics and prunes nothing** (item C, user
+  2026-10-31): every candidate trial-packs the 640-value sample. `Choice`
+  encodes in 102-759 us, 1.8-3.8x the chosen candidate's own row where one
+  exists (ALP-RD on `real` 1.78x, ALP on `floats` 3.10x, PFOR on `outliers`
+  3.80x, where the re-pick packs the segment twice) and 1.4-26x the shape's
+  best fixed cascade. Statistics (min/max, runs, a distinct estimate, the
+  top value) and a per-packer viability rule would cut that, and would
+  correct two misjudgements of scaling a sample linearly: at `Auto.int1()`,
+  `cardinality` (1,000 values) picks FOR at 3.19x where a dictionary packs
+  5.83x, and `constant` picks FOR at 910x where runs would pack 16 bytes.
+  Waits for an encode-side caller.
+- **No `Choice` over byte strings**: the byte-string packers share no trait
+  (step 6), so a string chooser (one value, dictionary, FSST, dictionary
+  then FSST) is a second, concrete chooser.
+- **Frequency's exceptions stay plain parts** (`uint16` positions, values in
+  the column's dtype: 10-12 bytes an exception); recompressing them would
+  lift `sparse` from Frequency's 72x towards `cascade_sparse`'s 215x.
+- **ALP's level-1 sample is the first segment of every 100** (32 values),
+  where the paper samples eight vectors of a rowgroup: a column whose
+  decimals change after that segment keeps a stale top five until the next
+  search. The sample is spread at `(k * 7919) % n`, so a column periodic in
+  7919 fools it.
+- **ALP searches every pair again on each segment whose level-1 search found
+  none with two survivors** (an all-NaN run: 190 pairs x 32 values a
+  segment). Unmeasured.
+- **ALP-RD's dictionary is exact**: the paper's skewed dictionary (at most
+  eight entries, the rest exceptions) is not built. `real` packs 1.30x with
+  182 left parts in its one segment.
+- **FSST12 and FSST's AVX-512 bulk encoder are not ported.** FSST encodes
+  64K strings in 2.7 ms, 2.1x the dictionary cascade and 10.8x the prefixes
+  cascade; unprofiled, probably the table build (up to 511 x 511 pair counts
+  a round, 512 KB of counters zeroed five times).
+- **`Choice`'s per-register switch costs 1.12-1.54x of the chosen candidate
+  decoding alone** (1.08-1.70x at `Int2`/`Float2`'s top level, nested levels
+  adding theirs). Cause: the candidate's state stays on the stack, about 20
+  loads and 3 stores a register, because the once-a-segment
+  `_enter(mut state)`, called inside the loop, takes its address.
+  `@always_inline` on `_enter` was worse (+2-15%, runs +48%). A per-segment
+  dispatch probe, the candidate's own loop over its segment, read 1.03-1.05x
+  at the top level (FOR on `signed` 22.54 to 16.61 us, alone 15.84) and was
+  not landed: it needs a new `UnpackKernel` member that `Codec.decode`,
+  Parquet's size-gated decode path too, would call, and a second read path
+  beside `load`, and reaches the top level only.
+- **`PatchUnpack` pays per register** a segment lookup, a fit read (which
+  `Pfor.decode` never uses) and the exception compare, under
+  `ReferenceUnpack`: in one probe PFOR decodes `outliers` in 21.9 us and ALP
+  `floats` in 22.2 us, about 1.4x `cascade_t64`'s FOR (15.7 us).
+  Unprofiled.
+- **The two FastLanes forms removed** (an `-O3` probe per tree, five
+  interleaved runs, load under 3.5; kept only at 0.95 of the fastest step-6
+  row's decode and ratio):
+  - **transposed delta** (`TransposePack` around `Lagged[SubKernel, S]`,
+    decoded by a strided `Scan[AddKernel, S]`; `29c1bd61`, reverted by
+    `00034203`): int64 timestamps 36.66 us at 5.09x, against the plain
+    delta's 16.10 us (2.28x), `cascade_delta` 21.84 us at 5.19x and
+    `cascade_delta_t64` 27.55 us at 6.56x. Values go back in order, so each
+    block is transposed back, which costs more than the lane-serial scan
+    saves; its `BitPack` needs segments of 32 to keep the ratio (2.89x at
+    1,024). Revisit only for a consumer that accepts transposed order (a
+    selection vector, an aggregate).
+  - **run index** (`RunIndexPack`, runs as dictionary codes; `c807dccb`,
+    reverted by `3e0f06b3`): int64 runs of 50 in 36.21 us at 27.97x, against
+    `RunsPack`'s 11.92 us at 25.00x (3.04x). Per value a 1-bit unpack, a
+    running sum and a gather, against `RunsUnpack`'s broadcast stores.
+- **`BitUnpack` skipping width 0** is a candidate of its own: a constant
+  column decoded in 0.56x when `Auto` used a packer that skips width 0.
+  Measure it alone; it is Parquet's decode path, so size-check it too.
+- **Compiler limit** (Tasks 8.5 and 8.9; reproduces at `00034203`): a packer
+  whose state is `Tuple[Int, Inner.State[T]]`, over an `Encoder` that holds a
+  scan stage, fails to elaborate with *"failed to locate witness entry
+  'start' for trait PackKernel"* and no source location. Repro: `struct
+  TP[Inner: PackKernel](PackKernel)` with `comptime State[T: DType] =
+  Tuple[Int, Self.Inner.State[T]]`, `start` returning `(Int(0),
+  self.inner.start[T](count))`, `store` adding to `state[0]` and forwarding
+  `state[1]`, `finish` taking the tuple apart with `consume_elements`; then
+  `Codec(TP(Encoder(Compose((Lagged[SubKernel, 1](),)), PlainPack())),
+  Decoder[PlainUnpack, Compose[SumScan], DType.int64](...)).encode(...)`.
+  The same two fields in a private struct build, which is the workaround.
 
 **`bench-size-check` fails on `main`** since `0656d5f5`: `query_cli`,
 `query_param`, `query_scan` and `query_scan_typed` are 6.9-8.1% over the
@@ -1920,23 +2002,33 @@ differentiator hiding inside a table-stakes item.
   (`kernels/compose.mojo`): stream stages fused by `Compose` (`DiffScan`,
   `SumScan`, `ZigzagEncode`, `OrderedEncode`, `NumericCast`, `ByteSwap`,
   `With`), then a packer (`kernels/packing.mojo`: `PlainPack`, `SplitPack`,
-  `BitPack`, `FittedPack`/`ReferencePack`, `RlePack`; `RunsPack` in
-  `runs.mojo`, `DictionaryPack` in `dictionary.mojo`) into a typed `Packed`
-  held in memory, and back a register at a time through `Codec`. Byte
-  strings go through `LengthsPack`, `PrefixesPack` and `DictionaryBytesPack`.
+  `BitPack`, `FittedPack`/`ReferencePack`, `RlePack`,
+  `ConstantPack`, `PatchPack` with `PforPack` and `FrequencyPack`;
+  `AlpPack` and `AlpRdPack` in `float.mojo`, `RunsPack` in `runs.mojo`,
+  `DictionaryPack` in `dictionary.mojo`, and `ChoicePack` in `compose.mojo`,
+  which packs each segment by the candidate its sample packs smallest, with
+  `Auto`'s three levels of candidates) into a typed `Packed` held in memory,
+  and back a register at a time through `Codec`. Byte strings go through
+  `LengthsPack`, `PrefixesPack`, `DictionaryBytesPack` and `FsstPack`.
   The codecs only tests used before step 6 -- `Alp`, `Patch`, `Gcd`, `Xor`,
   `Gorilla`, `Buckets`, `Frequency`, `Compressed[C]` -- were deleted and are
   recoverable from the parent of the commit `refactor(codecs): drop codecs
-  nothing but their tests used`. What is missing:
+  nothing but their tests used`; step 8 rebuilt `Alp`, `Patch` and
+  `Frequency` as packers. What is missing:
   - **Serialization.** Nothing writes a `Packed` to bytes but Parquet's own
     layouts. How one is written belongs to the Arrow IPC encoding design,
-    which is also the encodings' production caller.
-  - **More encodings**: the BtrBlocks and FastLanes techniques (patched
-    FOR, constant and frequency encodings, ALP and ALP-RD, FSST, per-segment
-    scheme selection by sampling, the FastLanes layouts) are step 8 of the
-    kernel foundations (`research_notes/2026-10-26-kernel-foundations-design.md`
-    §11). Outside it: Chimp, pseudodecimal (ALP supersedes it on the ALP
-    paper's benchmarks), and the compressors (`Lz4`, `Zstd`, `Snappy`) as
+    which is also the encodings' production caller; step 8's packers wait
+    for it too.
+  - **More encodings.** Step 8 of the kernel foundations
+    (`research_notes/2026-10-26-kernel-foundations-design.md` §11) built
+    patched FOR, the constant and frequency encodings, ALP and ALP-RD, FSST,
+    and per-segment scheme selection by sampling three levels deep; the
+    FastLanes transposed delta and run index were built and removed on
+    their measurements (§1.17), and the lane-interleaved bit packing for
+    want of a caller. Not built:
+    pseudodecimal (ALP supersedes it on the ALP paper's benchmarks), FSST12,
+    FastLanes multi-column compression (multi-column encoders, designed with
+    the IPC work), Chimp, and the compressors (`Lz4`, `Zstd`, `Snappy`) as
     packers over a stream.
   - **One dictionary builder.** `DictionaryPack` and `DictionaryBytesPack`
     assign codes through `SwissHashTable` by bits and by bytes, and

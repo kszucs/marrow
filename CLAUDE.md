@@ -375,8 +375,9 @@ consumers that predate them — see `io/dispatch.mojo`.
   `DynArray`.
 - Concrete types: `NullArray`, `BoolArray` (bit-packed), `PrimitiveArray[T]`,
   `BinaryLikeArray[T]`, `ListLikeArray[T]`, `FixedSizeListArray`,
-  `FixedSizeBinaryArray`, `StructArray`, `DictionaryArray`, and `ChunkedArray`
-  (multiple chunks; does **not** implement `Array`).
+  `FixedSizeBinaryArray`, `StructArray`, `DictionaryArray`,
+  `RunEndEncodedArray` (logical offset over unsliced run ends and values), and
+  `ChunkedArray` (multiple chunks; does **not** implement `Array`).
 - Aliases fix the parameter: `StringArray`/`LargeStringArray`/`BinaryArray`/
   `LargeBinaryArray` over `BinaryLikeArray`; `ListArray`/`LargeListArray`/
   `MapArray` over `ListLikeArray`; `Int32Array`, `Float64Array`, `TimestampArray`,
@@ -386,13 +387,15 @@ consumers that predate them — see `io/dispatch.mojo`.
 type-erased builder — constructible from a runtime `DataType`, `finish()` returns
 `DynArray`. Typed builders convert implicitly to `DynBuilder` by cloning the
 `ArcPointer`, so the original stays usable after being handed to a composite
-builder. Same alias scheme (`StringBuilder`, `ListBuilder`, `Int32Builder`, …).
+builder. Same alias scheme (`StringBuilder`, `ListBuilder`, `Int32Builder`, …);
+`RunEndEncodedBuilder` extends the current run on an equal value.
 
 **Scalars** (`marrow/scalars.mojo`): the trait is **`ArrowScalar`** (not `Scalar`
 — that name is the builtin), erased by `DynScalar`. `NullScalar`, `BoolScalar`,
 `PrimitiveScalar[T]`, `BinaryLikeScalar[T]` (`StringScalar`, `LargeStringScalar`,
 `BinaryScalar`, `LargeBinaryScalar`), `FixedSizeBinaryScalar`, `ListScalar`,
-`StructScalar`, `DictionaryScalar`, plus the usual aliases.
+`StructScalar`, `DictionaryScalar`, `RunEndEncodedScalar`, plus the usual
+aliases.
 
 ### Buffers, bitmaps, views
 
@@ -485,7 +488,8 @@ Rules:
 `IntegerType`/`FloatingType`, plus `TemporalType`, `IntervalType`, `DecimalType`,
 `BinaryLikeType` → `StringLikeType`, and `ListLikeType`. A type is identified by
 its `code` field and carries an optional `native` `DType`. Nested types are built
-with `list_(DataType)`, `fixed_size_list_(DataType, size)`, `struct_(Field, ...)`.
+with `list_(DataType)`, `fixed_size_list_(DataType, size)`, `struct_(Field, ...)`,
+`run_end_encoded(run_end_type, value_type)`.
 
 **Every erased handle is an `Enum`** (`marrow/utils/enum.mojo`), and the
 variant ladders live there and nowhere else. A handle holds one storage field,
@@ -961,7 +965,7 @@ marrow/
 │   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/
 │   ├── core.mojo         # Kernel and its bases (Unary, Binary, Scan,
-│                         #   Pack/Unpack), the algebraic properties
+│                         #   Pack/Unpack, Fit), the algebraic properties
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
 │   ├── decimal.mojo      # decimal arithmetic and its result types
 │   ├── bitwise.mojo      # bit_wise_*, shifts; Zigzag, Ordered, ByteSwap
@@ -971,7 +975,8 @@ marrow/
 │   ├── conditional.mojo  # case_when, coalesce, nullif, fill_null
 │   ├── segments.mojo     # BySize, ByEnds, Segmented, PerSegment
 │   ├── scan.mojo         # Scan, cumulative, shift, pairwise_diff, rolling
-│   ├── runs.mojo         # RunsKernel (runs of equal keys), RunsPack/Unpack
+│   ├── runs.mojo         # RunsKernel (runs of equal keys), run_end_encode /
+│                         #   run_end_decode, run_index, RunsPack/Unpack
 │   ├── aggregate.mojo    # sum, product, min/max, count, mean, any/all, var/std
 │   ├── statistics.mojo   # BoundsKernel: a column's least and greatest value
 │   ├── distinct.mojo     # (approx_)count_distinct, grouped variants
@@ -991,9 +996,12 @@ marrow/
 │   ├── nested.mojo       # array_length, array_contains
 │   ├── window.mojo       # WindowSegments, ranking, LAG/LEAD, frame values
 │   ├── concat.mojo       # batch concat on a context, in parallel when large
-│   ├── compose.mojo      # Compose, With, Encoder, Decoder, Codec
-│   ├── packing.mojo      # Plain, Split, Bit, Fitted (Reference), Rle,
-│                         #   Lengths and Prefixes packers
+│   ├── compose.mojo      # Compose, With, Encoder, Decoder, Codec;
+│                         #   ChoicePack/Unpack and Auto (picked per segment)
+│   ├── packing.mojo      # Plain, Split, Bit, Fitted
+│                         #   (Reference), Constant, Patch (Pfor, Frequency),
+│                         #   Rle, Lengths, Prefixes and Fsst packers
+│   ├── float.mojo        # ALP and ALP-RD, the floating-point packers
 │   └── tests/            # test_*.mojo + bench_*.mojo
 ├── engine/               # core (Operator, Pipeline), driver (Driver, Phase,
 │                         #   barriers), sources, observe, report; imports
@@ -1635,12 +1643,12 @@ release with both artifacts attached.
 
 1. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    string_view/binary_view, fixed_size_binary, list/large_list/fixed_size_list,
-   struct, map, dictionary, decimal (32/64/128/256) and temporal
-   (date/time/timestamp/duration/interval) are implemented; union,
-   run-end-encoded and list-view layouts are not. The archery
-   integration suite runs every implemented layout at **14/14** against C++,
-   Rust and Go, both directions, except `binary_view` at **10/14** — every C++
-   and Go phase; archery's pinned datagen skips the Rust tester for that case
+   struct, map, dictionary, run-end-encoded, decimal (32/64/128/256) and
+   temporal (date/time/timestamp/duration/interval) are implemented; union and
+   list-view layouts are not. The archery integration suite runs every
+   implemented layout at **18/18** against C++, Rust and Go, both directions,
+   except `binary_view` and `run_end_encoded` at **14/18** — every C++ and Go
+   phase; archery's pinned datagen skips the Rust tester for those cases
    (`.skip_tester('Rust')`) — and `decimal32`/`decimal64`, which Rust and Go
    do not implement. Marrow reads the suite's JSON (`marrow/integration.mojo`),
    IPC and C Data itself; pyarrow is only the equality oracle.

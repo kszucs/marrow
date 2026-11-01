@@ -59,8 +59,9 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
     of rows, and folds over each run), `RunsKernel` and the runs packers in
     `runs.mojo` (where runs of equal rows start), `statistics.mojo` (column
     bounds), `compose.mojo` (stream stages composed, and codecs built from
-    stages and packers) and `packing.mojo` (values and byte strings packed
-    into bytes and back)
+    stages and packers), `packing.mojo` (values and byte strings packed
+    into bytes and back) and `float.mojo` (floats packed as the integers of
+    their decimal digits, or with their bits cut in two)
 """
 
 from marrow.dtypes import (

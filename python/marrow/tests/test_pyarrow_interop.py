@@ -429,6 +429,15 @@ def test_array_import_run_end_encoded_rejects_decreasing_run_ends():
         ma.array(pa_arr)
 
 
+def test_array_import_run_end_encoded_rejects_run_end_encoded_values():
+    """Arrow C++ refuses an encoding of encoded values at import, as marrow
+    does: read one level, it would hide the inner values' nulls."""
+    inner = pc.run_end_encode(pa.array([1, None, 2]))
+    pa_arr = pa.RunEndEncodedArray.from_arrays(pa.array([2, 4, 6], pa.int32()), inner)
+    with pytest.raises(ma.ArrowTypeError, match="value_type cannot be run-end"):
+        ma.array(pa_arr)
+
+
 def test_run_end_encoded_of_nested_values_roundtrip():
     for values in [
         pa.array([{"a": 1, "b": "x"}, None, {"a": 3, "b": "z"}]),

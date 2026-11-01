@@ -523,7 +523,10 @@ struct JoinHashTable[Hash: Hasher = KeyHash](Movable):
         for ref key in keys:
             # A run-end encoded key counts no nulls: its runs' values hold
             # them.
-            if key.null_count() != 0 or key.isa[RunEndEncodedArray]():
+            if key.null_count() != 0 or (
+                key.isa[RunEndEncodedArray]()
+                and key.as_run_end_encoded().physical_values().null_count() != 0
+            ):
                 codes = Self._unmatched_where_null(codes, key)
         return codes^
 

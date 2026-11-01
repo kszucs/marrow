@@ -12,8 +12,8 @@ accumulator's slots, a join's build side.
 from std.collections import Set
 from std.memory import ArcPointer
 
-from ..errors import InternalError
-from ..arrays import DynArray, Int32Array, StructArray
+from ..errors import InternalError, TypeError
+from ..arrays import BoolArray, DynArray, Int32Array, StructArray
 from ..buffers import Buffer
 from std.builtin.rebind import downcast
 from ..builders import DynBuilder, arange, nulls
@@ -141,9 +141,7 @@ struct FilterOperator(Operator):
             return None
         var mask = produced.value().to_array(len(batch))
         var out = (
-            FilterKernel.dispatch(
-                batch.copy().to_dyn(), mask.as_bool(), self._ctx
-            )
+            FilterKernel.dispatch(batch.copy().to_dyn(), mask, self._ctx)
             .as_struct()
             .copy()
         )
@@ -1252,6 +1250,10 @@ struct ResidualJoinOperator(Operator):
             if not produced:
                 raise InternalError("join: a residual produced no value")
             var holds = produced.value().to_array(len(pairs))
+            if not holds.isa[BoolArray]():
+                raise TypeError(
+                    t"join: a residual must be boolean, got {holds.dtype()}"
+                )
             pairs = FilterKernel.dispatch(pairs, holds.as_bool(), self._ctx)
             probe = FilterKernel.dispatch(probe, holds.as_bool(), self._ctx)
         # The probe rows some pair stood for are the matched ones.
@@ -1404,6 +1406,10 @@ def compact_to_admitted(
     rejected still produces a row, with its kernel's answer over no input.
     """
     var mask = predicate.push(morsel).value().to_array(len(column))
+    if not mask.isa[BoolArray]():
+        raise TypeError(
+            t"aggregate: a FILTER predicate must be boolean, got {mask.dtype()}"
+        )
     var keep = FilterKernel.selection(mask.as_bool())
     groups = groups.filter(keep.view())
     column = FilterKernel.dispatch(column, keep.view())
@@ -1511,6 +1517,11 @@ struct ColumnEvaluator[Agg: AggKernel, A: Evaluable](FrameEvaluator):
                 .value()
                 .to_array(n)
             )
+            if not mask.isa[BoolArray]():
+                raise TypeError(
+                    t"window: a FILTER predicate must be boolean, got"
+                    t" {mask.dtype()}"
+                )
             var admitted = FilterKernel.selection(mask.as_bool())
             operand = MaskValidityKernel.apply(operand, admitted.view())
         return F.over(F.InArray(operand), segments, self._frame).to_dyn()

@@ -1402,6 +1402,30 @@ def test_filter_run_end_encoded_keeps_runs() raises:
     )
 
 
+def test_filter_by_a_run_end_encoded_mask_decodes_it() raises:
+    var values: DynArray = array([1, 2, 3, 4, 5], int64)
+    var mask: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int16), array([True, None, False])
+    )
+    var got = FilterKernel.dispatch(values, mask)
+    assert_true(got.as_int64() == array([1, 2], int64))
+    var plain: DynArray = array([True, False, None, True, False])
+    got = FilterKernel.dispatch(values, plain)
+    assert_true(got.as_int64() == array([1, 4], int64))
+
+
+def test_filter_by_a_non_boolean_mask_raises() raises:
+    var values: DynArray = array([1, 2, 3], int64)
+    var mask: DynArray = array([1, 0, 1], int64)
+    with assert_raises(contains="TypeError: filter: the mask must be boolean"):
+        _ = FilterKernel.dispatch(values, mask)
+    var encoded: DynArray = RunEndEncodedArray.from_arrays(
+        array([3], int32), array([1], int64)
+    )
+    with assert_raises(contains="TypeError: filter: the mask must be boolean"):
+        _ = FilterKernel.dispatch(values, encoded)
+
+
 def test_take_run_end_encoded_answers_runs() raises:
     var ree = _ree_window()
     var decoded = RunEndDecodeKernel.dispatch(ree)

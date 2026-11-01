@@ -67,7 +67,6 @@ from .cast import decode_dictionary
 from .numeric import EqKernel
 from .core import Kernel
 from .runs import RunEndDecodeKernel
-from .segments import ByEnds
 from ..utils import Hasher, RapidHash64
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
@@ -484,9 +483,8 @@ struct HashKernel[H: Hasher](Kernel):
         """Hash a run-end encoded array: each run's value once, the hash then
         repeated over the run's rows, so the rows hash as their decoded values
         do."""
-        var ends = keys.segment_ends()
         return RunEndDecodeKernel.apply(
-            Self.dispatch(keys.physical_values(), ctx), ByEnds(ends.values())
+            Self.dispatch(keys.physical_values(), ctx), keys
         )
 
     @staticmethod

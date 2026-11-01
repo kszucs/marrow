@@ -636,6 +636,19 @@ def test_run_end_encoded_dtype() raises:
     assert_true(children[1] == field("values", int64))
 
 
+def test_run_end_encoded_dtype_refuses_run_end_encoded_values() raises:
+    """Arrow C++ refuses an encoding of encoded values, which would hide the
+    inner values' nulls."""
+    with assert_raises(contains="TypeError: RunEndEncodedType: value_type"):
+        _ = run_end_encoded(int32, run_end_encoded(int16, int64))
+
+
+def test_run_end_encoded_dtype_max_length() raises:
+    assert_equal(run_end_encoded(int16, int64).max_length(), 32767)
+    assert_equal(run_end_encoded(int32, int64).max_length(), 2147483647)
+    assert_equal(run_end_encoded(int64, int64).max_length(), Int(Int64.MAX))
+
+
 def test_layout_run_end_encoded_has_two_children_and_no_buffers() raises:
     """A run-end encoded array owns no buffers: its run ends are child 0 and
     its values child 1."""

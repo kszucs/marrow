@@ -36,7 +36,6 @@ from ..dtypes import (
 from ..views import apply
 from .core import Kernel, UnaryKernel
 from .runs import RunEndDecodeKernel
-from .segments import ByEnds
 from ..execution import ExecContext
 from ..errors import InvalidError, TypeError
 
@@ -306,10 +305,8 @@ trait NullPredicateKernel(Kernel):
         array: RunEndEncodedArray, ctx: ExecContext
     ) raises -> BoolArray:
         """The mask of the window's runs' values, over their rows."""
-        var ends = array.segment_ends()
         return RunEndDecodeKernel.apply(
-            Self._mask(array.physical_values().to_data(), ctx),
-            ByEnds(ends.values()),
+            Self._mask(array.physical_values().to_data(), ctx), array
         )
 
     @staticmethod

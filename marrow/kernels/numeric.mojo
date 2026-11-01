@@ -62,6 +62,7 @@ from ..dtypes import (
     FloatingType,
     BinaryLikeType,
     BoolType,
+    run_end_encoded,
 )
 from .core import (
     Associative,
@@ -216,15 +217,18 @@ trait NumericUnaryKernel(UnaryKernel):
         array: RunEndEncodedArray, ctx: ExecContext
     ) raises -> DynArray:
         """The kernel over the window's runs' values, over the same runs."""
-        var first = array.find_physical_offset()
+        var values = Self.dispatch(array.physical_values(), ctx)
         return RunEndEncodedArray(
-            dtype=array.type(),
-            length=len(array),
-            offset=array.to_data().offset,
-            run_ends=array.run_ends().slice(
-                first, array.find_physical_length()
+            dtype=run_end_encoded(
+                array.type().as_run_end_encoded().run_end_type().copy(),
+                values.dtype(),
             ),
-            values=Self.dispatch(array.physical_values(), ctx),
+            length=len(array),
+            offset=array.offset(),
+            run_ends=array.run_ends().slice(
+                array.find_physical_offset(), len(values)
+            ),
+            values=values^,
         ).to_dyn()
 
 

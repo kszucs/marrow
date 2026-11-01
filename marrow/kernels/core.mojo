@@ -17,8 +17,14 @@ inherits it by conforming rather than by copying the message.
 
 `ScanKernel` is a stream stage that carries state from register to register,
 and `PackKernel` / `UnpackKernel` turn values into a typed `Packed` and back
-(`compose.mojo`, `packing.mojo`). Each keeps what one pass needs in a `State`
-value its caller owns, so the kernel itself holds only its parameters.
+(`compose.mojo`, `packing.mojo`); a packer also says how many bytes it
+packed. Each keeps what one pass needs in a `State` value its caller owns, so
+the kernel itself holds only its parameters.
+
+`FitKernel` is a value transform fitted per segment, 64 bits a packer keeps
+per segment, in both directions: `PatchPack` (`packing.mojo`) fits and
+encodes with it, `PatchUnpack` decodes, and the values the round trip does
+not give back are kept apart.
 
 A property trait (`Partial`, `Prunable`, `Identity`, `Associative`,
 `Commutative`) states one law about a kernel's values. A kernel lists every
@@ -495,6 +501,12 @@ trait PackKernel(Deinitable, Kernel, Movable):
         """The column's `Packed`, once every block is stored."""
         ...
 
+    def nbytes[T: DType](self, packed: Self.Packed) -> Int:
+        """The bytes `packed` holds for values packed as `T`: each part at
+        its logical size, the parts it nests included. A count or size
+        field is not a part."""
+        ...
+
     # Out of line: its message is built in no packer's `store`.
     @no_inline
     @staticmethod
@@ -537,3 +549,51 @@ trait UnpackKernel(Deinitable, Kernel, Movable):
     def check[T: DType](self, state: Self.State[T]) raises:
         """Raise what `load` noted wrong; by default, nothing."""
         pass
+
+
+trait FitKernel(Kernel):
+    """A value transform fitted per segment, 64 bits a packer keeps per
+    segment: the fit under which a segment packs smallest, found from its
+    values, and each value encoded and decoded under it."""
+
+    comptime Encoded[T: DType]: DType = T
+    """The dtype values of `T` are encoded as."""
+
+    comptime State[T: DType]: Movable & Deinitable
+    """What fitting values of `T` keeps from segment to segment."""
+
+    @staticmethod
+    def start[T: DType]() -> Self.State[T]:
+        """The state before the first segment."""
+        ...
+
+    @staticmethod
+    def fit[
+        T: DType
+    ](mut state: Self.State[T], segment: BufferView[T, _]) -> UInt64:
+        """The fit of `segment`, the next segment's values: at most `BLOCK`
+        of them, as a segment lies within a block."""
+        ...
+
+    @always_inline
+    @staticmethod
+    def encode[
+        T: DType, W: Int
+    ](v: SIMD[T, W], fit: UInt64) -> SIMD[Self.Encoded[T], W]:
+        """Per lane, `v` encoded under `fit`."""
+        ...
+
+    @always_inline
+    @staticmethod
+    def decode[
+        T: DType, W: Int
+    ](v: SIMD[Self.Encoded[T], W], fit: UInt64) -> SIMD[T, W]:
+        """Per lane, the values of `T` that `v` encodes under `fit`."""
+        ...
+
+    # No default: a decoder reading a table at the fit must refuse one past
+    # it.
+    @staticmethod
+    def valid[T: DType](fit: UInt64) -> Bool:
+        """Whether `fit` is one this kernel takes for values of `T`."""
+        ...

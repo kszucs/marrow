@@ -901,7 +901,7 @@ struct RunEndEncodedType(DataType):
 
     Equivalent to PyArrow's ``pa.run_end_encoded(run_end_type, value_type)``.
     The run-end type must be int16, int32 or int64; the value type can be any
-    Arrow type.
+    Arrow type but a run-end encoded one, as Arrow C++ refuses it.
     """
 
     var _run_end_type: DynType
@@ -909,7 +909,7 @@ struct RunEndEncodedType(DataType):
 
     def __init__(
         out self, var run_end_type: DynType, var value_type: DynType
-    ) raises:
+    ) raises TypeError:
         if not (
             run_end_type.is_int16()
             or run_end_type.is_int32()
@@ -919,6 +919,11 @@ struct RunEndEncodedType(DataType):
                 t"RunEndEncodedType: run_end_type must be int16, int32 or"
                 t" int64, got: {run_end_type}"
             )
+        if value_type.is_run_end_encoded():
+            raise TypeError(
+                t"RunEndEncodedType: value_type cannot be run-end encoded,"
+                t" got: {value_type}"
+            )
         self._run_end_type = run_end_type^
         self._value_type = value_type^
 
@@ -927,6 +932,16 @@ struct RunEndEncodedType(DataType):
 
     def value_type(ref self) -> ref[self._value_type] DynType:
         return self._value_type
+
+    def max_length(self) -> Int:
+        """The most rows an array of this type holds: the largest run end
+        the run-end type counts."""
+        if self._run_end_type.is_int16():
+            return Int(Int16.MAX)
+        elif self._run_end_type.is_int32():
+            return Int(Int32.MAX)
+        else:
+            return Int(Int64.MAX)
 
     def __eq__(self, other: Self) -> Bool:
         return (
@@ -1657,11 +1672,12 @@ def dictionary(
 
 def run_end_encoded(
     var run_end_type: DynType, var value_type: DynType
-) raises -> RunEndEncodedType:
+) raises TypeError -> RunEndEncodedType:
     """Construct a run-end encoded type. Equivalent to PyArrow's
     ``pa.run_end_encoded()``.
 
-    The run-end type must be int16, int32 or int64.
+    The run-end type must be int16, int32 or int64, and the value type not
+    run-end encoded.
     """
     return RunEndEncodedType(run_end_type^, value_type^)
 

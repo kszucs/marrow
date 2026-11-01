@@ -18,13 +18,14 @@ from std.testing import assert_equal, assert_raises, assert_true
 from std.os.path import join
 
 from ...utils.testing import ScratchDir
-from ...arrays import StructArray, DynArray, StringArray
+from ...arrays import StructArray, DynArray, RunEndEncodedArray, StringArray
 from ...builders import array
 from ...dtypes import (
     DynType,
     Int64Type,
     bool_,
     float64,
+    int32,
     int64,
     string,
     string_view,
@@ -143,6 +144,20 @@ def test_filter_preserves_its_input_schema() raises:
     var plan = table(b.copy()).filter((col("a", int64) > lit(2, int64)))
     assert_true(plan.schema() == b.schema)
     assert_equal(plan.execute().num_columns(), b.num_columns())
+
+
+def test_filter_on_a_run_end_encoded_boolean_column() raises:
+    """A run-end encoded boolean column filters as its decoded rows do, and a
+    predicate that is not boolean raises rather than aborting."""
+    var a: DynArray = array([1, 2, 3, 4, 5], int64)
+    var f: DynArray = RunEndEncodedArray.from_arrays(
+        array([2, 3, 5], int32), array([True, None, False])
+    )
+    var b = record_batch([a^, f^], names=["a", "f"])
+    var got = table(b.copy()).filter(col("f")).execute()
+    assert_true(got.column(0).as_int64() == array([1, 2], int64))
+    with assert_raises(contains="TypeError: filter: the mask must be boolean"):
+        _ = table(b^).filter(col("a")).execute()
 
 
 def test_an_empty_result_is_a_well_formed_batch() raises:

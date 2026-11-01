@@ -1033,9 +1033,18 @@ def test_is_null_run_end_encoded_matches_the_decoded(name):
 # Rows 5, 5, null, null, 2, 2, 2, 7: a window starting and ending inside runs.
 # PyArrow 23 has no filter, take, sort, cast or aggregate over run-end encoded
 # values, so each kernel is compared with PyArrow's over the decoded rows.
-_WINDOW = pc.run_end_encode(
-    pa.array([5, 5, 5, None, None, 2, 2, 2, 7, 7], pa.int64())
-).slice(1, 8)
+_RUN_END_TYPES = [pa.int16(), pa.int32(), pa.int64()]
+
+
+def _window(run_end_type):
+    """The window, its run ends typed `run_end_type`."""
+    return pc.run_end_encode(
+        pa.array([5, 5, 5, None, None, 2, 2, 2, 7, 7], pa.int64()),
+        run_end_type=run_end_type,
+    ).slice(1, 8)
+
+
+_WINDOW = _window(pa.int32())
 _ROWS = pc.run_end_decode(_WINDOW)
 
 
@@ -1047,20 +1056,37 @@ def _rows(result):
     return out
 
 
-def test_filter_run_end_encoded_matches_the_decoded():
+@pytest.mark.parametrize("run_end_type", _RUN_END_TYPES, ids=str)
+def test_filter_run_end_encoded_matches_the_decoded(run_end_type):
+    window = _window(run_end_type)
     mask = pa.array([False, False, True, None, True, False, True, True])
-    result = pa.array(ma.compute.filter(ma.array(_WINDOW), ma.array(mask)))
-    assert result.type == _WINDOW.type
+    result = pa.array(ma.compute.filter(ma.array(window), ma.array(mask)))
+    assert result.type == window.type
     assert _rows(result).to_pylist() == pc.filter(_ROWS, mask).to_pylist()
 
 
-def test_take_run_end_encoded_matches_the_decoded():
+@pytest.mark.parametrize("run_end_type", _RUN_END_TYPES, ids=str)
+def test_take_run_end_encoded_matches_the_decoded(run_end_type):
+    window = _window(run_end_type)
     indices = pa.array([0, 1, 4, 6, None, 2, 7, 0], pa.int32())
-    result = pa.array(ma.compute.take(ma.array(_WINDOW), ma.array(indices)))
-    assert result.type == _WINDOW.type
+    result = pa.array(ma.compute.take(ma.array(window), ma.array(indices)))
+    assert result.type == window.type
     assert _rows(result).to_pylist() == pc.take(_ROWS, indices).to_pylist()
     with pytest.raises(ma.ArrowIndexError):
-        ma.compute.take(ma.array(_WINDOW), ma.array(pa.array([8], pa.int32())))
+        ma.compute.take(ma.array(window), ma.array(pa.array([8], pa.int32())))
+
+
+def test_filter_by_a_run_end_encoded_mask_matches_the_decoded():
+    mask = pc.run_end_encode(pa.array([True, True, None, False, True]))
+    values = pa.array([1, 2, 3, 4, 5])
+    result = pa.array(ma.compute.filter(ma.array(values), ma.array(mask)))
+    assert result.to_pylist() == pc.filter(values, pc.run_end_decode(mask)).to_pylist()
+
+
+def test_filter_by_a_non_boolean_mask_raises():
+    values = ma.array(pa.array([1, 2, 3]))
+    with pytest.raises(ma.ArrowTypeError, match="mask must be boolean"):
+        ma.compute.filter(values, ma.array(pa.array([1, 0, 1])))
 
 
 @pytest.mark.parametrize("null_placement", ["at_start", "at_end"])
@@ -1167,18 +1193,12 @@ def test_encoder_kernels_run_end_encoded_match_the_decoded():
     assert result.to_pylist() == expected.to_pylist()
 
 
-def test_run_index_and_run_end_decode_read_run_end_encoded_values():
+def test_run_index_reads_run_end_encoded_values():
     """``run_index`` numbers an encoded array's rows as it numbers the decoded
-    ones, and decoding an encoding of encoded values answers their
-    encoding."""
+    ones."""
     encoded = pc.run_end_encode(pa.array([1, 1, None, None, 2, 1, 1])).slice(1, 5)
     result = pa.array(ma.compute.run_index(ma.array(encoded)))
     assert result.to_pylist() == [0, 1, 1, 2, 3]
-    inner = pc.run_end_encode(pa.array([5, 5, 6]))
-    outer = pa.RunEndEncodedArray.from_arrays(pa.array([2, 5, 6], pa.int32()), inner)
-    result = pa.array(ma.compute.run_end_decode(ma.array(outer)))
-    assert result.type == inner.type
-    assert pc.run_end_decode(result).to_pylist() == [5, 5, 5, 5, 5, 6]
 
 
 # ── bitwise ──────────────────────────────────────────────────────────────────

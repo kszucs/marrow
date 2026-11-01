@@ -146,14 +146,11 @@ struct RunEndEncodeKernel(Kernel):
         """
         var dtype = array.dtype()
         var n = len(array)
-        var most: Int
-        if run_end_type.is_int16():
-            most = Int(Int16.MAX)
-        elif run_end_type.is_int32():
-            most = Int(Int32.MAX)
-        elif run_end_type.is_int64():
-            most = Int(Int64.MAX)
-        else:
+        if not (
+            run_end_type.is_int16()
+            or run_end_type.is_int32()
+            or run_end_type.is_int64()
+        ):
             raise Self.error[TypeError](
                 t"run ends must be int16, int32 or int64, not {run_end_type}"
             )
@@ -165,6 +162,8 @@ struct RunEndEncodeKernel(Kernel):
             or dtype.is_run_end_encoded()
         ):
             raise Self.error[TypeError](t"cannot encode {dtype} values")
+        var encoded = run_end_encoded(run_end_type.copy(), dtype.copy())
+        var most = encoded.max_length()
         if n > most:
             raise Self.error[InvalidError](
                 t"{n} rows are more than {run_end_type} run ends can hold:"
@@ -199,7 +198,7 @@ struct RunEndEncodeKernel(Kernel):
                 ends, ctx
             )
         return RunEndEncodedArray(
-            dtype=run_end_encoded(run_end_type.copy(), dtype^),
+            dtype=encoded^,
             length=n,
             offset=0,
             run_ends=run_ends^,
@@ -281,6 +280,32 @@ struct RunEndDecodeKernel(Kernel):
         return BoolArray(
             length=n, validity=validity^, buffer=out^.to_immutable()
         )
+
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](
+        per_run: PrimitiveArray[T], over: RunEndEncodedArray
+    ) raises -> PrimitiveArray[T]:
+        """One value per run `over`'s window reads, repeated over that run's
+        rows of the window.
+
+        Raises:
+            InvalidError: unless `per_run` holds one value per run.
+        """
+        var ends = over.segment_ends()
+        return Self.apply(per_run, ByEnds(ends.values()))
+
+    @staticmethod
+    def apply(per_run: BoolArray, over: RunEndEncodedArray) raises -> BoolArray:
+        """One value per run `over`'s window reads, repeated over that run's
+        rows of the window.
+
+        Raises:
+            InvalidError: unless `per_run` holds one value per run.
+        """
+        var ends = over.segment_ends()
+        return Self.apply(per_run, ByEnds(ends.values()))
 
     @staticmethod
     def _valid_runs[
@@ -459,6 +484,11 @@ struct RunsPack[Values: PackKernel, Ends: PackKernel](PackKernel):
             Self._packed(self.values, state.values.view[T](0, runs)),
             Self._packed(self.ends, BufferView(Span(state.ends))),
         )
+
+    def nbytes[T: DType](self, packed: Self.Packed) -> Int:
+        return self.values.nbytes[T](packed.values) + self.ends.nbytes[
+            DType.uint64
+        ](packed.ends)
 
     @staticmethod
     def _packed[

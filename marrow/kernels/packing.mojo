@@ -1,6 +1,13 @@
 # Copyright 2024 Szűcs Krisztián
 # SPDX-License-Identifier: Apache-2.0
 
+# `FsstPack`'s symbol table and coding, and `FsstUnpack`'s decoding, are ported
+# from FSST (https://github.com/cwida/fsst): `libfsst.cpp`
+# (`buildSymbolTable`, `compressBulk`, `makeSample`), `libfsst.hpp` (`Symbol`,
+# `SymbolTable`, `finalize`) and `fsst.h` (`fsst_decompress`). Copyright
+# 2018-2020 CWI, TU Munich, FSU Jena, MIT License, and modified; see
+# NOTICE.txt.
+
 """Packers: values in, a typed `Packed` out, and back a register at a time.
 
 Each `*Pack` has its `*Unpack` and the `*Packed` a column is packed as.
@@ -9,14 +16,22 @@ Each `*Pack` has its `*Unpack` and the `*Packed` a column is packed as.
 bit-packed hybrid. `FittedPack` fits one value per segment with a fold and
 packs each value against its segment's fit with an inner packer; frame of
 reference, each value less its segment's least, is `ReferencePack`.
-`RunsPack` (`runs.mojo`) stores each run of equal values once.
+`ConstantPack` keeps a column that is one value as the value. `PatchPack`
+fits each segment with a `FitKernel`, packs the values encoded under the fit
+with an inner packer, and keeps apart, with their positions, the values
+decoding does not give back -- the exceptions: `PforPack` packs at a width
+fitted per segment and patches the values wider, `FrequencyPack` keeps each
+segment's most common value once and patches the rest. `RunsPack`
+(`runs.mojo`) stores each run of equal values once.
 
 Byte strings go in as offsets and bytes and come out the same way:
 `LengthsPack` keeps their bytes end to end and packs their lengths,
 `PrefixesPack` packs the length of the prefix each shares with the one
-before and keeps the rest of each as `LengthsPack` does. Each takes the value
-packers of its `int32` streams, and has an `*Unpack` reading them back a
-register at a time.
+before and keeps the rest of each as `LengthsPack` does, and `FsstPack` codes
+each by a table of up to 255 symbols of one to eight bytes, built from a
+sample of them, and keeps the code strings as `LengthsPack` does. Each takes
+the value packers of its `int32` streams, and has an `*Unpack` reading them
+back a register at a time.
 
 A packer that needs more than its values wraps an inner packer, and its
 `Packed` holds the inner one's: `FittedPacked[BitPacked]` is the fits plus
@@ -25,12 +40,14 @@ the bits.
 Segments: a packer that keeps a value per segment takes, encoding, the
 segment sizes that divide `BLOCK`, so a block holds whole segments, and,
 decoding, the multiples of its step -- a group of eight for `BitPack`, 64
-values for `FittedPack` -- so a register never spans two segments.
+values for `FittedPack` and `PatchPack` -- so a register never spans two
+segments.
 """
 
 from std.algorithm import vectorize
 from std.bit import bit_width
 from std.builtin.rebind import rebind_var
+from std.builtin.sort import sort
 from std.math import ceildiv
 from std.memory import bitcast
 from std.sys import bit_width_of, size_of
@@ -42,8 +59,14 @@ from ..utils.byteorder import Leb128, LittleEndian
 from ..utils.integers import Unsigned
 from ..views import BitmapView, BufferView, PackedGroup
 from .aggregate import FoldKernel, MinFold
-from .compose import Codec
-from .core import BinaryKernel, Kernel, PackKernel, UnpackKernel
+from .compose import Codec, NoState
+from .core import (
+    BinaryKernel,
+    FitKernel,
+    Kernel,
+    PackKernel,
+    UnpackKernel,
+)
 from .numeric import AddKernel, SubKernel
 from .runs import RunsPack, RunsUnpack
 from .segments import BySize, PerSegment
@@ -153,6 +176,9 @@ struct PlainPack(Copyable, Defaultable, PackKernel):
         var size = state.at * size_of[Scalar[T]]()
         return PlainPacked(state^.frozen(), size)
 
+    def nbytes[T: DType](self, packed: PlainPacked) -> Int:
+        return packed.size
+
 
 @fieldwise_init
 struct PlainUnpack(Copyable, Defaultable, UnpackKernel):
@@ -231,6 +257,9 @@ struct SplitPack(Copyable, Defaultable, PackKernel):
     def finish[T: DType](self, var state: _Filling) raises -> SplitPacked:
         var size = state.count * size_of[Scalar[T]]()
         return SplitPacked(state^.frozen(), size)
+
+    def nbytes[T: DType](self, packed: SplitPacked) -> Int:
+        return packed.size
 
 
 @fieldwise_init
@@ -371,6 +400,10 @@ struct BitPack(Copyable, Defaultable, PackKernel):
 
     def finish[T: DType](self, var state: _BitPacking) raises -> BitPacked:
         return state^.packed()
+
+    def nbytes[T: DType](self, packed: BitPacked) -> Int:
+        # A `uint8` width a segment.
+        return packed.size + len(packed.widths)
 
 
 struct _BitUnpacking(Movable):
@@ -614,6 +647,11 @@ struct FittedPack[F: FoldKernel, Enc: BinaryKernel, Inner: PackKernel](
             self.inner.finish[T](inner.take()),
         )
 
+    def nbytes[T: DType](self, packed: Self.Packed) -> Int:
+        return len(packed.fits) * size_of[Scalar[T]]() + self.inner.nbytes[T](
+            packed.inner
+        )
+
 
 @fieldwise_init
 struct FittedUnpack[Dec: BinaryKernel, Inner: UnpackKernel](UnpackKernel):
@@ -673,6 +711,562 @@ comptime ReferenceUnpack[Inner: UnpackKernel] = FittedUnpack[AddKernel, Inner]
 
 comptime ReferencePacked[P: Copyable & Deinitable] = FittedPacked[P]
 """What `ReferencePack` packs: each segment's least, and the inner `Packed`."""
+
+
+# --- Constant ------------------------------------------------------------------
+
+
+@fieldwise_init
+struct ConstantPacked(Copyable, Movable):
+    """One value standing for every value: its bits, and how many.
+
+    [42, 42, 42] as int64  ->  value 42, count 3
+    """
+
+    var value: UInt64
+    """The value's bits."""
+    var count: Int
+
+
+@fieldwise_init
+struct ConstantPack(Copyable, Defaultable, PackKernel):
+    """Values that are all one value, of at most eight bytes, as
+    `ConstantPacked`. Equal means the same bits; a second value is
+    refused."""
+
+    comptime name = "constant_pack"
+    comptime Packed = ConstantPacked
+    comptime State[T: DType]: Movable & Deinitable = ConstantPacked
+
+    def start[T: DType](self, count: Int) raises -> ConstantPacked:
+        comptime assert (
+            size_of[Scalar[T]]() <= 8
+        ), "ConstantPack takes values of at most 8 bytes"
+        return ConstantPacked(0, 0)
+
+    def store[
+        T: DType
+    ](self, mut state: ConstantPacked, block: BufferView[T, _]) raises:
+        comptime U = Unsigned[T]
+        comptime W = 64 // size_of[Scalar[T]]()
+        var n = len(block)
+        var i = 0
+        while i < n:
+            var bits = bitcast[U](block.load[1](i)).cast[DType.uint64]()
+            if state.count == 0:
+                state.value = bits
+            elif bits != state.value:
+                raise Self.error[InvalidError](
+                    t"value {state.count} is not the one before it"
+                )
+            state.count += 1
+            i += 1
+            # The values after it, a register at a time while they are it.
+            var v = SIMD[U, W](state.value.cast[U]())
+            while (
+                i + W <= n
+                and bitcast[U, W](block.load[W](i)).eq(v).reduce_and()
+            ):
+                state.count += W
+                i += W
+
+    def finish[
+        T: DType
+    ](self, var state: ConstantPacked) raises -> ConstantPacked:
+        return state^
+
+    def nbytes[T: DType](self, packed: ConstantPacked) -> Int:
+        return size_of[Scalar[T]]() if packed.count > 0 else 0
+
+
+@fieldwise_init
+struct ConstantUnpack(Copyable, Defaultable, UnpackKernel):
+    """`ConstantPacked`'s value, as every value."""
+
+    comptime name = "constant_unpack"
+    comptime Packed = ConstantPacked
+    comptime State[T: DType]: Movable & Deinitable = Scalar[T]
+
+    def start[
+        T: DType
+    ](self, var packed: ConstantPacked, count: Int) raises -> Scalar[T]:
+        comptime B = bit_width_of[T]()
+        comptime assert (
+            B <= 64
+        ), "ConstantUnpack yields values of at most 8 bytes"
+        var fits = True
+        comptime if B < 64:
+            fits = packed.value >> UInt64(B) == 0
+        if packed.count != count or not fits:
+            raise Self.error[CorruptError](
+                t"{packed.count} values of bits {packed.value} for {count}"
+                t" {T} values"
+            )
+        return bitcast[T](packed.value.cast[Unsigned[T]]())
+
+    @always_inline
+    def load[
+        T: DType, W: Int
+    ](self, mut state: Scalar[T], i: Int) -> SIMD[T, W]:
+        return SIMD[T, W](state)
+
+
+# --- Patch ---------------------------------------------------------------------
+
+
+@fieldwise_init
+struct PatchPacked[P: Copyable & Deinitable](Copyable, Movable):
+    """Each segment's fit, the values whose round trip under it fails -- the
+    exceptions, each with its position -- and every value encoded under its
+    fit, an exception holding a filler, packed by the inner packer.
+
+        Frequency over [7, 7, 3, 7, 9] as int64  ->  fits [7], ends [2],
+        positions [2, 4], values [3, 9], the inner packer five zeros
+    """
+
+    var fits: PerSegment
+    """Each segment's fit, a `uint64`."""
+    var ends: PerSegment
+    """The exceptions up to each segment's end, a `uint32`."""
+    var positions: PlainPacked
+    """Each exception's position within its segment, a `uint16`, ascending
+    within the segment."""
+    var values: PlainPacked
+    """The exceptions, in the column's dtype."""
+    var inner: Self.P
+
+
+struct _Patching[T: DType](Movable):
+    """The fits and ends of the segments packed, the exceptions found in
+    them, and the values stored."""
+
+    var fits: Buffer[mut=True]
+    var ends: Buffer[mut=True]
+    var segments: Int
+    var positions: List[UInt16]
+    var values: List[Scalar[Self.T]]
+    var stored: Int
+
+    def __init__(out self, segments: Int):
+        self.fits = Buffer.alloc_uninit[DType.uint64](segments)
+        self.ends = Buffer.alloc_uninit[DType.uint32](segments)
+        self.segments = 0
+        self.positions = List[UInt16]()
+        self.values = List[Scalar[Self.T]]()
+        self.stored = 0
+
+    def packed[
+        P: Copyable & Deinitable
+    ](deinit self, var inner: P) -> PatchPacked[P]:
+        """What was packed, `inner` the values encoded."""
+        var n = len(self.positions)
+        var positions = Buffer.alloc_uninit[DType.uint16](n)
+        positions.extend(BufferView(Span(self.positions)), 0, n)
+        var values = Buffer.alloc_uninit[Self.T](n)
+        values.extend(BufferView(Span(self.values)), 0, n)
+        return PatchPacked(
+            PerSegment(self.fits^.to_immutable(), self.segments),
+            PerSegment(self.ends^.to_immutable(), self.segments),
+            PlainPacked(positions^.to_immutable(), 2 * n),
+            PlainPacked(values^.to_immutable(), n * size_of[Scalar[Self.T]]()),
+            inner^,
+        )
+
+
+@fieldwise_init
+struct PatchPack[Fit: FitKernel, Inner: PackKernel](PackKernel):
+    """Fits each segment of `size` values with `Fit`, packs each value
+    encoded under the fit with `Inner`, and keeps each value its decoding
+    does not give back bit for bit.
+
+    An exception's slot holds the encoding of the segment's first value
+    that does come back, or zero when none does, so it widens nothing the
+    inner packer packs.
+    """
+
+    comptime name = "patch_pack"
+    comptime Packed = PatchPacked[Self.Inner.Packed]
+    comptime State[T: DType]: Movable & Deinitable = Tuple[
+        _Patching[T], Self.Fit.State[T], Self.Inner.State[Self.Fit.Encoded[T]]
+    ]
+    comptime STEP = 64
+
+    var size: Int
+    var inner: Self.Inner
+
+    def start[T: DType](self, count: Int) raises -> Self.State[T]:
+        var f = self.size
+        if f <= 0 or f % Self.STEP != 0 or BLOCK % f != 0:
+            raise Self.error[InvalidError](t"segments of {f} values")
+        # The ends count exceptions in 32 bits.
+        if count > Int(UInt32.MAX):
+            raise Self.error[InvalidError](t"{count} values")
+        return (
+            _Patching[T](ceildiv(count, f)),
+            Self.Fit.start[T](),
+            self.inner.start[Self.Fit.Encoded[T]](count),
+        )
+
+    @always_inline
+    @staticmethod
+    def _encode[
+        T: DType, W: Int
+    ](
+        mut patching: _Patching[T],
+        block: BufferView[T, _],
+        encoded: BufferView[mut=True, Self.Fit.Encoded[T], _],
+        i: Int,
+        lo: Int,
+        fit: UInt64,
+        mut filler: Optional[Scalar[Self.Fit.Encoded[T]]],
+    ):
+        """The register at `i` encoded under `fit`, into `encoded`; each of
+        its values that does not come back kept, at its position in the
+        segment from `lo`, and the first that does the filler."""
+        comptime U = Unsigned[T]
+        var v = block.load[W](i)
+        var e = Self.Fit.encode[T, W](v, fit)
+        encoded.store[W](i, e)
+        var back = Self.Fit.decode[T, W](e, fit)
+        var lost = bitcast[U, W](back).ne(bitcast[U, W](v))
+        if lost.reduce_or():
+            for k in range(W):
+                if lost[k]:
+                    patching.positions.append(UInt16(i + k - lo))
+                    patching.values.append(v[k])
+                elif not filler:
+                    filler = e[k]
+        elif not filler:
+            filler = e[0]
+
+    def store[
+        T: DType
+    ](self, mut state: Self.State[T], block: BufferView[T, _]) raises:
+        comptime O = Self.Fit.Encoded[T]
+        comptime W = 64 // size_of[Scalar[T]]()
+        var m = len(block)
+        if m > BLOCK or state[0].stored % BLOCK != 0:
+            raise Self.block_error(m)
+        var scratch = Array[UInt8, BLOCK * size_of[Scalar[O]]()](
+            uninitialized=True
+        )
+        var encoded = BufferView[O].from_bytes(Span(scratch))[:m]
+        var lo = 0
+        while lo < m:
+            var hi = min(lo + self.size, m)
+            var fit = Self.Fit.fit[T](state[1], block[lo:hi])
+            var first = len(state[0].positions)
+            var filler = Optional[Scalar[O]](None)
+            var i = lo
+            while i + W <= hi:
+                Self._encode[T, W](state[0], block, encoded, i, lo, fit, filler)
+                i += W
+            while i < hi:
+                Self._encode[T, 1](state[0], block, encoded, i, lo, fit, filler)
+                i += 1
+            var fill = Scalar[O](0)
+            if filler:
+                fill = filler.value()
+            for k in range(first, len(state[0].positions)):
+                encoded.unsafe_set(lo + Int(state[0].positions[k]), fill)
+            var s = state[0].segments
+            state[0].fits.view[DType.uint64]().unsafe_set(s, fit)
+            state[0].ends.view[DType.uint32]().unsafe_set(
+                s, UInt32(len(state[0].positions))
+            )
+            state[0].segments += 1
+            lo = hi
+        state[0].stored += m
+        self.inner.store[O](state[2], encoded)
+
+    def finish[T: DType](self, var state: Self.State[T]) raises -> Self.Packed:
+        comptime O = Self.Fit.Encoded[T]
+        var patching = Optional[_Patching[T]](None)
+        var inner = Optional[Self.Inner.State[O]](None)
+
+        # The fitting state is spent.
+        def take[
+            k: Int
+        ](var part: Self.State[T].Ts[k]) {mut patching, mut inner}:
+            comptime if k == 0:
+                patching = rebind_var[_Patching[T]](part^)
+            elif k == 1:
+                _ = rebind_var[Self.Fit.State[T]](part^)
+            else:
+                inner = rebind_var[Self.Inner.State[O]](part^)
+
+        state^.consume_elements(take)
+        return patching.take().packed(self.inner.finish[O](inner.take()))
+
+    def nbytes[T: DType](self, packed: Self.Packed) -> Int:
+        # A `uint64` fit and a `uint32` end a segment.
+        return (
+            8 * len(packed.fits)
+            + 4 * len(packed.ends)
+            + packed.positions.size
+            + packed.values.size
+            + self.inner.nbytes[Self.Fit.Encoded[T]](packed.inner)
+        )
+
+
+struct _PatchReading(Movable):
+    """What `PatchUnpack` reads: each segment's fit, the exceptions and
+    where each lies in the column -- then a position past every value --
+    and the next exception to put back."""
+
+    var fits: PerSegment
+    var segments: BySize
+    var values: Buffer[mut=False]
+    var at: List[Int]
+    var next: Int
+    var ahead: Int
+    """The next exception's position."""
+
+    def __init__(
+        out self,
+        var fits: PerSegment,
+        segments: BySize,
+        var values: Buffer[mut=False],
+        var at: List[Int],
+    ):
+        self.fits = fits^
+        self.segments = segments
+        self.values = values^
+        self.ahead = at[0]
+        self.at = at^
+        self.next = 0
+
+
+@fieldwise_init
+struct PatchUnpack[Fit: FitKernel, Inner: UnpackKernel](UnpackKernel):
+    """Each value `Inner` loads decoded by `Fit` under the fit of its
+    segment of `size` values; and each exception put back where it was."""
+
+    comptime name = "patch_unpack"
+    comptime Packed = PatchPacked[Self.Inner.Packed]
+    comptime State[T: DType]: Movable & Deinitable = Tuple[
+        _PatchReading, Self.Inner.State[Self.Fit.Encoded[T]]
+    ]
+    comptime STEP = 64
+
+    var size: Int
+    var inner: Self.Inner
+
+    def start[
+        T: DType
+    ](self, var packed: Self.Packed, count: Int) raises -> Self.State[T]:
+        var f = self.size
+        if f <= 0 or f % Self.STEP != 0:
+            raise Self.error[InvalidError](t"segments of {f} values")
+        var segments = BySize(count, f)
+        var s = segments.count()
+        if len(packed.fits) != s or not packed.fits.holds[DType.uint64]():
+            raise Self.error[CorruptError](
+                t"{len(packed.fits)} fits in a buffer of"
+                t" {len(packed.fits.values)} bytes for {s} segments"
+            )
+        if len(packed.ends) != s or not packed.ends.holds[DType.uint32]():
+            raise Self.error[CorruptError](
+                t"{len(packed.ends)} ends in a buffer of"
+                t" {len(packed.ends.values)} bytes for {s} segments"
+            )
+        for g in range(s):
+            var fit = packed.fits.get[DType.uint64](g)
+            if not Self.Fit.valid[T](fit):
+                raise Self.error[CorruptError](t"fit {fit} for {T}")
+        # As many exceptions as the last end counts.
+        var n = 0
+        if s > 0:
+            n = Int(packed.ends.get[DType.uint32](s - 1))
+        var p = packed.positions.size
+        var v = packed.values.size
+        if (
+            p != 2 * n
+            or p > len(packed.positions.bytes)
+            or v != n * size_of[Scalar[T]]()
+            or v > len(packed.values.bytes)
+        ):
+            raise Self.error[CorruptError](
+                t"{p} bytes of positions and {v} of values for {n} exceptions"
+            )
+        var positions = packed.positions.bytes.view[DType.uint16](0, n)
+        var at = List[Int](capacity=n + 1)
+        var k = 0
+        for g in range(s):
+            var end = Int(packed.ends.get[DType.uint32](g))
+            if end < k or end > n:
+                raise Self.error[CorruptError](
+                    t"segment {g}'s exceptions end at {end}, after {k} of {n}"
+                )
+            var first = segments.start(g)
+            var length = segments.end(g) - first
+            var last = -1
+            while k < end:
+                var q = Int(positions[k])
+                if q <= last or q >= length:
+                    raise Self.error[CorruptError](
+                        t"an exception at {q}, after {last}, in segment {g}"
+                        t" of {length} values"
+                    )
+                at.append(first + q)
+                last = q
+                k += 1
+        at.append(Int.MAX)
+        return (
+            _PatchReading(
+                packed.fits.copy(), segments, packed.values.bytes, at^
+            ),
+            self.inner.start[Self.Fit.Encoded[T]](packed.inner.copy(), count),
+        )
+
+    @always_inline
+    def load[
+        T: DType, W: Int
+    ](self, mut state: Self.State[T], i: Int) -> SIMD[T, W]:
+        var fit = state[0].fits.get[DType.uint64](state[0].segments.of(i))
+        var v = self.inner.load[Self.Fit.Encoded[T], W](state[1], i)
+        var out = Self.Fit.decode[T, W](v, fit)
+        # One compare a register; the exceptions it covers put back.
+        if state[0].ahead < i + W:
+            var kept = state[0].values.view[T]()
+            while state[0].ahead < i + W:
+                out[state[0].ahead - i] = kept.unsafe_get(state[0].next)
+                state[0].next += 1
+                state[0].ahead = state[0].at.unsafe_get(state[0].next)
+        return out
+
+    def check[T: DType](self, state: Self.State[T]) raises:
+        self.inner.check[Self.Fit.Encoded[T]](state[1])
+
+
+struct Pfor(FitKernel):
+    """Unsigned integers at a width fitted per segment: each value's low
+    `fit` bits, decoded as they are. The width is the one that packs the
+    segment smallest, a value wider than it costing its own bits and a
+    16-bit position too."""
+
+    comptime name = "pfor"
+    comptime State[T: DType]: Movable & Deinitable = NoState
+
+    @staticmethod
+    def start[T: DType]() -> NoState:
+        return NoState()
+
+    @staticmethod
+    def fit[T: DType](mut state: NoState, segment: BufferView[T, _]) -> UInt64:
+        comptime assert T.is_unsigned(), "Pfor takes unsigned integers"
+        comptime B = bit_width_of[T]()
+        var n = len(segment)
+        # How many values need each width; then, from the widest down, the
+        # width that costs least, ties to the wider.
+        var needs = Array[Int, B + 1](fill=0)
+        for i in range(n):
+            needs[Int(bit_width(segment.unsafe_get(i)))] += 1
+        var best = B
+        var cost = n * B
+        var wider = 0
+        var w = B
+        while w > 0:
+            wider += needs[w]
+            w -= 1
+            var c = w * n + wider * (16 + B)
+            if c < cost:
+                cost = c
+                best = w
+        return UInt64(best)
+
+    @always_inline
+    @staticmethod
+    def encode[T: DType, W: Int](v: SIMD[T, W], fit: UInt64) -> SIMD[T, W]:
+        comptime assert T.is_unsigned(), "Pfor takes unsigned integers"
+        var top = Scalar[T](0)
+        if fit > 0:
+            top = Scalar[T].MAX >> Scalar[T](UInt64(bit_width_of[T]()) - fit)
+        return v & SIMD[T, W](top)
+
+    @always_inline
+    @staticmethod
+    def decode[T: DType, W: Int](v: SIMD[T, W], fit: UInt64) -> SIMD[T, W]:
+        # The width says only which values were too wide to keep.
+        return v
+
+    @staticmethod
+    def valid[T: DType](fit: UInt64) -> Bool:
+        return fit <= UInt64(bit_width_of[T]())
+
+
+struct Frequency(FitKernel):
+    """Values of at most eight bytes under their segment's most common
+    value, the fit -- the one held longest, ties the smaller bits -- each
+    encoded as zero and decoded as the fit, so only the values that are not
+    it are kept."""
+
+    comptime name = "frequency"
+    comptime State[T: DType]: Movable & Deinitable = NoState
+
+    @staticmethod
+    def start[T: DType]() -> NoState:
+        return NoState()
+
+    @staticmethod
+    def fit[T: DType](mut state: NoState, segment: BufferView[T, _]) -> UInt64:
+        comptime assert (
+            size_of[Scalar[T]]() <= 8
+        ), "Frequency takes values of at most 8 bytes"
+        comptime U = Unsigned[T]
+        var n = len(segment)
+        debug_assert(n <= BLOCK, "Frequency: a segment of a block")
+        # The bits sorted, so each value's copies are a run.
+        var scratch = Array[UInt64, BLOCK](uninitialized=True)
+        var bits = Span(scratch)[:n]
+        for i in range(n):
+            bits[i] = bitcast[U](segment.unsafe_get(i)).cast[DType.uint64]()
+        sort(bits)
+        var top = UInt64(0)
+        var most = 0
+        var run = 0
+        for i in range(n):
+            if i > 0 and bits[i] != bits[i - 1]:
+                run = 0
+            run += 1
+            if run > most:
+                most = run
+                top = bits[i]
+        return top
+
+    @always_inline
+    @staticmethod
+    def encode[T: DType, W: Int](v: SIMD[T, W], fit: UInt64) -> SIMD[T, W]:
+        return SIMD[T, W](0)
+
+    @always_inline
+    @staticmethod
+    def decode[T: DType, W: Int](v: SIMD[T, W], fit: UInt64) -> SIMD[T, W]:
+        return SIMD[T, W](bitcast[T](fit.cast[Unsigned[T]]()))
+
+    @staticmethod
+    def valid[T: DType](fit: UInt64) -> Bool:
+        comptime B = bit_width_of[T]()
+        comptime if B < 64:
+            return fit >> UInt64(B) == 0
+        else:
+            return True
+
+
+comptime PforPack = PatchPack[Pfor, BitPack]
+"""Patched bit packing: each segment at the width that packs it smallest,
+the values wider than it kept apart. Under `ReferencePack`, patched frame of
+reference."""
+
+comptime PforUnpack = PatchUnpack[Pfor, BitUnpack]
+"""`PforPack`'s values."""
+
+comptime FrequencyPack = PatchPack[Frequency, ConstantPack]
+"""Each segment's most common value once, and the values that are not it
+with their positions."""
+
+comptime FrequencyUnpack = PatchUnpack[Frequency, ConstantUnpack]
+"""`FrequencyPack`'s values."""
 
 
 # --- Rle -----------------------------------------------------------------------
@@ -809,6 +1403,9 @@ struct RlePack(Copyable, PackKernel):
         var bytes = Buffer.alloc_uninit(len(out))
         bytes.extend(BufferView(Span(out)), 0, len(out))
         return RlePacked(bytes^.to_immutable(), len(out))
+
+    def nbytes[T: DType](self, packed: RlePacked) -> Int:
+        return packed.size
 
     @staticmethod
     def write_runs[
@@ -1058,6 +1655,10 @@ struct LengthsPack[L: PackKernel](Kernel, Movable):
             self.lengths.finish[DType.int32](state^),
         )
 
+    def nbytes(self, packed: LengthsPacked[Self.L.Packed]) -> Int:
+        """The bytes `packed` holds: the strings', and their lengths'."""
+        return packed.size + self.lengths.nbytes[DType.int32](packed.lengths)
+
 
 @fieldwise_init
 struct LengthsUnpack[L: UnpackKernel](Kernel, Movable):
@@ -1188,6 +1789,15 @@ struct PrefixesPack[P: PackKernel, L: PackKernel](Kernel, Movable):
             self.suffixes.pack(Span(ends), Span(bytes)[:at]),
         )
 
+    def nbytes(
+        self, packed: PrefixesPacked[Self.P.Packed, Self.L.Packed]
+    ) -> Int:
+        """The bytes `packed` holds: the prefix lengths', and the
+        suffixes'."""
+        return self.prefixes.nbytes[DType.int32](
+            packed.prefixes
+        ) + self.suffixes.nbytes(packed.suffixes)
+
 
 struct PrefixesUnpack[P: UnpackKernel, L: UnpackKernel](Kernel, Movable):
     """`PrefixesPacked`'s byte strings: the prefix lengths unpacked by `P` a
@@ -1268,3 +1878,600 @@ struct PrefixesUnpack[P: UnpackKernel, L: UnpackKernel](Kernel, Movable):
             raise Self.error[CorruptError](
                 "a prefix longer than the string before it"
             )
+
+
+# --- Fsst ----------------------------------------------------------------------
+
+
+@fieldwise_init
+struct FsstPacked[L: Copyable & Deinitable](Copyable, Movable):
+    """Byte strings as codes into a table of up to 255 symbols of one to
+    eight bytes: each string a code a symbol, and for a byte no symbol
+    starts with, the escape 255 and the byte; the table, and the code
+    strings as `LengthsPacked`.
+
+        ["abab", "ab"], one symbol "ab"  ->  codes ["\\x00\\x00", "\\x00"]
+    """
+
+    var symbols: Buffer[mut=False]
+    """Each symbol's bytes in a `uint64`, little-endian."""
+    var lengths: Buffer[mut=False]
+    """Each symbol's length, a `uint8` from 1 to 8."""
+    var count: Int
+    """The symbols, at most 255."""
+    var codes: LengthsPacked[Self.L]
+
+
+struct _SymbolTable(Copyable, Movable):
+    """The symbols an `FsstPack` codes by, and the tables it finds the
+    longest symbol a string goes on with by: a symbol of three bytes or more
+    by a hash of its first three, of two by its two, of one by its byte.
+
+    While the table is built, codes 0-255 are the bytes themselves, escaped,
+    and a symbol's code is 256 on; once `finalize`d, the symbols are codes
+    0-254 and every escape is 511 in the lookups, written as 255. A symbol's
+    `icl` packs its length (bits 28-31), its code (16-27) and the bits past
+    its bytes in a `uint64` (0-15).
+    """
+
+    comptime BASE = 256
+    """The first code a symbol takes while the table is built."""
+    comptime CODES = 512
+    comptime MASK = UInt64(511)
+    comptime HASHED = 1024
+    comptime FREE = UInt64((15 << 28) | (511 << 16))
+    """The `icl` of a free hash bucket, past every symbol's."""
+    comptime ESCAPE = 255
+    comptime SAMPLE = 1 << 14
+    """How many bytes of the strings a table is built from, at least."""
+    comptime LINE = 512
+    """The most bytes of one string a sample takes at once."""
+
+    var nums: List[UInt64]
+    """Each code's bytes, little-endian, and nothing past them."""
+    var icls: List[UInt64]
+    """Each code's `icl`."""
+    var hash_nums: List[UInt64]
+    """The symbols of three bytes or more, by a hash of their first three."""
+    var hash_icls: List[UInt64]
+    """Their `icl`s, `FREE` where none is."""
+    var shorts: List[UInt16]
+    """Each two bytes' code: a two-byte symbol's, else the first byte's."""
+    var bytes: List[UInt16]
+    """Each byte's code, a one-byte symbol's or its escape."""
+    var count: Int
+    """The symbols, at most 255."""
+    var terminator: Int
+    """A byte no symbol of two bytes or more holds, so a string can end in
+    it while a register reads past its end."""
+    var histogram: List[Int]
+    """How many symbols are 1, 2, ... 8 bytes long."""
+
+    def __init__(out self, terminator: Int):
+        """No symbols: every byte escaped."""
+        self.nums = List[UInt64](length=Self.CODES, fill=0)
+        self.icls = List[UInt64](
+            length=Self.CODES, fill=Self.icl(Int(Self.MASK), 1)
+        )
+        for i in range(Self.BASE):
+            self.nums[i] = UInt64(i)
+            self.icls[i] = Self.icl(i, 1)
+        self.hash_nums = List[UInt64](length=Self.HASHED, fill=0)
+        self.hash_icls = List[UInt64](length=Self.HASHED, fill=Self.FREE)
+        self.shorts = List[UInt16](length=1 << 16, fill=0)
+        for i in range(1 << 16):
+            self.shorts[i] = UInt16((1 << 12) | (i & 255))
+        self.bytes = List[UInt16](length=256, fill=0)
+        for i in range(256):
+            self.bytes[i] = UInt16((1 << 12) | i)
+        self.count = 0
+        self.terminator = terminator
+        self.histogram = List[Int](length=8, fill=0)
+
+    @always_inline
+    @staticmethod
+    def hash(w: UInt64) -> UInt64:
+        var h = w * 2971215073
+        return h ^ (h >> 15)
+
+    @always_inline
+    @staticmethod
+    def icl(code: Int, length: Int) -> UInt64:
+        return UInt64((length << 28) | (code << 16) | ((8 - length) * 8))
+
+    @always_inline
+    def length(self, code: Int) -> Int:
+        return Int(self.icls[code] >> 28)
+
+    def add(mut self, num: UInt64, length: Int) -> Bool:
+        """Symbol `num` of `length` bytes as the next code; false when its
+        hash bucket is taken."""
+        var code = Self.BASE + self.count
+        var icl = Self.icl(code, length)
+        var added = True
+        if length == 1:
+            self.bytes[Int(num & 0xFF)] = UInt16(code + (1 << 12))
+        elif length == 2:
+            self.shorts[Int(num & 0xFFFF)] = UInt16(code + (2 << 12))
+        else:
+            var at = Int(Self.hash(num & 0xFFFFFF) & UInt64(Self.HASHED - 1))
+            if self.hash_icls[at] < Self.FREE:
+                added = False
+            else:
+                self.hash_icls[at] = icl
+                self.hash_nums[at] = num & (UInt64.MAX >> (icl & 0xFF))
+        if added:
+            self.nums[code] = num
+            self.icls[code] = icl
+            self.histogram[length - 1] += 1
+            self.count += 1
+        return added
+
+    def longest(self, num: UInt64, length: Int) -> Int:
+        """The code of the longest symbol the `length` bytes of `num` start
+        with, an escape when none does."""
+        var at = Int(Self.hash(num & 0xFFFFFF) & UInt64(Self.HASHED - 1))
+        var hashed = self.hash_icls[at]
+        var short = UInt64(self.shorts[Int(num & 0xFFFF)]) & Self.MASK
+        var code: UInt64
+        if hashed <= Self.icl(Self.CODES, length) and self.hash_nums[at] == (
+            num & (UInt64.MAX >> (hashed & 0xFF))
+        ):
+            code = (hashed >> 16) & Self.MASK
+        elif length >= 2 and short >= UInt64(Self.BASE):
+            code = short
+        else:
+            code = UInt64(self.bytes[Int(num & 0xFF)]) & Self.MASK
+        return Int(code)
+
+    def counted(
+        self,
+        lines: Span[Int, _],
+        sample: Span[UInt8, _],
+        fraction: Int,
+        mut singles: List[UInt16],
+        mut pairs: List[UInt16],
+    ) -> Int:
+        """The bytes coding the sample by this table saves, counting each
+        code, and below the last round each pair of codes, as it goes. A
+        round below the last skips lines at random, the more the lower
+        `fraction` is, out of 128."""
+        var gain = 0
+        for i in range(len(lines) - 1):
+            var cur = lines[i]
+            var end = lines[i + 1]
+            var skip = (
+                fraction < 128
+                and Int(1 + (Self.hash(UInt64((i + 1) * fraction)) & 127))
+                > fraction
+            )
+            if cur < end and not skip:
+                var start = cur
+                var code1 = self.longest(
+                    LittleEndian.partial[DType.uint64](sample[:end], cur),
+                    min(end - cur, 8),
+                )
+                cur += self.length(code1)
+                gain += self.length(code1) - (2 if code1 < Self.BASE else 1)
+                var more = True
+                while more:
+                    singles[code1] += 1
+                    # The first byte on its own, as an alternative.
+                    if self.length(code1) != 1:
+                        singles[Int(sample[start])] += 1
+                    if cur == end:
+                        more = False
+                    else:
+                        start = cur
+                        var code2 = self.longest(
+                            LittleEndian.partial[DType.uint64](
+                                sample[:end], cur
+                            ),
+                            min(end - cur, 8),
+                        )
+                        cur += self.length(code2)
+                        gain += (cur - start) - (2 if code2 < Self.BASE else 1)
+                        if fraction < 128:
+                            pairs[code1 * Self.CODES + code2] += 1
+                            # Extended by the next byte alone, as an
+                            # alternative.
+                            if cur - start > 1:
+                                pairs[
+                                    code1 * Self.CODES + Int(sample[start])
+                                ] += 1
+                        code1 = code2
+        return gain
+
+    def made(
+        self,
+        mut singles: List[UInt16],
+        pairs: List[UInt16],
+        fraction: Int,
+    ) -> Self:
+        """The table of the 255 symbols, of this one's and of pairs of them
+        joined, that save the most by the counts; below the last round
+        `fraction`, rarer candidates are dropped."""
+        # The terminator counted the most often, so it stays a symbol.
+        if self.count > 0:
+            singles[Self.BASE] = UInt16.MAX
+        else:
+            singles[self.terminator] = UInt16.MAX
+        var least = (5 * fraction) // 128
+        # A candidate: its bytes, its length, and what it saves.
+        var candidates = List[SIMD[DType.uint64, 4]]()
+        for pos1 in range(Self.BASE + self.count):
+            var count1 = Int(singles[pos1])
+            if count1 > 0:
+                var num1 = self.nums[pos1]
+                var length1 = self.length(pos1)
+                # Single bytes promoted: fewer escapes.
+                var weighted = count1 * (8 if length1 == 1 else 1)
+                if weighted >= least:
+                    candidates.append(
+                        SIMD[DType.uint64, 4](
+                            num1,
+                            UInt64(length1),
+                            UInt64(weighted * length1),
+                            0,
+                        )
+                    )
+                if (
+                    fraction < 128
+                    and length1 < 8
+                    and Int(num1 & 0xFF) != self.terminator
+                ):
+                    for pos2 in range(Self.BASE + self.count):
+                        var count2 = Int(pairs[pos1 * Self.CODES + pos2])
+                        var num2 = self.nums[pos2]
+                        if (
+                            count2 >= max(least, 1)
+                            and Int(num2 & 0xFF) != self.terminator
+                        ):
+                            var length = min(length1 + self.length(pos2), 8)
+                            candidates.append(
+                                SIMD[DType.uint64, 4](
+                                    (num2 << UInt64(8 * length1)) | num1,
+                                    UInt64(length),
+                                    UInt64(count2 * length),
+                                    0,
+                                )
+                            )
+
+        # Equal candidates merged, their savings summed.
+        def by_symbol(
+            a: SIMD[DType.uint64, 4], b: SIMD[DType.uint64, 4]
+        ) -> Bool:
+            return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1])
+
+        sort(candidates, by_symbol)
+        var merged = List[SIMD[DType.uint64, 4]]()
+        for c in candidates:
+            var last = len(merged) - 1
+            if (
+                last >= 0
+                and merged[last][0] == c[0]
+                and merged[last][1] == c[1]
+            ):
+                merged[last][2] += c[2]
+            else:
+                merged.append(c)
+
+        # The most saving first; ties to the smaller bytes, then the
+        # shorter symbol.
+        def by_gain(a: SIMD[DType.uint64, 4], b: SIMD[DType.uint64, 4]) -> Bool:
+            return a[2] > b[2] or (
+                a[2] == b[2] and (a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
+            )
+
+        sort(merged, by_gain)
+        var table = Self(self.terminator)
+        for c in merged:
+            if table.count < 255:
+                _ = table.add(c[0], Int(c[1]))
+        return table^
+
+    @staticmethod
+    def build(lines: Span[Int, _], sample: Span[UInt8, _]) -> Self:
+        """The table for the strings `lines` cuts `sample` into: five
+        rounds, each counting the codes the table before it gives and making
+        the next from the counts; the best table's counts make the last."""
+        # The terminator: the least common byte, the lowest of those.
+        var histogram = List[Int](length=256, fill=0)
+        for b in sample:
+            histogram[Int(b)] += 1
+        var terminator = 0
+        var least = 2 * Self.SAMPLE
+        for i in reversed(range(256)):
+            if histogram[i] <= least:
+                terminator = i
+                least = histogram[i]
+        var table = Self(terminator)
+        var best = table.copy()
+        var gained = -2 * Self.SAMPLE
+        var singles = List[UInt16](length=Self.CODES, fill=0)
+        var pairs = List[UInt16](length=Self.CODES * Self.CODES, fill=0)
+        var kept = singles.copy()
+        for fraction in [8, 38, 68, 98, 128]:
+            for i in range(Self.CODES):
+                singles[i] = 0
+            for i in range(Self.CODES * Self.CODES):
+                pairs[i] = 0
+            var gain = table.counted(lines, sample, fraction, singles, pairs)
+            if gain >= gained:
+                kept = singles.copy()
+                best = table.copy()
+                gained = gain
+            if fraction < 128:
+                table = table.made(singles, pairs, fraction)
+        best = best.made(kept, pairs, 128)
+        best.finalize()
+        return best^
+
+    def finalize(mut self):
+        """Renumber the symbols 0-254 by length -- two bytes, those no longer
+        symbol starts like first, then three to eight, then one -- and point
+        every lookup at the new codes, single bytes in the two-byte lookup
+        too."""
+        var codes = List[Int](length=256, fill=0)
+        # Where each length's codes start.
+        var next = List[Int](length=8, fill=0)
+        next[0] = self.count - self.histogram[0]
+        for i in range(1, 7):
+            next[i + 1] = next[i] + self.histogram[i]
+        var alone = 0
+        var shared = next[2]
+        for i in range(self.count):
+            var num = self.nums[Self.BASE + i]
+            var length = self.length(Self.BASE + i)
+            var code: Int
+            if length == 2:
+                var longer = False
+                for k in range(self.count):
+                    if (
+                        k != i
+                        and self.length(Self.BASE + k) > 1
+                        and (self.nums[Self.BASE + k] & 0xFFFF)
+                        == (num & 0xFFFF)
+                    ):
+                        longer = True
+                if longer:
+                    shared -= 1
+                    code = shared
+                else:
+                    code = alone
+                    alone += 1
+            else:
+                code = next[length - 1]
+                next[length - 1] += 1
+            codes[i] = code
+            self.nums[code] = num
+            self.icls[code] = Self.icl(code, length)
+        var escape = UInt16(511 + (1 << 12))
+        for i in range(256):
+            var b = self.bytes[i]
+            if (UInt64(b) & Self.MASK) >= UInt64(Self.BASE):
+                self.bytes[i] = UInt16(codes[Int(b & 0xFF)] + (1 << 12))
+            else:
+                self.bytes[i] = escape
+        for i in range(1 << 16):
+            var s = self.shorts[i]
+            if (UInt64(s) & Self.MASK) >= UInt64(Self.BASE):
+                self.shorts[i] = UInt16(codes[Int(s & 0xFF)]) + (s & (15 << 12))
+            else:
+                self.shorts[i] = self.bytes[i & 0xFF]
+        for i in range(Self.HASHED):
+            if self.hash_icls[i] < Self.FREE:
+                var code = codes[Int((self.hash_icls[i] >> 16) & 0xFF)]
+                self.hash_nums[i] = self.nums[code]
+                self.hash_icls[i] = self.icls[code]
+
+    @always_inline
+    def coded(
+        self,
+        src: Span[UInt8, _],
+        var cur: Int,
+        end: Int,
+        dst: BufferView[mut=True, DType.uint8, _],
+        mut at: Int,
+    ) -> Int:
+        """The bytes of `src` from `cur` to at least `end`, coded into `dst`
+        from `at` on; where it stopped, at most seven bytes past `end`.
+        Reads eight bytes from each position, and writes a byte past
+        `at`."""
+        while cur < end:
+            var word = LittleEndian.fixed[DType.uint64](src, cur)
+            var short = UInt64(self.shorts[Int(word & 0xFFFF)])
+            var hashed_at = Int(
+                Self.hash(word & 0xFFFFFF) & UInt64(Self.HASHED - 1)
+            )
+            var hashed = self.hash_icls[hashed_at]
+            # The byte an escape writes, before knowing there is one.
+            dst.unsafe_set(at + 1, UInt8(word & 0xFF))
+            if hashed < Self.FREE and self.hash_nums[hashed_at] == (
+                word & (UInt64.MAX >> (hashed & 0xFF))
+            ):
+                dst.unsafe_set(at, UInt8((hashed >> 16) & 0xFF))
+                at += 1
+                cur += Int(hashed >> 28)
+            else:
+                dst.unsafe_set(at, UInt8(short & 0xFF))
+                at += 1 + Int((short & 256) >> 8)
+                cur += Int(short >> 12)
+        return cur
+
+
+struct FsstPack[L: PackKernel](Kernel, Movable):
+    """Byte strings as `FsstPacked`: a symbol table built from a sample of
+    them, and each string coded by it, the code strings' lengths packed by
+    `L`. Equal input packs to equal bytes."""
+
+    comptime name = "fsst_pack"
+
+    var codes: LengthsPack[Self.L]
+
+    def __init__(out self, var lengths: Self.L):
+        self.codes = LengthsPack(lengths^)
+
+    def pack(
+        self, offsets: Span[Int32, _], data: Span[UInt8, _]
+    ) raises -> FsstPacked[Self.L.Packed]:
+        """String `i` is `data[offsets[i] : offsets[i + 1]]`."""
+        comptime T = _SymbolTable
+        var n = max(len(offsets) - 1, 0)
+        var bounds = BufferView(offsets)
+        var total = Int(offsets[n]) - Int(offsets[0]) if n > 0 else 0
+        # The sample: every string when they are small; else pieces of at
+        # most a line, from strings chosen at random, by a fixed seed.
+        var sample = List[UInt8]()
+        var lines: List[Int] = [0]
+        if total < T.SAMPLE:
+            for i in range(n):
+                sample.extend(
+                    data[
+                        Int(bounds.unsafe_get(i)) : Int(
+                            bounds.unsafe_get(i + 1)
+                        )
+                    ]
+                )
+                lines.append(len(sample))
+        else:
+            var seed = T.hash(4637947)
+            while len(sample) < T.SAMPLE:
+                seed = T.hash(seed)
+                var line = Int(seed % UInt64(n))
+                # The next string that is not empty.
+                while bounds.unsafe_get(line + 1) == bounds.unsafe_get(line):
+                    line = (line + 1) % n
+                var start = Int(bounds.unsafe_get(line))
+                var size = Int(bounds.unsafe_get(line + 1)) - start
+                seed = T.hash(seed)
+                var piece = T.LINE * Int(
+                    seed % UInt64(1 + (size - 1) // T.LINE)
+                )
+                sample.extend(
+                    data[
+                        start
+                        + piece : start
+                        + piece
+                        + min(size - piece, T.LINE)
+                    ]
+                )
+                lines.append(len(sample))
+        var table = T.build(Span(lines), Span(sample))
+
+        # Each code at most two bytes a byte, and one written past the end.
+        var coded = List[UInt8]()
+        coded.resize(unsafe_uninit_length=2 * total + 8)
+        var out = BufferView(Span(coded))
+        var ends = List[Int32](capacity=n + 1)
+        ends.append(0)
+        # A string's last bytes, then the terminator, so the eight-byte
+        # reads stay within; no symbol longer than a byte holds it, so no
+        # code reaches past the string.
+        var tail = Array[UInt8, 17](fill=0)
+        var at = 0
+        for i in range(n):
+            var start = Int(bounds.unsafe_get(i))
+            var end = Int(bounds.unsafe_get(i + 1))
+            var stop = end - 8 if end - start > 8 else start
+            var cur = table.coded(data, start, stop, out, at)
+            var left = end - cur
+            for k in range(left):
+                tail[k] = data[cur + k]
+            tail[left] = UInt8(table.terminator)
+            _ = table.coded(Span(tail), 0, left, out, at)
+            ends.append(Int32(at))
+
+        var symbols = Buffer.alloc_uninit[DType.uint64](table.count)
+        var lengths = Buffer.alloc_uninit(table.count)
+        for c in range(table.count):
+            LittleEndian.store[DType.uint64](
+                symbols.view().as_span(), 8 * c, table.nums[c]
+            )
+            lengths.unsafe_set(c, UInt8(table.length(c)))
+        return FsstPacked(
+            symbols^.to_immutable(),
+            lengths^.to_immutable(),
+            table.count,
+            self.codes.pack(Span(ends), Span(coded)[:at]),
+        )
+
+    def nbytes(self, packed: FsstPacked[Self.L.Packed]) -> Int:
+        """The bytes `packed` holds: the symbols', eight each, their
+        lengths', one each, and the code strings'."""
+        return 9 * packed.count + self.codes.nbytes(packed.codes)
+
+
+struct FsstUnpack[L: UnpackKernel](Kernel, Movable):
+    """`FsstPacked`'s byte strings: each code as its symbol, eight bytes
+    copied at once, the code strings' lengths unpacked by `L`."""
+
+    comptime name = "fsst_unpack"
+
+    var codes: LengthsUnpack[Self.L]
+
+    def __init__(out self, var lengths: Self.L):
+        self.codes = LengthsUnpack(lengths^)
+
+    def unpack(
+        self,
+        var packed: FsstPacked[Self.L.Packed],
+        count: Int,
+        mut offsets: List[Int32],
+        mut data: List[UInt8],
+    ) raises:
+        """The `count` strings `packed` holds: their bytes appended to
+        `data`, and where each ends to `offsets`."""
+        var symbols = packed.count
+        if symbols < 0 or symbols > 255:
+            raise Self.error[CorruptError](t"{symbols} symbols, past 255")
+        if len(packed.symbols) < 8 * symbols or len(packed.lengths) < symbols:
+            raise Self.error[CorruptError](
+                t"{symbols} symbols in buffers of {len(packed.symbols)} and"
+                t" {len(packed.lengths)} bytes"
+            )
+        # A code past the table has no bytes, and is caught by that.
+        var table = Array[UInt64, 256](fill=0)
+        var lengths = Array[UInt8, 256](fill=0)
+        for c in range(symbols):
+            var length = packed.lengths.unsafe_get(c)
+            if length < 1 or length > 8:
+                raise Self.error[CorruptError](t"symbol {c} of {length} bytes")
+            lengths[c] = length
+            table[c] = LittleEndian.fixed[DType.uint64](
+                packed.symbols.view().as_span(), 8 * c
+            )
+        var ends: List[Int32] = [0]
+        var coded = List[UInt8]()
+        self.codes.unpack(packed.codes.copy(), count, ends, coded)
+        var codes = BufferView(Span(coded))
+        # Each code at most eight bytes, and eight written at once.
+        var at = len(data)
+        data.resize(unsafe_uninit_length=at + 8 * len(coded) + 8)
+        var out = Span(data)
+        offsets.reserve(len(offsets) + count)
+        var unknown = False
+        var dangling = False
+        var p = 0
+        for s in range(count):
+            var last = Int(ends[s + 1])
+            while p < last:
+                var c = Int(codes.unsafe_get(p))
+                if c != _SymbolTable.ESCAPE:
+                    LittleEndian.store[DType.uint64](out, at, table[c])
+                    at += Int(lengths[c])
+                    unknown = unknown or lengths[c] == 0
+                    p += 1
+                elif p + 1 < last:
+                    out[at] = codes.unsafe_get(p + 1)
+                    at += 1
+                    p += 2
+                else:
+                    dangling = True
+                    p = last
+            offsets.append(Int32(at))
+        data.shrink(at)
+        if unknown:
+            raise Self.error[CorruptError](t"a code past {symbols} symbols")
+        elif dangling:
+            raise Self.error[CorruptError]("an escape ends a string")

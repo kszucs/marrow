@@ -267,7 +267,7 @@ def _run_index(array: PythonObject, ctx: PythonObject) raises -> PythonObject:
 def _filter(
     array: DynArray, mask: DynArray, ctx: ExecContext
 ) raises -> DynArray:
-    return mk.FilterKernel.dispatch(array, mask.as_bool(), ctx)
+    return mk.FilterKernel.dispatch(array, mask, ctx)
 
 
 def _shift(array: DynArray, offset: Int, ctx: ExecContext) raises -> DynArray:

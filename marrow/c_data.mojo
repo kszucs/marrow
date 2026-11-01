@@ -314,16 +314,6 @@ def _format_int(fmt: StringSlice, text: StringSlice) raises InvalidError -> Int:
         raise InvalidError(t"c_data: malformed format string '{fmt}'")
 
 
-def _run_end_encoded_dtype(schema: CArrowSchema) raises -> DynType:
-    """The run-end encoded type of a `+r` schema: its first child's type for
-    the run ends, its second's for the values. The type names its children
-    itself, so the imported names and nullability are not kept."""
-    return run_end_encoded(
-        schema.children[unsafe_offset=0][].to_dtype(),
-        schema.children[unsafe_offset=1][].to_dtype(),
-    )
-
-
 def _release_schema_capsule(capsule: PyObjectPtr) abi("C"):
     """PyCapsule destructor for "arrow_schema" capsules.
 
@@ -920,7 +910,13 @@ struct CArrowSchema(Copyable, Movable):
             var sorted = Bool(self.flags & ARROW_FLAG_MAP_KEYS_SORTED)
             return MapType(entries^, sorted).to_dyn()
         elif fmt == "+r":
-            return _run_end_encoded_dtype(self)
+            # The run ends' type, then the values'. The type names its
+            # children itself, so the imported names and nullability are not
+            # kept.
+            return run_end_encoded(
+                self.children[unsafe_offset=0][].to_dtype(),
+                self.children[unsafe_offset=1][].to_dtype(),
+            )
         elif fmt.startswith("d:"):
             var rest = String(fmt).removeprefix("d:")
             var parts = rest.split(",")

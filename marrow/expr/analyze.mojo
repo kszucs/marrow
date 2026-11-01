@@ -16,7 +16,7 @@ Parquet reader, and a plan built without it estimates what it always did.
 
 from std.sys import bit_width_of
 
-from ..arrays import DynArray
+from ..arrays import DynArray, RunEndEncodedArray
 from ..dtypes import BinaryLikeType, PrimitiveType
 from ..execution import ExecContext
 from ..io import DynSource
@@ -117,6 +117,14 @@ def summarize(
         ref f = batch.schema.fields[i]
         ref column = batch.column(i)
         var nulls = column.null_count()
+        var null_count = Approx.exact(nulls)
+        # A run-end encoded column counts no nulls: its runs' values hold
+        # them, each standing for a run of rows.
+        if (
+            column.isa[RunEndEncodedArray]()
+            and column.as_run_end_encoded().physical_values().null_count() > 0
+        ):
+            null_count = Approx.unknown()
         var bounds = _bounds(column)
 
         var ndv = Approx.unknown()
@@ -141,7 +149,7 @@ def summarize(
                 f.name.copy(),
                 bounds[0].copy(),
                 bounds[1].copy(),
-                nulls=Approx.exact(nulls),
+                nulls=null_count,
                 ndv=ndv,
                 width=width,
             )
