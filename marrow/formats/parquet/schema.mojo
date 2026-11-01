@@ -13,6 +13,7 @@ geometry (`non_null_def`, `child_def`) computed once during the parse walk so
 `assemble` stays a clean recursive walk.
 """
 
+from std.base64 import b64decode, b64encode
 from std.sys import bit_width_of
 
 from ...errors import (
@@ -29,6 +30,8 @@ from ...arrays import DynArray, StructArray, BoolArray, ListArray
 from ...kernels.filter import FilterKernel
 from ...builders import BoolBuilder, PrimitiveBuilder
 from ...buffers import Bitmap
+from ..ipc.metadata import IpcDecoder, IpcEncoder
+from ..ipc.format import FieldIpcInfo
 
 # ---------------------------------------------------------------------------
 # Arrow leaf -> Parquet physical type.
@@ -542,6 +545,89 @@ struct _LeafTypeRow(Copyable, Movable):
         self.logical = logical
 
 
+comptime ARROW_SCHEMA_KEY = "ARROW:schema"
+"""The footer key holding the Arrow schema, as Arrow C++ and arrow-rs write it:
+an IPC schema message, base64-encoded."""
+
+
+def arrow_schema_value(schema: Schema) -> Optional[String]:
+    """The `ARROW:schema` footer value for `schema`, metadata included. It only
+    describes the file, so a schema the IPC encoder rejects gets none."""
+    try:
+        var message = IpcEncoder.encode_schema_message(schema)
+        return b64encode(IpcEncoder.frame_message(message, List[UInt8]()))
+    except:
+        return None
+
+
+def _embedded_fields(value: String) -> List[dt.Field]:
+    """The fields of an `ARROW:schema` value, an encapsulated IPC message
+    (an 8-byte frame, then the schema). Best effort: the Parquet schema alone
+    reads the file, so a value this reader cannot decode (a layout it lacks)
+    yields no fields rather than failing the read."""
+    try:
+        var bytes = b64decode(value)
+        var decoder = IpcDecoder(List[UInt8](bytes[8:]))
+        var info = List[FieldIpcInfo]()
+        var schema = decoder.decode_schema(info)
+        return schema.fields.copy()
+    except:
+        return List[dt.Field]()
+
+
+def _restore_extensions(
+    var field: dt.Field, embedded: dt.Field
+) raises -> dt.Field:
+    """`field` carrying the extension type `embedded` names, at any depth.
+
+    Parquet stores an extension type's storage only, so the type is recovered
+    from the file's embedded Arrow schema, and only where the storage there is
+    the storage read."""
+    if (
+        field.dtype.is_struct()
+        and embedded.dtype.is_struct()
+        and len(field.dtype.as_struct().fields)
+        == len(embedded.dtype.as_struct().fields)
+    ):
+        var children = List[dt.Field]()
+        for i in range(len(field.dtype.as_struct().fields)):
+            children.append(
+                _restore_extensions(
+                    field.dtype.as_struct().fields[i].copy(),
+                    embedded.dtype.as_struct().fields[i],
+                )
+            )
+        field.dtype = dt.struct_(children^)
+    elif field.dtype.is_list() and embedded.dtype.is_list():
+        field.dtype = dt.ListType(
+            _restore_extensions(
+                field.dtype.as_list().item.copy(),
+                embedded.dtype.as_list().item,
+            )
+        )
+    elif field.dtype.is_large_list() and embedded.dtype.is_large_list():
+        field.dtype = dt.LargeListType(
+            _restore_extensions(
+                field.dtype.as_large_list().item.copy(),
+                embedded.dtype.as_large_list().item,
+            )
+        )
+    elif field.dtype.is_map() and embedded.dtype.is_map():
+        field.dtype = dt.MapType(
+            _restore_extensions(
+                field.dtype.as_map().entries_field(),
+                embedded.dtype.as_map().entries_field(),
+            ),
+            keys_sorted=field.dtype.as_map().keys_sorted,
+        )
+    if dt.EXTENSION_NAME in embedded.metadata and field.dtype == embedded.dtype:
+        for key in [dt.EXTENSION_NAME, dt.EXTENSION_METADATA]:
+            var value = embedded.metadata.get(key)
+            if value:
+                field.metadata[key] = value.value()
+    return field^
+
+
 struct SchemaMapping(Movable):
     """The bridge between an Arrow schema and its Parquet representation, built in
     either direction. It holds the Arrow `schema`, the flat Parquet
@@ -689,6 +775,14 @@ struct SchemaMapping(Movable):
         var md = Dict[String, String]()
         for ref kv in meta.key_value_metadata:
             md[kv.key] = kv.value
+        if ARROW_SCHEMA_KEY in md:
+            var root = _restore_extensions(
+                dt.field("", dt.struct_(fields^)),
+                dt.field(
+                    "", dt.struct_(_embedded_fields(md[ARROW_SCHEMA_KEY]))
+                ),
+            )
+            fields = root.dtype.as_struct().fields.copy()
         m.schema = Schema(fields=fields^, metadata=md^)
         return m^
 

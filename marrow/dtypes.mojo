@@ -587,6 +587,11 @@ from: Parquet's `SchemaElement.field_id`, Avro's `field-id` / `element-id` /
 `key-id` / `value-id`, an Iceberg schema's `id`. The name is pyarrow's and
 arrow-rs's, so an id survives a round trip through either."""
 
+comptime EXTENSION_NAME = "ARROW:extension:name"
+comptime EXTENSION_METADATA = "ARROW:extension:metadata"
+"""The `Field.metadata` keys naming an extension type and carrying its
+serialized parameters: an extension type is its storage type under these."""
+
 
 struct Field(
     ConvertibleFromPython,

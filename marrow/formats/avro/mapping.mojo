@@ -39,6 +39,7 @@ resolution.
 """
 
 from ...dtypes import (
+    EXTENSION_NAME,
     Decimal128Type,
     DecimalType,
     FIELD_ID_KEY,
@@ -73,7 +74,6 @@ from ...errors import InvalidError, NotImplementedError
 from ...schema import Schema
 from .schema import AvroKind, AvroSchema, check_name
 
-comptime EXTENSION_NAME = "ARROW:extension:name"
 comptime UUID_EXTENSION = "arrow.uuid"
 
 

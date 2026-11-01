@@ -57,6 +57,8 @@ from ...kernels.packing import RlePack
 from ...utils import Crc32
 from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import (
+    ARROW_SCHEMA_KEY,
+    arrow_schema_value,
     SchemaMapping,
     LeafColumn,
     SchemaNode,
@@ -982,15 +984,20 @@ struct FileWriter[S: ByteSink = FileSink](BatchWriter):
         self.fmeta.schema = ps.elements.copy()
         self.fmeta.num_rows = 0
         self.fmeta.created_by = "marrow"
-        # Preserve the schema's key/value metadata. PyArrow's `ARROW:schema` is
-        # dropped: it pins the exact Arrow types, but marrow writes (and readers
-        # infer) types from the Parquet schema, so re-emitting a foreign
-        # ARROW:schema would make the file self-inconsistent.
-        for entry in schema.metadata.items():
-            if entry.key != "ARROW:schema":
-                self.fmeta.key_value_metadata.append(
-                    KeyValue(entry.key, entry.value)
-                )
+        # The schema's key/value metadata is preserved, except `ARROW:schema`:
+        # a foreign one pins types marrow did not write, so it is regenerated
+        # from the schema being written.
+        var described = schema.copy()
+        _ = described.metadata.pop(ARROW_SCHEMA_KEY, "")
+        for entry in described.metadata.items():
+            self.fmeta.key_value_metadata.append(
+                KeyValue(entry.key, entry.value)
+            )
+        var arrow_schema = arrow_schema_value(described)
+        if arrow_schema:
+            self.fmeta.key_value_metadata.append(
+                KeyValue(ARROW_SCHEMA_KEY, arrow_schema.value())
+            )
         self.pending = List[RecordBatch]()
         self.pending_rows = 0
         self.closed = False

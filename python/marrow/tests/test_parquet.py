@@ -254,7 +254,7 @@ def test_read_dictionary_with_plain_pages(tmp_path):
 
 
 def test_write_string_view(tmp_path):
-    """A string_view column writes as an ordinary string column."""
+    """A string_view column round-trips: the footer's Arrow schema names it."""
     import marrow as ma
 
     src = tmp_path / "src.parquet"
@@ -263,7 +263,9 @@ def test_write_string_view(tmp_path):
     assert _to_pa(views).schema.field("s").type == pa.string_view()
     out = tmp_path / "out.parquet"
     mpq.write_table(views, out)
-    _assert_equiv(pq.read_table(out), _sample())
+    back = pq.read_table(out)
+    assert back.schema.field("s").type == pa.string_view()
+    assert back.column("s").to_pylist() == _sample().column("s").to_pylist()
 
 
 def _ids_table():

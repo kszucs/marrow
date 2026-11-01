@@ -1153,8 +1153,8 @@ def test_writer_float16_roundtrip() raises:
 
 
 def test_key_value_metadata() raises:
-    # user schema metadata round-trips; PyArrow's ARROW:schema is dropped on
-    # write (marrow writes its own Parquet schema).
+    # user schema metadata round-trips; PyArrow's ARROW:schema is replaced on
+    # write by one describing the schema marrow wrote.
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
     var md = Python.dict()
@@ -1175,7 +1175,8 @@ def test_key_value_metadata() raises:
         assert_equal(t.schema.metadata["hello"], String("world"))
         assert_equal(t.schema.metadata["team"], String("marrow"))
 
-        # marrow writes it back; PyArrow reads the user keys, ARROW:schema is gone
+        # marrow writes it back; PyArrow reads the user keys, and the footer holds a
+        # fresh ARROW:schema
         var dst = join(dir, "marrow_kv_out.parquet")
         write_table(t, dst)
         var back = pq.read_table(dst)
@@ -1185,9 +1186,8 @@ def test_key_value_metadata() raises:
                 == Python.str("world").encode()
             )
         )
-        assert_false(
-            Bool(Python.str("ARROW:schema").encode() in back.schema.metadata)
-        )
+        var footer = pq.ParquetFile(dst).metadata.metadata
+        assert_true(Bool(Python.str("ARROW:schema").encode() in footer))
 
 
 def _decimal_int_backed(patype: PythonObject, phys: String) raises:
@@ -1457,16 +1457,16 @@ def test_the_writer_s_bytes_are_pinned_per_encoding() raises:
     got.append(_pinned(long, 1, True, none))
     got.append(_pinned(long, 1, False, Encoding.DELTA_BINARY_PACKED))
     var want: List[Tuple[Int, UInt32]] = [
-        (521431, UInt32(3135746839)),
-        (521532, UInt32(2475353435)),
-        (408034, UInt32(2802865492)),
-        (408135, UInt32(3019135239)),
-        (438836, UInt32(1226433025)),
-        (473154, UInt32(2164145343)),
-        (424585, UInt32(4286505591)),
-        (515775, UInt32(2453035520)),
-        (65454, UInt32(784651489)),
-        (197427, UInt32(2248244983)),
+        (523715, UInt32(1061331892)),
+        (523816, UInt32(3030105454)),
+        (410318, UInt32(2787959227)),
+        (410419, UInt32(2778983805)),
+        (441120, UInt32(821699647)),
+        (475438, UInt32(1951812289)),
+        (426869, UInt32(1828487022)),
+        (517983, UInt32(3232367686)),
+        (65722, UInt32(3923394158)),
+        (197695, UInt32(78004691)),
     ]
     var same = True
     var listed = String()

@@ -163,6 +163,11 @@ filters are implemented but **off by default** and not currently reachable from
 Python. `write_table` accepts any Arrow-C-stream object too, so a PyArrow table
 can be written directly.
 
+Like PyArrow, the writer stores the Arrow schema it wrote in the footer, under
+`ARROW:schema`. PyArrow reads it to restore the exact Arrow types, so a
+`string_view` column comes back as `string_view`. Marrow's reader uses it to
+restore extension types, nested ones included.
+
 ::: {.callout-note}
 The Mojo API mirrors the Python one — `from marrow.formats.parquet import read_table,
 write_table` operate on a marrow `Table`, and the `marrow/formats/parquet` package also
